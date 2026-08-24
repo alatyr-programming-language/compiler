@@ -12,6 +12,11 @@
 - [ ] Gate or tooling only — no change to what the compiler emits
 - [ ] Refactor with **no** behaviour change (the GAS delta is empty, see below)
 
+If you ticked one of the first four, `CHANGELOG.md`'s `## Unreleased` gained its line in the same
+commit — the last two are the boxes that deliberately change nothing a user would notice.
+
+- [ ] Changelog line added, or this change is one of the last two kinds
+
 ## Evidence
 
 <!--

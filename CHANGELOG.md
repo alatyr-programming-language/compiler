@@ -27,6 +27,11 @@ how this repository proves itself, not part of what it ships.
 
 First public release in preparation. Nothing is tagged yet; the entries below start once it is.
 
+Entries are added by the change that causes them, in its own commit — not gathered from the log at
+release time, which is archaeology and gets the "would a user notice this" judgement wrong once the
+measurement is a month old. `CONTRIBUTING.md` states it as a rule and the pull-request template
+carries the box.
+
 Where the current state actually stands is the open
 [issues](https://github.com/alatyr-programming-language/compiler/issues), honestly and in detail —
 including the open silent-wrong-value classes, the cross-backend coverage numbers, and what "ready"

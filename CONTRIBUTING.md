@@ -116,6 +116,13 @@ looks. Everything else is triaged by what it blocks.
 - **Keep needle strings out of fixture comments.** The gate's `*_has` helpers grep the whole file, so
   a header that quotes the string its own assertion searches for makes that assertion pass on an
   unfixed compiler. This has happened twice.
+- **A user-visible change carries its `## Unreleased` line in the same commit.** Same reasoning as the
+  fixture: written while you still know what you measured, not reconstructed at release time from a
+  log. Whether yours is user-visible is already decided by the PR's **Kind** block — the first four
+  boxes are, the last two (`gate or tooling only`, `refactor with no behaviour change`) are not, and
+  `CHANGELOG.md`'s own policy says why a change under `scripts/` moves nothing. Do not restate the
+  Kind in the entry; write the one sentence a person deciding whether to upgrade would want, and let
+  the version bump follow from the policy at the top of `CHANGELOG.md`.
 
 ## What the gate consists of, and why each part exists
 
@@ -154,6 +161,7 @@ Two rules about the oracle, and they are not negotiable:
 - [ ] Fixpoint still green. If it is not, a reseed may be owed — that is the maintainer's call, never
       a contributor's, and it needs three-stage evidence.
 - [ ] The manifest either matches, or its regeneration is a separate reviewed commit.
+- [ ] User-visible? Then `CHANGELOG.md`'s `## Unreleased` gained its line, in this same commit.
 
 ## How your change lands
 
