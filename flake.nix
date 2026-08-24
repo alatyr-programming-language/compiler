@@ -32,7 +32,7 @@
             gawk
             bc                                           # scripts/incr_probe.sh's timing arithmetic
             hyperfine                                    # reproducible timing when probing by hand
-            linuxPackages_latest.perf valgrind           # profilers (perf sampling / callgrind)
+            perf valgrind                                # profilers (perf sampling / callgrind)
             # The cross-language comparison toolchains (rustc/zig/go/php/ruby/nodejs/python3) are NOT
             # here: they existed only for the benchmark harness, which is now its own repository with
             # its own flake — https://github.com/alatyr-programming-language/benchmarks

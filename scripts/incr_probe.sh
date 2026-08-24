@@ -61,16 +61,37 @@ build_stage1() {
   ## resolved above instead of hard-coded: the flat target/alatyr stopped being the build output when
   ## the profile directory landed, and a stale leftover from an older build is what hid it.
   [ -n "$OUT" ] && [ -x "$OUT" ] || { echo "FAIL: no compiler at target/debug/alatyr (nor legacy target/alatyr)"; exit 1; }
-  ## `build` REPLACES $OUT, so measure with a frozen copy of the compiler.
-  cp "$OUT" "$WORK/incr_cc" || { echo "FAIL: could not snapshot $OUT"; exit 1; }
-  CC="$WORK/incr_cc"
+  ## `build` REPLACES $OUT, so measure with a frozen copy of the compiler. That copy MUST sit directly
+  ## under target/ and nowhere deeper: `lib_dir` is `dirname(/proc/self/exe)/../lib`, so target/incr_cc
+  ## resolves the stdlib to the real ./lib while target/incr/incr_cc resolves it to a target/lib that
+  ## does not exist. Measured, one directory deeper: `check package.al` returned rc 1 in 0.30 s with
+  ## "selfhost: cannot open source file" instead of rc 0 in 13.6 s — and `t()` reported that 0.30 s as
+  ## the front-end phase, making `emit` come out NEGATIVE. Do not move this file into $WORK.
+  cp "$OUT" "$ROOT/target/incr_cc" || { echo "FAIL: could not snapshot $OUT"; exit 1; }
+  CC="$ROOT/target/incr_cc"
+  ## Prove the frozen copy can do the very work about to be timed. A binary that exists but cannot
+  ## find its stdlib still EXITS, fast, and `t()` cannot tell that apart from a fast compiler.
+  if ! "$CC" check "$M" >/dev/null 2>"$WORK/precheck.err"; then
+    echo "FAIL: the frozen compiler at $CC cannot compile $M — every timing below would be a failure's"
+    echo "      duration, not a phase's. First lines of its stderr:"
+    sed 's/^/      /' "$WORK/precheck.err" | head -3
+    exit 1
+  fi
 }
 
 t() { # t <label> <cmd...>  — wall seconds, 3 runs, min reported
   local label="$1"; shift
-  local best=999999 s e d
+  local best=999999 s e d rc
   for _ in 1 2 3; do
-    s=$(date +%s.%N); "$@" >/dev/null 2>&1; e=$(date +%s.%N)
+    s=$(date +%s.%N); "$@" >/dev/null 2>"$WORK/t.err"; rc=$?; e=$(date +%s.%N)
+    ## A FAILING command has a duration too, and reporting it as a phase time is how this harness
+    ## once printed a negative `emit` share: the timed compiler was exiting 1 in 0.3 s. Never time
+    ## a failure silently.
+    if [ "$rc" != 0 ]; then
+      echo "FAIL: '$label' exited $rc — its duration is not a phase measurement. Its stderr:" >&2
+      sed 's/^/      /' "$WORK/t.err" | head -3 >&2
+      exit 1
+    fi
     d=$(echo "$e - $s" | bc)
     best=$(echo "if ($d < $best) $d else $best" | bc)
   done
@@ -100,17 +121,40 @@ do_profile() {
 }
 
 # --- the per-module emission fingerprint (needs the split enabled) -------------------------------
+## The fingerprint comes from the EMISSION MANIFEST, not from globbing the split's `.s` files.
+##
+## It used to glob `<out>.<i>.s`, and that shape stopped existing: the split now writes
+## `<dir-of-out>/<module>__<i>.s` (plus `alatyr__<i>.s`, `instances__<i>.s` and, for spans whose
+## module could not be named, `<unmapped-module>__<i>.s`). Measured, the stale glob matched nothing,
+## so every probe read a 0-span snapshot — `blast` then reported "only 0 span(s)" rather than a wrong
+## radius, which is the one thing that went right here.
+##
+## The manifest is the better source anyway: `manifest_gate` above already proves it is deterministic
+## across two cold builds, each `span=` record already carries a `gas_hash`, and the key is the span's
+## `input=` rather than a FILENAME carrying an index that shifts when a module is added. Duplicate
+## inputs (`<unmapped-module>` occurs many times) get an occurrence suffix so `join` still sees unique
+## keys, which is why this projects rather than just cutting two fields.
 spans_snapshot() { # spans_snapshot <file>
-  rm -f "$OUT".*.s "$OUT".*.o
+  rm -f "$(dirname "$OUT")"/*__[0-9]*.s "$(dirname "$OUT")"/*__[0-9]*.o "$OUT".manifest
   ALATYR_OSPLIT=1 "$CC" build "$M" >/dev/null 2>&1
   : > "$1"
-  shopt -s nullglob
-  for f in "$OUT".*.s; do echo "$(basename "$f") $(sha256sum < "$f" | cut -c1-16)"; done | sort > "$1"
-  shopt -u nullglob
+  [ -s "$OUT".manifest ] || return 0
+  gawk '
+    /^span=/ {
+      hash = ""; input = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^gas_hash=/) { hash = substr($i, 10) }
+        else if ($i ~ /^input=/) { input = substr($i, 7) }
+      }
+      if (input == "" || hash == "") next
+      key = input
+      if (input in seen) { key = input "#" ++seen[input] } else { seen[input] = 1 }
+      print key, hash
+    }' "$OUT".manifest | LC_ALL=C sort > "$1"
 }
 
 manifest_snapshot() { # manifest_snapshot <file>
-  rm -f "$OUT".*.s "$OUT".*.o "$OUT".manifest
+  rm -f "$(dirname "$OUT")"/*__[0-9]*.s "$(dirname "$OUT")"/*__[0-9]*.o "$OUT".manifest
   ALATYR_OSPLIT=1 "$CC" build "$M" >/dev/null 2>&1
   [ -s "$OUT".manifest ] || {
     echo "FAIL: split build did not write $OUT.manifest"
@@ -156,8 +200,9 @@ do_blast() {
   spans_snapshot "$WORK/base.txt"
   local n; n=$(wc -l < "$WORK/base.txt")
   if [ "$n" -le 1 ]; then
-    echo "FAIL: only $n span(s) — the per-module split did not run."
-    echo "      $OUT must be a build of a tree whose link_exe_split is enabled."
+    echo "FAIL: only $n span(s) — the per-module split did not run, or it wrote no emission manifest."
+    echo "      $OUT must be a build of a tree whose link_exe_split is enabled, and"
+    echo "      $OUT.manifest must carry its span= records."
     return 1
   fi
   echo "  $n per-module GAS blocks"
@@ -170,6 +215,16 @@ do_blast() {
     local label="$1" file="$2" expect="$3"; shift 3
     cp "$file" "$WORK/edit.bak"
     "$@"
+    ## A probe whose mutation MATCHED NOTHING measures nothing, and its radius of 0 is
+    ## indistinguishable from "the compiler now invalidates nothing" — which reads as a WIN against an
+    ## expectation of 4. `probe_edit` is a `sed` against a literal spelling in src/, so it goes stale
+    ## silently every time that line is reworded. Say which of the two happened.
+    if cmp -s "$WORK/edit.bak" "$file"; then
+      cp "$WORK/edit.bak" "$file"
+      printf '  %-46s %s\n' "$label" "STALE PROBE — the mutation matched nothing; no radius was measured"
+      rc=1
+      return
+    fi
     spans_snapshot "$WORK/edit.txt"
     cp "$WORK/edit.bak" "$file"
     local changed cnt verdict
@@ -204,7 +259,7 @@ do_blast() {
   ## With per-module `.Lstr<m>_<n>` labels only driver's own block moves: 13 -> 1.
   probe_run "string literal ADDED to driver.al (mod 4)" src/driver.al 1 \
     probe_append src/driver.al '_incr_probe_lit := "zz"'
-  rm -f "$OUT".*.s "$OUT".*.o
+  rm -f "$(dirname "$OUT")"/*__[0-9]*.s "$(dirname "$OUT")"/*__[0-9]*.o
   [ "$rc" = 0 ] && echo "  *** blast: every probe at its expected radius ***" \
                 || echo "  *** blast: a probe is OFF its expected radius ***"
   return "$rc"
