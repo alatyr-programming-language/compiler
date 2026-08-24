@@ -1,0 +1,1146 @@
+# The bootstrap seed (seed/alatyr) is a STATIC self-host compiler binary — a TOOL-1 fixpoint
+# artifact (byte-identical to the `target/debug/alatyr` that it builds).
+#
+# HOW THE SEED IS REPLACED, and it is no longer the ancestor route: every reseed since 2026-08-19 has
+# been a SELF-PROMOTE of a validated Stage1 (see the dated entries below). The frozen Rust ancestor
+# CANNOT parse the current canonical src/ — the entry for 2026-08-19 records exactly where it stopped
+# being able to — so it can no longer bootstrap this tree, and it is not published. The `rs-ancestor`
+# line below and the ancestor commits named in the entries are a PROVENANCE RECORD of where the
+# lineage began, not a recipe you can run today.
+#
+# To promote: build Stage1, have it build Stage2 and Stage3, require Stage1 == Stage2 == Stage3 in
+# both the emitted GAS and the binary, read the seed->Stage1 GAS delta line by line (normalize the
+# .L<N> and .Lra<N>_<k> label families first, or the diff is drowned in renumbering), copy Stage1 over
+# seed/alatyr, and append an entry here with those three hashes and that delta reading.
+#
+# The entries below are APPEND-ONLY. Do not rewrite them to make old hashes resolve.
+rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
+#
+# Self-promoted 2026-08-19 — nested enum and Slice(T) payload construction now preserves the complete
+# word layout through Result/Option return, local, match, and call boundaries; the remaining nested
+# Option/Result call/variable payload forms stay fail-loud. The frozen Rust ancestor at
+# 338c5001d6a5e844069ff9e8ea93811b273bc4b7 cannot parse the current canonical src/ (compact match-arm
+# syntax), so the validated Stage1 was promoted as the bootstrap seed after Stage1 == Stage2 reached
+# 877166 GAS lines; seed/alatyr SHA-256: 900f6e0381a2df58faa8b42f41ba26e2c1d818cdb1332a78b68556bb4e4d0ea1.
+#
+# Self-promoted 2026-08-17 — production reachability now carries the caller module through bare-call
+# marking and resolves qualified edges by module head, preventing a retained `std::os::sys_mmap` from
+# keeping a test-only same-basename `main::sys_mmap`. The frozen Rust ancestor cannot parse the current
+# canonical `src/`, so Stage1 was promoted as the bootstrap seed after the fixpoint reached 838109 GAS
+# lines; seed/alatyr SHA-256: 0951cfc5fb13f1a1184382599d8610e3f48a426e97d9ba84f76345c5f5c60aa5.
+#
+# Self-promoted 2026-08-17 — the frozen Rust ancestor at
+# 338c5001d6a5e844069ff9e8ea93811b273bc4b7 cannot parse the current canonical `src/` snapshot
+# (modern parameter syntax at parser offsets [2228..2229] and [2827..2828]). Stage1 was therefore promoted as the
+# bootstrap seed after `scripts/fixpoint.sh` verified seed == Stage1 == Stage2 at 835853 GAS lines;
+# seed/alatyr SHA-256: 3d6277594487d3043124c4e9a32b289a05f464486f438b5dbdae34944b7815cb.
+#
+# Reseeded 2026-08-16b (self-promote) — `unchecked (expr)` erased an operand's unsignedness.
+# `infer_local_scalar_type` had arms for Var/Call/Field/Bin/Index but NONE for Unchecked, and
+# `is_unsigned_expr` could see through neither `unchecked (...)` nor an arithmetic Bin with both operands
+# proven — so `s := unchecked (w + d)` then `s < w` compiled a SIGNED compare and answered FALSE for a
+# high-bit u64. The peel is filtered to UNSIGNED types only: the parser ERASES a scalar bitcast, so an
+# unfiltered peel read `unchecked bitcast(usize, n)` as bare `n`, recorded isize, and flipped `c / d`
+# from divq to idivq. Delta audited: exactly 20 hunks, every one a signed->unsigned setcc (7 setg->seta,
+# 9 setl->setb, 4 setle->setbe) and NOTHING else — no divq/idivq and no overflow-guard direction moved.
+# None compares against 0, so no `x >= 0` became always-true and no `x < 0` always-false; all 20 are
+# genuinely-unsigned comparisons in the compiler's own source (rt::bump's arena bound, the four
+# node_alloc's, array_elem_span, peephole_range, abi_c_arg_disp, the vac_* ABI helpers, d_limit_reject,
+# check_files, fmt::emit_fmt_params) that were latently compare-as-signed. Stage1 == Stage2 == Stage3
+# byte-identical GAS at 792638 lines; seed/Stage1 SHA-256: 34808299d742d341c61e1bf267510aab8e872e9c912334cdfdbbba9a6f19739b.
+#
+# Reseeded 2026-08-16 (self-promote) — an ORDERING compare between an UNSIGNED value and an integer
+# LITERAL was lowered SIGNED on all four backends (a literal carries no type span, so the "both operands
+# provably unsigned" guard could never prove that side): 19 silent miscompiles per backend, identically.
+# The rule governs src/ + lib/ too, so the tree's own emission changes at 263 sites — 98 setg->seta,
+# 96 setge->setae, 52 setl->setb, 15 setle->setbe, 2 jle/jg->jbe/ja, and NOTHING else. Delta audited: 63
+# of them compare against literal 0 and every one is setg->seta (`x > 0` on a length/count); there is no
+# `x >= 0` (which unsigned makes always-true) and no `x < 0` (always-false), so no site changed meaning —
+# all 263 were latently wrong and are now right. Stage1 == Stage2 == Stage3 byte-identical GAS at 779994
+# lines; seed/Stage1 SHA-256: ea349ece0229fe2c286caa0fc02a9ee73e25a33d893e79cf656408883dda0a0e.
+#
+# Reseeded 2026-08-08 (self-promote) — Types §9.4 definite-assignment branch joins and divergence filtering.
+# The frozen Rust ancestor cannot parse the current self-host source snapshot (pre-existing compact match-arm
+# forms), so the validated Stage1 binary was promoted per ROADMAP.md's documented self-promote discipline.
+# Stage1/seed SHA-256: 51a2abe4eac994301c2d16d8c7284a82f83854576369b382acc36c5e3a3ab4ae.
+#
+# Reseeded 2026-07-31 (self-promote) — CHECKED `/` and `%` on the register-allocated scalar-leaf IR path.
+# The predicate `is_scalar_leaf_shape` previously required `unchecked` for `/`/`%` (the div-by-zero /
+# signed INT_MIN-overflow guards were thought unmodeled). On x86 those checked traps are the HARDWARE #DE
+# (SIGFPE → exit 136 ≥ 128, an I11 trap) raised by the plain `divq`/`idivq` — exactly what the reference
+# text path emits for a checked division (no software guard exists there to reproduce). So the IR's div
+# lowering (ir_lower_bin op 19/29 → op 11 `xorq %rdx,%rdx; divq` / op 12 `cqto; idivq`) ALREADY matches the
+# reference for both modes; the `unch` gate in ir_check_expr was simply dropped. VERIFIED: `ra_checked_div`
+# (a scalar-leaf `(a/b)+(a%b)`) = 42 register-allocated (disasm: div with register operands, zero frame
+# reloads), `ra_checked_div_trap` (÷0) = 136 (I11 trap on the allocated path). NON-neutral (a self-build fn
+# now register-allocates a checked div → 45 fewer GAS lines, 542544→542499), so self-promoted: seed(old) ->
+# Stage1 != seed, Stage1 == Stage2 == Stage3 byte-identical (deterministic); post-reseed seed==Stage1==Stage2
+# GREEN. Full e2e green; a64/rv64/wat sweeps no silent miscompiles (also fixed an e2e.sh harness bug the 6c
+# commit introduced: an inline `##` comment on a swept `run` line corrupted the sweep's `want` parse).
+#
+# Reseeded 2026-07-31 (self-promote) — COMPILE-MEMORY: bound the emitter's AST-arena (`na`) usage. The
+# `.text` emit loop in `lower::emit_program` allocates a fresh per-function slot map + tup-layout SVec +
+# any UFCS-desugar nodes into `na`, but NEVER reclaimed them — so the scratch accumulated across every
+# function of the whole tree. Measured on the self-build: AST ~19.6 MB, sema scratch ~2.9 MB, but EMIT
+# scratch ~246 MB — reaching NA_AFTER_EMIT = 268,388,232 of a 268,435,456-byte (256 MB) arena, i.e. only
+# ~47 KB of headroom. Any further src growth (the next feature = regalloc 6c) tipped it → `lower: out of
+# memory` (node_alloc, lower.al:6957) and the seed could no longer BUILD the tree. FIX: capture the
+# arena high-water AFTER all pre-loop setup (`insts` monomorphization set, reachability `rb`, `aggw_all`,
+# the AST — all still needed by the instance loop) and restore `mar.off` to it after EACH `emit_fn`,
+# reclaiming that function's dead scratch. Bounds compile memory to AST + ONE function's scratch (~25 MB)
+# instead of AST + the whole tree's. EMISSION-NEUTRAL: the emitted GAS is byte-identical (only dead memory
+# is freed) — verified seed == Stage1 == Stage2 (541651 lines) + full e2e green + all 3 sweeps. Promoted
+# because the bootstrap itself must carry the low-`na` behavior so the tree can keep growing on x86.
+#
+# Reseeded 2026-07-31 (self-promote) — SysV CALLS + CALLER-SAVED CLOBBERS (regalloc COMMIT 5). The
+# register-allocated `emit_fn_ir` shape previously required a LEAF fn (no calls / no module-global). This
+# widens `is_scalar_leaf_shape` to admit a fn that CALLS other fns of the modeled form: a resolved,
+# non-generic, non-variadic, non-overloaded, non-extern plain fn (kind 1) with a native-scalar return +
+# all params native-scalar plain-`in` + arity == nargs ≤ 6 (a scalar conversion `T(x)` is NOT a call →
+# rejected). The emit models SysV: args go into %rdi,%rsi,%rdx,%rcx,%r8,%r9 as PRE-COLORED writes (nested
+# calls resolve onto an arg-eval stack before any arg reg is set), a `call` (IR op 6, Sym → call side-table
+# → `emit_mangled_call`, the SAME mangler the callee's def uses), and the %rax return read into a fresh
+# vreg RIGHT AFTER. CLOBBER SAFETY (the whole point): the allocator already marks every caller-saved reg
+# BUSY at a `call` over the value's interval (`ra_build_busy` op 6), so a value LIVE ACROSS a call cannot
+# take a caller-saved reg — it lands in a CALLEE-SAVED reg or a spill slot. The pool now offers the
+# caller-saved set {rcx,rsi,rdi,r8,r9} FIRST (a between-calls temp keeps its former assignment), then the
+# callee-saved set {rbx,r12..r15}; the emitter SAVES/RESTORES (movq to/from frame slots BELOW the spill
+# slots) exactly the callee-saved regs the allocator used. %rsp stays 16-aligned at every call (one `subq`
+# frame, no body pushes). NEW regression tests (x86, run under BOTH default and ALATYR_RA=0 — same answers):
+# ra_call_live_across (42, a value survives one call), ra_call_two_calls (42, live across TWO calls),
+# ra_call_arg_collide (69, a value that is BOTH a %rdi arg AND live across the call). This widening turned
+# out FIXPOINT-NEUTRAL to the self-host tree — NO compiler fn has the pure-scalar-call shape (every one
+# touches a ptr/aggregate/global), so the emitted GAS is BYTE-IDENTICAL (seed==Stage1==Stage2, all 540157
+# lines; the +1681 vs commit 4 is the new source's OWN GAS, emitted identically by old + new logic). The
+# self-build's regalloc'd-fn count is unchanged (still 2: is_prime + nstack_args); primes 0.119s / 78498.
+# Seed self-promoted to the current-source convergent binary (Stage1==Stage2 byte-identical, DETERMINISTIC)
+# so the seed embodies the new source. check rc=0; full e2e all green; a64/rv64 sweeps match=112, wasm
+# sweep match=110, all "no silent miscompiles". Rebuilds from the rs-ancestor lineage as usual. Next
+# regalloc lever: >6 args / aggregate + float args, indirect (fn-value) calls, checked division guards.
+#
+# Reseeded 2026-07-17 (self-promote) — GENERATED-CODE PEEPHOLE (first generated-code-quality win, vs the
+# compile-TIME wins below). `peephole_gas` collapses the stack-machine's adjacent `pushq A`/`popq B`
+# pairs (A==B → deleted; else `movq A, B`) over the final GAS — ~32% of emitted instructions were this
+# churn (46289 pairs, 25952 pure %rax round-trips). x86 GAS emit path only; NON-neutral (output shrinks
+# 406825→335088 lines, -17.6%) so seed promoted to the peephole'd Stage2 (Stage1==Stage2 byte-identical,
+# 575/575 e2e, 3 sweeps clean). SELF-BUILD ~8s -> ~5s (-37.5%); benefits every Alatyr program. Next
+# generated-code lever: real register allocation (needs an instruction IR — a fresh multi-session
+# project); a further peephole pass could collapse non-adjacent push/pop with light stack analysis.
+#
+# Reseeded 2026-07-17 (self-promote, PERF freshen #4) — hash caches for module_const_value /
+# mut_global_value (checked per Var reference) + a "name already scanned" cache for mark_name (DCE).
+# Combined with #1..#3: self-build ~51s -> ~8s (-84%, 6.4x), all BYTE-IDENTICAL (fixpoint-neutral,
+# seed==Stage1==Stage2, 406825 lines), 575/575 e2e, all 3 backend sweeps clean. Remaining profiled
+# scans (diminishing): callee_decl_idx (needs a name+MODULE-keyed cache), entry_of, and the shared
+# decl_get/rt::vec_get call volume. (The compile-time bottleneck — linear name->decl scans — is now
+# largely resolved; the next major perf lever is GENERATED-CODE quality, i.e. register allocation.)
+#
+# Reseeded 2026-07-17 (self-promote, PERF freshen #3) — 512-bucket direct-mapped hash cache for
+# struct_decl_of/enum_decl_of (mut-global arrays, [0;512] init) replacing the 1-entry cache; + streq
+# length-first fast reject (helps every name scan). Combined with #1/#2 below: self-build ~51s -> ~12s
+# (-76%, 4.25x), all BYTE-IDENTICAL (fixpoint-neutral, seed==Stage1==Stage2, 400535 lines), 575/575 e2e.
+# Remaining profiled scans (each ~7-9%, diminishing): callee_decl_idx / module_const_value /
+# mut_global_value / mark_name (each a name->decl linear scan — same hash-cache treatment applies) and
+# the shared decl_get/vec_get volume.
+#
+# Reseeded 2026-07-17 (self-promote, PERF freshen #2) — decl-lookup 1-entry name-text cache
+# (struct_decl_of/enum_decl_of) + DCE reachability walks each fn body ONCE (processed bitmap, not once
+# per fixpoint pass). Combined with the max_agg hoist below: self-build ~51s -> ~19s (-63%, 2.7x), all
+# BYTE-IDENTICAL (fixpoint-neutral), 575/575 e2e. Next profiled hot spot: struct_decl_of/enum_decl_of
+# scans via field_words/field_word_offset during emit (the 1-entry cache thrashes on varied field
+# types) — needs an N-entry cache or a name->index map (mut-global arrays miscompile, so unrolled
+# scalars or a threaded/HashMap map).
+#
+# Reseeded 2026-07-17 (self-promote, PERF freshen) — hoist max_agg_words_all out of emit_fn. The
+# agg-temp pool width (a program-global constant) was recomputed per emit_fn, walking all decls each
+# time (~35% of compile per the perf profile). Now computed once in emit_program + threaded via
+# PCtx.aggw_all. BYTE-IDENTICAL output (fixpoint-neutral); ~51s->33s emitting package.al GAS. This
+# reseed just freshens the seed binary to the faster compiler (seed==Stage1==Stage2, 395925 lines).
+# Next perf target (profiled): the linear name->decl-index scans shared by mark_name / struct_decl_of /
+# enum_decl_of (streq/vec_get hot) — a build-once name->index map would remove them (~30% more).
+#
+# Reseeded 2026-07-17 (self-promote) — §4 UP-GROWING aggregate value model. The aggregate layout was
+# flipped from DOWN-growing (word k at -(k*8) from word 0, a masked cross-region corruption + a blocker
+# on @alloc struct-init) to UP-GROWING (word 0 at the block TOP = lowest address, word k at base-k /
+# +(k*8) through a pointer). This is a NON-neutral codegen change (the old down-growing seed emits
+# different GAS), so the seed is promoted to the fully-up-growing Stage2 (built by the up-growing Stage1;
+# seed==Stage1==Stage2 byte-identical GAS, 395918 lines; full e2e green 575/575; all three backend
+# sweeps to follow). The arena allocators (node_alloc/dnode) were left low-end+bump-up (already correct
+# for up). Formulation: fillers-before/ent.off=TOP; str/enum/struct/array locals + temp pools + inline
+# scratch + payload bindings all up; enum-payload binding gated on a recognised-enum scrutinee (sise) so
+# an unresolved scrutinee's not-found base 0 no longer underflows. See ROADMAP §4 + the branch history.
+#
+# Reseeded 2026-07-12 (self-promote) — COMPOUND-ASSIGN `-=`/`*=`/`/=` (+ freshen the seed to the
+# 2026-07-12 compiler). The prior seed (2026-07-09) lacked the `-=`/`*=`/`/=` lexer tokens + parser
+# desugar (added this session, commit 3e1a187) — so `src/` could not USE those operators (the old seed
+# parse-errored them), even though the feature was fixpoint-NEUTRAL to ADD (src/ used only `+=`). This
+# reseed promotes the fully-verified Stage2 (seed==Stage1==Stage2 byte-identical GAS, 296852 lines, full
+# e2e green, all three backend sweeps clean) so the seed can parse `-=`/`*=`/`/=`, enabling the src/ idiom
+# sweep that follows. It ALSO banks the whole 2026-07-12 compiler into the seed binary (raw-asm surface
+# incl. `@abi(naked)` on all 3 native targets; I5/I9 orthogonal limits; §60 exhaustiveness; §10 linearity
+# — use-after-discharge / leak-detection / dangling-pointer; call-return type-name recovery) — all of
+# which were fixpoint-neutral additions (codegen paths + check-only), so the old seed built them
+# identically; this only freshens the stale seed binary (603KB→910KB) to the current fixpoint artifact.
+# FIRST self-promote under explicit developer authorization to reseed at my judgment (2026-07-12).
+# Rebuilds from the rs-ancestor lineage as usual (alatyr-compiler-rs still reconstructs from scratch).
+#
+# Reseeded 2026-07-09 (self-promote) — CHECKER MISCOMPILE FIX (§1, part 1 of the check/build-parity
+# work): `x := <call>?` where the callee returns `Result(Struct, E)` (the fallible-pass shape
+# `tv := check_expr(v)?`, Ok payload = `Ty`) was bound as a BARE SCALAR — `collect_slots` had no `Try`
+# arm — so `x.field` mis-resolved (e.g. `tv.tag` read `base-1`, a stale slot). This corrupted
+# `check_stmts`' typed-local type-mismatch check (`dt.tag != tv.tag` read garbage → spurious rejects of
+# valid `n : u64 = 100` and, with a different frame, missed genuine ones). Fix: `try_ok_struct_span`
+# binds `x` as the Ok-payload struct (the `?` delivers payload word 0 to `x`'s base, so `x`.<first field>
+# resolves). This is the mis-diagnosed "check_fn slot-aliasing": not aliasing, a Try-binding gap. It
+# re-emits any `x := f()?`-struct-Ok site in src/, so the prior seed went stale; the new seed is the
+# self-hosted Stage2 (Stage1==Stage2==Stage3 byte-identical, 196325 lines, full e2e green). NOTE: this is
+# ONE layer — `check` still mis-handles other `?`/Result-return cases (a value-`match`-arm etc.), so full
+# check/build parity is not yet reached. Rebuilds from the rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-09 (self-promote) — INTEGER COMPARISONS AS LIBRARY FUNCTIONS (§2 item 3, part 2):
+# a built-in-INTEGER comparison `a <cmp> b` (`==`/`!=`/`<`/`>`/`<=`/`>=` on u8..u64/i8..i64/usize/isize)
+# now ROUTES through `lib/base/cmp.al`'s `@inline` `lt`/`eq` — inlined at the call site — instead of the
+# built-in `setl`/`setg` path. The op desugars: `==`→`eq(a,b)`; `!=`→`eq(a,b)` negated; `<`→`lt(a,b)`;
+# `>`→`lt(b,a)` (operand swap); `<=`→`lt(b,a)` negated; `>=`→`lt(a,b)` negated (`cmp_route_idx` +
+# `cmp_route_name` + `named_op_decl_idx`; frame-need reserves scratch for the routed body). cmp.al picks
+# the SIGNEDNESS per type (u64→`setb` unsigned, i64→`setl` signed), so this ALSO FIXES the built-in
+# path's always-signed ordering of UNSIGNED integers (a latent miscompile, the comparison analogue of
+# the unsigned-division fix). Float comparisons keep the built-in NaN-aware path; str keeps the byte
+# compare. This re-emitted every typed-integer comparison in src/ (and flipped unsigned orderings to
+# `setb`), so the prior seed went stale; the new seed is the self-hosted Stage2 after Stage1==Stage2==
+# Stage3 byte-identical convergence (192929 lines), full e2e green (incl. new int_cmp_library). §2 item 3
+# (operators as library functions) is now COMPLETE — arithmetic + comparisons. Rebuilds from rs-ancestor.
+#
+# Reseeded 2026-07-09 (self-promote) — OPERATORS AS LIBRARY FUNCTIONS (§2 item 3): `a <op> b` over a
+# BUILT-IN scalar (`+`/`-`/`*`/`/`/`%` on u64/i64/u32/i32/u16/i16/u8/i8/usize/isize/f64/f32) now ROUTES
+# through the overloadable `@inline` operator functions in `lib/base/num.al` — inlined at the call site
+# (`emit_inline_binop`/`emit_inline_body`, the same machinery as the user-type operators) — instead of
+# the built-in scalar/float lowering. The `operator_decl_idx` guard that kept built-in numerics on the
+# direct path was removed and a D23 width-alias normalization added (`usize`→`u64`, `isize`→`i64`) so a
+# `usize` operand matches num.al's `u64` operator. Comparisons (`<`/`==`) have NO symbol decl in cmp.al
+# (they are `lt`/`eq`), so they stay on the direct lowering — only the 5 arithmetic symbol operators
+# route. This is VALUE-identical to the prior direct lowering (the num.al bodies name the same x86_64
+# instruction the built-in emitted: `+`→`addq`, unsigned `/`→`divq`, signed `iN /`→`idivq`, …), so no
+# behaviour change — but it re-emits EVERY typed-scalar arithmetic site in src/ as an inlined operator
+# body, so the prior seed went stale. The new seed is the self-hosted Stage2 after Stage1==Stage2==Stage3
+# byte-identical convergence (191823 lines), full e2e green. src/ now uses the library operators for its
+# own arithmetic (the §6 "built-in operator paths with library operators" dogfood). Rebuilds from the
+# rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-09 (self-promote) — NON-NATIVE INTEGER WIDTH TRUNCATION (§4, first self-promotion
+# slice): a to-integer conversion to a SUB-NATIVE width now truncates/wraps — `uN(x)` zero-extends the
+# low N bits (`movzbq`/`movzwq`/`movl`), `iN(x)` sign-extends (`movsbq`/`movswq`/`movslq`); native
+# widths (u64/i64/usize/isize) stay identity. Previously every `uN(x)` was an identity no-op, so e.g.
+# `u8(810)` yielded 810 instead of 42 — a silent miscompile of the wrap semantics. src/'s own
+# `parser.al` uses `unchecked u8(rt::rec_get(h, 0))` for the token kind, so this added one
+# `popq/movzbq/pushq` to src's self-emission (VALUE-identical — token kinds are < 256 — so no behaviour
+# change to the compiler); the prior seed went stale. The new seed is the self-hosted Stage2 after
+# Stage1==Stage2==Stage3 byte-identical GAS convergence (184196 lines), all e2e green incl. the new
+# int_narrow_conv. Implementation note: a `mut <local> : str` reassignment does NOT lower correctly in
+# the lean lower — the narrow-target name is read from `callee` directly, not a mutable str local.
+# Rebuilds from the rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-07 (self-promote) — MISSING FUNCTION RESULT CHECK: parser now records the absence
+# of a real trailing function expression with an internal `Num(-1)` sentinel instead of the old
+# `Num(0)` placeholder, so sema can distinguish `fn -> T { 0 }` from a statement-only body. sema now
+# rejects a value-returning function with no trailing value, no guaranteed explicit return, and no
+# existing lower-supported tail statement value (the braced tail `match` path). This changed src/'s own
+# self-emission in sema/parser/lower, so the prior seed went stale; the new seed is the self-hosted
+# Stage2 after Stage1==Stage2 GAS convergence.
+#
+# Reseeded 2026-07-06 (self-promote) — `continue` STATEMENT: added a `Stmt.Continue` AST variant + a
+# `LCtx.cont` target so `continue` skips to the next iteration of the nearest enclosing loop (a
+# `while`'s guard, a `loop`'s top, a `for`'s increment label — so the index still advances). This
+# added an `.L<cont>:` label before the increment of EVERY range-`for`, and src/ uses range-`for`
+# pervasively (sema/lower_layout/…), so the old seed's emission of src/ went stale (it emitted no
+# such label). The new seed is the self-hosted Stage2 (Stage1==Stage2==Stage3 byte-identical GAS,
+# 148081 lines, all 67 e2e green incl. the new continue_stmt / for_over_array / match_comma_arms).
+# Also landed since the prior seed (fixpoint-neutral, no emission change to src/): for-over-ARRAY
+# (scalar + float elements) and the comma-separated expression-match parser fix (a compiler
+# stack-overflow crash). Rebuilds from the rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-06 (self-promote) — STRUCT-RETURNING-CALL ENUM PAYLOAD: constructing an enum variant
+# whose single payload is a struct-returning CALL (`Option(U).Some(f(v))` where the fn value `f` returns
+# a struct, or any `E.V(g())` with a >1-word struct payload) truncated the payload to ONE register
+# (`pushq %rax; popq %rdx`) — the payload's tail struct words were dropped. Now the payload width comes
+# from the variant's SUBSTITUTED declared type (variant_payload_type through the instance's type-params),
+# the call is emitted leaving its struct in %rax:%rdx:…, and each word is SHIFTED up one register (word k
+# → payload reg k+1) so the whole struct rides %rdx:%rcx:%r8:… (emit_enum_value's EnumLit arm, new `pcall`
+# branch). This fixed a latent 2-site truncation in src/'s own emission (a `E.V(<3-word-struct-call>)`
+# staged 1 word before), so the prior seed went stale; the new seed is the self-hosted Stage2
+# (Stage1==Stage2==Stage3 byte-identical GAS, 141733 lines, all e2e green incl. option_map's struct-map
+# case). Delivered Option::map for a struct-producing fn value. Rebuilds from the rs-ancestor lineage.
+#
+# Reseeded 2026-07-04 (self-promote) — UNSIGNED DIVISION/MODULO: `/` (op 19) and `%` (op 29) hardcoded
+# the SIGNED `cqto; idivq`, so a `u64`/`usize` operand with the high bit set (e.g. an FNV hash reduced
+# `h % cap`) was read as negative → a negative/huge remainder → an out-of-range index (a latent OOB, hit
+# by `alloc::strmap`). Now `/`%` pick UNSIGNED `xorq %rdx,%rdx; divq` by default (Alatyr's unsigned scalar
+# default) and SIGNED `idivq` only when an operand is a known `iN` (`is_signed_expr`). This changed every
+# unsigned `/`%` in src/'s own emission (idivq→divq; behaviour-identical for the small positive values
+# src/ divides, so no miscompile — verified Stage1==Stage2==Stage3 byte-identical, 133700 lines, all 46
+# e2e green incl. the new ambient_strmap). Also fixed (same session, fixpoint-neutral): `Slice(u8)` `s[i]`
+# indexed at word stride 8 → now a byte load at stride 1 (movzbq). Rebuilds from the rs-ancestor lineage.
+#
+# Reseeded 2026-07-04 (self-promote) — MULTI-WORD ENUM PAYLOAD RETURN: the enum-return convention
+# carried only the discriminant (%rax) + payload word 0 (%rdx), truncating a >1-word struct payload
+# across a return. emit_enum_value (Var + EnumLit arms) + the enum-call-result staging now ride the
+# extra payload registers (%rcx, %r8, … via emit_retreg) — word i of the payload in emit_retreg(i+1),
+# up to disc + 6 payload words. A single-payload-word enum is byte-identical (still %rax + %rdx); the
+# change fires only for a struct-typed payload (e.g. an AST variant carrying a >1-word struct). src/
+# HAS such enums returned by value, so this delivered their previously-dropped payload words and
+# reordered src's own emission -> the prior seed went stale. The new seed is the self-hosted Stage2
+# (Stage1 == Stage2 == Stage3 byte-identical GAS, 133147 lines, all 45 e2e green incl. the new
+# enum_struct_payload). Rebuilds from the rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-04 (self-promote) — PORTABLE MODULE SORT (§1.0): `list_al_in_dir` now sorts the
+# discovered `.al` module paths byte-lexicographically (sort_path_lines) instead of leaving them in
+# FS-state-dependent getdents order — so the module (hence emitted-GAS) order is deterministic across
+# filesystems. This reordered src/'s own module emission, so the prior seed went stale; the new seed is
+# the self-hosted Stage2 (Stage1==Stage2==Stage3 byte-identical, 122356 lines, all e2e green). The two
+# lean-lower gaps that once blocked this (str-param `.len` in arithmetic; svec record-swap) are gone —
+# the sort swaps ARRAY elements. Rebuilds from the rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-04 (self-promote) — AGGREGATE-VAR COPY (§1.4-A item 3): `x := <struct/enum var>` was
+# a 1-word SCALAR copy (dropping the aggregate's other words); now it word-copies the whole struct/enum
+# (var_agg_info + collect_slots binding + emit word-copy: local source from slots, by-ref param through
+# the pointer). This changed src/'s own `x := <agg var>` sites, so the prior seed went stale; the new
+# seed is the self-hosted Stage2 (verified Stage1==Stage2==Stage3 byte-identical GAS, 119571 lines, all
+# e2e green). Rebuilds from the rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-04 (self-promote) — NESTED-MATCH SCRATCH DEPTH: a `match` on a by-ref / call-result
+# enum materializes the scrutinee into a frame scratch region; a match NESTED inside such an arm's body
+# was reusing the SAME `tslot`, clobbering the outer scrutinee's payload (still aliased by the outer
+# arm's binding). Fixed: materialize at `tslot + mdepth * swidth`, reserving `max_match_depth` scratch
+# levels (LCtx.mdepth/swidth + a match_depth walker). This enlarged the scratch region for src's own
+# nested-match fns, so the prior seed went stale; the new seed is the self-hosted Stage2 (verified
+# Stage1 == Stage2 == Stage3 byte-identical GAS, all e2e green — 116534 lines). Unblocks the
+# dual-operand enum `eq`/`lt` derive (compares two enums via a nested `match`). Rebuilds from the
+# rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-03 (self-promote) — TWO-PASS enum-type-name table (gap-2 blocker A): the parser
+# now pre-collects enum-type names so a call-then-UFCS `f(args).method(…)` is not mis-read as a
+# generic-enum-ctor. PC grew to 8 words; the prior 7-word-PC seed miscompiled the transient Stage1,
+# but Stage2==Stage3 (self-consistent) + all e2e green → promoted Stage2. (A follow-up null-sentinel
+# refactor was fixpoint-neutral atop this.) Rebuilds from the rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-03 (self-promote) — DEAD-CODE ELIMINATION: emit_program now emits only
+# non-generic fns REACHABLE from `main` + the generic roots (call-graph closure over Call/EnumLit/
+# Field callee names). This dropped ~3800 lines of genuinely dead src/ surface (helpers never reached
+# from main), so the previous seed (which emitted them) went stale. The new seed is the self-hosted
+# Stage2 built by the new logic (verified `Stage1 == Stage2` byte-identical GAS, all e2e green) — NOT
+# a fresh Rust-ancestor build; the rs-ancestor lineage above still reconstructs it from scratch.
+#
+# Prior reseed 2026-07-03: word-sized generic-enum-payload (`enum_inst_words` + type-aware match
+# binding + multi-word enum construction) altered src/'s own aggregate-payload enum layout.
+#
+# Reseeded 2026-07-14 (self-promote) — SCALAR TYPE INFERENCE for `:=` bindings (checked-verification
+# coverage, I11). An inferred local `x := f()` / `x := T(y)` / `x := <var>` now records its scalar
+# type in its slot, so `x`'s arithmetic ROUTES to num.al's guarded operators (path A / guard-in-
+# library) — a checked `x * y` overflow traps via num.al's `panic`, an `unchecked` scope wraps. This
+# changed src/'s own emission (typed-local overload/comparison routing; no new arithmetic guard in
+# src/ itself), so the old seed went stale; the new seed is the self-hosted Stage2 (verified
+# Stage1 == Stage2 == Stage3 byte-identical GAS, full e2e + all 3 backend sweeps green). Builds on
+# the checked-verification stack landed the same day: Expr.Unchecked/verify.checked infra, the 2a
+# @inline body-local scratch reservation, and 2b nested-@inline expansion. Rebuilds from the
+# rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-14 (self-promote) — CHECKED ARRAY BOUNDS (I11 / Types §5, §358). A static-length
+# scalar/float frame array `[T; N]` now emits a compiler-emitted bounds trap in `emit_index_addr`
+# under `verify.checked` (`cmpq $N; jb 1f; ud2`; `N` = the slot's element count); `unchecked (a[i])`
+# reads raw. This added bounds guards to src/'s own frame-array indexing (all in-bounds — no trap),
+# so the old seed went stale; the new seed is the self-hosted Stage2 (Stage1 == Stage2 == Stage3
+# byte-identical GAS, full e2e + all 3 backend sweeps green, `test/checked_array_oob` = SIGILL 132).
+# Rebuilds from the rs-ancestor lineage as usual.
+#
+# Reseeded 2026-07-15 (self-promote) — WIDER scalar type inference (checked coverage). Beyond the
+# Var/Call/conversion `:=` RHS, `infer_local_scalar_type` now types a local from a `s.f` field read
+# and an `a <arith> b` result (comparisons/booleans excluded — they are `bool`), so more locals route
+# their arithmetic to num.al's guarded operators. Changed src/'s own emission (all self-build
+# arithmetic in-bounds — no trap), so the old seed went stale; new seed = self-hosted Stage2
+# (Stage1 == Stage2 == Stage3 byte-identical GAS, full e2e + 3 backend sweeps green). Rebuilds from
+# the rs-ancestor lineage as usual.
+
+# ---- reseed: checked bounds for module-global fixed arrays ----
+# The Index emit for a module-global fixed-size array (`gname[i]` reading from a `.rip`-relative
+# global) now emits a `verify.checked`-gated bounds guard (cmpq $nel,%rcx / jb 1f / ud2 / 1:) using
+# the array literal's element count. src/'s own emission does NOT index a global array on this path,
+# so fixpoint stayed green with the old seed — but the old seed could not emit the guard for arbitrary
+# programs (a capability gap for I11). New seed = self-hosted Stage2 (seed==Stage1==Stage2, S2==S3,
+# full e2e incl. checked_array_oob + 3 backend sweeps green). Rebuilds from the rs-ancestor lineage.
+
+# ---- reseed: no_unchecked limit enforcement (FND-10) ----
+# `check` now enforces `@limits(no_unchecked)`: a TU declaring it must contain no `unchecked` scope.
+# New sema helpers expr_has_unchecked (a DEEP full-expr walk — every ptr(Expr) child + Call/StructLit/
+# EnumLit/ArrayLit arg lists + Match arms) and stmts_have_unchecked / arms_have_unchecked, wired into
+# the per-file limits loop next to no_comptime/no_alloc/freestanding. src/ declares no @limits so its
+# own emission is unchanged, but the compiler binary grew (new code) → the committed seed is refreshed
+# to the self-hosted Stage2 so the lineage reproduces it byte-for-byte (seed==Stage1==Stage2, S2==S3,
+# full e2e incl. reject_/accept_limit_no_unchecked + 3 backend sweeps green).
+
+# ---- reseed: store-escape reject for deep-nested field paths (§5.3.1) ----
+# The scoped-reference store-escape check now also rejects `G.a.b = ptr(<fn-local>)` (a FieldPathAssign
+# — a multi-level place) when the path's root is a module mut global: `field_path_root_var` peels the
+# nested `Field` chain to its root Var, then the same is_mod_mut_global test applies. Completes the
+# store-sink coverage (Assign/FieldAssign/IndexAssign/IndexFieldAssign/FieldPathAssign). New check code
+# grew the binary → seed refreshed to Stage2 (seed==Stage1==Stage2, S2==S3, full e2e incl.
+# reject_store_escape_field_path + 3 backend sweeps green). Rebuilds from the rs-ancestor lineage.
+
+# ---- reseed: fmt total over Expr (FloatLit/Try/Slice arms) ----
+# `alatyr fmt`'s emit_fmt_expr panicked ("unsupported expression form") on a float literal, a `?`
+# (Try), or a `base[lo..hi]` (Slice) — three real expr forms with no arm. Added them: FloatLit renders
+# its verbatim source span; Try = inner + "?"; Slice = base + "[" + lo + ".." + hi + "]". fmt is now
+# total over the runtime Expr enum. New tests fmt_float (u64(42.5)) + fmt_try (`get()?` over an Opt
+# enum, dot-construction + expression-body match arms) + `fmt_test range_slice` (existing Slice file).
+# Not exercised in self-build → fixpoint stayed green, but the binary grew → seed refreshed to Stage2
+# (seed==Stage1==Stage2, S2==S3, full e2e + 3 backend sweeps green). Rebuilds from rs-ancestor lineage.
+
+# ---- reseed: no_abstractions limit enforcement (CG-12) ----
+# `check` now enforces `@limits(no_abstractions)` per spec decision CG-12 (alatyr-spec 2bfc264): a
+# positive 1:1 allow-list. New sema helpers is_asm_instr_name (the raw instruction-intrinsic set),
+# expr_has_abstraction (rejects library value-operators / structured control flow / `?` / structured
+# data access+construction / ptr/deref / non-instruction calls; admits immediates, registers, array
+# data, and instruction-intrinsic calls with args recursed) and stmts_have_abstraction /
+# arms_have_abstraction (structured stores + control flow forbidden outright; comptime bodies recursed
+# as erased-but-emitting), wired into the per-file limits loop. This makes 5/6 limits enforced
+# (no_comptime/no_alloc/freestanding/no_unchecked/no_abstractions). src/ declares no @limits so its own
+# emission is unchanged; the binary grew → seed refreshed to Stage2 (seed==Stage1==Stage2, S2==S3, full
+# e2e incl. reject_/accept_limit_no_abstractions + 3 backend sweeps green).
+
+# ---- reseed: fmt value bindings (kind 0) + statement-match arms ----
+# `alatyr fmt` panicked on two common forms. (1) Top-level VALUE bindings (kind-0 decls) — a constant
+# `name := <value>` or a mutable global `mut name := <value>` — now render via emit_fmt_value
+# (ast::local_is_mut recovers the erased `mut`; `pub` is dropped like emit_fmt_fn; the value is any
+# surface expr incl. enum/struct constructors); typed bindings (ret_tl != 0) and the @limits marker
+# (arity == 99) stay fail-loud. (2) STATEMENT-match arms (braced bodies `V(b) => { … }`) now render
+# multi-line via emit_fmt_stmt_match_arms — the inline emit_fmt_arms (value-match, bare arms) fail-loud
+# on braced bodies, so a statement-match never formatted before. New test `fmt_test enum_global`
+# (mut enum global + statement-match, round-trips + builds + runs to 42). Binary grew → seed refreshed
+# to Stage2 (seed==Stage1==Stage2, S2==S3, full e2e + 3 backend sweeps green).
+
+# ---- reseed: checked bounds for typed array-slice indexing (I11) ----
+# `emit_index_addr` now emits a `verify.checked`-gated bounds guard for a typed ARRAY-SLICE local
+# (`ek == 5`, `is_ref`, `snl == 1` — a {data ptr, runtime len} view from `arr[lo..hi]`): the index in
+# %rax is compared against the slice's runtime LEN WORD (frame `-(off+2)*8(%rbp)`, the same word `.len`
+# reads) via `cmpq -(off+2)*8(%rbp), %rax / jb 1f / ud2 / 1:` — no register clobbered, `jb` traps a
+# negative (huge-unsigned) index too. Complements the static frame-array (ek 5, non-ref) and mutable-
+# global array bounds; a struct/enum-element slice (snl != 1) is not yet covered. src/ indexes slices,
+# so its own emission gained the guards (self-build stays in-bounds → S2==S3) — the old seed went stale,
+# new seed = self-hosted Stage2 (seed==Stage1==Stage2, S2==S3, full e2e incl. checked_slice_oob + 3
+# backend sweeps green). x86_64-only (the guard is in the x86_64 lower).
+
+# ---- reseed: checked bounds for str / Slice(T)-value byte-and-word indexing (I11) ----
+# The slice_var_ref index path (`s[i]` on a `Slice(T)` struct local or a str/str-view local, ek 2/4)
+# now emits a verify.checked-gated bounds guard: after the index is popped to %r8, it is compared
+# against the value's runtime LEN WORD (word 1, frame `-(off+2)*8(%rbp)`) via `cmpq …(%rbp), %r8 / jb
+# 1f / ud2 / 1:` (no register clobbered; a negative/huge-unsigned index also traps) for the NON-REF
+# (local) case; a by-ref Slice(T) PARAM (len behind the struct pointer) is a follow-up. Unlike the
+# typed-array-slice guard (emit_index_addr), src/ DOES index Slice(T) locals, so its own emission
+# gained guards → the old seed went stale (fixpoint reported seed!=Stage1); new seed = self-hosted
+# Stage2 (post-reseed seed==Stage1==Stage2 326541, S2==S3, full e2e incl. checked_str_oob + 3 backend
+# sweeps green — self-build stays in-bounds, no self-trap). x86_64-only.
+
+# ---- reseed: cross-backend checked array bounds — aarch64 (I11/CG-7) ----
+# The aarch64 backend now emits a verify.checked-gated array-index bounds guard (the first cross-backend
+# checked step — checked was x86_64-only). New `A64_CHK` mode global (mirrors lower.al's VERIFY_CHK;
+# the native backends run their own emit, so they need their own mode flag), an `Expr::Unchecked` arm
+# that clears/restores it (so `unchecked` drops the guard — no cross-backend divergence under unchecked,
+# unlike an always-on guard), `a64_array_nel` (the array local's ArrayLit length), and in the Index emit
+# `mov x1,#N / cmp x0,x1 / b.lo 1f / brk #0 / 1:` (b.lo also traps a negative/huge index). aarch64.al is
+# NOT exercised by the x86_64 self-build (dead code there), so fixpoint stayed green (seed==Stage1==Stage2
+# 326836) — the binary just grew → seed refreshed to Stage2. a64_sweep green (in-bounds programs run
+# correctly; guards don't false-trap). riscv64/wasm array bounds are the next parallel step.
+
+# ---- reseed: cross-backend checked array bounds — riscv64 (I11/CG-7) ----
+# Same as the aarch64 step, for riscv64: new `RV_CHK` mode global + `Expr::Unchecked` arm that
+# clears/restores it + `rv_array_nel` + Index-emit guard `li a1,N / bltu a0,a1,1f / ebreak / 1:`
+# (bltu also traps a negative/huge index; a1 scratch). riscv64.al is dead code in the x86_64 self-build
+# → fixpoint stayed green (327131); binary grew → seed refreshed to Stage2. rv64_sweep green. WASM
+# array bounds remain (structured WAT needs a scratch-local to check-and-reuse the index — a follow-up).
+
+# ---- reseed: cross-backend checked array bounds — WASM (I11/CG-7), completes 4/4 backends ----
+# The WASM backend now bounds-checks array indexing too, completing checked array bounds on ALL FOUR
+# backends (x86_64 + aarch64 + riscv64 + wasm). WASM is structured (no scratch register, folded WAT
+# expr), so: `WAT_CHK` mode global + `Expr::Unchecked` arm + `array_local_nel` + one extra reusable
+# SCRATCH `(local i64)` per fn (index `pcount + nloc`, declared in emit_wat_body) + the Index emit wraps
+# the index in `(block (result i64) (local.set SC <idx>) (if (i64.ge_u (local.get SC) (i64.const N))
+# (then (unreachable))) (local.get SC))` (i64.ge_u unsigned → negative/huge index also traps). Validated
+# by wat2wasm; wasm_sweep green (in-bounds run correct). wat.al is dead code in the x86_64 self-build →
+# fixpoint stayed green (327585); binary grew → seed refreshed to Stage2.
+
+# ---- reseed: FN-6 non-capturing inline function values (lambdas) ----
+# Inline `fn(sig){body}` in expression position now works end-to-end (parse + lift + check + build +
+# run). NEW: ast `Expr::Lambda`/`Expr::FnRef`; parser p_factor parses `fn(...){...}` → Lambda (scalar
+# params first-slice); a DRIVER-level pass `d_lift_lambdas` (in driver.al — the parser module's decl
+# read gave garbage, an isolated cross-module discrepancy; the driver reads decls correctly) rewrites
+# each Lambda → FnRef + appends a synthetic top-level fn Decl (SENTINEL name_len==0, name_start = the
+# `fn` offset → label `<mod>__lam<fnpos>`); lower emits the FnRef code pointer (`leaq …lam<fnpos>`) and
+# the mangled def; calling a fn value is the existing indirect `call *%rax`. Also: mark_calls_expr FnRef
+# arm marks the (indirectly-called) lifted lambda reachable so DCE keeps it; sema check_expr +
+# expr_has_unbound FnRef arms; d_lift_stmts For arm null-guards lo/hi (`for x in arr` has null hi — was
+# a segfault). na/tar passed as ptr(mut Arena) (ptr of a driver LOCAL is stable; in-out aggregate PARAM
+# ptr destabilizes, driver.al:53-59). Tests lambda_value (run 42 + check_accept). src/ has no lambdas
+# so lift is a no-op there → self-build unchanged (fixpoint 330722 seed==Stage1==Stage2, full e2e + 3
+# sweeps green). Follow-ups: CAPTURE (static-closure env aggregate), dyn, fmt Lambda render.
+
+# ---- reseed: fmt renders FN-6 lambda values ----
+# `alatyr fmt` now renders an inline `Expr::Lambda` (`fn(sig) -> ret { body }`) — the fmt path does not
+# lift, so it sees Lambda (added a defensive FnRef arm too). Reuses emit_fmt_params + emit_fmt_stmts +
+# the trailing-value + fmt_type_param machinery like emit_fmt_fn. Test `fmt_test lambda_value` (round-
+# trips idempotently + rebuilds+runs to 42; body indent is a cosmetic gap, still valid + idempotent).
+# fmt.al is dead code in the self-build's emission → fixpoint stayed green (330954); binary grew → seed
+# refreshed to Stage2.
+
+# ---- reseed: multi-parameter FN-6 lambdas ----
+# A 2+-parameter inline lambda `fn(a, b) { ... }` was mis-lowered two ways:
+#  (1) parser.al — the extra-param `.next` link was written via a `deref(ptr) = Param(...)` inline-ctor
+#      store, which the seed mis-lowers (store-through-pointer scar), silently dropping the link. The
+#      §1 spill count reads `d.arity`, so the callee saw only its first parameter and the 2nd argument
+#      aliased the 1st (`add(40, 2)` = 80). Fixed by building the updated Param in a LOCAL, then storing
+#      (mirrors the top-level fn param-link).
+#  (2) lower.al — two lambdas in one fn both have the SENTINEL empty name (name_len == 0), so
+#      overload_set_count saw a 2-member "overload set" and appended a signature suffix to the
+#      DEFINITION labels only (`__lam31__u64_u64`), while the FnRef call side emits the bare name
+#      (`__lam31`) → undefined reference at link. Fixed by never suffixing an empty-named fn.
+# src has no lambdas → self-build GAS byte-identical → fixpoint held (331022); binary grew → reseed.
+# Test: lambda_multiparam (2- and 3-param lambdas; run + accept + fmt round-trip, all = 42).
+
+# ---- reseed: reject immediately-invoked function values (FN-6 IIFE) ----
+# `(fn(...){...})(args)` — a call APPLIED to a parenthesized lambda — was a SILENT MISCOMPILE: the
+# postfix `(args)` isn't handled by p_field (Expr::Call's callee is a NAME span, not an expression,
+# so an IIFE is not representable), so the trailing `(args)` was dropped and the lambda's code pointer
+# leaked out as the value — the process exit was the LOW BYTE of the lambda's address (e.g. 50 for a
+# program that should return 42). Now rejected fail-loud in the parser (an `expr_is_lambda` guard on a
+# `(`-postfix after a factor); bind the lambda to a name first. NOTE: the guard uses NESTED `if`s, not
+# `if cur==10 and expr_is_lambda(base)` — a comparison AND-ed with a fn call mis-lowers under the seed
+# (the lean-lower `and` gotcha) and silently skipped the guard. src has no IIFE → fixpoint-neutral
+# (331112); binary grew → reseed. Test: reject_iife (check rejects, rc=1).
+
+# ---- reseed: no false-duplicate rejection for same-arity lambdas (FN-6) ----
+# `check` FALSELY rejected a fn holding two lambdas of the SAME arity ("duplicate name"): both lifted
+# lambdas carry the SENTINEL empty name (name_len == 0), so duplicate_decl compared their names equal
+# (empty == empty) and same_fn_signature (same arity) marked the second a duplicate — a check/build
+# divergence (the program builds + runs fine). A lambda is unique by its `fn`-offset, never a duplicate;
+# duplicate_decl now returns false immediately for a name_len == 0 decl. Bonus: a capturing lambda that
+# calls another lambda now rejects with the CORRECT "unbound name" diagnostic instead of the misleading
+# "duplicate name". src has no lambdas → fixpoint-neutral (331133); binary grew → reseed.
+# Test: lambda_two_same_arity (accept + run 42).
+
+# ---- reseed: reject aggregate-returning function values fail-loud (FN-6) ----
+# A lambda returning a MULTI-WORD aggregate (struct/enum/str) was a SILENT MISCOMPILE: a lambda is
+# called only INDIRECTLY (through its code-pointer value), and the indirect-call site has no signature
+# for the fn value, so `r := mk(40)` captured only ONE result word (dropping the rest) and `r.x`/`r.y`
+# resolved against the wrong slot — `r.x + r.y` returned 184, not 42. Now rejected fail-loud on BOTH
+# paths: sema check_fn (check, located at the lambda) rejects ret tag 3/4/6; lower emit_fn (build)
+# panics for a name_len==0 fn whose return type is a struct/enum/str. Scalar-returning lambdas are
+# unaffected. Proper support needs fn-value return-type tracking (a larger batch). Both guards use
+# nested `if`s (the seed mis-lowers a comparison AND-ed with a call). src has no lambdas → fixpoint-
+# neutral (331433); binary grew → reseed. Test: reject_lambda_aggregate_return (check rejects, rc=1).
+
+# ---- reseed: checked bounds for AGGREGATE-element frame arrays (I11, x86_64) ----
+# A struct/enum/str-element frame array `[P; N]` was NOT bounds-checked on x86_64 (only scalar/float-
+# element arrays were) — `arr[5].x` on a 2-element array SILENTLY read out of bounds (a real I11 gap /
+# silent OOB). The scalar check keyed on `ent.snl` = the static count, but an aggregate array's `snl`
+# holds the element TYPE span, so there was no count to compare. Fix (emit_index_addr): recover the
+# count from the reserved filler slots (`agg_arr_fill_count(slots, bslot) / ent.estride`) and emit the
+# same `cmpq $N; jb 1f; ud2; 1:` trap on the raw index, for eek 2/3/4 (struct/enum/str), gated on
+# `aggn > 0` + `not is_ref` + VERIFY_CHK. Behaves EXACTLY like the scalar case: OOB traps (SIGILL 132),
+# `unchecked (arr[i])` drops the check. Fixpoint held (seed==Stage1==Stage2, 331626 — src does index
+# aggregate arrays, all in-bounds, so the added checks pass); binary grew → reseed.
+# Test: checked_agg_array_oob (struct-element OOB → exit 132).
+
+# ---- reseed: checked bounds for MUTABLE-GLOBAL array element access (I11, x86_64) ----
+# Four mutable-global array index paths in lower had NO bounds check (only the scalar-global READ + the
+# frame-array paths did) → out-of-range access SILENTLY read/wrote out of bounds (I11 gap / memory
+# corruption on writes): (1) `TAB[i].field` READ on a struct-array global; (2) `TAB[i] = P(…)` whole-
+# struct element WRITE; (3) `TAB[i].field = v` element-field WRITE; (4) `TABLE[i] = v` SCALAR element
+# WRITE. Each now emits `cmpq $N, %rcx; jb 1f; ud2; 1:` (N = the array's static count `array_lit_info(
+# ...).nel`) on the index before scaling/store — same trap + `unchecked`-drop as the scalar-global read
+# and the frame paths. Fixpoint held (seed==Stage1==Stage2, 331878); binary grew → reseed.
+# Tests: checked_global_arr_read_oob + checked_global_arr_write_oob (both → SIGILL exit 132).
+
+# ---- reseed: checked bounds for an ARRAY FIELD of a struct (I11, x86_64) ----
+# `s.xs[i]` (xs : [T; N], the nested-place `field_index_base` path) computed the element address with NO
+# bounds check → out-of-range read/write silently out of bounds. `FldIxBase` now carries the field's
+# static length `flen` (from its declared `[T; N]` type span via field_type_span + parse_arr_len) and
+# emit_index_addr traps an out-of-range index (`cmpq $N; jb; ud2`) before scaling. Fixpoint held
+# (332011); reseed. Test: checked_struct_field_array_oob (→ SIGILL exit 132).
+
+# ---- reseed: FN-6 CAPTURE — static closures, first slice (scalar captures, direct calls) ----
+# A lambda that references an enclosing LOCAL now captures it. Lift-time AST rewrite (driver
+# d_capture_pass, run per enclosing fn before the existing lift): (1) collect the lambda's FREE VARS
+# (body Vars that are not its params / not a top-level decl) — single-`return` body, bound set = params;
+# (2) if any, ESCAPE-check (f used as an Expr::Var anywhere = a value use → panic fail-loud, since the
+# captures are injected only at direct calls); (3) append each capture as a trailing PARAM; (4) inject
+# each as a trailing ARG at every direct `f(...)` call in the enclosing fn → `f(x, c)`. Lower then sees
+# an ordinary multi-arg indirect call — NO lower/sema changes. sema now accepts (the free vars ARE params
+# post-rewrite); a scalar-returning multi-cap closure called N times works; capturing the enclosing fn's
+# param works. **CRACKED WITH gdb**: the create kept crashing d_lam_arity on a garbage `.next`; a gdb
+# backtrace + a word-dump probe showed the stored Param word 0 = a STACK POINTER, not the fields — the
+# node STORE (`deref(ptr)=structval`) mis-lowers in the DRIVER module (writes &val) but works in the
+# PARSER module (a cross-module codegen quirk, the mirror of the driver-reads-decls-fine/parser-doesn't
+# one). Fix: all appended-node building runs via NEW pub parser helpers — pnode / newnode / gnode /
+# set_param_next / set_arg_next — so the stores execute in the parser module. src has no lambdas →
+# capture pass dormant → fixpoint held (336345); binary grew → reseed.
+# Tests: lambda_capture, lambda_capture_multi (accept+run 42); reject_lambda_capture_escape (fail-loud).
+
+# ---- reseed: FN-6 capture extended to MULTI-STATEMENT lambda bodies ----
+# Capture no longer requires a single-`return` body: the lift now collects the lambda body's inner
+# LOCALS (`:=` binding LHS + `for` loop vars, via d_cap_locals) so they are NOT mistaken for captures,
+# then collects free vars over ALL body statements + the trailing value (d_cap_free_stmts + d_cap_free
+# gained a `locals` exclusion). Works for `t := n+c; return t`, tail-expr bodies (`d := n*2; d + c`), and
+# if/while/for bodies. A `match`-arm-binding body sets an `unhandled` flag → capture handling is
+# declined (falls back to the normal lift → sema rejects it if truly capturing — sound, not-yet-
+# supported); a NON-capturing match-body lambda still builds fine. src has no lambdas → fixpoint held
+# (337367); reseed. Test: lambda_capture_multistmt (accept + run 42).
+
+# ---- reseed: FN-6 capture — reject NON-SCALAR captures fail-loud (soundness) ----
+# Capturing a struct/enum/str/array local was a SILENT MISCOMPILE (`f(0)` on a struct-capturing closure
+# returned 0, not 42; check accepted): the first-slice capture params are untyped WORD slots, so a
+# captured aggregate is truncated/mis-passed. Now the lift detects a non-scalar capture — a `.field` or
+# `[i]` access on a captured var in the lambda body (d_flag_nonscalar_base, threaded through d_cap_free/
+# d_cap_free_stmts) — and rejects fail-loud on BOTH paths. Scalar captures (single/multi/multi-stmt)
+# unaffected. Typed/by-ref aggregate capture params are a later slice. src neutral → fixpoint 337679;
+# reseed. Test: reject_lambda_capture_aggregate.
+
+# ---- reseed: FN-6 capture — AGGREGATE (struct/enum) captures now WORK (typed by-ref params) ----
+# A lambda capturing a struct/enum local is no longer rejected: the lift resolves the captured var's TYPE
+# by scanning its enclosing binding (`cap := StructLit/EnumLit` → the type name span, d_local_type_span +
+# a standalone d_lit_type_span — a nested `match` inside the scan mis-lowered under the seed, the
+# doubly-nested-match gotcha), then gives the capture a TYPED by-reference param, so `cap.field` /
+# `match cap` in the lifted fn resolve and the injected arg passes the struct/enum local by reference.
+# `match`-body lambdas are now FULLY analyzed (arm payload binds collected as locals via the Arm/Bind
+# walk; scrutinee + arm bodies scanned for captures) — enum captures via `match` work; the `unhandled`
+# fallback now only covers comptime match/if/for. SOUNDNESS preserved: a non-scalar capture whose type
+# is NOT a directly-bound literal (e.g. `p := mk(40)`) → hardreject fail-loud; escaping capturer →
+# reject; scalar capture → untyped word param. src neutral → fixpoint 338599; reseed.
+# Tests: lambda_capture_struct, lambda_capture_enum (accept+run 42); reject_lambda_capture_aggregate
+# (fn-call-bound struct → reject).
+
+# ---- reseed: FN-6 capture — comptime-if bodies + prelude-identifier exclusion (soundness) ----
+# A capturing lambda with a `comptime if` body was a SILENT MISCOMPILE (the capture inside the comptime
+# body was not collected → the `unhandled` decline lifted it with the var unbound → returned garbage;
+# sema does not catch it). Fixes: (1) CompIf is now FOLDED/handled like a runtime `if` (d_cap_locals +
+# d_cap_free_stmts recurse its branches) — a captured scalar in the kept branch resolves against its
+# injected param; (2) CompFor/CompForRange/CompMatch stay `unhandled` but their free vars ARE collected,
+# so a CAPTURING one has caps > 0 → d_try_capture rejects it fail-loud (no silent miscompile from an
+# un-injected comptime-body capture); (3) PRELUDE namespace identifiers (target/Arch/verify/Ordering)
+# are excluded from capture detection (d_is_cap_name) — `target.arch`/`Arch.x86_64` in a condition were
+# mis-detected as non-scalar captures → a false hardreject; this also prevents any lambda from
+# false-capturing a prelude builtin. src neutral → fixpoint 339093; reseed.
+# Test: lambda_capture_comptime_if (accept + run 42).
+
+# ---- reseed: checked bounds for by-ref fixed-array PARAMS + struct-array-param slice-collision fix ----
+# (1) A by-reference fixed-array param `a : [T; N]` was NOT bounds-checked (a by-ref param had no static
+# count in its slot) → an OOB `a[i]` crashed (SIGSEGV) instead of trapping. The length N is STATIC (from
+# the param's own `[T; N]` type) — no passed length needed: the parser now captures N into the param's
+# free `pps` slot (was discarded), bind_param records it in the slot's `sns` for a scalar element, and
+# emit_index_addr traps an out-of-range index (`cmpq $N; jb; ud2`), like a frame array. `unchecked` drops it.
+# (2) FIXED a latent bug it exposed: a struct/enum array PARAM whose element type NAME is 1 char (`[P;N]`,
+# snl = len("P") = 1) collided with the runtime-len SLICE marker (`snl == 1`) → the slice bounds check
+# read the wrong frame slot as a "length" and mis-trapped even an IN-BOUNDS index. Gating the slice check
+# on a scalar element (`eek == 0`) fixes it (a struct/enum-element slice has snl = a type span, not 1).
+# src neutral → fixpoint 339391; reseed. Tests: checked_byref_array_param_oob (OOB→132), struct_array_param (in-bounds→42).
+
+# ---- reseed: FN-6 escaping closures via forwarding-HOF inlining (a slice of dyn) ----
+# A CAPTURING closure passed to a PURE FORWARDING higher-order fn `app(g, x…){ return g(x…) }` now works
+# (was rejected as escaping): the lift detects such a forwarder (d_fwd_hof_arity — its body a single
+# `return param0(param1…)`, callee==param0, args==the rest of the params in order) and INLINES the call
+# `app(f, a…)` → a DIRECT call `f(a…)` (d_rewrite_fwd_* runs in d_capture_pass before the capture pass),
+# so `f` no longer escapes and the existing capture injection carries its captures — scalar AND struct
+# captures, multi-arg forwarders. NON-forwarding HOFs (loops / multiple calls, e.g. `g(x)+g(x)`, map,
+# filter) still can't carry captures → reject fail-loud (no silent miscompile). KEY BUG (gdb-adjacent):
+# an INLINE `match deref(re) { Expr::Call => }` inside d_fwd_hof_arity did NOT fire on a top-level-fn
+# body's returned Call (the lean-lower inline-match gotcha) — extracting it to a STANDALONE `expr_call_info`
+# helper (its own match) fixed it. General non-forwarding escaping closures still need the fat-value/env
+# dyn (a wide ABI refactor — a dedicated session). src neutral → fixpoint 340794; reseed.
+# Tests: lambda_capture_via_apply (accept+42); reject_lambda_capture_escape (non-forwarding `twice` → reject).
+
+# ---- reseed: built-in narrow-width arithmetic WRAP on x86_64 (§4 value model) ----
+# The built-in (non-routed) x86_64 `+`/`-`/`*` now TRUNCATES its result to the operand's narrow width
+# (uN/iN, N<64) — `200u8 + 100u8` = 44u8, not the 64-bit 300. Formerly the built-in path computed in
+# 64 bits and only an explicit uN(x) conversion truncated, so an inferred/typed narrow local silently
+# held the un-wrapped value (a silent miscompile per the value model). lower.al Bin arm: after add/sub/
+# imulq, if expr_type_span(operand) is a narrow uN/iN (is_narrowing_conv) emit emit_int_narrow_reg
+# (movzbq/movsbq/movl/…). A ROUTED width operator (§2, e.g. num.al addl) truncates itself + returns
+# before this path → unaffected (width_wrap_arith stays 2). src/ DOES do a little narrow arithmetic
+# (byte-escape helpers etc., all in-range) so its emission shifted → NOT fixpoint-neutral → self-promote
+# (Stage2==Stage3 353153, e2e + 3 sweeps green). Test narrow_wrap_builtin (run_x86 — u8 200+100=44<50 → 42).
+# FOLLOW-UP: the NATIVE backends (aarch64/riscv64/wasm) built-in narrow arith still does NOT wrap (their
+# emit_*_arith + operand-width resolution — the a64_emit_narrow/etc. helpers exist from the conversion
+# work; needs a per-backend operand narrow-type resolver). Registered run_x86 so no sweep divergence.
+
+# --- reseed (self-promote): I11/CG-8 checked OVERFLOW guard on `+` (native width) ---
+# Native `Bin` path now TRAPS on a checked integer OVERFLOW of `+` at native width (u64/i64/usize/
+# isize), dropped under `unchecked`. x86 addq+jnc/jno/ud2; a64 adds+b.cc/b.vc/brk; rv64 add+sltu/
+# sign-test+ebreak; wasm operands→value-stack then $__ova/$__ovb/$__ovo + i64.lt_u/sign-test+unreachable
+# (nesting-safe). Narrow width keeps its §4 value-model WRAP. POINTER offsetting is expressed via the
+# new `rt::addr(base, off)` (unchecked) so address arithmetic (incl. REBASED comptime-synthesized-name
+# handles `src + (target-src)`) never reaches the guard — audit found exactly lower_layout::name_tail +
+# streq needed it (the rebased-offset path). NOT fixpoint-neutral → self-promote: Stage2==Stage3
+# byte-identical, e2e + a64/rv64/wasm sweeps green. Tests checked_add_ovf (run→132) + unchecked_add_ovf
+# (run_a64→0). Test wraparound audit: operator_vec2 (.y per-field unchecked) + overload_second_arg.
+
+# --- reseed (self-promote): I11/CG-8 checked OVERFLOW guard on `+` (native width) + rt::addr ---
+# Native `Bin` path TRAPS on checked integer OVERFLOW of `+` at native width (u64/i64/usize/isize),
+# dropped under `unchecked`. x86 addq+jnc/jno/ud2; a64 adds+b.cc/b.vc/brk; rv64 add+sltu/sign-test+
+# ebreak; wasm value-stack→$__ova/$__ovb/$__ovo + i64.lt_u/sign-test+unreachable (nesting-safe).
+# Narrow width keeps §4 value-model WRAP. NEW rt::addr(base,off) = unchecked pointer offsetting: the
+# compiler's `str_at(src + span)` reads are ADDRESS arithmetic (a REBASED comptime-synthesized-name
+# handle `src + (target-src)` wraps modularly; the guard's carry-trap is ASLR-nondeterministic on it),
+# so every `str_at((cx.)?src + off)` across all modules routes through rt::addr, plus per-module streq +
+# lower_layout name/type scanners. rt::addr is the usize->ptr migration seam. NOT fixpoint-neutral ->
+# self-promote: S2==S3 byte-identical, e2e (x3, ASLR) + a64/rv64/wasm sweeps green. Tests
+# checked_add_ovf (run->132) + unchecked_add_ovf (run_a64->0); wraparound-audit operator_vec2 +
+# overload_second_arg. FOLLOW-UP: slice 1c = `*`/`-` overflow (audit src FNV `*` + usize `-`); then
+# narrow-width overflow; full usize->ptr typing migration (retires rt::addr) is its own track.
+
+# --- reseed (self-promote): I11/CG-8 checked OVERFLOW/UNDERFLOW on `-` and `*` (native width) ---
+# `-`: x86 subq+jnc(borrow)/jno; a64 subs+b.cs/b.vc; rv64 sltu-pre / signed xor-test; wasm gt_u /
+# signed xor-test. `*`: x86 mulq+jnc(unsigned hi) / imulq+jno(signed); a64 umulh/smulh vs asr#63;
+# rv64 mulhu/mulh vs srai 63; wasm a!=0 && out/a!=b (div_u/div_s). All dropped under `unchecked`;
+# narrow width wraps. NEW: unary `-x` wrapped in Expr.Unchecked by the parser (2's-complement negation
+# is modular). NEW: a literal-`0` LEFT operand skips the guard (expr_is_zero) — `0 - N` is negation/
+# sentinel, never overflow — covers the pervasive `mut off := 0 - 1` idiom in src/. Pointer DIFFERENCE
+# (rebasing `base_abs - src`) routes through new rt::off (unchecked), the dual of rt::addr. FNV-hash `*`
+# already `unchecked` in lib/. NOT fixpoint-neutral -> self-promote: S2==S3 byte-identical, e2e +
+# a64/rv64/wasm sweeps green. Tests: checked_mul_ovf/checked_sub_ovf (132), unchecked_mul_ovf (2),
+# unchecked_sub_ovf (42). After this, I11 arithmetic verification (+,-,*,/,overflow+div0) is met in
+# codegen on all four backends; bounds-trap was already done. Remaining I11: narrow-width overflow trap.
+
+# --- reseed (self-promote): I11/CG-8 checked NARROW-WIDTH overflow trap (x86_64) ---
+# A checked narrow-typed (uN/iN, N<64) `+`/`-`/`*` now TRAPS if the 64-bit result does not fit the
+# width, BEFORE the value-model truncation: unsigned uN via `shr $N` nonzero; signed iN via low-N
+# sign-extension (movsbq/movswq/movslq) != full. Dropped under `unchecked` (then the truncation is the
+# wrap) and skipped for a `0 - x` negation. x86_64-only (narrow arithmetic is x86-only today; the native
+# backends model neither the narrow wrap nor this trap — a follow-up). NOT fixpoint-neutral (src narrow
+# arith gains a guard where checked) -> self-promote: S2==S3, e2e green (src byte arith all in-range).
+# narrow_wrap_builtin now uses `unchecked` to select the wrap (44 -> 42); checked_narrow_ovf asserts the
+# trap (132). This closes I11 arithmetic verification on x86_64 (+,-,*,/,div0,bounds,overflow both widths).
+
+# 2026-07-18 reseed: `unchecked { block }` statement verification-mode form (Grammar §130
+# `unchecked (expr | block)`) — a new `Stmt::Unchecked(body, next)` AST variant + parser (p_stmt/
+# stmt_starts) + 34 pass arms + the x86 emit toggling VERIFY_CHK around the body. NON-neutral (the
+# new arms shift the compiler's own emit by 4 lines: 337803 -> 337807) -> self-promote. Stage2==Stage3
+# binary-identical, e2e green, a64/rv64/wasm sweeps clean; verified on the primes benchmark
+# (`unchecked { while … }` -> "primes = 78498") + u1 (-> 5). The EXPRESSION form `unchecked <expr>`
+# (used pervasively in src/) is unchanged. Enables the spec-correct freestanding benchmarks (with the
+# already-merged entry-point _start + bare-exit injection).
+
+# 2026-07-18 reseed: usize->ptr Phase 3 (fold the rebase). rt::addr/rt::off were REAL fns (640
+# `call rt__addr` in the compiler's own gas — a call+ret per source access); folded all 649 call
+# sites to native pointer arithmetic (`src + off` / `p - base`). Prereq: the x86 Bin emit now SKIPS
+# the I11 overflow guard when an operand is a POINTER type (address arithmetic is unchecked BY TYPE,
+# CG-8 — via expr_type_span base-name `ptr`, resolves ptr fields too). The 2 INTENTIONAL modular-
+# underflow rebase seams (synth_ident_span, subst_enum_ret_span: `base_abs - src`) keep an explicit
+# `unchecked` (a `PC.src` in-out-param field the type-based skip didn't cover). NON-neutral (inline
+# arithmetic replaces the calls: 337807 -> 337991, 640 -> 0 `call rt__addr`) -> self-promote.
+# Stage2==Stage3, e2e + a64/rv64/wasm sweeps green. Completes usize->ptr (Phase 1 relabel + Phase 3
+# fold): address arithmetic is now native + unchecked by type, not by the rt::addr helper.
+#
+# --- reseed (self-promote): nested enum-in-enum copy — type a match payload binding in collect_slots ---
+# 2026-07-19 reseed: `collect_slots`' `Stmt::Match` arm now binds a SINGLE struct/enum-typed payload
+# binding as a real aggregate slot (ek 2/3, via variant_payload_type), so a `j := <payload binding>`
+# inside the arm infers the payload's enum/struct type. Was: only emit_match aliased the payload type,
+# so the collect-time `:=` bound `j` scalar and a later `match j` read word 0 -> the wrong arm (0). The
+# added slot entry shifts svec_len-based offsets of every following local, so `src/`'s own enum-payload
+# matches re-emit -> NON-neutral (seed != Stage1, 352056 -> 353700 GAS lines). CROSS-BACKEND SAFE: all 3
+# sweeps clean (emit_match re-aliases per arm on every backend, so the collect reservation is unused at
+# emit). Self-promote: Stage2==Stage3 byte-identical + e2e (nested_enum_copy=42) + a64/rv64/wasm sweeps
+# green. (Batched with the fixpoint-neutral non-x86 shift-signed-inference fix, committed separately.)
+
+# --- reseed (self-promote): multi-word enum-RETURN ABI beyond 2 words (nested-enum payload) ---
+# 2026-07-22 reseed: an enum RETURNED from a call whose payload is itself a MULTI-WORD enum
+# (`R.Fail(Err.Bad(x))`, R = disc + Err = 3 words) now delivers + stages the WHOLE payload, not just
+# disc + payload[0] (2 words). Three x86 sites: (1) emit_enum_value's EnumLit arm widens `pw` for a
+# nested-enum payload via the new `payload_enum_words` (EnumLit/enum-Var → `1 + enum_inst_words`),
+# reusing the existing `pcall` register-SHIFT path (the inner enum's words ride %rdx.. whole); (2) the
+# expression-match call-staging and (3) the statement-match call-staging both now copy EVERY returned
+# word (word k in emit_retreg(k) → scratch slot tbc+1-k, the down-growing layout) instead of only
+# %rax+%rdx. NON-neutral (355457 -> 355465 GAS lines: src/ returns enums like Result/ParseErr whose
+# payload is a multi-word enum, so the RETURN emit changed) -> self-promote. Stage2==Stage3
+# byte-identical + e2e (enum_ret_nested_payload/_direct = 42) + a64/rv64/wasm sweeps green (the two new
+# tests trap on non-x86 — allowed; the change is x86-only). Unblocks the structured-error pattern
+# (`Result`/`ParseErr` by value) and the §5 ParseErr parse-diagnostic (its inner payload no longer
+# truncates). enum_max_arity already recurses into nested-enum payloads, so the binding-slot RESERVE
+# was already correct; only the register DELIVERY + call-staging COPY truncated.
+#
+# Reseeded 2026-07-22 (self-promote) — DIRECT deref-of-field field READ. A `deref(o.p).f` where `o.p`
+# is a `ptr(<opt mut> Struct)` struct FIELD now resolves the pointee's field INLINE, with no
+# intermediate `n := o.p` binding — the idiomatic linked-list / tree walk spelled directly
+# (`deref(node.next).val`). New `deref_field_ptrstruct_span` (the READ dual of `deref_field_struct_span`,
+# which handles the `x := deref(o.p)` BINDING) + a branch in the scalar field-read arm that evaluates the
+# field's pointer value then loads the pointee field at `fi*8(%rax)` (the same ascending pointee layout
+# as the ek-7 `deref(p).f` and `deref(<call>).f` reads). NON-neutral (355901 -> 355904 GAS lines): the
+# ONE src/ site of this shape — `deref(v.arena).base` in sema.al's lvec_push, previously latently
+# mis-lowered (per the arena_base comment) but on a grow path unexercised during self-compile — now
+# lowers CORRECTLY through the new branch, so the emit changed -> self-promote. Stage2==Stage3
+# byte-identical + full e2e (new deref_field_direct = 42) + a64/rv64/wasm sweeps green (deref_field_direct
+# traps on non-x86 — allowed; the x86 field-read emit is the deliverable, other backends are a follow-up).
+#
+# Reseeded 2026-07-24 (self-promote) — UNSIGNED ORDERING COMPARISON fix (I11 / signedness). The
+# non-inline binary-op fallback in lower.al emitted SIGNED setcc (`setl`/`setg`/`setle`/`setge`)
+# UNCONDITIONALLY for `<`/`>`/`<=`/`>=`, so a `u64`/`usize` comparison whose operands straddle 2^63
+# read the high-bit operand as NEGATIVE and evaluated WRONG (`0 < u64::MAX` was FALSE — a latent silent
+# miscompile). New positive, CONSERVATIVE `is_unsigned_expr`/`is_unsigned_cmp` (the DUAL of
+# `is_signed_expr`): when BOTH operands are PROVABLY unsigned (base type u8/u16/u32/u64/usize) the
+# fallback now emits the UNSIGNED setcc (`setb`/`seta`/`setbe`/`setae`); every signed/unknown operand
+# keeps the SIGNED default, so the compiler's own `isize` comparisons (which go negative) are unchanged
+# in behavior (a naive default-flip broke self-build precisely because `is_signed_expr` misses some).
+# NON-neutral (379027 -> 379027 GAS lines; exactly 42 comparison sites flipped setl->setb / setg->seta /
+# setle->setbe / setge->setae — all proven-unsigned u64/usize compares of small values, so byte-changed
+# TEXT but identical runtime behavior). Stage2==Stage3 byte-identical + full e2e green (new
+# checked_unsigned_cmp = 42: all four orderings across 2^63 correct + signed -1<0 still correct) +
+# a64/rv64/wasm sweeps clean (no silent miscompiles). x86 fallback only; the a64/rv64 backends keep the
+# always-signed ordering pending their own fix (checked_unsigned_cmp is run_x86, sweep-excluded).
+#
+# Reseeded 2026-07-31 (self-promote) — REGISTER ALLOCATION NOW DEFAULT-ON for the scalar-leaf shape
+# (regalloc COMMIT 3). Commit 1 (421aaba) landed a dormant instruction-IR + linear-scan allocator;
+# commit 2 (f04db84) wired an emit-from-IR path for the scalar-leaf / `unchecked` shape behind an
+# `ALATYR_RA=1` env flag (default OFF → fixpoint-neutral). This reseed FLIPS the default: `emit_fn`
+# register-allocates the scalar-leaf shape on EVERY build with no env var; `ALATYR_RA=0` is retained
+# as an OFF escape hatch (forces the old text-stack-machine path, for debugging). `ra_env_init` now
+# defaults RA_ON=1 and only CLEARS it on an `ALATYR_RA=0` /proc/self/environ entry. Because the
+# compiler's OWN scalar-leaf fns are now register-allocated, this is a NON-neutral codegen change (the
+# old default-off seed emits different GAS), so — exactly like the 2026-07-17 peephole_gas reseed — the
+# seed is SELF-PROMOTED to the convergent default-on fixpoint: seed(old,default-off) builds src ->
+# Stage1 (behaves default-on, bytes from the old seed), Stage1 builds -> Stage2 (its own fns now
+# register-allocated) != Stage1, Stage2 builds -> Stage3 == Stage2 == Stage4 BYTE-IDENTICAL (allocator
+# is DETERMINISTIC — the reseed precondition). Stage2 promoted to seed/alatyr; post-reseed fixpoint
+# seed == Stage1 == Stage2 GREEN (537763 GAS lines, up from 379027 — the register-allocated scalar-leaf
+# emission is more verbose per fn but runs tighter loops). RUNTIME WIN (the deliverable): primes 0.430s
+# -> 0.119s (~3.6x, parity with C) with NO env var; `ALATYR_RA=0` reverts primes to 0.430s (escape
+# hatch verified). arraysum 0.320s -> 0.320s (its hot loop is array-indexing, not the scalar-leaf shape,
+# so unaffected). COMPILE-TIME COST: self-build ~13.0s (default-off seed) -> ~23.9s (default-on) — the
+# per-fn allocator pass adds compile time; the trade is faster EMITTED programs, not faster compilation.
+# check rc=0; full e2e all green; a64/rv64 sweeps match=112, wasm sweep match=110, all "no silent
+# miscompiles". Rebuilds from the rs-ancestor lineage as usual. Next regalloc lever: widen the admitted
+# shape beyond scalar-leaf, and reclaim the compile-time cost (the allocator per-fn overhead).
+#
+# Reseeded 2026-07-31 (self-promote) — CHECKED SCALAR ARITHMETIC WIDENING (regalloc COMMIT 4). The
+# scalar-leaf shape previously required every `+`/`-`/`*` to sit under an `unchecked` scope (so no I11
+# overflow guard was emitted); most real Alatyr code is CHECKED (the default), so ordinary scalar loops
+# fell to the text path. This reseed WIDENS the shape to model CHECKED `+`/`-`/`*` in the register-
+# allocated IR: each op is followed by an inline overflow guard — `add/sub` → `jno/jnc CONT; ud2; CONT:`
+# (signed → `jno`, unsigned → `jnc`); signed `*` → `imul + jno`; UNSIGNED `*` → 1-operand `mul` (rdx:rax,
+# CF on overflow) `+ jnc` — the EXACT trap the text path emits. New IR opcode 13 = `ud2` (a dead-end, no
+# CFG successor); new jcc codes jno(10)/jnc(11); the op+guard is an ATOMIC unit (the only thing the
+# allocator schedules between them is a spill STORE, a `movq` that preserves OF/CF), and the op's result
+# stays live across the `CONT:` block boundary. `/`/`%` still require `unchecked` (div-by-zero / INT_MIN
+# guards deferred) → a checked division falls to the text path unchanged. CORRECTNESS (I11): a register-
+# allocated checked op TRAPS on overflow exactly as the text path — verified `checked_add/mul/sub_ovf`
+# stay 132, plus standalone leaf-fn traps (a register-allocated `mul3(u64::MAX-adjacent)` → SIGILL 132,
+# `unchecked` wraps, valid inputs compute). SOUNDNESS FIX (found via the reseed's own Stage2 crash): the
+# shape now REJECTS any fn that reads/writes a MODULE GLOBAL (`ir_name_is_global` over mut_global_value /
+# module_const_value) — the checked-`+` widening had let `ir_fresh_vreg`'s `IRV_NEXT = IRV_NEXT + 1` in;
+# the IR treated the global as a vreg (uninitialised garbage → a SIGILL in ra_rw_operand). The inst/label
+# budget now counts checked-guard bins separately (IRP_NCHK) so an UNCHECKED-only fn keeps the tight
+# estimate — is_prime stayed admitted (primes 0.119s, C-parity, 78498). NON-neutral (the self-build's
+# own `nstack_args` — a checked `nvals - 6` — is now register-allocated; +1 regalloc'd fn, 2 total in the
+# self-build), so seed SELF-PROMOTED to the convergent Stage2: seed(old) -> Stage1 -> Stage2 != Stage1,
+# Stage2 == Stage3 == Stage4 BYTE-IDENTICAL (deterministic). Post-reseed fixpoint seed == Stage1 ==
+# Stage2 GREEN (538476 GAS lines, ~10 fewer than the pre-widening 538486 — regalloc removes stack churn).
+# check rc=0; full e2e all green (all checked-arith trap tests); a64/rv64 sweeps match=112, wasm sweep
+# match=110, all "no silent miscompiles". Rebuilds from the rs-ancestor lineage as usual. Next: checked
+# division guards + non-leaf shapes.
+
+# 2026-08-05 RESEED (regalloc for-over-Vec-LOCAL): scalar-leaf register allocation extended to a
+# `for x in v` loop over an arena-backed Vec LOCAL (hybrid-barrier: base=arena.base+idx and len hoisted
+# once into vregs, loop-carried index, indexed element load; the Vec build is a whitelisted text barrier).
+# Narrowed predicate (whitelist mmap/with_capacity/new/arena_over/push barrier calls + admit general
+# barriers ONLY in an arity-0 fn that also has a register-allocated for-over-Vec-local + fail-loud slot
+# guard) so NO fmt/display/print fn is admitted. seed(old) -> Stage1 -> Stage2 != Stage1, Stage1 == Stage2
+# == Stage3 BYTE-IDENTICAL (deterministic, 564314 GAS lines). Post-reseed fixpoint seed == Stage1 ==
+# Stage2 GREEN; full e2e all green (print_* tests exit 42 with RA on); a64/rv64 sweep match=118, wasm=116,
+# no silent miscompiles. arraysum hot loop now 11 insns/iter, zero per-iteration frame reloads. Next:
+# v.push-in-loop + alloc::with/fmt::print barriers for the full arraysum _start shape.
+
+# 2026-08-05 RESEED (regalloc arraysum _start megashape, 6e): the scalar-leaf RA path now admits the
+# FULL arraysum shape — a `v.push` WHILE-loop text-barrier, barriers-not-first (accumulator declared
+# before the build), an `alloc::with` block barrier, and a trailing `fmt::print` barrier — with the
+# scalar for-over-Vec sum-loop register-allocated (base/len/idx/element register-resident, 13 insns/iter;
+# the text path reloaded all of them every iteration). Barriers sync-store modeled scalar vregs to their
+# slots before each op-24 splice; emit_fn_ir reserves the text scratch pools when a general barrier is
+# present. The VEC-SHAPE final gate (arity-0 fn that also has a register-allocated for-over-Vec-local) is
+# the sole narrowing → no fmt/display/print fn is ever admitted (print_* e2e tests stay 42 with RA on).
+# seed(old) -> Stage1; Stage1 == Stage2 == Stage3 BYTE-IDENTICAL (deterministic, 567881 GAS lines);
+# self-promoted to Stage2; post-reseed fixpoint seed==Stage1==Stage2 GREEN; full e2e all green; a64/rv64
+# sweep 118, wasm 116, no silent miscompiles. FOLLOW-UP: hoist the accumulator into a vreg across the
+# for-over-Vec loop (sum currently spills because its live range spans the surrounding barriers) → the
+# full ~6x arraysum headline. Tests: arraysum_start, for_over_vec_regalloc (both 42, RA + text agree).
+
+# 2026-08-05 RESEED (regalloc accumulator-hoist): the arraysum for-over-Vec sum-loop now keeps the
+# ACCUMULATOR register-resident across the loop (ir_find_accum identifies the unique modeled scalar that a
+# body Assign reads-and-writes and isn't the element/idx; ir_lower_vec_for loads its slot into a fresh
+# loop-carried vreg before the loop and stores it back after, preserving the barrier-sync contract — pre-
+# loop barriers see the initial value, the trailing print barrier sees the final sum). Sum no longer
+# round-trips to its frame slot each iteration → 13->11 insns/iter, the only in-loop memory ref is the
+# element load. seed(old)->Stage1; Stage1==Stage2==Stage3 byte-identical (568397 GAS lines, deterministic);
+# self-promoted to Stage2; post-reseed fixpoint seed==Stage1==Stage2 GREEN; full e2e all green (print_*=42
+# RA on); a64/rv64 sweep 118, wasm 116, no silent miscompiles. Residual (separate follow-ups): the 3-insn
+# sum+x (mov;add;mov) = copy-coalescing; the 3-insn address recompute = lea/strength-reduction.
+
+# 2026-08-05 RESEED (regalloc register/move COALESCING — broad code-quality): a conservative
+# move-coalescing pass in the scalar-leaf allocator. ra_interfere (Chaitin test over per-instruction
+# LIVEOUT/LIVEIN, excluding the copy's own def) + ra_crosses_barrier (declines a merge where either vreg
+# is live across a full-clobber barrier op14/23/24 — such a value MUST spill; fusing it with a register
+# temp would let the barrier clobber it) + guarded greedy ra_coalesce (vreg<->vreg only, kept only if it
+# STRICTLY lowers the emitted insn count, else reverted; deterministic IR-index order) + self-move
+# elimination at render (movq %rX,%rX skipped). Clean-slate reset of interval/assign/spill state at the
+# top of ra_intervals (the coalescer reallocates a fn many times). Two bugs found+fixed in bring-up:
+# barrier-crossing miscompile (the ra_crosses_barrier gate) and stale-interval regression (the reset).
+# WIN: arraysum hot loop `sum += x` 3-insn chain (mov;add;mov) -> single addq (11->9 insns/iter); barrier-
+# free leaves also win (ra_bitwise 16->14). Monotonic-improvement guard: every fn same-or-fewer insns.
+# seed(old)->Stage1; Stage1==Stage2==Stage3 byte-identical (570081 GAS lines, deterministic); self-promoted
+# to Stage2; post-reseed fixpoint seed==Stage1==Stage2 GREEN; full e2e all green; a64/rv64 sweep 118,
+# wasm 116, no silent miscompiles. Remaining perf tail: lea/folded-addressing (the 3-insn addr recompute).
+
+# 2026-08-05/06 RESEED (regalloc FOLDED scaled-indexed addressing): the RA'd for-over-Vec/slice/array
+# element load now emits a single x86 scaled-index memory operand `movq (%base,%index,8),%dst` (opcode 25)
+# instead of the `mov;imul $8;add;load` triple. Required threading a THIRD operand column (O2, kind None
+# for every other op) through the allocator — liveness/interference/coalescing/callee-save/rename all
+# extended; ra_rewrite reuses the two reserved spill temps (dst reuses base's temp since the load consumes
+# base before writing dst → no third temp). ir_lower_array_for folds only when estride==1, else falls back
+# to mul/add/load (non-word stride, fail-safe). WIN: arraysum sum-loop 9->6 insns/iter (the 3-insn address
+# recompute collapsed into the addressing mode); every RA'd indexed loop benefits. seed(old)->Stage1;
+# Stage1==Stage2==Stage3 byte-identical (571785 GAS lines, deterministic); self-promoted to Stage2 (a pure
+# codegen change — the frozen seed still compiles new src, NO rs-ancestor rebuild); post-reseed fixpoint
+# seed==Stage1==Stage2 GREEN; full e2e all green; a64/rv64 sweep 118, wasm 116, no silent miscompiles.
+# arraysum hot loop is now register-resident + coalesced + folded: 36 (text baseline) -> 6 insns/iter.
+
+# 2026-08-13 AUDIT-SELFHOST-GAS ROOT FIX + RESEED. The frozen-seed "manifest text spliced into an
+# instruction" corruption (any src/ addition made the seed emit malformed GAS; ROADMAP Priority 0,
+# blocked all src/ feature lanes) was a BUILD-ARENA OVERFLOW: compile_files_mode's tar/na/tokar were
+# 256 MiB and `rt::bump` does NOT bounds-check (rt.al:35, `a.off += n`), so once the grown src pushed a
+# build allocation past 256 MiB it silently overran into the adjacent manifest buffer, splicing package.al
+# bytes into the emitted GAS near program end (wat__emit_*). Bisect: first-bad a14a4c7 (2026-08-11, +22
+# lines) — a pure cumulative-size threshold, NOT a bad reseed (a4d993b^ and a4d993b both build a trigger
+# clean). The fleet's "enlarge 256->512 didn't help" failed because they tested with the OLD 256-MiB seed;
+# the fix only takes effect after a RESEED. FIX: driver.al build arenas 256->512 MiB + this reseed.
+# Verified: seed==Stage1==Stage2==Stage3 byte-identical (667539 GAS lines); a code-addition trigger now
+# builds CLEAN (blocker CLEARED); full e2e green; a64/rv64/wasm sweeps no silent miscompiles.
+# Follow-up hardening: make rt::bump fail-loud on overflow so a future capacity breach traps, not corrupts.
+
+# 2026-08-13 RESEED (TOOL-6 Step 1b-ii, per-module block reorg). emit_program now emits per module a
+# contiguous .rodata(strings)+.text(reachable fns) block (instances trail as a separate .text block),
+# instead of all-rodata-then-all-text. Assembler/linker merge same-named sections -> behaviour-identical
+# binary; the .s is now physically per-module (the structure the .o split needs). rb/pb reachability
+# bitmaps moved to the mar arena (below the emit_hw per-fn scratch high-water) to survive the merged loop.
+# seed(old) -> Stage1 (+35 lines of per-module .section headers) -> Stage2; Stage1==Stage2==Stage3
+# byte-identical (670470); post-reseed fixpoint seed==Stage1==Stage2 GREEN; full e2e + a64/rv64/wasm
+# sweeps clean. Next: 1b-iii fold field-name .rodata + .data into blocks; 1c the actual .o split (driver).
+
+# 2026-08-13 RESEED (TOOL-6 Step 1b-iii, fold field-name .rodata + .data globals into per-module blocks).
+# emit_program no longer emits the field-name .rodata and the .data globals as two whole-program leading
+# blocks; each is folded into its owning module's per-module block in the merged loop (using the tm range's
+# (start,count) -- no new mar buffer). A module block is now .section .rodata (string-lits + field-names) +
+# .data (that module's globals) + .text (reachable fns), contiguous per module. Removing the two extra
+# module_decl_ranges call sites + their outer loops shrank emit_program's own body: 670470 -> 670303 lines.
+# Assembler/linker merge same-named sections -> behaviour-identical binary. seed(old) builds Stage1;
+# Stage1==Stage2==Stage3 byte-identical (670303); post-reseed fixpoint seed==Stage1==Stage2 GREEN; full e2e
+# + a64/rv64/wasm sweeps clean. The .s is now fully per-module-contiguous -- the input the 1c .o split needs.
+
+# 2026-08-13 RESEED (TOOL-6 Step 1c-alpha, globalize cross-module symbols). Every emitted fn label
+# (emit_fn_ir RA path, classic emit_fn incl. generic-instance + overload-suffix + @test, emit_syscall_fn)
+# and every .data module global now emits `.globl <name>` before its `<name>:` definition, so a
+# cross-module reference resolves once the single .s is split into per-module .o (1c-gamma). Over-
+# globalizing is a no-op in the single-.s build (as/ld accept the redundant directive on a locally
+# defined symbol). ~2255 .globl directives added; 670303 -> 672754 lines. seed(old) builds Stage1;
+# Stage1==Stage2==Stage3 byte-identical (672754); post-reseed fixpoint GREEN; full e2e + a64/rv64/wasm
+# sweeps clean. Next: 1c-beta (emit_program records a per-module span table as side-metadata, NEUTRAL).
+
+## 2026-08-15 — RESEED: view Var-to-Var copy (`t := s` for a `str`/`Slice(T)`) no longer drops the view.
+# `t := s` where `s` names a 2-word {ptr,len} view matched NO aggregate branch of Stmt::Assign — var_agg_info
+# reports ek 0 for a str slot (ek 4) and a slice slot (ek 5) — so collect_slots reserved ONE word and the emit
+# took the generic scalar store: word 1 was never written (`t.len` read the neighbouring slot => 0), and for a
+# PARAM source (whose slot holds a POINTER to the caller's pair) the single stored word was that block address,
+# so the data pointer was wrong too. Narrow elements survived by accident: bind_param recognizes a view only for
+# a known-scalar element set, so Slice(u8)/Slice(u32) bound as an ordinary 2-word STRUCT and copied fine.
+# Fix (src/lower.al): view_var_kind + view_dest_is_local gate a 2-word reservation and route the store through
+# the existing emit_str_pair / emit_pair_field_store.
+#
+# WHY IT NEEDED A RESEED — the compiler was miscompiling ITSELF in four places, and the GAS delta is exactly
+# those 4 sites x 4 lines (the previously-dropped len-word copy; no slot-offset shifts anywhere):
+#   * src/aarch64.al, src/riscv64.al, src/wat.al — `*_operand_narrow`: `mut r := ""` ... `r = nn` left r.len 0,
+#     so the following `if r == ""` was ALWAYS TRUE and the param-derived narrow type was silently discarded.
+#   * src/cli.al — manifest_profile_flags: `mut dv : str = mf_token(...)` ... `dv = ov` gave a per-profile flag
+#     OVERRIDE the DEFAULT's length.
+# seed(old) builds Stage1; Stage1 == Stage2 == Stage3 byte-identical GAS (731654 lines); Stage2 == Stage3
+# binaries (sha d2543e7e...); full e2e green (1203 ok) + a64/rv64/wasm sweeps clean under Stage2.
+# Locked by test/view_var_copy.al (42) and test/view_var_reassign.al (11) — both fail on the old seed.
+
+## 2026-08-15 — RESEED: MODULE-LOCAL rodata label namespaces (the prerequisite for a per-module emit cache).
+# `.Lstr<N>` was a single literal counter threaded across modules IN PARSE ORDER, and `.Lfld`/`.Lflt` keyed on
+# ABSOLUTE offsets into the concatenated source buffer. Measured consequence: adding ONE string literal to
+# module 4 changed 13 of the 19 per-module GAS blocks — and almost every emit change in this compiler adds a
+# `push_str(sb, "…")`. That made per-module invalidation track PARSE ORDER rather than the meaning of the edit,
+# which would have halved the value of any incremental cache.
+# Scheme: `MODTAB` holds two monotone non-decreasing bases per module (source-offset base, label-index base),
+# module 0 pinned to 0; every label emits as `(m(k), k - base[m(k)])`. Label-index bases are recovered by
+# REPLAYING the real .rodata walk in a silent scan mode, so no match arm can be missed.
+#   .Lstr<N>   -> .Lstr<m>_<n>      .Lflt<off> -> .Lflt<m>_<n>      .Lfld<off> -> .Lfld<m>_<n>
+# UNIQUENESS is unconditional, not empirical: for any non-decreasing base array with base[0] == 0 the map
+# k -> (m(k), k - base[m(k)]) is INJECTIVE (recover k = base[m] + n), so this is a pure RENAMING of the old key
+# — distinct labels stay distinct, equal stay equal. Every subtle property of the old scheme therefore survives:
+# the HOF-clone (fnpos+1)*1000000 renumber, the .Lflt dedup, the `lbl % 1000000 >= 500000` embed marker, and
+# cross-module references from inlined bodies and monomorphized instances. A wrong base can only cost cache
+# precision, never correctness.
+# Invalidation radius after (scripts/incr_probe.sh blast, 19 blocks): body edit 1, comment 0, layout edit 4
+# (its users), ADDED STRING LITERAL 13 -> 1.
+# seed(old) builds Stage1; Stage1 == Stage2 == Stage3 byte-identical GAS (776233 lines) AND byte-identical
+# binaries (sha 138a142c…); full e2e green (1244 ok) + a64/rv64/wasm sweeps clean under Stage2.
+# Landed together with the per-module .o split unblock (a 64-byte name StrBuf, NOT the codegen fault it was
+# long believed to be) — `ALATYR_OSPLIT=1` builds green, 19 objects, .text/.rodata/.data byte-identical to the
+# single-.s binary. REMAINING absolute-offset key: a lifted lambda's `<module>__lam<fnpos>` symbol.
+
+## 2026-08-19 — self-promote: CG-13 (one failure mechanism for the checked-guard family) + CT-12
+# Reseeded from `target/stage2` (sha256 7512602a5ef1a49c9d1b80d0ee94b60ff0473e10a042dd0eafdb59ffeb98326e),
+# NOT from the frozen Rust ancestor. Two source changes made the old seed unable to reproduce the tree:
+#   • CG-13 — division by zero and `MIN / -1` now emit the language's direct inline trap (`ud2` on x86,
+#     `brk #0` on a64, `ebreak` on rv64) from a guard placed BEFORE the divide, on both the text and the
+#     register-allocated path, with the guard elided for a provably positive literal divisor. Previously the
+#     hardware decided: x86 faulted with `#DE` (exit 136 vs the overflow guard's 132) while a64/rv64 did not
+#     fault at all — `i64::MIN / -1` exited 0 with a WRONG value there, a silent miscompile.
+#   • CT-12 — a failed checked guard during comptime evaluation is a located diagnostic (sema/driver only,
+#     fixpoint-neutral on its own).
+# 3-stage evidence: seed(old)=882537 lines emitted; Stage1 == Stage2 == Stage3 GAS byte-identical at
+# 882576 lines; stage2 == stage3 BINARY byte-identical (sha above). GAS delta seed→Stage1 read line by line:
+# +9 `ud2`, +7 `testq`/`jnz`, +3 `cmpq`/`jne`, +1 `movq`; `divq`/`idivq` counts unchanged (103/14) — the delta
+# is guard insertion at 9 of the compiler's own divide sites and nothing else, so no latent self-miscompile
+# surfaced in this promote.
+# Gates under Stage2: full e2e green; a64_sweep match=209 trap=293 reject=110, rv64_sweep match=203 trap=300
+# reject=109, wasm_sweep match=216 trap=388 reject=8 — each run standalone, all "no silent miscompiles"
+# (the `scripts/sweeps.sh` a64→rv64 sequencing flake is pre-existing and reproduces on an unmodified tree).
+
+## 2026-08-19 — self-promote #2: nested-block tail position (a general silent miscompile) + path dependencies
+# Reseeded from `target/stage2` (sha256 d07abf41d97853d2302364b46b8dcf896d01a2f4e2fee0787873f77f7aa4ff45).
+# The source change the old seed could not reproduce: in `emit_stmts`, `Stmt::ExprStmt` delivered a bare
+# expression as the FUNCTION's return whenever `cx.tail and nx == 0`. `cx.tail` is set once per function, but
+# `nx == 0` holds at the end of EVERY statement list — so a bare CALL as the last statement of a `while`/`for`/
+# `loop` body, an `if` branch, a `match` arm, `unchecked` or `alloc::with` was emitted as that function's
+# return: `jmp` to the epilogue, and for a void callee the call disappeared entirely (replaced by the default
+# `pushq $0`). Measured before the fix: a void call last in a `while` body made a value-returning function
+# exit 255 instead of 31, compiling with rc 0 — a silent wrong value, the one forbidden outcome (I11).
+# `Stmt::CompIf` already had the save/restore discipline; every other nested-block arm now does too.
+# GAS delta seed→Stage1 (+14 lines) read instruction by instruction: **-37 `jmp`** (37 sites inside the
+# compiler where a trailing nested call silently jumped to the epilogue), **+3 `call`** to `mf_config_error`
+# (two `manifest_profile_flags` diagnostics — a profile flag with no declared type, and a default not matching
+# its type — had been swallowed by exactly this bug), plus their argument setup (+24 movq, +12 leaq, +6
+# pushq/popq). Nothing else changed: this promote is guard-free and purely the tail-position correction.
+# Landed with it: path dependencies (alias namespace `d__math__answer`, located diagnostics for a git source /
+# a dependency without a manifest / a nameless `Dependency`, and `../dep` no longer normalized to `dep`).
+# 3-stage evidence: seed(old) emitted 884413 lines; Stage1 == Stage2 == Stage3 GAS byte-identical at 884427;
+# stage2 == stage3 BINARY byte-identical (sha above).
+# Gates under Stage2: full e2e green; `scripts/package_cli_test.sh` green (23 ok / 0 FAIL); a64_sweep
+# match=209 trap=293 reject=110, rv64_sweep match=203 trap=300 reject=109, wasm_sweep match=216 trap=388
+# reject=8 — each standalone, all "no silent miscompiles", byte-for-byte the same counts as promote #1 (no drift).
+
+## 2026-08-19 — self-promote #3: carry the envp fix INTO the seed (emission-neutral)
+# Reseeded from `target/stage2` (sha256 43765d66020206eab8c2a4e3c44925d875e0d7a5a4c2c664b0e5972a47f93e8d).
+# This promote is NOT required for reproducibility — `seed == Stage1 == Stage2 == Stage3` at 889773 lines
+# BEFORE it, i.e. the old seed already reproduced the tree byte-for-byte. It carries a BEHAVIOUR fix into the
+# bootstrap binary: the old seed corrupts its own `execve` envp whenever the environment exceeds ~64 KiB, so
+# `scripts/fixpoint.sh` and every sweep failed at "seed builds Stage1" in such a shell, with the misleading
+# message "the assembler (`as`) rejected the emitted assembly" although `as` never ran. Verified before the
+# promote: `env BIGVAR=<80000 bytes> seed/alatyr build package.al` -> rc 13; after: 5/5 builds rc 0.
+# The defect: `read_proc` capped /proc/self/environ at 65528 bytes, truncating mid-entry so the last entry
+# had no NUL; `build_envp` sized its array by the NUL count but looped once per ENTRY, writing the terminating
+# word 8 bytes past its reservation — into `resolve_in_path`'s $PATH probe strings. Boundary bisected to the
+# byte (environ 65407 ok, 65707 fails). Fixed by bounding the fill loop by the sizing count (and trapping on
+# an unterminated buffer), sizing regular files from the file, and reading the environment ONCE (ARG_MAX) as
+# a parameter instead of re-reading it into the arena the caller's envp was just built in.
+# Also carried: split toolchain diagnostics — 19 could-not-run-the-tool (with the child's execve errno via a
+# CLOEXEC pipe2), 13 the-tool-rejected-the-input, 11 not-on-PATH, 21 environment-not-read-whole; and the
+# `ambient_paths` source scan no longer clips a user file at 512 KiB (`src/lower.al` is 1 858 061 bytes, so
+# the library-injection scan had been seeing 28% of it — output-neutral by luck, not by design).
+# Gates under Stage2: full gate GREEN — fixpoint, `e2e: all green`, sweeps STATUS=RAN with a64 210/296/111,
+# rv64 204/303/110, wasm 217/392/8, each `missing=0 corpus=617`, no silent miscompiles.
+
+## 2026-08-20 — self-promote #4: a bare call now resolves up the ancestor chain (Modules §3)
+# Reseeded from `target/stage2` (sha256 ae7a91047317d442d54a65316cf12397398d6af079dd774af25a420e05011cb6).
+# The defect: `mod_head_matches` (src/lower.al:355) matched the calling module or a last-segment lib path but
+# NEVER the ancestor chain, so `callee_decl_idx`'s fallback took the FIRST same-named declaration in decl
+# order — an unrelated module's non-`pub` duplicate, which §3 makes unnameable from there. A generic
+# instantiation had the same defect with the opposite tie-break (LAST wins). Measured: a child calling bare
+# `helper` emitted `call aother__helper` and returned 22 instead of 42, on the frozen seed too. Fixed by one
+# shared rank (`callee_mod_rank` = own module, then ancestors nearest-first) across `callee_decl_ranked`,
+# `generic_decl_of` and `mark_name`, so DCE retains the declaration the resolver actually calls. Ambiguity is
+# now a located reject; the deliberate lib-path and unique-declaration leniencies are preserved (the whole
+# tree leans on them for `push_str`→`rt`, `str_at`→`base__str` and every `m := path` binding).
+# GAS delta seed→Stage1 read in full: 488 changed CALL EDGES and nothing else — every one a callee module
+# change, and 5 of them were latent wrong-module bindings inside `src/` itself, each behaviour-equivalent to
+# what it replaced and therefore invisible to every existing gate: `driver`'s `streq`→`aarch64__streq` (9
+# sites) and `decl_get`→`aarch64__decl_get`; `riscv64`'s `param_find`→`aarch64__param_find` (3 sites, where
+# `wat`'s copy differs materially); `decl_at`→`wat__decl_at__Decl` (181); `base_type_name` (47); `node_ptr`
+# (13). By module: wat 1265→1025, lower_layout 1558→1639, driver 670→717, aarch64/riscv64 +17 each,
+# lower 6213→6262. Callers 10668→10669 (the new reject helper); none removed.
+# 3-stage evidence: seed(old) emitted 922441 lines; Stage1 == Stage2 == Stage3 GAS byte-identical at 922664;
+# stage2 == stage3 BINARY byte-identical (sha above).
+# Gates under Stage2: e2e all green (0 FAIL); sweeps STATUS=RAN, missing=0, corpus 622 — a64 210, rv64 204,
+# wasm 218 (up 1: one program stopped trapping). New whole-program invariant `scripts/callee_module_check.sh`
+# (with a gate-of-the-gate so it cannot go vacuous) reports 0 violations and 3 NONPUB reaches — the three
+# backends bare-calling non-`pub` `lower::tuple_typearg_span`, which cannot be closed without a module cycle.
+# NOT fixed here and still silent: bare TYPE resolution is module-blind and LAST-wins (`struct_decl_of` takes
+# no naming module and is memoized by name span alone) — see `P1-TYPE-ANCESTOR` in ROADMAP.md.
+#
+# Self-promoted 2026-08-21 — the `if / else if / else` chain in VALUE position. `if_is_stmt_form` decided
+# statement-if vs tail value-if by peeking for a statement head only inside the FIRST branch's body, so a
+# chain whose first branch was a bare call and whose later branches were assignments fell through to "an
+# `if` followed only by `}`/EOF is a tail value-if". `p_or` then read the statement branches as VALUES and
+# its blind `pc.idx + 1` skips stepped over the `=` signs, drifting the cursor out of the function — which
+# surfaced as a parse error about fourteen lines later, at the next top-level-looking line. Two shapes did
+# not even fail: they COMPILED CLEAN AND RETURNED THE WRONG VALUE (66 and 62 where 42 is correct, measured
+# on all four backends) — an I11 violation that the roadmap had recorded as merely loud. Fixed by applying
+# the statement-head peek to EVERY branch of the chain, and by teaching `p_factor`'s if-EXPRESSION to
+# recurse on `else if` as the statement path already did.
+# GAS delta seed->Stage1 read with `.L` labels normalized (the raw diff is 71509 lines, almost all label
+# renumbering below the insertion; normalized it is 1133 lines in SEVEN functions): 208 lines in
+# `sema__check_expr` — the one materially changed site and a REAL SELF-MISCOMPILE now corrected. Its
+# operand checks at src/sema.al:4118-4120 and 4132-4134 are value-position `else if` chains returning
+# `Result`; the old build evaluated the guard into a discarded if-expression and reached the branch body
+# unconditionally, so the added instructions are the guard's own store, compare and branch. Latent so far
+# (no corpus row moved), but it means the checker's boolean/arithmetic operand validation was not gating.
+# The other six are benign void-call chains: lower__collect_slots (11), lower__bind_uninit_slot (7),
+# lower__emit_norm_type (3), fmt__emit_fmt_expr (3), sema__ct_lo32 / sema__ct_hi32 (2 each).
+# 3-stage evidence: seed(old) emitted 957834 lines; Stage1 == Stage2 == Stage3 GAS byte-identical at
+# 957862; Stage2 == Stage3 BINARY byte-identical.
+# seed/alatyr SHA-256: d9500140030234e9b9e7054fe7b3bdc425f5a5ac5fae37e9dae52b01c91de353 (see the gate log).
+
+# Self-promoted 2026-08-22 — bounded `read_file_into` and per-function aggregate scratch pools.
+# The driver now caps each read by the remaining `StrBuf` capacity and fails at the located buffer
+# boundary instead of letting the AST arena overflow on an oversized source file. The lowerer no longer
+# charges every function for the widest aggregate in the whole program: it measures the aggregate value
+# paths referenced by each function, while retaining the existing nested-call peak scan. On the RA=0
+# frame repro, an unrelated small function fell from 128 to 48 bytes and the wide-use function from 176
+# to 80 bytes; the default path also kept the unrelated frame narrow, and the wide aggregate repro exits 13.
+# The GAS delta was audited: the expected per-function width helpers/call sites, frame and local-offset
+# changes, generated label/string shifts, and the bounded driver path were the only changed shapes.
+# Three-stage evidence: the old seed emitted 969767 lines; Stage1 == Stage2 == Stage3 GAS byte-identical
+# at 971452 lines; Stage2 == Stage3 binary byte-identical. Promoted seed/alatyr SHA-256:
+# 0b4ef13fb584b73d7ae5c0026aba1962940b959651c4b7d5f816dbd660680402.
+# Gates under the promoted seed: e2e 1687/1687 rows, 2277 assertions, 0 failures; corpus 6140/6140;
+# a64 244/300/113, rv64 238/307/112, wasm 246/403/8 (match/trap/reject), all missing=0 and sweeps clean.
+
+# Self-promoted 2026-08-23 — TOOL-15 manifest handle rewrite and TOOL-6 interface-summary filtering.
+# The driver now skips the CompFor variant flag (u8, not an Expr pointer) during manifest rewriting;
+# split interface summaries omit bookkeeping/monomorphized declaration runs with no visible exports.
+# The old seed emitted 1014858 GAS lines; Stage1 == Stage2 == Stage3 emitted byte-identical GAS at
+# 1014948 lines, and Stage2 == Stage3 binaries are byte-identical. GAS delta audit found only 90 added
+# lines: 30 repeated `.section .rodata`/`.LstrN_0: .ascii "0.1.0"` default-version literals from the
+# manifest fixtures; no unexpected code or call-edge changes. Promoted seed/alatyr SHA-256:
+# c0703db0fcf057de365e12aee9b973e3575935f38a866fc1098502116d5f4ba3.
+# Pre-promote gates under Stage2: e2e 1709/1709 rows, 2361 assertions, 0 failures; a64 246/301/113,
+# rv64 240/308/112, wasm 248/404/8 (match/trap/reject), all missing=0 and no silent miscompiles.
+
+# Self-promoted 2026-08-23 — MOD-8 anonymous package-root declarations and TOOL-15 boundary repair.
+# The driver now parses a single-file package.al as the anonymous root for ordinary declarations and
+# rejects same-scope root duplicates while retaining the distinct manifest-handle/child diagnostic.
+# Root synthetic handles are restricted to modules in the consuming package, so dependency d__math
+# cannot resolve app.version; the explicit root process module is deduplicated against ambient discovery.
+# The old seed emitted 1021380 GAS lines; Stage1 == Stage2 == Stage3 emitted byte-identical GAS at
+# 1021417 lines, and Stage2 == Stage3 binaries are byte-identical. The normalized GAS delta contains
+# only the expected anonymous _start/process emission, one manifest version literal, and label shifts;
+# no unexpected compiler code or call-edge changes.
+# Promoted seed/alatyr SHA-256: d35e9fa3618e6dfe19cff82730a0af45014cabf4d9b94d8a81075ce105622d73.
+# Pre-promote gates under Stage2/Stage3: e2e 1712/1712 rows, 2383 assertions, 0 failures; corpus
+# 6440/6440 across all four backends; a64 246/301/113, rv64 240/308/112, wasm 248/404/8
+# (match/trap/reject), all missing=0 and no silent miscompiles.

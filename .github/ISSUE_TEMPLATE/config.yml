@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How this repository works
+    url: https://github.com/alatyr-programming-language/compiler/blob/main/CONTRIBUTING.md
+    about: The sources of truth, the correct-or-loudly-wrong invariant, and what the gate proves. Two minutes, and it decides which template you want.
+  - name: A language question, not a compiler one
+    url: https://github.com/alatyr-programming-language/spec/issues
+    about: If the question is what Alatyr should DO, it is decided in the specification first — the compiler never invents semantics.
+  - name: What is already known and planned
+    url: https://github.com/alatyr-programming-language/compiler/issues
+    about: Open defect classes with their measurements, including the silent-wrong-value ones. Your finding may already be filed with a reproducer — and a staged programme is tracked as one issue with a checklist, so search closed and open alike.

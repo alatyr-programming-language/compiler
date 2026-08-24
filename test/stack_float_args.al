@@ -1,0 +1,8 @@
+sum9 := fn(a : f64, b : f64, c : f64, d : f64, e : f64, f : f64, g : f64, h : f64, i : f64) -> f64 {
+  return a + b + c + d + e + f + g + h + i
+}
+
+main := fn() -> u64 {
+  r : f64 = sum9(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 6.0)
+  return u64(r)
+}

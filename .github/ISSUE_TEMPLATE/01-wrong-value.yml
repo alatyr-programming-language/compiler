@@ -1,0 +1,72 @@
+name: Wrong value (a clean compile that lies)
+description: A program compiles without complaint, runs to a normal exit, and produces the wrong answer.
+title: "[wrong-value] "
+labels: ["wrong-value", "priority-0"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This is the one forbidden outcome, and it outranks everything else in the queue.**
+        Correct, or loudly wrong — a trap, a located rejection or a missing feature are all
+        acceptable; a clean compile that yields the wrong answer is not.
+
+        If the program instead *fails* — a crash, a diagnostic, a trap, a refusal — that is a
+        different report: use **Fails when it should work** or **Bad diagnostic**.
+  - type: textarea
+    id: program
+    attributes:
+      label: The program
+      description: >
+        The smallest one that still misbehaves. Shrinking it is not politeness — it usually
+        identifies the real axis, and four times out of four in this project's history the
+        first-guessed axis was the wrong one.
+      render: rust
+      placeholder: |
+        main := fn() -> u64 {
+          mut xs : [u64; 2] = [0, 0]
+          xs[0] = 1
+          a : u64 = 18446744073709551610
+          if 0 < a { return 42 }
+          return 7
+        }
+    validations:
+      required: true
+  - type: textarea
+    id: measured
+    attributes:
+      label: What each backend does
+      description: >
+        Exit codes truncate mod 256, so put the comparison **inside** the program
+        (`if v != 42 { return 1 }`) rather than trusting the exit code. One backend disagreeing
+        with the other three is itself the finding — say so even if you only tested two.
+      placeholder: |
+        x86_64   42   (correct)
+        aarch64  42
+        riscv64  42
+        wasm      7   <- wrong, and no diagnostic
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: expected
+    attributes:
+      label: Why the right answer is the right answer
+      description: One line. Cite the spec section if the shape is subtle.
+      placeholder: "`0 < a` with a above 2^63 is true for an unsigned compare; the emitter used i64.lt_s"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Compiler revision
+      description: "`git rev-parse --short HEAD`, plus the seed's sha256 if you built one yourself."
+    validations:
+      required: true
+  - type: textarea
+    id: narrowing
+    attributes:
+      label: What you already ruled out
+      description: >
+        Optional, and disproportionately useful. What did you vary that did *not* change the
+        outcome? A shape that works one line away is often the whole answer — for example
+        "deleting the `xs[0] = 1` line makes wasm answer 42 too".

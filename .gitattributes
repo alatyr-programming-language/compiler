@@ -1,0 +1,33 @@
+# Normalize line endings on the way in, check out LF everywhere. The compiler's lexer and the
+# fixtures' expected output are byte-exact, and `scripts/corpus.manifest` hashes captured streams —
+# a CRLF checkout on another platform would move rows for reasons that have nothing to do with code.
+* text=auto eol=lf
+
+*.md diff=markdown
+
+# The committed bootstrap seed is a static ELF. `text=auto` would guess right, but guessing is not a
+# contract: an accidental EOL conversion here would corrupt the one artifact the whole trust chain
+# rests on.
+seed/alatyr binary
+
+# Generated, and large. `scripts/corpus.manifest` is a 6600-row behaviour oracle: a legitimate change
+# to it is a handful of rows, and a reviewer must be able to see those rows without scrolling past the
+# whole file. `-diff` collapses it in review; `linguist-generated` keeps it out of language stats.
+#
+# `-merge` is the load-bearing one, and it is not cosmetic. Both files are line-oriented, so git's
+# default text merge will combine two branches that regenerated DISJOINT row sets without reporting a
+# conflict — yielding a manifest that is the output of NEITHER compiler, and whose next `--check` on
+# main fails with a diff that reads like a regression in whichever side landed second. With `merge`
+# unset git refuses instead: it takes the single side cleanly when only one side changed the file, and
+# declares a conflict when both did. That is exactly the ownership rule the protocol used to ask
+# people to keep by hand.
+scripts/corpus.manifest -diff -merge linguist-generated
+scripts/idiom.baseline   -diff -merge linguist-generated
+
+# The THIRD oracle, and it is deliberately NOT `-diff`. `scripts/needle.baseline` is ~40 reviewed
+# lines, not 6600 generated ones: collapsing its diff would hide exactly the change a reviewer must
+# see (a lane grandfathering a 21st vacuous assertion). It needs `-merge` for the same reason as the
+# other two — it is line-oriented, so two branches repaying DISJOINT debt would merge clean into a
+# baseline that matches neither run of the gate. `scripts/land.sh` already treats all three as
+# oracles; this line is what makes git agree.
+scripts/needle.baseline  -merge

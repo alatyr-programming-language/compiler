@@ -1,0 +1,46 @@
+# scripts/needle.baseline — *_has assertions whose needle appears in their own fixture's `##`
+# comments, and which therefore CANNOT FAIL.
+#
+# Why this file exists rather than a cleanup commit. The rule "a needle must not appear in its own
+# fixture's comments" was written in `AGENTS.md`, in `CONTRIBUTING.md` and as a checkbox in the pull
+# request template, and it was violated 20 times anyway. A checkbox beside a predicate is worse than
+# nothing: ticking it manufactures a record that the check was performed. So the predicate became a
+# check (`_e2e_needle_check` in scripts/e2e.sh), and the existing violations became a debt that is
+# REPORTED on every single run instead of being quietly repaid once.
+#
+# Each line is one vacuous assertion: the `fmt_test_has` / `fmt_test_has_all` helpers grep the whole
+# formatted artifact, and `fmt_test` separately asserts that comments survive a reformat, so the
+# needle is guaranteed to be present in the searched text no matter what the formatter did to the
+# construct. `fmt_pub` is the clearest case: its needle is `pub ` and its own header sentence contains
+# "A pub value, a pub fn" — if `fmt` dropped every `pub` keyword from real declarations tomorrow, the
+# row would still print ok.
+#
+# Fixing one is a change to the FIXTURE's comment (or a stronger needle), plus deleting its line here.
+# Following `scripts/idiom.baseline`: an entry that stops occurring is reported `allow-unused` and does
+# NOT fail the gate, so a fix is never punished. Adding a NEW violation IS a failure.
+#
+# A caveat, so the count is not read as more than it is: some of these needles are weak substrings
+# (`(T)`, `pub `) and would be nearly vacuous even without the comment. The check catches the
+# mechanical failure; whether a needle is strong enough remains a reviewer's judgement.
+#
+# Format: <fixture name><TAB><needle>
+deref_field_write	ptr(mut Rec)
+elseif_chain_value_form	} else if 
+fmt_array_fill	sum_gen([u64; 3], xs)
+fmt_big_literal	18446744073709551615
+fmt_bitcast_targets	y := bitcast(B, x)
+fmt_comptime_arm_template	comptime for v in typeinfo(T).variants { T.(v)(pa) =>
+fmt_decl_attrs	@convert fn
+fmt_decl_tails	u32.require(is_nonzero)
+fmt_defer	defer {
+fmt_enum_forms	mut GE := [E.A(1), E.B(2)]
+fmt_expr_callee	fs[0](9)
+fmt_gen_enum	(T)
+fmt_generic_typefn	Either(A, B).L(a)
+fmt_pub	pub 
+fmt_qualified_tryable	Result(usize, ser::SerError).Ok(0)
+fmt_struct_lit_names	D(b = 3)
+fmt_tuple	cnt((u64, u64))
+fmt_ufcs_dot	r.unwrap()
+fmt_unchecked_postfix	unchecked (x.u)
+fmt_when_guard	when target.arch == Arch.x86_64

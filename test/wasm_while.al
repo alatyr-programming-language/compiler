@@ -1,0 +1,5 @@
+main := fn() -> u64 {
+  mut i := 0
+  while i < 42 { i = i + 1 }
+  return i
+}

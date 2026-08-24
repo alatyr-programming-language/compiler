@@ -1,0 +1,19 @@
+# build artifacts (the spec target_dir; like Rust's /target)
+/target/
+# package-level E2E builds write artifacts below their fixture directories
+test/**/target/
+# stray build outputs
+*.s
+*.o
+a.out
+b.out
+/.direnv/
+
+# qemu core dumps from the aarch64 sweep (brk fail-loud → SIGTRAP)
+*.core
+
+# Agent state, per machine. Only the STATE is ignored — if skills or shared agent config are ever
+# added here they are meant to be tracked, and a blanket `/.claude` would hide them silently.
+/.claude/worktrees/
+/.claude/settings.local.json
+/.codex/state/

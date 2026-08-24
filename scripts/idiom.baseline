@@ -1,0 +1,103 @@
+# scripts/idiom.baseline — the reviewed ALLOW list for scripts/idiom_gate.sh.
+#
+# One line per accepted finding, TAB-separated, each carrying a LOCATION so a reader can
+# tell an accepted duplicate from a forgotten one. Regenerating this file is an
+# INTENTIONAL act that belongs in its own reviewed commit — blessing a new duplicate
+# unreviewed erases the oracle, exactly as with scripts/corpus.manifest.
+#
+# Columns:
+#   TABLE|SCAN  fileA  nameA  fileB  nameB  n-shared-literals  signature  lineA:lineB
+#   STRIDE      file   count                                              -
+#   DROPPED     file   callee  count                                      -
+#   CACHE       file   family  columns                                    -
+#
+# The LAST field of every row is a LOCATION and is EXCLUDED from the comparison: a line
+# number churns on any edit above it. Everything before it is the key.
+#
+# Written by: bash scripts/idiom_gate.sh --write
+# Thresholds: LK=4 LMAXF=20 SK=4 SMAXF=40
+#
+# The TABLE/SCAN pairs below, collapsed into CLUSTERS. A pair is the gate's unit (so a new
+# copy adds lines and FAILS, while a removed copy only goes stale), but a cluster is what a
+# reader can judge: 21 pairs among 7 functions is ONE duplicated decision, not 21.
+# cluster of 7:  src/lower_attrs.al:fn_is_inline src/driver.al:d_export_name src/lower.al:export_name src/iface.al:iface_ident src/lower/fnval.al:ecallee_ident_char src/wat.al:wat_export_name src/sema.al:export_name
+# cluster of 6:  src/fmt.al:fmt_op src/lower.al:op_symbol src/sema.al:sema_op_symbol src/wat.al:wat_cmp_glyph src/ast.al:compound_assign_op_at src/lower.al:local_is_plain_assign
+# cluster of 5:  src/riscv64.al:rv_asm_digit src/wat.al:wat_float_global_init src/lower_ctx.al:asm_digit src/aarch64.al:a64_asm_digit src/lower_layout.al:dec_digit_val
+# cluster of 5:  src/riscv64.al:rv_ann_span src/wat.al:wat_ann_span src/aarch64.al:a64_ann_span src/ast.al:local_is_uninit src/ast.al:local_type_span
+# cluster of 3:  src/wat.al:wat_comp_range_bound src/riscv64.al:rv_comp_range_bound src/aarch64.al:a64_comp_range_bound
+# cluster of 3:  src/wat.al:emit_wat_expr src/aarch64.al:emit_a64_expr src/riscv64.al:emit_rv_expr
+# cluster of 3:  src/riscv64.al:emit_rv_fn src/aarch64.al:emit_a64_fn src/wat.al:emit_wat_fn
+# cluster of 2:  src/lower/fnval.al:fnty_name_end src/sema.al:sema_fnty_name_end
+# cluster of 2:  src/cli.al:link_exe_split src/cli.al:link_exe
+# cluster of 2:  src/aarch64.al:a64_fcond src/aarch64.al:a64_cond
+# Deliberate target-specific copies: S3(d)'s byte-tier array-element loads and stores must spell the
+# selected ISA/WASM memory operations in each emitter; the layout decision and byte offsets remain
+# shared in lower_layout.al. These are an extension of the already reviewed emit_* backend cluster.
+CACHE	src/lower.al	_mcv	ctx,ml,ms,n,r,s,src	-
+CACHE	src/lower.al	_mgv	ctx,ml,ms,n,r,s,src	-
+CACHE	src/lower.al	_mn	ml,ms,n,s,src	-
+CACHE	src/lower_layout.al	_ctb	nl,ns,val	-
+CACHE	src/lower_layout.al	_edc	ctx,i,ml,ms,n,s,src	-
+CACHE	src/lower_layout.al	_sdc	ctx,i,ml,ms,n,s,src	-
+DROPPED	src/cli.al	rt::sys_write	6	-
+DROPPED	src/driver.al	rt::sb_flush	4	-
+DROPPED	src/lower.al	rt::sys_write	2	-
+DROPPED	src/lower/ctfold.al	rt::sys_write	1	-
+DROPPED	src/lower_layout.al	rt::sys_write	3	-
+DROPPED	src/rt.al	sys_write	1	-
+SCAN	src/aarch64.al	a64_ann_span	src/ast.al	local_is_uninit	4	ptr(u8),usize,usize	2654:76
+SCAN	src/aarch64.al	a64_ann_span	src/ast.al	local_type_span	4	ptr(u8),usize,usize	2654:32
+SCAN	src/aarch64.al	a64_ann_span	src/riscv64.al	rv_ann_span	4	ptr(u8),usize,usize	2654:2277
+SCAN	src/aarch64.al	a64_ann_span	src/wat.al	wat_ann_span	4	ptr(u8),usize,usize	2654:2377
+SCAN	src/aarch64.al	a64_comp_range_bound	src/riscv64.al	rv_comp_range_bound	4	ptr(Expr),ptr(rt::Vec),ptr(u8)	2259:1919
+SCAN	src/aarch64.al	a64_comp_range_bound	src/wat.al	wat_comp_range_bound	4	ptr(Expr),ptr(rt::Vec),ptr(u8)	2259:768
+SCAN	src/aarch64.al	emit_a64_expr	src/wat.al	emit_wat_expr	7	ptr(Expr),rt::StrBuf,rt::Arena,ptr(u8),ptr(mutParam),i64,ptr(mutStmt),ptr(rt::Vec),ptr(mutBind),i64	3870:3468
+SCAN	src/aarch64.al	emit_a64_fn	src/riscv64.al	emit_rv_fn	6	Decl,rt::StrBuf,rt::Arena,ptr(u8),ptr(rt::Vec)	6550:6016
+SCAN	src/aarch64.al	emit_a64_fn	src/wat.al	emit_wat_fn	5	Decl,rt::StrBuf,rt::Arena,ptr(u8),ptr(rt::Vec)	6550:5839
+SCAN	src/ast.al	local_is_uninit	src/ast.al	local_type_span	4	ptr(u8),usize,usize	76:32
+SCAN	src/ast.al	local_is_uninit	src/riscv64.al	rv_ann_span	4	ptr(u8),usize,usize	76:2277
+SCAN	src/ast.al	local_is_uninit	src/wat.al	wat_ann_span	4	ptr(u8),usize,usize	76:2377
+SCAN	src/ast.al	local_type_span	src/riscv64.al	rv_ann_span	4	ptr(u8),usize,usize	32:2277
+SCAN	src/ast.al	local_type_span	src/wat.al	wat_ann_span	4	ptr(u8),usize,usize	32:2377
+SCAN	src/fmt.al	fmt_op	src/wat.al	wat_cmp_glyph	4	u8	149:451
+SCAN	src/lower/fnval.al	fnty_name_end	src/sema.al	sema_fnty_name_end	5	ptr(u8),usize,usize	81:3364
+SCAN	src/riscv64.al	emit_rv_expr	src/wat.al	emit_wat_expr	7	ptr(Expr),rt::StrBuf,rt::Arena,ptr(u8),ptr(mutParam),i64,ptr(mutStmt),ptr(rt::Vec),ptr(mutBind),i64	3439:3468
+SCAN	src/riscv64.al	emit_rv_fn	src/wat.al	emit_wat_fn	5	Decl,rt::StrBuf,rt::Arena,ptr(u8),ptr(rt::Vec)	6016:5839
+SCAN	src/riscv64.al	rv_ann_span	src/wat.al	wat_ann_span	4	ptr(u8),usize,usize	2277:2377
+SCAN	src/riscv64.al	rv_comp_range_bound	src/wat.al	wat_comp_range_bound	4	ptr(Expr),ptr(rt::Vec),ptr(u8)	1919:768
+STRIDE	lib/alloc/hashmap.al	3	-
+STRIDE	src/lower.al	5	-
+STRIDE	src/sema.al	204	-
+TABLE	src/aarch64.al	a64_cond	src/aarch64.al	a64_fcond	4	-	3709:3733
+TABLE	src/ast.al	compound_assign_op_at	src/fmt.al	fmt_op	8	-	116:149
+TABLE	src/ast.al	compound_assign_op_at	src/lower.al	local_is_plain_assign	5	-	116:2105
+TABLE	src/ast.al	compound_assign_op_at	src/lower.al	op_symbol	8	-	116:454
+TABLE	src/ast.al	compound_assign_op_at	src/sema.al	sema_op_symbol	8	-	116:2543
+TABLE	src/cli.al	link_exe	src/cli.al	link_exe_split	6	-	423:739
+TABLE	src/driver.al	d_export_name	src/iface.al	iface_ident	6	-	221:71
+TABLE	src/driver.al	d_export_name	src/lower.al	export_name	8	-	221:2289
+TABLE	src/driver.al	d_export_name	src/lower/fnval.al	ecallee_ident_char	6	-	221:425
+TABLE	src/driver.al	d_export_name	src/lower_attrs.al	fn_is_inline	8	-	221:11
+TABLE	src/driver.al	d_export_name	src/sema.al	export_name	8	-	221:8000
+TABLE	src/driver.al	d_export_name	src/wat.al	wat_export_name	8	-	221:75
+TABLE	src/fmt.al	fmt_op	src/lower.al	local_is_plain_assign	5	-	149:2105
+TABLE	src/fmt.al	fmt_op	src/lower.al	op_symbol	11	-	149:454
+TABLE	src/fmt.al	fmt_op	src/sema.al	sema_op_symbol	8	-	149:2543
+TABLE	src/iface.al	iface_ident	src/lower.al	export_name	6	-	71:2289
+TABLE	src/iface.al	iface_ident	src/lower/fnval.al	ecallee_ident_char	6	-	71:425
+TABLE	src/iface.al	iface_ident	src/lower_attrs.al	fn_is_inline	6	-	71:11
+TABLE	src/iface.al	iface_ident	src/sema.al	export_name	6	-	71:8000
+TABLE	src/iface.al	iface_ident	src/wat.al	wat_export_name	6	-	71:75
+TABLE	src/lower.al	export_name	src/lower/fnval.al	ecallee_ident_char	6	-	2289:425
+TABLE	src/lower.al	export_name	src/lower_attrs.al	fn_is_inline	8	-	2289:11
+TABLE	src/lower.al	export_name	src/sema.al	export_name	8	-	2289:8000
+TABLE	src/lower.al	export_name	src/wat.al	wat_export_name	8	-	2289:75
+TABLE	src/lower.al	local_is_plain_assign	src/lower.al	op_symbol	5	-	2105:454
+TABLE	src/lower.al	local_is_plain_assign	src/sema.al	sema_op_symbol	5	-	2105:2543
+TABLE	src/lower.al	op_symbol	src/sema.al	sema_op_symbol	8	-	454:2543
+TABLE	src/lower/fnval.al	ecallee_ident_char	src/lower_attrs.al	fn_is_inline	6	-	425:11
+TABLE	src/lower/fnval.al	ecallee_ident_char	src/sema.al	export_name	6	-	425:8000
+TABLE	src/lower/fnval.al	ecallee_ident_char	src/wat.al	wat_export_name	6	-	425:75
+TABLE	src/lower_attrs.al	fn_is_inline	src/sema.al	export_name	8	-	11:8000
+TABLE	src/lower_attrs.al	fn_is_inline	src/wat.al	wat_export_name	8	-	11:75
+TABLE	src/sema.al	export_name	src/wat.al	wat_export_name	8	-	8000:75

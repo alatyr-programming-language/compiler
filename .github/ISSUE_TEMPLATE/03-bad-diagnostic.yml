@@ -1,0 +1,43 @@
+name: Bad diagnostic
+description: The compiler refuses correctly but explains itself badly — wrong place, wrong reason, or nothing at all.
+title: "[diagnostic] "
+labels: ["diagnostic"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A refusal is only useful if it sends the reader to the right place. Reports worth filing
+        here: a message that names the wrong cause (a wrong argument count reported as an unbound
+        name), a position that is far from the construct, a failure with **no message at all** (a
+        bare trap, or a bounds check that ends in `ud2`), or a message that names an internal symbol
+        the author never wrote.
+  - type: textarea
+    id: program
+    attributes:
+      label: The program
+      render: rust
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What it says now
+      description: Verbatim, with the exit code, and the line it points at.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: wanted
+    attributes:
+      label: What it should say, and where it should point
+      description: >
+        The line the construct is actually on, and the cause in the author's terms. You do not have
+        to write the final wording — naming the right cause and the right line is the substance.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Compiler revision
+    validations:
+      required: true

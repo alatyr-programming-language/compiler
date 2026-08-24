@@ -1,0 +1,55 @@
+name: Fails when it should work
+description: A valid program is rejected, crashes the compiler, or traps at runtime.
+title: "[reject] "
+labels: ["fails-when-valid"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Loud failures are acceptable outcomes for a shape the compiler does not model yet — the
+        cross backends are narrower than `x86_64` **by design**, and a trap there is often expected
+        rather than a bug. What makes this a defect is that the program is *valid* and the failure
+        is not a documented limit.
+
+        Two things this is not: a program that compiles and returns the wrong answer (use
+        **Wrong value** — that one jumps the queue), and a failure whose *message* is the problem
+        (use **Bad diagnostic**).
+  - type: textarea
+    id: program
+    attributes:
+      label: The program
+      description: The smallest one that still fails.
+      render: rust
+    validations:
+      required: true
+  - type: textarea
+    id: failure
+    attributes:
+      label: How it fails, per backend, verbatim
+      description: >
+        Paste the diagnostic exactly, and give the exit code. A compiler **segfault** (139) or a
+        trap with no message is worth saying outright, because a limit that cannot name itself is a
+        separate defect from the limit.
+      placeholder: |
+        x86_64   rc 139, no output at all
+        aarch64  rc 1: selfhost: … not supported
+        wasm     rc 0, runs, 42
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: control
+    attributes:
+      label: The control
+      description: >
+        The nearest shape that **does** work. This is the single most useful field in the form: it
+        separates "this construct is unsupported" from "this construct is supported and something
+        about your program is unusual". If a plain assignment works where a compound one fails, or
+        two elements work where three do not, say so.
+      placeholder: "The same program with 32 distinct callees instead of 33 compiles and runs fine."
+  - type: input
+    id: version
+    attributes:
+      label: Compiler revision
+    validations:
+      required: true
