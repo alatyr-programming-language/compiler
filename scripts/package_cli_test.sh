@@ -79,6 +79,65 @@ run_zero_tests() {
   rm -rf "$tmp"
 }
 
+run_cross_target_test() {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/src"
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(name = "cross", arch = Arch.aarch64, os = Os.linux, env = Env.gnu, container = Container.elf,
+           entry = "_start", output = "cross-target"),
+    Target(name = "rv", arch = Arch.riscv64, os = Os.linux, env = Env.gnu, container = Container.elf,
+           entry = "_start", output = "cross-target"),
+  ]
+)
+EOF
+  cat >"$tmp/src/main.al" <<'EOF'
+main := fn() -> u64 { return 42 }
+
+_start := fn() -> u64 { return 7 }
+
+@test("cross target test")
+fn() -> Result(usize, str) {
+  return Result.Ok(0)
+}
+EOF
+  (cd "$tmp" && "$CC" test --target cross package.al) >"$tmp/a64.out" 2>"$tmp/a64.err"
+  a64_rc=$?
+  a64_artifact="$tmp/target/cross/debug/cross-target.test"
+  if [ "$a64_rc" = 0 ] && grep -qF 'test cross target test: ok' "$tmp/a64.out" \
+    && [ ! -s "$tmp/a64.err" ] && [ -x "$a64_artifact" ]; then
+    echo "ok   cross_target_test: AArch64 target assembles, runs under QEMU, and reports the test"
+  else
+    echo "FAIL cross_target_test: AArch64 rc=$a64_rc output=$(cat "$tmp/a64.out" 2>/dev/null) stderr=$(cat "$tmp/a64.err" 2>/dev/null)"
+    fail=1
+  fi
+  (cd "$tmp" && "$CC" test --target rv package.al cross) >"$tmp/rv.out" 2>"$tmp/rv.err"
+  rv_rc=$?
+  rv_artifact="$tmp/target/rv/debug/cross-target.test"
+  if [ "$rv_rc" = 0 ] && grep -qF 'test cross target test: ok' "$tmp/rv.out" \
+    && [ ! -s "$tmp/rv.err" ] && [ -x "$rv_artifact" ]; then
+    echo "ok   cross_target_test: RISC-V target and description filter work under QEMU"
+  else
+    echo "FAIL cross_target_test: RISC-V rc=$rv_rc output=$(cat "$tmp/rv.out" 2>/dev/null) stderr=$(cat "$tmp/rv.err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -rf "$tmp/target"
+  (cd "$tmp" && "$CC" build --target cross package.al) >"$tmp/build.out" 2>"$tmp/build.err"
+  build_rc=$?
+  if [ "$build_rc" = 1 ] && grep -qF 'config: non-x86 targets are supported only by `test`' "$tmp/build.err" \
+    && [ ! -e "$tmp/target" ]; then
+    echo "ok   cross_target_test: non-test non-x86 command fails closed without an x86 impostor"
+  else
+    echo "FAIL cross_target_test: non-x86 build rc=$build_rc output=$(cat "$tmp/build.out" 2>/dev/null) stderr=$(cat "$tmp/build.err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -rf "$tmp"
+}
+
 run_expect() {
   name="$1"
   want="$2"
@@ -838,6 +897,11 @@ EOF
   rm -rf "$tmp"
 }
 
+if [ "${CROSS_TARGET_ONLY:-0}" = 1 ]; then
+  run_cross_target_test
+  exit "$fail"
+fi
+
 if [ "${TOOL14_ONLY:-0}" = 1 ]; then
   run_tool14_manifest_selection
   exit "$fail"
@@ -849,6 +913,7 @@ fi
 run_noarg_help
 run_new_scaffold
 run_zero_tests
+run_cross_target_test
 run_expect profile_check_named 0 check --profile release package.al
 run_expect profile_check_release 0 check --release package.al
 run_expect profile_run_debug 7 run package.al

@@ -3315,6 +3315,44 @@ pub set_target_code_size := fn(code_size : usize) -> i64 {
   return lower::ctfold::set_target_code_size(code_size)
 }
 
+## Cross-target `test` is routed through the existing non-x86 multi-file front end. These scalars keep
+## the path-list and test selection out of aggregate parameters, which the lean self-host lower does
+## not reliably copy across a module boundary.
+mut D_RAW_PATHS : usize = 0
+mut D_TEST_MODE : usize = 0
+mut D_TEST_FILTER_P : usize = 0
+mut D_TEST_FILTER_N : usize = 0
+mut D_TEST_KEEP : usize = 0
+mut D_TEST_ENTRY_P : usize = 0
+mut D_TEST_ENTRY_N : usize = 0
+
+pub set_cross_test_filter := fn(p : usize, n : usize) -> i64 {
+  D_TEST_FILTER_P = p
+  D_TEST_FILTER_N = n
+  return 0
+}
+
+pub compile_files_cross_test := fn(paths : str, in out a : Arena, backend : usize, keep_going : bool, ceiling : str) -> strbuf::StrBuf {
+  ## `test` already ran the canonical x86-shaped check before entering this path. The backend front end
+  ## below must receive the package's complete newline-joined module list, not reinterpret that list as
+  ## one filesystem path and silently fall back to only the final source file.
+  D_RAW_PATHS = 1
+  D_TEST_MODE = 1
+  D_TEST_KEEP = 0
+  if keep_going { D_TEST_KEEP = 1 }
+  D_TEST_ENTRY_P = TEST_ENTRY_P
+  D_TEST_ENTRY_N = TEST_ENTRY_N
+  mut out := d_compile_file_multi(paths, backend)
+  D_RAW_PATHS = 0
+  D_TEST_MODE = 0
+  D_TEST_FILTER_P = 0
+  D_TEST_FILTER_N = 0
+  D_TEST_KEEP = 0
+  D_TEST_ENTRY_P = 0
+  D_TEST_ENTRY_N = 0
+  out
+}
+
 ## TOOL-5 — the CLI forwards the optional test description filter as raw pointer/length facts. Keeping
 ## the boundary scalar avoids the lean lower's fragile aggregate-string copyback across cli → driver.
 mut TEST_FILTER_P : usize = 0
@@ -4173,7 +4211,7 @@ d_qual_sweep := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8), keep
     if keep != 0 { live = rt::rec_get(unchecked bitcast(ptr(mut u8), keep), i) != 0 }
     if live {
       d := deref(decl_at(Decl, rt::vec_get(decls, i)))
-      if d.kind == 1 {
+      if d.kind == 1 or d.kind == 5 {
         d_qual_stmts(d.body_stmts, d.mod_start, d.mod_len, decls, na, src)
         if unchecked bitcast(usize, d.value) != 0 { d_qual_expr(d.value, d.mod_start, d.mod_len, decls, na, src) }
       }
@@ -4407,6 +4445,7 @@ d_entry_aggcmp := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8), em
 ## 1 while the WAT aggregate-compare guard has forced a SINGLE-FILE retry (no ambient closure).
 mut D_NOLIB : usize = 0
 d_ambient_paths := fn(in out sc : rt::Arena, path : str) -> str {
+  if D_RAW_PATHS != 0 { return path }
   mut ub := rt::strbuf(sc, path.len + 16)
   ku := rt::push_str(ub, path)
   kn := rt::push_byte(ub, 10)
@@ -4570,10 +4609,51 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     }
     ed = d_resolve_and_prune(decls, ptr(na), base, ems, eml, ptr(tar))
   }
+  ## TOOL-7 — the cross-target test artifact has the same entry exclusion as the canonical x86 test
+  ## artifact. The cross runner supplies its own `_start`; retaining the package entry would either
+  ## create a duplicate linker symbol or, for a named entry, link code that the test artifact must not
+  ## contain. Apply this after pruning so the backend sees one coherent declaration vector.
+  if D_TEST_MODE != 0 {
+    mut cross_entry := "_start"
+    if D_TEST_ENTRY_N != 0 {
+      cross_entry = str_at(unchecked bitcast(ptr(u8), D_TEST_ENTRY_P), D_TEST_ENTRY_N)
+    }
+    ecnt := rt::vec_len(ed)
+    mut ekept := 0
+    mut ei := 0
+    while ei < ecnt {
+      eh := rt::vec_get(ed, ei)
+      ee := deref(decl_at(Decl, eh))
+      if d_emits_entry(base, ee, cross_entry) == false {
+        rt::rec_set(ed.data, ekept, eh)
+        ekept += 1
+      }
+      ei += 1
+    }
+    ed.len = ekept
+  }
   mut out := strbuf::strbuf(tar, 67108864)
   if backend == 0 { wat::emit_wat_program(ptr(ed), out, base, na) }
-  if backend == 1 { aarch64::emit_a64_program(ptr(ed), out, base, na) }
-  if backend == 2 { riscv64::emit_rv_program(ptr(ed), out, base, na) }
+  if backend == 1 {
+    mut cross_test_mode := D_TEST_MODE
+    aarch64::set_cross_test_mode(cross_test_mode)
+    mut cross_filter_p := D_TEST_FILTER_P
+    mut cross_filter_n := D_TEST_FILTER_N
+    aarch64::set_cross_test_filter(cross_filter_p, cross_filter_n)
+    mut cross_keep := D_TEST_KEEP
+    aarch64::set_cross_test_options(cross_keep)
+    aarch64::emit_a64_program(ptr(ed), out, base, na)
+  }
+  if backend == 2 {
+    mut rv_test_mode := D_TEST_MODE
+    riscv64::set_cross_test_mode(rv_test_mode)
+    mut rv_filter_p := D_TEST_FILTER_P
+    mut rv_filter_n := D_TEST_FILTER_N
+    riscv64::set_cross_test_filter(rv_filter_p, rv_filter_n)
+    mut rv_keep := D_TEST_KEEP
+    riscv64::set_cross_test_options(rv_keep)
+    riscv64::emit_rv_program(ptr(ed), out, base, na)
+  }
   out
 }
 

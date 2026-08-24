@@ -1818,15 +1818,127 @@ mf_token := fn(s : str, wi : usize, wl : usize) -> str {
   return str_at(bb + p, e - p)
 }
 
+## The target selected by `--target`, or the first Target when the option is absent. The manifest parser
+## owns the full schema; this deliberately small scanner only recovers the one Target record that the
+## package-aware command is about to build. Keep the selected name as pointer/length facts: the command
+## arena owns both the argv span and the manifest text for the lifetime of every later scanner call.
+mut CLI_SELECTED_TARGET_P : usize = 0
+mut CLI_SELECTED_TARGET_N : usize = 0
+
+manifest_target_record := fn(in out a : rt::Arena, pkg_al : str) -> str {
+  blk := manifest_list_field(a, pkg_al, "targets")
+  bb := unchecked bitcast(usize, blk.ptr)
+  mut first_s := 0
+  mut first_n := 0
+  mut i := 0
+  while i + 7 <= blk.len {
+    mut is_target := true
+    if bytes(blk)[i] != 84 { is_target = false }
+    if bytes(blk)[i + 1] != 97 { is_target = false }
+    if bytes(blk)[i + 2] != 114 { is_target = false }
+    if bytes(blk)[i + 3] != 103 { is_target = false }
+    if bytes(blk)[i + 4] != 101 { is_target = false }
+    if bytes(blk)[i + 5] != 116 { is_target = false }
+    if bytes(blk)[i + 6] != 40 { is_target = false }
+    if is_target {
+      mut e := i + 7
+      mut depth := 1
+      mut in_str := false
+      while e < blk.len and depth > 0 {
+        c := bytes(blk)[e]
+        if c == 34 {
+          mut esc := false
+          if e > 0 and bytes(blk)[e - 1] == 92 { esc = true }
+          if not esc { in_str = not in_str }
+        } else if not in_str {
+          if c == 40 { depth += 1 }
+          if c == 41 { depth -= 1 }
+        }
+        e += 1
+      }
+      if first_n == 0 { first_s = i ; first_n = e - i }
+      rec := str_at(bb + i, e - i)
+      nwi := mf_find_word(rec, 0, "name")
+      mut nm := str_at(0, 0)
+      if nwi >= 0 { nm = mf_quoted(rec, usize(nwi), 4) }
+      if CLI_SELECTED_TARGET_N != 0 and nm == str_at(CLI_SELECTED_TARGET_P, CLI_SELECTED_TARGET_N) {
+        return rec
+      }
+      i = e
+    } else {
+      i += 1
+    }
+  }
+  if CLI_SELECTED_TARGET_N == 0 and first_n != 0 { return str_at(bb + first_s, first_n) }
+  str_at(bb, 0)
+}
+
+## Resolve the selector before any source parsing. An unknown target is a located Config error, never a
+## silent fallback to the first record. Unnamed targets retain the stable `default` artifact component.
+manifest_target_selection_resolve := fn(in out a : rt::Arena, pkg_al : str) -> usize {
+  CLI_SELECTED_TARGET_P = 0
+  CLI_SELECTED_TARGET_N = 0
+  blk := manifest_list_field(a, pkg_al, "targets")
+  if CLI_TARGET_SELECT_COUNT != 0 {
+    wanted := str_at(CLI_TARGET_SELECT_P, CLI_TARGET_SELECT_N)
+    CLI_SELECTED_TARGET_P = CLI_TARGET_SELECT_P
+    CLI_SELECTED_TARGET_N = CLI_TARGET_SELECT_N
+    rec := manifest_target_record(a, pkg_al)
+    if rec.len == 0 {
+      manifest_located_error(a, "config: --target names no Target in the manifest", pkg_al, "targets")
+      return 43
+    }
+    ## `manifest_target_record` returns the first record when the selected name is empty only. An
+    ## explicit selector is non-empty, so a returned record is a proof that the exact name matched.
+    nwi := mf_find_word(rec, 0, "name")
+    if nwi < 0 or mf_quoted(rec, usize(nwi), 4) != wanted {
+      manifest_located_error(a, "config: --target names no Target in the manifest", pkg_al, "targets")
+      return 43
+    }
+    return 0
+  }
+  ## No explicit selector: preserve the existing first-target default, but remember its name so every
+  ## later field scanner (kind/code-size/output/entry/artifact directory) reads the same record.
+  mut i := 0
+  while i + 7 <= blk.len {
+    if bytes(blk)[i] == 84 and bytes(blk)[i + 1] == 97 and bytes(blk)[i + 2] == 114 and bytes(blk)[i + 3] == 103 and bytes(blk)[i + 4] == 101 and bytes(blk)[i + 5] == 116 and bytes(blk)[i + 6] == 40 {
+      mut e := i + 7
+      mut depth := 1
+      mut in_str := false
+      while e < blk.len and depth > 0 {
+        c := bytes(blk)[e]
+        if c == 34 {
+          mut esc := false
+          if e > 0 and bytes(blk)[e - 1] == 92 { esc = true }
+          if not esc { in_str = not in_str }
+        } else if not in_str {
+          if c == 40 { depth += 1 }
+          if c == 41 { depth -= 1 }
+        }
+        e += 1
+      }
+      rec := str_at(unchecked bitcast(usize, blk.ptr) + i, e - i)
+      nwi := mf_find_word(rec, 0, "name")
+      if nwi >= 0 {
+        nm := mf_quoted(rec, usize(nwi), 4)
+        CLI_SELECTED_TARGET_P = unchecked bitcast(usize, nm.ptr)
+        CLI_SELECTED_TARGET_N = nm.len
+      }
+      return 0
+    }
+    i += 1
+  }
+  0
+}
+
 ## The selected Target.kind token (`executable`, `object`, `static_lib`, …). The manifest parser already
 ## validates the enum through the Package schema; this CLI scan only publishes the selected artifact shape
 ## to the build dispatcher. Missing kind keeps the spec's executable default.
 manifest_target_kind := fn(in out a : rt::Arena, pkg_al : str) -> str {
-  mc := cstr(a, pkg_al)
-  mtext := read_proc(a, mc, 262144)
-  wi := mf_find_word(mtext, 0, "kind")
+  rec := manifest_target_record(a, pkg_al)
+  wi := mf_find_word(rec, 0, "kind")
   if wi < 0 { return "executable" }
-  tok := mf_token(mtext, usize(wi), 4)
+  tok := mf_token(rec, usize(wi), 4)
   if tok == "Kind.executable" { return "executable" }
   if tok == "Kind.object" { return "object" }
   if tok == "Kind.static_lib" { return "static_lib" }
@@ -1852,11 +1964,10 @@ manifest_target_kind_code := fn(kind : str) -> usize {
 ## parser supplies the Target field; this narrow CLI scan carries only its closed enum scalar across
 ## the existing package boundary. x86_64's omitted/default value is CodeSize.b64.
 manifest_target_code_size := fn(in out a : rt::Arena, pkg_al : str) -> usize {
-  mc := cstr(a, pkg_al)
-  mtext := read_proc(a, mc, 262144)
-  wi := mf_find_word(mtext, 0, "code_size")
+  rec := manifest_target_record(a, pkg_al)
+  wi := mf_find_word(rec, 0, "code_size")
   if wi < 0 { return 2 }
-  tok := mf_token(mtext, usize(wi), 9)
+  tok := mf_token(rec, usize(wi), 9)
   if tok == "CodeSize.b16" { return 0 }
   if tok == "CodeSize.b32" { return 1 }
   if tok == "CodeSize.b64" { return 2 }
@@ -1908,11 +2019,13 @@ manifest_vendor_reject := fn(in out a : rt::Arena, pkg_al : str) {
 ## deterministic default; an explicit empty value or path separator is a Config error before source
 ## compilation. NUL cannot occur in an Alatyr source literal.
 manifest_output_reject := fn(in out a : rt::Arena, pkg_al : str) {
-  mc := cstr(a, pkg_al)
-  mtext := read_proc(a, mc, 262144)
-  wi := mf_find_word(mtext, 0, "output")
+  ## Selection has already published the exact Target record; validate that record, not the first
+  ## `output` anywhere in a multi-target manifest. An invalid unselected target must not poison the
+  ## selected invocation, while the selected target must never inherit a safe field from a sibling.
+  rec := manifest_target_record(a, pkg_al)
+  wi := mf_find_word(rec, 0, "output")
   if wi < 0 { return }
-  value := mf_quoted(mtext, usize(wi), 6)
+  value := mf_quoted(rec, usize(wi), 6)
   mut bad := value.len == 0
   mut i := 0
   while i < value.len {
@@ -2042,13 +2155,33 @@ manifest_kind_reject := fn(in out a : rt::Arena, pkg_al : str, kind : str) -> us
   return 0
 }
 
-## TOOL-13/TOOL-18 boundary — target selection is not implemented by this bounded layout lane. Keep
-## the rejection at the manifest's targets field so an unsupported selection cannot fall through as a
-## source path (and therefore cannot lose its Config stage/location).
-manifest_target_selection_reject := fn(in out a : rt::Arena, pkg_al : str) -> usize {
-  if CLI_TARGET_SELECT_COUNT == 0 { return 0 }
-  manifest_located_error(a, "config: --target selection is not implemented yet", pkg_al, "targets")
-  return 43
+## Tooling §2.7 — map the selected Target.arch to the small backend selector carried by the driver.
+## Unsupported architectures fail at the configuration boundary; they must not fall through to the host
+## assembler or silently run an artifact for a different machine. The non-x86 selector is currently
+## consumed only by the cross-target `test` path; build/run/dump/check reject it until their own
+## target-specific link/execute contract is implemented.
+manifest_target_backend := fn(in out a : rt::Arena, pkg_al : str) -> usize {
+  rec := manifest_target_record(a, pkg_al)
+  if rec.len == 0 { return 0 }
+  wi := mf_find_word(rec, 0, "arch")
+  if wi < 0 { return 3 }
+  tok := mf_token(rec, usize(wi), 4)
+  if tok == "Arch.x86_64" { return 0 }
+  if tok == "Arch.aarch64" { return 1 }
+  if tok == "Arch.riscv64" { return 2 }
+  return 3
+}
+
+manifest_target_arch_reject := fn(in out a : rt::Arena, pkg_al : str, backend : usize) -> usize {
+  if backend < 3 { return 0 }
+  manifest_located_error(a, "config: Target.arch is unsupported by this compiler", pkg_al, "arch")
+  return 44
+}
+
+manifest_target_command_reject := fn(in out a : rt::Arena, pkg_al : str, backend : usize, mode : usize) -> usize {
+  if backend == 0 or mode == 5 { return 0 }
+  manifest_located_error(a, "config: non-x86 targets are supported only by `test`", pkg_al, "arch")
+  return 45
 }
 
 ## The `flags = [ … ]` inner text of the Profile whose `name = "<sel>"` within the `profiles` list,
@@ -2327,7 +2460,10 @@ manifest_has_package := fn(in out a : rt::Arena, pkg_al : str) -> bool {
 ## The selected target's `output` artifact file name (Manifest appendix §3.1), or "a.out" when
 ## absent. Zero-Package naming is deliberately kept separate in manifest_artifact_basename below.
 manifest_output := fn(in out a : rt::Arena, pkg_al : str) -> str {
-  v := manifest_field(a, pkg_al, "output")
+  rec := manifest_target_record(a, pkg_al)
+  wi := mf_find_word(rec, 0, "output")
+  if wi < 0 { return "a.out" }
+  v := mf_quoted(rec, usize(wi), 6)
   if v.len == 0 { return "a.out" }
   return v
 }
@@ -2358,9 +2494,9 @@ manifest_target_count := fn(in out a : rt::Arena, pkg_al : str) -> usize {
 ## The default target is the first manifest Target. TOOL-13 only needs its name to keep the
 ## multi-target directory stable; selecting a different target remains a later resolver increment.
 manifest_default_target_name := fn(in out a : rt::Arena, pkg_al : str) -> str {
-  blk := manifest_list_field(a, pkg_al, "targets")
-  wi := mf_find_word(blk, 0, "name")
-  if wi >= 0 { return mf_quoted(blk, usize(wi), 4) }
+  rec := manifest_target_record(a, pkg_al)
+  wi := mf_find_word(rec, 0, "name")
+  if wi >= 0 { return mf_quoted(rec, usize(wi), 4) }
   return "default"
 }
 
@@ -2403,7 +2539,10 @@ manifest_target_artifact := fn(in out a : rt::Arena, pkg_al : str, suffix : str,
 ## selected with `ld -e <entry>` for a manifest build; default `_start` when absent (the conventional
 ## ELF entry, and the byte-identical self-build compatibility path).
 manifest_entry := fn(in out a : rt::Arena, pkg_al : str) -> str {
-  v := manifest_field(a, pkg_al, "entry")
+  rec := manifest_target_record(a, pkg_al)
+  wi := mf_find_word(rec, 0, "entry")
+  if wi < 0 { return "_start" }
+  v := mf_quoted(rec, usize(wi), 5)
   if v.len == 0 { return "_start" }
   return v
 }
@@ -2654,6 +2793,72 @@ build_and_run := fn(in out a : rt::Arena, outp : str, keep_artifacts : bool, gba
   return result
 }
 
+## Cross-target TOOL-5 link/run. The non-x86 emitters produce freestanding Linux GAS, so the selected
+## target triple's binutils must assemble/link it and the matching user-mode QEMU must execute it. A
+## missing cross tool is a Tooling failure, never a host-tool fallback or a skipped test.
+cross_link_exe := fn(in out a : rt::Arena, out : str, gbase : usize, glen : usize, backend : usize) -> usize {
+  ssfx := cat2(a, out, ".s")
+  osfx := cat2(a, out, ".o")
+  outs_c := cstr(a, ssfx)
+  outo_c := cstr(a, osfx)
+  out_c := cstr(a, out)
+  w := rt::write_file(outs_c, gbase, glen)
+  if w != 0 { tool_error("alatyr: cannot write the emitted cross-target assembly"); return 10 }
+  mut etr := 0
+  environ := read_environ(a, etr)
+  if etr != 0 { env_truncation_error(); return 21 }
+  envp := build_envp(a, environ)
+  mut as_name := "aarch64-unknown-linux-gnu-as"
+  mut ld_name := "aarch64-unknown-linux-gnu-ld"
+  if backend == 2 { as_name = "riscv64-unknown-linux-gnu-as" ; ld_name = "riscv64-unknown-linux-gnu-ld" }
+  as_c := resolve_in_path(a, environ, as_name)
+  ld_c := resolve_in_path(a, environ, ld_name)
+  if as_c == 0 { tool_error("alatyr: the selected target assembler is not found on PATH"); return 11 }
+  if ld_c == 0 { tool_error("alatyr: the selected target linker is not found on PATH"); return 12 }
+  dash_o := cstr(a, "-o")
+  ra := exec4(a, as_c, outs_c, dash_o, outo_c, envp)
+  if ra.kind != 0 { spawn_error(a, "cross-target assembler", as_name, ra); return 19 }
+  if ra.code != 0 { tool_error("alatyr: the selected target assembler rejected the emitted assembly"); return 13 }
+  rl := exec4(a, ld_c, outo_c, dash_o, out_c, envp)
+  if rl.kind != 0 { spawn_error(a, "cross-target linker", ld_name, rl); return 19 }
+  if rl.code != 0 { tool_error("alatyr: the selected target linker failed"); return 14 }
+  0
+}
+
+cross_run_exe := fn(in out a : rt::Arena, out : str, backend : usize) -> usize {
+  mut etr := 0
+  environ := read_environ(a, etr)
+  if etr != 0 { env_truncation_error(); return 21 }
+  envp := build_envp(a, environ)
+  mut qemu_name := "qemu-aarch64"
+  if backend == 2 { qemu_name = "qemu-riscv64" }
+  qemu_c := resolve_in_path(a, environ, qemu_name)
+  if qemu_c == 0 { tool_error("alatyr: the selected target QEMU is not found on PATH; cross-target test cannot run"); return 19 }
+  out_c := cstr(a, out)
+  st := exec4(a, qemu_c, out_c, 0, 0, envp)
+  if st.kind != 0 { spawn_error(a, "cross-target QEMU", qemu_name, st); return 19 }
+  wexit(unchecked bitcast(usize, st.code))
+}
+
+build_and_run_cross := fn(in out a : rt::Arena, outp : str, keep_artifacts : bool, gbase : usize, glen : usize, backend : usize) -> usize {
+  mut artifact := outp
+  if artifact.len == 0 {
+    pid := rt::sys_getpid(39)
+    mut b := rt::strbuf(a, 64)
+    k := rt::push_str(b, "/tmp/.alatyr-cross-test-")
+    k2 := rt::push_int(b, pid)
+    artifact = str_at(b.data, b.len)
+  }
+  rc := cross_link_exe(a, artifact, gbase, glen, backend)
+  if rc != 0 {
+    if keep_artifacts == false { cleanup_temp_artifact(a, artifact, 0, "") }
+    return rc
+  }
+  result := cross_run_exe(a, artifact, backend)
+  if keep_artifacts == false { cleanup_temp_artifact(a, artifact, 0, "") }
+  result
+}
+
 ## `new <name>`: scaffold a package directory `<name>/` containing a manifest `package.al` and the
 ## default-source directory `<name>/src/` with a runnable `main.al` that prints a deterministic success
 ## message through the ambient stdlib, so `<prog> build <name>/package.al` / `<prog> run <name>/package.al`
@@ -2709,6 +2914,13 @@ test_gas_has_desc := fn(gas : str) -> bool {
     i += 1
   }
   return false
+}
+
+## Cross-target runners use backend-specific local labels, but the zero-test decision is the same
+## CLI contract as the host runner. Keep this probe at the surface rather than teaching the backends
+## about command-line diagnostics.
+cross_test_gas_has_desc := fn(gas : str) -> bool {
+  return str_contains(gas, ".La64testdesc") or str_contains(gas, ".Lrvtestdesc")
 }
 
 ## Report the successful empty test selection on stdout. The wording is intentionally concise and
@@ -3731,6 +3943,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     lim_ceiling = manifest_limits(a, pkg_arg)
   }
   mut paths := build_paths(a, cmd, fi, path_n, pkg_arg)
+  mut target_backend := 0
   ## Modules §8 / Tooling §2.4 — a dependency DECLARATION the resolver cannot honour (a git source, a
   ## path dependency with no `package.al`, a record naming neither a name nor an alias) is a Config
   ## failure for EVERY command. The scanner already printed the located diagnostic; abort here rather
@@ -3739,8 +3952,14 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if is_pkg {
     manifest_vendor_reject(a, pkg_arg)
     manifest_path_reject(a, pkg_arg)
-    manifest_output_reject(a, pkg_arg)
-    if manifest_target_selection_reject(a, pkg_arg) != 0 { MANIFEST_CONFIG_BAD = true }
+    if manifest_target_selection_resolve(a, pkg_arg) != 0 { MANIFEST_CONFIG_BAD = true }
+    if MANIFEST_CONFIG_BAD == false { manifest_output_reject(a, pkg_arg) }
+    if MANIFEST_CONFIG_BAD == false {
+      backend := manifest_target_backend(a, pkg_arg)
+      if manifest_target_arch_reject(a, pkg_arg, backend) != 0 { MANIFEST_CONFIG_BAD = true }
+      if MANIFEST_CONFIG_BAD == false and manifest_target_command_reject(a, pkg_arg, backend, mode) != 0 { MANIFEST_CONFIG_BAD = true }
+      if MANIFEST_CONFIG_BAD == false { target_backend = backend }
+    }
     if MANIFEST_CONFIG_BAD { return 1 }
   }
   ## TOOL-17 — publish the selected Target.code_size before package parsing/lowering. The default
@@ -3871,10 +4090,23 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     kte := driver::set_test_entry(unchecked bitcast(usize, test_entry.ptr), test_entry.len)
     ## test: build a runner that calls every @test fn, then run it; its exit code = failure count.
     kst := driver::set_test_filter(test_filter_p, test_filter_n)
+    mut cross_filter_p := test_filter_p
+    mut cross_filter_n := test_filter_n
+    kcf0 := driver::set_cross_test_filter(cross_filter_p, cross_filter_n)
     kto := driver::set_test_options(test_jobs, test_keep_going)
+    mut cross_test := false
     mut tsb := driver::compile_files_test_with_options(paths, a, test_keep_going, lim_ceiling)
+    if target_backend != 0 {
+      ## The x86 front end remains the canonical type/limits check. Cross-target backends are
+      ## emitters, not a second semantic implementation; reject before assembling anything.
+      crc := driver::check_files(paths, a, lim_ceiling)
+      if crc != 0 { return crc }
+      tsb = driver::compile_files_cross_test(paths, a, target_backend, test_keep_going, lim_ceiling)
+      cross_test = true
+    }
     tgas := str_at(unchecked bitcast(usize, tsb.data), tsb.len)
-    has_tests := test_gas_has_desc(tgas)
+    mut has_tests := test_gas_has_desc(tgas)
+    if cross_test { has_tests = cross_test_gas_has_desc(tgas) }
     mut test_out := ""
     mut keep_test_artifact := false
     if is_pkg {
@@ -3882,7 +4114,12 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       test_out = manifest_target_artifact(a, tep, ".test", selected_profile)
       keep_test_artifact = true
     }
-    rc := build_and_run(a, test_out, keep_test_artifact, tsb.data, tsb.len, paths, "_start", 0, "", 0, 0)
+    mut rc := 0
+    if cross_test {
+      rc = build_and_run_cross(a, test_out, keep_test_artifact, tsb.data, tsb.len, target_backend)
+    } else {
+      rc = build_and_run(a, test_out, keep_test_artifact, tsb.data, tsb.len, paths, "_start", 0, "", 0, 0)
+    }
     if rc == 0 and has_tests == false {
       test_zero_diag()
       return 0

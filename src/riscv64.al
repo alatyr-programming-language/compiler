@@ -46,6 +46,27 @@ variant_payload_type := lower_layout::variant_payload_type
 (CSpan) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
+## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
+## from the driver so the frozen self-host lower does not copy a selection aggregate.
+mut RV_TEST_MODE : bool = false
+mut RV_TEST_FILTER_P : usize = 0
+mut RV_TEST_FILTER_N : usize = 0
+mut RV_TEST_KEEP : bool = false
+mut RV_TEST_DECL_INDEX : usize = 0
+pub set_cross_test_mode := fn(mode : usize) -> i64 {
+  RV_TEST_MODE = mode != 0
+  return 0
+}
+pub set_cross_test_filter := fn(p : usize, n : usize) -> i64 {
+  RV_TEST_FILTER_P = p
+  RV_TEST_FILTER_N = n
+  return 0
+}
+pub set_cross_test_options := fn(keep : usize) -> i64 {
+  RV_TEST_KEEP = keep != 0
+  return 0
+}
+
 decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
 ## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
 decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return decl_at(Decl, hh) }
@@ -6592,7 +6613,7 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   ## `@abi(naked)` (spec ch.80): label + raw body (asm() lines) + trailing value only; no prologue/epilogue.
   if rv_fn_is_naked(src, d.name_start, d.name_len) {
     emit_rv_export(sb, src, d.name_start, d.name_len)
-    if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
+    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(RV_TEST_DECL_INDEX)) } else if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
     emit_rv_stmts(d.body_stmts, sb, a, src, ephead, pcount, d.body_stmts, decls, frame, 0, 0)
     if not ex_is_no_tail(d.value) { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
     return
@@ -6711,7 +6732,7 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
     push_str(sb, ":\n")
   } else {
     emit_rv_export(sb, src, d.name_start, d.name_len)
-    if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
+    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(RV_TEST_DECL_INDEX)) } else if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
   }
   push_str(sb, "  addi sp, sp, -") ; push_int(sb, frame) ; push_str(sb, "\n")
   push_str(sb, "  sd ra, 8(sp)\n  sd s0, 0(sp)\n  mv s0, sp\n")
@@ -6847,6 +6868,95 @@ emit_rv_float_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr
   }
 }
 
+## TOOL-5 — the cross-target test filter and the scalar Result return convention mirror the AArch64
+## runner. Each selected test is emitted with the original declaration index as its synthetic label.
+rv_test_selected := fn(src : ptr(u8), start : usize, len : usize) -> bool {
+  if RV_TEST_FILTER_N == 0 { return true }
+  desc := str_at((src + start), len)
+  needle := str_at(unchecked bitcast(ptr(u8), RV_TEST_FILTER_P), RV_TEST_FILTER_N)
+  if needle.len > desc.len { return false }
+  mut i := 0
+  while i + needle.len <= desc.len {
+    if str_at(unchecked bitcast(usize, desc.ptr) + i, needle.len) == needle { return true }
+    i += 1
+  }
+  false
+}
+
+rv_test_is_result := fn(src : ptr(u8), d : Decl) -> bool {
+  if d.ret_tl < 6 { return false }
+  str_at((src + d.ret_ts), 6) == "Result"
+}
+
+rv_emit_test_desc := fn(in out sb : rt::StrBuf, src : ptr(u8), start : usize, len : usize, idx : usize) {
+  push_str(sb, ".Lrvtestdesc") ; push_int(sb, i64(idx)) ; push_str(sb, ":\n  .byte ")
+  if len == 0 { push_str(sb, "0\n") } else {
+    mut i := 0
+    while i < len {
+      if i != 0 { push_str(sb, ", ") }
+      push_int(sb, i64(bytes(str_at((src + start), len))[i]))
+      i += 1
+    }
+    push_byte(sb, 10)
+  }
+}
+
+rv_emit_test_report := fn(in out sb : rt::StrBuf, idx : usize, dlen : usize, kind : usize) {
+  push_str(sb, "  li a0, 1\n  la a1, .Lrvtestprefix\n  li a2, 5\n  li a7, 64\n  ecall\n  li a0, 1\n  la a1, .Lrvtestdesc") ; push_int(sb, i64(idx))
+  push_str(sb, "\n  li a2, ") ; push_int(sb, i64(dlen)) ; push_str(sb, "\n  li a7, 64\n  ecall\n  li a0, 1\n  la a1, .Lrvtest")
+  if kind == 0 { push_str(sb, "ok") }
+  if kind == 1 { push_str(sb, "soft") }
+  if kind == 2 { push_str(sb, "trap") }
+  push_str(sb, "\n  li a2, ")
+  if kind == 0 { push_int(sb, i64(5)) }
+  if kind != 0 { push_int(sb, i64(14)) }
+  push_str(sb, "\n  li a7, 64\n  ecall\n")
+}
+
+## A sequential RV64 Linux runner. `clone(SIGCHLD)` supplies the same one-child isolation contract as
+## the native runner; wait4 status is decoded before the next test is launched.
+rv_emit_test_runner := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
+  push_str(sb, ".section .rodata\n.Lrvtestprefix: .byte 116, 101, 115, 116, 32\n.Lrvtestok: .byte 58, 32, 111, 107, 10\n.Lrvtestsoft: .byte 58, 32, 70, 65, 73, 76, 32, 40, 115, 111, 102, 116, 41, 10\n.Lrvtesttrap: .byte 58, 32, 70, 65, 73, 76, 32, 40, 116, 114, 97, 112, 41, 10\n")
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 5 and rv_test_selected(src, d.name_start, d.name_len) { rv_emit_test_desc(sb, src, d.name_start, d.name_len, i) }
+    i += 1
+  }
+  push_str(sb, ".text\n.global _start\n_start:\n  li s2, 0\n")
+  i = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 5 and rv_test_selected(src, d.name_start, d.name_len) {
+      push_str(sb, "  li a0, 17\n  li a1, 0\n  li a2, 0\n  li a3, 0\n  li a4, 0\n  li a7, 220\n  ecall\n  beqz a0, .Lrvchild") ; push_int(sb, i64(i)) ; push_str(sb, "\n  bltz a0, .Lrvforkfail") ; push_int(sb, i64(i)) ; push_str(sb, "\n  mv s3, a0\n  addi sp, sp, -16\n  mv a0, s3\n  mv a1, sp\n  li a2, 0\n  li a3, 0\n  li a7, 260\n  ecall\n  bltz a0, .Lrvwaitfail") ; push_int(sb, i64(i)) ; push_str(sb, "\n  ld t0, 0(sp)\n  addi sp, sp, 16\n  andi t1, t0, 127\n  bnez t1, .Lrvtrap") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      if rv_test_is_result(src, d) {
+        push_str(sb, "  srli t1, t0, 8\n  andi t1, t1, 255\n  bnez t1, .Lrvsoft") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      }
+      rv_emit_test_report(sb, i, d.name_len, 0)
+      push_str(sb, "  j .Lrvnext") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      push_str(sb, ".Lrvsoft") ; push_int(sb, i64(i)) ; push_str(sb, ":\n")
+      rv_emit_test_report(sb, i, d.name_len, 1)
+      push_str(sb, "  addi s2, s2, 1\n")
+      if not RV_TEST_KEEP { push_str(sb, "  j .Lrvdone\n") } else { push_str(sb, "  j .Lrvnext") ; push_int(sb, i64(i)) ; push_str(sb, "\n") }
+      push_str(sb, ".Lrvtrap") ; push_int(sb, i64(i)) ; push_str(sb, ":\n")
+      rv_emit_test_report(sb, i, d.name_len, 2)
+      push_str(sb, "  addi s2, s2, 1\n")
+      if not RV_TEST_KEEP { push_str(sb, "  j .Lrvdone\n") } else { push_str(sb, "  j .Lrvnext") ; push_int(sb, i64(i)) ; push_str(sb, "\n") }
+      push_str(sb, ".Lrvforkfail") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  j .Lrvtrap") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      push_str(sb, ".Lrvwaitfail") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  addi sp, sp, 16\n  j .Lrvtrap") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      push_str(sb, ".Lrvchild") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  call __test") ; push_int(sb, i64(i))
+      if rv_test_is_result(src, d) {
+        push_str(sb, "\n  beqz a0, .Lrvchildok") ; push_int(sb, i64(i)) ; push_str(sb, "\n  li a0, 1\n  j .Lrvchildexit") ; push_int(sb, i64(i)) ; push_str(sb, "\n.Lrvchildok") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  li a0, 0\n")
+      } else { push_str(sb, "\n  li a0, 0\n") }
+      push_str(sb, ".Lrvchildexit") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  li a7, 93\n  ecall\n")
+      push_str(sb, ".Lrvnext") ; push_int(sb, i64(i)) ; push_str(sb, ":\n")
+    }
+    i += 1
+  }
+  push_str(sb, ".Lrvdone:\n  mv a0, s2\n  li a7, 93\n  ecall\n")
+}
+
 ## Emit a complete runnable RV64 GAS program: `_start` (call main, exit(a0)) + every fn + `.data`.
 pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any callee resolution or emission,
@@ -6860,7 +6970,8 @@ pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
   ## The linker RELAXES a nearby `la sym` into gp-relative `addi rd, gp, off`; without gp set that
   ## dereferences garbage and segfaults (module_const's HEIGHT read). The `.option norelax` around the
   ## gp-load is mandatory — otherwise the linker relaxes the gp setup itself into nonsense.
-  push_str(sb, ".text\n.global _start\n_start:\n.option push\n.option norelax\n  la gp, __global_pointer$\n.option pop\n  call main\n  li a7, 93\n  ecall\n")
+  if RV_TEST_MODE { rv_emit_test_runner(decls, sb, src, a) }
+  if not RV_TEST_MODE { push_str(sb, ".text\n.global _start\n_start:\n.option push\n.option norelax\n  la gp, __global_pointer$\n.option pop\n  call main\n  li a7, 93\n  ecall\n") }
   cnt := rt::vec_len(deref(decls))
   ## GENERICS (§8 mono): instances are RECORDED DURING EMIT — every generic CALL site (emit_rv_expr)
   ## resolves its type-arg and appends via rv_inst_add (dedup) into the fixed RV_INST_* arrays.
@@ -6872,7 +6983,10 @@ pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
   mut i := 0
   while i < cnt {
     d := deref(decl_get(decls, i))
-    if d.kind == 1 { emit_rv_fn(d, sb, a, src, decls) }
+    if d.kind == 1 or (RV_TEST_MODE and d.kind == 5 and rv_test_selected(src, d.name_start, d.name_len)) {
+      if d.kind == 5 { RV_TEST_DECL_INDEX = i }
+      emit_rv_fn(d, sb, a, src, decls)
+    }
     i += 1
   }
   ## emit one monomorphized instance per RECORDED (generic-fn, type) pair, with the instance

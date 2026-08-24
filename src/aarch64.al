@@ -48,6 +48,28 @@ stmt_p := ast::stmt_p
 (arch_rhs_span, arch_guard_fold, apply_when_guards) := lower_layout
 variant_payload_type := lower_layout::variant_payload_type
 field_type_is_float := lower_layout::field_type_is_float
+
+## TOOL-5 cross-target mode. The ordinary backend keeps its historical `main` wrapper; the selected
+## package `test` target asks for a small AArch64 runner instead. The runner's filter facts arrive as
+## scalars because the driver deliberately does not pass a test-selection aggregate across modules.
+mut A64_TEST_MODE : bool = false
+mut A64_TEST_FILTER_P : usize = 0
+mut A64_TEST_FILTER_N : usize = 0
+mut A64_TEST_KEEP : bool = false
+mut A64_TEST_DECL_INDEX : usize = 0
+pub set_cross_test_mode := fn(mode : usize) -> i64 {
+  A64_TEST_MODE = mode != 0
+  return 0
+}
+pub set_cross_test_filter := fn(p : usize, n : usize) -> i64 {
+  A64_TEST_FILTER_P = p
+  A64_TEST_FILTER_N = n
+  return 0
+}
+pub set_cross_test_options := fn(keep : usize) -> i64 {
+  A64_TEST_KEEP = keep != 0
+  return 0
+}
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
@@ -7176,7 +7198,7 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   ## is asm() lines over the AArch64 registers; the trailing value (a closing `asm("ret")`) is emitted too.
   if a64_fn_is_naked(src, d.name_start, d.name_len) {
     emit_a64_export(sb, src, d.name_start, d.name_len)
-    if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
+    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(A64_TEST_DECL_INDEX)) } else if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
     emit_a64_stmts(d.body_stmts, sb, a, src, ephead, pcount, d.body_stmts, decls, frame, 0, 0)
     if not ex_is_no_tail(d.value) { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
     return
@@ -7315,7 +7337,7 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
     push_str(sb, ":\n")
   } else {
     emit_a64_export(sb, src, d.name_start, d.name_len)
-    if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
+    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(A64_TEST_DECL_INDEX)) } else if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
   }
   push_str(sb, "  stp x29, x30, [sp, #-") ; push_int(sb, frame) ; push_str(sb, "]!\n")
   push_str(sb, "  mov x29, sp\n")
@@ -7464,12 +7486,110 @@ emit_a64_float_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : pt
   }
 }
 
+## TOOL-5 — substring filter over the source-level test description. This mirrors the native runner's
+## selection rule but keeps the cross backend independent of the x86 driver emitter.
+a64_test_selected := fn(src : ptr(u8), start : usize, len : usize) -> bool {
+  if A64_TEST_FILTER_N == 0 { return true }
+  desc := str_at((src + start), len)
+  needle := str_at(unchecked bitcast(ptr(u8), A64_TEST_FILTER_P), A64_TEST_FILTER_N)
+  if needle.len > desc.len { return false }
+  mut i := 0
+  while i + needle.len <= desc.len {
+    if str_at(unchecked bitcast(usize, desc.ptr) + i, needle.len) == needle { return true }
+    i += 1
+  }
+  false
+}
+
+a64_test_is_result := fn(src : ptr(u8), d : Decl) -> bool {
+  if d.ret_tl < 6 { return false }
+  str_at((src + d.ret_ts), 6) == "Result"
+}
+
+a64_emit_test_desc := fn(in out sb : rt::StrBuf, src : ptr(u8), start : usize, len : usize, idx : usize) {
+  push_str(sb, ".La64testdesc") ; push_int(sb, i64(idx)) ; push_str(sb, ":\n  .byte ")
+  if len == 0 { push_str(sb, "0\n") } else {
+    mut i := 0
+    while i < len {
+      if i != 0 { push_str(sb, ", ") }
+      push_int(sb, i64(bytes(str_at((src + start), len))[i]))
+      i += 1
+    }
+    push_byte(sb, 10)
+  }
+}
+
+a64_emit_test_report := fn(in out sb : rt::StrBuf, idx : usize, dlen : usize, kind : usize) {
+  push_str(sb, "  mov x0, #1\n  adrp x1, .La64testprefix\n  add x1, x1, :lo12:.La64testprefix\n  mov x2, #5\n  mov x8, #64\n  svc #0\n  mov x0, #1\n  adrp x1, .La64testdesc")
+  push_int(sb, i64(idx))
+  push_str(sb, "\n  add x1, x1, :lo12:.La64testdesc") ; push_int(sb, i64(idx))
+  push_str(sb, "\n  mov x2, #") ; push_int(sb, i64(dlen))
+  push_str(sb, "\n  mov x8, #64\n  svc #0\n  mov x0, #1\n  adrp x1, .La64test")
+  if kind == 0 { push_str(sb, "ok") }
+  if kind == 1 { push_str(sb, "soft") }
+  if kind == 2 { push_str(sb, "trap") }
+  push_str(sb, "\n  add x1, x1, :lo12:.La64test")
+  if kind == 0 { push_str(sb, "ok") }
+  if kind == 1 { push_str(sb, "soft") }
+  if kind == 2 { push_str(sb, "trap") }
+  push_str(sb, "\n  mov x2, #")
+  if kind == 0 { push_int(sb, 5) }
+  if kind != 0 { push_int(sb, 14) }
+  push_str(sb, "\n  mov x8, #64\n  svc #0\n")
+}
+
+## A small sequential runner for AArch64 Linux. Each test still gets its own child, so a trap cannot
+## abort later tests; `-k` controls whether a normal failure stops launching new children. The runner is
+## intentionally emitted here, beside the ABI it speaks, rather than translating the x86 register code.
+a64_emit_test_runner := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
+  push_str(sb, ".section .rodata\n.La64testprefix: .byte 116, 101, 115, 116, 32\n.La64testok: .byte 58, 32, 111, 107, 10\n.La64testsoft: .byte 58, 32, 70, 65, 73, 76, 32, 40, 115, 111, 102, 116, 41, 10\n.La64testtrap: .byte 58, 32, 70, 65, 73, 76, 32, 40, 116, 114, 97, 112, 41, 10\n")
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 5 and a64_test_selected(src, d.name_start, d.name_len) { a64_emit_test_desc(sb, src, d.name_start, d.name_len, i) }
+    i += 1
+  }
+  push_str(sb, ".text\n.global _start\n_start:\n  mov x19, #0\n")
+  i = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 5 and a64_test_selected(src, d.name_start, d.name_len) {
+      push_str(sb, "  mov x0, #17\n  mov x1, #0\n  mov x2, #0\n  mov x3, #0\n  mov x4, #0\n  mov x8, #220\n  svc #0\n  cbz x0, .La64child") ; push_int(sb, i64(i)) ; push_str(sb, "\n  cmp x0, #0\n  b.lt .La64forkfail") ; push_int(sb, i64(i)) ; push_str(sb, "\n  mov x20, x0\n  sub sp, sp, #16\n  mov x0, x20\n  mov x1, sp\n  mov x2, #0\n  mov x3, #0\n  mov x8, #260\n  svc #0\n  cmp x0, #0\n  b.lt .La64waitfail") ; push_int(sb, i64(i)) ; push_str(sb, "\n  ldr x2, [sp]\n  add sp, sp, #16\n  and x3, x2, #127\n  cbnz x3, .La64trap") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      if a64_test_is_result(src, d) {
+        push_str(sb, "  lsr x3, x2, #8\n  and x3, x3, #255\n  cbnz x3, .La64soft") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      }
+      a64_emit_test_report(sb, i, d.name_len, 0)
+      push_str(sb, "  b .La64next") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      push_str(sb, ".La64soft") ; push_int(sb, i64(i)) ; push_str(sb, ":\n")
+      a64_emit_test_report(sb, i, d.name_len, 1)
+      push_str(sb, "  add x19, x19, #1\n")
+      if not A64_TEST_KEEP { push_str(sb, "  b .La64done\n") } else { push_str(sb, "  b .La64next") ; push_int(sb, i64(i)) ; push_str(sb, "\n") }
+      push_str(sb, ".La64trap") ; push_int(sb, i64(i)) ; push_str(sb, ":\n")
+      a64_emit_test_report(sb, i, d.name_len, 2)
+      push_str(sb, "  add x19, x19, #1\n")
+      if not A64_TEST_KEEP { push_str(sb, "  b .La64done\n") } else { push_str(sb, "  b .La64next") ; push_int(sb, i64(i)) ; push_str(sb, "\n") }
+      push_str(sb, ".La64forkfail") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  b .La64trap") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      push_str(sb, ".La64waitfail") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  add sp, sp, #16\n  b .La64trap") ; push_int(sb, i64(i)) ; push_str(sb, "\n")
+      push_str(sb, ".La64child") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  bl __test") ; push_int(sb, i64(i))
+      if a64_test_is_result(src, d) {
+        push_str(sb, "\n  cmp x0, #0\n  b.eq .La64childok") ; push_int(sb, i64(i)) ; push_str(sb, "\n  mov x0, #1\n  b .La64childexit") ; push_int(sb, i64(i)) ; push_str(sb, "\n.La64childok") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  mov x0, #0\n")
+      } else { push_str(sb, "\n  mov x0, #0\n") }
+      push_str(sb, ".La64childexit") ; push_int(sb, i64(i)) ; push_str(sb, ":\n  mov x8, #93\n  svc #0\n")
+      push_str(sb, ".La64next") ; push_int(sb, i64(i)) ; push_str(sb, ":\n")
+    }
+    i += 1
+  }
+  push_str(sb, ".La64done:\n  mov x0, x19\n  mov x8, #93\n  svc #0\n")
+}
+
 pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any callee resolution or emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on another arch is neutered to an
   ## as-if-absent no-op here, so an arch-gated raw-`asm` body (`lib/std/thread.al`) never reaches `as`.
   apply_when_guards(decls, src, a64_target_arch())
-  push_str(sb, ".text\n.global _start\n_start:\n  bl main\n  mov x8, #93\n  svc #0\n")
+  if A64_TEST_MODE { a64_emit_test_runner(decls, sb, src, a) }
+  if not A64_TEST_MODE { push_str(sb, ".text\n.global _start\n_start:\n  bl main\n  mov x8, #93\n  svc #0\n") }
   cnt := rt::vec_len(deref(decls))
   ## GENERICS (§8 mono): instances are RECORDED DURING EMIT — every generic CALL site (`emit_a64_expr`)
   ## resolves its type-arg and appends via `a64_inst_add` (dedup) into the fixed A64_INST_* arrays.
@@ -7483,7 +7603,10 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   mut i := 0
   while i < cnt {
     d := deref(decl_get(decls, i))
-    if d.kind == 1 { emit_a64_fn(d, sb, a, src, decls) }
+    if d.kind == 1 or (A64_TEST_MODE and d.kind == 5 and a64_test_selected(src, d.name_start, d.name_len)) {
+      if d.kind == 5 { A64_TEST_DECL_INDEX = i }
+      emit_a64_fn(d, sb, a, src, decls)
+    }
     i += 1
   }
   ## emit one monomorphized instance per RECORDED (generic-fn, type) pair, with the instance
