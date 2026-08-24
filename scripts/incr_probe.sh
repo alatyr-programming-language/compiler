@@ -124,16 +124,16 @@ do_profile() {
 ## The fingerprint comes from the EMISSION MANIFEST, not from globbing the split's `.s` files.
 ##
 ## It used to glob `<out>.<i>.s`, and that shape stopped existing: the split now writes
-## `<dir-of-out>/<module>__<i>.s` (plus `alatyr__<i>.s`, `instances__<i>.s` and, for spans whose
-## module could not be named, `<unmapped-module>__<i>.s`). Measured, the stale glob matched nothing,
+## `<dir-of-out>/<module>__<i>.s` (plus `alatyr__<i>.s`, `instances__<i>.s` and, defensively, an
+## `<unmapped-module>__<i>.s` if attribution fails). Measured, the stale glob matched nothing,
 ## so every probe read a 0-span snapshot — `blast` then reported "only 0 span(s)" rather than a wrong
 ## radius, which is the one thing that went right here.
 ##
 ## The manifest is the better source anyway: `manifest_gate` above already proves it is deterministic
 ## across two cold builds, each `span=` record already carries a `gas_hash`, and the key is the span's
 ## `input=` rather than a FILENAME carrying an index that shifts when a module is added. Duplicate
-## inputs (`<unmapped-module>` occurs many times) get an occurrence suffix so `join` still sees unique
-## keys, which is why this projects rather than just cutting two fields.
+## inputs (package roots and manifest-generated declarations can repeat a source path) get an occurrence
+## suffix so `join` still sees unique keys, which is why this projects rather than just cutting two fields.
 spans_snapshot() { # spans_snapshot <file>
   rm -f "$(dirname "$OUT")"/*__[0-9]*.s "$(dirname "$OUT")"/*__[0-9]*.o "$OUT".manifest
   ALATYR_OSPLIT=1 "$CC" build "$M" >/dev/null 2>&1
@@ -179,6 +179,33 @@ manifest_gate() {
     echo "FAIL: emission manifest hash algorithm missing"
     return 1
   }
+  grep -q '^version=2$' "$WORK/manifest_a" || {
+    echo "FAIL: emission manifest schema version is not current"
+    return 1
+  }
+  local emission_size
+  emission_size=$(sed -n 's/^emission_size=//p' "$WORK/manifest_a")
+  [ -n "$emission_size" ] || {
+    echo "FAIL: emission manifest final GAS extent is missing"
+    return 1
+  }
+  if ! awk -v total="$emission_size" '
+    BEGIN { prev = 0; rows = 0; ok = 1 }
+    /^span=/ {
+      start = -1; len = -1
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^start=/) start = substr($i, 7) + 0
+        if ($i ~ /^len=/) len = substr($i, 5) + 0
+      }
+      if (start < 0 || len < 0 || start != prev) ok = 0
+      prev = start + len
+      rows++
+    }
+    END { if (rows == 0 || prev != total || ok == 0) exit 1 }
+  ' "$WORK/manifest_a"; then
+    echo "FAIL: emission manifest spans do not tile the final GAS extent"
+    return 1
+  fi
   local spans modules
   spans=$(sed -n 's/^span_count=//p' "$WORK/manifest_a")
   modules=$(grep -c '^span=.* kind=module ' "$WORK/manifest_a")
@@ -186,6 +213,10 @@ manifest_gate() {
     echo "FAIL: emission manifest span/module cardinality is inconsistent"
     return 1
   }
+  if grep -q '^span=.* kind=module .* input=<unmapped-module>$' "$WORK/manifest_a"; then
+    echo "FAIL: emission manifest contains an unattributed module span"
+    return 1
+  fi
   grep -q 'kind=instances .*input=<monomorphized-instances>$' "$WORK/manifest_a" || {
     echo "FAIL: emission manifest instances span is not explicit"
     return 1

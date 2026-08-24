@@ -288,12 +288,23 @@ split_artifact_path := fn(in out a : rt::Arena, out : str, i : usize, suffix : s
   str_at(b.data, b.len)
 }
 
+## Return the driver's exact span-to-input list when a split build has one. The raw CLI path list is
+## only the front-end input order; declaration-module ranges can additionally contain the package root,
+## ambient modules, and synthetic manifest declarations, so it is not a safe attribution source.
+emission_paths_for := fn(paths : str) -> str {
+  p := driver::emission_paths_ptr()
+  n := driver::emission_paths_len()
+  if p != 0 and n != 0 { return str_at(p, n) }
+  return paths
+}
+
 ## The stable module-path stem for a split span. Package paths normally contain `/src/`; strip that
 ## source root, remove `.al`, and mangle path separators to `__` (Modules §6.1). Bare inputs fall
 ## back to the file basename. The final span is the compiler-generated monomorphized instance set.
 split_module_path := fn(in out a : rt::Arena, paths : str, i : usize, nspan : usize) -> str {
   if i + 1 == nspan { return "instances" }
-  ip := emission_input_path(paths, i)
+  span_paths := emission_paths_for(paths)
+  ip := emission_input_path(span_paths, i)
   mut start := 0
   mut j := 0
   while j + 4 < ip.len {
@@ -323,9 +334,14 @@ split_module_path := fn(in out a : rt::Arena, paths : str, i : usize, nspan : us
 split_module_artifact_path := fn(in out a : rt::Arena, out : str, paths : str, i : usize, nspan : usize, suffix : str) -> str {
   d := dir_of(out)
   stem := split_module_path(a, paths, i, nspan)
-  mut b := rt::strbuf(a, d.len + stem.len + suffix.len + 8)
+  mut b := rt::strbuf(a, d.len + stem.len + suffix.len + 32)
   if d.len != 0 { rt::push_str(b, d); rt::push_byte(b, 47) }
   rt::push_str(b, stem)
+  ## Several declaration ranges can legitimately share one source path (the package root and
+  ## manifest-generated declarations are the current example). Keep every intermediate name unique
+  ## by span index; otherwise ld receives the same `.o` twice and reports duplicate local rodata labels.
+  rt::push_str(b, "__")
+  rt::push_int(b, i)
   rt::push_str(b, suffix)
   return str_at(b.data, b.len)
 }
@@ -710,26 +726,37 @@ emission_input_path := fn(paths : str, want : usize) -> str {
 }
 
 ## Write the deterministic sidecar after every per-module `.s` has been materialized. The manifest
-## records the exact span geometry and GAS hash plus the claimed source path; source bytes are not
+## records the exact FINAL span geometry, GAS hash, and driver-resolved source path; source bytes are not
 ## reread here because the emitted span is already the authoritative input to `as`. The final span
 ## is explicitly attributed to monomorphized instances, which have no source path of their own.
-emission_manifest := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize, spanbase : usize, nspan : usize) -> usize {
+emission_manifest := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize, glen : usize, spanbase : usize, nspan : usize) -> usize {
   mp := cat2(a, out, ".manifest")
-  mut b := rt::strbuf(a, out.len + paths.len + nspan * 160 + 256)
+  span_paths := emission_paths_for(paths)
+  mut b := rt::strbuf(a, out.len + span_paths.len + nspan * 160 + 256)
   rt::push_str(b, "format=alatyr-emission-manifest\n")
-  rt::push_str(b, "version=1\n")
+  rt::push_str(b, "version=2\n")
   rt::push_str(b, "output=")
   rt::push_str(b, out)
   rt::push_byte(b, 10)
   rt::push_str(b, "hash=fnv1a64\n")
   rt::push_str(b, "hash_encoding=unsigned-decimal\n")
+  rt::push_str(b, "emission_size=")
+  emission_push_u64(b, u64(glen))
+  rt::push_byte(b, 10)
   rt::push_str(b, "span_count=")
   emission_push_u64(b, u64(nspan))
   rt::push_byte(b, 10)
+  mut prev := 0
+  mut bad_geometry := false
+  mut bad_attribution := false
   mut i := 0
   while i < nspan {
     st := rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 1 + i * 2)
     ln := rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 2 + i * 2)
+    if st != prev { bad_geometry = true }
+    if st > glen { bad_geometry = true }
+    else if ln > glen - st { bad_geometry = true }
+    prev = st + ln
     rt::push_str(b, "span=")
     emission_push_u64(b, u64(i))
     if i + 1 == nspan {
@@ -747,11 +774,21 @@ emission_manifest := fn(in out a : rt::Arena, out : str, paths : str, gbase : us
     if i + 1 == nspan {
       rt::push_str(b, "<monomorphized-instances>")
     } else {
-      ip := emission_input_path(paths, i)
+      ip := emission_input_path(span_paths, i)
+      if ip == "<unmapped-module>" { bad_attribution = true }
       rt::push_str(b, ip)
     }
     rt::push_byte(b, 10)
     i += 1
+  }
+  if prev != glen { bad_geometry = true }
+  if bad_geometry {
+    tool_error("alatyr: emission manifest span geometry does not tile the final GAS")
+    return 10
+  }
+  if bad_attribution {
+    tool_error("alatyr: emission manifest has an unmapped module span")
+    return 10
   }
   w := rt::write_file(cstr(a, mp), b.data, b.len)
   if w != 0 {
@@ -859,7 +896,7 @@ link_exe_split := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize
     j = j + 1
   }
   if err != 0 { return err }
-  em := emission_manifest(a, out, paths, gbase, spanbase, nspan)
+  em := emission_manifest(a, out, paths, gbase, glen, spanbase, nspan)
   if em != 0 { return em }
   im := interface_summary_sidecar(a, out)
   if im != 0 { return im }

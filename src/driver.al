@@ -1115,6 +1115,51 @@ d_mod_seg_eq := fn(src : ptr(u8), as_ : usize, al : usize, bs : usize, bl : usiz
   }
   ok
 }
+
+## TOOL-6 — materialize the source path for each contiguous declaration-module range in the exact
+## order consumed by `lower::module_decl_ranges`. `pv` contains the full front-end list (including the
+## anonymous package root and any driver-added ambient file); matching the declaration's module-name
+## span against `name_start/name_len` therefore also covers synthetic manifest declarations, which are
+## appended after the ordinary source declarations and would otherwise become `<unmapped-module>`.
+d_emission_paths := fn(decls : rt::Vec, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec, src : ptr(u8), in out tar : rt::Arena) -> str {
+  cnt := rt::vec_len(decls)
+  pcount := rt::vec_len(pv)
+  mut out := rt::strbuf(tar, 16777216)
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(ptr(decls), i))
+    ms := d.mod_start
+    ml := d.mod_len
+    mut j := i + 1
+    mut go := true
+    while go {
+      mut same := false
+      if j < cnt {
+        dj := deref(decl_get(ptr(decls), j))
+        if dj.mod_start == ms and dj.mod_len == ml { same = true }
+      }
+      if same { j += 1 } else { go = false }
+    }
+    mut path_i := pcount
+    mut k := 0
+    while k < pcount and path_i == pcount {
+      ns := rt::vec_get(name_start, k)
+      nl := rt::vec_get(name_len, k)
+      if d_mod_seg_eq(src, ms, ml, ns, nl) { path_i = k }
+      k += 1
+    }
+    if path_i < pcount {
+      p := rt::svec_str_get(pv, path_i)
+      kpath := rt::push_str(out, p)
+    } else {
+      kun := rt::push_str(out, "<unmapped-module>")
+    }
+    knl := rt::push_byte(out, 10)
+    i = j
+  }
+  return str_at(out.data, out.len)
+}
+
 ## Decl index+1 of a user fn matching callee span `[cs,cl)`, else 0. A BARE callee (`twice`) matches
 ## by whole name (byte-identical to the former form — fixpoint-safe). A QUALIFIED callee
 ## (`alloc::vec::map`) splits at the LAST `::` into module head `alloc::vec` + tail `map`, matching a
@@ -2317,6 +2362,16 @@ pub set_module_root := fn(p : usize, n : usize) -> i64 {
   0
 }
 
+## TOOL-6 — the lower's span order is the order of declaration-module ranges, not the raw CLI path
+## order: a package root, manifest-owned synthetic declarations, and a manifest-triggered ambient module
+## can all add ranges of their own. Publish the exact newline-joined path for each range so the CLI does
+## not guess attribution from a span index. The pointer stays live in the compile arena until the process
+## exits, which is the lifetime of the returned GAS and the split linker call.
+mut EMISSION_PATHS_P : usize = 0
+mut EMISSION_PATHS_N : usize = 0
+pub emission_paths_ptr := fn() -> usize { return EMISSION_PATHS_P }
+pub emission_paths_len := fn() -> usize { return EMISSION_PATHS_N }
+
 ## TOOL-15 — the CLI deliberately keeps `package.al` out of the module path list, because it is
 ## configuration input rather than an ordinary source file in the current plumbing.  The handle is
 ## nevertheless an ordinary private value to the package.  Keep the bridge here, at the file-driver
@@ -3470,6 +3525,8 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## sources + the whole tree's emitted GAS are large, so size generously.
   mut tar := rt::Arena(base = 0, off = 0, cap = 0)
   rt::arena_init(tar, 536870912)
+  EMISSION_PATHS_P = 0
+  EMISSION_PATHS_N = 0
   mut na := rt::Arena(base = 0, off = 0, cap = 0)
   rt::arena_init(na, 536870912)
   ## A SEPARATE arena for the per-module TOKEN records (handles + `{kind,start,len}` records).
@@ -3649,6 +3706,12 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
   d_manifest_module_decls(pv, name_start, name_len, decls, na, tar, nstr)
   d_manifest_rewrite_decls(decls, pv, name_start, name_len, base, nstr, ptr(na))
+  ## TOOL-6 — lower groups the final declaration vector, including manifest/synthetic declarations, by
+  ## module-name run. Publish that exact run-to-file mapping before any emission so the split linker and
+  ## its manifest can name every span independently of the original CLI path order.
+  emission_paths := d_emission_paths(decls, pv, name_start, name_len, base, tar)
+  EMISSION_PATHS_P = unchecked bitcast(usize, emission_paths.ptr)
+  EMISSION_PATHS_N = emission_paths.len
   d_manifest_set_sema_modules(pv, name_start, name_len, tar)
   ## FND-10/11 build-time limits: first enforce each file's declared `@limits`, then validate/enforce any
   ## manifest ceiling. This is limits-only parity with `check`, not the full type-checker, so build rejects
