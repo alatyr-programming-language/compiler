@@ -12,9 +12,9 @@ description: >-
 
 # Landing a pull request
 
-`AGENTS.md` holds the gate blind spots and the measurement traps; this is the procedure that uses
-them. The rule that generates every step below: **the object that was gated is the object that
-lands.** Nothing is re-derived between the gate and the push.
+`AGENTS.md` holds the gate blind spots, measurement traps, and commit-message convention; this is the
+procedure that uses them. The rule that generates every step below: **the object that was gated is the
+object that lands.** Nothing is re-derived between the gate and the push.
 
 This procedure is public and adversary-visible. Do not rely on obscurity: an author may know every
 check below and tailor a PR to it. The checklist is a minimum for independent review, never an allow

@@ -16,7 +16,7 @@ description: >-
 # Taking one unit of work
 
 `AGENTS.md` holds what is true whatever you are doing — the gate blind spots, the measurement traps,
-the reseed rule. Read it. This file is only the procedure.
+the reseed rule, and the commit-message convention. Read it. This file is only the procedure.
 
 **One unit of work at a time.** Not "while I'm here". A slice that grows while being implemented
 produces a measurement nobody can attribute, and that is the expensive failure here, not the merge.
