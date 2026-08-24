@@ -25,6 +25,9 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- Fixed path dependencies whose source tree contains `lib/`: their modules now retain the dependency
+  alias instead of being mistaken for ambient standard-library modules.
+
 First public release in preparation. Nothing is tagged yet; the entries below start once it is.
 
 Entries are added by the change that causes them, in its own commit — not gathered from the log at

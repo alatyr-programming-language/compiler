@@ -3112,6 +3112,7 @@ root_package_test nested_modules "T _start" "T main__main" "T geometry__vec__ans
 # (a library package with no `main`, never built on its own) and exit 42.
 root_package_test dep_declared "T _start" "T main__main"
 root_package_test dep_alias_use "T _start" "T main__main" "T d__math__answer"
+root_package_test dep_lib_nested_use "T _start" "T main__main" "T d__lib__thing__answer"
 ## Proposal #13 / STD-1 — a non-root module may instantiate the ambient Result prelude without
 ## importing std/alloc from the root; check, run, artifact exit, and module/linker boundaries are locked.
 root_package_test result_nonroot_prelude "T _start" "T main__main" "T lib__go"

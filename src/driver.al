@@ -2222,6 +2222,26 @@ d_is_root_path := fn(p : str) -> bool {
 ## `geometry::vec` and the spec's `::`→`__` symbol rule. Flat/direct files retain basename behavior.
 ## (Caller records the byte count via a buffer delta.)
 pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
+  ## Modules §8 — a DEPENDENCY's module is named under its ALIAS: `<alias>__<path under the dep's
+  ## source dir>`, so `…/dep/src/math.al` reached as `d` becomes `d__math` and a call spelled
+  ## `d::math::answer()` mangles onto it. Check this FIRST: a dependency directory may legally
+  ## contain a `lib/` directory, which belongs to the dependency rather than the ambient stdlib.
+  dpfx := dep_root_prefix(p)
+  if dpfx != 0 {
+    kal := strbuf::push_str(bld, str_at(DEP_ALIAS_S, DEP_ALIAS_N))
+    kus := strbuf::push_str(bld, "__")
+    mut de := p.len
+    if de >= dpfx + 3 and bytes(p)[de - 3] == 46 and bytes(p)[de - 2] == 97 and bytes(p)[de - 1] == 108 { de = de - 3 }
+    mut dj := dpfx
+    while dj < de {
+      c := bytes(p)[dj]
+      if c == 47 { kd1 := strbuf::push_str(bld, "__") }
+      else { kd2 := strbuf::push_byte(bld, c) }
+      dj += 1
+    }
+    return
+  }
+
   ## find the LAST "/lib/" in the path
   mut q := -1
   mut i := 0
@@ -2230,25 +2250,6 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
     i += 1
   }
   if q < 0 {
-    ## Modules §8 — a DEPENDENCY's module is named under its ALIAS: `<alias>__<path under the dep's
-    ## source dir>`, so `…/dep/src/math.al` reached as `d` becomes `d__math` and a call spelled
-    ## `d::math::answer()` mangles onto it. Checked FIRST (a dependency directory may legally sit
-    ## under the consuming package's own source root), and DORMANT when the table is empty.
-    dpfx := dep_root_prefix(p)
-    if dpfx != 0 {
-      kal := strbuf::push_str(bld, str_at(DEP_ALIAS_S, DEP_ALIAS_N))
-      kus := strbuf::push_str(bld, "__")
-      mut de := p.len
-      if de >= dpfx + 3 and bytes(p)[de - 3] == 46 and bytes(p)[de - 2] == 97 and bytes(p)[de - 1] == 108 { de = de - 3 }
-      mut dj := dpfx
-      while dj < de {
-        c := bytes(p)[dj]
-        if c == 47 { kd1 := strbuf::push_str(bld, "__") }
-        else { kd2 := strbuf::push_byte(bld, c) }
-        dj += 1
-      }
-      return
-    }
     ## Prefer the manifest-provided source root. This covers arbitrary `source_dir` values and
     ## flat packages (`source_dir = "."`) where the path has no `/src/` marker. The root is a
     ## pointer/length context set by the CLI immediately after package discovery.
