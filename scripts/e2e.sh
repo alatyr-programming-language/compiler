@@ -2623,6 +2623,7 @@ run_x86 global_agg_struct_whole_assign 42
 run_x86 global_agg_array_whole_assign 42
 run_x86 global_agg_enum_whole_assign 42
 run_x86 global_str 42
+run_x86 global_str_field_operand 42
 run_x86 global_const_str_index 42
 check_accept smoke
 run early_return_result 42

@@ -2625,6 +2625,31 @@ struct_field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), ss : usize, sl : u
   }
   found
 }
+
+## Resolve a FIELD CHAIN rooted at a module-level CONST STRUCT to its literal value. `const_struct_field`
+## handles the depth-1 scalar reader, but a `str` VALUE operand needs the same fold for `G.name` and
+## `G.q.name` before `emit_str_pair` can push the literal's `{ptr,len}` pair. Returning the literal
+## expression keeps all runtime paths out of this const-only case; a const field that aliases another
+## const is normalized by `const_rhs` at the call site.
+const_field_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> ptr(Expr) {
+  z := unchecked bitcast(ptr(Expr), 0)
+  mut res : ptr(Expr) = z
+  match deref(e) {
+    Expr::Var(s, n) => { res = module_const_value(decls, src, s, n) }
+    Expr::Field(base, fs, fl) => {
+      cv := const_field_value(base, decls, src, a)
+      if unchecked bitcast(usize, cv) != 0 {
+        sli := struct_lit_info(cv)
+        if sli.is_s {
+          fi := struct_field_index(decls, src, sli.ss, sli.sl, fs, fl, a)
+          if fi >= 0 { res = arg_expr_at(struct_lit_fields(cv), usize(fi), a) }
+        }
+      }
+    }
+    _ => {}
+  }
+  res
+}
 emit_mangled_call := fn(in out sb : strbuf::StrBuf, src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, decls : ptr(rt::Vec)) {
   cp := colon_pos(src, cs, cl)
   if cp >= 0 {
@@ -5445,6 +5470,20 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
     emit_slice_pair(e, sb, cx, a, nl)
     return
   }
+  ## A module-level CONST struct has no `.data` address. Fold a direct or nested field to its literal
+  ## value, then let the existing literal arm emit the pair. Mutable globals take the `.data` path below;
+  ## locals/PARAMs take `str_field_place`, so this branch is restricted to the const-value resolver.
+  cfp := field_place_parts(e)
+  if unchecked bitcast(usize, cfp.base) != 0 {
+    cfv := const_field_value(e, cx.decls, cx.src, a)
+    if unchecked bitcast(usize, cfv) != 0 {
+      cstr := const_rhs(cfv, cx.decls, cx.src)
+      if str_lit_info(cstr).is_s {
+        emit_str_pair(cstr, sb, cx, a, nl)
+        return
+      }
+    }
+  }
   ## `xs[i].key` — a str FIELD of an ARRAY-of-STRUCT element: the {ptr, len} sit at the element field
   ## address (`emit_idx_field_addr`) and the next word down. Push ptr (deeper), len (top).
   sae := str_field_arr_elem(e, cx, a)
@@ -5477,6 +5516,22 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
       push_int(sb, i64(sfpv.off * 8))
       push_str(sb, "(%rbp), %rax\n  pushq %rax\n")
     }
+    return
+  }
+  ## A mutable GLOBAL struct has no frame slot. Reuse the global-place walk used by scalar nested
+  ## field reads, but deliver the final `str` as its two ascending `.data` words. This covers both the
+  ## direct `G.name` issue shape and a deeper `G.q.name` chain.
+  gsp := global_place(e, cx, a)
+  if gsp.found and gsp.tl != 0 and str_at((cx.src + gsp.ts), gsp.tl) == "str" {
+    push_str(sb, "  movq ")
+    emit_global_label(sb, cx.decls, cx.src, gsp.gs, gsp.gn)
+    push_str(sb, "+")
+    push_int(sb, gsp.off * 8)
+    push_str(sb, "(%rip), %rax\n  pushq %rax\n  movq ")
+    emit_global_label(sb, cx.decls, cx.src, gsp.gs, gsp.gn)
+    push_str(sb, "+")
+    push_int(sb, (gsp.off + 1) * 8)
+    push_str(sb, "(%rip), %rax\n  pushq %rax\n")
     return
   }
   match deref(e) {
@@ -5910,28 +5965,61 @@ StdIdxPath := struct { ok : bool, arr : ptr(Expr), idx : ptr(Expr), bo : i64, ts
 ## read that goes through `std_idx_path`.
 StdIdxOne := struct { ok : bool, bo : i64, ts : usize, tl : usize }
 
-## Is `base` the place `g.name` where `g` is a STRUCT LOCAL and `name` a 2-word `{ptr, len}` VIEW
-## field — `str` or a `Slice(T)` instantiation (Types §9.4: the same pair repr)? Used by the
-## `Field` arm to read `g.name.ptr`/`g.name.len` — a str FIELD is a 2-word `{ptr, len}` sub-aggregate at
-## `field_word_offset(name)` within `g` (Memory §3.5), so the str's ptr/len reuse the str-local slot math
-## with `off = g_off + field_word_offset`. Uses `field_place_parts` + `field_base_var` (no nested match —
-## the seed mis-lowers a doubly-nested `match`). `found`=false ⇒ base is not a struct-local str field.
-## `is_ref`=false (an INLINE struct local): `off` = g_off + field_word_offset, read via the frame str
-## slot math (ptr at `off+1`, len at `off+2`). `is_ref`=true (a BY-REFERENCE struct param — the slot
-## holds the caller's word-0 pointer): `off` = the pointer slot, `fldoff` = the str field's word offset;
-## read `movq -(off+1)*8(%rbp)` (the pointer) then ptr at `-(fldoff*8)(%rax)`, len at `-((fldoff+1)*8)`.
+## The root `Var` of a field chain (`p.q.name`). Kept separate from `field_base_var`: the latter is
+## deliberately depth-1 because several old callers need a direct `match` shape, while this value path
+## must recover the root without making those callers re-enter a nested match under the frozen seed.
+field_root_var := fn(e : ptr(Expr)) -> CSpan {
+  mut res := CSpan(s = 0, n = 0)
+  match deref(e) {
+    Expr::Var(s, n) => { res = CSpan(s = s, n = n) }
+    Expr::Field(base, fs, fl) => { res = field_root_var(base) }
+    _ => {}
+  }
+  res
+}
+
+## The cumulative WORD offset of a field chain from its root struct (`p.q.name` = q's offset + name's
+## offset). `base_struct_span` supplies the type at each hop, so this uses the same field layout query as
+## every other word-tier reader instead of reconstructing declaration indices here. `-1` means the chain
+## is not a plain Var-rooted struct path.
+field_path_word_offset := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> i64 {
+  mut res := 0 - 1
+  match deref(e) {
+    Expr::Var(s, n) => { res = 0 }
+    Expr::Field(base, fs, fl) => {
+      bt := base_struct_span(base, cx)
+      if bt.n != 0 {
+        fwo := field_word_offset(cx.decls, cx.src, bt.s, bt.n, fs, fl, a)
+        if fwo >= 0 {
+          parent := field_path_word_offset(base, cx, a)
+          if parent >= 0 { res = parent + fwo }
+        }
+      }
+    }
+    _ => {}
+  }
+  res
+}
+
+## Is `base` the place `g.name` where `g` is a STRUCT LOCAL/PARAM and `name` a 2-word `{ptr, len}`
+## VIEW field — `str` or a `Slice(T)` instantiation (Types §9.4: the same pair repr)? Used by the
+## `Field` arm to read a str VALUE operand. The root may be a nested plain field path (`p.q.name`):
+## `off`/`fldoff` carry the cumulative word offset so inline locals and by-reference params use the same
+## ascending pair layout as a one-level field. `found`=false means the base is not a struct-local view
+## field.
 StrFldPlace := struct { found : bool, is_ref : bool, off : usize, fldoff : usize }
 str_field_place := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> StrFldPlace {
   mut res := StrFldPlace(found = false, is_ref = false, off = 0, fldoff = 0)
   fp := field_place_parts(base)                          ## base == Field(g, name) → (g, "name")
   if unchecked bitcast(usize, fp.base) == 0 { return res }
-  bv := field_base_var(fp.base)                          ## g must be a plain Var
-  if not bv.ok { return res }
+  bv := field_root_var(base)                              ## g may be the root of p.q.name
+  if bv.n == 0 { return res }
   ei := entry_of(cx.slots, cx.src, bv.s, bv.n)
   se := deref(svec_at(SlotEntry, cx.slots, ei))
   if not streq(cx.src, se.ns, se.nl, bv.s, bv.n) { return res }   ## entry_of returns 0 on miss — verify
   if se.ek != 2 { return res }                           ## g must be a struct (inline local or by-ref param)
-  fts := field_type_span(cx.decls, cx.src, se.sns, se.snl, fp.fs, fp.fl, a)
+  bt := base_struct_span(fp.base, cx)
+  fts := field_type_span(cx.decls, cx.src, bt.s, bt.n, fp.fs, fp.fl, a)
   if fts.n == 0 { return res }
   ## Types §9.4 — the 2-word `{ptr, len}` VIEW field. `str` IS that pair, and so is a `Slice(T)`
   ## instantiation (the library pair `struct { ptr : ptr(T), len : usize }`, Stdlib §3.5 / appendix
@@ -5945,7 +6033,8 @@ str_field_place := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> StrFld
   ## declare NO `Slice(T)` struct field, so the added case is dormant there → fixpoint-neutral.
   ftb := base_type_name(cx.src, fts.s, fts.n)
   if str_at((cx.src + fts.s), fts.n) != "str" and str_at((cx.src + ftb.s), ftb.n) != "Slice" { return res }
-  fwo := field_word_offset(cx.decls, cx.src, se.sns, se.snl, fp.fs, fp.fl, a)
+  fwo := field_path_word_offset(base, cx, a)
+  if fwo < 0 { return res }
   if se.is_ref {
     res = StrFldPlace(found = true, is_ref = true, off = se.off, fldoff = usize(fwo))
   } else {
