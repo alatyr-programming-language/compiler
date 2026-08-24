@@ -242,6 +242,14 @@ ALEOF
     echo "idiom: FAIL gate-of-the-gate — an existing pair losing score became NEW"
     ok=0
   fi
+  # …and the line that did the suppressing must NOT be advertised as droppable. Reporting a
+  # load-bearing ceiling as stale is what makes an honest cleanup turn the gate red.
+  if [ -s "$W/st_plant/stability-down/stale" ]; then
+    echo "idiom: FAIL gate-of-the-gate — the reviewed CEILING of a still-occurring pair was reported stale;"
+    echo "       deleting it as the report instructs would unmask the observation as NEW. What it said:"
+    sed 's/^/    /' "$W/st_plant/stability-down/stale"
+    ok=0
+  fi
   printf 'TABLE\told.al\told_table\tother.al\tother_table\t6\t-\t9:10\n' > "$W/st_plant/stability.observed"
   if verdict "$W/st_plant/stability.observed" "$W/st_plant/stability.base" "$W/st_plant/stability-up" >/dev/null 2>&1; then
     echo "idiom: FAIL gate-of-the-gate — a stronger existing pair did not become NEW"
@@ -295,7 +303,34 @@ verdict() { # observed baseline outdir -> 0 iff no NEW findings
       if (($1 == "TABLE" || $1 == "SCAN") && (k in max) && $6 + 0 <= max[k]) next
       if (!(($0) in exact)) print
     }' "$o/base.k" "$o/obs.k" > "$o/new.k"
-  LC_ALL=C comm -13 "$o/obs.k" "$o/base.k" > "$o/stale.k"
+  # stale must mean SAFE TO DELETE, and for TABLE/SCAN a plain set-difference does not: the NEW rule
+  # above is MONOTONIC (a reviewed score of 6 suppresses an observed 4), so the score is part of the
+  # key here while the suppression ignores it. A `comm -13` therefore reported the reviewed CEILING of
+  # a pair that still occurs at a lower score as stale — and deleting it, exactly as this file and
+  # scripts/idiom.baseline instruct, unmasked the observation as NEW. Measured: dropping the two
+  # reviewed TABLE lines for aarch64 emit_a64_expr / riscv64 emit_rv_expr (scores 5 and 6) turned the
+  # live score-4 finding for that same pair into a NEW one and failed the gate.
+  #
+  # So a TABLE/SCAN baseline line is reported stale only when it is genuinely droppable: either no
+  # observation shares its monotonic key (the pair is gone), or a HIGHER reviewed line covers the same
+  # key (this one is redundant — the rule reads max[k], not each line). The line holding the maximum
+  # for a key that still occurs is load-bearing and is not reported. Other rules keep the exact
+  # comparison, where the set-difference was already correct.
+  gawk -F '\t' '
+    ARGIND == 1 { oexact[$0] = 1; oseen[$1 FS $2 FS $3 FS $4 FS $5 FS $7] = 1; next }
+    ARGIND == 2 { if ($1 == "TABLE" || $1 == "SCAN") {
+                    k = $1 FS $2 FS $3 FS $4 FS $5 FS $7
+                    if ($6 + 0 > bmax[k]) bmax[k] = $6 + 0
+                  }
+                  next
+    }
+    ARGIND == 3 { if ($1 == "TABLE" || $1 == "SCAN") {
+                    k = $1 FS $2 FS $3 FS $4 FS $5 FS $7
+                    if ((k in oseen) && $6 + 0 == bmax[k]) next   # the reviewed ceiling; load-bearing
+                    print; next
+                  }
+                  if (!(($0) in oexact)) print
+    }' "$o/obs.k" "$o/base.k" "$o/base.k" | LC_ALL=C sort -u > "$o/stale.k"
   : > "$o/new"; : > "$o/stale"
   while IFS= read -r k; do grep -m1 -F "$k" "$obs"    >> "$o/new"   || echo "$k" >> "$o/new";   done < "$o/new.k"
   while IFS= read -r k; do grep -m1 -F "$k" "$o/base" >> "$o/stale" || echo "$k" >> "$o/stale"; done < "$o/stale.k"

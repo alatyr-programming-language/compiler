@@ -175,6 +175,12 @@ Treat the gates as a hierarchy with known blind spots, not as one verdict:
   baseline is an INTENTIONAL act owed its own commit, like `scripts/corpus.manifest`; expect an extraction
   lane to need one, because a new shared helper is an (N+1)th copy until the copies it replaces are gone.
   It ships a gate-of-the-gate (five planted defects, one per rule, plus a clean twin) and needs no compiler.
+  Its `stale` report means **safe to delete** — which for TABLE/SCAN is a repair, not a given. The NEW rule
+  is monotonic (a reviewed score of 6 suppresses an observed 4 for the same pair, because it reads the
+  MAXIMUM per pair), so a reviewed CEILING used to be reported stale while it was the only thing keeping a
+  live lower-score observation out of NEW — and repaying that "debt" turned the gate red. Measured here:
+  dropping all 16 reported entries unmasked one finding. The report now withholds a load-bearing ceiling,
+  and the gate-of-the-gate asserts that it does.
 - `scripts/callee_module_check.sh` and `scripts/type_module_check.sh` are whole-program invariants over the
   emitted GAS. Each ships with a gate-of-the-gate (a synthetic input that must fail) because an invariant
   nobody has seen fail is decoration. One of them silently inspected 18 of 25 instances until a non-vacuity
