@@ -36,7 +36,7 @@ pub new := fn(a : ptr(mut Arena)) -> String {
 ## backed by arena `a`. The owning counterpart of borrowing — keep an input slice
 ## alive past its source (a parsed token, a map key).
 ## The growth **mutators** `push`/`push_str` are **fallible** — `Result(usize, AllocError)`
-## (§6/§160; D91 confirms String's growth operations surface `AllocError`, never trap on a
+## (§6/§160; String's growth operations surface `AllocError`, never trap on a
 ## recoverable allocation failure, I11/I3) — and simply propagate `std::strbuf`'s result.
 ## The **constructors** `string`/`with_capacity`/`from_str` keep their value shape and trap on
 ## OOM (the spec marks only the mutators fallible); the recoverable construction path is
@@ -99,7 +99,7 @@ pub as_str := fn(s : ptr(String)) -> str {
 }
 
 ## `reserve` — ensure room for `additional` more bytes without reallocating (§160);
-## forwards to the buffer's growth. Fallible (`AllocError`, D91).
+## forwards to the buffer's growth. Fallible (`AllocError`).
 pub reserve := fn(in out s : String, additional : usize) -> Result(usize, AllocError) {
   strbuf::reserve(s, additional)
 }
@@ -113,7 +113,7 @@ pub eq := fn(a : ptr(String), b : ptr(String)) -> bool {
   bytes_eq(ba, bb)
 }
 
-## (Writing a string to stdout is a **std-tier** operation (D91): use
+## (Writing a string to stdout is a **std-tier** operation: use
 ## `std::fmt::write_buf(s)` — a `String` is a `StrBuf`, so it reads the same way.
 ## The alloc tier no longer carries a stdout `print`.)
 
@@ -207,7 +207,7 @@ pub repeat := fn(a : ptr(mut Arena), s : str, n : usize) -> String {
   strbuf::by_value(out)
 }
 
-## Release the backing pages (`munmap`) and **consume** the string (D86) —
+## Release the backing pages (`munmap`) and **consume** the string —
 ## `strbuf_free` consumes the handle.
 pub free := fn(s : String) -> isize {
   strbuf::strbuf_free(s)

@@ -1,4 +1,4 @@
-## ROADMAP §1 overload resolution: an overload set discriminated solely by a FLOAT-vs-INT parameter
+## overload resolution: an overload set discriminated solely by a FLOAT-vs-INT parameter
 ## must resolve a bare FLOAT-literal argument (`g(2.0)` → `g(f64)`), the float mirror of the existing
 ## integer-literal rule. Previously a float literal was not classified, so `g(2.0)` matched BOTH
 ## `g(u64)` and `g(f64)` as a wildcard → the call was ambiguous → no per-signature suffix → a bare

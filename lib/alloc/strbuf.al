@@ -1,21 +1,21 @@
 ## std::strbuf — a growable byte buffer (a UTF-8 string builder) over OS memory.
 ##
-## Allocator-borne (ROADMAP §3, as for std::vec): the backing bytes come from a
-## pluggable **`Arena`** (the region protocol, D84), not a direct `mmap`. The buffer
+## Allocator-borne (as for std::vec): the backing bytes come from a
+## pluggable **`Arena`** (the region protocol), not a direct `mmap`. The buffer
 ## holds a borrow of that arena (`arena`) so a growing `push_byte` reaches it; reads
 ## use the cached pointer. (`format` is given the arena; `print`/`println` make a
 ## throwaway one internally, so their callers are unaffected.)
 ##
-## Tier discipline (D91): this is the **alloc** tier — it manages the in-memory
+## Tier discipline: this is the **alloc** tier — it manages the in-memory
 ## buffer only and never reaches the OS. Writing the buffer to stdout is a
 ## **std-tier** operation (`std::fmt::write_buf`), so no `sys_write` is declared here.
 
 ## { backing bytes, byte length, capacity (bytes), the arena it allocates from }.
 ##
-## `@owning` (D86): a `StrBuf` (and thus `String`, its alias) is a linear handle,
+## `@owning`: a `StrBuf` (and thus `String`, its alias) is a linear handle,
 ## consumed by `strbuf_free` once — `free` only `forget`s; the backing pages belong
 ## to the arena (reclaimed via `std::os::free`). **Handle-based (Memory §5.3.1 /
-## D19):** it stores the backing's arena **index** (`idx`), NOT a pointer, plus a
+##):** it stores the backing's arena **index** (`idx`), NOT a pointer, plus a
 ## borrow of its arena to resolve it per access (`strbuf_base` → `get`) and to grow.
 ## Mutations (`push_*`, `write`) borrow `in out`; reads (`print_buf`, `buf_len`) by
 ## **scoped reference** `in s : ptr(StrBuf)`; `by_value` moves it out.
@@ -46,7 +46,7 @@ pub strbuf_base := fn(s : ptr(StrBuf)) -> ptr(mut u8) {
 ## bytes (byte-by-byte — a whole-aggregate store through a pointer is not lowered),
 ## and update the stored handle (the old block is left to the arena's bulk reclaim).
 ## This is the **sole allocating step** — and it is **fallible**: a growth that
-## exhausts the allocator surfaces `AllocError` (D91), it does **not** trap. (`AllocError`
+## exhausts the allocator surfaces `AllocError`, it does **not** trap. (`AllocError`
 ## is a base-prelude enum — a `StrBuf`/`String` is an alloc-tier value whose only
 ## real failure is OOM, so its `Writer` error stays base/alloc-tier, never std-tier
 ## `IoError`; tier discipline, Stdlib §1.) The arena is reached through the stored borrow.
@@ -55,7 +55,7 @@ ensure := fn(in out s : StrBuf, extra : usize) -> Result(usize, AllocError) {
   if need <= s.cap { return Result(usize, AllocError).Ok(s.cap) }
   mut new_cap : usize = s.cap
   while new_cap < need { new_cap = new_cap * 2 }
-  ## The sole allocating step — surfaces `AllocError` on exhaustion (D91), propagated
+  ## The sole allocating step — surfaces `AllocError` on exhaustion, propagated
   ## with `?` and the handle index extracted in one step.
   nidx := allocate(deref(s.arena), u8, new_cap, 1)?.idx
   aa := deref(s.arena)
@@ -76,14 +76,14 @@ ensure := fn(in out s : StrBuf, extra : usize) -> Result(usize, AllocError) {
 }
 
 ## Ensure room for `additional` more bytes without reallocating (§160): the public
-## face of `ensure`. **Fallible** — surfaces `AllocError` on exhaustion (D91), never
+## face of `ensure`. **Fallible** — surfaces `AllocError` on exhaustion, never
 ## traps. Call before a known batch of `push`es to amortize the growth.
 pub reserve := fn(in out s : StrBuf, additional : usize) -> Result(usize, AllocError) {
   ensure(s, additional)
 }
 
 ## Append one byte, growing through the arena when full (`ensure`). **Fallible**
-## (`?`-propagates `AllocError`, D91): the in-memory rendering layer threads the
+## (`?`-propagates `AllocError`): the in-memory rendering layer threads the
 ## allocator's failure up to the `Writer` surface (`write`) and `format`, rather
 ## than trapping. The trapping conveniences (`std::string`, `print`/`println`)
 ## absorb it at their boundary.
@@ -256,7 +256,7 @@ pub push_float := fn(in out s : StrBuf, x : f64) -> Result(usize, AllocError) {
 
 ## Append a byte slice, returning the count accepted — `StrBuf` as a **`Writer`**
 ## (Stdlib §2.7). Its error is the **writer's own**, of the writer's tier or below
-## (D91): a `StrBuf` is alloc-tier and its only real failure is exhausting its
+##: a `StrBuf` is alloc-tier and its only real failure is exhausting its
 ## allocator, so `write` returns `Result(usize, AllocError)` (base-prelude error) —
 ## **not** the std-tier `IoError` a `Stdout`/`File` writer uses. (Hard-coding
 ## `IoError` here would be a tier inversion: an alloc-tier value referencing a
@@ -286,7 +286,7 @@ pub by_value := fn(s : StrBuf) -> StrBuf {
 }
 
 ## (Writing the buffer to stdout is a **std-tier** operation — the alloc tier must
-## not reach the OS, D91 tier discipline. It lives in `std::fmt::write_buf`, which
+## not reach the OS tier discipline. It lives in `std::fmt::write_buf`, which
 ## reads these bytes via `strbuf_base`/`buf_len` and does the syscall itself.)
 
 ## The byte length — a non-consuming scoped-reference read.

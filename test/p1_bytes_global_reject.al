@@ -1,4 +1,4 @@
-## P1-BYTES / D69: a module-level fixed byte-array initializer must not call at runtime.
+## BYTES: a module-level fixed byte-array initializer must not call at runtime.
 ## The frozen lower emits no call before _start: the mutable global's byte storage is zero
 ## (and the const path has no materialized array value), so both reads silently lose 42.
 ## This lane must turn both paths into a located reject while preserving literal/scalar globals

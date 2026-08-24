@@ -1,4 +1,4 @@
-## selfhost::sema — a fallible TYPE-checker pass over the AST (ROADMAP §1/§6, item 4).
+## selfhost::sema — a fallible TYPE-checker pass over the AST.
 ##
 ## The fourth promoted pass. It does two things in one AST walk: (1) **name resolution** —
 ## every identifier reference (`Var`) must resolve to a binding declared **earlier** in the
@@ -106,7 +106,7 @@ ty_eq := fn(a : Ty, b : Ty) -> bool {
   tag_compat(a.tag, b.tag)
 }
 
-## `ty_eq` PLUS pointer-target discrimination (the dogfood of `ptr(T)` typing, ROADMAP §6). `ty_compat`
+## `ty_eq` PLUS pointer-target discrimination (the dogfood of `ptr(T)` typing). `ty_compat`
 ## additionally requires: when BOTH sides are
 ## pointers (tag 5) whose pointee resolved to a KNOWN struct/enum name (`resolve_ty` records it in
 ## ns/nl; a generic `T`, a scalar `usize`, or a qualified pointee stays {0,0} = unknown), the pointee
@@ -136,7 +136,7 @@ streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -
 
 ## Typed pointer to the `T`-record at decl handle `h` (arg0=T → deref-copy on read).
 decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
-## ROADMAP §6: a DIRECT typed accessor for decl `i` — `ptr(Decl)` in one expression, replacing the
+## a DIRECT typed accessor for decl `i` — `ptr(Decl)` in one expression, replacing the
 ## nested helper-recovery `decl_get(decls, i)` at every use site (the
 ## opaque-usize→typed-ptr dogfood: the bitcast is encapsulated here, not repeated at each caller).
 decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { return decl_at(Decl, rt::vec_get(deref(decls), i)) }
@@ -158,12 +158,12 @@ node_alloc := fn(in out a : rt::Arena, sz : usize) -> usize {
 }
 
 ## `LVec` — a `Local` vector backed by a bump arena (the lean replacement for the generic
-## `alloc::vec` locals table; ROADMAP §1 fixpoint), mirroring `lower::SVec`. The check pass's
+## `alloc::vec` locals table fixpoint), mirroring `lower::SVec`. The check pass's
 ## locals table; growth doubles `cap` with a word-granular copy (element stride word-aligned).
 ## `fspan` points at a frame word recording the FIRST located `mark_failed` poison as a `CheckErr`
 ## code (kind in the low 2 bits, source start in the rest — the `CheckErr` encoding), 0 = unset. It
 ## lets a poison-only failure (one that never propagated through the `Err` channel) still carry a
-## source location into the diagnostic (ROADMAP §1 item 6 / §5). Distinct from `failed` (which holds
+## source location into the diagnostic (§5). Distinct from `failed` (which holds
 ## the sticky flag + the declared return tag), so recording a span never disturbs the return-tag bits.
 ## `mod_s`/`mod_l` identify the function's owning module, so call diagnostics can inspect only the
 ## overload set the lower will actually route. `pbase`/`pcnt`/`pcap`: a function-wide REMEMBERED
@@ -1826,7 +1826,7 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
   ## A pointer-typed parameter `p : ptr(mut T)` is captured by the parser as a type annotation whose
   ## lexeme is `ptr` (the head of the `ptr(...)` form) — resolve it to the pointer type (tag 5), and
   ## record its POINTEE type name in ns/nl when it is a known struct/enum (else {0,0} = unknown). This
-  ## is what lets `ty_compat` discriminate `ptr(Arg)` from `ptr(Expr)` (ROADMAP §6 ptr-typing dogfood).
+  ## is what lets `ty_compat` discriminate `ptr(Arg)` from `ptr(Expr)` (ptr-typing dogfood).
   is_ptr := w == "ptr" or str_at((src + ts), 4) == "ptr("
   if is_ptr {
     sp := ptr_pointee_span(src, ts, tl, decls, ncnt)
@@ -2473,7 +2473,7 @@ scalar_coverage_gap := fn(head : ptr(mut Arm), tag : u8, tns : usize, tnl : usiz
   gap
 }
 
-## ─── AGGREGATE↔SCALAR CONFORMANCE (TYP-6 / D69) ────────────────────────────────────────────────────
+## ─── AGGREGATE↔SCALAR CONFORMANCE (TYP-6) ────────────────────────────────────────────────────
 ## Reject a resolvable USER AGGREGATE (struct/enum) connected to a builtin SCALAR type, in BOTH
 ## directions — the check that MOVED UP from the emit path (the `lower.al` fail-loud nets): an aggregate
 ## VALUE flowing into a scalar SINK (a binding / assignment / call-arg / return / field / array-element)
@@ -3836,7 +3836,7 @@ sema_is_dyn_over_call := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
 
 ## Is the callee `[s, s+n)` a comptime TYPE-BUILTIN whose arguments are TYPE names, not values
 ## (`size(T)`, `align(T)`, `typeinfo(T)`)? A type-shaped argument must not be walked as an unbound
-## VALUE — the `expr_has_unbound` Call arm consults this (ROADMAP next-up #2; Types §6.4/§6.5).
+## VALUE — the `expr_has_unbound` Call arm consults this (next-up #2; Types §6.4/§6.5).
 callee_is_type_builtin := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   nm := str_at((src + s), n)
   nm == "size" or nm == "align" or nm == "typeinfo"
@@ -3886,7 +3886,7 @@ sema_type_arg_ok := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bo
 }
 
 ## Is the callee `[s, s+n)` a BUILT-IN callee — a prelude identifier the lower handles directly rather
-## than a declared fn (D70/D79)? Covers the width/type CASTS (`u32(x)`, `f64(x)`, `bits32(x)`), the
+## than a declared fn? Covers the width/type CASTS (`u32(x)`, `f64(x)`, `bits32(x)`), the
 ## layout/pointer METHODS reached via UFCS `x.m()` → `Call(m, [x])` (`ptr`/`len`/`size`/`align`),
 ## `typeinfo`, and the lower's special-cased intrinsics (`bytes`/`sub`/`expect`). A call to one of
 ## these is legal even though no `fn` declares it, so the undefined-callee diagnostic must exempt it.
@@ -3909,7 +3909,7 @@ is_builtin_callee := fn(src : ptr(u8), s : usize, n : usize) -> bool {
     or nm == "bytes" or nm == "sub" or nm == "expect" or nm == "bitcast"
     ## Stage-0 STR/BYTE + shift/rotate + control intrinsics the lower emits directly (no `fn`
     ## declares them in `src/` — `lib/base/str.al`'s `str_at`/`str_eq` are shadowed by the lower's
-    ## intrinsic emit): a call to one is legal though unresolvable, so exempt it (ROADMAP §1 item b).
+    ## intrinsic emit): a call to one is legal though unresolvable, so exempt it.
     or nm == "str_at" or nm == "str_eq" or nm == "byte_at"
     or nm == "shl" or nm == "shr" or nm == "rotl" or nm == "rotr"
     or nm == "panic" or nm == "forget"
@@ -4089,7 +4089,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       mut g := ah
       gen := callee_is_generic(decls, upto, src, cs, cl)
       if not gen and call_arity_match(decls, upto, src, cs, cl, na, a) == 0 { bad = true }
-      ## ROADMAP §1(b): an UNDEFINED function call is a name resolving to no declared fn/type AND not
+      ## an UNDEFINED function call is a name resolving to no declared fn/type AND not
       ## a built-in (a prelude identifier the lower handles) — reject at CHECK time rather than at LINK.
       ## Accumulates into `bad` (the poison path the caller turns into a located `mark_failed`); no early
       ## return (that mis-lowers the arm under the seed). Conservative: any decl by tail-name
@@ -4118,7 +4118,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       ## a comptime TYPE-BUILTIN (`size`/`align`/`typeinfo`) takes TYPE names as arguments, not values:
       ## a type-shaped arg (a bare known-type-name Var, or an array-TYPE literal `[T; N]` whose inner
       ## names ARE the type) is NOT an unbound VALUE — without this `size([u64; 3])` read `u64` as an
-      ## unbound Var (ROADMAP next-up #2; Types §6.4).
+      ## unbound Var (next-up #2; Types §6.4).
       tb := callee_is_type_builtin(src, cs, cl)
       mut ai := 0
       while g != 0 {
@@ -4283,7 +4283,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## seed, so call-arg type-checking runs HERE as a side-effect + fall-through, like the exhaustiveness
   ## check below). For a DIRECT, NON-generic call, walk the args: a Var arg naming a local POINTER with a
   ## known nominal pointee, passed to a param that is a pointer with a DIFFERENT known nominal pointee, is
-  ## a mismatch (`ptr(X)` flowing into a `ptr(Y)` slot — the node-handle confusion class, ROADMAP §6).
+  ## a mismatch (`ptr(X)` flowing into a `ptr(Y)` slot — the node-handle confusion class).
   ## Conservative: only Var-local args, only when BOTH pointees resolve to a known struct/enum → never a
   ## false reject. Stepped bools (the isolated `streq` dodges the `cmp-and-fn-call` mis-lower scar).
   ecs := expr_call_callee_span(e)
@@ -4292,7 +4292,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## the shared pre-match path so a direct call and the private `compiles` transaction observe the same
   ## rejection; the frozen seed may otherwise skip the payload-heavy Call arm and leave it unknown.
   if sema_builtin_str_integer_cast_bad(e, src) { mark_failed(locals, mismatch_err(s_of(e, a), 0)) }
-  ## P1-QUERY: reject a known aggregate operand in an arithmetic/bitwise binary expression before the
+  ## QUERY: reject a known aggregate operand in an arithmetic/bitwise binary expression before the
   ## payload-heavy `Bin` arm can be skipped by the frozen seed. This is intentionally shared by ordinary
   ## `check` and the query's private `check_expr` attempt, so neither path accepts a silent word-zero.
   if bin_aggregate_arithmetic_bad(e, decls, upto, src, locals, nloc) { mark_failed(locals, mismatch_err(s_of(e, a), 0)) }
@@ -4316,7 +4316,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       mark_failed(locals, ambiguous_err(ecs.s))
     }
   }
-  ## GENERIC when-GUARD located reject (CT-4/CT-5, D69) — a generic call to a `when`-guarded instance the
+  ## GENERIC when-GUARD located reject (CT-4/CT-5) — a generic call to a `when`-guarded instance the
   ## lower will NOT emit (its predicate folds FALSE for this call's concrete type-arg) is rejected HERE with
   ## a SOURCE LOCATION (was a bare undefined-symbol LINK error). `sema_when_guard_false_span` is a FAITHFUL
   ## SUBSET of `lower::guard_fold_inst` (folds `size(U) <op> N` over a concrete struct/enum type-arg; every
@@ -4343,7 +4343,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       gg = ga.next
     }
   }
-  ## CALL-ARG aggregate↔scalar conformance (TYP-6 / D69) — the retired `check_agg_arg_scalar_param` emit
+  ## CALL-ARG aggregate↔scalar conformance (TYP-6) — the retired `check_agg_arg_scalar_param` emit
   ## net PLUS the REVERSE (a scalar literal into an aggregate param) the net could not do. Gated to an
   ## UNAMBIGUOUS callee (exactly one same-name fn among `[0..upto)`): sema does not model overload
   ## resolution, so an overloaded name is left tolerant (post-resolution — the fix that keeps
@@ -4706,7 +4706,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     ## `loop { … }` in VALUE position (loop-as-expression, §7.2). Reuse the established break-value
     ## walker so a typed sink sees the loop's common reachable-break type instead of UNKNOWN. A loop with
     ## no value break remains UNKNOWN (Never is bottom here), while a known incompatible pair returns the
-    ## same located mismatch used by the standalone P1-BREAK consistency pass.
+    ## same located mismatch used by the standalone BREAK consistency pass.
     Expr::Loop(b) => {
       lcode := lbv_stmts(b, 0, decls, upto, src, a, locals, nloc)
       ltag := lbv_code_tag(lcode)
@@ -5155,7 +5155,7 @@ ct_check := fn(e : ptr(Expr), w : str, chk : bool, src : ptr(u8), decls : ptr(rt
       if res == 0 { res = ct_check(r, w, chk, src, decls, upto) }
       ## BOTH operands must be comptime constants: CT-12 governs the COMPTIME EVALUATION of an
       ## operation, not a run-time one that happens to divide by a literal zero (that is the run-time
-      ## checked-guard family, CG-8/D82, and it traps in the emitted program as it always has).
+      ## checked-guard family, CG-8, and it traps in the emitted program as it always has).
       if res == 0 and (op == 19 or op == 29) and ct_is_const_env(l, decls, upto, src) and ct_is_const_env(r, decls, upto, src) {
         if ct_val_env(r, w, decls, upto, src) == 0 { res = ct_span(e) * 8 + 2 }
         else if chk and ct_signed(w) and ct_val_env(r, w, decls, upto, src) == (0 - 1) and ct_val_env(l, w, decls, upto, src) == ct_min(w) { res = ct_span(e) * 8 + 1 }
@@ -5797,7 +5797,7 @@ expr_num_lit_val := fn(e : ptr(Expr)) -> i64 {
 ## walk (mirrors `expr_has_unbound`'s proven structure). Covers the common sub-expression-bearing forms;
 ## any variant not listed returns false — an UNDER-approximation, so a missed form is only a false
 ## NEGATIVE (under-enforcement), never a false positive (which would wrongly reject valid code). Used by
-## the use-after-`forget` linearity check (spec §10 / D86): the discharge consumes an `@owning` handle,
+## the use-after-`forget` linearity check (spec §10): the discharge consumes an `@owning` handle,
 ## so a later mention of it is a use-after-consume error.
 expr_mentions_var := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   match deref(e) {
@@ -5827,9 +5827,9 @@ expr_mentions_var := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a 
 }
 
 ## If statement handle `h` is a discharge `forget(x)` (an `ExprStmt` calling `forget` with one `Var`
-## argument), the forgotten variable's name span; else `{0, 0}`. `forget` is the D86 linearity discharge
+## argument), the forgotten variable's name span; else `{0, 0}`. `forget` is the linearity discharge
 ## primitive — only ever applied to an `@owning` handle — so no type resolution is needed here.
-## If expression `e` is a linearity DISCHARGE call (spec §10 / D86), the discharged handle's name span;
+## If expression `e` is a linearity DISCHARGE call (spec §10), the discharged handle's name span;
 ## else `{0,0}`. Two discharge forms: the `forget` primitive (exact tail-name), and a type-specific
 ## FREE (tail-name ending `_free` — `strbuf_free`/`hashmap_free`/… ; a `_free`-suffixed fn is
 ## overwhelmingly a consumer). The discharged handle is the LAST bare-`Var` argument (a non-generic
@@ -5940,7 +5940,7 @@ stmt_mentions_var := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : pt
   res
 }
 
-## USE-AFTER-`forget` linearity check (spec §10 / D86 — the first enforced slice of `@owning` linearity):
+## USE-AFTER-`forget` linearity check (spec §10 — the first enforced slice of `@owning` linearity):
 ## within a statement list, a `forget(x)` DISCHARGES the linear handle `x`, so any LATER mention of `x`
 ## in the same list is a use-after-consume error — poisoned via `mark_failed`. Scoped to one list (a
 ## cross-block use is a safe false negative). Corpus-safe: the compiler's 5 `forget` sites are all
@@ -6025,7 +6025,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## place the global's own `mut` authorizes writing — NOT a local. Do not push it as a fake local
           ## (which made a SECOND write to the same global read as an immutable-local reassign) and do not
           ## run the local immutable/type-match check. The RHS is already checked above; nothing more here.
-          ## GLOBAL-REASSIGN conformance (TYP-6 / D69): `G = <aggregate>` into a scalar global (or the
+          ## GLOBAL-REASSIGN conformance (TYP-6): `G = <aggregate>` into a scalar global (or the
           ## REVERSE, a scalar literal into an aggregate global) — the retired `Stmt::Assign` scalar-global
           ## emit net. Recover `G`'s declared `: T` from source and check it against the RHS.
           gsp := global_type_span(decls, src, ns, nl)
@@ -6139,7 +6139,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## RELIABLE aggregate recording (scar #2: StructLit/EnumLit don't dispatch check_expr's big
           ## match, so `tv.tag` came back 0). Recover the aggregate type NAME + tag straight from the
           ## literal, so a later use of this local (return / annotated-local / call-arg / field / array-
-          ## element / global sink) is checked against a scalar sink (TYP-6 / D69). An ARRAY literal of
+          ## element / global sink) is checked against a scalar sink (TYP-6). An ARRAY literal of
           ## SCALAR-LITERAL elements is tagged 7 (scalar-element array) so a whole-aggregate store into
           ## `xs[i]` is rejected. Only fires when nothing has typed the binding yet (bind_tag == 0), so an
           ## annotation / call-return type still wins.
@@ -6177,7 +6177,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         } else if local_in(locals, cnt, src, bns, bnl) {
         } else { return Result(usize, CheckErr).Err(unbound_err(bns, bnl)) }
         cv := check_expr_da(fv, decls, upto, src, a, locals, cnt, da)?
-        ## FIELD-ASSIGN conformance (TYP-6 / D69): `t.field = <aggregate>` into a scalar field (or the
+        ## FIELD-ASSIGN conformance (TYP-6): `t.field = <aggregate>` into a scalar field (or the
         ## REVERSE, a scalar literal into an aggregate field) — the retired `Stmt::FieldAssign` emit net.
         ## Resolve the base's struct type NAME from its recorded local tag (3 = struct), then the field's
         ## declared type span, then check the stored value against it. Poison-tolerant (a non-struct or
@@ -6400,7 +6400,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cii := check_expr_da(ii, decls, upto, src, a, locals, cnt, da)?
         if cii.tag != 0 and cii.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(ii, a), 0)) }
         civ := check_expr_da(iv, decls, upto, src, a, locals, cnt, da)?
-        ## INDEX-ASSIGN conformance (TYP-6 / D69): `xs[i] = <aggregate>` where `xs` is a SCALAR-element
+        ## INDEX-ASSIGN conformance (TYP-6): `xs[i] = <aggregate>` where `xs` is a SCALAR-element
         ## array (tag 7, recorded at binding from a scalar-literal-element ArrayLit) — the retired
         ## `Stmt::IndexAssign` emit net. Poison-tolerant: only a confidently scalar-element array + a
         ## confident aggregate value fires (a struct/enum-element array is left tolerant).
@@ -6863,7 +6863,7 @@ sema_bad_typeinfo_field_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), vs : us
 }
 
 ## Check a fn body + return expr with a freshly-allocated `locals` set, freeing it on every
-## Is `[tns, tnl)` the name of an `@owning` type (D86)? Find its decl and scan a bounded window from the
+## Is `[tns, tnl)` the name of an `@owning` type? Find its decl and scan a bounded window from the
 ## name for the `@owning` effector — catches `Name := @owning struct/enum {…}` and the generic
 ## `Name := fn(T : type) -> type { @owning struct }`. A miss is a safe leak false-negative; only `@owning`
 ## types carry the marker, so a stray hit within the window is implausible.
@@ -6999,7 +6999,7 @@ stmt_binding_var := fn(h : usize, a : ptr(mut rt::Arena)) -> VSpan {
   res
 }
 
-## LEAK-detection (spec §10 / D86): in a STRAIGHT-LINE fn, an `@owning` local that is bound and then NEVER
+## LEAK-detection (spec §10): in a STRAIGHT-LINE fn, an `@owning` local that is bound and then NEVER
 ## used (not discharged, returned, stored, or passed) before the fn ends is a LEAK — poisoned via
 ## `mark_failed`. Sound by construction: any uncertain form makes the conservative scan report "used", so
 ## a leak is flagged only when the handle is PROVABLY never touched again (subsequent statements + the
@@ -7203,7 +7203,7 @@ decl_is_extern_fn := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
 
 ## exit (both success and the first error). The fallible sub-checks are captured by `match`
 ## (not `?`) so the owning `locals` Vec is always discharged before returning — `?` would leak
-## it on an early failure (Memory §5.9 / D86 linearity). The locals are seeded with the fn's
+## it on an early failure (Memory §5.9 linearity). The locals are seeded with the fn's
 ## declared params (their resolved types); `check_stmts` grows the set as body bindings appear;
 ## then the trailing return expr (`value`) is checked, and its type must match the fn's declared
 ## return type (`-> R`) — a `Mismatch` at the return expr's span otherwise.
@@ -7321,7 +7321,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
       Result::Err(e) => { err = e; failed = true }
     }
   }
-  ## RETURN-sink aggregate↔scalar conformance (TYP-6 / D69) — the retired `Stmt::Return` emit net. The
+  ## RETURN-sink aggregate↔scalar conformance (TYP-6) — the retired `Stmt::Return` emit net. The
   ## `check_stmts` `ret_tag` check already covers int/bool/struct/enum returns (both directions); this
   ## adds the float/char-aware sweep over every `return <v>` (nested branches too) + the tail value,
   ## consulting the return type NAME so an `-> f64`/`-> char` scalar sink is covered. Poison-tolerant.
@@ -7336,7 +7336,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
       if agg_scalar_bad(d.ret_ts, d.ret_tl, d.value, decls, upto, src, ptr(locals), nloc) { mark_failed(ptr(locals), located_err(d.name_start)) }
     }
   }
-  ## §10 / D86 leak-detection: an `@owning` local bound then never used before the fn ends (a leaked
+  ## §10 leak-detection: an `@owning` local bound then never used before the fn ends (a leaked
   ## handle). Run after the body + params are in `locals` (so a local's `@owning` type resolves), and only
   ## if nothing has failed yet (avoid piling onto an already-rejected fn). Poisons via `mark_failed`.
   if failed == false and failed_word % 2 == 0 { check_leaks(d.body_stmts, d.value, decls, upto, src, a, ptr(locals), nloc) }
@@ -7501,7 +7501,7 @@ guard_is_false := fn(d : Decl, src : ptr(u8)) -> bool {
   guard_fold(d.when_cond, src) == 0
 }
 
-## ─── GENERIC when-GUARD LOCATED REJECT (CT-4/CT-5, D69) ──────────────────────────────────────────────
+## ─── GENERIC when-GUARD LOCATED REJECT (CT-4/CT-5) ──────────────────────────────────────────────
 ## A generic fn may carry a comptime `when P(T)` predicate gating its INSTANTIATION: an instance whose
 ## concrete type-arg makes `P` FALSE is AS-IF-ABSENT — the lower's `guard_fold_inst` skips emitting it, so
 ## a call to it fails LOUD at LINK (undefined symbol). These helpers give `check` a SOURCE-LOCATED reject
@@ -8244,7 +8244,7 @@ limit_parser_unary_neg_body := fn(inner : ptr(Expr)) -> bool {
 ## EnumLit/ArrayLit arg lists and Match arms). Unlike the shallow `no_alloc`/`freestanding` scans this is
 ## DEEP: the `no_unchecked` LIMIT (I5/I9, FND-10) promises the TU contains no `unchecked` escape, so a
 ## nested `a + unchecked b` must not slip past. This walks the EXPRESSION form (`Expr::Unchecked`); the
-## SCOPED STATEMENT form `unchecked { … }` (D70/D82, `Stmt::Unchecked`) is caught by
+## SCOPED STATEMENT form `unchecked { … }` (`Stmt::Unchecked`) is caught by
 ## `stmts_have_unchecked` below — an earlier revision of this comment claimed "`unchecked` is only ever
 ## an expression … there is no statement block form to handle", which was the whole bug.
 expr_has_unchecked := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> bool {
@@ -8323,7 +8323,7 @@ stmts_have_unchecked := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool
       Stmt::While(c, b, n) => { if expr_has_unchecked(c, a) { result = true } else if stmts_have_unchecked(b, a) { result = true } }
       Stmt::For(fns, fnl, lo, hi, b, n) => { if expr_has_unchecked(lo, a) { result = true } else if expr_has_unchecked(hi, a) { result = true } else if stmts_have_unchecked(b, a) { result = true } }
       Stmt::Loop(b, n) => { if stmts_have_unchecked(b, a) { result = true } }
-      ## The SCOPED STATEMENT form `unchecked { … }` (D70/D82) IS the escape — the block itself opts the
+      ## The SCOPED STATEMENT form `unchecked { … }` IS the escape — the block itself opts the
       ## enclosed statements out of I11 verification, exactly like the `unchecked <expr>` operator does.
       ## This arm used to only RECURSE into the body, so a `@limits(no_unchecked)` unit was rejected for
       ## `return unchecked (a + b)` but ACCEPTED for `unchecked { r = a + b }` — the unit contract (I5/I9,
@@ -8843,7 +8843,7 @@ sema_unknown_prefix_attr := fn(decls : ptr(rt::Vec), cnt : usize, src : ptr(u8),
   bad
 }
 
-## §8 `@repr(T)` LOCATED reject (spec Types §8, D69) — a FAITHFUL sema mirror of `lower::validate_repr`
+## §8 `@repr(T)` LOCATED reject (spec Types §8) — a FAITHFUL sema mirror of `lower::validate_repr`
 ## (driver build path, currently a bare unlocated `panic`; `check` did not run it at all). An enum
 ## carrying `@repr(T)` must have T an INTEGER type (`uN`/`iN`/`usize`/`bitsN`) wide enough to encode
 ## every discriminant (0..variant_count-1); otherwise the spec mandates a compile diagnostic. This

@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(d) — the array-element tier at every sub-word CHILD width, and with a byte array
+## CLAYOUT S3(d) — the array-element tier at every sub-word CHILD width, and with a byte array
 ## BEFORE and AFTER the child. Chosen so the word model and the C model disagree on every field but
 ## the first (audit §7 risk 4's selection criterion):
 ##   W16 { a : u16, b : u16 }          §6.1 offsets 0, 2      word offsets 0, 8

@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(b) — the byte-precise whole-value writer at every sub-word FIELD WIDTH, and at a
+## CLAYOUT S3(b) — the byte-precise whole-value writer at every sub-word FIELD WIDTH, and at a
 ## MIXED width where the §6.1 padding rule is load-bearing. Chosen so the word model and the C model
 ## disagree on every field but the first (audit §7 risk 4's selection criterion):
 ##   W32 { a : u32, b : u32 }        §6.1 offsets 0, 4      word offsets 0, 8

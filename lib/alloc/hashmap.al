@@ -1,11 +1,11 @@
 ## std::hashmap — a **generic** `HashMap(K, V)` over OS memory (open addressing,
 ## linear probing), keyed by the structural derives `hash(K)` / `eq(K)`
-## (base prelude `derive.al`; Stdlib §2.6, Comptime §5 / D87). Any `K` that is a
+## (base prelude `derive.al`; Stdlib §2.6, Comptime §5). Any `K` that is a
 ## struct of scalar fields (or a scalar) is a usable key with **no** per-type
 ## boilerplate — the derive monomorphizes to per-field code.
 ##
-## Allocator-borne (ROADMAP §3, as for `std::vec`): the three regions come from a
-## pluggable **`Arena`** (the region protocol, D84), not a direct `mmap`, so a
+## Allocator-borne (as for `std::vec`): the three regions come from a
+## pluggable **`Arena`** (the region protocol), not a direct `mmap`, so a
 ## compiler can run many maps over one arena it owns and frees in one shot. Fixed
 ## capacity (it traps if full — resize is a follow-up), so the map does NOT need to
 ## keep the arena after construction. Layout is **struct of arrays** — parallel
@@ -17,8 +17,8 @@
 ## `mmap` is zero-filled), `1` = occupied, `2` = **tombstone** (a removed entry —
 ## probing skips past it but does not stop, so a later key in the same cluster stays
 ## findable; `insert` reuses the first tombstone it passes). §160 `remove`.
-## `@owning` (D86): a `HashMap` is a linear handle — consumed by `hashmap_free`
-## exactly once. **Handle-based (Memory §5.3.1 / D19):** it stores the three regions'
+## `@owning`: a `HashMap` is a linear handle — consumed by `hashmap_free`
+## exactly once. **Handle-based (Memory §5.3.1):** it stores the three regions'
 ## arena **indices** (`Handle` values), NOT pointers — a long-lived reference into an
 ## arena is a handle (a number, no lifetime problem), resolved to a scoped pointer
 ## per access by threading the arena (the same discipline as `Buf`). So every op
@@ -93,7 +93,7 @@ occupied := fn(K : type, V : type, m : ptr(HashMap(K, V)), a : Arena) -> usize {
 ## Grow to `new_cap` buckets and **rehash** the live entries into the fresh regions
 ## (linear-probing placement, tombstones dropped — only occupied slots migrate).
 ## Allocates the three new regions from the arena (fallible — `AllocError` on
-## exhaustion, D91), re-stores their handle indices, and updates `cap`. The old
+## exhaustion), re-stores their handle indices, and updates `cap`. The old
 ## regions are left to the arena's bulk reclaim (the standard arena trade-off).
 rehash := fn(K : type, V : type, m : ptr(mut HashMap(K, V)), in out a : Arena, new_cap : usize) -> Result(usize, AllocError) {
   old_cap := deref(m).cap
@@ -149,7 +149,7 @@ rehash := fn(K : type, V : type, m : ptr(mut HashMap(K, V)), in out a : Arena, n
 ## returning the **previous** value as `Ok(Some(old))` on overwrite or `Ok(None)`
 ## on a fresh key (§160). **Grows** when the live load factor would exceed ~75%
 ## (doubling + rehash, §160) so the table stays fast and a fresh key always finds a
-## home; a growth that exhausts the allocator surfaces `AllocError` (D91), it does
+## home; a growth that exhausts the allocator surfaces `AllocError`, it does
 ## not trap. Borrows the handle by a **scoped reference** (the regions are reached
 ## through the slot pointers; growth updates the stored indices in place); called
 ## `m.hashmap_insert(key, value)` via auto-ref.
@@ -380,7 +380,7 @@ next := fn(K : type, V : type, in out it : HashMapIter(K, V)) -> Option(Entry(K,
   Option(Entry(K, V)).None
 }
 
-## **Consume** the owning handle (the linear release, D86): the three regions
+## **Consume** the owning handle (the linear release): the three regions
 ## belong to the **arena**, not the map, so this no longer `munmap`s — it only
 ## `forget(m)`s, discharging the consume obligation. The pages are reclaimed when
 ## the caller frees the arena (`std::os::free`), one shot.

@@ -7,7 +7,7 @@
 ## and this file is a DESCENDANT of `lower`. Everything the walk leans on that is NOT imported below —
 ## `streq`, `decl_at`, `decl_get`, `is_slice_expr`, the `bind_*_slot` binders, the `*_info` shape
 ## classifiers, and the `Subst` TYPE — binds `lower.al`'s OWN declaration through the ancestor chain
-## (Modules §3 for values, P1-TYPE-ANCESTOR for the type), not an unrelated module's same-named
+## (Modules §3 for values, TYPE-ANCESTOR for the type), not an unrelated module's same-named
 ## private duplicate. `is_slice_expr` (also declared in `wat`) and `streq` (also in six other modules,
 ## with a DIFFERENT body in `aarch64`) are exactly the names `scripts/callee_module_check.sh` exists to
 ## keep honest across this boundary.
@@ -193,7 +193,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## the Assign emits `cmpxchg` into the two slots (`r.0` current, `r.1` succeeded 0/1).
           bind_array_slot(slots, src, ns, nl, 2, AElem(eek = 0, ess = 0, esl = 0, stride = 1))
         } else if fixed_array_byte_return_len(v, decls, src, a) >= 1 {
-          ## P1-BYTES: a bounded `r := f(…)` where `f` returns `[u8; N]`, 1 <= N <= 8. The
+          ## BYTES: a bounded `r := f(…)` where `f` returns `[u8; N]`, 1 <= N <= 8. The
           ## returned %rax word is copied into the same packed byte block used by typed locals, so
           ## `r[k]` reuses the existing byte-address/load path. Wider or non-u8 array returns do not
           ## match and continue to their existing fail-loud scalar/aggregate diagnostics.
@@ -359,7 +359,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
         } else if deref_call_pointee_unresolved(v, decls, src, a) {
           reject_deref_call_pointee(v, src)
         } else if deref_view_pointee_span(v, ptr(slots), decls, src, a, sub).n != 0 {
-          ## P1-CLAYOUT S3(b) — `v := deref(<pointer to a §7 VIEW>)`: the pointee IS the two-word
+          ## CLAYOUT S3(b) — `v := deref(<pointer to a §7 VIEW>)`: the pointee IS the two-word
           ## `{ptr, len}` pair, so `v` is a str LOCAL (2 words), exactly like `v := <str var>`. The
           ## pointer may be a bitcast local, a `ptr(mut str)` annotation, an eek-6 call-derived
           ## pointer local, or the CALL itself (`deref(val_at(K, V, m, a, i))` at `V = str`) — the
@@ -395,7 +395,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           grp := gen_ret_ptrstruct_span(v, decls, src, a)
           bind_ptrstruct_slot(slots, src, ns, nl, grp.s, grp.n)
         } else if call_view_pointee_bind(v, decls, src, a, sub).n != 0 {
-          ## P1-CLAYOUT S3(b) — `slot := dq_elem(T, ptr(d), i)` at `T = str`: a pointer LOCAL whose
+          ## CLAYOUT S3(b) — `slot := dq_elem(T, ptr(d), i)` at `T = str`: a pointer LOCAL whose
           ## pointee is a §7 VIEW. Bind it as the eek-6 marked scalar carrying the RESOLVED pointee
           ## span, so the later `deref(slot) = x` store and `deref(slot)` read move BOTH words. Placed
           ## AFTER every pointer-to-STRUCT branch, so a struct pointee keeps its ek-7 binding.

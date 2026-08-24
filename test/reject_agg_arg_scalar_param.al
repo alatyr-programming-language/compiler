@@ -1,4 +1,4 @@
-## SOUNDNESS NET (TYP-6 sibling / D69): passing a user AGGREGATE (struct/enum) argument to a builtin
+## SOUNDNESS NET (TYP-6 sibling): passing a user AGGREGATE (struct/enum) argument to a builtin
 ## SCALAR parameter used to silently miscompile — the call read the aggregate's word 0 as if it were
 ## the scalar (`f(s)` returned garbage: rc=201). The compiler must instead FAIL LOUD at build time.
 ## A non-zero build rc is the acceptable outcome; a valid binary with a wrong result is the forbidden

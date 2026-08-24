@@ -3,7 +3,7 @@
 ## and signed integers, `bool`, IEEE-754 `f64`, and length-prefixed byte / string
 ## blobs, all in **little-endian** byte order.
 ##
-## Tier (D91): a **std**-tier convenience over the **alloc**-tier `StrBuf` (the
+## Tier: a **std**-tier convenience over the **alloc**-tier `StrBuf` (the
 ## growable byte buffer that backs the encoder) and the base-tier `Slice(u8)` /
 ## `Result` / `Option`. The encoder appends into a caller-provided `StrBuf`; the
 ## decoder reads back from a borrowed `Slice(u8)` through a bounds-checked cursor,

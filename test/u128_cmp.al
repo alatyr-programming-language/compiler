@@ -1,5 +1,5 @@
-## e2e — ROADMAP §8.4 part 1b, TYP-10 slice C: COMPARISON operators on the prelude `u128 ≡
-## uint(128)` (Types §3/§7, TYP-2 / TYP-10 / D23 / D24; operators.md OP-1). The six comparisons
+## e2e part 1b, TYP-10 slice C: COMPARISON operators on the prelude `u128 ≡
+## uint(128)` (Types §3/§7, TYP-2 / TYP-10; operators.md OP-1). The six comparisons
 ## (`==`/`!=`/`<`/`<=`/`>`/`>=`) are `@inline` GENERIC operators over the comptime value parameter
 ## N (lib/base/u128.al), used by BARE prelude name. Ordering is hi-word-to-lo-word lexicographic
 ## UNSIGNED — `<` is computed COMPARISON-FREE (the `a - b` borrow ripple's missing final carry IS

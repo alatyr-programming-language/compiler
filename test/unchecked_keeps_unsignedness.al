@@ -1,4 +1,4 @@
-## e2e — Verification §/D70/D82: an `unchecked (…)` SCOPE changes the OVERFLOW-CHECKING MODE of the
+## e2e — Verification §: an `unchecked (…)` SCOPE changes the OVERFLOW-CHECKING MODE of the
 ## expression it wraps, never its TYPE. So a `u64` value that reaches an ordering comparison through
 ## an `unchecked` wrapper must still be compared with the UNSIGNED setcc.
 ##

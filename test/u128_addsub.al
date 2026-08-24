@@ -1,4 +1,4 @@
-## e2e — ROADMAP §8.4 part 1, TYP-10 slice C (Types §3/§7, TYP-2 / TYP-10 / D23 / D24;
+## e2e part 1, TYP-10 slice C (Types §3/§7, TYP-2 / TYP-10;
 ## spec/20-types.md §7 "Wider-than-native named integers"; operators.md OP-1). `u128` is a PRELUDE
 ## name — the `u128 ≡ uint(128)` ALIAS of the generalized `uint(N)` recipe (lib/base/u128.al: a
 ## nominal struct of N/64 little-endian `u64` words, word 0 = the low 64 bits, ambiently injected),

@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(a) — taking the address of a NESTED field reduced to the constant 0, so two distinct
+## CLAYOUT S3(a) — taking the address of a NESTED field reduced to the constant 0, so two distinct
 ## fields reported one and the same address. An address is never a safe placeholder: `px == py` then
 ## answers "the same field", and any store through such a pointer writes to page zero.
 ##

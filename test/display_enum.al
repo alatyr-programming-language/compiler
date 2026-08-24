@@ -1,5 +1,5 @@
-## e2e — `alloc::fmt::display` ENUM rendering (the AMBIENT stdlib renderer, D87 / Stdlib §2.7;
-## comptime variant match D90 / Comptime §5.5). Renders BOTH a payload variant `Just(5)` and a
+## e2e — `alloc::fmt::display` ENUM rendering (the AMBIENT stdlib renderer / Stdlib §2.7;
+## comptime variant match Comptime §5.5). Renders BOTH a payload variant `Just(5)` and a
 ## unit variant `Nothing` of the same enum into one StrBuf and checks the produced text BYTE FOR
 ## BYTE against `Just(5)Nothing`. Exercises: the `Enum(_)` arm's `comptime for var in
 ## typeinfo(T).variants` unroll, `var.name` (the variant's comptime `str`), the per-variant

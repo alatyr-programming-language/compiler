@@ -1,4 +1,4 @@
-## selfhost::lower — AST → x86_64 GAS back end (ROADMAP §1/§6, item 6).
+## selfhost::lower — AST → x86_64 GAS back end.
 ##
 ## The lowering pass: it walks the expression AST **post-order** and emits real x86_64
 ## GAS assembly for a stack machine (operands pushed, then the operator pops two and
@@ -87,9 +87,9 @@ ecallee_is := ast::ecallee_is
 ## AGGREGATE PLACE RESOLUTION + ADDRESSING (`src/lower/place.al`) — a CHILD module under MOD-12,
 ## imported by BARE NAME so the ~120 call sites are unchanged and the boundary stays
 ## `@inline`-transparent. The seam was picked by CO-CHANGE: these are the functions the four
-## serialized `P1-CLAYOUT` lanes S3(a)-S3(d) touched. The types (`AggFld`, `FPParts`, `FieldAgg`,
+## serialized `CLAYOUT` lanes S3(a)-S3(d) touched. The types (`AggFld`, `FPParts`, `FieldAgg`,
 ## `IFPlace`, `StdFieldPath`, `StdIdxOne`, `StdIdxPath`) stay HERE — the parent constructs and reads
-## them too, and the child builds them through the §3/P1-TYPE-ANCESTOR chain.
+## them too, and the child builds them through the §3/TYPE-ANCESTOR chain.
 (agg_field_of, agg_arr_fill_count, slot_elem_stride_bytes, field_place_parts, standard_field_path, std_idx_path, std_idx_leaf_is_agg, std_idx_byte_field_eek, std_idx_one, resolve_idx_field_place, emit_addr_of, field_read_agg, emit_elem_copy_in, emit_index_addr) := place
 
 ## Name-imports for the two output primitives this back end emits on nearly every line — a
@@ -117,12 +117,12 @@ ecallee_is := ast::ecallee_is
 ## `Vec(SlotEntry)` built over the params then the body's `Assign` locals; a `Var` resolves
 ## by content (its span vs each entry's span — last binding wins, mirroring nameres's env).
 ##
-## STRUCT LAYOUT SIMPLIFICATION (ROADMAP §1 struct tier): every field is treated as 8 bytes
+## STRUCT LAYOUT SIMPLIFICATION (struct tier): every field is treated as 8 bytes
 ## (a word — u64/usize/ptr); field `i` is at byte offset `i * 8` and the struct size is
 ## `nfields * 8`. The self-host compiler's own structs are essentially all word-sized fields,
 ## so sub-word packing is intentionally deferred (no `u8`/`bool` field packing yet).
 ##
-## ENUM LAYOUT SIMPLIFICATION (ROADMAP §1 enum tier): an enum value is a discriminant word
+## ENUM LAYOUT SIMPLIFICATION (enum tier): an enum value is a discriminant word
 ## (the variant's declaration index 0,1,2,…) at word 0 followed by `max_arity` payload words
 ## (the max payload arity over the enum's variants), so size = (1 + max_arity) * 8. Each
 ## payload word-sized; no sub-word packing. For an enum local `ek == 3`, `sns`/`snl` carry
@@ -130,7 +130,7 @@ ecallee_is := ast::ecallee_is
 ## and `off` is the base slot — word 0 (discriminant) at `off`, payload word `i` at `off+1+i`.
 ## `ek`: 0 a scalar local, 2 a struct local, 3 an enum local, 4 a str local, 5 an array local.
 ##
-## ARRAY-OF-AGGREGATE (ROADMAP §1 multi-word-element tier): an array local (`ek == 5`) records
+## ARRAY-OF-AGGREGATE (multi-word-element tier): an array local (`ek == 5`) records
 ## its ELEMENT STRIDE in words (`estride`) and the element kind (`eek`: 0 a word-sized scalar
 ## element, 2 a struct element, 3 an enum element). Byte-packed local arrays use eek 8 (`u8`),
 ## 10 (`i8`), or 11 (`bits8`) and keep the same static length metadata while reserving
@@ -143,7 +143,7 @@ ecallee_is := ast::ecallee_is
 ## its counted loop. Element `i` lives at element-0's address MINUS
 ## `i * estride * 8` (the frame grows DOWN); within an element, field `f` is at the element
 ## address MINUS `f * 8` (matching the struct field layout's down-growing convention).
-## `is_ref` marks a BY-REFERENCE aggregate parameter (ROADMAP §1 aggregate-param tier): the
+## `is_ref` marks a BY-REFERENCE aggregate parameter (aggregate-param tier): the
 ## slot holds a POINTER to word 0 of the caller's aggregate (a struct/array/enum passed by
 ## reference — the real Alatyr ABI for an `in`/`in out` aggregate param), NOT the aggregate's
 ## own words. So a field/element access on such an entry must first LOAD the pointer from the
@@ -155,7 +155,7 @@ ecallee_is := ast::ecallee_is
 pub SlotEntry := struct { ns : usize, nl : usize, off : usize, sns : usize, snl : usize, ek : u8, estride : usize, eek : u8, is_ref : bool, tmod_s : usize, tmod_l : usize }
 
 ## `SVec` — a `SlotEntry` vector backed by a plain bump arena (the lean replacement for
-## `alloc::SVec`; ROADMAP §1 fixpoint). The self-host lower cannot compile the
+## `alloc::SVec` fixpoint). The self-host lower cannot compile the
 ## generic `alloc::vec` (its `push` uses `allocate`/`get` + a generic element store), so the
 ## per-function slot map lives here instead. `base` is the ABSOLUTE address of the element
 ## region, `arena` is the owning bump arena (carried so `svec_push` can grow). Growth doubles
@@ -488,7 +488,7 @@ is_builtin_num_name := fn(t : str) -> bool {
     or t == "f32" or t == "f64" or t == "bool" or t == "char" or t == "str"
     or t == "bits8" or t == "bits16" or t == "bits32" or t == "bits64"
 }
-## The D23 pointer-width normalization of a type-name text: `usize`→`u64`, `isize`→`i64`, else the
+## The pointer-width normalization of a type-name text: `usize`→`u64`, `isize`→`i64`, else the
 ## text unchanged — so a `usize` operand matches `num.al`'s `u64` operator (they lower identically).
 norm_type_name := fn(t : str) -> str {
   if t == "usize" { return "u64" }
@@ -496,13 +496,13 @@ norm_type_name := fn(t : str) -> str {
   t
 }
 ## The decl index of an `@inline` binary-operator fn named `op`'s symbol whose FIRST parameter type
-## matches the operand type span `[ts, ts+tn)` (with D23 width-alias normalization) — the operator
-## resolver (§2, D61). Matches BOTH user struct/enum operators AND `num.al`'s built-in scalar/float
+## matches the operand type span `[ts, ts+tn)` (with width-alias normalization) — the operator
+## resolver (§2). Matches BOTH user struct/enum operators AND `num.al`'s built-in scalar/float
 ## operators (`+`/`-`/`*`/`/`/`%`); comparisons (`<`/`==`) have no symbol decl in `cmp.al` (they are
 ## `lt`/`eq`), so those stay on the direct lowering. A `str`/`bool`/`char` operand or an un-inferable /
 ## non-routable op returns -1.
 ## The decl index of an `@inline` 2-arg fn NAMED `name` whose first parameter type matches the operand
-## type span (with D23 width-alias normalization), else -1. The name-keyed core of the operator resolver.
+## type span (with width-alias normalization), else -1. The name-keyed core of the operator resolver.
 named_op_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), name : str, ts : usize, tn : usize, a : rt::Arena) -> i64 {
   if tn == 0 { return -1 }
   ont := norm_type_name(str_at((src + ts), tn))
@@ -524,7 +524,7 @@ named_op_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), name : str, ts : us
   -1
 }
 ## The decl index of a NON-`@inline` 2-arg fn NAMED `name` whose first parameter type matches the
-## operand type span (D23-normalized), else -1. The fallback of `named_op_decl_idx`, consulted ONLY
+## operand type span (-normalized), else -1. The fallback of `named_op_decl_idx`, consulted ONLY
 ## after it returned -1 (so an `@inline` operator always wins): a plain `+ := fn(a : T, b : T) -> T`
 ## routes + expands at the site through the SAME `emit_inline_binop` machinery. Without it a
 ## non-inline operator never routed at all — `a <op> b` fell through to the built-in scalar lowering
@@ -1093,7 +1093,7 @@ fn_param_count := fn(decls : ptr(rt::Vec), i : usize) -> usize {
 ##    call's OWN resolution (`resolve_callee_idx`, the emitter's) lands on the variadic decl. When
 ##    resolution finds nothing (-1) keep the tail-name answer, so nothing that works today changes.
 ##  - a BARE callee keeps the tail-name answer UNLESS a decl of that name lives in the CALLER's own
-##    module: a user-declared `print`/`format` SHADOWS the prelude's variadic (D70/D79 — the built-in
+##    module: a user-declared `print`/`format` SHADOWS the prelude's variadic (the built-in
 ##    names are ordinary prelude identifiers), so the call is an ordinary call to the user's fn.
 ##  - Either way the override needs the call's ARITY to FIT the resolved decl: `io::print("v = {}", x)`
 ##    spells two arguments where `std::io::print` declares one, so it cannot be that fn — keep the
@@ -1734,7 +1734,7 @@ mut GLOBAL_REF_MOD_SET : bool = false
 mut GLOBAL_REF_DECLS : usize = 0
 set_global_ref_module := fn(s : usize, l : usize, dp : usize) {
   GLOBAL_REF_MOD_S = s; GLOBAL_REF_MOD_L = l; GLOBAL_REF_MOD_SET = true; GLOBAL_REF_DECLS = dp
-  ## P1-TYPE-ANCESTOR: a bare TYPE name resolves against the same module identity a bare global and a
+  ## TYPE-ANCESTOR: a bare TYPE name resolves against the same module identity a bare global and a
   ## bare call already do (Modules §3), so the ONE publisher establishes all three. `lower_layout`
   ## owns the type-side pair because it owns the resolvers; the anonymous package root travels with
   ## it because `is_root_mod` is a `lower` fact that base module cannot import back.
@@ -3198,7 +3198,7 @@ agg_alloc := fn(cx : ptr(LCtx)) -> i64 {
 ## already pass an existing address and keep their (unchanged) arms.
 view_temp_arg := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> bool {
   if is_str_call(e, cx) { return true }
-  ## P1-CLAYOUT S3(b) — `io::print(deref(p))` where `p` points at a §7 VIEW. The pointee IS the pair,
+  ## CLAYOUT S3(b) — `io::print(deref(p))` where `p` points at a §7 VIEW. The pointee IS the pair,
   ## but it lives at the ASCENDING pointee offsets while a by-ref view PARAM reads the DOWN-growing
   ## frame layout, so the pointer cannot simply be forwarded (the `deref_ptr_agg_arg` shortcut below
   ## is only correct for a struct/enum pointee). Materialize the pair into an agg-temp block and pass
@@ -3764,7 +3764,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
     push_str(sb, "  pushq %rax\n")
     return
   }
-  ## P1-BYTES bounded return-carrier argument — a supported `[u8; N]` call result has no frame home,
+  ## BYTES bounded return-carrier argument — a supported `[u8; N]` call result has no frame home,
   ## while the existing fixed-array parameter ABI consumes a caller-owned data pointer. Materialize
   ## the one packed `%rax` carrier into one aggregate-temp word, then pass that word's address. This
   ## is deliberately the only return-call argument shape admitted here: array literals, wider/non-u8
@@ -4542,7 +4542,7 @@ emit_global_data_cells := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, decls : 
       if is_union_decl(decls, src, ef.es, ef.el) {
         ## RAW UNION initializer: one payload at offset zero, no discriminant. Multi-payload members are
         ## deliberately unsupported here because §6.3 only says they are additive and gives no layout
-        ## contract (D69 gap). The payload's actual width is recovered from the member declaration so
+        ## contract (gap). The payload's actual width is recovered from the member declaration so
         ## wide struct payloads are padded to the union's max width rather than shifting later fields.
         if ef.np != 1 { panic("selfhost: multi-payload union global initializer is unsupported until the spec defines payload layout") }
         pay := arg_expr_at(ef.phead, 0, a)
@@ -5022,7 +5022,7 @@ bind_str_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize) {
   svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = 0, snl = 0, ek = 4, estride = 1, eek = 0, is_ref = false))
 }
 
-## ROADMAP §4 typed-slice: if `v` is `Slice(<array-local Var>, lo, hi)` whose base is a frame-local
+## typed-slice: if `v` is `Slice(<array-local Var>, lo, hi)` whose base is a frame-local
 ## SCALAR/FLOAT-element array (ek 5, eek 0/9), the element STRIDE (else 0). A raw-array slice is a
 ## TYPED view — distinct from a `str` byte-view — so it must index element-wise, not byte-wise.
 slice_arr_stride := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> usize {
@@ -5868,7 +5868,7 @@ FPParts := struct { base : ptr(Expr), fs : usize, fl : usize }
 ## compiler was correct). `layout_kind` decides PACKED before BYTE, which is the whole point of it.
 ##
 ## EVERY HOP uses `layout_field_offset_bytes`, which reads each link in the tier that link is actually
-## WRITTEN in. Since P1-CLAYOUT S3(b) there is ONE byte-precise whole-value writer, so that is §6.1
+## WRITTEN in. Since CLAYOUT S3(b) there is ONE byte-precise whole-value writer, so that is §6.1
 ## bytes for the byte-layout root AND for every nested child in that writer's domain
 ## (`std_struct_is_byte_writable`), plus `field_word_offset * 8` for a word-granular child, where the
 ## two models coincide. A child in neither set has NO answer and its consumer stays fail-loud. Under
@@ -5877,7 +5877,7 @@ FPParts := struct { base : ptr(Expr), fs : usize, fl : usize }
 ## `o.inner.b` read byte 10 and returned 0 while this compiler's own a64/rv64/wat answered 22.
 StdFieldPath := struct { ok : bool, root : usize, bo : i64, ts : usize, tl : usize }
 
-## P1-CLAYOUT S3(d) — THE BYTE-PRECISE ARRAY-ELEMENT PLACE RESOLVER, and it is deliberately the same
+## CLAYOUT S3(d) — THE BYTE-PRECISE ARRAY-ELEMENT PLACE RESOLVER, and it is deliberately the same
 ## walk as `standard_field_path` above with an `Index` root instead of a `Var` root. That is the whole
 ## design: an array element is a byte-layout struct value at `base + i*stride`, so once the stride is
 ## byte-precise (`slot_elem_stride_bytes`) the field path inside it is the SAME per-hop query every
@@ -5902,7 +5902,7 @@ StdIdxPath := struct { ok : bool, arr : ptr(Expr), idx : ptr(Expr), bo : i64, ts
 
 
 
-## P1-CLAYOUT S3(d) — the DEPTH-1 form of `std_idx_path`, taking the place's PIECES rather than its
+## CLAYOUT S3(d) — the DEPTH-1 form of `std_idx_path`, taking the place's PIECES rather than its
 ## expression: `xs[i].f`. It exists because `Stmt::IndexFieldAssign` is destructured by the parser into
 ## (array, index, field-name, value) and never reassembled, so the write arm has no `Field` node to walk.
 ## Same two decisions, same order, same queries — the element must be in `std_array_elem_byte_tier`'s
@@ -7267,7 +7267,7 @@ infer_local_scalar_type := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::
         }
       }
     }
-    ## `x := unchecked (<init>)` — an `unchecked` SCOPE (D70/D82) changes only the VERIFICATION mode of
+    ## `x := unchecked (<init>)` — an `unchecked` SCOPE changes only the VERIFICATION mode of
     ## the expression it wraps, never its TYPE. Without this arm the wrapper swallowed the inferred
     ## type: `s := unchecked (w + d)` over `w, d : u64` bound `s` UNTYPED, so `is_unsigned_expr` could
     ## not prove it unsigned and `s < w` fell back to the always-SIGNED `setl` — a wrapped `u64` sum
@@ -7624,7 +7624,7 @@ fn_decl_idx_by_name := fn(decls : ptr(rt::Vec), src : ptr(u8), nm : CSpan) -> i6
   ci
 }
 
-## Types §7 / P1-CLAYOUT S3(b) — the POINTEE type span of a CALL whose callee is declared
+## Types §7 / CLAYOUT S3(b) — the POINTEE type span of a CALL whose callee is declared
 ## `-> ptr(<opt mut> P)`, resolved by TYPE-PARAMETER **POSITION**.
 ##
 ## `P` is written in the CALLEE's scope. When it names one of the callee's own PARAMETERS (a
@@ -9534,7 +9534,7 @@ try_operand_ty_span := fn(inner : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> C
 ## emit an undefined typetag-less label and fail to link — but `src/` links), so the generic branch
 ## never fires for `src/` → byte-identical.
 
-## NOTE (TYP-6 / D69): the aggregate-VALUE-into-scalar-SINK soundness nets that formerly lived in the
+## NOTE (TYP-6): the aggregate-VALUE-into-scalar-SINK soundness nets that formerly lived in the
 ## emit path (a struct/enum argument to a scalar parameter — `is_agg_value_var` + `check_agg_arg_scalar_
 ## param` — plus the return / local / field / index / reassign sinks below) have MOVED UP into
 ## `sema::check_program` (now run on the build path), which rejects the class post-overload-resolution
@@ -9779,7 +9779,7 @@ struct_has_nonstr_multiword_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s :
   }
   res
 }
-## P1-BYTES return value emitter for the bounded internal `[u8; N]` ABI. The local/parameter path
+## BYTES return value emitter for the bounded internal `[u8; N]` ABI. The local/parameter path
 ## reads the packed byte block in the same low-address/low-byte order used by `emit_array_assign` and
 ## `emit_index_addr`; a nested call already leaves its one packed word in %rax and is normalized onto
 ## that same register. Other expression shapes are deliberately rejected here: adding a guessed
@@ -9882,7 +9882,7 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       }
     }
     Expr::StructLit(cs, cl, nf, fhead) => {
-      ## FAIL LOUD on the SILENT-ZERO case of an UNRESOLVABLE construction head (D69) — the
+      ## FAIL LOUD on the SILENT-ZERO case of an UNRESOLVABLE construction head — the
       ## return-position dual of the `emit_struct_assign` guard: an undeclared generic-constructor
       ## head (`X(128)(words = […])`, erased to a bare `StructLit`) pushes a `$0` word per
       ## ARRAY-LITERAL field, a SILENT zero return. An all-scalar bare head keeps the positional
@@ -10258,7 +10258,7 @@ emit_struct_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LC
       ## (dead code past the epilogue jump). Nothing to deliver — and NOT a fail-loud case.
     }
     _ => {
-      ## CORRECT-OR-TRAP (D69): any other value form in a wide-struct return position has no writer for
+      ## CORRECT-OR-TRAP: any other value form in a wide-struct return position has no writer for
       ## the hidden result buffer, so it used to leave the caller's destination UNTOUCHED — a silent
       ## garbage/zero struct. Fail at COMPILE time instead of shipping a wrong value.
       panic("selfhost: this value form is not yet delivered through a wide (> 7-word) struct return's hidden result pointer — bind it to a local first (`t := <value>` then `return t`)")
@@ -10412,7 +10412,7 @@ emit_enum_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## (dead code past the epilogue jump). Nothing to deliver — and NOT a fail-loud case.
     }
     _ => {
-      ## CORRECT-OR-TRAP (D69): any other value form in a wide-enum return position has no writer for
+      ## CORRECT-OR-TRAP: any other value form in a wide-enum return position has no writer for
       ## the hidden result buffer, so it used to leave the caller's destination UNTOUCHED — a silent
       ## all-zero enum (which reads as variant 0 with a zero payload). Fail at COMPILE time instead.
       panic("selfhost: this value form is not yet delivered through a wide (disc + payload > 7-word) enum return's hidden result pointer — bind it to a local first (`t := <value>` then `return t`)")
@@ -10758,7 +10758,7 @@ deref_store_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
 ## `name := [unchecked ]bitcast(ptr([mut ]T), …)` shape: an unresolved pointer keeps the old word-sized
 ## fallback rather than guessing a width. The source scan is the same bounded recovery used by
 ## `byte_ptr_local` and does not change any ordinary scalar slot layout.
-## P1-CLAYOUT S3(b): a local bound from a CALL returning `ptr(mut T)` carries no `bitcast` in its
+## CLAYOUT S3(b): a local bound from a CALL returning `ptr(mut T)` carries no `bitcast` in its
 ## source and no annotation, so the scan below finds nothing. `bind_ptrview_slot` records the
 ## ALREADY-RESOLVED §7 view pointee on such a slot (the eek-6 marker); read it first — it is the
 ## concrete type, so no further substitution applies.
@@ -10834,7 +10834,7 @@ slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usi
 ## the monomorphized instance binds it to the concrete type-argument, so a `Vec(str)` element store
 ## must see `str`.
 ##
-## P1-CLAYOUT S3(b): the pointer is not always a local. The sibling containers reach an element
+## CLAYOUT S3(b): the pointer is not always a local. The sibling containers reach an element
 ## through a HELPER CALL declared `-> ptr(mut T)` (`dq_elem`, `val_at`, `omap_val_elem`,
 ## `oset_elem`), and at that use site the local-slot / bitcast-source recovery above sees nothing.
 ## `call_ret_pointee_span` recovers it from the CALLEE's declared return type, mapping the pointee
@@ -11211,7 +11211,7 @@ bind_ptrptrstruct_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : 
   svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = ss, snl = sl, ek = 0, estride = 1, eek = 1, is_ref = false))
 }
 
-## P1-CLAYOUT S3(b) — `p := <call returning ptr(mut <§7 view>)>`. `p` is bound as a 1-word SCALAR
+## CLAYOUT S3(b) — `p := <call returning ptr(mut <§7 view>)>`. `p` is bound as a 1-word SCALAR
 ## (ek 0 — a pointer word reads and writes exactly like any other), MARKED `eek == 6` with the
 ## RESOLVED pointee VIEW type span in `sns`/`snl`. The marker follows the eek-1 precedent above: every
 ## existing `eek` reader is gated on `ek == 5`, so `p` behaves as a plain scalar everywhere except
@@ -11345,7 +11345,7 @@ var_ptrstruct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSp
 ## top-of-block address). `T : type` arg0 lets `call_first_struct_span` recognize `deref(decl_at(T,h))`
 ## as a struct read (the `get(T,…)` shape), so the read deref-COPIES the record into a local.
 decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
-## ROADMAP §6: a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
+## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
 decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return decl_at(Decl, hh) }
 ## A typed pointer to the AST node at arena OFFSET `h` — the lean replacement for `get(T, a,
 ## Handle(T)(idx=h))` (the self-host lower cannot compile the generic `get`/`Handle`/`scoped`
@@ -11546,7 +11546,7 @@ fn_is_convert := fn(src : ptr(u8), name_s : usize, name_l : usize) -> bool {
 ## 0`) and BRAND constructions (`brand_underlying`) keep PRIORITY — a `T(v)` that rides either is
 ## short-circuited here, so it never resolves to a @convert (this is what makes `char(n)`, a brand,
 ## stay the brand path → fixpoint-neutral: src/lib's only @convert `to_char` targets the brand `char`).
-## Two @convert to the same target are an AMBIGUITY error (fail-loud, no guessing — D69).
+## Two @convert to the same target are an AMBIGUITY error (fail-loud, no guessing).
 ## The §3 scope rank of a `@convert` declaration's module as seen from the module being lowered. A
 ## declaration in NO module (a single-file program, `mod_len == 0`) and a compile with no published
 ## module both rank 0, so every candidate ties there and the historical flat-ambiguity behaviour is
@@ -11564,13 +11564,13 @@ convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
   if bu.n != 0 { return 0 - 1 }
   cnt := rt::vec_len(deref(decls))
   mut found := 0 - 1
-  ## Modules §3 (P1-TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE
+  ## Modules §3 (TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE
   ## at this construction is the same question a bare call asks — `callee_mod_rank` answers it (this
   ## module, then its ancestors nearest-first, -1 for a sibling / a descendant / an unrelated module).
   ## Without the rank, two `@convert` to the same target in unrelated modules were a flat AMBIGUITY
   ## even when §3 lets the naming module see exactly ONE of them (measured: a child constructing
   ## through its ancestor's `@convert` was rejected as ambiguous because a sibling declared one too).
-  ## The D69 fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
+  ## The fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
   mut bestr := 0 - 2                     ## below EVERY rank, including the -1 "not on the chain"
   mut j := 0
   je := dcv_hi(cnt)
@@ -11584,7 +11584,7 @@ convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
       if rb.n != 0 and streq(src, rb.s, rb.n, cs, cl) {
         r := convert_scope_rank(src, d.mod_start, d.mod_len)
         if found < 0 or r > bestr { bestr = r; found = i64(i) }
-        else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6 / D69)") }
+        else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6)") }
       }
     }
     j += 1
@@ -11602,13 +11602,13 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
   if bu.n != 0 { return 0 - 1 }
   cnt := rt::vec_len(deref(decls))
   mut found := 0 - 1
-  ## Modules §3 (P1-TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE
+  ## Modules §3 (TYPE-ANCESTOR): a `@convert` is a FUNCTION declaration, so which ones are IN SCOPE
   ## at this construction is the same question a bare call asks — `callee_mod_rank` answers it (this
   ## module, then its ancestors nearest-first, -1 for a sibling / a descendant / an unrelated module).
   ## Without the rank, two `@convert` to the same target in unrelated modules were a flat AMBIGUITY
   ## even when §3 lets the naming module see exactly ONE of them (measured: a child constructing
   ## through its ancestor's `@convert` was rejected as ambiguous because a sibling declared one too).
-  ## The D69 fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
+  ## The fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
   mut bestr := 0 - 2                     ## below EVERY rank, including the -1 "not on the chain"
   mut j := 0
   je := dcv_hi(cnt)
@@ -11622,7 +11622,7 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
       if rb.n != 0 and streq(src, rb.s, rb.n, cs, cl) {
         r := convert_scope_rank(src, d.mod_start, d.mod_len)
         if found < 0 or r > bestr { bestr = r; found = i64(i) }
-        else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6 / D69)") }
+        else if r == bestr { panic("selfhost: ambiguous @convert to target type (TYP-6)") }
       }
     }
     j += 1
@@ -11842,7 +11842,7 @@ fixed_array_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
   }
 }
 
-## P1-BYTES bounded return ABI. A `[u8; N]` result with 1 <= N <= 8 is the one fixed-array shape
+## BYTES bounded return ABI. A `[u8; N]` result with 1 <= N <= 8 is the one fixed-array shape
 ## whose already-proven packed local representation fits one internal integer return word: byte 0 is
 ## the low byte at the array's data address and the whole word returns in %rax. Keep this predicate
 ## separate from `fixed_array_ret_call`: every other array (including `[i8; N]`, `[bits8; N]`, wider
@@ -12300,7 +12300,7 @@ str_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::A
 ## ran: `G.a` silently read 0 (a SILENT miscompile). The SCALAR case is already fail-loud (the value is
 ## inlined at each use → an `undefined reference` at `ld`); this makes the AGGREGATE case loud too.
 ## Deciding what a *runtime* global initializer should MEAN (a start-up initializer phase? an
-## initialization order?) is a spec question (D69) — until it is decided, reject rather than miscompile.
+## initialization order?) is a spec question — until it is decided, reject rather than miscompile.
 global_init_agg_call := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
   if struct_ret_call(v, decls, src, a) { return true }
   if sret_ret_call(v, decls, src, a) { return true }
@@ -12476,7 +12476,7 @@ call_ret_ptrstruct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
 ## `ptr(<opt mut> Struct)` (`get -> ptr(Box)`). The dual of `call_ret_ptrstruct_span` (which
 ## handles the GENERIC node_ptr/decl_at machinery, where the pointee is a type-ARG). Lets an
 ## INFERRED `p := get(…)` bind `p` as a pointer-to-struct (ek 7) so a later `deref(p).f` / `p.f`
-## reads the field THROUGH the pointer (ROADMAP §4: preserved pointee types through pointer-
+## reads the field THROUGH the pointer (preserved pointee types through pointer-
 ## returning calls). The annotated form (`p : ptr(Box) = …`) already resolved via the local type
 ## span; this recovers the same pointee for the un-annotated binding. 0/0 if the callee isn't a
 ## non-generic fn returning `ptr(Struct)`.
@@ -13574,7 +13574,7 @@ is_unsigned_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
 ## The two SHAPES that carry an operand's unsignedness but record no type span of their own, so
 ## `expr_type_span` answers 0/0 for them and `is_unsigned_expr` could not prove them unsigned:
 ##
-##   • `unchecked (<inner>)` — a VERIFICATION scope (D70/D82). It changes the overflow-checking mode
+##   • `unchecked (<inner>)` — a VERIFICATION scope. It changes the overflow-checking mode
 ##     of the expression it wraps, NEVER its type, so the inner's signedness IS the expression's.
 ##     `unchecked (w + d) < w` over `w, d : u64` therefore fell back to the always-SIGNED `setl`, and
 ##     the wrapped sum (a word above 2^63) compared as NEGATIVE: `0 < 18446744073709551610` answered
@@ -13704,7 +13704,7 @@ first_param_type_span := fn(d : Decl, a : rt::Arena, src : ptr(u8)) -> CSpan {
   base_type_name(src, p0.ts, p0.tl)
 }
 
-## Emit a type name span with the D23 pointer-width aliases normalized (`usize`→`u64`, `isize`→`i64`)
+## Emit a type name span with the pointer-width aliases normalized (`usize`→`u64`, `isize`→`i64`)
 ## so a def parameter typed `u64` and a call argument inferred as `usize` reach the SAME label.
 emit_norm_type := fn(in out sb : strbuf::StrBuf, src : ptr(u8), s : usize, n : usize) {
   t := str_at((src + s), n)
@@ -14109,7 +14109,7 @@ emit_overload_suffix := fn(in out sb : strbuf::StrBuf, cs : usize, cl : usize, a
   emit_sig_suffix(sb, cx.src, rd, deref(cx.mar))
 }
 
-## Compare two type-NAME spans after D23 pointer-width normalization (`usize`→`u64`, `isize`→`i64`),
+## Compare two type-NAME spans after pointer-width normalization (`usize`→`u64`, `isize`→`i64`),
 ## so a parameter typed `u64` and an argument inferred `usize` are considered the same type.
 norm_type_str := fn(src : ptr(u8), s : usize, n : usize) -> str {
   t := str_at((src + s), n)
@@ -14238,7 +14238,7 @@ overload_resolve_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl :
   0 - 1
 }
 
-## Is `name` a recognised x86_64 instruction-intrinsic mnemonic (`x86_64.<mnem>`, D25.3 / §80)?
+## Is `name` a recognised x86_64 instruction-intrinsic mnemonic (`x86_64.<mnem>`.3 / §80)?
 ## num.al's `@inline` scalar operators name these inside a `comptime if target.arch == Arch.x86_64`
 ## (folded TRUE on the lean x86_64 target), so only the x86_64 mnemonics ever reach emit.
 is_arch_mnemonic := fn(name : str) -> bool {
@@ -14254,7 +14254,7 @@ is_arch_mnemonic := fn(name : str) -> bool {
 }
 
 ## Lower an x86_64 instruction intrinsic `x86_64.<mnem>(dest, src)` to real machine code (A-7 /
-## §80 / D25.3). Each is a two-operand op that MUTATES `dest` (arg 0 — a scalar local lvalue) with
+## §80.3). Each is a two-operand op that MUTATES `dest` (arg 0 — a scalar local lvalue) with
 ## `src` (arg 1) in place: load `dest` → %rax, `src` → %rbx, apply the mnemonic, store the result
 ## back to `dest`'s frame slot. Signedness / high-half / float variants pick the exact instruction
 ## (`idivq`/`divq`, `iremq`/`remq`, `imulhiq`/`mulhiq`, `addsd`/…). The `…ss` (f32) forms reuse the
@@ -16219,9 +16219,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## §6.2 NICHE-FOLDED `Option(ptr(T))`: `None` lives in the pointer's null niche, so the whole
         ## type is pointer-width. Checked BEFORE the enum arm below, which would otherwise size it as
         ## tag + payload (16). Kept exactly to the shape `is_niche_folded` recognizes; a real `@niche`
-        ## producer for `bool` etc. is a later stage (P1-CLAYOUT S6).
+        ## producer for `bool` etc. is a later stage (CLAYOUT S6).
         if is_bool_niche_pending(cx.src, ts, tl) {
-          panic("selfhost: size(Option(bool)) requires the declared bool niche; this layout fold is deferred until P1-CLAYOUT S6")
+          panic("selfhost: size(Option(bool)) requires the declared bool niche; this layout fold is deferred until CLAYOUT S6")
         }
         if is_niche_folded(cx.src, ts, tl) {
           push_str(sb, "  movq $")
@@ -16473,7 +16473,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         push_str(sb, "  movq $1, %rdi\n  movq $60, %rax\n  syscall\n  pushq $0\n")
         return
       }
-      ## `forget(x)` — the linearity DISCHARGE primitive (D86): consume an `@owning` handle
+      ## `forget(x)` — the linearity DISCHARGE primitive: consume an `@owning` handle
       ## without running any reclamation (`std::os::free`/`strbuf_free`/`vec_free`/`hashmap_free`/
       ## `by_value` end with it; the backing pages belong to the arena, so discharge is a no-op).
       ## Recognized by name like `panic` — a bare `forget(v)` would otherwise mangle to
@@ -17005,7 +17005,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
                 push_str(sb, "(%rbp), %rax\n  pushq %rax\n")
                 return
               }
-              ## P1-CLAYOUT packed-nested seam: the intermediate child can itself be @packed. The
+              ## CLAYOUT packed-nested seam: the intermediate child can itself be @packed. The
               ## word-model fallback below is correct for a plain nested struct because that child
               ## was stored one word per field, but it is SILENTLY WRONG for a packed child: `a : u8`
               ## and `b : u16` live at child byte offsets 0 and 1, not word offsets 0 and 1. Compose
@@ -17048,7 +17048,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## `emit_struct_assign` → `is_packed` → `emit_packed_assign`, which writes the packed struct
       ## BYTE-precise into the first of those words. Write and read then disagree: `g.p.b` read word
       ## `index(p) + index(b)` while `b` lives at BYTE 1 of word `index(p)` — a SILENT WRONG VALUE (0).
-      ## Correct-or-trap (D69): reject rather than emit the word read. (The mirror direction — a plain
+      ## Correct-or-trap: reject rather than emit the word read. (The mirror direction — a plain
       ## struct nested INSIDE a `@packed` struct — is supported by the byte→slot arm just above and is
       ## unaffected.) Gated on the INTERMEDIATE field's type being packed while the base is not →
       ## `src/`+`lib/` declare no packed struct, so this is unreachable there (fixpoint-neutral).
@@ -17078,7 +17078,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       mut mgv : ptr(Expr) = if gbv.n != 0 { mut_global_value(cx.decls, cx.src, gbv.s, gbv.n) } else { unchecked bitcast(ptr(Expr), 0) }
       if unchecked bitcast(usize, mgv) == 0 and gbv.n != 0 { mgv = const_array_value(cx.decls, cx.src, gbv.s, gbv.n) }
       if unchecked bitcast(usize, mgv) != 0 {
-        ## CORRECT-OR-TRAP (D69): a FIELD read of a `mut` global whose initializer is a runtime CALL
+        ## CORRECT-OR-TRAP: a FIELD read of a `mut` global whose initializer is a runtime CALL
         ## returning an AGGREGATE. Nothing runs before `_start`, so the call never happened and the
         ## global's `.data` is ZEROED — every field read below silently returned 0 (or an adjacent
         ## `.data` word) instead of the initializer's value. The global itself stays legal (its zeroed
@@ -17361,7 +17361,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         }
         return
       }
-      ## P1-CLAYOUT S3(d) — a SCALAR leaf of a BYTE-TIER ARRAY ELEMENT (`xs[i].f`, `xs[i].inner.b`, any
+      ## CLAYOUT S3(d) — a SCALAR leaf of a BYTE-TIER ARRAY ELEMENT (`xs[i].f`, `xs[i].inner.b`, any
       ## depth). Claimed FIRST, and it has to be first for a mechanical reason as well as a semantic
       ## one: `ddif` below is bound EAGERLY, and `resolve_idx_field_place`'s byte-tier fence would fire
       ## before any later arm could look. The element address comes from `emit_index_addr` (Types §6.4's
@@ -17840,7 +17840,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         push_str(sb, "  pushq %rax\n")
         return
       }
-      ## P1-BYTES bounded DIRECT READ — a supported `[u8; N]` call result is returned as one packed
+      ## BYTES bounded DIRECT READ — a supported `[u8; N]` call result is returned as one packed
       ## word in %rax. Keep the index on the value stack while lowering the call, then extract byte
       ## `k` from the returned little-endian word. This is intentionally a READ-only composition;
       ## `emit_index_addr` retains the old located reject for unsupported direct aggregate places and
@@ -18026,7 +18026,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         }
       }
       mut gamgv : ptr(Expr) = if gav.n != 0 { mut_global_value(cx.decls, cx.src, gav.s, gav.n) } else { unchecked bitcast(ptr(Expr), 0) }
-      ## CORRECT-OR-TRAP (P1-BYTES / D69): both a mutable global and a const global whose
+      ## CORRECT-OR-TRAP (BYTES): both a mutable global and a const global whose
       ## initializer is a direct bounded `[u8; N]` return call have no valid array image here.
       ## The mutable path otherwise emits a zero/short `.data` cell; the const path has no
       ## materialized array value. In either case an indexed read would silently lose the call's
@@ -18111,7 +18111,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         }
         pbfe := packed_byte_field_eek(base, cx)
         sbfe := standard_byte_field_eek(base, cx)
-        ## P1-CLAYOUT S3(d) — `xs[i].data[j]`: the address above is already the exact BYTE, so the load
+        ## CLAYOUT S3(d) — `xs[i].data[j]`: the address above is already the exact BYTE, so the load
         ## must be one byte wide. Without this the chain fell to the `movq` default and read the byte
         ## plus its seven neighbours.
         sdbe := std_idx_byte_field_eek(base, cx.slots, cx.decls, cx.src, a)
@@ -20832,7 +20832,7 @@ comptime_type_kind := fn(it_s : usize, it_l : usize, decls : ptr(rt::Vec), src :
   if bnm == "ptr" { return 8 }
   if bnm == "str" { return 9 }
   if bnm == "fn" { return 10 }
-  ## A NOMINAL BRAND (`Id := brand(U)`, D9/D24/D25) reifies as `Brand` (kind 6) — checked before
+  ## A NOMINAL BRAND (`Id := brand(U)`) reifies as `Brand` (kind 6) — checked before
   ## struct/enum/scalar so `typeinfo(Id)`'s `Brand(under, _)` arm is selected. The PRELUDE scalar
   ## brands (`bool`/`char`/`f32`/`f64`, declared `:= brand(bitsN)` in lib) are the lower's BUILT-IN
   ## scalars, not user brands — they reify as `Scalar{kind}` (handled by the `Scalar` arm + the
@@ -20959,7 +20959,7 @@ decl_guard_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
 ## `when` → never reached during the self-build → fixpoint-neutral.
 guard_type_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, a : rt::Arena) -> usize {
   if is_bool_niche_pending(src, ts, tl) {
-    panic("selfhost: when size(Option(bool)) requires the declared bool niche; this guard fold is deferred until P1-CLAYOUT S6")
+    panic("selfhost: when size(Option(bool)) requires the declared bool niche; this guard fold is deferred until CLAYOUT S6")
   }
   layout_type_size_bytes(decls, src, ts, tl, a)
 }
@@ -22009,7 +22009,7 @@ emit_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx
           emit_str_pair(rv, sb, cx, a, nl)
           push_str(sb, "  popq %rdx\n  popq %rax\n")
         } else {
-          ## (TYP-6 / D69) the `return <aggregate>` from a scalar-return fn soundness net moved UP into
+          ## (TYP-6) the `return <aggregate>` from a scalar-return fn soundness net moved UP into
           ## `sema::check_program` (build-path gate; covers int/float/char/bool + the reverse direction).
           emit_gas(rv, sb, cx, a, nl)
           push_str(sb, "  popq %rax\n")
@@ -22883,7 +22883,7 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
       ## generic-array param in src/).
       geek = 9
     } else if byte_type_eek(src, aes.s, aes.n) == 8 {
-      ## P1-BYTES generic array instance (`T → [u8; N]`) — preserve the same packed byte parameter ABI
+      ## BYTES generic array instance (`T → [u8; N]`) — preserve the same packed byte parameter ABI
       ## as a concrete `[u8; N]` parameter. The caller-side return-carrier seam above relies on this
       ## substituted parameter retaining its static N and byte element kind; other byte kinds remain
       ## outside this bounded consumer increment rather than inheriting an unsigned ABI accidentally.
@@ -22898,7 +22898,7 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     if sdi >= 0 {
       ## STRUCT param `p : P` — by-reference, type span `P` (base name) for field resolution.
       ##
-      ## P1-CLAYOUT S3(a) FENCE. Every consumer of an `ek = 2` by-ref struct param resolves its fields
+      ## CLAYOUT S3(a) FENCE. Every consumer of an `ek = 2` by-ref struct param resolves its fields
       ## with `field_word_offset` — one machine word per field — so a STANDARD-BYTE-LAYOUT parameter is
       ## read at the wrong offsets end to end. Measured: `readx := fn(o : Outer) -> u64 { o.inner.x }`
       ## over `struct { data : [u8;4], inner : Inner }` emitted `movq 32(%rax), %rax` — word 4, because
@@ -22987,7 +22987,7 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
 }
 
 ## ============================================================================================
-## COMMIT 2 — EMIT-FROM-IR for the SCALAR-LEAF / `unchecked` shape (ROADMAP §0 register allocator).
+## COMMIT 2 — EMIT-FROM-IR for the SCALAR-LEAF / `unchecked` shape (register allocator).
 ## Behind the `--ra` flag (default OFF): when OFF the whole path is dormant (short-circuited before it
 ## is even reached in `emit_fn`), so the self-host build's GAS is byte-identical and the TOOL-1 fixpoint
 ## is untouched. When ON, a function matching `is_scalar_leaf_shape` is lowered to the `regalloc`
@@ -23241,7 +23241,7 @@ mut IRGSB_N := 0
 
 
 
-## ===== arraysum MEGASHAPE (ROADMAP 6e): barrier-in-loop + barriers-not-first + alloc-with + print =======
+## ===== arraysum MEGASHAPE: barrier-in-loop + barriers-not-first + alloc-with + print =======
 ## A GENERAL barrier text-splices a whole statement whose args may READ a MODELED scalar (the build loop's
 ## cursor `i` inside a `while` barrier, the printed accumulator `sum` in a `fmt::print` barrier). Those
 ## scalars are register-resident (vregs) so the sum loop stays register-resident; the barrier's TEXT splice
@@ -23608,7 +23608,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## literal returned only the words it constructed while the caller spilled one per FIELD (garbage over
   ## the `@offset` overlays), and `@endian(big)` never swapped. `mk().b` "worked" only because BOTH the
   ## return and the direct register read were word-model — two errors cancelling, and it broke the moment
-  ## the by-ref packed PARAM read was made byte-precise. Correct-or-trap (D69): reject at the DECL, the
+  ## the by-ref packed PARAM read was made byte-precise. Correct-or-trap: reject at the DECL, the
   ## one choke point every call shape flows through, rather than leave any of them silently wrong.
   ## Gated on `is_packed(return type)` → `src/`+`lib/` declare no packed struct at all, so this is
   ## unreachable for the self-host source (fixpoint-neutral). Removing it is the entry point for a real
@@ -24590,7 +24590,7 @@ emit_rodata_decl := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), in out sb 
     emit_rodata_stmts(d.body_stmts, sb, src, a, seen)
     emit_rodata_expr(d.value, sb, src, a, seen)
   } else if d.kind == 0 {
-    ## CORRECT-OR-TRAP (D69): a CONST module-level GLOBAL (`G := mk()`, no `mut`) whose initializer is
+    ## CORRECT-OR-TRAP: a CONST module-level GLOBAL (`G := mk()`, no `mut`) whose initializer is
     ## a runtime CALL returning an AGGREGATE. A const global has NO storage — its value is folded at each
     ## use — and a call folds to nothing, so `G.a` silently read 0 while the initializer never ran.
     ## A `mut` global is deliberately excluded: it gets real zero-initialized storage.
@@ -24612,7 +24612,7 @@ emit_rodata_decl := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), in out sb 
 Inst := struct { gi : usize, ts : usize, tl : usize, ts2 : usize, tl2 : usize, ts3 : usize, tl3 : usize }
 
 ## `IVec` — an `Inst` vector backed by a bump arena (the lean replacement for
-## `alloc::IVec`; ROADMAP §1 fixpoint), mirroring `SVec`. The mono pre-pass collects
+## `alloc::IVec` fixpoint), mirroring `SVec`. The mono pre-pass collects
 ## a bounded set of generic instances here; growth doubles `cap` with a word-granular copy.
 IVec := struct { base : usize, len : usize, cap : usize, arena : ptr(mut rt::Arena) }
 ivec_stride := fn() -> usize {
@@ -26271,7 +26271,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
         rd := deref(decl_get(decls, ri))
         if rd.kind == 0 and rd.arity == 1 {
           ## A WHOLE-PROGRAM pass asking about a declaration it already HAS: the naming module for the
-          ## query is that declaration's own module (P1-TYPE-ANCESTOR), never whichever module was
+          ## query is that declaration's own module (TYPE-ANCESTOR), never whichever module was
           ## published last — otherwise a `@require` alias declared in two modules resolves to the
           ## wrong one here and the root scan keeps the wrong predicate alive.
           lower_layout::set_type_ref_module(rd.mod_start, rd.mod_len, ROOT_MOD_S, ROOT_MOD_L)
@@ -26315,7 +26315,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
         if d.kind == 1 or (test_artifact and d.kind == 5) {
           _mark_ms = d.mod_start
           _mark_ml = d.mod_len
-          ## P1-TYPE-ANCESTOR: the DCE walk resolves TYPE names too (a `@require` predicate, a brand's
+          ## TYPE-ANCESTOR: the DCE walk resolves TYPE names too (a `@require` predicate, a brand's
           ## underlying, a struct/enum construction), so it must ask those questions from the SAME
           ## module the emit will ask them from — otherwise DCE keeps one module's declaration and the
           ## emitter calls another's. Measured: a child constructing an ancestor's `Nz := @require(ok1)

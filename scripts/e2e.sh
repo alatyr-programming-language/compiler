@@ -432,7 +432,7 @@ archive="$p/target/debug/library-dce-scope.a"
   fi
 }
 
-# ROADMAP §8 (WASM→WAT): emit `test/<name>.al` to WAT, assemble with wat2wasm (structural + type
+# (WASM→WAT): emit `test/<name>.al` to WAT, assemble with wat2wasm (structural + type
 # validation), run under wasmtime, check the exit code. Requires wat2wasm + wasmtime (flake
 # devShell); if either is absent this SKIPS (an env gap is not a test failure) but says so.
 run_wat() { # name, want
@@ -446,7 +446,7 @@ run_wat() { # name, want
   if [ "$got" = "$2" ]; then echo "ok   $1(wat): $got"; else echo "FAIL $1(wat): got $got want $2"; fail=1; fi
 }
 
-# ROADMAP §8.1 WASM print: emit to WAT, run under wasmtime, check BOTH captured stdout and exit code
+# WASM print: emit to WAT, run under wasmtime, check BOTH captured stdout and exit code
 # (a print program's output is its point). want-out uses $'\n' for newlines. Soft-skips.
 run_wat_out() { # name, want-out, want-exit
   command -v wat2wasm >/dev/null 2>&1 && command -v wasmtime >/dev/null 2>&1 || { echo "skip $1: wat2wasm/wasmtime absent"; return; }
@@ -476,7 +476,7 @@ check_wat_has() { # name, needle
   echo "ok   $1(wat-has): [$2]"
 }
 
-# ROADMAP §8.4 — backend emission must be reproducible even when the AST arena moves between
+# backend emission must be reproducible even when the AST arena moves between
 # processes. Loop/control-flow labels are an implementation detail, but pointer-derived names make
 # byte comparison (and any future content-addressed cache) meaningless. Run both a While and a Loop
 # shape twice for each affected backend and require byte-identical output.
@@ -512,7 +512,7 @@ check_reexport_wat() {
   echo "ok   import_reexport(wat): one pub module re-export reaches floor"
 }
 
-# ROADMAP §8.2 (aarch64): emit `test/<name>.al` to AArch64 GAS, assemble+link with the cross binutils
+# (aarch64): emit `test/<name>.al` to AArch64 GAS, assemble+link with the cross binutils
 # (aarch64-unknown-linux-gnu-{as,ld}), run under qemu-aarch64, check the exit code — the same verify
 # loop as the native x86_64 / wasmtime paths. Requires the cross toolchain + qemu-aarch64 (flake
 # devShell); if absent this SKIPS (an env gap is not a failure) but says so.
@@ -541,7 +541,7 @@ run_a64_out() { # name, want-out, want-exit
   if [ "$got" = "$2" ] && [ "$ec" = "$3" ]; then echo "ok   $1(a64-out): out+exit"; else echo "FAIL $1(a64-out): out=[$got] exit=$ec want=[$2]/$3"; fail=1; fi
 }
 
-# ROADMAP §8.3 (riscv64): emit `test/<name>.al` to RISC-V64 GAS, assemble+link with the cross binutils
+# (riscv64): emit `test/<name>.al` to RISC-V64 GAS, assemble+link with the cross binutils
 # (riscv64-unknown-linux-gnu-{as,ld}), run under qemu-riscv64, check the exit code. SKIPS if the cross
 # toolchain + qemu-riscv64 are absent. ulimit -c 0 so an ebreak trap dumps no core into the repo.
 run_rv64() { # name, want
@@ -626,7 +626,7 @@ build_reject_has() { # name, needle
   else echo "FAIL $1: rc=$got but the diagnostic is missing [$2]"; fail=1; fi
 }
 
-# ROADMAP §5 — `alatyr fmt`: re-emit a source file in canonical form. Checks (1) IDEMPOTENCE
+# `alatyr fmt`: re-emit a source file in canonical form. Checks (1) IDEMPOTENCE
 # (fmt(fmt(x)) == fmt(x), the acceptance property), and (2) the formatted output still BUILDS+RUNS to
 # the expected exit — a faithful reformat must preserve behaviour.
 fmt_test() { # name, want-exit
@@ -703,7 +703,7 @@ fmt_refuses_has() { # name, needle
   echo "ok   fmt_refuses_has_$1: refused with rc $got, wrote nothing, named the reason"
 }
 
-# ROADMAP §5 — `alatyr fmt` across MODULES: a struct literal whose struct DECL lives in an IMPORTED
+# `alatyr fmt` across MODULES: a struct literal whose struct DECL lives in an IMPORTED
 # module is absent from this file's decls, so field-name recovery must SOURCE-SCAN the literal rather
 # than look up the decl (else fail-loud "struct literal of unknown struct" — the dominant multi-module
 # gap). Single-file fmt can't resolve the import, so this builds a 2-module package and fmt's the
@@ -761,7 +761,7 @@ flush_reject_short() { # label, argv… (source last)
 # fixture comes close (the largest fmt output is 5 509 bytes), so the input is generated here rather than
 # added to `test/` — which also keeps the corpus manifest untouched. The shape is deliberate: 6 000 calls to
 # ONE callee. 33 DISTINCT callees in a single function SEGFAULTS the x86 lower (measured: 32 is fine, 33 is
-# rc 139, while `check`, `wat` and `aarch64` all accept it — a separate defect recorded in ROADMAP), and
+# rc 139, while `check`, `wat` and `aarch64` all accept it — a separate defect recorded in), and
 # generating the obvious 1 000-distinct-function program would have made this row fail for that reason
 # instead. Measured on this shape: fmt writes 84 116 bytes in 52 ms, the GAS dump 834 647 bytes in 1.3 s.
 # The fmt path carried a FIXED 64 MiB arena while its consumers scale LINEARLY with the source — decls 8 B
@@ -848,7 +848,7 @@ fmt_package_test() {
   echo "ok   fmt_package: recursive + manifest + idempotent + invalid unchanged"
 }
 
-# ROADMAP §5 — manifest `Target.entry`: build a package whose manifest names a NON-default ELF entry
+# manifest `Target.entry`: build a package whose manifest names a NON-default ELF entry
 # symbol, run the artifact (exit must match), and confirm the entry is a REAL exported symbol rather
 # than a compiler-synthesized `<entry> -> main__main` wrapper. Keeping `main` with a different exit
 # value proves the loader starts at `@export("myentry")`, while an old wrapper would duplicate `myentry`.
@@ -928,7 +928,7 @@ rm -f "$pd/target/debug/iface" "$pd/target/debug/iface.interface" "$pd/target/de
   echo "ok   interface_summary: API/layout facts + cold determinism + adversarial invalidation"
 }
 
-# ROADMAP §5 — a flat single-file package may define its own default `_start` directly in
+# a flat single-file package may define its own default `_start` directly in
 # `package.al` when no source modules are present. The manifest binding is inert source data; the
 # user-defined `_start` must remain the ELF entry and must not be replaced by a `main__main` wrapper.
 single_file_start_test() {
@@ -1193,7 +1193,7 @@ mod8_root_duplicate_test() {
   rm -rf "$root"/*/target
 }
 
-## P1-BYTES / D69 — a bounded fixed-byte-array return call is not a compile-time global image. The
+## BYTES — a bounded fixed-byte-array return call is not a compile-time global image. The
 ## tracked dual fixture locks the const path's existing aggregate-global diagnostic; the row-local
 ## mutable-only source independently locks the indexed-read guard, so either declaration order cannot
 ## hide the other path behind an earlier failure.
@@ -1203,7 +1203,7 @@ p1_bytes_global_test() {
   "$CC" build "$src" >/dev/null 2>"$err"
   rc=$?
   if [ "$rc" = 1 ] && grep -qF "CONST module-level global initialized by a runtime CALL returning an aggregate" "$err"; then
-    echo "ok   p1_bytes_global: const path keeps located D69 reject"
+    echo "ok   p1_bytes_global: const path keeps its located reject"
   else
     echo "FAIL p1_bytes_global: const rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"; fail=1
   fi
@@ -1892,7 +1892,7 @@ tool5_contract_test() {
 
 # name, want-line — the program must be rejected (rc 1) AND its stderr diagnostic must name the
 # expected 1-based source line ("... at line N"), proving the failure carries a source location
-# (ROADMAP §1 item 6 / §5). A "location not tracked" message (a poison with no span) fails this.
+# (§5). A "location not tracked" message (a poison with no span) fails this.
 check_located() {
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
@@ -1945,7 +1945,7 @@ check_limit_named() {
 
 # name, want-line — the program must FAIL TO PARSE (rc 9) AND its stderr diagnostic must be the
 # located parse-error message ("alatyr: parse: ... at line N"), proving a parse failure now carries a
-# source location, not a bare rc 9 (ROADMAP §1 item 6 / §5).
+# source location, not a bare rc 9 (§5).
 check_parse_located() {
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
@@ -2165,13 +2165,13 @@ run module_const 42
 run module_str_const 42
 run module_struct_const 42
 run module_struct_copy 42
-## TYP-8/D29 — struct construction is BY NAME, not by source position. `P(y = 6, x = 5)` used to
+## TYP-8 — struct construction is BY NAME, not by source position. `P(y = 6, x = 5)` used to
 ## drop the field names and store positionally (y=6 landed in x) — a silent miscompile for any
 ## out-of-declaration-order literal. The parser now reorders each named field to its declaration
 ## index (a parse desugar), so it is correct on EVERY backend (`run`, not `run_x86` — verified by
 ## the arch sweeps). Also exercises a full 3-way permutation + trailing partial init reject at compile.
 run struct_field_by_name 42
-## TYP-8/D29 check/build parity: check must use the same PASS-1 struct field table as build for
+## TYP-8 check/build parity: check must use the same PASS-1 struct field table as build for
 ## mixed-type by-name literals, and must reject an unknown named field instead of checking positionally.
 run check_struct_field_order 42
 ## TYP-8 / spec Types §9.4 — STRUCT-FIELD DEFAULTS `x : T = <expr>`: an omitted field with a default is
@@ -2207,18 +2207,18 @@ run_x86 embed_byte_storage 42
 ## the word-model emitters at a byte->slot-translated position; x86_64-only, so run_x86 (sweep-excluded).
 run_x86 packed_str_field 42
 run_x86 packed_nested_struct 42
-## P1-CLAYOUT: a @packed root containing a @packed nested child must compose both byte cursors;
+## CLAYOUT: a @packed root containing a @packed nested child must compose both byte cursors;
 ## the child’s sub-word scalar fields are not at the old word-model offsets.
 run_x86 packed_nested_packed_read 42
 run_x86 packed_array_field 42
 run_x86 packed_byte_array_field 42
-## P1-BYTES: ordinary standard-layout structs with direct byte-array fields use exact byte offsets
+## BYTES: ordinary standard-layout structs with direct byte-array fields use exact byte offsets
 ## for construction, copy, indexed read/write, address-of, by-ref aggregate passing, size and align.
 run_x86 standard_byte_array_field 42
-## P1-CLAYOUT S3(e): a standard byte-tier struct crosses an ordinary by-value parameter and return;
+## CLAYOUT S3(e): a standard byte-tier struct crosses an ordinary by-value parameter and return;
 ## all four emitters must load its byte fields through the parameter's caller-owned address.
 run standard_byte_abi 42
-## P1-BYTES: a direct byte-array component in a typed tuple local uses standard byte offsets.
+## BYTES: a direct byte-array component in a typed tuple local uses standard byte offsets.
 run_x86 standard_tuple_byte_component 42
 build_reject_has reject_standard_tuple_byte_param "a standard-layout byte tuple parameter is not supported yet"
 build_reject_has reject_standard_tuple_byte_return "a standard-layout byte tuple return is not supported yet"
@@ -2345,12 +2345,12 @@ check_located reject_enum_disc_pin_overflow 3
 ## §8 @repr(T) representability: a non-integer tag type (@repr(str)) is a compile diagnostic — the build
 ## must fail loud (the alternative, a binary with a meaningless tag, is the forbidden silent miscompile).
 build_reject repr_enum_bad
-## §8/D69: the same @repr representability rejection now carries a SOURCE LOCATION — sema mirrors
+## §8: the same @repr representability rejection now carries a SOURCE LOCATION — sema mirrors
 ## `lower::validate_repr` faithfully (same `lower_layout` primitives: enum_repr_ty / repr_ty_is_integer /
 ## repr_ty_capacity), so `check` (which never ran `validate_repr`) now REJECTS AND LOCATES a bad @repr at
 ## the enum decl, not a bare undefined/unlocated abort. `@repr(str)` (non-integer) → line 4 of repr_enum_bad.
 check_located repr_enum_bad 4
-## §8/D69: the NARROW-tag arm of the same representability check — an @repr(i8) enum with 129 variants
+## §8: the NARROW-tag arm of the same representability check — an @repr(i8) enum with 129 variants
 ## exceeds i8's 128-value capacity (repr_ty_capacity), so the tag can't encode every discriminant. Located
 ## at the enum decl (line 7). Faithful sema mirror of validate_repr's variant-count > capacity branch.
 check_located repr_narrow_reject_located 7
@@ -2358,24 +2358,24 @@ check_located repr_narrow_reject_located 7
 ## canonical surface is the PREFIX `@offset(0) v : u32`. Formerly silently dropped (a wrong-layout
 ## miscompile); now the build must be rejected (the forbidden alternative is a silent miscompile).
 build_reject_has misplaced_attr_bad "must PREFIX the field"
-## TYP-6 sibling / D69: a plain direct call passing a user AGGREGATE (struct/enum) argument to a
+## TYP-6 sibling: a plain direct call passing a user AGGREGATE (struct/enum) argument to a
 ## builtin SCALAR parameter (`f(s)` with `f := fn(x : u64)`, `s : S`) silently read the aggregate's
 ## word 0 as the scalar (rc=201, a wrong-but-valid result). The narrow call-arg soundness net now
 ## FAILS LOUD at build time; the forbidden alternative is that silent miscompile.
 build_reject_has reject_agg_arg_scalar_param "check: type mismatch at line 10"
-## Sibling soundness nets (TYP-6 / D69): the SAME aggregate-into-scalar silent miscompile via the other
+## Sibling soundness nets (TYP-6): the SAME aggregate-into-scalar silent miscompile via the other
 ## two sinks — a scalar-return fn `return`ing an aggregate Var (R1, delivered word 0 in %rax), and a
 ## scalar-annotated local bound to an aggregate Var (R2, stored word 0). Both must now FAIL LOUD.
 build_reject reject_agg_return_scalar
 build_reject_has reject_agg_local_scalar "check: type mismatch at line 9"
-## Sibling soundness nets (TYP-6 / D69): the SAME aggregate-into-scalar silent miscompile via the three
+## Sibling soundness nets (TYP-6): the SAME aggregate-into-scalar silent miscompile via the three
 ## ASSIGNMENT-TARGET sinks — a scalar struct FIELD (`t.x = s`, P3), a scalar-element ARRAY element
 ## (`xs[0] = s`, P2), and a plain RE-ASSIGN into an existing scalar place (`G = s`, P1). Each kept only
 ## word 0 of the aggregate; all must now FAIL LOUD at build time.
 build_reject_has reject_agg_field_scalar "check: type mismatch at line 11"
 build_reject_has reject_agg_index_scalar "check: type mismatch at line 10"
 build_reject_has reject_agg_reassign_scalar "check: type mismatch at line 10"
-## REVERSE direction (TYP-6 / D69): a bare SCALAR literal into an AGGREGATE parameter (`f(42)` with
+## REVERSE direction (TYP-6): a bare SCALAR literal into an AGGREGATE parameter (`f(42)` with
 ## `f := fn(p : S)`). A naive emit-time net could NOT reject this (it needs post-overload resolution,
 ## which the sema conformance gate — now on the build path — has), so it must FAIL LOUD at build too.
 build_reject reject_scalar_arg_agg_param
@@ -2438,11 +2438,11 @@ run ra_codec_slice_cast 17
 ## admitted byte load. Direct indexing, a narrow-parameter call, nested binary conversion, and checked
 ## narrow arithmetic remain text/fail-loud controls.
 run ra_codec_next_usize 17
-## P1-BYTES: a bounded byte-array return may be explicitly forwarded through another return before
+## BYTES: a bounded byte-array return may be explicitly forwarded through another return before
 ## the caller reads its packed carrier. The adjacent wider/non-u8 return forms remain rejects.
 run_x86 p1_bytes_param_forward_u8 42
 check_accept p1_bytes_param_forward_u8
-## P1-BYTES consumer seam: a direct [u8; 4] return carrier is materialized into the existing
+## BYTES consumer seam: a direct [u8; 4] return carrier is materialized into the existing
 ## aggregate temporary before a generic fixed-array parameter reads it by reference. The wider,
 ## signed, and non-byte controls remain located rejects inside the lower.
 run_x86 p1_bytes_arg_consumer 42
@@ -2571,7 +2571,7 @@ run operator_vec2 42
 ## cardinal silent-miscompile). x86_64-only aggregate operator delivery, so run_x86.
 run_x86 routed_op_aggregate 42
 run_x86 multiword_u128_add 42
-## ROADMAP §8.4 part 1 (Types §3/§7, TYP-2/TYP-10/D23/D24): `u128` as an ambient PRELUDE library
+## part 1 (Types §3/§7, TYP-2/TYP-10): `u128` as an ambient PRELUDE library
 ## multiword type — now the `u128 ≡ uint(128)` ALIAS of the generalized TYP-10 `uint(N)` recipe
 ## (lib/base/u128.al, little-endian `words`), used by BARE name — its `@inline` generic `+`/`-`
 ## ripple carry/borrow across the word boundary comparison-free (generate/propagate identity).
@@ -2886,7 +2886,7 @@ build_reject_has reject_slice_struct_elem_compare "struct/enum/str/pointer eleme
 ## which would drop the recorded type for `x := a + 1` over a narrow `a` (what the CG-6/I11 narrow wrap and
 ## the overflow guard read) and would flip `u64 + usize`, on which all four backends already agree.
 run unchecked_mixed_signedness 42
-## §9.1 / D70/D82 — a bare integer literal inherits the proven unsignedness of its `u64` partner inside
+## §9.1 — a bare integer literal inherits the proven unsignedness of its `u64` partner inside
 ## an `unchecked` arithmetic expression. All four backends now return 42; this used to be a normal-exit
 ## silent wrong value (3) on a64, rv64 and wasm.
 run unchecked_literal_unsignedness 42
@@ -2907,7 +2907,7 @@ build_reject_has reject_tuple_str_compare "multi-word by-value TUPLE / ARRAY"
 ## operands proven. The peel is filtered to unsigned types ONLY: the parser ERASES a scalar bitcast, so an
 ## unfiltered peel saw `unchecked bitcast(usize, n)` as bare `n`, recorded isize, and flipped `c / d` from
 ## divq to idivq.
-## D70/D82 -- an `unchecked` SCOPE changes only the VERIFICATION mode of what it wraps, never its TYPE, but
+## an `unchecked` SCOPE changes only the VERIFICATION mode of what it wraps, never its TYPE, but
 ## the type scan had no arm for it, so `s := unchecked (w + d)` over u64 bound s UNTYPED and `s < w` fell to
 ## the always-SIGNED compare: `0 < 18446744073709551610` answered FALSE. Closed on x86 first and then on all
 ## three other backends, where the hole was IDENTICAL but the mechanism differs (they source-scan a `: uN`
@@ -2941,16 +2941,16 @@ check_reject reject_limit_no_abstractions_at_operand
 check_reject reject_field_layout_attr
 check_accept accept_limit_no_abstractions
 run_x86 accept_limit_no_abstractions 42
-## §10 / D86 linearity — use-after-forget: a mention of an @owning handle AFTER its forget() discharge
+## §10 linearity — use-after-forget: a mention of an @owning handle AFTER its forget() discharge
 ## is a use-after-consume error (reject); forget() as the terminal use is fine (accept).
 check_reject reject_use_after_forget
 check_reject reject_use_after_forget_branch
 check_accept accept_forget_terminal
-## §10 / D86 — use-after-free: a `_free`-tail discharge consumes its handle arg; a later mention rejects.
+## §10 — use-after-free: a `_free`-tail discharge consumes its handle arg; a later mention rejects.
 check_reject reject_use_after_free
 check_reject reject_use_after_free_ufcs
 check_accept accept_free_terminal
-## §10 / D86 — leak-detection: an @owning handle created then never used (straight-line fn) is a leak.
+## §10 — leak-detection: an @owning handle created then never used (straight-line fn) is a leak.
 check_reject reject_leak_owning
 check_accept accept_owning_discharged
 ## §10 — leak-detection in a CONTROL-FLOW fn: an @owning handle used nowhere on any path is a leak.
@@ -3007,7 +3007,7 @@ run_x86_out print_int_i64_min 42
 run stmt_call_str_arg 42
 run_x86_out stmt_call_str_arg 42
 ## The same defect with NO `str` and no view in sight: a user-declared `print := fn(x : u64)` shadows the
-## prelude variadic (D70/D79) and never ran — the program returned 0 instead of 42. Scalar-only, so it
+## prelude variadic and never ran — the program returned 0 instead of 42. Scalar-only, so it
 ## MATCHES on a64/rv64/wasm too, which is the cross-backend proof.
 run stmt_call_shadow_print 42
 ## The two-word VIEW as a discarded call's argument — the shape the defect was first blamed on. It always
@@ -3560,7 +3560,7 @@ run_x86 when_guard_enum 42
 ## `pick__Big` undefined → build fails loud (build_reject). x86-focused generic emission, so run_x86.
 run_x86 when_predicate 42
 build_reject when_predicate_reject
-## CT-4/CT-5/D69: sema mirrors the size-predicate fold to give `check` a SOURCE-LOCATED reject (not a bare
+## CT-4/CT-5: sema mirrors the size-predicate fold to give `check` a SOURCE-LOCATED reject (not a bare
 ## undefined-symbol LINK error) when a generic `when size(T)` guard folds FALSE for a call's concrete
 ## type-arg. `pick(Big, 42)` (Big a 3-word struct, size 24 > 8) → the guard folds FALSE → `check` rejects
 ## AND locates the call (line 12). The faithful-SUBSET boundary: sema folds only size/struct-enum, so the
@@ -3572,7 +3572,7 @@ check_located when_reject_located 12
 ## instance dropped → `pick__u64` undefined → build fails loud). x86-focused generic emission, so run_x86.
 run_x86 when_predicate_kind 42
 build_reject when_predicate_kind_reject
-## D69/CT-4/CT-5: the sema when-guard fold-mirror now also covers the is-KIND form, so `pick(u64,42)`
+## CT-4/CT-5: the sema when-guard fold-mirror now also covers the is-KIND form, so `pick(u64,42)`
 ## (u64 a concrete scalar → kind Scalar ≠ Struct) is rejected by `check` with a SOURCE-LOCATED diagnostic
 ## at the call site (line 11), not only as a link-time undefined symbol. Faithful subset: sema folds the
 ## kind only for a PROVABLY-CONCRETE type-arg (declared struct/enum/brand, or a recognized scalar/ptr/str/
@@ -3591,7 +3591,7 @@ build_reject when_predicate_2tp_reject
 ## dropped → `pick__Big` undefined → build fails loud). x86-focused generic emission, so run_x86.
 run_x86 when_named_pred 42
 build_reject when_named_pred_reject
-## D69/CT-4: the sema fold-mirror INLINES a named comptime predicate too — `when is_small(T)` resolves the
+## CT-4: the sema fold-mirror INLINES a named comptime predicate too — `when is_small(T)` resolves the
 ## callee, inlines its single bool body under the type-arg binding, and folds — so `pick(Big,42)` is rejected
 ## by `check` with a LOCATED diagnostic at the call site (line 15), not only at link. Same faithful-subset
 ## boundary as the size/is-kind forms (a not-yet-monomorphized arg stays admitted).
@@ -3637,11 +3637,11 @@ run comptime_typeinfo_variants_len 42
 ## are covered. Malformed arity is a check-time rejection.
 check_accept compiles_module_query
 run compiles_value_query 42
-## P1-QUERY/CT-6: the build-path query mirror must agree with ordinary scalar `v.(f)` Field
+## QUERY/CT-6: the build-path query mirror must agree with ordinary scalar `v.(f)` Field
 ## projection. `sum_projection` proves the ordinary call path; the query checks the same u64 field
 ## true and the incompatible str sink false, without evaluating either operand.
 run query_typeinfo_field_projection 42
-## P1-QUERY/CT-6: the capability-query mirror preserves aggregate field types without entering the
+## QUERY/CT-6: the capability-query mirror preserves aggregate field types without entering the
 ## ordinary aggregate value-position emitter, which remains fail-loud until its ABI is unified.
 run query_typeinfo_aggregate_projection 42
 run query_typeinfo_generic_instance 42
@@ -3746,7 +3746,7 @@ build_reject_has reject_nested_tuple_write_deep "nested mixed-kind tuple element
 run named_args 42
 build_reject_has reject_named_arg_unknown "named call argument does not match"
 limit_scope_multi
-## SYN-4 (D53): newline-as-separator for struct fields / call args / block statements (no comma/`;`).
+## SYN-4: newline-as-separator for struct fields / call args / block statements (no comma/`;`).
 run syn4_separators 42
 run_x86 raw_asm_exit 42
 run_x86 checked_overflow 132
@@ -4253,7 +4253,7 @@ run enum_agg_payload 42
 run map_container 42
 run vec_container 42
 run fn_value 42
-## P1-FN-VALUE residual: a second wrapper forwards the same function value and two Slice views.
+## FN-VALUE residual: a second wrapper forwards the same function value and two Slice views.
 run fn_value_forward_lower_slice 42
 ## the supported way to call a fn value that isn't a bare name: bind it first (`g := fs[0]; g(10)`), plus HOF /
 ## returned-fn / equality / UFCS / lambda anchors — the forms the non-name-callee rejects must NOT disturb.
@@ -4742,7 +4742,7 @@ build_reject_has reject_parse_expected_assign "at line 7 in reject_parse_expecte
 emit_reject_has wat     reject_parse_tail_located "at line 21 in reject_parse_tail_located"
 emit_reject_has aarch64 reject_parse_tail_located "at line 21 in reject_parse_tail_located"
 emit_reject_has riscv64 reject_parse_tail_located "at line 21 in reject_parse_tail_located"
-## P1-CLAYOUT S3(a): a standard-byte-layout struct holding a nested aggregate field. `standard_byte_...` is
+## CLAYOUT S3(a): a standard-byte-layout struct holding a nested aggregate field. `standard_byte_...` is
 ## the win (42 on all four backends; the base rejected on x86 and TRAPPED on the other three). The `packed`
 ## fixture is the gate for the regression the first attempt introduced — it read `o.inner.a` as `data[1]` on
 ## the three cross backends where the base was CORRECT, so a tier this slice does not claim got claimed.
@@ -4806,7 +4806,7 @@ check_build_located reject_word_layout_ptr_field_write 20 "check: invalid"
 ## The six active S3(a) fences now reject identically through `check` and `build`, with a located diagnostic.
 ## The remaining historical S3(c/d) array-element rows stay build-only cross-backend fences and are kept
 ## separate above; their check/build parity is a later scope.
-## P1-CLAYOUT S2 — the two folds that were silently WRONG, and the guard that disagreed with them.
+## CLAYOUT S2 — the two folds that were silently WRONG, and the guard that disagreed with them.
 ## `size((u64, u8))` answered 8: a mixed tuple was sized as if the u8 cost nothing, so standard product
 ## padding (u64 at 0, u8 at 8, tail to 8 = 16 bytes) was simply absent. And `when size(T) <= 2` did not
 ## share the layout tier `size(...)` uses, so a declaration guard and an expression disagreed about the
@@ -4863,7 +4863,7 @@ run tuple_return 42
 run tuple_sret_wide_return 54
 ## a module-level global initialized by a runtime CALL returning an aggregate: the initializer never runs, so the
 ## value silently read 0. Const binding rejected; `mut` global FIELD READ rejected (the zeroed `mut` storage itself
-## stays legal — the global-Mutex idiom in mutex_basic). A start-up-initializer phase is an open D69 question.
+## stays legal — the global-Mutex idiom in mutex_basic). A start-up-initializer phase is an open question.
 build_reject_has reject_global_call_init "CONST module-level global initialized by a runtime CALL"
 build_reject_has reject_mut_global_call_init_field "reading a FIELD of a module-level global initialized by a runtime CALL"
 p1_bytes_global_test
@@ -5220,7 +5220,7 @@ run slice_range_return 36
 ## COMPILER SIGSEGV at CHECK time (139) on `t := s` where `s : Slice(T)` is a PARAM: a fresh `x := <value>`
 ## binding seeded the local's type-NAME span from the PACKED `Result(Ty, CheckErr)` carrier, which keeps only the
 ## TAG — so ns/nl were stack garbage (typically a whole ABSOLUTE address). `Slice` resolves to a NOMINAL struct
-## decl, which armed the D86 leak probe and made it dereference that garbage. The frozen seed carries the same
+## decl, which armed the leak probe and made it dereference that garbage. The frozen seed carries the same
 ## line and the same out-of-bounds read; it just lands on a benign word — latent UB in BOTH compilers, not a
 ## regression. Note `Slice(u8)`/`Slice(u32)` param copies are CORRECT today, which is why no blanket reject was
 ## added: it would refuse spec-valid working code. 4 + 7 = 11.
@@ -5244,7 +5244,7 @@ run view_ptr_deref_byte 100
 ## must be REJECTED, not read. Five spellings used to leaq the pointer's own frame slot and read the surrounding
 ## frame (0 / a neighbouring element / 95 / 80 / 104). Working spellings: deref(p), bytes(s)[i], Slice(u8)(…)[i].
 build_reject_has reject_index_scalar_ptr "indexing a SCALAR local/param"
-## P1-BYTES bounded return ABI: `[u8; N]` with 1 <= N <= 8 is returned as one packed word and can be
+## BYTES bounded return ABI: `[u8; N]` with 1 <= N <= 8 is returned as one packed word and can be
 ## indexed both after binding and directly. The positive rows are x86-only because this packed `%rax`
 ## carrier is the first bounded backend slice; the wider/non-u8 direct forms below remain located rejects.
 run_x86 array_return_bound_u8 42
@@ -5321,7 +5321,7 @@ build_reject_has reject_chained_comparison "comparison operators are non-associa
 # cmp_paren_pair: a parenthesized `(a<b) == (c>d)` pair must NOT be false-rejected by the non-assoc guard.
 run cmp_paren_pair 42
 
-# ROADMAP §8 tracer: the WASM→WAT backend round-trips integer arithmetic through wat2wasm+wasmtime.
+# tracer: the WASM→WAT backend round-trips integer arithmetic through wat2wasm+wasmtime.
 check_reexport_wat
 run_wat wasm_add 42
 run_wat wasm_sub 42
@@ -5393,7 +5393,7 @@ run_wat hex_literal 42
 run_wat wasm_nested_local 45
 run_wat wasm_value_match_local_decl 42
 check_backend_determinism
-## ROADMAP §8.2 aarch64 backend (scalar kernel): cross-validate against the same expected exits as
+## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
 ## direct calls, value+statement `if`, `while`, `return`.
 run_a64 smoke 42
@@ -5457,7 +5457,7 @@ run_a64_out wasm_println 'hello, wasm' 42
 run_a64_out wasm_print_multi 'abc' 42
 run_a64_out wasm_print_val 'val = 42' 42
 run_a64_out wasm_print_two '40 and 2' 42
-## ROADMAP §8.3 riscv64 backend (scalar kernel + scalar globals): cross-validate against the same
+## riscv64 backend (scalar kernel + scalar globals): cross-validate against the same
 ## expected exits as the x86_64 / WASM / aarch64 backends.
 run_rv64 smoke 42
 run_rv64 wasm_param 42

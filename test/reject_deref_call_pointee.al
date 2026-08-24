@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(b), I11 loud boundary — `deref(f(...))` where `f` is declared `-> ptr(<its own type
+## CLAYOUT S3(b), I11 loud boundary — `deref(f(...))` where `f` is declared `-> ptr(<its own type
 ## PARAMETER>)` and the call does NOT name a resolvable type argument at that parameter's position.
 ##
 ## The pointee is then unknowable at the use site: a scalar pointee is ONE machine word, a §7

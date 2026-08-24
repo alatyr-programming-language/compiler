@@ -7,7 +7,7 @@
 ## the `@offset` overlays); `@endian(big)` never swapped. `mk().b` appeared to work ONLY because the
 ## return and the direct register read were BOTH word-model — two errors cancelling, which stopped
 ## cancelling the moment the by-ref packed PARAM read was made byte-precise.
-## Correct-or-trap (D69): the decl is rejected, so no caller can observe a wrong value. build_reject
+## Correct-or-trap: the decl is rejected, so no caller can observe a wrong value. build_reject
 ## asserts the non-zero build rc (a valid binary with a wrong result is the forbidden outcome).
 Pk := @packed struct { a : u8, b : u16, c : u32 }
 

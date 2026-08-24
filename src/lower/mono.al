@@ -7,7 +7,7 @@
 ## the two halves are ONE module scope (Modules §1), so `driver`'s `lower::` call sites are untouched
 ## and this file is a DESCENDANT of `lower`. Everything it does not import — `streq`, `decl_at`,
 ## `decl_get`, `ret_call_target`, `generic_decl_of`, the `LocalTypeSpan` TYPE — binds `lower.al`'s OWN
-## declaration through the ancestor chain (Modules §3 for values, P1-TYPE-ANCESTOR for types).
+## declaration through the ancestor chain (Modules §3 for values, TYPE-ANCESTOR for types).
 ##
 ## State, and this is the band that makes the rule concrete. `_bdt_active` (the `block_decl_type`
 ## re-entrancy guard) travels HERE: nothing outside the band ever named it. The FIVE pre-pass context

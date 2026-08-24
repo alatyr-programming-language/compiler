@@ -3,7 +3,7 @@
 ## An anonymous `mmap` region is a **genuinely owning, releasable** resource — its
 ## `free` is `munmap`, a real release, unlike the `arena_over` arena over a caller
 ## buffer (which owns nothing). So it is a **distinct `@owning` type** `OsArena`
-## (Memory §5.9 / D86) — NOT the same `Arena` — and the linearity checker enforces
+## (Memory §5.9) — NOT the same `Arena` — and the linearity checker enforces
 ## that each `OsArena` is consumed (freed) exactly once on every normal exit. It is
 ## the linear resource the `alloc` tier (`Vec`/`String`/…) will build on.
 ##
@@ -13,7 +13,7 @@ sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usiz
 sys_munmap := @abi(syscall) fn(num : usize, addr : usize, len : usize) -> isize
 
 ## `OsArena` — an owning handle to an anonymous `mmap` region: its `base` pointer
-## and byte `cap`. `@owning` (D86) makes it non-copyable and linear: it must be
+## and byte `cap`. `@owning` makes it non-copyable and linear: it must be
 ## released by `free` (which consumes it) exactly once. It holds an `Arena` over
 ## the pages for bump allocation via `region` (a borrow).
 OsArena := @owning struct { base : ptr(mut bits8), cap : usize }
@@ -35,14 +35,14 @@ pub arena := fn(len : usize) -> OsArena {
 ## (a borrow: reading fields does not consume) and must still `free` it. Reads the
 ## owning handle's `base`/`cap` **through the borrow pointer** (`deref(a).f`), so
 ## `osar.region()` yields the allocator without surfacing the raw fields at the
-## call site. (Memory §5.2 / D84: a `region` allocator hands out `Handle(T)`s into
+## call site. (Memory §5.2: a `region` allocator hands out `Handle(T)`s into
 ## these pages; `get(arena, handle)` exchanges a handle for a scoped reference.)
 pub region := fn(a : ptr(OsArena)) -> Arena {
   return arena_over(deref(a).base, deref(a).cap)
 }
 
 ## Release the arena's pages (`munmap`) and **consume** the owning handle: this is
-## the linear release (D86). Reads `a`'s fields (borrows), performs the syscall,
+## the linear release. Reads `a`'s fields (borrows), performs the syscall,
 ## then `forget(a)` discharges the obligation — the pages are gone, the handle is
 ## defunct, and there is nothing more to consume.
 pub free := fn(a : OsArena) -> isize {
@@ -186,11 +186,11 @@ pub env_lookup := fn(base : ptr(u8), len : usize, name : str) -> Option(Slice(u8
   return Option(Slice(u8)).None
 }
 
-## --- Allocating process inputs (Stdlib §7 / D92) -----------------------------
+## --- Allocating process inputs (Stdlib §7) -----------------------------
 ## The OS delivers the environment / command line as a transient byte image; the
 ## allocating forms below copy it into a caller-provided **allocator** and return
-## `str`/`[str]` **views into that arena** (region-backed, D19 — valid for the
-## arena's extent, freed when the caller frees it). Allocator-explicit (D84): no
+## `str`/`[str]` **views into that arena** (region-backed — valid for the
+## arena's extent, freed when the caller frees it). Allocator-explicit: no
 ## implicit or process-static storage. The byte→`str` reinterpret is `unchecked`
 ## (the OS image is trusted UTF-8; a checked, validating construction is additive).
 
@@ -230,8 +230,8 @@ pub env := fn(a : ptr(mut Arena), name : str) -> Option(str) {
 ## name first, then each argument — as a `Slice(str)`. Copies `/proc/self/cmdline`
 ## into the arena, then builds a `str` **table** in the arena (one `{ptr, len}` per
 ## NUL-separated segment, each viewing into the copied bytes) and returns a slice
-## over it. The strings and the table are region-backed (D19): valid for the arena's
-## extent, freed when the caller frees it (allocator-explicit, D84). Traps on
+## over it. The strings and the table are region-backed: valid for the arena's
+## extent, freed when the caller frees it (allocator-explicit). Traps on
 ## allocator exhaustion (the trapping convenience; the recoverable form is additive).
 pub args := fn(a : ptr(mut Arena)) -> Slice(str) {
   cap : usize = 65536

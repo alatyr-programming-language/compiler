@@ -2,7 +2,7 @@
 ## Handle-based like `alloc::vec` (stores the backing's arena INDEX, not a pointer — resolved per access
 ## via `get`). Elements live in a circular buffer: logical element `i` (0-based from the FRONT) sits at
 ## physical slot `(head + i) mod cap`. Push/pop at either end are O(1); a full buffer doubles (copying
-## the elements in logical order into a fresh, linearized block — `head` resets to 0). `@owning` (D86):
+## the elements in logical order into a fresh, linearized block — `head` resets to 0). `@owning`:
 ## a `Deque(T)` is a linear handle, consumed once (freed by `std::os::free` on its arena).
 ##
 ## Names are deliberately distinct from `alloc::vec` (push_back/pop_front… ; dq_len/dq_at) so the two
@@ -61,7 +61,7 @@ dq_grow := fn(T : type, in out d : Deque(T)) -> Result(usize, AllocError) {
   Result(usize, AllocError).Ok(new_cap)
 }
 
-## Append `x` at the BACK; doubles the ring when full. Fallible (D91).
+## Append `x` at the BACK; doubles the ring when full. Fallible.
 pub push_back := fn(T : type, in out d : Deque(T), x : T) -> Result(usize, AllocError) {
   if d.len >= d.cap { dq_grow(T, d)? }
   slot := dq_elem(T, ptr(d), d.len)     ## logical index len = one past the back
@@ -70,7 +70,7 @@ pub push_back := fn(T : type, in out d : Deque(T), x : T) -> Result(usize, Alloc
   Result(usize, AllocError).Ok(d.len)
 }
 
-## Prepend `x` at the FRONT; doubles the ring when full. Fallible (D91).
+## Prepend `x` at the FRONT; doubles the ring when full. Fallible.
 pub push_front := fn(T : type, in out d : Deque(T), x : T) -> Result(usize, AllocError) {
   if d.len >= d.cap { dq_grow(T, d)? }
   d.head = (d.head + d.cap - 1) - ((d.head + d.cap - 1) / d.cap) * d.cap   ## (head - 1) mod cap

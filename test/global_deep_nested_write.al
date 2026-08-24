@@ -1,4 +1,4 @@
-## ROADMAP §4: DEPTH-3 nested scalar-field WRITE of a mutable-global struct (`STATE.i1.i2.c = v`),
+## DEPTH-3 nested scalar-field WRITE of a mutable-global struct (`STATE.i1.i2.c = v`),
 ## then read back. global_place resolves the cumulative offset for the FieldPathAssign store. 20+10+7+5=42.
 C := struct { c : u64, d : u64 }
 B := struct { i2 : C, m : u64 }

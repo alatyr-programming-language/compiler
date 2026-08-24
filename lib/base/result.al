@@ -8,7 +8,7 @@ Result := fn(T : type, E : type) -> type { return enum { Ok(T), Err(E) } }
 
 ## Curated operations (Stdlib §160). Unwrapping an `Err` is a **defined-failure**
 ## `panic` (§4), never UB — and a **named** method (CF-7/CF-9: there is no `!`
-## force-unwrap glyph). Reached prefix `unwrap(r)` or UFCS `r.unwrap()` (D10).
+## force-unwrap glyph). Reached prefix `unwrap(r)` or UFCS `r.unwrap()`.
 
 ## The success value, trapping on `Err` (defined-failure `panic`, §4).
 pub unwrap := fn(T : type, E : type, self : Result(T, E)) -> T {

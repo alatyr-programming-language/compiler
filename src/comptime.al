@@ -1,4 +1,4 @@
-## selfhost::comptime — a constant-folding pass over the AST (ROADMAP §1/§6, item 5).
+## selfhost::comptime — a constant-folding pass over the AST.
 ##
 ## The fifth promoted pass: it walks the parser AST and **evaluates the sub-expressions
 ## that are known at compile time**, rewriting a binary node whose folded operands are
@@ -18,7 +18,7 @@
 arm_p := ast::arm_p
 arg_p := ast::arg_p
 
-## rt-style AST-node allocator + reader (ROADMAP §1 fixpoint) — the lean replacement for the
+## rt-style AST-node allocator + reader (fixpoint) — the lean replacement for the
 ## generic `allocate`/`get` allocator (which the self-host lower cannot compile: `Result(Handle(T),
 ## AllocError)` / `scoped` / generic `Handle(T)` param). Same OFFSET handle semantics as `allocate`,
 ## so interchangeable with any remaining `get` readers. Mirrors `parser::node_alloc`/`node_ptr`.
@@ -79,7 +79,7 @@ apply := fn(op : u8, l : i64, r : i64) -> i64 {
 ## Fold an expression: rebuild it in the arena with every fully-constant sub-expression
 ## reduced to a single literal. A `Bin` whose folded children are both `Num` becomes one
 ## `Num`; otherwise it is rebuilt over the folded children (a partial fold).
-## The allocator parameter `a` is the **ambient** within this body (D99 / Functions §5.5
+## The allocator parameter `a` is the **ambient** within this body (Functions §5.5
 ## step 2), so `newnode` / `fold` calls elide it — `newnode(Expr.Num(v))` rather than
 ## `newnode(a, Expr.Num(v))`. The default allocation is the enclosing `a`.
 pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {

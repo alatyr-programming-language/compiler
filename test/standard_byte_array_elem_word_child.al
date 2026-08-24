@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(d) — the program `reject_standard_byte_array_elem_field.al` was registered to REFUSE,
+## CLAYOUT S3(d) — the program `reject_standard_byte_array_elem_field.al` was registered to REFUSE,
 ## now composed. Same declarations, same reads, deliberately a separate file: the reject fixture keeps
 ## its three `emit_reject_has` lines (the aarch64/riscv64/wat fence still stands) and this one carries
 ## the x86_64 coverage as a `run_x86` line, so neither claim has to be read out of the other's name.

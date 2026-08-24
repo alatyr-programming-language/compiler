@@ -1,4 +1,4 @@
-## ROADMAP §1 item 3: resolve overloads by the COMPLETE signature, not a first-argument heuristic.
+## resolve overloads by the COMPLETE signature, not a first-argument heuristic.
 ## Two same-name overloads share their first parameter type (u64) and differ only in the SECOND
 ## (A vs B). The old first-argument mangling collided both to `__u64`, so the assembler rejected the
 ## duplicate symbol; the full-signature suffix (`__u64_A` / `__u64_B`) keeps them distinct, and the

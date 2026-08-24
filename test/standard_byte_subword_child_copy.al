@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(c) — THE BYTE-PRECISE WHOLE-VALUE COPIER, the mirror of S3(b)'s writer. This file was
+## CLAYOUT S3(c) — THE BYTE-PRECISE WHOLE-VALUE COPIER, the mirror of S3(b)'s writer. This file was
 ## `reject_standard_byte_subword_child_copy.al`: S3(b) made a SUB-WORD nested child constructible and
 ## thereby put a byte-precise 4-byte child in front of the whole-value EXTRACT `copy := o.inner` for the
 ## first time. That extract was `struct_words` whole WORDS into a destination local read back at WORD

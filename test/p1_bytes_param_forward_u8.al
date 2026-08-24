@@ -1,4 +1,4 @@
-## P1-BYTES caller-side seam: explicitly forward a bounded byte-array return
+## BYTES caller-side seam: explicitly forward a bounded byte-array return
 ## through another `[u8; N]` function's return. The caller reads the carrier.
 build := fn() -> [u8; 4] {
   mut t : [u8; 4] = [0; 4]

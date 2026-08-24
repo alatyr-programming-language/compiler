@@ -1,5 +1,5 @@
 ## selfhost::regalloc — a DORMANT virtual-register instruction-IR + linear-scan register allocator
-## (ROADMAP §0 "register allocator", COMMIT 1). Ported from the frozen Rust ancestor's
+## ("register allocator", COMMIT 1). Ported from the frozen Rust ancestor's
 ## `crates/alatyr-lower/src/regalloc.rs` — that ancestor is not published; `seed/VERSION` records the
 ## lineage.
 ##

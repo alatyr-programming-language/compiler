@@ -1,4 +1,4 @@
-## selfhost::fmt — ROADMAP §5 (tooling parity): `alatyr fmt`, a canonical source pretty-printer.
+## selfhost::fmt (tooling parity): `alatyr fmt`, a canonical source pretty-printer.
 ##
 ## A THIRD consumer of the same parsed `Decl`/`Stmt`/`Expr` model (alongside lower + the backends):
 ## it walks the AST and re-emits CANONICAL Alatyr source. Scope (v1, the common language core): a
@@ -773,7 +773,7 @@ fmt_structlit_names_ok := fn(src : ptr(u8), fopen : usize, ah : ptr(mut Arg)) ->
 ## once: `n / 10` is at most (2^64-1)/10, comfortably below 2^63, and both halves then print correctly
 ## through the SIGNED `push_int`. Written without a loop on purpose — a `n >= 10` guard would not
 ## work here, because a `u64` holding a high-bit value compares SIGNED under the current lower (see
-## ROADMAP: `18446744073709551615 < 10` is true today), which is also what makes this whole path
+## `18446744073709551615 < 10` is true today), which is also what makes this whole path
 ## necessary. Unsigned `/` and `%` are correct, so the split is exact.
 fmt_push_uint := fn(in out sb : rt::StrBuf, n : usize) {
   hi := n / 10
@@ -1071,7 +1071,7 @@ fmt_skip_postfix := fn(src : ptr(u8), p : usize) -> usize {
   if c != 46 { return 0 }                                                        ## not a '.'
   mut j := i + 1
   while fmt_is_blank_byte(bytes(str_at((src + j), 1))[0]) { j += 1 }
-  if bytes(str_at((src + j), 1))[0] == 40 { return skip_balanced_group(src, j) }  ## `.(f)` (D90)
+  if bytes(str_at((src + j), 1))[0] == 40 { return skip_balanced_group(src, j) }  ## `.(f)`
   mut k := j
   while fmt_is_ident_byte(bytes(str_at((src + k), 1))[0]) { k += 1 }
   if k == j { return 0 }
@@ -2137,7 +2137,7 @@ fmt_attr_run_reaches := fn(src : ptr(u8), p : usize, name_s : usize) -> bool {
 }
 
 ## A STATEMENT-level `@…` attribute run written before a LOCAL BINDING — today only the storage
-## attribute `@alloc(a) x := init` (D84 / Memory §2.4). The parser DESUGARS it away into
+## attribute `@alloc(a) x := init` (Memory §2.4). The parser DESUGARS it away into
 ## `x := alloc_into(a, init)` (or `alloc_into(isize, a, init)` for a bare literal) and records nothing,
 ## so fmt re-emitted the desugar: the `@alloc` marker vanished, and with it the base-allocator PRELUDE
 ## INJECTION it drives, so the reformatted file no longer resolved `alloc_into`/`get`/`arena_over` at
@@ -2470,7 +2470,7 @@ emit_fmt_stmts := fn(list : ptr(mut Stmt), body_head : ptr(mut Stmt), in out sb 
         ## a scalar 0, and the subsequent element writes land elsewhere: the deep-place fixture ran 65
         ## before and 1 after). `local_is_uninit` is the source metadata that recovers the distinction
         ## (the same probe lower/sema use); when it fires, emit the declaration WITHOUT an initializer.
-        ## A STORAGE-ATTRIBUTE binding (`@alloc(ar) h := P(…)`, D84) is DESUGARED by the parser into a
+        ## A STORAGE-ATTRIBUTE binding (`@alloc(ar) h := P(…)`) is DESUGARED by the parser into a
         ## plain `h := alloc_into(ar, P(…))` with the marker gone, so the AST cannot rebuild the surface
         ## form — copy the written statement VERBATIM (`fmt_stmt_lead_attr`) and skip the reconstruction
         ## below. Flat guards, not an if/else: a nested if/else in this arm mis-lowers (both branches
@@ -3890,7 +3890,7 @@ emit_fmt_decl := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Are
   if d.kind == 0 and d.arity != 99 and d.ret_tl == 0 { emit_fmt_value(d, sb, src, a, decls) ; return }
   if d.kind == 0 and d.arity != 99 and d.ret_tl != 0 {
     ## MODULE / TYPE ALIAS import — `name := <path>` (`vec := alloc::vec`, `String := strbuf::StrBuf`;
-    ## Modules §, D73 — no `use`). The parser records the RHS qualified path span in `ret_ts/ret_tl` and
+    ## Modules § — no `use`). The parser records the RHS qualified path span in `ret_ts/ret_tl` and
     ## a `Num(0)` placeholder value; the path round-trips verbatim. Distinguished from a plain value
     ## binding (`ret_tl == 0`) and the `@limits` marker (`arity == 99`).
     push_str(sb, str_at((src + d.name_start), d.name_len))

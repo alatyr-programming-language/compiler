@@ -23,7 +23,7 @@
 # messages and mnemonics, which two unrelated functions share for unrelated reasons.
 BEGIN { OFS = "\t"
   # Keywords stay verbatim so a body's shape survives normalization. Deliberately NOT here:
-  # `panic`, `assert`, `embed`, `size`, `align` — those are PRELUDE IDENTIFIERS (D70/D79), and a
+  # `panic`, `assert`, `embed`, `size`, `align` — those are PRELUDE IDENTIFIERS, and a
   # program may declare a function of that name (`lib/base/assert.al` does).
   split("if else while for loop match return break continue mut fn comptime unchecked checked \
          and or not true false pub type deref bitcast at when", a, " ")

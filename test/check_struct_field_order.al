@@ -1,4 +1,4 @@
-## TYP-8/D29 check/build parity: named struct construction is by field name even
+## TYP-8 check/build parity: named struct construction is by field name even
 ## when the source order differs and the fields have different types. Without
 ## the struct-order table, check sees the string as x : u64 and rejects a valid
 ## program that build parses and lowers correctly.

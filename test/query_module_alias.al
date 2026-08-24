@@ -1,4 +1,4 @@
-## P1-QUERY: a renamed module alias must resolve inside compiles/resolves exactly
+## QUERY: a renamed module alias must resolve inside compiles/resolves exactly
 ## as an ordinary alias-qualified call. `comptime if` deliberately reaches the
 ## lower query mirror after the ordinary sema pass skips comptime branches.
 m := std::math

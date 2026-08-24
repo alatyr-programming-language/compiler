@@ -1,4 +1,4 @@
-## P1-CLAYOUT boundary: a @packed root containing a @packed nested child.
+## CLAYOUT boundary: a @packed root containing a @packed nested child.
 ## The root has a byte-array prefix so a standard_field_path resolver must not
 ## steal the root from the packed byte-cursor path. Inner itself is packed:
 ## a @0 (u8), b @1 (u16), and the root places Inner at byte 8.

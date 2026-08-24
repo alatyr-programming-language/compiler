@@ -1,4 +1,4 @@
-## ROADMAP §4: matching an ENUM field of a NESTED struct field of a mutable-global struct
+## matching an ENUM field of a NESTED struct field of a mutable-global struct
 ## (`match STATE.i.c`). try_field_enum_scrut now resolves the scrutinee via global_place (any depth)
 ## and materializes the enum from .data ascending into the match scratch. G(35) + n(7) = 42.
 Col := enum { R, G(u64) }

@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(e): an ordinary standard-byte-layout struct crosses a
+## CLAYOUT S3(e): an ordinary standard-byte-layout struct crosses a
 ## by-value parameter and return boundary on every supported backend.
 
 S := struct { data : [u8; 4], tail : u16 }

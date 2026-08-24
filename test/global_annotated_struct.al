@@ -1,4 +1,4 @@
-## ROADMAP §4/§1: a TYPE-ANNOTATED module-level struct binding `mut STATE : S = S(...)` with an ENUM
+## a TYPE-ANNOTATED module-level struct binding `mut STATE : S = S(...)` with an ENUM
 ## field, read via `match STATE.c`. Exercises the annotated-global parse path (kind-0 value decl, the
 ## `: T =` form) on an aggregate initializer. Returns 42 (40 + 2).
 Col := enum { R, G(u64) }

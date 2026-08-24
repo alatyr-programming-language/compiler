@@ -1,4 +1,4 @@
-## `char` — a Unicode code point, a **brand** over `u32` (D24/D25: the kernel keeps
+## `char` — a Unicode code point, a **brand** over `u32` (the kernel keeps
 ## no built-in code-point type; `char` is a prelude type over a raw block). `u32(c)`
 ## and `char(n)` cross between them; `==`/`<` lower as the unsigned `u32` compares.
 char := brand(u32)
@@ -6,7 +6,7 @@ char := brand(u32)
 ## `char(n)` — checked code-point construction (Stdlib 3.2, I11): `n` must be a valid
 ## Unicode scalar value (at most 0x10FFFF and not a surrogate 0xD800..=0xDFFF), else a
 ## defined trap. A library conversion-constructor (`@convert`, 4.6) — no built-in
-## code-point range. The validity guard is mode-dependent (D89): present in checked
+## code-point range. The validity guard is mode-dependent: present in checked
 ## code, dropped under `unchecked` (a raw reinterpret there).
 to_char := @convert fn(n : u32) -> char {
   comptime if verify.checked {

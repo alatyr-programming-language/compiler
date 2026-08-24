@@ -5,7 +5,7 @@
 ## element copy (`emit_index_addr`, `emit_addr_of`, `emit_elem_copy_in`).
 ##
 ## WHY THIS BAND, measured — the seam was chosen by CO-CHANGE, not by size. Over the two days of lane
-## work the four `P1-CLAYOUT` lanes S3(a)–S3(d) ran STRICTLY one after another because each needed
+## work the four `CLAYOUT` lanes S3(a)–S3(d) ran STRICTLY one after another because each needed
 ## `src/lower.al` and its neighbours at once. Mapping each of those four commits' diff hunks onto the
 ## enclosing top-level function shows they touched, inside `lower.al`, almost exactly this set:
 ##   S3(a) 22acca63: agg_field_of, field_place_parts, field_read_agg, standard_field_path (+ emit_gas,
@@ -60,7 +60,7 @@ pub agg_field_of := fn(base : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx))
     if ft.n != 0 and (str_at((cx.src + ft.s), 1) == "[" or str_at((cx.src + ft.s), 1) == "(") { is_agg_fld = true }
     if ft.n != 0 and (str_at((cx.src + ft.s), ft.n) == "str" or str_at((cx.src + ftb.s), ftb.n) == "Slice") { is_agg_fld = true }
     if is_agg_fld {
-      ## P1-CLAYOUT S3(a) FENCE. Both addressing forms below are WORD-model: `fbr.fi * 8` and
+      ## CLAYOUT S3(a) FENCE. Both addressing forms below are WORD-model: `fbr.fi * 8` and
       ## `field_slot`. For a STANDARD-BYTE-LAYOUT base struct the aggregate field does not start at a
       ## word multiple of its word-model index — a `[u8;4]` field counts as FOUR words there while it
       ## occupies FOUR BYTES — so this hands the callee (or the return registers) the wrong block.
@@ -98,7 +98,7 @@ pub agg_arr_fill_count := fn(slots : ptr(SVec), bslot : usize) -> usize {
   }
   fills
 }
-## P1-CLAYOUT S3(d) — the ELEMENT STRIDE IN BYTES of an array slot, which is the one number every
+## CLAYOUT S3(d) — the ELEMENT STRIDE IN BYTES of an array slot, which is the one number every
 ## element address on this backend is scaled by. `SlotEntry.estride` is denominated in WORDS and every
 ## pre-existing element kind's byte stride IS `estride * 8` (a scalar/float element is 1 word, a `str`
 ## element 2, an enum element `1 + max_arity`, a word-tier struct element `struct_words`), so this
@@ -180,7 +180,7 @@ pub std_idx_leaf_is_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, t
   if enum_decl_of(decls, src, ts, tl) >= 0 { return true }
   false
 }
-## P1-CLAYOUT S3(d) — `xs[i].data[j]` (any field depth): is `base` an `std_idx_path` place whose
+## CLAYOUT S3(d) — `xs[i].data[j]` (any field depth): is `base` an `std_idx_path` place whose
 ## terminal type is an explicitly BYTE-typed fixed array? Answers its element kind (8 `u8` / 10 `i8` /
 ## 11 `bits8`), 0 otherwise. This is the array-element dual of `standard_byte_field_eek`, and it is a
 ## separate query for one reason: a struct LOCAL's byte-array field has a static frame displacement,
@@ -235,7 +235,7 @@ pub resolve_idx_field_place := fn(e : ptr(Expr), cx : ptr(LCtx)) -> IFPlace {
       }
       fty := field_type_span(cx.decls, cx.src, inner.tys, inner.tyn, fs, fl, a)
       if fty.n == 0 { return IFPlace(found = false, tys = 0, tyn = 0, woff = 0) }   ## not a field of this hop → not this shape
-      ## P1-CLAYOUT S3(b) — a BYTE-TIER hop has no word offsets to compose. `field_word_offset` below
+      ## CLAYOUT S3(b) — a BYTE-TIER hop has no word offsets to compose. `field_word_offset` below
       ## counts a `[u8; 4]` field as FOUR WORDS where §6.1 gives it four BYTES, and the element itself
       ## was written by the byte-precise whole-value writer, so composing word offsets through such a
       ## hop reads a place nothing wrote. That was already a SILENT WRONG VALUE before S3(b), measured
@@ -247,7 +247,7 @@ pub resolve_idx_field_place := fn(e : ptr(Expr), cx : ptr(LCtx)) -> IFPlace {
       ## deliberately refuses an `Index` root for the same reason, and giving the array element tier a
       ## byte-precise stride + place resolver is audit stage S3(c).
       if layout_kind_is_byte(layout_kind(cx.decls, cx.src, inner.tys, inner.tyn, a)) {
-        ## P1-CLAYOUT S3(d) — the fence STAYS, but it is no longer the only answer: when the byte-precise
+        ## CLAYOUT S3(d) — the fence STAYS, but it is no longer the only answer: when the byte-precise
         ## element-place resolver owns this whole chain (`std_idx_path` walks the SAME expression and
         ## answers `ok` only when the ROOT element is a byte-tier struct in the one writer's domain AND
         ## every hop has a §6.1 offset), hand the place over instead of refusing it — `found = false` is
@@ -410,7 +410,7 @@ pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
     else if struct_decl_of(decls, src, s3ftb.s, s3ftb.n) >= 0 { s3fkind = 2 }
     else if enum_decl_of(decls, src, s3ftb.s, s3ftb.n) >= 0 { s3fkind = 3 }
     else if str_at((src + s3fra.ts), s3fra.tl) == "str" { s3fkind = 4 }
-    ## P1-CLAYOUT S3(b)/S3(c) — THE WORD EXTRACT NEEDS A WORD-GRANULAR CHILD; EVERYTHING ELSE IS THE
+    ## CLAYOUT S3(b)/S3(c) — THE WORD EXTRACT NEEDS A WORD-GRANULAR CHILD; EVERYTHING ELSE IS THE
     ## COPIER'S. S3(b) made a sub-word child CONSTRUCTIBLE (`struct { data : [u8;8], inner : struct
     ## { a : u16, b : u16 } }` now has one byte-precise image on all four backends), which exposed
     ## `copy := o.inner`: this resolver hands the caller a word offset `bo / 8` and the caller copies
@@ -476,7 +476,7 @@ pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
 ## `dst + k`. The store dual of `emit_array_assign`'s aggregate-element store, but element→local.
 pub emit_elem_copy_in := fn(arr : ptr(Expr), idx : ptr(Expr), dst : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
   a := arena_of(cx)
-  ## P1-CLAYOUT S3(d) — `e := xs[i]`, a whole BYTE-TIER element copied OUT into a standalone local. This
+  ## CLAYOUT S3(d) — `e := xs[i]`, a whole BYTE-TIER element copied OUT into a standalone local. This
   ## is S3(c)'s copier reached through an element rather than through a field, and the decision is the
   ## same one: `std_copy_kind` answers 1 (IMAGE) here — the destination local's own tier is BYTE
   ## (`layout_kind` of the element type, which is what made it an element-tier array in the first
@@ -746,7 +746,7 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
     push_str(sb, "  addq %rax, %rbx\n  movq %rbx, %rax\n")
     return
   }
-  ## P1-CLAYOUT S3(d) — BYTE ARRAY FIELD of a byte-tier ARRAY ELEMENT (`xs[i].data[j]`, any field
+  ## CLAYOUT S3(d) — BYTE ARRAY FIELD of a byte-tier ARRAY ELEMENT (`xs[i].data[j]`, any field
   ## depth). Same shape as the `sbf` arm above, with the aggregate base coming from the element address
   ## instead of a frame slot: `emit_index_addr` on the ELEMENT (Types §6.4 byte stride), plus the
   ## field's §6.1 offset, plus the raw byte index (stride 1). Placed before the `fib.is_fld` path
@@ -1011,7 +1011,7 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
       push_str(sb, ", %rax\n  jb 1f\n  ud2\n1:\n")
     }
   }
-  ## P1-CLAYOUT S3(d) — THE element stride, in BYTES, from the one shared query. Identical to the
+  ## CLAYOUT S3(d) — THE element stride, in BYTES, from the one shared query. Identical to the
   ## historical `ent.estride * 8` for every element kind that existed before this slice (a
   ## word-granular element's §6.4 stride IS `struct_words * 8`); different only for a BYTE-tier struct
   ## element, whose §6.1 size need not be a multiple of 8.

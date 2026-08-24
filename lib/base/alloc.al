@@ -1,4 +1,4 @@
-## Allocator protocol + the region mechanism (Stdlib appendix §5; D84).
+## Allocator protocol + the region mechanism (Stdlib appendix §5).
 ##
 ## This is the **base-tier** allocator surface (available freestanding) — the
 ## mechanism *menu* (Memory §5.2), not the `alloc` *tier* (`Vec`/`String`/…,
@@ -8,8 +8,8 @@
 
 ## `Mechanism` — how an allocator declares the lifetime mechanism it supplies
 ## (Stdlib §5.1). `@alloc(a)` reads it at comptime (via the `mechanism` accessor)
-## to pick the reference representation (D84). Further mechanisms are additive
-## (D16); `region` is the only one with a v1 surface.
+## to pick the reference representation. Further mechanisms are additive
+##; `region` is the only one with a v1 surface.
 Mechanism := enum { region, generational, manual }
 
 ## `AllocError` — the closed v1 error set of the allocator protocol (Stdlib §5.1).
@@ -18,11 +18,11 @@ Mechanism := enum { region, generational, manual }
 ## rounding) exceeds the limit or overflows `usize`.
 AllocError := enum { OutOfMemory, BadAlignment, SizeTooLarge }
 
-## `Handle(T)` — a region handle: an index into its arena (Stdlib §5.2.1 / D84).
+## `Handle(T)` — a region handle: an index into its arena (Stdlib §5.2.1).
 ## Just a number, so it has no lifetime problem; copyable, not owning. Distinct
 ## per `T` because a type-function result is nominal by (function, args) (Type
 ## System §4.1) — even though the layout (`usize`) does not mention `T`. It
-## carries **no** region name and **no** lifetime variable (D19 holds). A handle
+## carries **no** region name and **no** lifetime variable (holds). A handle
 ## is **never** dereferenced (§5.6 rule 4); the value is reached via `get`.
 Handle := fn(T : type) -> type { return struct { idx : usize } }
 
@@ -36,7 +36,7 @@ Arena := struct { base : ptr(mut bits8), cap : usize, off : usize }
 
 ## `mechanism` — the comptime accessor (Stdlib §5.1): an `Arena` supplies the
 ## `region` mechanism. `@alloc(a)` evaluates this at comptime to choose the
-## reference representation (D84).
+## reference representation.
 mechanism := fn(self : Arena) -> Mechanism { return Mechanism.region }
 
 ## `arena_over` — construct an arena over a caller-supplied buffer (`buf`, `cap`
@@ -56,7 +56,7 @@ close := fn(in out self : Arena) { self.off = 0 }
 ## `align`, return `OutOfMemory` if the request does not fit the remaining
 ## capacity, else bump the cursor and return the byte offset as a `Handle(T)`.
 ## `size`/`align` are the caller's `size(T)` / `align(T)`. The handle is
-## an index into the arena — never a pointer (D84); the value is reached with `get`.
+## an index into the arena — never a pointer; the value is reached with `get`.
 allocate := fn(in out self : Arena, T : type, size : usize, align : usize) -> Result(Handle(T), AllocError) {
   rem := self.off % align
   mut aligned : usize = self.off
@@ -80,18 +80,18 @@ free := fn(in out self : Arena, T : type, h : Handle(T), size : usize, align : u
 }
 
 ## `get` — exchange a handle + its arena for a **scoped pointer** to the value
-## (Stdlib §5.2.1 / D84): bounds-check the handle's index against the arena's
+## (Stdlib §5.2.1): bounds-check the handle's index against the arena's
 ## high-water mark (out-of-range → trap, I11), then form `base + idx` as a
 ## `ptr(mut T)`. The pointer arithmetic is a raw, capability-requiring
 ## reinterpret, hence the `unchecked` grant (Memory §4.5).
 ##
 ## The discipline is enforced by the checkers: the second-class-reference
 ## **escape checker** (Memory §5.3.1) recognizes `get(T, arena, handle)` (and its
-## an **ordinary function with a `scoped` return** (D98), not a privileged intrinsic:
+## an **ordinary function with a `scoped` return**, not a privileged intrinsic:
 ## the `scoped` result qualifier makes the escape checker treat a `get` result as a
 ## second-class scoped reference — it flows only downward (deref/read/pass-on) and may
 ## **not** be returned or stored, so the scoped pointer cannot outlive the arena (§5.4).
-## A user could write the same signature. The **linearity checker** (D86) enforces that
+## A user could write the same signature. The **linearity checker** enforces that
 ## an owning arena is consumed exactly once. The body below deliberately escapes its own
 ## return via `unchecked` (§5.6 rule 5), forming the raw `ptr` the bounds-checked
 ## arithmetic computes.
@@ -104,7 +104,7 @@ get := fn(T : type, a : Arena, h : Handle(T)) -> scoped ptr(mut T) {
 }
 
 ## `alloc_into` — the trapping allocation that backs the `@alloc(a) x := init`
-## storage attribute (Memory §2.4 / D84): allocate a `T` in `a`, **trap** on
+## storage attribute (Memory §2.4): allocate a `T` in `a`, **trap** on
 ## `OutOfMemory` (a defined failure, I11 — the convenient attribute form has no
 ## `Result` to carry it; the recoverable path is `a.allocate(…)?` directly),
 ## write `init` into the storage, and return the binding's `Handle(T)`. `T` is
@@ -123,8 +123,8 @@ alloc_into := fn(T : type, in out a : Arena, init : T) -> Handle(T) {
 }
 
 ## --- `Buf(T)`: a growable array over the allocator protocol -------------------
-## The canonical **"container over a pluggable allocator"** (Memory §5 / D84;
-## ROADMAP §3). A dynamic array whose backing storage comes from an `Arena` (the
+## The canonical **"container over a pluggable allocator"** (Memory §5;
+##). A dynamic array whose backing storage comes from an `Arena` (the
 ## region mechanism) — NOT a direct `mmap`, the way `std::vec`'s `Vec(T)` does it.
 ## It holds the arena **index** of its backing (the `Handle(T)`'s value, kept as a
 ## flat `usize` so the `Buf` is three scalars) plus `len`/`cap`. It is **non-owning**:

@@ -1,4 +1,4 @@
-## P1-BREAK — nested conditional inference must diagnose the offending break value site.
+## BREAK — nested conditional inference must diagnose the offending break value site.
 ## The first break establishes an int loop value. The nested if's break carries a bool local.
 main := fn() -> u64 {
   flag : bool = true

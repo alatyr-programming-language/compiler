@@ -1,4 +1,4 @@
-## Use-after-discharge across a nested BRANCH (spec §10 / D86): forget(x) discharges x unconditionally,
+## Use-after-discharge across a nested BRANCH (spec §10): forget(x) discharges x unconditionally,
 ## then a later `if` branch uses x — a use-after-consume error caught by the block-recursing scan (rc 1).
 main := fn() -> u64 {
   x := 5

@@ -1,4 +1,4 @@
-## FN-7 / ROADMAP P3-DIAG: a bare integer literal matches both integer-scalar overloads, so the call
+## FN-7: a bare integer literal matches both integer-scalar overloads, so the call
 ## has no unique target. Both public `check` and build must reject it as an "ambiguous call" located
 ## at the call site, rather than accepting check and falling through to an unlocated assembler/link error.
 g := fn(x : u64) -> u64 { return 1 }

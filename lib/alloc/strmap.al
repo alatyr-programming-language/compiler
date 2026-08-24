@@ -6,8 +6,8 @@
 ## (`hash_bytes`), so this is the string/symbol-table capability now — ahead of
 ## the generic `HashMap(K, V)` (which needs the `Hash`/`Eq` protocols over
 ## `typeinfo`). A bucket is 4 `u64` slots: `[used, key_ptr, key_len, value]`.
-## **Allocator-borne** (ROADMAP §3): the buckets come from a pluggable `Arena`
-## (region protocol, D84), not a direct `mmap`; the arena's region pages are
+## **Allocator-borne**: the buckets come from a pluggable `Arena`
+## (region protocol), not a direct `mmap`; the arena's region pages are
 ## zero-filled, so every bucket starts `used = 0` (empty).
 ##
 ## **Key lifetime:** a bucket stores the key's pointer + length (no copy), so the

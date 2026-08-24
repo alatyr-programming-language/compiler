@@ -1,4 +1,4 @@
-## P1-QUERY/CT-6: capability queries may consume aggregate-valued `v.(f)` without
+## QUERY/CT-6: capability queries may consume aggregate-valued `v.(f)` without
 ## entering ordinary value-position emission. Each sink must match only its field type.
 Pair := struct { x : u64, y : u64 }
 Holder := struct { pair : Pair, text : str, nums : [u64; 2], coords : (u64, u64), scalar : u64 }

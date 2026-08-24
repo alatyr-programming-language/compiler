@@ -1,4 +1,4 @@
-## ROADMAP §1/§4: a generic fn returning its type parameter (`id(T, v) -> T`) applied to a STRUCT.
+## a generic fn returning its type parameter (`id(T, v) -> T`) applied to a STRUCT.
 ## Previously the instance id__P didn't set ret_struct for the substituted T→P, so `return v` (a
 ## by-ref struct param) returned the pointer, and the caller bound p as a scalar (took only %rax).
 ## Now: emit_fn resolves the effective (substituted) return type -> ret_struct; emit_struct_value's

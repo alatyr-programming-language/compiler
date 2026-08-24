@@ -3,7 +3,7 @@
 ## supplied comparator `less : fn(a, b) -> bool` (a<b — the same shape `base::slice::sort_by` takes), so
 ## no `Ord` bound / trait system is needed and any `T` with a strict-weak order works. Duplicates are
 ## rejected (a SET). Iterate in sorted order via `oset_as_slice`. Handle-based like `alloc::vec`; `@owning`
-## (D86 — a linear handle, its backing reclaimed when the caller frees the arena). Names are `oset_*` so
+## (a linear handle, its backing reclaimed when the caller frees the arena). Names are `oset_*` so
 ## the set co-injects with vec/deque without a same-name overload collision.
 
 pub OSet := fn(T : type) -> type {

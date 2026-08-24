@@ -1,4 +1,4 @@
-## ROADMAP §4: a `match s.c` over a struct's ENUM FIELD in VALUE (expression) position
+## a `match s.c` over a struct's ENUM FIELD in VALUE (expression) position
 ## (`x := match s.c { … => { v } }`) — the value-match path (emit_gas' Expr::Match), not the
 ## statement-match path. It previously fell to the integer scrutinee (garbage discriminant); now it
 ## materializes the field's enum via try_field_enum_scrut, like the statement match. Two enum fields

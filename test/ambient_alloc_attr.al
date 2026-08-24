@@ -1,4 +1,4 @@
-## e2e — the `@alloc(a) x := init` storage attribute (D84 / Memory §2.4), the language surface over
+## e2e — the `@alloc(a) x := init` storage attribute (Memory §2.4), the language surface over
 ## `alloc_into`, used STANDALONE (no explicit `alloc::` reference). The parser desugars
 ## `@alloc(ar) h := P(x = 40, y = 2)` to `h := alloc_into(ar, P(…))`, binding `h : Handle(P)`; the bare
 ## `@alloc` forces the base allocator prelude to be injected (arena_over / alloc_into / get), so the

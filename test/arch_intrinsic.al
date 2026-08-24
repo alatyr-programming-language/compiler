@@ -1,4 +1,4 @@
-## e2e — x86_64 instruction INTRINSICS (A-7 / §80 / D25.3). num.al's `@inline` scalar operators
+## e2e — x86_64 instruction INTRINSICS (A-7 / §80.3). num.al's `@inline` scalar operators
 ## name arch instructions (`x86_64.addq`/`imulq`/`subq`/`remq`/`idivq`/`addsd`/…) inside a
 ## `comptime if target.arch == Arch.x86_64` (folded TRUE on this x86_64 target). The lean lower
 ## emits each as a REAL instruction that mutates its first arg (a scalar local lvalue) in place.

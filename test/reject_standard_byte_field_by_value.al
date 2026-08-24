@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(a) — an AGGREGATE FIELD of a standard-byte-layout struct cannot be handed to a call,
+## CLAYOUT S3(a) — an AGGREGATE FIELD of a standard-byte-layout struct cannot be handed to a call,
 ## or returned, by value yet. Both by-value addressing forms are word-model (`field_base_ref`'s word
 ## index and `field_slot`), so the callee receives a block that starts at the wrong place; the same
 ## two forms serve the aggregate-field RETURN paths, which is why the fence sits in the shared

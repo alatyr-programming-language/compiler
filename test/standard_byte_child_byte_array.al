@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(b) — a nested child that carries ITS OWN byte array, at an ALIGNED and at a
+## CLAYOUT S3(b) — a nested child that carries ITS OWN byte array, at an ALIGNED and at a
 ## NON-8-ALIGNED parent offset. Both halves matter and neither was reachable before:
 ##
 ##  * a child holding a byte array is itself in the BYTE tier (`layout_kind` 2), which S3(a)'s

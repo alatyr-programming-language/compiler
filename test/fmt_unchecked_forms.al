@@ -1,4 +1,4 @@
-## fmt fixture — the `unchecked` surface (Types §4.2 scoped verification mode, D70/D82). Two wrong
+## fmt fixture — the `unchecked` surface (Types §4.2 scoped verification mode). Two wrong
 ## renders, both silent:
 ##   • `unchecked` is a `p_factor` PREFIX, binding tighter than every binary operator, so the scope
 ##     body needs grouping. `b := unchecked { lo - hi }` came back as `unchecked lo - hi`, which

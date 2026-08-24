@@ -1,4 +1,4 @@
-## selfhost::cli — the self-hosted compiler's command-line front (ROADMAP §1.0 step 1).
+## selfhost::cli — the self-hosted compiler's command-line front (step 1).
 ##
 ## Turns the GAS-emitting passes into a driveable tool: read the process arguments, resolve the
 ## assembler/linker on `$PATH`, and (in `driver`) write the emitted `.s` + invoke `as`/`ld` to
@@ -391,7 +391,7 @@ pub exec4 := fn(in out a : rt::Arena, prog_c : usize, a1 : usize, a2 : usize, a3
 }
 
 ## Like exec4 but with FIVE positional args (argv `[prog, a1..a5, NULL]`) — used to pass `ld … -e <entry>`
-## when the manifest selects a non-default ELF entry symbol (ROADMAP §5). Same `rt::Spawned` contract.
+## when the manifest selects a non-default ELF entry symbol. Same `rt::Spawned` contract.
 pub exec6 := fn(in out a : rt::Arena, prog_c : usize, a1 : usize, a2 : usize, a3 : usize, a4 : usize, a5 : usize, envp : usize) -> rt::Spawned {
   av := rt::bump(a, 56)
   wword(av + 0, prog_c)
@@ -495,7 +495,7 @@ pub link_exe := fn(in out a : rt::Arena, out : str, gbase : usize, glen : usize,
     return link_with_libs(a, outo_c, out_c, entry, libnames, any_dyn, lflags, environ, envp)
   }
   ## Default ELF entry (`_start`) → the plain 3-arg `ld` (byte-identical to before / the self-build);
-  ## a custom manifest entry → `ld … -e <entry>` so the loader jumps to that symbol (ROADMAP §5).
+  ## a custom manifest entry → `ld … -e <entry>` so the loader jumps to that symbol.
   if entry == "_start" {
     rl := exec4(a, ld_c, outo_c, dash_o, out_c, envp)
     if rl.kind != 0 { spawn_error(a, "linker", "ld", rl); return 19 }
@@ -2399,7 +2399,7 @@ manifest_target_artifact := fn(in out a : rt::Arena, pkg_al : str, suffix : str,
   cat2(a, slash, name)
 }
 
-## The selected target's `entry` symbol (Manifest appendix §3.1 / ROADMAP §5) — the linker symbol
+## The selected target's `entry` symbol (Manifest appendix §3.1) — the linker symbol
 ## selected with `ld -e <entry>` for a manifest build; default `_start` when absent (the conventional
 ## ELF entry, and the byte-identical self-build compatibility path).
 manifest_entry := fn(in out a : rt::Arena, pkg_al : str) -> str {
@@ -2815,7 +2815,7 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
   ## self-host inject-nothing invariant (fixpoint). (Harmless anyway — no `lib/*/rt.al` exists — but
   ## gated for clarity + safety.)
   user_q_end := rt::vec_len(sq)
-  ## `@alloc(…)` in USER source (D84 / Memory §2.4) needs the base allocator surface even with no
+  ## `@alloc(…)` in USER source (Memory §2.4) needs the base allocator surface even with no
   ## explicit `alloc::`/`std::` reference. The parser desugars it to a bare `alloc_into(a, init)` call
   ## resting on the base prelude closure (assert/result/option/alloc/slice), so a bare `@alloc` must
   ## FORCE that prelude to be injected. Just record the need here (the prelude block below does the
@@ -2840,7 +2840,7 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
   ## false`: the self-host manifest build never sets it (`src/` makes no bare aggregate compare) → the
   ## TOOL-1 fixpoint is unaffected.
   mut needs_derive := false
-  ## `u128` (Types §7 wider-than-native integer, D23/D24; now the TYP-10 `u128 ≡ uint(128)` alias)
+  ## `u128` (Types §7 wider-than-native integer; now the TYP-10 `u128 ≡ uint(128)` alias)
   ## is an ambient PRELUDE library type (`lib/base/u128.al` — the generalized `uint(N)` recipe),
   ## referenced by BARE name in a single-file user program — the 3-segment scan misses it. A bare
   ## `u128` (word-boundary, `is_pkg == false`) forces the base-prelude block below, which lists
@@ -3103,7 +3103,7 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
   if result.len == 0 and needs_alloc == false and needs_u128 == false { return str_at(result.data, 0) }
   mut pre := rt::strbuf(a, 1048576)
   ## The base closure {assert, result, option, alloc, slice, cmp, num, derive} + the `u128`/`uint(N)`
-  ## prelude recipe (Types §7 / D23/D24 / TYP-10, `lib/base/u128.al`). bi==8 = `u128`; a program
+  ## prelude recipe (Types §7 / TYP-10, `lib/base/u128.al`). bi==8 = `u128`; a program
   ## referencing `u128` by bare name or instantiating a bare `uint(` pulls it here (like
   ## `Option`/`Result` pull the base closure). Each is path-checked, so an absent file is skipped.
   ## Generic base fns emit only when instantiated (DCE), so an unused module is inert.
@@ -3127,12 +3127,12 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
     ## (no duplicate-label collision); `min`/`max`/`clamp` are generic (emit per instantiated type).
     else if bi == 5 { kn := rt::push_str(nb, "cmp") }
     else if bi == 6 { kn := rt::push_str(nb, "num") }
-    ## `derive` — the comptime-derive `eq`/`lt`/`hash` (generic over any T, §5.4/D87). Formerly excluded
+    ## `derive` — the comptime-derive `eq`/`lt`/`hash` (generic over any T, §5.4). Formerly excluded
     ## (its per-type overloads collided on one label); the per-signature overload mangling now emits
     ## distinct labels, and its generic derives emit only when instantiated (DCE), so it co-compiles
     ## cleanly. Needed by `alloc::hashmap` (`hash(key)`/`eq`) and any comptime-derived container.
     else if bi == 7 { kn := rt::push_str(nb, "derive") }
-    ## `u128` (Types §7 wider-than-native integer, D23/D24; TYP-10) — the generalized `uint(N)`
+    ## `u128` (Types §7 wider-than-native integer; TYP-10) — the generalized `uint(N)`
     ## recipe (`uint := fn(comptime N : u64) -> type { struct { words : [u64; N/64] } }`, the
     ## `u128 ≡ uint(128)` alias, and the full `@inline` generic-operator set); injected when a
     ## program references `u128` by bare name or instantiates a bare `uint(`.
@@ -3519,7 +3519,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     return new_package(a, nm)
   }
   if mode == 7 {
-    ## ROADMAP §8 (WASM→WAT), tracer: emit a WAT module for a SINGLE `.al` file to stdout.
+    ## (WASM→WAT), tracer: emit a WAT module for a SINGLE `.al` file to stdout.
     ## Bind the path to a local FIRST — an inline str-returning call as a str argument drops its
     ## length in the lean lower (the path would arrive 0-len → read_file_into faults).
     if n < 3 { return 40 }
@@ -3541,7 +3541,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     return emit_dump_status(d, wsblen)
   }
   if mode == 8 {
-    ## ROADMAP §8.2 (aarch64): emit an AArch64 GAS program for a SINGLE `.al` file to stdout.
+    ## (aarch64): emit an AArch64 GAS program for a SINGLE `.al` file to stdout.
     ## Bind the path to a local first (inline str-returning call as a str arg drops its length).
     if n < 3 { return 40 }
     apath := arg_at(cmd, fi)
@@ -3562,7 +3562,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     return emit_dump_status(d, asblen)
   }
   if mode == 9 {
-    ## ROADMAP §8.3 (riscv64): emit a RISC-V64 GAS program for a SINGLE `.al` file to stdout.
+    ## (riscv64): emit a RISC-V64 GAS program for a SINGLE `.al` file to stdout.
     if n < 3 { return 40 }
     rpath := arg_at(cmd, fi)
     ## TYPE-CHECK BEFORE EMITTING (I11 correct-or-trap). Without this the three emit-to-stdout
@@ -3582,7 +3582,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     return emit_dump_status(d, rsblen)
   }
   if mode == 10 {
-    ## ROADMAP §5 (`alatyr fmt`): with a path, preserve the existing filter-friendly stdout form;
+    ## (`alatyr fmt`): with a path, preserve the existing filter-friendly stdout form;
     ## with no path, Tooling §4.2 formats every `.al` below the current package root in place.
     if n < 3 {
       allpaths := list_al_in_tree(a, ".")
@@ -3603,7 +3603,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     return flush_status(d, fsblen)
   }
   if mode == 11 {
-    ## ROADMAP §0 (register allocator, COMMIT 1): run the DORMANT linear-scan allocator's self-test
+    ## (register allocator, COMMIT 1): run the DORMANT linear-scan allocator's self-test
     ## (6 ported unit cases over hand-built instruction streams). Not wired into emission; takes no
     ## file arguments. Exit code = the number of failing cases (0 = all passed).
     return regalloc::selftest(a)
@@ -3889,7 +3889,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     }
     return rc
   }
-  ## ROADMAP §5: the ELF entry symbol comes from the manifest's `Target.entry` for a manifest build
+  ## the ELF entry symbol comes from the manifest's `Target.entry` for a manifest build
   ## (default `_start`), else `_start`. Bind the manifest path to a local first (the lean lower drops a
   ## str arg forwarded from an inline str-returning call).
   mut artifact_kind := "executable"

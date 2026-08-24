@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(a): a standard byte-layout struct may contain a WORD-GRANULAR aggregate field — one
+## CLAYOUT S3(a): a standard byte-layout struct may contain a WORD-GRANULAR aggregate field — one
 ## whose own §6.1 byte offsets are exactly its word-model offsets times 8, so all four emitters build
 ## the same image for it. Its nested construction, reads, and writes use the containing struct's byte
 ## offsets without changing the inner value's words.

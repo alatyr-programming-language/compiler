@@ -1,4 +1,4 @@
-## selfhost::lower_layout — pure decl-layout queries for the lowering pass (ROADMAP §1).
+## selfhost::lower_layout — pure decl-layout queries for the lowering pass.
 ##
 ## Extracted from `lower.al` (which had grown past 3000 lines): these functions read the
 ## `Decl` vector + source bytes and return **scalar** layout facts — a struct/enum's decl
@@ -78,7 +78,7 @@ pub local_decl_assign := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
 ## rt HANDLES (addresses), not inline `Decl`s, so a lookup maps an index through `rt::vec_get`
 ## to its handle, then `deref(decl_at(...))` copies the record in.
 decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
-## ROADMAP §6: a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
+## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
 decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return decl_at(Decl, hh) }
 ## A typed pointer to the AST node at arena OFFSET `h` (lean replacement for `get`; mirrors
 ## `parser::node_ptr`). Used to read `FieldDecl`s when walking a struct/enum's field list.
@@ -188,7 +188,7 @@ type_module_eq := fn(src : ptr(u8), ds : usize, dn : usize, qs : usize, qn : usi
 }
 
 ## ---------------------------------------------------------------------------------------------
-## Modules §3 for a BARE TYPE NAME (P1-TYPE-ANCESTOR) — the type-shaped twin of `lower`'s
+## Modules §3 for a BARE TYPE NAME (TYPE-ANCESTOR) — the type-shaped twin of `lower`'s
 ## `callee_mod_rank`. `struct_decl_of`/`enum_decl_of` used to take NO naming module at all and
 ## settle same-named candidates by declaration order (the LAST one won — the opposite tie-break of
 ## the callee fallback, which was FIRST-wins). Measured before this: with `Box := struct { a, b }` in
@@ -352,7 +352,7 @@ _name_hash := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   h := unchecked { n * 131 + usize(bs[0]) * 7 + usize(bs[n - 1]) }
   h & 511
 }
-## RE-KEYED BY THE NAMING MODULE (P1-TYPE-ANCESTOR). The answer now depends on WHO is asking, so a
+## RE-KEYED BY THE NAMING MODULE (TYPE-ANCESTOR). The answer now depends on WHO is asking, so a
 ## bucket keyed by the name text alone would hand one module's answer to another — the exact shape
 ## `lower::module_const_value` already guards against with its `_mcv_ms`/`_mcv_ml`/`_mcv_ctx` triple,
 ## copied here. The memoization itself is PRESERVED: these are the profile's hottest scans (O(n_decls)
@@ -818,7 +818,7 @@ pub alias_rhs := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -
 ## `arity == 1`, its underlying type span in ret_ts/ret_tl) to its underlying type span `U`.
 ## Returns `{0, 0}` if the name is not a brand. So the lower can peel `Id(v)` construction and a
 ## scalar conversion `u64(id)` to the underlying — the brand is a compile-time nominal wrapper with
-## the underlying's exact runtime representation (D24/D25). Resolved by tail name (a qualified
+## the underlying's exact runtime representation. Resolved by tail name (a qualified
 ## `mod::Id` still finds the brand decl).
 pub brand_underlying := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> LSpan {
   cnt := rt::vec_len(deref(decls))
@@ -837,7 +837,7 @@ pub brand_underlying := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
     if lni_skip(decls, cnt, i, th) == false {
       d := deref(decl_get(decls, i))
       ## Modules §3: rank the candidates instead of taking the FIRST in declaration order. A brand
-      ## is a nominal wrapper (D24/D25), so an unrelated module's same-named brand must not supply
+      ## is a nominal wrapper, so an unrelated module's same-named brand must not supply
       ## the underlying type. `>=` keeps the last of equal-rank candidates, i.e. the historical
       ## answer (the FIRST match) whenever no naming module is published (every rank -1).
       if d.kind == 0 and d.arity == 1 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, nm.s, nm.n) {
@@ -989,7 +989,7 @@ pub std_struct_has_byte_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), s : us
 ##              byte offsets yet.
 ##   3 WORD   — the historical word-granular model (one machine word per field). This is the tier
 ##              that spec §6.1 says must go away; widening the byte tier is a change to THIS
-##              function alone (P1-CLAYOUT S4), which is the point of the oracle.
+##              function alone (CLAYOUT S4), which is the point of the oracle.
 ## A non-struct name (scalar, unknown, enum, union) answers WORD — callers keep their own
 ## enum/union/scalar arms, exactly as before.
 pub layout_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> usize {
@@ -1006,7 +1006,7 @@ pub layout_kind_is_byte := fn(k : usize) -> bool { k == 2 }
 ## and each link must be read in ITS OWN tier, because each tier is written by a different emitter:
 ##   BYTE   → the §6.1 byte offsets, which is exactly what `emit_standard_assign` writes;
 ##   WORD   → §6.1 byte offsets when the type is in the byte-precise whole-value writer's domain
-##            (`std_struct_is_byte_writable`, P1-CLAYOUT S3(b)); otherwise the historical
+##            (`std_struct_is_byte_writable`, CLAYOUT S3(b)); otherwise the historical
 ##            `field_word_offset * 8`, which is what `emit_struct_assign`'s word loop writes (it
 ##            accumulates `field_words`, the same sum `field_word_offset` computes), and which is
 ##            answerable only for a WORD-GRANULAR type, where the two models coincide;
@@ -1030,7 +1030,7 @@ pub layout_field_offset_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usi
   ## what READS it agree, and there are now two independent ways that holds.
   ##   (1) WORD-GRANULAR — the two models coincide, and then `standard_field_byte_offset` IS
   ##       `field_word_offset * 8`, which is why one expression serves both tiers.
-  ##   (2) P1-CLAYOUT S3(b) — BYTE-WRITABLE: the ONE byte-precise whole-value writer is now what every
+  ##   (2) CLAYOUT S3(b) — BYTE-WRITABLE: the ONE byte-precise whole-value writer is now what every
   ##       backend uses for a nested child (x86's `emit_standard_assign` recursion, aarch64/riscv64/
   ##       wat's `*_std_store_struct`), so a child in its domain is WRITTEN at its §6.1 offsets on all
   ##       four and is therefore READ at them.
@@ -1043,7 +1043,7 @@ pub layout_field_offset_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usi
   standard_field_byte_offset(decls, src, s, n, fs, fl, a)
 }
 
-## ─── THE ONE BYTE-PRECISE WHOLE-VALUE WRITER'S DOMAIN (P1-CLAYOUT S3(b)) ──────────────────────────
+## ─── THE ONE BYTE-PRECISE WHOLE-VALUE WRITER'S DOMAIN (CLAYOUT S3(b)) ──────────────────────────
 ## Can the byte-precise whole-value writer materialize a value of this struct type at an ARBITRARY
 ## byte offset? That writer is one algorithm with four spellings — `emit_standard_assign`'s recursion
 ## on x86_64 and `a64_std_store_struct` / `rv_std_store_struct` / `wat_std_store_struct` on the three
@@ -1103,7 +1103,7 @@ pub std_struct_is_byte_writable := fn(decls : ptr(rt::Vec), src : ptr(u8), s : u
   ok
 }
 
-## ─── THE ONE BYTE-PRECISE WHOLE-VALUE COPIER (P1-CLAYOUT S3(c)) ───────────────────────────────────
+## ─── THE ONE BYTE-PRECISE WHOLE-VALUE COPIER (CLAYOUT S3(c)) ───────────────────────────────────
 ## S3(b) gave the four backends ONE byte-precise whole-value WRITER; this is its mirror on the READ
 ## side, and it exists for the same reason. `copy := o.inner` binds a nested child of a byte-layout
 ## root to a STANDALONE local, and the two sides of that copy speak different layouts:
@@ -1245,7 +1245,7 @@ pub layout_copy_step := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
   _copy_walk(decls, src, s, n, 0, 0, want, 0, a)
 }
 
-## ─── THE ARRAY-ELEMENT TIER (P1-CLAYOUT S3(d)) ────────────────────────────────────────────────────
+## ─── THE ARRAY-ELEMENT TIER (CLAYOUT S3(d)) ────────────────────────────────────────────────────
 ## `layout_elem_stride_bytes` is THE element stride, and it is spec Types §6.4 read literally:
 ## *"arrays are contiguous, stride = size rounded to align, element i at base + i*stride"*. Every
 ## backend's element addressing must multiply the index by THIS number and nothing else — that is the
@@ -1296,7 +1296,7 @@ pub array_elem_word_reservation := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : 
   struct_words(decls, src, ts, tl, a)
 }
 
-## ─── THE ARRAY-ELEMENT FENCE (P1-CLAYOUT S3(c)) ───────────────────────────────────────────────────
+## ─── THE ARRAY-ELEMENT FENCE (CLAYOUT S3(c)) ───────────────────────────────────────────────────
 ## An ARRAY whose element is a standard byte-layout struct has no byte-precise tier yet: the element
 ## STRIDE is `struct_words * 8` while the element is written and read by two different models, so
 ## `xs[i]` and `xs[i].f` name places nothing wrote. On x86_64 that is already fenced twice
@@ -1700,7 +1700,7 @@ pub struct_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     ## and `:=` locals are function-scoped, so binding it after the read made that fence consult an unset
     ## slot on the first iteration and the PREVIOUS field's `wsize` afterwards. The fence is redundant
     ## today (the `layout_kind` gate above catches the same shape first) but it must be correct before
-    ## that gate widens (P1-CLAYOUT S4).
+    ## that gate widens (CLAYOUT S4).
     ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
     if not layout_kind_is_packed(lk) {
       aes := arr_field_elem_span(src, eff.s, eff.n)
@@ -1923,7 +1923,7 @@ pub scalar_byte_size := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   8
 }
 
-## ─── The scalar TYPE-NAME decisions, shared by every backend (ROADMAP P3 item 4) ───────────────
+## ─── The scalar TYPE-NAME decisions, shared by every backend ───────────────
 ##
 ## `src/aarch64.al`, `src/riscv64.al` and `src/wat.al` each carried its own private copy of the six
 ## predicates below, byte-for-byte identical in all three. They answer ONE question each — "is this
@@ -1979,7 +1979,7 @@ pub scalar_name_is_int_conv := fn(name : str) -> bool {
   name == "u8" or name == "u16" or name == "u32" or name == "u64" or name == "usize" or name == "i8" or name == "i16" or name == "i32" or name == "i64" or name == "isize"
 }
 
-## ─── The ANNOTATION SOURCE SCAN, shared by every backend (ROADMAP P3 item 4) ───────────────────
+## ─── The ANNOTATION SOURCE SCAN, shared by every backend ───────────────────
 ##
 ## One scan, three questions. Given a position just past a NAME in the source (a local binding's
 ## name, a global decl's name), each of these skips blanks, requires a `:`, refuses `:=` (an
@@ -2050,7 +2050,7 @@ pub ann_scan_narrow := fn(src : ptr(u8), pos : usize) -> str {
   scalar_name_narrow(src, sp.s, sp.n)
 }
 
-## ─── The NAMED-PARAMETER annotation lookup, shared by every backend (ROADMAP P3 item 4) ────────
+## ─── The NAMED-PARAMETER annotation lookup, shared by every backend ────────
 ##
 ## "Walk the parameter list, match on the DECLARED name, ask one predicate of the declared type."
 ## Three questions, three backends, twelve identical copies. The predicate is the only part that
@@ -2113,7 +2113,7 @@ pub callee_ret_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
   r
 }
 
-## ─── The TYPE-CLASSIFICATION tables, shared by every backend (ROADMAP P3 item 4) ────────────────
+## ─── The TYPE-CLASSIFICATION tables, shared by every backend ────────────────
 ##
 ## Seven questions about what KIND of thing a type name denotes, each answered identically by all
 ## three backends and each a pure language decision — the comptime `TypeInfo` kind codes, the
@@ -2204,7 +2204,7 @@ pub ty_is_scalar := fn(ts : usize, tl : usize, decls : ptr(rt::Vec), src : ptr(u
   true
 }
 
-## ─── The GENERIC / TUPLE-PARAMETER probes and the Expr shape tests (ROADMAP P3 item 4) ──────────
+## ─── The GENERIC / TUPLE-PARAMETER probes and the Expr shape tests ──────────
 ##
 ## The last block of decisions the three backends held in triplicate with byte-identical bodies:
 ## how many type parameters a decl has and where they are, whether a generic call is one this
@@ -2379,7 +2379,7 @@ pub ex_is_zero_lit := fn(e : ptr(Expr)) -> bool {
   r
 }
 
-## ─── The Expr ACCESSORS and the two byte tables (ROADMAP P3 item 4) ─────────────────────────────
+## ─── The Expr ACCESSORS and the two byte tables ─────────────────────────────
 ##
 ## The last identical triplicates, and the ones a NAME-based duplicate scan misses entirely: these
 ## carry a different STEM in each backend (`a64_var_ns` / `rv_var_ns` / `expr_var_ns`,
@@ -2519,7 +2519,7 @@ pub bind_list_index := fn(bind_head : ptr(mut Bind), src : ptr(u8), ns : usize, 
 ## be exactly the defect this extraction exists to prevent.
 ##
 ## NOTE, not fixed here: those three `target_arch()` answers are `"aarch64"`, `"riscv64"` and
-## `"<none>"` — and each backend's `target.arch` FOLD still reports `x86_64` (ROADMAP Priority 4,
+## `"<none>"` — and each backend's `target.arch` FOLD still reports `x86_64` (
 ## `ARCH-IDENTITY`). Passing the name in makes that inconsistency a one-line difference between the
 ## three call sites instead of something buried in three copies of an evaluator.
 
@@ -3769,7 +3769,7 @@ pub ct_arr_len := fn(decls : ptr(rt::Vec), src : ptr(u8), sns : usize, snl : usi
         if op == 47 { if tval == 0 { err = 3 } }
         ## TYP-10 ADMISSIBILITY (slice C): an INEXACT comptime division (`N/64` with N = 100) must
         ## fail LOUD — silently laying out trunc(N/64) words would mint a narrower type
-        ## masquerading as N bits (a silent miscompile, D69).
+        ## masquerading as N bits (a silent miscompile).
         if op == 47 and err == 0 { if acc % tval != 0 { err = 5 } }
         if op == 47 and err == 0 { acc = acc / tval; divided = true }
         if op == 37 { if tval == 0 { err = 3 } }

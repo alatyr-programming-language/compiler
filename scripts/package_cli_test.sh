@@ -494,7 +494,7 @@ run_manifestless_cleanup() {
   rm -rf "$tmp"
 }
 
-# P1-MODULE-GLOBAL-REF (Modules §3, Memory §2.2) — a module-level global reference that this module
+# MODULE-GLOBAL-REF (Modules §3, Memory §2.2) — a module-level global reference that this module
 # may NOT address must be a LOCATED REJECT, never a fresh frame local. The pre-fix emitter turned a
 # cross-module READ into `movq -8(%rbp), %rax` (an uninitialised slot, silently 0), a cross-module
 # WRITE into a frame store that smashed the stack (SIGSEGV), and the qualified `mod::G = v` into a
@@ -1078,7 +1078,7 @@ run_type_gate_selftest() {
 ## The whole-program EMITTED-TYPE invariant over the compiler's OWN assembly: every monomorphized
 ## instance symbol `<mod>__<generic>__<Targ>` must name a type declaration `<mod>` may see under
 ## Modules §3. On the tree this reports 25 instances and 0 violations BOTH before and after
-## P1-TYPE-ANCESTOR — `src/`s modules are all top-level siblings (there is no ancestor chain in the
+## TYPE-ANCESTOR — `src/`s modules are all top-level siblings (there is no ancestor chain in the
 ## compiler's own tree at all), so unlike the CALLEE half there was no latent wrong binding here to
 ## find. The gate exists for what comes next: the file split creates exactly those chains.
 run_type_gate_selftest

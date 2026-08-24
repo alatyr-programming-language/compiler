@@ -1,4 +1,4 @@
-## selfhost::rt — the lean self-host runtime (ROADMAP §1.1 item 6a), path-B shape.
+## selfhost::rt — the lean self-host runtime (a), path-B shape.
 ## Monomorphic, handle-based: everything is arena-allocated and referenced by a usize
 ## handle, so the containers are plain (non-generic) structs of word-sized elements — no
 ## generic-type-declaration form (which diverges between Stage-0 and the self-host parser),
@@ -126,7 +126,7 @@ pub sys_close := @abi(syscall) fn(num : usize, fd : usize) -> isize
 pub sys_lseek := @abi(syscall) fn(num : usize, fd : usize, off : usize, whence : usize) -> isize
 
 ## Process syscalls — the as/ld invocation a self-hosted DRIVER needs to turn its emitted GAS into
-## an executable on its own (ROADMAP §1.0). Raw Linux x86_64 numbers, no libc: `sys_fork` (57; no
+## an executable on its own. Raw Linux x86_64 numbers, no libc: `sys_fork` (57; no
 ## args, returns child pid in the parent / 0 in the child / < 0 on error), `sys_execve` (59;
 ## execve(path, argv, envp) — only RETURNS on failure), `sys_wait4` (61; wait4(pid, &status, 0, 0)),
 ## `sys_exit` (60; the child's escape hatch when execve fails).
@@ -253,14 +253,14 @@ pub run := fn(in out a : Arena, path_cstr : usize, argv : usize, envp : usize) -
 ## byte plus 7 trailing zeros, the next append overwrites them, and `sb_flush` emits only
 ## `[0, len)` — so the flushed bytes are exact (reserve a few bytes of slack in `cap`).
 ## (The GAS emitter's GLOBAL label counter is NOT here — it is threaded as a scalar `in out nl`
-## param through the emit recursion, ROADMAP §1.2; a scalar out-param now writes back to the
+## param through the emit recursion; a scalar out-param now writes back to the
 ## caller, so the counter accumulates across `emit_fn` calls without living on the buffer.)
 pub StrBuf := struct { data : ptr(mut u8), len : usize, cap : usize }
 
 ## Append one byte `b` (its low 8 bits); returns the new length. A word store writes the byte
 ## plus 7 trailing zeros that the next append overwrites, so the buffer must keep ≥ 8 bytes of
 ## slack past `len` — overflow is a hard error (the lean stand-in for `alloc::strbuf`'s growth;
-## the emitter sizes its output buffer up front, ROADMAP §1 fixpoint).
+## the emitter sizes its output buffer up front fixpoint).
 pub sb_byte := fn(in out s : StrBuf, b : usize) -> usize {
   if s.len + 8 > s.cap { panic("rt: StrBuf overflow") }
   p : ptr(mut usize) = unchecked bitcast(ptr(mut usize), s.data + s.len)

@@ -1,4 +1,4 @@
-## ROADMAP §4: a struct with an ENUM FIELD, then `match s.c`. Previously silently miscompiled — an
+## a struct with an ENUM FIELD, then `match s.c`. Previously silently miscompiled — an
 ## enum field was sized as ONE word (field_words defaulted it to wsize 1), so the following field
 ## overwrote the enum's payload, AND the struct constructor never stored the enum (an EnumLit isn't an
 ## ArrayLit), AND `match s.c` read a garbage discriminant. Now field_words counts an enum field as

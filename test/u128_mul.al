@@ -1,5 +1,5 @@
-## e2e — ROADMAP §8.4 part 2, TYP-10 slice C: MULTIPLY (`*`) on the prelude `u128 ≡ uint(128)`
-## (Types §3/§7, TYP-2 / TYP-10 / D23 / D24; operators.md OP-1). `@inline` GENERIC schoolbook
+## e2e part 2, TYP-10 slice C: MULTIPLY (`*`) on the prelude `u128 ≡ uint(128)`
+## (Types §3/§7, TYP-2 / TYP-10; operators.md OP-1). `@inline` GENERIC schoolbook
 ## multiply over the comptime value parameter N (lib/base/u128.al), keeping the LOW N bits: column
 ## k sums the low halves of `a[i]·b[j]` (i+j=k), the high halves (i+j=k-1), and the incoming carry;
 ## the per-word high half is the x86_64 `mulq`→`%rdx` synthetic `mulhiq` INLINED in the operator

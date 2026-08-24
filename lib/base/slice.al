@@ -146,7 +146,7 @@ sift_down := fn(T : type, s : Slice(T), n : usize, i : usize) {
 ## `sort` — in-place ascending sort by `Ord` (`<`, §2.6), no allocation
 ## (Stdlib §3.5). **Heapsort** — O(n log n) worst-case, in-place, no allocation;
 ## **not guaranteed stable** (a stable sort and key/comparator variants are additive,
-## D16). Sorts the slice's backing storage, so the slice must be over a mutable place.
+##). Sorts the slice's backing storage, so the slice must be over a mutable place.
 ## Conforms to appendix §160 (introsort-class algorithm; a quadratic worst case is
 ## non-conforming).
 pub sort := fn(T : type, s : Slice(T)) {

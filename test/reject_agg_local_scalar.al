@@ -1,4 +1,4 @@
-## SOUNDNESS NET (R2, TYP-6 sibling / D69): a local annotated with a builtin-SCALAR type bound to a
+## SOUNDNESS NET (R2, TYP-6 sibling): a local annotated with a builtin-SCALAR type bound to a
 ## struct/enum VALUE (`x : u64 = s`) used to silently miscompile — the scalar store kept only the
 ## aggregate's word 0 (`x` became 41, the value of field `a`, discarding `b`). The compiler must instead
 ## FAIL LOUD at build time. A non-zero build rc is the acceptable outcome; a valid binary with a wrong

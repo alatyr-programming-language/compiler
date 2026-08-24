@@ -314,7 +314,7 @@ pub emit_packed_assign := fn(ss : usize, sl : usize, fhead : usize, base : i64, 
 ## fields only; a nested struct/enum/str/other aggregate is rejected before the old word emitter can
 ## silently disagree with the shared byte offsets. The destination frame block still reserves whole
 ## words (`ceil(T.size()/8)`), but every byte-array element and narrow scalar lands at its exact offset.
-## P1-CLAYOUT S3(b) — `bias` is the byte offset of THIS struct value inside the frame block whose
+## CLAYOUT S3(b) — `bias` is the byte offset of THIS struct value inside the frame block whose
 ## lowest address is `rbp-(base+1)*8`: 0 for a top-level construction, the accumulated §6.1 offset for
 ## a nested child. It is what makes this function the ONE byte-precise whole-value writer on x86_64 —
 ## the nested-struct arm recurses into itself at `bias + bo` instead of handing the child to the
@@ -356,7 +356,7 @@ emit_standard_assign := fn(ss : usize, sl : usize, fhead : usize, base : i64, bi
         ae = av.next
       }
     } else if struct_decl_of(cx.decls, cx.src, eff.s, eff.n) >= 0 {
-      ## P1-CLAYOUT S3(b) — THE RECURSION. A nested STRUCT field is a value whose standard layout
+      ## CLAYOUT S3(b) — THE RECURSION. A nested STRUCT field is a value whose standard layout
       ## starts at the containing field's §6.1 byte offset, so writing it is THIS function again with
       ## `bias = bo`. S3(a) could not do that: it handed the child to `emit_struct_assign`, the
       ## word-per-field constructor, while aarch64/riscv64/wat recursed byte-precisely — so for a child
@@ -415,7 +415,7 @@ pub emit_standard_value := fn(v : ptr(Expr), base : i64, bias : i64, in out sb :
   }
 }
 
-## P1-CLAYOUT S3(c) — THE ONE BYTE-PRECISE WHOLE-VALUE COPIER on x86_64, the mirror of the writer
+## CLAYOUT S3(c) — THE ONE BYTE-PRECISE WHOLE-VALUE COPIER on x86_64, the mirror of the writer
 ## above. It moves a nested child OUT of a standard byte-layout root into a standalone local:
 ## `copy := o.inner`. `root` is the ROOT local's first slot and `sbo` the child's accumulated §6.1 byte
 ## offset inside it (both from `standard_field_path`, the same walk every reader uses), so the child's
@@ -485,7 +485,7 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
       irs := inst_struct_span_cx(ss, sl, cx)
       ## walk the field-decl list (for each field's wsize) and the value list together.
       di := struct_decl_of(cx.decls, cx.src, irs.s, irs.n)
-      ## FAIL LOUD on the SILENT-ZERO case of an UNRESOLVABLE construction head (D69): a
+      ## FAIL LOUD on the SILENT-ZERO case of an UNRESOLVABLE construction head: a
       ## generic-CONSTRUCTION-shaped literal `Name(args)(field = …)` with an UNDECLARED `Name`
       ## parses to a bare `StructLit` (the type-arg list is erased), so the decl lookup misses.
       ## With `fd` 0 every field walks as a scalar — fine for genuinely scalar values (a bare
@@ -584,7 +584,7 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
           ## a struct/enum VAR field value (`inner = s`, `p = q`) — COPY the source aggregate's `wsz`
           ## words into the field's slot. The `wsz > 1` array branch below matches only an `ArrayLit`,
           ## so a bound-var aggregate value fell through to `emit_array_assign`'s `_ => {}` and stored
-          ## NOTHING (the field read word 0 as 0 — a silent-wrong-data corner; ROADMAP Priority 2's
+          ## NOTHING (the field read word 0 as 0 — a silent-wrong-data corner's
           ## generic-struct-LITERAL EMIT case, but general to any struct literal). Field word k lives at
           ## logical slot `base - off - k`; a LOCAL source keeps source word k at frame word k, a by-REF
           ## PARAM holds a pointer with word k at `-(k*8)(ptr)` (the same shape as the `x := <var>` copy).
@@ -661,7 +661,7 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
 ## scalar/aggregate store into the field's reserved frame slot; the caller keeps `s = nx`.
 ## Touches no module global.
 pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usize, fv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
-  ## (TYP-6 / D69) the `t.field = <aggregate>` into a scalar struct field soundness net moved UP into
+  ## (TYP-6) the `t.field = <aggregate>` into a scalar struct field soundness net moved UP into
   ## `sema::check_program` (build-path gate).
   ## `GLOBAL.field = v` — a field write to a MUTABLE struct global (`STATE.x = 40`): store the
   ## value into the `.data` cell at `LABEL + field_index*8`. Checked FIRST — the base is a module
@@ -761,7 +761,7 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
         sbo := standard_field_byte_offset(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
         saes := array_elem_span(cx.src, fts.s, fts.n)
         smulti := saes.n != 0 or (fts.n != 0 and (str_at((cx.src + fts.s), fts.n) == "str" or struct_decl_of(cx.decls, cx.src, fts.s, fts.n) >= 0 or enum_decl_of(cx.decls, cx.src, fts.s, fts.n) >= 0))
-        ## P1-CLAYOUT S3(b) — the whole-child write `o.inner = S(…)` uses the SAME byte-precise
+        ## CLAYOUT S3(b) — the whole-child write `o.inner = S(…)` uses the SAME byte-precise
         ## whole-value writer as the construction path, at the child's §6.1 offset inside `o`. Its
         ## domain is `std_struct_is_byte_writable`, defined once in `lower_layout` and asked by all
         ## four backends, so the child's image here is the image every reader resolves. The
@@ -981,7 +981,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
     push_str(sb, "\n")
     fpa_done = true
   }
-  ## P1-CLAYOUT S3(d) — the WRITE dual of the byte-tier array-element read: `xs[i].inner.b = v` (any
+  ## CLAYOUT S3(d) — the WRITE dual of the byte-tier array-element read: `xs[i].inner.b = v` (any
   ## depth). Same resolver, same offsets, opposite direction — which is the point: a place written here
   ## and read by the `s3dr` arm cannot disagree, because both take every hop from
   ## `layout_field_offset_bytes` and the element address from `emit_index_addr`. The store is SIZED to
@@ -1281,7 +1281,7 @@ pub emit_st_index_field_assign := fn(fia : ptr(Expr), fii : ptr(Expr), ifs : usi
       }
     }
   }
-  ## P1-CLAYOUT S3(d) — the DEPTH-1 byte-tier element field WRITE `xs[i].f = v`. Claimed before the
+  ## CLAYOUT S3(d) — the DEPTH-1 byte-tier element field WRITE `xs[i].f = v`. Claimed before the
   ## word-offset tail below, which scales `idx_field_index` (a field INDEX) by 8 and would place a
   ## `u16` second field at byte 8 instead of byte 2, with a full-word store over its neighbours.
   if w_done == false {
@@ -1314,7 +1314,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
   pbe := packed_byte_base_entry(ib, cx)
   pbfe := packed_byte_field_eek(ib, cx)
   sbfe := standard_byte_field_eek(ib, cx)
-  ## P1-CLAYOUT S3(d) — `xs[i].data[j] = v`: the store dual of the byte-tier element's byte-array read.
+  ## CLAYOUT S3(d) — `xs[i].data[j] = v`: the store dual of the byte-tier element's byte-array read.
   ## `emit_index_addr` leaves the exact byte address, so a single `movb` is the whole store and the
   ## seven neighbouring bytes are preserved.
   sdbe := std_idx_byte_field_eek(ib, cx.slots, cx.decls, cx.src, a)
@@ -1325,7 +1325,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
     push_str(sb, "  popq %rbx\n  movb %bl, (%rax)\n")
     return
   }
-  ## (TYP-6 / D69) the `xs[i] = <aggregate>` into a scalar-element array soundness net moved UP into
+  ## (TYP-6) the `xs[i] = <aggregate>` into a scalar-element array soundness net moved UP into
   ## `sema::check_program` (build-path gate).
   ## `GLOBAL[i] = v` on a MUTABLE array global (`TABLE[i] = v`): store into `.data` at
   ## `LABEL + i*8`. Checked FIRST (a module global has no frame slot for `emit_index_addr`).
@@ -1597,7 +1597,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
   ## reached during the self-build → fixpoint-NEUTRAL. A struct/enum LITERAL and a NON-ref local
   ## struct/enum VAR RHS are handled; a call/branch/other RHS FAILS LOUD (bind it to a local first).
   ##
-  ## P1-CLAYOUT S3(d) — the WHOLE-ELEMENT WRITE `xs[i] = Elem(…)` / `xs[i] = e` for a BYTE-TIER element,
+  ## CLAYOUT S3(d) — the WHOLE-ELEMENT WRITE `xs[i] = Elem(…)` / `xs[i] = e` for a BYTE-TIER element,
   ## claimed before the word-copy arm below and never falling through to it. Two facts make this its own
   ## arm rather than a tweak of that one:
   ##   * the number of bytes moved is the element's own `standard_struct_bytes`, NOT `estride * 8`.
@@ -1901,7 +1901,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     _ => {}
   }
   rqa := require_agg_parts(v, cx.decls, cx.src, a)
-  ## (TYP-6 / D69) the ANNOTATED-scalar-local (`x : u64 = s`) and scalar-RE-ASSIGN (`G = s` / `x = s`)
+  ## (TYP-6) the ANNOTATED-scalar-local (`x : u64 = s`) and scalar-RE-ASSIGN (`G = s` / `x = s`)
   ## aggregate-into-scalar soundness nets moved UP into `sema::check_program` (build-path gate).
   si := struct_lit_info(v)
   ei := enum_lit_info(v)
@@ -2084,7 +2084,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     base := slot_of(cx.slots, cx.src, ns, nl2)
     emit_array_assign(v, base, sb, cx, nl)
   } else if fixed_array_byte_return_len(v, cx.decls, cx.src, a) >= 1 {
-    ## P1-BYTES: the bounded `[u8; N]` return is one packed word in %rax. The byte-array local's
+    ## BYTES: the bounded `[u8; N]` return is one packed word in %rax. The byte-array local's
     ## data block begins at `-(base*8)(%rbp)` (the filler below its metadata slot), exactly the
     ## address used by `emit_index_addr`/`emit_array_assign`; store the whole returned word there.
     ## No other array return reaches this arm, so unsupported shapes retain their old rejects.
@@ -2497,7 +2497,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       }
     }
   } else if deref_view_span_cx(v, cx).n != 0 and view_dest_is_local(cx.slots, cx.src, ns, nl2) {
-    ## P1-CLAYOUT S3(b) — `t := deref(<pointer to a §7 VIEW>)`: the pointee IS the two-word
+    ## CLAYOUT S3(b) — `t := deref(<pointer to a §7 VIEW>)`: the pointee IS the two-word
     ## `{ptr, len}` pair. `emit_str_pair`'s `Deref` arm reads BOTH words at the ascending
     ## pointee offsets and `emit_pair_field_store` pops them into the destination's word 0 / 1
     ## — the same landing the `t := <str var>` copy below uses. Gated on the destination being
@@ -2529,7 +2529,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     else if fra.kind == 4 { nfr = 2 }
     else { nfr = 1 + enum_inst_words(cx.decls, cx.src, fra.s, fra.n, a) }
     dstr := slot_of(cx.slots, cx.src, ns, nl2)
-    ## P1-CLAYOUT S3(c) — THE BYTE-PRECISE WHOLE-VALUE COPY. When the source is a nested child of a
+    ## CLAYOUT S3(c) — THE BYTE-PRECISE WHOLE-VALUE COPY. When the source is a nested child of a
     ## standard byte-layout root whose §6.1 image is NOT its word image, the word loop below copies
     ## whole words out of (say) a 4-byte child into a destination read back at word offsets: measured
     ## exit 1 on all three cross backends with S3(b)'s writer in and its fence out. `std_copy_kind`

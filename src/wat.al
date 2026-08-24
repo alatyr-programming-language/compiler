@@ -1,4 +1,4 @@
-## selfhost::wat — ROADMAP §8 (backend breadth), item 1: WASM → WAT.
+## selfhost::wat (backend breadth), item 1: WASM → WAT.
 ##
 ## A SECOND backend emitting against the SAME parsed `Decl` model the x86_64 lower consumes
 ## (`lower::emit_program`), rather than a fork of the front end. Scope (the scalar kernel): every
@@ -65,7 +65,7 @@ compfor_iter_arg := lower::compfor_iter_arg
 ## A typed pointer to a Decl node at absolute handle `h` (the per-module `decl_at`, duplicated per
 ## module in the self-host tree — mirrors lower.al / driver.al).
 decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
-## ROADMAP §6: a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
+## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
 decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return decl_at(Decl, hh) }
 
 ## A typed pointer to an AST node at arena OFFSET `h` (Stmt/Arg/Param handles are offsets into the AST
@@ -248,7 +248,7 @@ wat_local_ann_unsigned := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl
   }
   r
 }
-## `v` is the `:=` RHS of an UN-annotated local and it is an `unchecked (<inner>)` SCOPE (D70/D82) —
+## `v` is the `:=` RHS of an UN-annotated local and it is an `unchecked (<inner>)` SCOPE —
 ## which changes only the VERIFICATION mode of the expression it wraps, never its TYPE, so the inner's
 ## unsignedness IS the binding's. The SHAPE GATE that keeps the peel narrow: only an `unchecked`-shaped
 ## init participates; every other inferred init stays untyped exactly as before. (x86_64's dual is the
@@ -278,7 +278,7 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : ptr(mut Param), body_hea
     ## SIGNED `i64.lt_s`/`gt_s`/`le_s`/`ge_s` — a `u64` word above 2^63 then ordered as NEGATIVE and
     ## `0 < 18446744073709551610` answered FALSE (a valid module, a non-trap exit, a wrong value):
     ##
-    ##   • `unchecked (<inner>)` — a VERIFICATION scope (D70/D82). It changes the overflow-checking
+    ##   • `unchecked (<inner>)` — a VERIFICATION scope. It changes the overflow-checking
     ##     mode of the expression it wraps, NEVER its type, so the inner's signedness IS its own.
     ##   • an ARITHMETIC `Bin` (`+ - * / %` and the bit ops `& | ^`) whose BOTH operands are provably
     ##     unsigned, or whose other operand is a bare integer literal: the literal inherits the proven
@@ -2518,7 +2518,7 @@ wat_local_arrty_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
 ## leaf stays fail-loud. FRAME-LOCAL roots only (a param / bind / global root keeps its existing path).
 
 
-## STANDARD BYTE-LAYOUT PLACE RESOLUTION (P1-CLAYOUT S3a). A standard-byte struct local already holds
+## STANDARD BYTE-LAYOUT PLACE RESOLUTION (CLAYOUT S3a). A standard-byte struct local already holds
 ## a linear-memory base address in its WASM local; the only change is that FIELD hops use byte offsets,
 ## not the legacy word offsets. Keep this resolver narrow: a local struct root followed by FIELD hops,
 ## with no params/globals/indexes. Other shapes keep their existing fail-loud paths.
@@ -2527,7 +2527,7 @@ wat_local_arrty_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
 ## `@packed` roots from the packed emitter and read them at §6.1 offsets — measured, `@packed
 ## { data : [u8;3], inner : @packed { a : u8, b : u16 } }` answered `data[1]` for `o.inner.a`, a WRONG
 ## VALUE where the previous compiler was correct. EVERY HOP uses `layout_field_offset_bytes`, which
-## reads each link in the tier it is actually WRITTEN in. Since P1-CLAYOUT S3(b) that is §6.1 bytes for
+## reads each link in the tier it is actually WRITTEN in. Since CLAYOUT S3(b) that is §6.1 bytes for
 ## the byte-layout root AND for every nested child the one byte-precise whole-value writer can write
 ## (`std_struct_is_byte_writable`), plus `field_word_offset * 8` for a word-granular child, where the
 ## two models coincide anyway. A child in neither set has NO answer (-1) and its consumer stays
@@ -3063,7 +3063,7 @@ emit_wat_addr := fn(in out sb : rt::StrBuf, base_idx : i64, byte_off : i64) {
 ## holding the aggregate base address; unlike the native backends there is no inline frame offset to
 ## add. A direct byte array uses load8/store8, while nested word-granular aggregates recurse at the
 ## containing field's byte offset.
-## The WIDTH-based core of the standard-byte scalar load. P1-CLAYOUT S3(c) needs it: the shared copy
+## The WIDTH-based core of the standard-byte scalar load. CLAYOUT S3(c) needs it: the shared copy
 ## plan (`layout_copy_step`) carries a width + signedness, not a type span, because the plan is computed
 ## once in `lower_layout` for all four backends.
 wat_std_load_width := fn(bidx : i64, off : i64, width : usize, signed : bool, in out sb : rt::StrBuf) {
@@ -3083,7 +3083,7 @@ wat_std_load_scalar := fn(bidx : i64, off : i64, ts : usize, tl : usize, in out 
   wat_std_load_width(bidx, off, width, signed, sb)
 }
 
-## P1-CLAYOUT S3(c) — THE ONE BYTE-PRECISE WHOLE-VALUE COPIER, WASM's spelling. There is no inline
+## CLAYOUT S3(c) — THE ONE BYTE-PRECISE WHOLE-VALUE COPIER, WASM's spelling. There is no inline
 ## frame here: `sidx` is the local holding the SOURCE root's base address and `sbo` the child's
 ## accumulated §6.1 byte offset from it, while `didx` holds the destination block's base address (its
 ## word `w` at byte `w*8`, its byte `k` at byte `k`). WHICH of the two the destination is read at is
@@ -3147,7 +3147,7 @@ wat_std_store_value := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl 
   }
   bn := base_type_name(src, ts, tl)
   if struct_decl_of(decls, src, bn.s, bn.n) >= 0 {
-  ## P1-CLAYOUT S3(b) — THE CHILD MUST BE IN THE BYTE-PRECISE WHOLE-VALUE WRITER'S DOMAIN, which is
+  ## CLAYOUT S3(b) — THE CHILD MUST BE IN THE BYTE-PRECISE WHOLE-VALUE WRITER'S DOMAIN, which is
   ## `lower_layout::std_struct_is_byte_writable`: ONE predicate, asked by this recursion and by
   ## x86_64's `emit_standard_assign` recursion alike, so all four backends now build the same §6.1
   ## image and every reader resolves it through the same `layout_field_offset_bytes`. S3(a) had to gate
@@ -5016,7 +5016,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           sc3 := pcount + count_locals(fn_head, src, a, decls) + 2
           ## `struct_words` is the FLATTENED width and the copy is word-wise, so a NESTED-AGGREGATE field
           ## rides along correctly — only a PLAIN (arity-0) decl is required, not an all-scalar one.
-          ## P1-CLAYOUT S3(b) — EXCEPT when the place is a FIELD of a standard byte-layout root, which
+          ## CLAYOUT S3(b) — EXCEPT when the place is a FIELD of a standard byte-layout root, which
           ## `wat_place_agg_span` resolves through `wat_std_path_*`: there the SOURCE is a byte-precise
           ## sub-place while the destination block is read back at WORD offsets, so a word-wise copy is
           ## only right for a WORD-GRANULAR child. S3(b) made a sub-word child constructible and thereby
@@ -5028,7 +5028,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           ## is restricted to the FIELD place. The byte-precise COPIER is its own consumer (audit S3).
           mut cpwg := true
           if ex_is_field(v) and (not std_struct_is_word_granular(decls, src, cpsp.s, cpsp.n, a)) { cpwg = false }
-          ## P1-CLAYOUT S3(c) — THE BYTE-PRECISE COPIER takes exactly what the word copy above cannot.
+          ## CLAYOUT S3(c) — THE BYTE-PRECISE COPIER takes exactly what the word copy above cannot.
           ## `std_copy_kind` (shared, `lower_layout`) decides whether this child has a byte-precise copy
           ## and of which shape; the SOURCE address is the root's base local plus the path's §6.1 byte
           ## offset (`wat_std_path_root_idx` + `wat_std_path_bo`) rather than `emit_wat_expr`, which has

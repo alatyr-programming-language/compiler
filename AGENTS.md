@@ -14,22 +14,27 @@ conforms to the spec, never the reverse.
 repository, which is why `lib/` ships here). Cite that pin when a change turns on what the spec says;
 if the spec has moved past it, the pin moves in its own commit, never silently inside a feature.
 
-**How a spec citation is spelled, and three vocabularies that are NOT one.** The spec's citation
-anchors are **theme-prefixed**: `FND-*`, `TYP-*`, `MOD-*`, `TOOL-*`, `CG-*`, `CF-*`, `CT-*`, `FN-*`,
-`MEM-*`, `OP-*`, `SYN-*`, `STD-*`, `CC-*`, `PRIN-*`. Those resolve. Two other families appear all over
-this tree's comments and resolve NOWHERE:
+**How a spec citation is spelled.** The spec's citation anchors are **theme-prefixed**: `FND-*`,
+`TYP-*`, `MOD-*`, `TOOL-*`, `CG-*`, `CF-*`, `CT-*`, `FN-*`, `MEM-*`, `OP-*`, `SYN-*`, `STD-*`, `CC-*`,
+`PRIN-*`. A comment or an issue cites one of those, a chapter section (`Types §6.1`), or an issue
+number — and nothing else, because nothing else resolves.
 
-- **flat `D<N>`** (`D9`…`D99`, ~31 distinct) — the pre-1.0 numbering the spec replaced. It left no
-  old→new map, so these are readable only as history. Three were recovered and are used in their new
-  spelling here: `D75` → **TOOL-3** (the manifest is a single `Package` value), `D69` → **FND-1**
-  (spec-first: decide, then write), `P1-CLAYOUT` → **TYP-3**/**TYP-7** (layout primitives + the closed
-  per-site levers).
-- **`ROADMAP §N` and `P1-*`** — anchors into an internal planning document that is not published, and
-  internal priority IDs from it. They stay as historical markers in code comments; `seed/VERSION` is
-  append-only and keeps them by rule.
+Two vocabularies used to be cited here and pointed at nothing. They have been REMOVED rather than
+explained, because a pointer a reader cannot follow is worse than no pointer. The flat `D`-number
+scheme (31 distinct, 286 sites) was the pre-1.0 numbering the spec replaced, and it left no old-to-new
+map, so the numbers were unrecoverable; three were recovered by MEANING and are now cited properly —
+the manifest as a single `Package` value is **TOOL-3**, spec-first-decide-then-write is **FND-1**, and
+the C-layout coincidence with its closed per-site levers is **TYP-3**/**TYP-7**. The planning-document
+section anchors (178 sites) pointed into a document that is not published; the prose around each one
+carried the meaning, so only the pointer went. `seed/VERSION` still contains both: it is append-only
+by rule, and its entries are a historical record, not a reference you are meant to follow.
 
-So: a NEW comment cites a theme-prefixed spec ID or an issue number. An OLD comment citing `D42`,
-`ROADMAP §8.2` or `P1-BYTES` is a historical note, not a pointer you can follow — do not add more.
+**`CLAYOUT S3(b)` and its siblings are TAGS, not citations.** `CLAYOUT S3(a)`…`S3(e)`, `S4`, `S6`,
+plus `TYPE-ANCESTOR`, `BYTES`, `BREAK`, `DA-DEEP`, `FN-VALUE`, `MODULE-GLOBAL-REF`, `QUERY` and
+`REQUIRE-AGG`, group the sites of ONE sub-problem so that `grep -rn 'CLAYOUT S3(b)' src` returns all
+26 of them at once. They name a work-stream in this repository, not a section of anything, and that
+grep is exactly why they are worth keeping. They were spelled with a `P1-` prefix while the planning
+document existed; the prefix is gone because it read as a reference to it.
 
 ## Layout
 

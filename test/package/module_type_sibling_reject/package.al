@@ -6,7 +6,7 @@
 ## The single-sibling case is deliberately NOT this fixture: one declaration program-wide keeps
 ## resolving (the unique-declaration leniency the whole tree leans on for every ambient prelude type).
 ## It takes TWO for the resolver to have been guessing — and guessing is what it did: measured on the
-## frozen seed before P1-TYPE-ANCESTOR this program BUILT and returned 50, having silently sized
+## frozen seed before TYPE-ANCESTOR this program BUILT and returned 50, having silently sized
 ## `atwo`s 16-byte `Box` because it sorts last in declaration order.
 app := Package(
   version = "0.1.0",

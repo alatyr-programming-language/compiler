@@ -1,4 +1,4 @@
-## ROADMAP §4: mutate a struct ENUM FIELD (s.c = Col.G(40)) — FieldAssign now stores the
+## mutate a struct ENUM FIELD (s.c = Col.G(40)) — FieldAssign now stores the
 ## enum via emit_enum_assign (a scalar store dropped the payload, leaving a stale discriminant).
 Col := enum { R, G(u64), B }
 S := struct { c : Col, n : u64 }

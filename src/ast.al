@@ -1,4 +1,4 @@
-## selfhost::ast — the shared AST + token types (ROADMAP §1/§6).
+## selfhost::ast — the shared AST + token types.
 ##
 ## The single source of truth for the data that flows BETWEEN passes: the lexer's
 ## `Token`, and the parser's `Expr` / `Arm` / `Decl` / `FieldDecl` / `Stmt`. Each
@@ -165,13 +165,13 @@ pub Option := fn(T : type) -> type { enum { Some(T), None } }
 ## carries up to **6** arguments — the System V integer argument registers
 ## (%rdi %rsi %rdx %rcx %r8 %r9). >6 would need stack args (deferred; lower logs the cap).
 ##
-## Two struct forms (ROADMAP §1 struct tier): a **struct construction** `S(f0 = e0, …, fN = eN)`
+## Two struct forms (struct tier): a **struct construction** `S(f0 = e0, …, fN = eN)`
 ## (`StructLit` — the struct name span `[s, s+n)` + an `nfields` count + the arena-linked
 ## field-value list head `fields_head` (an `Arg` list, 0 = no fields), mirroring `Call`'s shape;
 ## SIMPLIFICATION: each field word-sized — sub-word packing is deferred, see lower.al's layout
 ## note), and a **field read** `p.f` (`Field` — the base expression + the field name span; lower
 ## resolves the base to its struct's frame base slot and `f` to its declaration-order field index).
-## ENUM tier (ROADMAP §1 enum tier): an enum-variant construction `E.V(a0, …, aN)`
+## ENUM tier (enum tier): an enum-variant construction `E.V(a0, …, aN)`
 ## (`EnumLit` — the enum TYPE name span + the variant name span + an `nargs` count + the
 ## arena-linked payload-value list head `args_head` (an `Arg` list, 0 = no payloads), mirroring
 ## `Call`/`StructLit`). Lower lays an enum value out as a discriminant word (the variant's
@@ -252,7 +252,7 @@ pub Expr := enum {
   ## 2-word {ptr = base.ptr + lo, len = hi - lo} pair, reusing the `sub`-view machinery
   ## (`emit_sub_pair`). Parsed in the postfix `[ … ]` when a `..` (kind 31) follows the low bound.
   Slice(ptr(Expr), ptr(Expr), ptr(Expr)),
-  ## COMPTIME field access `base.(f)` (D90) — `f` is a comptime value (a `typeinfo` field/variant
+  ## COMPTIME field access `base.(f)` — `f` is a comptime value (a `typeinfo` field/variant
   ## bound by a `comptime for`). Inside the unroll it resolves to a concrete member of `base`.
   ## The two fields are the base expr and the index expr (`f`). Only meaningful inside a `comptime
   ## for` body; the unroll rewrites it to a plain `Field`/element access for the current member.
@@ -353,7 +353,7 @@ pub bnd_next := fn(p : ptr(mut Bind)) -> ptr(mut Bind) { deref(p).next }
 ## `kind == 1`. The parameters are an **arena-linked `Param` list** (`params_head`, 0 = none),
 ## `arity` their count — up to **6** (the System V integer argument registers); >6 would need
 ## stack args (deferred).
-## GENERICS tier (ROADMAP §1/§6): a **generic function** has a leading comptime type
+## GENERICS tier: a **generic function** has a leading comptime type
 ## parameter `T : type` — its type annotation is the literal `type`. `is_generic` marks
 ## such a decl. The type parameter is COMPTIME: it consumes NO runtime register/slot (it is
 ## erased at the call). A generic fn is monomorphized — lower emits one specialized copy per
@@ -362,7 +362,7 @@ pub bnd_next := fn(p : ptr(mut Bind)) -> ptr(mut Bind) { deref(p).next }
 ## type parameter is still counted in `params_head`/`arity` (param 0), so the value parameters
 ## are params 1..arity; lower spills value param `i` (i≥1) from argument register `i-1`.
 ##
-## A **generic STRUCT** `Name(T) := struct { … }` (ROADMAP §1/§6 generic-struct tier) also sets
+## A **generic STRUCT** `Name(T) := struct { … }` (generic-struct tier) also sets
 ## `is_generic` — its single type parameter `T` is parsed-and-skipped (its NAME need not be
 ## recorded: a field type may reference `T`, e.g. `buf : [T; 8]` or `f : T`, but for a WORD-SIZED
 ## `T` (u64/i64/any pointer-sized type) every instance's layout is IDENTICAL — the field offsets
@@ -416,7 +416,7 @@ pub Decl := struct {
 ## payload type span (0/0 = no payload), enough for the integer-payload checks the toy
 ## grammar uses (full per-payload enum type lists are deferred).
 ##
-## STRUCT-WITH-ARRAY-FIELD tier (ROADMAP §1): `wsize` is the field's SIZE IN WORDS — 1 for a
+## STRUCT-WITH-ARRAY-FIELD tier: `wsize` is the field's SIZE IN WORDS — 1 for a
 ## scalar field `name : T`, and `N` for a fixed-array field `name : [T; N]` (a multi-word
 ## field). Lower lays struct fields out at CUMULATIVE word offsets (field `k` starts after the
 ## sum of the prior fields' `wsize`s), so a struct `{ buf : [u64; 8], len : u64 }` puts `len`
@@ -442,11 +442,11 @@ pub fld_null := fn() -> ptr(mut FieldDecl) { unchecked bitcast(ptr(mut FieldDecl
 ## annotation span `[ts, ts+tl)` (the `T` of `name : T` — sema resolves it to a `Ty` to
 ## type-check a call's argument against the parameter), and `next` (0 = end). The list is
 ## walked in declaration order, so parameter `i` is spilled from / passed in arg register `i`.
-## AGGREGATE-PARAM tier (ROADMAP §1): a struct/array param is passed BY REFERENCE (the caller
+## AGGREGATE-PARAM tier: a struct/array param is passed BY REFERENCE (the caller
 ## passes the aggregate's word-0 address; the callee dereferences). For a struct param `p : P`,
 ## `ts`/`tl` is the struct TYPE name span `P` (lower resolves its layout) and `pmode` is 0.
 ## The PASSING MODE `pmode` (a u8, NOT a new word — repurposes the old `is_arr : bool` slot so
-## `Param` stays at 8 words; growing it to 9 destabilizes the self-host fixpoint, see ROADMAP §1.2):
+## `Param` stays at 8 words; growing it to 9 destabilizes the self-host fixpoint, see):
 ##   0 = an ordinary value parameter (`in`/default) — a scalar passed by value, or an aggregate
 ##       passed by reference (the aggregate-ness is decided by the TYPE, not `pmode`);
 ##   1 = an ARRAY parameter `a : [T; N]` (`ts`/`tl` is the ELEMENT type span `T`; lower resolves
@@ -490,7 +490,7 @@ pub arg_null := fn() -> ptr(mut Arg) { unchecked bitcast(ptr(mut Arg), 0) }
 
 ## A struct-literal **field initializer** `f = v` collected AT PARSE (arena-linked): the field
 ## NAME span `[fs, fs+fl)`, the value expr, and `next` (0 = end). Used ONLY transiently inside the
-## struct-literal parse to REORDER named field values into the struct's DECLARATION order (TYP-8/D29
+## struct-literal parse to REORDER named field values into the struct's DECLARATION order (TYP-8
 ## — construction is BY NAME, not by source position). The reordered result is an ordinary `Arg` list
 ## stored on the `StructLit` node, so no other pass ever sees a `FInit` — it is parser-internal, and
 ## the emitted AST is byte-identical for an already-in-declaration-order literal (fixpoint-neutral).
@@ -507,7 +507,7 @@ pub finit_null := fn() -> ptr(mut FInit) { unchecked bitcast(ptr(mut FInit), 0) 
 ## the store dual of the `Field` READ expr. (Only `var.field = e` for a struct LOCAL is
 ## supported; a general place chain `a.b.c = e` or element assign `a[i].f = e` is deferred.)
 ##
-## CONTROL FLOW STATEMENTS (ROADMAP §1/§6 statement-flow tier): an **early return**
+## CONTROL FLOW STATEMENTS (statement-flow tier): an **early return**
 ## `return <cmp>` (Return: the value expr, next) — lower delivers it in `%rax` and jumps to
 ## the function epilogue; a statement-position **if/else** `if <cmp> { <stmts> } [ else
 ## { <stmts> } ]` (If: the condition expr, the then statement-list head, the else

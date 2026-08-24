@@ -1,17 +1,17 @@
-## std::vec — growable arrays over a pluggable allocator (ROADMAP §3).
+## std::vec — growable arrays over a pluggable allocator.
 ##
 ## The generic `Vec(T)` takes its backing from an **`Arena`** (region protocol,
-## D84), not a direct `mmap`, so a compiler can run many vectors over one arena it
+##), not a direct `mmap`, so a compiler can run many vectors over one arena it
 ## owns and frees in one shot (the natural discipline for compiler passes). For a
 ## `u64` array use `Vec(u64)` — there is no separate concrete container.
 
-## --- Generic `Vec(T)`, allocator-borne (ROADMAP §3) --------------------------
+## --- Generic `Vec(T)`, allocator-borne --------------------------
 ## The element-type-parametric growable array. Its storage comes from a pluggable
-## **`Arena`** (the region allocator protocol, Stdlib §5 / D84) — NOT a direct
+## **`Arena`** (the region allocator protocol, Stdlib §5) — NOT a direct
 ## `mmap` — so a compiler can run many vectors over one arena it owns and frees in
 ## one shot (the natural discipline for compiler passes).
 ##
-## **Handle-based (Memory §5.3.1 / D19):** the vector stores the backing's arena
+## **Handle-based (Memory §5.3.1):** the vector stores the backing's arena
 ## **index** (a `Handle` value, `idx`), NOT a pointer — a long-lived reference into
 ## an arena is a handle (a number, no lifetime problem), resolved to a scoped pointer
 ## per access via `get`. It keeps a borrow of its arena (`arena`) to do that
@@ -19,7 +19,7 @@
 ## pointer `get` yields is used immediately and never stored. The element stride is
 ## `size(T)`, so one body serves any `T` (the type argument is comptime, erased).
 ##
-## `@owning` (D86): a `Vec(T)` is a **linear handle** — non-copyable, consumed once
+## `@owning`: a `Vec(T)` is a **linear handle** — non-copyable, consumed once
 ## by `free` (which only **discharges** it with `forget`; the backing pages belong to
 ## the arena, reclaimed when the caller frees it via `std::os::free`). Reads borrow
 ## through a const scoped reference (`in v`); mutations are `in out` place borrows.
@@ -95,7 +95,7 @@ pub push := fn(T : type, in out v : Vec(T), x : T) -> Result(usize, AllocError) 
 }
 
 ## The element at `i` (bounds-checked, traps when `i >= len`) — also the **read arm
-## of the index operator** (D94 / Type System §4.5): `v[i]` desugars to `v.at(i)`.
+## of the index operator** (Type System §4.5): `v[i]` desugars to `v.at(i)`.
 ## There is no separate `index` shim; the established named read `at` is the read
 ## the `[]` notation resolves to (write/range stay `index_set`/`index_range`). A
 ## non-consuming **scoped-reference** read (`in v : ptr(Vec(T))`); the UFCS
@@ -108,7 +108,7 @@ pub push := fn(T : type, in out v : Vec(T), x : T) -> Result(usize, AllocError) 
   return deref(elem)
 }
 
-## The **`index_range` operator** (D94): `v[lo..hi]` desugars to `v.index_range(lo,
+## The **`index_range` operator**: `v[lo..hi]` desugars to `v.index_range(lo,
 ## hi)`, a borrowed `Slice(T)` view over the half-open element range (bounds-checked,
 ## traps on `lo > hi` or `hi > len`). The view aliases the backing and stays valid
 ## while `v` is unmodified (a `push` may move the region). A non-consuming read.
@@ -120,7 +120,7 @@ pub index_range := fn(T : type, v : ptr(Vec(T)), lo : usize, hi : usize) -> Slic
   return Slice(T)(ptr = p, len = hi - lo)
 }
 
-## The **`index_set` operator** (D94): `v[i] = x` desugars to `v.index_set(i, x)`,
+## The **`index_set` operator**: `v[i] = x` desugars to `v.index_set(i, x)`,
 ## the bounds-checked element write. The receiver is taken **by scoped pointer**
 ## (`ptr(mut Vec(T))`) — like `index`/`at` — so the write borrows `v` (it is
 ## not consumed); it writes the backing heap directly (the `set` body, through the
@@ -233,7 +233,7 @@ pub swap_remove := fn(T : type, in out v : Vec(T), i : usize) -> Option(T) {
 ## Ensure room for `additional` more elements without reallocating (§160): grow the
 ## backing through the **arena** (doubling capacity until it fits) iff `len +
 ## additional` exceeds the current capacity, otherwise a no-op. **Fallible** — a
-## growth that exhausts the allocator surfaces `AllocError` (D91), it does not trap.
+## growth that exhausts the allocator surfaces `AllocError`, it does not trap.
 ## The amortized counterpart of `push`'s on-demand grow (call it before a known
 ## batch of `push`es to make each one allocation-free). An `in out` place borrow.
 pub reserve := fn(T : type, in out v : Vec(T), additional : usize) -> Result(usize, AllocError) {
@@ -260,7 +260,7 @@ pub reserve := fn(T : type, in out v : Vec(T), additional : usize) -> Result(usi
   return Result(usize, AllocError).Ok(new_cap)
 }
 
-## **Consume** the owning handle (the linear release, D86): the backing pages
+## **Consume** the owning handle (the linear release): the backing pages
 ## belong to the **arena**, not the vector, so this no longer `munmap`s — it only
 ## `forget(v)`s, discharging the consume obligation. The pages are reclaimed when
 ## the caller frees the arena (`std::os::free` on the owning `OsArena`), one

@@ -1,4 +1,4 @@
-## ROADMAP §1 overload resolution: a scalar-literal call must NOT be spuriously rejected as a
+## overload resolution: a scalar-literal call must NOT be spuriously rejected as a
 ## "unbound name" when a same-name overload takes an AGGREGATE parameter. sema does not resolve
 ## overloads, so its per-argument conformance check stays tolerant for an overload set — the scalar
 ## `10` must not be tag-compared against the sibling `g(A)`'s struct parameter (which flagged a false

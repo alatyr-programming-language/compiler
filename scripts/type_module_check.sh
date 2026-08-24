@@ -4,7 +4,7 @@
 # The sibling of `scripts/callee_module_check.sh`, for the other half of the same defect family. That
 # one checks CALL edges; this one checks every emitted reference that came from a TYPE declaration.
 #
-# Why it exists: before P1-TYPE-ANCESTOR, `lower_layout::struct_decl_of`/`enum_decl_of` took NO naming
+# Why it exists: before TYPE-ANCESTOR, `lower_layout::struct_decl_of`/`enum_decl_of` took NO naming
 # module at all and settled same-named candidates by DECLARATION ORDER (the LAST one won — the opposite
 # tie-break of the callee fallback). Nothing compared an emitted type identity against the declaration
 # the referencing module may actually see: `scripts/fixpoint.sh` compares the tree's GAS against

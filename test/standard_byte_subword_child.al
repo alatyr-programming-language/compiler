@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(b) — THE FENCE S3(a) LEFT, TAKEN DOWN. A standard byte-layout struct holding a
+## CLAYOUT S3(b) — THE FENCE S3(a) LEFT, TAKEN DOWN. A standard byte-layout struct holding a
 ## nested child whose own fields are NARROWER than a machine word. This is the exact program S3(a)
 ## registered as `reject_standard_byte_subword_child` (this file, renamed): the child was constructed
 ## two different ways — x86_64 handed it to the WORD-per-field constructor `emit_struct_assign`

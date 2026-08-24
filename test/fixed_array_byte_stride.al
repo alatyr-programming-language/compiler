@@ -1,4 +1,4 @@
-## P1-BYTES: an explicitly typed byte array is packed by byte, not by word.
+## BYTES: an explicitly typed byte array is packed by byte, not by word.
 ## The pointer deltas, range-slice backing, and byte write all observe the same contiguous storage.
 main := fn() -> u64 {
   mut xs : [u8; 4] = [11, 22, 33, 44]

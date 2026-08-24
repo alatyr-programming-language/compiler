@@ -4,7 +4,7 @@
 ## strict-weak order works. O(log n) lookup (binary search on keys), O(n) insert (shift both tails). A
 ## duplicate key OVERWRITES its value (a map, not a multimap). Iterate in sorted-key order via
 ## `omap_keys` / `omap_values`. Handle-based like `alloc::vec` (stores the two backing ARENA INDICES,
-## resolved per access) and `@owning` (D86 — a linear handle, its backing reclaimed with the arena).
+## resolved per access) and `@owning` (a linear handle, its backing reclaimed with the arena).
 ##
 ## Growth copies each array BYTE-BY-BYTE into a fresh block (like `oset_grow`), so the value copy never
 ## routes through an aggregate move — the doubling preserves every key AND value. Names are `omap_*` so

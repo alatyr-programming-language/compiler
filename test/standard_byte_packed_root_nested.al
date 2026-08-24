@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(a) — `@packed` is its OWN tier, not the standard byte tier, even when the packed
+## CLAYOUT S3(a) — `@packed` is its OWN tier, not the standard byte tier, even when the packed
 ## struct happens to carry a byte array. The layout oracle (`layout_kind`) decides PACKED before BYTE
 ## for exactly this reason: a resolver that asks only "does this struct have a direct byte array
 ## field?" answers yes for a packed struct too, steals the root from the packed emitter, and reads the

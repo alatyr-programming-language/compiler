@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(a) CONTROL — the by-value fences added for the standard BYTE tier must not touch the
+## CLAYOUT S3(a) CONTROL — the by-value fences added for the standard BYTE tier must not touch the
 ## ordinary WORD tier. This is the same program shape as `reject_standard_byte_param.al` and
 ## `reject_standard_byte_field_by_value.al` with the byte array replaced by a plain `u64`, so the only
 ## difference is which layout tier the outer struct is in.

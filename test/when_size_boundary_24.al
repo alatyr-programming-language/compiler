@@ -1,4 +1,4 @@
-## P1-CLAYOUT S2 boundary probe: `when size(T) > 24` must use the same byte-size
+## CLAYOUT S2 boundary probe: `when size(T) > 24` must use the same byte-size
 ## ladder as the direct `size(T)` fold for a standard byte-layout struct, a mixed
 ## tuple, and an ordinary word-layout struct.
 Byte25 := struct { data : [u8;25] }

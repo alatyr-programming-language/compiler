@@ -1,4 +1,4 @@
-## SOUNDNESS NET (P2, TYP-6 / D69): storing a struct/enum VALUE into a SCALAR-element array element
+## SOUNDNESS NET (P2, TYP-6): storing a struct/enum VALUE into a SCALAR-element array element
 ## (`xs[0] = s` with `xs : [u64]`, `s : S`) used to silently miscompile — the single-word indexed
 ## store kept only the aggregate's word 0 (`xs[0]` became 41, the value of field `a`, discarding `b`).
 ## The compiler must instead FAIL LOUD at build time. A non-zero build rc is the acceptable outcome; a

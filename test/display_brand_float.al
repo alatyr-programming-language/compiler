@@ -1,4 +1,4 @@
-## e2e — `alloc::fmt::display` on a FLOAT-underlying user brand (`F := brand(f64)`, D9/D24/D25).
+## e2e — `alloc::fmt::display` on a FLOAT-underlying user brand (`F := brand(f64)`).
 ## The `Brand(under, _)` arm dispatches on the underlying `f64`'s kind (`Float`), so the value peels
 ## via `f64(v)` and renders through the float formatter (`F(3.5)` → "3.5"). Confirms the float-brand
 ## slot is tagged `ek == 9` (`type_is_float` in `bind_param`) so the peel is a reinterpret, not a

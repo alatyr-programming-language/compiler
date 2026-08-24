@@ -1,4 +1,4 @@
-## ROADMAP §4: return a struct with an ENUM FIELD by value — emit_struct_value materializes a
+## return a struct with an ENUM FIELD by value — emit_struct_value materializes a
 ## StructLit with a non-str multi-word field via emit_struct_assign, then delivers its words to the
 ## return registers (the per-field push only knew str + scalar, dropping the enum payload).
 Col := enum { R, G(u64) }

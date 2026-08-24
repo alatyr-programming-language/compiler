@@ -1,4 +1,4 @@
-## ROADMAP §4: extract an AGGREGATE field of a local struct into a local (`x := s.f` where f is a
+## extract an AGGREGATE field of a local struct into a local (`x := s.f` where f is a
 ## struct or enum field). The scalar store delivered only word 0, so `inner := b.a` / `c := s.c`
 ## silently produced 0. Now field_read_agg binds x as the field's aggregate type and the emit copies
 ## its words from the base struct. Struct-field extract + enum-field extract in one program.

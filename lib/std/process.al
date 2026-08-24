@@ -3,7 +3,7 @@
 ## The OS process primitives via `@abi(syscall)` (Linux x86_64): `fork(2)` = 57,
 ## `execve(2)` = 59, `wait4(2)` = 61. Raw-level, so each wrapper is `unchecked`.
 ## This is the surface a self-hosted compiler needs to invoke `as`/`ld` itself
-## (the D50 reproducible-build fixpoint): build an argv, `fork`, `execve` in the
+## (the reproducible-build fixpoint): build an argv, `fork`, `execve` in the
 ## child, `wait4` the child in the parent, decode its exit status.
 ##
 ## Mirrors the `@abi(syscall)` pattern of `std::os` (mmap/munmap) and
@@ -31,7 +31,7 @@ sys_wait4 := @abi(syscall) fn(num : usize, pid : usize, status : usize, options 
 ## --- cstring / argv helpers --------------------------------------------------
 ## An Alatyr `str` is `{ptr, len}` and is NOT NUL-terminated; `execve` needs C
 ## NUL-terminated strings and a NULL-terminated array of their pointers. These
-## helpers copy into a caller-provided allocator (arena, region-backed D19) — the
+## helpers copy into a caller-provided allocator (arena, region-backed) — the
 ## established raw-memory pattern from `std::os::args`. `usize` pointers throughout.
 
 ## Copy `s` into the arena as a NUL-terminated C string. Allocates `len + 1`
@@ -122,7 +122,7 @@ pub exited := fn(status : usize) -> bool {
 ## explicit flags; inheriting `environ` is additive).
 ##
 ## The arena `a` backs the cstrings and the argv/envp arrays; they live for the
-## arena's extent (region-backed, D19).
+## arena's extent (region-backed).
 pub run := fn(path : str, args : Slice(str), a : ptr(mut Arena)) -> isize {
   pid := unchecked sys_fork(57)
   neg1 : isize = 0 - 1

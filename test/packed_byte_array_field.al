@@ -1,4 +1,4 @@
-## P1-BYTES — an explicitly typed byte fixed-array FIELD in an @packed struct.
+## BYTES — an explicitly typed byte fixed-array FIELD in an @packed struct.
 ## The field uses the packed struct's byte layout: bind/size, construction, indexed
 ## read/write, ptr(element) addressing, and a proven word-padded aggregate copy.
 U := @packed struct { tag : u8, data : [u8; 4], tail : u8 }

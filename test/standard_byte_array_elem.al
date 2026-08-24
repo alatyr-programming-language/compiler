@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(d) — THE ARRAY-ELEMENT TIER. The exact program the ROADMAP measured as the family's
+## CLAYOUT S3(d) — THE ARRAY-ELEMENT TIER. The exact program the measured as the family's
 ## last silent wrong value: `mut xs : [Elem; 3]` with NO literal initializer, each element written by
 ## `xs[k] = Elem(…)`, then every element and every field read back.
 ##

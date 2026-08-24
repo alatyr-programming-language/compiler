@@ -7,7 +7,7 @@
 param_p := ast::param_p
 
 ## Is the fn whose NAME occupies `name_s .. name_s+name_l` marked `@inline`? The parser drops the
-## marker (D93), so recover both declaration-prefix and value-position spellings.
+## marker, so recover both declaration-prefix and value-position spellings.
 pub fn_is_inline := fn(src : ptr(u8), name_s : usize, name_l : usize) -> bool {
   ## VALUE position: `name := @inline fn(…)`. Walk the attribute run so `@inline` may coexist with
   ## other value-position attributes without depending on their order.

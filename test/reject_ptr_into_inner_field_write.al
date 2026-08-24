@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(a) — a store through a pointer taken INTO an inner aggregate was silently dropped.
+## CLAYOUT S3(a) — a store through a pointer taken INTO an inner aggregate was silently dropped.
 ## The pointer's address is right (+8 from the outer's base, verified in-program), but the write place
 ## resolver cannot see the pointee's type, so it fell through to the last-resort store with a NEGATIVE
 ## slot: `-(-1 + 1) * 8` is `-0(%rbp)`, which lands on the saved frame pointer. The write vanished and

@@ -1,4 +1,4 @@
-## e2e/fmt — the `@alloc(a) x := init` STORAGE ATTRIBUTE (D84 / Memory §2.4) survives a reformat.
+## e2e/fmt — the `@alloc(a) x := init` STORAGE ATTRIBUTE (Memory §2.4) survives a reformat.
 ## The parser desugars it into a plain `x := alloc_into(a, init)` (or the explicit-T
 ## `alloc_into(isize, a, init)` for a bare integer literal) and records the marker NOWHERE, so fmt
 ## re-emitted the desugar. Two things died with the marker: the surface form itself, and the

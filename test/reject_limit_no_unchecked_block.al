@@ -1,4 +1,4 @@
-## sema/§ limits (I5/I9, FND-10): the SCOPED STATEMENT form `unchecked { … }` (D70/D82) is an
+## sema/§ limits (I5/I9, FND-10): the SCOPED STATEMENT form `unchecked { … }` is an
 ## `unchecked` escape exactly like the `unchecked <expr>` operator, so a unit declaring
 ## `@limits(no_unchecked)` must REJECT it.
 ##

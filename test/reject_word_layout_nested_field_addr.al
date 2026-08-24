@@ -1,6 +1,6 @@
 ## The WORD-tier twin of `reject_standard_byte_nested_field_addr.al`, and the evidence that the
 ## nested-field-address hole was never about the byte tier. `Outer` here is an ordinary word-layout
-## struct that no part of P1-CLAYOUT touches, and the address of a nested field still reduced to the
+## struct that no part of CLAYOUT touches, and the address of a nested field still reduced to the
 ## constant 0, so two distinct fields compared EQUAL.
 ##
 ## MEASURED, where 42 means the two addresses differ and 7 means they compared equal

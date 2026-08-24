@@ -1,4 +1,4 @@
-## P1-BYTES / fixed-array parameter ABI: a concrete `[u8; N]` parameter receives
+## BYTES / fixed-array parameter ABI: a concrete `[u8; N]` parameter receives
 ## the packed byte pointer from a typed local, and a callee can re-pass it.
 sum_bytes := fn(xs : [u8; 4]) -> u64 {
   if u64(bytes(xs)[0]) != 11 { return 0 }

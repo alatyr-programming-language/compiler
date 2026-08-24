@@ -8,7 +8,7 @@
 ## and this file is a DESCENDANT of `lower`. Every UNQUALIFIED name it does not import — `streq`,
 ## `decl_get`, `emit_gas`, `emit_stmts`, `emit_mangled_call`, `is_signed_expr`, the sixty-three `IR*`
 ## globals, and the `PCtx`/`SlotEntry` TYPES — binds `lower.al`'s OWN declaration through the ancestor
-## chain (Modules §3 for values, P1-TYPE-ANCESTOR for types).
+## chain (Modules §3 for values, TYPE-ANCESTOR for types).
 ##
 ## State: ALL sixty-three `IR*` globals stay declared in `src/lower.al` and are read and written from
 ## here through the ancestor chain. That is not conservatism — `emit_fn_ir` (which stays in the parent,
@@ -504,7 +504,7 @@ ir_lower_array_for := fn(fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut
 ## lives at slot `vec_bslot - k` (frame `-(vec_bslot - k + 1)*8`). Hoisted ONCE: base = *(arena_ptr) + idx and
 ## len = *(field 1); then a counted loop over a loop-carried index loads each element `*(base + idx*8)` through
 ## a register-held address — no per-iteration frame reload of base/len/index. Scalar/word elements (arraysum).
-## ACCUMULATOR HOIST (ROADMAP 6e follow-up): find THE scalar accumulator of a for-over-Vec body so the
+## ACCUMULATOR HOIST (follow-up): find THE scalar accumulator of a for-over-Vec body so the
 ## sum-loop keeps it in a REGISTER (not a per-iteration frame round-trip). The accumulator = the UNIQUE
 ## scalar local that a TOP-LEVEL body `Stmt::Assign` READS-AND-WRITES (`sum = sum + x` / `sum += x`), that
 ## is already MODELED (has an IRV vreg — i.e. declared before the loop, e.g. `mut sum := 0`), has a scalar

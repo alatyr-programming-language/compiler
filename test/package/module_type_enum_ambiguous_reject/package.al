@@ -4,7 +4,7 @@
 ##
 ## `user` names `E` bare; `aone` and `atwo` both declare an `E`, neither is `pub`, and `user` is
 ## nested in neither — §3 lets it name neither, and no projection, alias or qualified path in `user`
-## says which it means. Measured on the frozen seed before P1-TYPE-ANCESTOR: this BUILT and returned
+## says which it means. Measured on the frozen seed before TYPE-ANCESTOR: this BUILT and returned
 ## 58, having silently sized `atwo`s 32-byte `E`.
 app := Package(
   version = "0.1.0",

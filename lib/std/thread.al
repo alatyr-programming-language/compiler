@@ -27,7 +27,7 @@
 ## then `exit` the thread. Everything else (mmap the stack, arm the join word, bookkeeping,
 ## futex-join, munmap) is ordinary Alatyr around that trampoline.
 
-## The Linux syscalls this module needs (raw x86_64 numbers, no libc; ABI §5 / D76). A
+## The Linux syscalls this module needs (raw x86_64 numbers, no libc; ABI §5). A
 ## negative return is `-errno`; callers wrap the traps in `unchecked` (raw level, I11).
 ##   mmap  = 9   munmap = 11   futex = 202
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize

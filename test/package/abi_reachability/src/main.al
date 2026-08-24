@@ -9,7 +9,7 @@ pub production_api := fn() -> u64 {
   ## NOT `pub`, and `main` is a sibling of `std`, so naming it directly is a §3 violation — it was one
   ## here until 2026-08-20). `std::os::arena` is `pub` and is the declared owner of that private
   ## `@abi(syscall)`, so the retained-but-private trampoline this fixture is about is reached exactly
-  ## as a real program reaches it. `OsArena` is `@owning` (D86), so the region is freed once.
+  ## as a real program reaches it. `OsArena` is `@owning`, so the region is freed once.
   r := std::os::arena(4096)
   _ := std::os::free(r)
   42

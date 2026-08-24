@@ -1,4 +1,4 @@
-## ROADMAP §4: a value-match over an ENUM scrutinee yielding a STRUCT into a local
+## a value-match over an ENUM scrutinee yielding a STRUCT into a local
 ## (`p := match o { Some(v) => P(v, …) }`). emit_val_match_to_local dispatched with `am.lit` (0 for
 ## enum patterns) so it never matched and the aggregate stayed unwritten; now it detects an enum
 ## scrutinee, dispatches on the discriminant with variant indices, binds the arm's payload, and

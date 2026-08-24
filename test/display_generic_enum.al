@@ -1,5 +1,5 @@
 ## e2e — `alloc::fmt::display` over a GENERIC ENUM INSTANCE (`Option(u64)`), the Option/Result
-## display case (Stdlib §2.7, D87; comptime variant match D90). A generic-enum type argument
+## display case (Stdlib §2.7; comptime variant match). A generic-enum type argument
 ## parses as a `Call("Option", [u64])`; the lower extracts the bare head `Option` (gated on it
 ## naming an enum), positioned in source right before its `(u64)` — so `variant_payload_type` /
 ## `typearg_at` re-read the concrete `V = u64` from source (the generic-instance payload

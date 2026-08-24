@@ -1,4 +1,4 @@
-## e2e regression (ROADMAP §6 ptr-typing): match arms with 2+ payload bindings AND an aggregate
+## e2e regression (ptr-typing): match arms with 2+ payload bindings AND an aggregate
 ## payload — the exact shapes that crashed when `Arm.binds_head` / `Bind.next` became `ptr(mut Bind)`.
 ## A `Bind`-list walk read through a FIELD-READ local (`bnd := am.binds_head`, then `deref(bnd)`) does
 ## NOT resolve the pointee struct (only a ptr-to-struct PARAM gets `ek = 7`), so the whole-`Bind`

@@ -1,4 +1,4 @@
-## e2e BUILD-REJECT (correct-or-trap, D69) — the `mut` half of `reject_global_call_init`. A `mut`
+## e2e BUILD-REJECT (correct-or-trap) — the `mut` half of `reject_global_call_init`. A `mut`
 ## module-level global initialized by a runtime CALL returning an aggregate DOES get `.data` storage,
 ## but nothing runs before `_start`, so the call never happens and that storage stays ZEROED: reading
 ## a FIELD of it silently returned 0 instead of the initializer's value (here 11 instead of 5 + 6).

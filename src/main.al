@@ -1,4 +1,4 @@
-## selfhost::main — the self-hosted Alatyr compiler's entry point (ROADMAP §1.0).
+## selfhost::main — the self-hosted Alatyr compiler's entry point.
 ##
 ## The emitted `_start` calls `main__main`; this hands off to `cli::run_cli`, which reads the
 ## process arguments and either emits a program's GAS to stdout or BUILDS it (write `.s` + run

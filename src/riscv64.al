@@ -1,4 +1,4 @@
-## selfhost::riscv64 — ROADMAP §8 (backend breadth), item 3: riscv64 (RV64 Linux GAS).
+## selfhost::riscv64 (backend breadth), item 3: riscv64 (RV64 Linux GAS).
 ##
 ## A FOURTH backend against the SAME parsed `Decl` model the x86_64 lower, the WASM backend, and the
 ## aarch64 backend consume. Scope mirrors aarch64.al's scalar kernel + scalar globals: every function
@@ -47,7 +47,7 @@ variant_payload_type := lower_layout::variant_payload_type
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
 decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
-## ROADMAP §6: a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
+## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
 decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return decl_at(Decl, hh) }
 
 node_ptr := fn(T : type, a : rt::Arena, h : usize) -> ptr(mut T) {
@@ -844,7 +844,7 @@ rv_field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   r
 }
 
-## STANDARD BYTE-LAYOUT PLACE RESOLUTION (P1-CLAYOUT S3a). A standard-byte struct local remains an
+## STANDARD BYTE-LAYOUT PLACE RESOLUTION (CLAYOUT S3a). A standard-byte struct local remains an
 ## inline frame value on RV64; only the FIELD offsets change from words to bytes. Keep this tier narrow:
 ## a plain local root followed by FIELD hops, with no params/globals/indexes. Other shapes retain their
 ## existing fail-loud paths.
@@ -853,7 +853,7 @@ rv_field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
 ## `@packed` roots from the packed emitter and read them at §6.1 offsets — measured, `@packed
 ## { data : [u8;3], inner : @packed { a : u8, b : u16 } }` answered `data[1]` for `o.inner.a`, a WRONG
 ## VALUE where the previous compiler was correct. EVERY HOP uses `layout_field_offset_bytes`, which
-## reads each link in the tier it is actually WRITTEN in. Since P1-CLAYOUT S3(b) that is §6.1 bytes for
+## reads each link in the tier it is actually WRITTEN in. Since CLAYOUT S3(b) that is §6.1 bytes for
 ## the byte-layout root AND for every nested child the one byte-precise whole-value writer can write
 ## (`std_struct_is_byte_writable`), plus `field_word_offset * 8` for a word-granular child, where the
 ## two models coincide anyway. A child in neither set has NO answer (-1) and its consumer stays
@@ -949,7 +949,7 @@ rv_std_param_path_idx := fn(e : ptr(Expr), params_head : ptr(mut Param), src : p
   rv_param_find(params_head, src, ex_var_ns(base), ex_var_nl(base), a)
 }
 
-## STANDARD BYTE-LAYOUT ARRAY-ELEMENT PATH (P1-CLAYOUT S3(d)). The root is an INDEX of a
+## STANDARD BYTE-LAYOUT ARRAY-ELEMENT PATH (CLAYOUT S3(d)). The root is an INDEX of a
 ## byte-tier struct array, followed by zero or more FIELD hops. The runtime element base is resolved
 ## separately from the cumulative field byte offset so the historical word-tier place path stays intact.
 rv_std_idx_path_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
@@ -1007,7 +1007,7 @@ rv_std_store_scalar := fn(off : i64, width : usize, in out sb : rt::StrBuf) {
   if width != 1 and width != 2 and width != 4 and width != 8 { push_str(sb, "  ebreak # unsupported standard scalar width\n") }
 }
 
-## The WIDTH-based core of the standard-byte scalar load. P1-CLAYOUT S3(c) needs it: the shared copy
+## The WIDTH-based core of the standard-byte scalar load. CLAYOUT S3(c) needs it: the shared copy
 ## plan (`layout_copy_step`) carries a width + signedness, not a type span, because the plan is computed
 ## once in `lower_layout` for all four backends.
 rv_std_load_width := fn(off : i64, width : usize, signed : bool, in out sb : rt::StrBuf) {
@@ -1040,7 +1040,7 @@ rv_std_load_width_a0 := fn(width : usize, signed : bool, in out sb : rt::StrBuf)
   if width != 1 and width != 2 and width != 4 and width != 8 { push_str(sb, "  ebreak # unsupported standard scalar width at place\n") }
 }
 
-## P1-CLAYOUT S3(c) — THE ONE BYTE-PRECISE WHOLE-VALUE COPIER, riscv64's spelling. `soff` is the
+## CLAYOUT S3(c) — THE ONE BYTE-PRECISE WHOLE-VALUE COPIER, riscv64's spelling. `soff` is the
 ## child's §6.1 byte offset inside the frame (ascending from s0), `doff` the destination local's own
 ## frame offset; the destination's word `w` is at `doff + w*8`, its byte `k` at `doff + k`. WHICH of the
 ## two it is read at is decided by `std_copy_kind` in `lower_layout`, shared with the other three
@@ -1095,7 +1095,7 @@ rv_std_store_value := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsiz
   }
   bn := base_type_name(src, ts, tl)
   if struct_decl_of(decls, src, bn.s, bn.n) >= 0 {
-  ## P1-CLAYOUT S3(b) — THE CHILD MUST BE IN THE BYTE-PRECISE WHOLE-VALUE WRITER'S DOMAIN, which is
+  ## CLAYOUT S3(b) — THE CHILD MUST BE IN THE BYTE-PRECISE WHOLE-VALUE WRITER'S DOMAIN, which is
   ## `lower_layout::std_struct_is_byte_writable`: ONE predicate, asked by this recursion and by
   ## x86_64's `emit_standard_assign` recursion alike, so all four backends now build the same §6.1
   ## image and every reader resolves it through the same `layout_field_offset_bytes`. S3(a) had to gate
@@ -2374,7 +2374,7 @@ rv_garr_elem_struct_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, 
 }
 
 ## True when the ARRAY-LIT `v` is HOMOGENEOUS in one named STRUCT — EVERY element is a StructLit of the
-## SAME type. A TUPLE literal `(Pt(…), 12)` parses as an ArrayLit too (D94: tuples reuse the aggregate
+## SAME type. A TUPLE literal `(Pt(…), 12)` parses as an ArrayLit too (tuples reuse the aggregate
 ## surface), but its components have DIFFERENT widths, so a first-element stride would mis-address every
 ## component after the first — `t.1` would read the struct component's word 1. Element access below
 ## fires ONLY on a homogeneous struct array; a tuple keeps falling through to the fail-loud `ebreak`.
@@ -2841,7 +2841,7 @@ rv_local_ann_unsigned := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
   }
   r
 }
-## `v` is the `:=` RHS of an UN-annotated local and it is an `unchecked (<inner>)` SCOPE (D70/D82) —
+## `v` is the `:=` RHS of an UN-annotated local and it is an `unchecked (<inner>)` SCOPE —
 ## which changes only the VERIFICATION mode of the expression it wraps, never its TYPE, so the inner's
 ## unsignedness IS the binding's. The SHAPE GATE that keeps the peel narrow: only an `unchecked`-shaped
 ## init participates; every other inferred init stays untyped exactly as before. (x86_64's dual is the
@@ -2871,7 +2871,7 @@ rv_operand_unsigned := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head
     ## SIGNED `slt` — a `u64` word above 2^63 then ordered as NEGATIVE and `0 < 18446744073709551610`
     ## answered FALSE (a valid binary, a normal exit, a wrong value):
     ##
-    ##   • `unchecked (<inner>)` — a VERIFICATION scope (D70/D82). It changes the overflow-checking
+    ##   • `unchecked (<inner>)` — a VERIFICATION scope. It changes the overflow-checking
     ##     mode of the expression it wraps, NEVER its type, so the inner's signedness IS its own.
     ##   • an ARITHMETIC `Bin` (`+ - * / %` and the bit ops `& | ^`) whose BOTH operands are provably
     ##     unsigned, or whose other operand is a bare integer literal: the literal inherits the proven
@@ -5349,11 +5349,11 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         ## a standard-byte aggregate field copy `q := p.inner`: copy the leaf struct's words from its
         ## containing local at the cumulative byte offset. The standard tier only reuses word-copy when
         ## that byte offset is word-aligned; an unaligned aggregate remains fail-loud.
-        ## P1-CLAYOUT S3(b) — AND the child must be WORD-GRANULAR: this is a whole-WORD copy into a
+        ## CLAYOUT S3(b) — AND the child must be WORD-GRANULAR: this is a whole-WORD copy into a
         ## destination local that is read back at WORD offsets, so a byte-precise sub-word child (now
         ## constructible) would be silently mis-copied. Measured without the guard: exit 1 where the
         ## pre-S3(b) compiler trapped. A located `ebreak` until the byte-precise copier lands (I11).
-        ## P1-CLAYOUT S3(c) — AND WHEN IT IS NOT WORD-GRANULAR, THE BYTE-PRECISE COPIER TAKES IT.
+        ## CLAYOUT S3(c) — AND WHEN IT IS NOT WORD-GRANULAR, THE BYTE-PRECISE COPIER TAKES IT.
         ## `stdbc` switches the copy LOOP below from words to the shared plan, so every `(not iscopy)`
         ## guard in this arm keeps working (the source place must not be evaluated as a value — the
         ## expression emitter has no aggregate-field load and would emit an `ebreak`). Only a child
@@ -5454,7 +5454,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           mut cwk := i64(0)
           while cwk < copyw { push_str(sb, "  ld a0, ") ; push_int(sb, soff + cwk * 8) ; push_str(sb, "(s0)\n  sd a0, ") ; push_int(sb, poff + cwk * 8) ; push_str(sb, "(s0)\n") ; cwk = cwk + 1 }
         }
-        ## P1-CLAYOUT S3(c): the same copy, but byte-precise — the child's §6.1 image at `soff` into the
+        ## CLAYOUT S3(c): the same copy, but byte-precise — the child's §6.1 image at `soff` into the
         ## destination's own tier at `poff`, per the shared plan.
         if iscopy and poff >= 0 and stdbc { rv_std_copy(stdbcts, stdbctl, soff, poff, sb, decls, src, a) }
         if iscopy and poff < 0 { push_str(sb, "  ebreak\n") }

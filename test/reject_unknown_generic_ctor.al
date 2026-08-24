@@ -1,4 +1,4 @@
-## e2e — fail-loud (D69): a GENERIC-CONSTRUCTION-shaped literal `Name(args)(field = …)` whose head
+## e2e — fail-loud: a GENERIC-CONSTRUCTION-shaped literal `Name(args)(field = …)` whose head
 ## `Name` resolves to NO declared struct, type-function, or type alias. The parser erases the
 ## type-arg list (`X(128)` → a `StructLit(X, …)`), and the lower's struct-decl lookup then MISSED —
 ## every field fell to the scalar path and a bare `ArrayLit` emitted `$0`, so the whole value was a

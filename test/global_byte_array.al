@@ -1,4 +1,4 @@
-## P1-BYTES — x86 module-global byte arrays. Explicit [u8|i8|bits8; N] globals use one-byte
+## BYTES — x86 module-global byte arrays. Explicit [u8|i8|bits8; N] globals use one-byte
 ## `.data` cells, byte-stride indexed reads, checked bounds, ptr(element), and mutable writes.
 mut UG : [u8; 4] = [10, 20, 30, 40]
 IG : [i8; 3] = [-1, 2, 3]

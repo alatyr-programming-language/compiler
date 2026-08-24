@@ -1,4 +1,4 @@
-## ROADMAP §4: `match xs[i].c` directly over an ENUM FIELD of a struct-element array element
+## `match xs[i].c` directly over an ENUM FIELD of a struct-element array element
 ## (Field(Index(xs, i), c)). try_arrelem_field_enum_scrut destructures the Index via field_base_index,
 ## resolves the element struct's enum field, and materializes its words (element base via
 ## emit_index_addr, field at -(fwo+j)*8) into the match scratch. Both value- and statement-match paths.

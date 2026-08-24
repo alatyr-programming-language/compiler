@@ -1,4 +1,4 @@
-## e2e — Verification § / D70/D82: the `unchecked` type peel is PROOF-ONLY, so it must not depend on
+## e2e — Verification §: the `unchecked` type peel is PROOF-ONLY, so it must not depend on
 ## OPERAND ORDER, and a pair containing a provably SIGNED member proves nothing.
 ##
 ## What was wrong: `lower::infer_local_scalar_type`'s `Bin` arm recorded the FIRST TYPED operand, so

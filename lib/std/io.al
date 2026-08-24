@@ -10,7 +10,7 @@
 ## the `Result(_, IoError)` error layer and `read`/`write`-with-`Result` are here.
 
 ## The Linux `write(2)` syscall through the `@abi(syscall)` convention (ABI §5 /
-## D76): the number → the number register, the arguments → the argument registers,
+##): the number → the number register, the arguments → the argument registers,
 ## the result ← the result register (a negative value is `-errno`). Body-less; each
 ## call lowers to the `syscall` trap. Raw-level, so callers wrap it in `unchecked`.
 sys_write := @abi(syscall) fn(num : usize, fd : usize, buf : ptr(u8), len : usize) -> isize
@@ -43,7 +43,7 @@ pub eprint := fn(s : str) -> isize {
 ## (mirrors the spec exactly): a failure not separately classified maps to
 ## `Other(raw errno)`, never a new variant, so an exhaustive `match` stays valid
 ## across the frozen version (a new named variant would be a versioned, breaking
-## change — D16). `TimedOut`/`ConnectionRefused` are present ahead of networking.
+## change). `TimedOut`/`ConnectionRefused` are present ahead of networking.
 pub IoError := enum {
   NotFound, PermissionDenied, AlreadyExists, InvalidInput, UnexpectedEof,
   Interrupted, WouldBlock, BrokenPipe, TimedOut, ConnectionRefused,
@@ -203,7 +203,7 @@ pub file_close := fn(f : File) -> Result(usize, IoError) {
 ## 577), then **closing** it (so the bytes are flushed to disk before any reader —
 ## e.g. `as` — opens the file). Returns `Ok(bytes_written)` or the mapped
 ## `IoError`. This is the primitive a self-hosted compiler needs to put its emitted
-## GAS on disk for the assembler (the D50 toolchain-drive loop). One `write(2)`
+## GAS on disk for the assembler (the toolchain-drive loop). One `write(2)`
 ## (partial-write looping is additive; a freshly created file accepts the buffer in
 ## one call for the sizes here).
 pub write_file := fn(path : str, buf : [u8]) -> Result(usize, IoError) {

@@ -8,7 +8,7 @@
 ## `Result(Ty, CheckErr)` carrier. That carrier preserves only the TAG — the two span words are stack
 ## GARBAGE (the tag-5 pointer recovery beside it already documented the same truncation). A `Slice(T)`
 ## annotation resolves to the NOMINAL library struct `Slice` (`lib/base/slice.al`), i.e. tag 3, so the
-## D86 leak probe (`check_leaks` → `local_is_owning` → `type_is_owning`) fired on the binding and did
+## leak probe (`check_leaks` → `local_is_owning` → `type_is_owning`) fired on the binding and did
 ## `streq(src + <garbage>, …)` — with the garbage typically a whole ABSOLUTE address, that read is far
 ## outside the source buffer. Plain struct params never tripped it: the same garbage was there, it just
 ## happened not to land on a decl name of matching length. The fix records UNKNOWN (0/0) and lets only

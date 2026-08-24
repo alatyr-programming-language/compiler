@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(a) — a standard-byte-layout struct cannot cross a call boundary by value yet. The
+## CLAYOUT S3(a) — a standard-byte-layout struct cannot cross a call boundary by value yet. The
 ## by-reference struct-parameter ABI resolves the callee's field reads with the WORD model, so a
 ## `[u8; 4]` field counts as FOUR words there while it occupies four BYTES: every field read in the
 ## callee lands at the wrong offset. The byte-precise parameter/return ABI is audit stage S3(e).

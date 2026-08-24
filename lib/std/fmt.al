@@ -1,5 +1,5 @@
 ## std::fmt — structural `Display` rendering over `typeinfo` (Stdlib §2.7;
-## Comptime §5.3 / D87). `display(T, v, sb)` renders any value into a `StrBuf`
+## Comptime §5.3). `display(T, v, sb)` renders any value into a `StrBuf`
 ## (the §2.7 sink) **field by field**: an aggregate as `{ name = value, … }`
 ## (recursing into each field via `comptime for` over `typeinfo(T).fields` + the
 ## projection `a.(f)`), a scalar leaf as its base-10 text. Monomorphized per
@@ -37,7 +37,7 @@ pub write := fn(in out o : Stdout, bs : Slice(u8)) -> Result(usize, io::IoError)
 ## Write the **whole** slice to any **`Writer`** `W` (a type providing
 ## `write(in out self, [u8]) -> Result(usize, IoError)`, Stdlib §2.7) — looping
 ## over short writes. Generic over the sink: the `w.write(…)` call dispatches by
-## `W`'s type (UFCS, D67), so output composes against `StrBuf`, `Stdout`, or any
+## `W`'s type (UFCS), so output composes against `StrBuf`, `Stdout`, or any
 ## writer. A failed write **propagates** (`?`); a sink that refuses progress
 ## (a `0` accept) returns `Ok` with the count written so far. On success returns
 ## `Ok(bs.len)`.
@@ -62,7 +62,7 @@ pub write_all := fn(W : type, E : type, in out w : W, bs : Slice(u8)) -> Result(
   Result(usize, E).Ok(off)
 }
 
-## The **renderer** lives in the **alloc tier** (`alloc::fmt`, D91 — it builds an
+## The **renderer** lives in the **alloc tier** (`alloc::fmt` — it builds an
 ## in-memory `StrBuf` and never reaches the OS, so it is usable `freestanding`). It
 ## is **re-exported** here so the historical `std::fmt::display` / `std::fmt::format`
 ## paths keep resolving; `print`/`println` below call it and add the std-tier write.
@@ -77,7 +77,7 @@ pub format := alloc::fmt::format
 ## (element type inferred per argument, monomorphized; a `str` segment renders
 ## verbatim). An adaptive integer **literal** hole argument (`print("{}", 7)`)
 ## Write a built `StrBuf`'s bytes to standard output — the **std-tier** I/O sink
-## (Stdlib §7 / D91 tier discipline). The buffer's bytes are read from the alloc
+## (Stdlib §7 tier discipline). The buffer's bytes are read from the alloc
 ## tier via its non-consuming accessors (`strbuf_base`/`buf_len`); the **syscall
 ## lives here in `std`**, never in `alloc` (which must not reach the OS tier — the
 ## former `alloc::strbuf::print_buf` was that inversion). Returns the `write(2)`
@@ -87,7 +87,7 @@ pub write_buf := fn(s : ptr(alloc::strbuf::StrBuf)) -> isize {
   unchecked sys_write(1, 1, p, alloc::strbuf::buf_len(s))
 }
 
-## Write a built `StrBuf`'s bytes to a file at `path` (the std-tier file sink, D91
+## Write a built `StrBuf`'s bytes to a file at `path` (the std-tier file sink
 ## tier discipline — the syscall lives in `std`, the bytes are read from the alloc
 ## tier via the non-consuming `strbuf_base`/`buf_len`). The buffer is viewed as a
 ## `[u8]` slice and handed to `io::write_file` (open `O_WRONLY|O_CREAT|O_TRUNC`,

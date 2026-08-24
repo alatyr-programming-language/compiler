@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(b) — `deref(p)` where `p` points at a §7 VIEW, in the three shapes the containers
+## CLAYOUT S3(b) — `deref(p)` where `p` points at a §7 VIEW, in the three shapes the containers
 ## reach an element through. Types §7: a `[T]`/`str` binding, field, parameter, return value or array
 ## element holds the two-word `{ptr, len}` PAIR itself, so a `deref` of a pointer to one must move
 ## BOTH words — on the READ, on the STORE, and when the value is passed as an ARGUMENT.

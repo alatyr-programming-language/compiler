@@ -8,7 +8,7 @@
 ## and this file is a DESCENDANT of `lower`. Every UNQUALIFIED name below that this file does not
 ## import — `streq`, `decl_at`, `entry_of`, `slot_of`, `svec_at`, `emit_expr`, and the TYPES
 ## `SlotEntry` and `ScrutInfo` — binds `lower.al`'s OWN declaration through the ancestor chain
-## (Modules §3 for values, P1-TYPE-ANCESTOR for types).
+## (Modules §3 for values, TYPE-ANCESTOR for types).
 ##
 ## Types: `DInfo` and `FEScrut` move HERE with the band because only the band names them.
 ## `ScrutInfo` DELIBERATELY stays declared in `src/lower.al` — `emit_gas` constructs one at

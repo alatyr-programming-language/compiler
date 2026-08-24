@@ -1,4 +1,4 @@
-## e2e — `alloc::fmt::display` structural rendering end to end (the AMBIENT stdlib renderer, D87 /
+## e2e — `alloc::fmt::display` structural rendering end to end (the AMBIENT stdlib renderer,
 ## Stdlib §2.7). Builds a StrBuf over a raw `mmap` arena, renders a flat struct of scalars via
 ## `display`, and checks the produced text BYTE FOR BYTE against the expected `{ x = 3, y = -7 }`
 ## (an unsigned `u64` field and a signed `i64` field — exercising the `Scalar` arm's numeric-kind

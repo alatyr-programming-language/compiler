@@ -1,4 +1,4 @@
-## TYP-8/D29 — struct construction is BY NAME, not by source position. Regression for a silent
+## TYP-8 — struct construction is BY NAME, not by source position. Regression for a silent
 ## miscompile: `P(y = 6, x = 5)` used to drop the field names and store values POSITIONALLY, so `y`'s
 ## value (6) landed in field 0 (`x`) — any out-of-declaration-order literal silently produced wrong
 ## values (violating TYP-8 and I11). The parser now REORDERS each named field to its declaration index,

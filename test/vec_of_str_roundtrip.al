@@ -1,4 +1,4 @@
-## P1-CLAYOUT S1 — a `Vec(str)` must round-trip its elements, VALUES included.
+## CLAYOUT S1 — a `Vec(str)` must round-trip its elements, VALUES included.
 ##
 ## `lib/alloc/vec.al` strides its backing by `size(T)`. With `size(str) == 8` (the pointer alone,
 ## contradicting the 16 bytes a `str` FIELD already occupied) the two-word {ptr, len} view did not fit

@@ -1,4 +1,4 @@
-## fmt round-trip for the statement forms fmt previously fail-loud rejected (ROADMAP §5): range- and
+## fmt round-trip for the statement forms fmt previously fail-loud rejected: range- and
 ## iterable-`for`, `loop`/`break`/`continue`, `a[i] =`, `a[i].f =`, the nested-field `o.p.x =` store,
 ## and `deref(p) =`. No body comments (fmt retains only LEADING-decl comments, so the `##` count
 ## round-trips exactly). Builds + runs to 42; AllocWith and the `unchecked { }` block are covered by

@@ -1,4 +1,4 @@
-## ROADMAP §4 typed-slice: slicing a STRUCT-element array `[Pt; N]` yields a typed slice whose
+## typed-slice: slicing a STRUCT-element array `[Pt; N]` yields a typed slice whose
 ## elements are structs — `s[i].field` reads the field through the slice pointer (element stride =
 ## the struct's word count, element type span carried so field resolution works).
 Pt := struct { x : u64, y : u64 }

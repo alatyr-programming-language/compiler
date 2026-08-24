@@ -1,5 +1,5 @@
-## e2e — ROADMAP §8.4 part 3, TYP-10 slice C: DIVIDE (`/`) and REMAINDER (`%`) on the prelude
-## `u128 ≡ uint(128)` (Types §3/§7, TYP-2 / TYP-10 / D23 / D24; operators.md OP-1). Binary LONG
+## e2e part 3, TYP-10 slice C: DIVIDE (`/`) and REMAINDER (`%`) on the prelude
+## `u128 ≡ uint(128)` (Types §3/§7, TYP-2 / TYP-10; operators.md OP-1). Binary LONG
 ## DIVISION (shift-subtract), COMPTIME-UNROLLED over the N bits inside the `@inline` generic
 ## operator bodies themselves (lib/base/u128.al): an `@inline` operator body cannot hold a runtime
 ## `while` (the inline expander has no loop form) and a comptime-param helper fn is not declarable,

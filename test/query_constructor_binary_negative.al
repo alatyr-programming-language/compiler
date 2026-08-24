@@ -1,4 +1,4 @@
-## P1-QUERY regression: the constructor value itself is an aggregate, so aggregate + scalar
+## QUERY regression: the constructor value itself is an aggregate, so aggregate + scalar
 ## is not type-correct. `compiles` must return false without evaluating the operand.
 S := struct { a : u64 }
 

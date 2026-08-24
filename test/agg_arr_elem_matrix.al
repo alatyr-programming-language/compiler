@@ -1,4 +1,4 @@
-## e2e (ROADMAP §8.3 — AGGREGATE ARRAY ELEMENT, the LOCAL array). Every access shape on a fixed array
+## e2e (AGGREGATE ARRAY ELEMENT, the LOCAL array). Every access shape on a fixed array
 ## whose elements are a scalar-only STRUCT, each landing on a DISTINCT non-zero word offset so a
 ## dropped stride (element k read as word k) or a dropped field offset shows up as a wrong number:
 ##   1. constant-index field read at word 0, 1 and 2

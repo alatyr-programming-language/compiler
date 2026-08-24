@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(b) — a `Deque(str)` must round-trip its elements, VALUES included.
+## CLAYOUT S3(b) — a `Deque(str)` must round-trip its elements, VALUES included.
 ##
 ## `alloc::deque` reaches an element through the helper `dq_elem(T, d, i) -> ptr(mut T)`. At the use
 ## site (`deref(dq_elem(…))` / `slot := dq_elem(…)` then `deref(slot) = x`) the POINTEE type was not

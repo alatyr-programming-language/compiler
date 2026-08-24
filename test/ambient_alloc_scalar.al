@@ -1,4 +1,4 @@
-## e2e — `@alloc(a) x := <int literal>` (D84): scalar-literal init. A bare integer literal has no
+## e2e — `@alloc(a) x := <int literal>`: scalar-literal init. A bare integer literal has no
 ## inferable type, so the desugar passes an EXPLICIT `isize` (spec §3.4: a literal with no context
 ## takes the target's native signed integer) — `x := alloc_into(isize, ar, 42)`. `x : Handle(isize)`;
 ## `get(isize, ar, x)` recovers the stored 42. Standalone: the bare `@alloc` injects the base prelude.

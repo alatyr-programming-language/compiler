@@ -1,4 +1,4 @@
-## ROADMAP §4 typed-slice: slicing a raw scalar array `[u64; N]` yields a TYPED slice view — `s[i]`
+## typed-slice: slicing a raw scalar array `[u64; N]` yields a TYPED slice view — `s[i]`
 ## reads ELEMENTS (stride-aware through the data pointer), not bytes, and `s.len` is the runtime
 ## length. Previously `xs[0..3]` bound a str byte-view, so `s[i]` mis-read / segfaulted.
 main := fn() -> u64 {

@@ -1,4 +1,4 @@
-## ROADMAP §1/§4: a generic fn returning its type parameter applied to an ENUM (`id(Opt, o)`) — the
+## a generic fn returning its type parameter applied to an ENUM (`id(Opt, o)`) — the
 ## enum dual of generic_struct_return. emit_enum_value's Var arm dereferences a by-ref enum param, and
 ## gen_ret_enum_span binds `o := id(Opt, …)` as the enum (disc/%rax + payload/%rdx delivery).
 Opt := enum { None, Some(u64) }

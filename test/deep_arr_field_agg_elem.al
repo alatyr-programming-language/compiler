@@ -1,4 +1,4 @@
-## P1-DA-DEEP aggregate leaf — whole-element READ/BIND and WRITE for `xs[i].arr[j]`.
+## DA-DEEP aggregate leaf — whole-element READ/BIND and WRITE for `xs[i].arr[j]`.
 ##
 ## The outer array index and inner array-field index are both dynamic. `Row.pad` places the nested
 ## array at a non-zero field offset; `P` is three words, so a one-word copy/store loses observable

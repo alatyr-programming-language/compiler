@@ -1,4 +1,4 @@
-## P1-BYTES: explicit local byte arrays expose byte-precise size/align queries.
+## BYTES: explicit local byte arrays expose byte-precise size/align queries.
 ## Their storage is packed by byte stride, so size([u8; N]) is N and align is 1.
 main := fn() -> u64 {
   mut us : [u8; 4] = [1, 2, 3, 4]

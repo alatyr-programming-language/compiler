@@ -1,4 +1,4 @@
-## e2e (ROADMAP §8.3 — AGGREGATE ARRAY ELEMENT, the array GLOBAL). The `.data` twin of
+## e2e (AGGREGATE ARRAY ELEMENT, the array GLOBAL). The `.data` twin of
 ## `agg_arr_elem_matrix`: the same access shapes on a module-level array of scalar-only structs,
 ## addressed off the global's LABEL instead of a frame slot — field reads at word 1 and 2, a runtime
 ## index, a whole-element copy OUT of `.data` into a struct local, a whole-element write from a

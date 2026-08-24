@@ -1,4 +1,4 @@
-## selfhost::iface — deterministic module-interface/layout summary (TOOL-6 / ROADMAP P3).
+## selfhost::iface — deterministic module-interface/layout summary (TOOL-6).
 ##
 ## This is deliberately a scalar/span-oriented seam. The emitter still consumes the flat Decl
 ## vector, while this module records facts a dependent can observe at an exported boundary. It is

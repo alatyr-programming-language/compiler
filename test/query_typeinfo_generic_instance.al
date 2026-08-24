@@ -1,4 +1,4 @@
-## P1-QUERY/CT-6: a generic instance must substitute T before checking a
+## QUERY/CT-6: a generic instance must substitute T before checking a
 ## capability query that consumes the active `typeinfo(T).fields` projection.
 Pair := struct { x : u64, y : u64 }
 Mixed := struct { scalar : u64, pair : Pair, text : str }

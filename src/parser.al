@@ -1,4 +1,4 @@
-## selfhost::parser — recursive-descent parser, tokens → AST (ROADMAP §1/§6, item 2).
+## selfhost::parser — recursive-descent parser, tokens → AST.
 ##
 ## The second promoted pass: it consumes the `selfhost::lexer` token stream (a
 ## `Vec(Token)` with the kinds documented there) and builds a recursive,
@@ -199,7 +199,7 @@ scan_string := fn(base : usize, n : usize) -> StringScan {
   StringScan(ok = true, len = out)
 }
 
-## rt-style AST-node allocator + reader (ROADMAP §1 fixpoint). These replace the generic
+## rt-style AST-node allocator + reader (fixpoint). These replace the generic
 ## `allocate`/`get` allocator protocol for the AST arena: the lean self-host lower compiles a
 ## monomorphic bump + a generic `bitcast` accessor (the `decl_at` shape), but NOT the generic
 ## `allocate` (it returns `Result(Handle(T), AllocError)`) / `get` (it takes a generic `Handle(T)`
@@ -1143,7 +1143,7 @@ is_enum_name := fn(pc : PC, s : usize, n : usize) -> bool {
   false
 }
 
-## STRUCT FIELD-ORDER TABLE (by-name construction, TYP-8/D29) — held in a MODULE GLOBAL rather than a
+## STRUCT FIELD-ORDER TABLE (by-name construction, TYP-8) — held in a MODULE GLOBAL rather than a
 ## `PC` field: adding a 9th field to `PC` pushed it past the frozen seed's 8-word aggregate-value limit
 ## (the seed then dropped the store of the extra field). The table is a `rt::Vec` of usize, packed as one
 ## variable-length RECORD per kind-2 struct decl — `name_start, name_len, nfields, then nfields × (field
@@ -1171,7 +1171,7 @@ structs_tbl := fn() -> rt::Vec { return deref(unchecked bitcast(ptr(rt::Vec), P_
 ## def_start, def_len)`; the scan strides record-by-record using the stored `nfields`. Names compared by
 ## TEXT over the shared `pc.src`.
 ##
-## Modules §3 (P1-TYPE-ANCESTOR): candidates are RANKED by the module being parsed (`pc.mod_s/mod_l`)
+## Modules §3 (TYPE-ANCESTOR): candidates are RANKED by the module being parsed (`pc.mod_s/mod_l`)
 ## through the one shared rank — this module and its ancestors nearest-first — instead of taking the
 ## FIRST same-named record in table order. That first-wins scan is what made a struct literal in a
 ## CHILD module get checked against an unrelated sibling's same-named struct: a legal
@@ -1272,7 +1272,7 @@ relex_default := fn(in out pc : PC, ds : usize, dl : usize) -> ptr(Expr) {
 }
 
 ## factor := int | ident | '(' expr ')'
-## `alloc::with(pc.arena)` makes the cursor's arena the ambient (D99), so the `newnode`
+## `alloc::with(pc.arena)` makes the cursor's arena the ambient, so the `newnode`
 ## calls elide it — `newnode(pc.arena, Expr.Num(v))` rather than `newnode(pc.arena, Expr.Num(v))`.
 p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     ## THE ROOT OF THE BALANCED-TRUNCATION SEGVs. `p_factor` is the only place a VALUE is read, and
@@ -1633,7 +1633,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           ## integer LITERAL (kind 3). Desugar to `[e, e, …, e]` (n copies) right here — reusing
           ## the `ArrayLit` node + lowering with ZERO codegen/AST change (fixpoint-safe: `src/`
           ## uses no fill form). All copies share the single element node `ee` (each just re-emits
-          ## it — fine for the constant fills the stdlib uses, e.g. `[0; 256]`). ROADMAP §1.3 P3.
+          ## it — fine for the constant fills the stdlib uses, e.g. `[0; 256]`). P3.
           pc.idx = pc.idx + 1                           ## ';'
           if cur(pc).kind != 3 { panic("selfhost: array-fill count must be an integer literal") }
           filln := int_at(pc)
@@ -1965,7 +1965,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         if is_struct {
           ## `field = expr` pairs are collected into a transient `FInit` list (each carrying the field
           ## NAME span), then REORDERED into the struct's DECLARATION order (by-name construction,
-          ## TYP-8/D29): `P(y = 6, x = 5)` and `P(x = 5, y = 6)` both emit values in `x, y` order, so the
+          ## TYP-8): `P(y = 6, x = 5)` and `P(x = 5, y = 6)` both emit values in `x, y` order, so the
           ## positional struct-assign every backend already does is correct. The reorder is inlined here
           ## with scalar-only locals (a multi-word-struct-returning helper mis-lowers under the seed).
           mut fihead := 0
@@ -2212,7 +2212,7 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
         zde := reject_eof(pc, "selfhost: a `.` must be followed by a FIELD, variant or tuple-element name - the input ends after it, so this member access is incomplete (a truncated file, a partial copy, or a bad merge)")
       }
       if cur(pc).kind == 10 {
-        ## `base.(f)` — COMPTIME field access (D90): the member is a comptime value `f` (a
+        ## `base.(f)` — COMPTIME field access: the member is a comptime value `f` (a
         ## `typeinfo` field bound by a `comptime for`). The unroll rewrites it per member.
         pc.idx = pc.idx + 1               ## '('
         cfidx := p_or(pc)
@@ -2332,7 +2332,7 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
     ## re-reads (a comptime-match KIND arm `Array(_) => …` is seen this way while a nested `match` arm
     ## body is parsed — the parenthesized `(add1)(41)` form is caught in `p_factor` instead, where the
     ## parentheses are still visible), and a `CompField` is the COMPTIME-VARIANT PATTERN `T.(v)(pa)`
-    ## (D90; the enum derives in `lib/base/derive.al` / `lib/alloc/fmt.al`), whose trailing `(pa)` is
+    ## (the enum derives in `lib/base/derive.al` / `lib/alloc/fmt.al`), whose trailing `(pa)` is
     ## the arm's payload BINDING list.
     ## SUPPORTED since this lane: an ELEMENT callee `fs[i](x)` / `t.fs[0](x)` — see `p_ecallee` for the
     ## representation (argument 0 IS the callee expression; the callee NAME SPAN is borrowed from the
@@ -2635,7 +2635,7 @@ p_expr := fn(in out pc : PC) -> ptr(mut Expr) {
 ## carrying the token kind as its op byte; the lower emits `andq`/`orq`/`xorq`. Shift operators
 ## are intentionally absent — the language has none (OP-2/OP-6: named `shl`/`shr`/… ops). Every
 ## mixed-bitwise site in `src/`/`lib/` is fully parenthesized, so the tier split is
-## fixpoint-neutral. Grammar §4; ROADMAP §1.3 P3.
+## fixpoint-neutral. Grammar §4 P3.
 
 ## band := expr { '&' expr }  — bitwise AND (kind 34), TIGHTEST bitwise tier (§4 level 5),
 ## just above arithmetic.
@@ -3222,7 +3222,7 @@ p_stmt := fn(in out pc : PC) -> usize {
   ## statement form below keys on the final segment (see `qual_place_assign_head`).
   qph := qual_place_assign_head(pc)
   if qph != 0 { pc.idx = pc.idx + qph }
-  ## `@alloc(A) [mut] name := init` — the D84 dynamic-allocation storage attribute (Memory §2.4):
+  ## `@alloc(A) [mut] name := init` — the dynamic-allocation storage attribute (Memory §2.4):
   ## desugar to `name := alloc_into(A, init)`. `alloc_into` (base/alloc.al) allocates a `T` through the
   ## allocator value `A`, writes `init`, traps on capacity exhaustion (I11), and returns the binding's
   ## `Handle(T)` — so `name` binds `Handle(T)`, with `T` inferred from `init` (a struct/enum literal or a
@@ -3682,7 +3682,7 @@ p_stmt := fn(in out pc : PC) -> usize {
       mut btail := bind_null()
       wt := cur(pc)
       ## `comptime for <var> in typeinfo(T).variants { <T.(var)(p...)> => body }` — a COMPTIME
-      ## VARIANT-ARM TEMPLATE (D90 enum derive). Parse the inner arm `T.(var)(bindings) => body` and
+      ## VARIANT-ARM TEMPLATE (enum derive). Parse the inner arm `T.(var)(bindings) => body` and
       ## mark it `wild = 2`; the lower UNROLLS it into one real arm per variant of the scrutinee's
       ## enum (in a mono instance). `vs/vl` = the loop var name (marks the payload as comptime-typed
       ## for the recursive `hash(p)`); the bindings + body come from the template.
@@ -3999,7 +3999,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
 ## is distinguished from a field-READ in the trailing return expr (`p.x + …`, no trailing
 ## `=`) by requiring the `=` after the field name.
 stmt_starts := fn(pc : PC) -> bool {
-  ## `@alloc(A) name := init` — the D84 allocation storage attribute leads a binding statement (§2.4).
+  ## `@alloc(A) name := init` — the allocation storage attribute leads a binding statement (§2.4).
   if cur(pc).kind == 33 and tok_at(pc, pc.idx + 1).kind == 1 and str_eq(str_at(pc.src + tok_at(pc, pc.idx + 1).start, tok_at(pc, pc.idx + 1).len), "alloc") { return true }
   ## `@label(name) <loop>` — the structured-label attribute leads a labeled loop STATEMENT (§2.1/§7.1).
   ## Without this, `@label(name) while/for` fell to the trailing-expression path and the loop-expression
@@ -4790,12 +4790,12 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       body_stmts = 0, fields_head = 0, ret_ts = lts, ret_tl = ltl,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
   }
-  ## An optional `pub` visibility prefix (Modules §4.1 / D73): every module of the self-host
+  ## An optional `pub` visibility prefix (Modules §4.1): every module of the self-host
   ## tree exports its surface with `pub`, so the parser must accept it. The lean compiler does
   ## not yet gate on visibility (all flattened symbols are reachable), so the marker is consumed
   ## and the declaration parses as if bare; recording the exported flag is additive.
   ## Consume any leading decl-position prefixes in either order: `pub` (visibility, above) and
-  ## `@inline` (D93 — an OPTIMIZATION hint; the lean lower does not inline, so the fn parses as an
+  ## `@inline` (an OPTIMIZATION hint; the lean lower does not inline, so the fn parses as an
   ## ordinary definition, semantically identical). `@inline` is `@` + the ident `inline` (guarded so
   ## `@test`/`@abi` are untouched). src uses only `pub` here, so this is byte-identical for the
   ## self-host build (the TOOL-1 fixpoint holds); it just also accepts `@inline`/`@inline pub`/`pub`.
@@ -5460,7 +5460,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       }
       ## §5.1 in-PARAMETER DEFAULT `in x : T = <expr>`: when the argument is omitted at the call, this
       ## expression is supplied at the call site (FN-5). The `=` (kind 21) after the type opens it.
-      ## STORAGE without growing `Param` (which must stay 8 words — ROADMAP §1.2): a non-pointer value
+      ## STORAGE without growing `Param` (which must stay 8 words): a non-pointer value
       ## param leaves `pps`/`ppl` at 0/0 and every reader of `pps` is guarded by `ts == "ptr"` (lower
       ## 1725/12149/12156), so `pps` is FREE — store the default's `Expr` pointer there (as a usize).
       ## The lower's `fill_program` recovers it (bitcast back) and appends the omitted trailing args.
@@ -5543,7 +5543,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       if cur(pc).kind == 0 {
         zra := reject_eof(pc, "selfhost: a `->` must be followed by a RETURN TYPE - the input ends after it (a truncated file, a partial copy, or a bad merge)")
       }
-      ## `-> scoped ptr(mut T)` — the `scoped` second-class-reference qualifier (§5.3.1 / D98) precedes
+      ## `-> scoped ptr(mut T)` — the `scoped` second-class-reference qualifier (§5.3.1) precedes
       ## the type; skip it so `rt` captures the actual return-type head (`ptr`), not `scoped` (which is
       ## not a type). Without this a `scoped`-returning `get` records `ret_ts = "scoped"`, so the
       ## pointer-return recognizers (`gen_ret_ptrstruct_span`) miss it and a `p := get(P,…)` binding
@@ -5714,7 +5714,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       body_stmts = stmts, fields_head = 0, ret_ts = rt.start, ret_tl = rt.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = when_e, alias_ts = 0, alias_tl = 0)))
   }
-  ## `Name := @owning struct {…}` / `@owning enum {…}` — the `@owning` effector (D86 linearity) may
+  ## `Name := @owning struct {…}` / `@owning enum {…}` — the `@owning` effector (linearity) may
   ## prefix a DIRECT type declaration, not only the generic `fn(T : type) -> type { @owning struct }`
   ## form. Skip the `@owning` (`@` + ident) so the struct/enum body parses; the marker is a checker
   ## concern with NO codegen effect (the lowered struct is identical to a plain one). Guarded on a
@@ -5766,7 +5766,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       body_stmts = 0, fields_head = fhead, ret_ts = 0, ret_tl = 0,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = swhen, alias_ts = 0, alias_tl = 0)))
   }
-  ## `Name := brand(U)` — a NOMINAL BRAND over an underlying scalar type `U` (D9/D24/D25: the
+  ## `Name := brand(U)` — a NOMINAL BRAND over an underlying scalar type `U` (the
   ## prelude scalars `bool`/`char`/`fN` are brands over `bitsN`; a user brand is the same shape).
   ## Recorded as a kind-0 decl MARKED by `arity = 1` (a plain value/alias decl is arity 0), with the
   ## underlying type span in ret_ts/ret_tl — so `struct_decl_of` follows the brand to its underlying

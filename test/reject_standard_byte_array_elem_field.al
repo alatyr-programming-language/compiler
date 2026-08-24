@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(c) — `xs[i].inner.leaf` through a STANDARD BYTE-LAYOUT element struct.
+## CLAYOUT S3(c) — `xs[i].inner.leaf` through a STANDARD BYTE-LAYOUT element struct.
 ##
 ## S3(d) UPDATE: this is now a located reject on the THREE CROSS BACKENDS ONLY. x86_64 composes the
 ## place correctly (byte-precise element stride + `layout_field_offset_bytes` per hop) and returns 42,

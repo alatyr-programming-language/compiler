@@ -1,4 +1,4 @@
-## A user-declared `print` SHADOWS the prelude's comptime-variadic `std::fmt::print` (D70/D79 — the
+## A user-declared `print` SHADOWS the prelude's comptime-variadic `std::fmt::print` (the
 ## built-in names are ordinary prelude identifiers, not reserved words). In STATEMENT position the
 ## call was routed into the `{}`-template desugar by TAIL NAME alone and then dropped (arg 0 is not
 ## a string literal): the user's fn never ran, the counter stayed 0, and the program exited 0 with

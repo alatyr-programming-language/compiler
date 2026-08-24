@@ -1,4 +1,4 @@
-## e2e — FIRST INCREMENT of the non-native-width integer capability (Types §3, TYP-2 / D23 / D24;
+## e2e — FIRST INCREMENT of the non-native-width integer capability (Types §3, TYP-2;
 ## spec/20-types.md §7 "Wider-than-native named integers"; operators.md OP-1). A wider-than-native
 ## unsigned integer is an ORDINARY LIBRARY type: `u128` on a 64-bit host is a multiword value of TWO
 ## native u64 words {lo, hi}, with library-defined, carry-propagating arithmetic and VISIBLE cost,

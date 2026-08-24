@@ -1,4 +1,4 @@
-## selfhost::driver — ties the passes into ONE compile function (ROADMAP §1/§6, item 7).
+## selfhost::driver — ties the passes into ONE compile function.
 ##
 ## This is the integration point of the self-hosted compiler tree: it composes the
 ## sibling passes — `lexer::lex_all` (source → `Vec(Token)`), `parser::parse_program`
@@ -59,7 +59,7 @@ streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -
 
 ## Build the struct FIELD-ORDER table `sv` (the parser's `P_STRUCTS_TBL`) from the collected `decls`:
 ## one packed record per kind-2 struct decl — `name_start, name_len, nfields, then nfields × (field_ns,
-## field_nl)`. Consumed by the parser's by-name struct-literal reorder (TYP-8/D29). Mirrors the enum-name
+## field_nl)`. Consumed by the parser's by-name struct-literal reorder (TYP-8). Mirrors the enum-name
 ## collection loop; run in the SAME first parse pass (getdents module order is not dependency-sorted, so
 ## the table must span all modules before pass 2 resolves any struct literal). Two walks per struct —
 ## count fields, then push the pairs — since the record's `nfields` header precedes the field pairs.
@@ -119,7 +119,7 @@ collect_struct_table := fn(decls : rt::Vec, src : ptr(u8), in out sv : rt::Vec) 
       }
       rt::vec_push(sv, d.name_start)
       rt::vec_push(sv, d.name_len)
-      ## The DECLARING MODULE travels with the record (P1-TYPE-ANCESTOR): `parser::struct_rec_of` used
+      ## The DECLARING MODULE travels with the record (TYPE-ANCESTOR): `parser::struct_rec_of` used
       ## to take the FIRST same-named record in the table, so a struct literal's `f = v` names were
       ## checked against an unrelated module's same-named struct — a LEGAL program rejected with
       ## "unknown field name" whenever the decoy sorted first. With the module recorded, that lookup
@@ -2018,7 +2018,7 @@ pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
 }
 
 ## Compile TWO modules into one runnable program — the first step of multi-module package
-## assembly (ROADMAP §1, port pass #7). This is the in-memory analogue of compiling two files;
+## assembly (port pass #7). This is the in-memory analogue of compiling two files;
 ## the module names are supplied by the DRIVER (in the real package model the name comes from
 ## the filename — MOD-4 — NOT in-source syntax). Module A is named `m0`, module B is named
 ## `main` (so its `main` fn is the `main__main` entry). The two names + two sources are
@@ -2095,7 +2095,7 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
 }
 
 ## Compile N modules into one runnable program — the general form of `compile_pair`
-## (ROADMAP §1, port pass #7; the real package model is N files, MOD-4). `names` and `srcs`
+## (port pass #7; the real package model is N files, MOD-4). `names` and `srcs`
 ## are parallel `Vec(str)` (module k is `names[k]` with source `srcs[k]`); the LAST module's
 ## `main` fn is the entry (`main__main`). Every name + every source is concatenated into ONE
 ## buffer so all name/literal spans stay relative to a SINGLE base (the lower resolves all
@@ -3014,7 +3014,7 @@ read_file_into := fn(in out sb : strbuf::StrBuf, in out scratch : rt::Arena, pat
 
 ## Compile N source FILES into one runnable program — the file-I/O form of `compile_program`
 ## and the mechanism the TOOL-1 fixpoint harness uses to feed the self-host tree its OWN `.al`
-## sources (ROADMAP §1, port pass #7). `paths` is a `Vec(str)` of file paths; module k's name is
+## sources (port pass #7). `paths` is a `Vec(str)` of file paths; module k's name is
 ## `module_name(paths[k])` (the filename stem, MOD-4) and its source is the file's bytes. Every
 ## name + every source is concatenated into one buffer (all spans relative to a single base),
 ## each region lexed + parsed with its module name as the decl tag into one shared `Decl` `Vec`,
@@ -3582,7 +3582,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     di += 1
   }
   collect_enum_aliases(decls, base, ev)
-  collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8/D29)
+  collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
   decls.len = 0
@@ -4517,7 +4517,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     di += 1
   }
   collect_enum_aliases(decls, base, ev)
-  collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8/D29)
+  collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
   decls.len = 0
@@ -4612,14 +4612,14 @@ pub check_file_emit := fn(path : str, in out a : Arena) -> usize {
   return check_files(paths, cs, "")
 }
 
-## ROADMAP §8 backend breadth (WASM→WAT): compile a `.al` program to a WAT module. Runs the shared
+## backend breadth (WASM→WAT): compile a `.al` program to a WAT module. Runs the shared
 ## non-x86 multi-file front end (`d_compile_file_multi`) so the module-qualified stdlib the program
 ## imports is present in `decls`, then `wat::emit_wat_program`.
 pub compile_file_wat := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   return d_compile_file_multi(path, 0)
 }
 
-## ROADMAP §5 (`alatyr fmt`) — the byte length of the file at `path`, probed BEFORE anything is
+## (`alatyr fmt`) — the byte length of the file at `path`, probed BEFORE anything is
 ## reserved. Every arena and every buffer on the fmt path is a function of the input (see
 ## `compile_file_fmt`), and `read_file_into` only reports its length AFTER it has already written the
 ## bytes into a buffer that had to be sized first — so the size has to come from the file itself.
@@ -4660,7 +4660,7 @@ fmt_cap_max := fn(x : usize, y : usize) -> usize {
   return y
 }
 
-## ROADMAP §5 — `alatyr fmt`: parse a single `.al` file and re-emit CANONICAL source (fmt::emit_fmt_
+## `alatyr fmt`: parse a single `.al` file and re-emit CANONICAL source (fmt::emit_fmt_
 ## program). A single parse pass suffices (fmt fail-louds on the enum/aggregate forms the two-pass
 ## enum table exists for). Additive: never invoked by the self-build, so fixpoint-neutral.
 pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
@@ -4804,7 +4804,7 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   out
 }
 
-## ROADMAP §8.2 (backend breadth), item 2: compile a `.al` program to an AArch64 GAS program. Runs the
+## (backend breadth), item 2: compile a `.al` program to an AArch64 GAS program. Runs the
 ## shared non-x86 multi-file front end (`d_compile_file_multi`) — so a module-qualified stdlib callee
 ## (`std::math::sqrt`, `alloc::vec::push`, …) reaches the backend in `decls` instead of hitting its
 ## "undefined/builtin callee" trap — then `aarch64::emit_a64_program`. The emitted `.s` is assembled +
@@ -4814,7 +4814,7 @@ pub compile_file_aarch64 := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   return d_compile_file_multi(path, 1)
 }
 
-## ROADMAP §8.3 (backend breadth), item 3: compile a `.al` program to a RISC-V64 GAS program. Same
+## (backend breadth), item 3: compile a `.al` program to a RISC-V64 GAS program. Same
 ## shared multi-file front end as `compile_file_aarch64`, then `riscv64::emit_rv_program`. Assembled +
 ## linked by `riscv64-unknown-linux-gnu-{as,ld}` and run under `qemu-riscv64`.
 pub compile_file_riscv64 := fn(path : str, in out a : Arena) -> strbuf::StrBuf {

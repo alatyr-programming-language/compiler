@@ -1,4 +1,4 @@
-## Focused P1-CLAYOUT S3(d) seam: a mutable standard-byte-tier aggregate array.
+## Focused CLAYOUT S3(d) seam: a mutable standard-byte-tier aggregate array.
 ## The runtime index must use the element's byte stride for both whole-element assignment and
 ## subsequent field/byte-element places. The source's expected result is 42; every failure below
 ## returns a distinct value below 126 so a backend run is diagnostic rather than a truncated value.

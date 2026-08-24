@@ -1,7 +1,7 @@
 ## Struct-literal field VALUE that is an AGGREGATE bound var (not an inline construct). An inline
 ## aggregate field value (`p = Pt(x=3, y=2)`) already emitted a full multi-word write into the
 ## field slot; a BOUND-VAR aggregate value (`p = q`) dropped the copy — the field read word 0 as 0
-## (silent-wrong-data, ROADMAP Priority 2 "generic-struct-LITERAL EMIT corner", but the defect is
+## (silent-wrong-data "generic-struct-LITERAL EMIT corner", but the defect is
 ## general to any struct literal). Covers non-generic + generic (1- and 2-word field) shapes. → 42.
 
 Pt    := struct { x : usize, y : usize }

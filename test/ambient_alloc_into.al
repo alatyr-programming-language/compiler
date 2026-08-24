@@ -1,4 +1,4 @@
-## e2e — `alloc_into` (the trapping allocation backing `@alloc(a) x := init`, D84) end to end
+## e2e — `alloc_into` (the trapping allocation backing `@alloc(a) x := init`) end to end
 ## through the AMBIENT allocator surface, for a SCALAR value. A raw `mmap` arena is wrapped by
 ## `arena_over`; the `alloc::strbuf::…` reference transitively injects the base `alloc` module so
 ## the bare `arena_over`/`alloc_into`/`get` resolve. `alloc_into(u64, ar, 42)` allocates a `u64`,

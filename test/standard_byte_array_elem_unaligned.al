@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(d) — the shape where the byte STRIDE and `struct_words * 8` genuinely DISAGREE, and
+## CLAYOUT S3(d) — the shape where the byte STRIDE and `struct_words * 8` genuinely DISAGREE, and
 ## where the child sits at a NON-8-ALIGNED element offset. This is the fixture that falsifies "the
 ## stride was already right": the previous element addressing multiplied the index by
 ## `struct_words * 8`, which is 16 here, while Types §6.4 requires 10.

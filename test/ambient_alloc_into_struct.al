@@ -1,4 +1,4 @@
-## e2e — `alloc_into` for a STRUCT value end to end through the ambient allocator surface (D84).
+## e2e — `alloc_into` for a STRUCT value end to end through the ambient allocator surface.
 ## `alloc_into(P, ar, P(x = 40, y = 2))` allocates a two-word struct in the arena, stores it whole
 ## (the `deref(p) = init` value-model store, up-growing §4), and returns its `Handle`; the value is
 ## recovered with `s := deref(get(P, ar, h))` — a whole-struct copy out of the arena — and its

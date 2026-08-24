@@ -1,5 +1,5 @@
-## e2e — the STD-tier `std::fmt::println` composing over the alloc-tier ENUM display arm (D87 /
-## Stdlib §2.7; enum rendering via the comptime variant match, D90). `println(Opt, Opt.Just(5))`
+## e2e — the STD-tier `std::fmt::println` composing over the alloc-tier ENUM display arm (
+## Stdlib §2.7; enum rendering via the comptime variant match). `println(Opt, Opt.Just(5))`
 ## builds a StrBuf via `display` (rendering the enum as `Just(5)`), appends a newline, and writes it
 ## to stdout with a real `write(2)` syscall, returning the byte count. `Just(5)\n` is 8 bytes, so a
 ## correct render+write returns 8 → this exits 42. Proves the whole ambient path over an enum:

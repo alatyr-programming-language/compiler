@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(d) — THE CONTROL. The two array kinds the byte-precise element tier must NOT capture,
+## CLAYOUT S3(d) — THE CONTROL. The two array kinds the byte-precise element tier must NOT capture,
 ## measured beside the ones it does:
 ##
 ##   a WORD-GRANULAR struct element (`struct { x : u64, y : u64 }`) — every field is 8 bytes wide and

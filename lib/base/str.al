@@ -482,7 +482,7 @@ pub eq_ignore_ascii_case := fn(a : str, b : str) -> bool {
 ## **Iterator** protocol (Stdlib §2.4: `iter` returns itself, `next` decodes one
 ## code point and advances), so `for c in chars(s) { … }` walks the string by
 ## **code point**, not byte (`for b in bytes(s)` walks bytes). Its `iter`/`next`
-## are free-function **overloads** (D88) keyed on `CharIter`, so they coexist with
+## are free-function **overloads** keyed on `CharIter`, so they coexist with
 ## any other type's `iter`/`next`.
 pub CharIter := struct { ptr : ptr(u8), len : usize, pos : usize }
 
@@ -545,7 +545,7 @@ next := fn(in out c : CharIter) -> Option(char) {
 ## separator **byte** `sep` (Stdlib §3.6), yielding each piece as a `str` view
 ## (no copy — a sub-slice into the original). Like `CharIter`, it satisfies the
 ## **Iterator** protocol (Stdlib §2.4) via free-function `iter`/`next` overloads
-## (D88) keyed on `SplitIter`, so `for part in split(s, sep) { … }` walks the
+## keyed on `SplitIter`, so `for part in split(s, sep) { … }` walks the
 ## fields. Standard split semantics: `n` separators yield `n+1` pieces, an empty
 ## piece between adjacent separators, and a trailing separator a final empty
 ## piece. Splitting on a byte suits the common ASCII delimiters (`,` `=` `\n`

@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(c) — the two whole-value copies that must NOT change, measured beside the ones that
+## CLAYOUT S3(c) — the two whole-value copies that must NOT change, measured beside the ones that
 ## did. Both are the pre-existing WORD copy, and both are correct for the same reason (audit §5's
 ## staging principle): the two layouts coincide, so the word copy IS the byte copy.
 ##

@@ -1,4 +1,4 @@
-## P1-CLAYOUT S1 (spec Types §7): a `[T]` / `str` VIEW **is** the two-word {pointer, length} pair
+## CLAYOUT S1 (spec Types §7): a `[T]` / `str` VIEW **is** the two-word {pointer, length} pair
 ## wherever it appears, and `[T].size()` / `str.size()` report **that pair** — 16 bytes on a 64-bit
 ## target, aligned as a pointer. Every line is chosen so the pre-S1 word model and the spec DISAGREE:
 ##   size(str) was 8 (the pointer alone) while a `str` FIELD already occupied 16 — the compiler

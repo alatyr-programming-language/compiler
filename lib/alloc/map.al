@@ -2,8 +2,8 @@
 ##
 ## Concrete `u64 -> u64`, fixed-capacity (it traps if full — resize-on-load is a
 ## follow-up); the generic `HashMap(K, V)` is the typeinfo-driven version.
-## **Allocator-borne** (ROADMAP §3): the buckets come from a pluggable `Arena`
-## (region protocol, D84), not a direct `mmap`. Each bucket is 3 `u64` slots:
+## **Allocator-borne**: the buckets come from a pluggable `Arena`
+## (region protocol), not a direct `mmap`. Each bucket is 3 `u64` slots:
 ## `[used, key, value]`; the arena's region pages are zero-filled, so every bucket
 ## starts `used = 0` (empty).
 

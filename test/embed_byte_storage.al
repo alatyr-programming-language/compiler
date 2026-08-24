@@ -1,4 +1,4 @@
-## P1-BYTES — an explicitly typed byte fixed-array backed by embed storage.
+## BYTES — an explicitly typed byte fixed-array backed by embed storage.
 ## Direct local/global indexing, byte addresses, mutation, and .len must all use [T; N].
 mut EMBED_GLOBAL : [u8; 4] = embed("test/embed_fixture.bin")
 EMBED_CONST : [u8; 4] = embed("test/embed_fixture.bin")

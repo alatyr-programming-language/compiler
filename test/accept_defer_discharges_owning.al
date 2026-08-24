@@ -1,4 +1,4 @@
-## DEFER + LINEARITY (spec Memory §5.8/§5.9, Control Flow §9.3 / D86): `defer` is the idiom that
+## DEFER + LINEARITY (spec Memory §5.8/§5.9, Control Flow §9.3): `defer` is the idiom that
 ## discharges an @owning value's linear obligation on every normal exit. Here `h` (an @owning handle) is
 ## consumed by a DEFERRED `close_it(h)`; the discharge is registered before the fn ends, so the leak
 ## check must ACCEPT (rc 0) — the deferred consumer is a real use of `h`. (Contrast `reject_leak_owning`,

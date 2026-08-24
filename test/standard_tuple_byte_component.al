@@ -1,4 +1,4 @@
-## P1-BYTES: a typed local tuple with a direct byte-array component uses the
+## BYTES: a typed local tuple with a direct byte-array component uses the
 ## standard byte layout for construction, indexing, writes, and scalar neighbors.
 
 main := fn() -> u64 {

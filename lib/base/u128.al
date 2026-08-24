@@ -1,7 +1,7 @@
 ## u128 — the TYP-10 GENERALIZED `uint(N)` recipe: a wider-than-native unsigned integer of N bits
 ## (N a POSITIVE MULTIPLE OF 64 — the comptime array-length fold rejects anything else LOUD, see
 ## `lower_layout::ct_arr_len`), as an ORDINARY LIBRARY multiword type (Types §3 / §7
-## "Wider-than-native named integers"; TYP-2 / TYP-10 / D23 / D24). `uint` is a comptime-VALUE
+## "Wider-than-native named integers"; TYP-2 / TYP-10). `uint` is a comptime-VALUE
 ## type-function: `uint(N)` is a nominal struct of `N/64` little-endian `u64` words (word 0 = the
 ## least-significant 64 bits, §6 declaration-order layout). The FULL operator set (`+ - * / %` +
 ## the six comparisons) is `@inline` GENERIC operators over the comptime value parameter N — the
@@ -62,14 +62,14 @@ u128 := uint(128)
   return r
 }
 
-## `*` — schoolbook multiply keeping the LOW N bits (modular, per D24), O(words²). COLUMN k of the
+## `*` — schoolbook multiply keeping the LOW N bits (modular, per), O(words²). COLUMN k of the
 ## product receives the LOW half of every `a[i]·b[j]` with i+j = k and the HIGH half of every one
 ## with i+j = k-1, plus the carry column k-1 produced. The column accumulates mod 2^64 — each
 ## wrapping add's carry-out (≤ 1) is COUNTED into the next column's incoming carry (their sum is
 ## < 2^64, so no bit is lost); the final accumulator is the result word. All adds wrap (`unchecked`
 ## — the reduction IS the modular semantics, else the I11 guard would trap instead of reduce). The
 ## per-word HIGH half is x86_64's 1-operand `mulq` (high half in %rdx) via the synthetic `mulhiq`
-## intrinsic (Assembly §80 / D25.3) under `comptime if target.arch == Arch.x86_64`, INLINED in the
+## intrinsic (Assembly §80.3) under `comptime if target.arch == Arch.x86_64`, INLINED in the
 ## body — a helper fn with a comptime param is not declarable (TYP-10 v1). The triangular guards
 ## `i <= k` / `i < k` are runtime ifs on the unrolled loop vars (each holds its constant); the
 ## `comptime for` bounds (`N/64`) fold against the site binding.

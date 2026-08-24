@@ -1,6 +1,6 @@
 ## DO NOT REGISTER IN scripts/e2e.sh YET — it would go RED on the sweeps, and correctly so.
 ##
-## e2e (deferred) — Verification § / D70/D82: an `unchecked` sum whose partner is a bare INTEGER
+## e2e (deferred) — Verification §: an `unchecked` sum whose partner is a bare INTEGER
 ## LITERAL must keep its operand's UNSIGNEDNESS. A literal has no type of its own and takes its
 ## partner's, so `w + 6` over `w : u64` is a `u64` sum.
 ##

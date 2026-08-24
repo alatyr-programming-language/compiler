@@ -8,7 +8,7 @@
 ## two futex "condition" words for blocking. No new language entity. x86_64-only in v1 (the futex
 ## syscall number is Linux), and the element `T` is **word-sized** in v1 (scalar `u64`/`usize`/ptr):
 ## a slot is read/written with a single scalar load/store, so a multi-word struct `T` — which needs
-## the byte-by-byte aggregate copy — is a follow-up (see ROADMAP).
+## the byte-by-byte aggregate copy — is a follow-up (see).
 ##
 ## Layout (`Channel(T)`) — all fields are 8-byte scalars, so their offsets are FIXED regardless of
 ## `T` (the ring elements live OUT of line, in the arena, reached through `data`): this lets `send`/
@@ -362,7 +362,7 @@ pub select2_recv := fn(T : type, ch_a : ptr(mut Channel(T)), ch_b : ptr(mut Chan
 ## real use. Split out as its OWN function (a plain `ptr(mut Channel(T))` param) so the field deref
 ## happens on an ordinary pointer, NOT on a pointer just read inline from a slice element: an inline
 ## `deref(chans[i]).field` over a `Slice(ptr(mut Channel(T)))` element currently mis-addresses (reads
-## a wrong base), whereas passing the element pointer across a call boundary is correct — see ROADMAP.
+## a wrong base), whereas passing the element pointer across a call boundary is correct — see.
 ch_seed := fn(T : type, ch : ptr(mut Channel(T))) -> T {
   data0 := deref(ch).data
   return unchecked deref(bitcast(ptr(T), data0))

@@ -1,4 +1,4 @@
-## Focused control for P1-CLAYOUT S3(d): preserve the historical word-tier aggregate path and the
+## Focused control for CLAYOUT S3(d): preserve the historical word-tier aggregate path and the
 ## independent plain-byte-array path while the byte-tier aggregate path is narrowed.
 Word := struct { x : u64, y : u64 }
 main := fn() -> u64 {

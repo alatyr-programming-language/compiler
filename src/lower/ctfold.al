@@ -8,7 +8,7 @@
 ## and this file is a DESCENDANT of `lower`. Every UNQUALIFIED name it does not import — `streq`,
 ## `decl_at`, `module_const_value`, `guard_resolve_tp`, `size_of_type_span`, and the `BUILD_FLAGS_P`/
 ## `BUILD_FLAGS_N` globals — binds `lower.al`'s OWN declaration through the ancestor chain (Modules §3
-## for values, P1-TYPE-ANCESTOR for types).
+## for values, TYPE-ANCESTOR for types).
 ##
 ## Audit-listed as "entangled by `VERIFY_CHK`"; that entanglement went away when `d18876c` moved the
 ## verification mode into `LCtx`, and `comptime_cond_eval` now folds `verify.checked` off `cx.vchk`.
@@ -337,7 +337,7 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Ar
   }
   found
 }
-## The build-path query mirror for the narrow P1-QUERY constructor/binary conformance boundary. The
+## The build-path query mirror for the narrow QUERY constructor/binary conformance boundary. The
 ## canonical sema attempt rejects a known aggregate beside a scalar literal; build lowering has a
 ## deliberately conservative fallback because it may receive an AST copy after the sema rewrite. Keep
 ## this mirror limited to that exact shape so aggregate+aggregate operator overloads remain resolvable.

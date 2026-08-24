@@ -13,7 +13,7 @@
 #     the eight glyphs -> a valid program REJECTED and a write to an immutable binding ACCEPTED.
 #   * THREE-PLUS copies of the `return 0`-after-flush shape -> two real defects: the three non-x86
 #     emit surfaces failing OPEN, and an unreportable write failure on two more paths.
-#   * FIVE hand-rolled `size(T)`-strided arena containers -> named in ROADMAP as the danger for the
+#   * FIVE hand-rolled `size(T)`-strided arena containers -> named in as the danger for the
 #     layout switch.
 #   * caches keyed on the wrong identity (`_sdc_*`/`_edc_*` on a `src` base, `LNI` on a decl COUNT)
 #     -> 74 of 630 fixtures died rc 139 the first time a pass exercised them.
@@ -33,7 +33,7 @@
 # 7 585 function pairs on this tree; at 240 tokens — a verbatim 240-token clone modulo identifier
 # spellings — it still reports 216 pairs and misses EVERY case in the ledger, because the ledger's
 # shapes are 3 to 15 tokens long. A rare-identifier vocabulary was also measured: 106 to 1 759
-# pairs, and it too misses the container family. Neither is gateable. See ROADMAP / the lane report.
+# pairs, and it too misses the container family. Neither is gateable. See the lane report.
 #
 # HOW IT FAILS
 # ------------

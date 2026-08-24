@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(b) — an `OSet(str)` must keep, order and find its elements by VALUE.
+## CLAYOUT S3(b) — an `OSet(str)` must keep, order and find its elements by VALUE.
 ##
 ## `alloc::oset` reaches an element through `oset_elem(T, s, i) -> ptr(mut T)`; every ordering
 ## decision reads one (`e := deref(oset_elem(…))` inside `oset_lower_bound` / `oset_contains`). At the

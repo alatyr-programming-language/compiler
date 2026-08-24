@@ -1,4 +1,4 @@
-## selfhost::lexrt — the lexer, migrated onto the lean runtime `rt` (ROADMAP §1 capstone:
+## selfhost::lexrt — the lexer, migrated onto the lean runtime `rt` (capstone:
 ## the first pass moved off `alloc::vec` so the SELF-HOST lower can compile it, toward the
 ## TOOL-1 fixpoint). It reads the source `str` via the spec-canonical byte access `bytes(src)[i]`
 ## (a byte read under both compilers) and `src.len`, and stores each token as a 3-word arena

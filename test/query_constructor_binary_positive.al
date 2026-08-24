@@ -1,4 +1,4 @@
-## P1-QUERY regression: valid constructor and scalar-binary operands remain queryable.
+## QUERY regression: valid constructor and scalar-binary operands remain queryable.
 ## The negative companion locks the aggregate-binary rejection separately.
 S := struct { a : u64 }
 @inline + := fn(x : S, y : u64) -> u64 { x.a + y }

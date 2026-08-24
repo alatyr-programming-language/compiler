@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(b) — a `HashMap(u64, str)` must round-trip its VALUES.
+## CLAYOUT S3(b) — a `HashMap(u64, str)` must round-trip its VALUES.
 ##
 ## `alloc::hashmap` reaches a value through `val_at(K, V, m, a, i) -> ptr(mut V)`. At the use site the
 ## POINTEE type was not recoverable, so the two-word §7 `{ptr, len}` view was never materialized:

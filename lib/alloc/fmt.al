@@ -1,10 +1,10 @@
-## alloc::fmt — the **alloc-tier renderer** (Stdlib §2.7; Comptime §5.3 / D87).
+## alloc::fmt — the **alloc-tier renderer** (Stdlib §2.7; Comptime §5.3).
 ## `display(T, v, sb)` renders any value into a `StrBuf` (the §2.7 sink) **field by
 ## field**: an aggregate as `{ name = value, … }` (recursing via `comptime for` over
 ## `typeinfo(T).fields` + the projection `a.(f)`), a scalar leaf as its base-10 text.
 ## Monomorphized per type, fully erased — zero-cost, no RTTI.
 ##
-## **Tier (D91):** this is the **alloc** tier — it builds an in-memory `StrBuf` and
+## **Tier:** this is the **alloc** tier — it builds an in-memory `StrBuf` and
 ## never reaches the OS, so `format`/`display` are usable on a `freestanding` (no
 ## `std`) target with only an allocator. Writing a built buffer to a stream is the
 ## **std** tier (`std::fmt::write_buf`/`print`/`println`), which composes over this.
@@ -18,7 +18,7 @@
 ## generalization.
 
 ## Trap on an in-memory render failure — the **trapping boundary** for the
-## `print`/`println` conveniences (Stdlib §1 / D91: a buffer's `Writer` error is
+## `print`/`println` conveniences (Stdlib §1: a buffer's `Writer` error is
 ## `AllocError`; these conveniences own a throwaway arena, where OOM is a hard
 ## error, not a recoverable one — so they absorb the fallible renderer's `Result`
 ## here and trap). This is *not* a hidden failure (I3/I11): a trap is observable.
@@ -35,13 +35,13 @@ pub trap_oom := fn(r : Result(usize, AllocError)) {
 
 ## Render `v` into `sb`. A struct/aggregate renders `{ f = v, … }` recursively;
 ## a scalar leaf renders its base-10 text (signed with a leading `-`). Fallible:
-## the buffer's growth `?`-propagates `AllocError` (D91), so `format` surfaces OOM
+## the buffer's growth `?`-propagates `AllocError`, so `format` surfaces OOM
 ## instead of trapping; `print`/`println` absorb it.
 pub display := fn(T : type, v : T, in out sb : alloc::strbuf::StrBuf) -> Result(usize, AllocError) {
   ## One flat `comptime match` over `typeinfo(T)` (CT-8 §8.2) — only the matching
   ## arm is emitted, its pattern bindings (`under`/`m`, `b`/`k`) comptime values.
   comptime match typeinfo(T) {
-    ## A **user nominal brand** (D9/CT-6) — the prelude scalar brands
+    ## A **user nominal brand** (CT-6) — the prelude scalar brands
     ## (`uN`/`iN`/`fN`/`bool`/`char`) reify as `Scalar{kind}`, not `Brand`, so they
     ## are handled by the `Scalar` arm below; only a user brand reaches here. Dispatch on
     ## the UNDERLYING scalar's kind (`typeinfo(under)`) so a brand over a SIGNED or FLOAT
@@ -77,7 +77,7 @@ pub display := fn(T : type, v : T, in out sb : alloc::strbuf::StrBuf) -> Result(
     }
     ## An **enum** renders the active variant's NAME, followed by its payload in
     ## parentheses when the variant carries one (`Some(3)`, `None`). Reached through the
-    ## comptime variant match (D90 / Comptime §5.5): `comptime for var in
+    ## comptime variant match (Comptime §5.5): `comptime for var in
     ## typeinfo(T).variants` unrolls one `match` arm per variant, `var.name` is the
     ## variant's comptime `str`, and `comptime match var.payload` (an `Option(type)`,
     ## appendix §4.1) folds per variant — `Some(_)` for a payloaded variant (rendered
@@ -166,7 +166,7 @@ pub display := fn(T : type, v : T, in out sb : alloc::strbuf::StrBuf) -> Result(
 ## `Result`: `format` is an inlined comptime-variadic, so a `?` inside would propagate
 ## from the *call site's* enclosing function, and wrapping the `@owning` `String` in a
 ## `Result` snags linearity. The recoverable in-memory render is the `Writer` surface
-## directly (`sb.write(bytes)? -> Result(usize, AllocError)`, D91).
+## directly (`sb.write(bytes)? -> Result(usize, AllocError)`).
 pub format := fn(fmt : str, a : ptr(mut Arena), args : ...) -> alloc::strbuf::StrBuf {
   mut sb := alloc::strbuf::strbuf(a, 64)
   comptime for x in args {

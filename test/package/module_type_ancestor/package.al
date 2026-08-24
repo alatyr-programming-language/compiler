@@ -10,7 +10,7 @@
 ## Every shape here is a SIZE or a VALIDITY, because those are the only observable differences a
 ## same-named type can produce: a struct's `size()`, a raw union's `size()`, an enum's `size()`, a
 ## type ALIAS's target, a generic type ARGUMENT's instance layout, a struct literal's field-name set,
-## and which `@require` predicate runs. Measured on the frozen seed before P1-TYPE-ANCESTOR:
+## and which `@require` predicate runs. Measured on the frozen seed before TYPE-ANCESTOR:
 ## `geo::child::run()` returned 74 and `geo::deep::leaf::run()` 33 (both sized `zother`'s types).
 ##
 ## child 25 + grandchild 17 = 42.

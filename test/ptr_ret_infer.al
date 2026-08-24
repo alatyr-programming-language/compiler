@@ -1,4 +1,4 @@
-## ROADMAP §4: preserved pointee types through pointer-returning calls.
+## preserved pointee types through pointer-returning calls.
 ## An INFERRED `p := get(…)` binding, where `get` is a non-generic fn whose declared return
 ## type is `ptr(Struct)`, must record `p` as a pointer-to-struct so `deref(p).field` reads the
 ## field through the pointer (not collapse onto p's own scalar slot). The annotated form

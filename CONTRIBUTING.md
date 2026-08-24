@@ -26,10 +26,10 @@ get it decided there, then implement. That rule is why this compiler can claim c
 `TYP-*`, `MOD-*`, `TOOL-*`, `CG-*`, `CF-*`, `CT-*`, `FN-*`, `MEM-*`, `OP-*`, `SYN-*`, `STD-*`, `CC-*`,
 `PRIN-*` — and a new comment or issue cites one of those, or an issue number.
 
-You will also meet two vocabularies in existing comments that resolve nowhere: **flat `D<N>`** (the
-pre-1.0 numbering the spec replaced, with no old→new map) and **`ROADMAP §N` / `P1-*`** (anchors into
-an internal planning document that is not published). Read them as history, not as pointers, and do
-not add more. `AGENTS.md` records the three that were recovered.
+Nothing in this tree cites anything else. The flat `D`-number scheme the spec retired and the section
+anchors into an unpublished planning document have both been removed, not annotated — `AGENTS.md` says
+which three were recovered by meaning. What looks similar and is NOT a citation is `CLAYOUT S3(b)` and
+its siblings: in-code tags that group the sites of one sub-problem so a single `grep` finds them all.
 
 ## Spec decisions awaiting implementation
 

@@ -1,4 +1,4 @@
-## P1-BYTES: embed has the spec-facing [u8; N] surface, not only the internal str view.
+## BYTES: embed has the spec-facing [u8; N] surface, not only the internal str view.
 ## The compiler may reuse the binary-safe byte representation, but an explicit [u8; 4]
 ## binding must type-check, preserve the exact length, and expose byte indexing.
 main := fn() -> u64 {

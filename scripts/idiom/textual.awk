@@ -30,7 +30,7 @@ FNR == 1 {
 
 # ---- STRIDE ------------------------------------------------------------------------------------
 # `deref(v).base + i * 16` and friends: an element address computed from a HAND-WRITTEN stride.
-# ROADMAP names this as the danger for the layout switch — every such site hard-codes a byte layout
+# names this as the danger for the layout switch — every such site hard-codes a byte layout
 # the compiler is about to start choosing for itself, and the five it names ("five hand-rolled
 # `size(T)`-strided arena containers") are only the ones somebody happened to list.
 {

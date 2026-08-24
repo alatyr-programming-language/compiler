@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(c) — the IMAGE half of the byte-precise copier. When the copied child carries its OWN
+## CLAYOUT S3(c) — the IMAGE half of the byte-precise copier. When the copied child carries its OWN
 ## byte-typed array it is BYTE-tier in its own right (`layout_kind` says so precisely because of that
 ## field), so its destination local is read at §6.1 offsets — the same offsets the source holds. The
 ## copy is then the child's `standard_struct_bytes` bytes moved VERBATIM, and it has to be byte-wise:

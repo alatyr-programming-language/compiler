@@ -1,4 +1,4 @@
-## e2e — `alloc::fmt::display` on a USER NOMINAL BRAND (D9/D24/D25). `Id := brand(u64)` is a
+## e2e — `alloc::fmt::display` on a USER NOMINAL BRAND. `Id := brand(u64)` is a
 ## compile-time nominal wrapper over `u64` with `u64`'s exact runtime representation. `display`'s
 ## `Brand(under, _)` arm dispatches on the UNDERLYING type's kind (`typeinfo(under)`), so a brand
 ## over an unsigned integer renders as base-10 (`Id(7)` → "7"). Confirms: brand construction

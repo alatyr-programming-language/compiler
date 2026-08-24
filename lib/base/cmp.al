@@ -31,7 +31,7 @@ pub clamp := fn(T : type, x : T, lo : T, hi : T) -> T {
 ## that inlines to one flags→`bool` instruction. **Signedness IS which instruction
 ## the body selects**: `setb` (unsigned "below") vs `setl` (signed "less"). Lowered
 ## to `cmp`+`setcc`+`movzbq`. x86_64 first (the priority arch); other arches keep
-## the built-in comparison until their fused `cmp`+`cset` lands (ROADMAP §4.3a).
+## the built-in comparison until their fused `cmp`+`cset` lands (a).
 @inline lt := fn(a : u64, b : u64) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.setb(out, a, b) }

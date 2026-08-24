@@ -7,7 +7,7 @@ Option := fn(T : type) -> type { return enum { None, Some(T) } }
 
 ## Curated operations (Stdlib §160). Unwrapping a `None` is a **defined-failure**
 ## `panic` (§4), never UB — a **named** method (CF-7/CF-9: no `!` force-unwrap).
-## Reached prefix `unwrap(o)` or UFCS `o.unwrap()` (D10).
+## Reached prefix `unwrap(o)` or UFCS `o.unwrap()`.
 
 ## The present value, trapping on `None` (defined-failure `panic`, §4).
 pub unwrap := fn(T : type, self : Option(T)) -> T {

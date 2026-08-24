@@ -1,14 +1,14 @@
-## Numeric interpretations as prelude brands over bitsN (D24/D25). Floating point
+## Numeric interpretations as prelude brands over bitsN. Floating point
 ## (f32/f64); uN/iN are compiler-provided (a width-parameterized family).
 f32 := brand(bits32)
 f64 := brand(bits64)
 
-## Floating-point arithmetic operators (§4 / D61) — library functions naming the
+## Floating-point arithmetic operators (§4) — library functions naming the
 ## scalar-FP intrinsic (x86_64 `addsd`/`subsd`/`mulsd`/`divsd` for `f64`,
 ## `addss`/… for `f32`). A float is held as its IEEE-754 bit pattern in a GP
 ## register; the intrinsic lowering bounces it through `xmm` (the same dance the
 ## built-in `float_binop` did). **No overflow guard** — IEEE arithmetic is total
-## (overflow → ±inf, `0/0` → NaN), never a trap (D61). One-instruction bodies, so
+## (overflow → ±inf, `0/0` → NaN), never a trap. One-instruction bodies, so
 ## inlined (I2). x86_64-gated like the integer scalar operators.
 @inline + := fn(a : f64, b : f64) -> f64 {
   mut out : f64 = a
@@ -51,12 +51,12 @@ f64 := brand(bits64)
   return out
 }
 
-## Native integer operators as library functions (D24/D25.3 — signedness IS the
+## Native integer operators as library functions (.3 — signedness IS the
 ## instruction the body names; the implementation differs per target via
 ## `comptime if target.arch`). The override-desugar routes `a <op> b` over u64/i64
 ## to these (overload-mangled per type), each inlining to the bare instruction.
 ##
-## The instruction is **arch-qualified** (`x86_64.divq`, `aarch64.sdiv`, §80/D25.3):
+## The instruction is **arch-qualified** (`x86_64.divq`, `aarch64.sdiv`, §80.3):
 ## a qualified mnemonic cannot be shadowed by a user function, so a body may name
 ## `div` — a mnemonic that collides with a common function name — without
 ## ambiguity. x86_64 uses the implicit-`rdx:rax` 1-operand divides (`divq`/`idivq`);
@@ -66,7 +66,7 @@ f64 := brand(bits64)
 ##
 ## **Every integer scalar operator is now a library function on x86_64** — all
 ## five arithmetic (`+`/`-`/`*`/`/`/`%`) and the six comparisons (`cmp.al`),
-## for `u8`/`i8`/`u16`/`i16`/`u32`/`i32`/`u64`/`i64` (and `usize`/`isize` as D23
+## for `u8`/`i8`/`u16`/`i16`/`u32`/`i32`/`u64`/`i64` (and `usize`/`isize` as
 ## aliases of the pointer-width integer). Scalar-operator routing is **x86_64-
 ## gated** (`routes_comparison`), so other arches keep the built-in lowering until
 ## their operator support lands. The 64-bit ops name the bare instruction
@@ -131,8 +131,8 @@ f64 := brand(bits64)
 }
 
 ## 32-bit `+`/`-` for `u32`/`i32` — the narrower-width counterpart of the 64-bit
-## operators (D24/D25.3). Same shape, at 32-bit width on **every** arch (a 32-bit
-## target's `usize`/`isize` IS `u32`/`i32`, D23, so these must cover all arches):
+## operators (.3). Same shape, at 32-bit width on **every** arch (a 32-bit
+## target's `usize`/`isize` IS `u32`/`i32`, so these must cover all arches):
 ## the x86 family uses the 2-operand `addl`/`subl` (on x86_64 the lowering spells
 ## the operands at the 32-bit sub-register; on i386 the registers are already
 ## 32-bit), riscv the `addw`/`subw` (64-bit) or native `add`/`sub` (riscv32),
@@ -405,7 +405,7 @@ f64 := brand(bits64)
 ## Available EVERYWHERE (no `unchecked` grant) as ordinary prelude functions —
 ## resolved by UFCS, so both `wrapping_add(a, b)` and `a.wrapping_add(b)` work
 ## (Type System §4.5). Four families per operation, on the integer interpretations
-## `uN`/`iN` (`usize`/`isize` are D23 aliases of the pointer-width integer, covered
+## `uN`/`iN` (`usize`/`isize` are aliases of the pointer-width integer, covered
 ## by the `u64`/`i64` overloads on x86_64):
 ##   wrapping_*    -> T           (two's-complement wrap; == an `unchecked` op)
 ##   saturating_*  -> T           (clamp to the type's [min, max])

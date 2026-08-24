@@ -1,4 +1,4 @@
-## ROADMAP §4: a mutable-GLOBAL struct with an ENUM FIELD — `.data` layout (emit_global_data_cells
+## a mutable-GLOBAL struct with an ENUM FIELD — `.data` layout (emit_global_data_cells
 ## emits the enum field as [disc, payload, pad] so a following scalar field aligns) and `match STATE.c`
 ## (try_field_enum_scrut materializes the field's enum from .data ascending, LABEL+(fwo+j)*8, into the
 ## match scratch — the global dual of the local struct-enum-field match). STATE.c = G(40), STATE.n = 2.

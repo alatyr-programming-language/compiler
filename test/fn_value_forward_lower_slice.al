@@ -1,4 +1,4 @@
-## P1-FN-VALUE residual: forwarding a function value through a second wrapper.
+## FN-VALUE residual: forwarding a function value through a second wrapper.
 ## The direct and forwarded paths both validate the computed value; a code
 ## pointer accidentally passed as a Slice (or a Slice passed as the code
 ## pointer) must not become a silent normal exit.

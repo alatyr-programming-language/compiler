@@ -1,14 +1,14 @@
 ## Structural derives over `typeinfo(T).fields` (Stdlib §2.6; Comptime §5.3 /
-## §5.4; D87) — `eq` / `lt` / `hash`, generic over any `T`. Each body iterates
+## §5.4) — `eq` / `lt` / `hash`, generic over any `T`. Each body iterates
 ## the fields with `comptime for` and projects the matching field of the value
 ## with `a.(f)` (≡ `a.<f.name>`), monomorphizing to **zero-cost**, fully erased
 ## per-field code (I2/I7). A nested aggregate field recurses through the
 ## per-field operator (`!=` / `<`) or the recursive `hash`. These are the v1
-## default `Eq` / `Ord` / `Hash`; a type overrides by defining its own (D25).
+## default `Eq` / `Ord` / `Hash`; a type overrides by defining its own.
 
 ## Componentwise structural equality (the default `Eq`, §2.6): a **struct** is
 ## equal field by field (`a.(f)`); an **enum** is equal iff the same variant with
-## equal payloads — matched via the comptime variant pattern `T.(v)` (D90), one
+## equal payloads — matched via the comptime variant pattern `T.(v)`, one
 ## unrolled arm per variant, the whole payload bound and compared with `==` (a unit
 ## variant's empty payload compares trivially equal); a scalar leaf compares
 ## directly. An aggregate recurses through the per-field/-payload `==`.
@@ -57,7 +57,7 @@ eq := fn(T : type, a : T, b : T) -> bool {
 
 ## Lexicographic order by declaration order (the default `Ord`, §2.6): for a
 ## **struct**, the first field at which the two differ decides; for an **enum**,
-## the variant **declaration order** decides, then the payload (D90). A scalar leaf
+## the variant **declaration order** decides, then the payload. A scalar leaf
 ## orders directly; equal ⇒ not less-than.
 lt := fn(T : type, a : T, b : T) -> bool {
   comptime match typeinfo(T) {
@@ -105,7 +105,7 @@ lt := fn(T : type, a : T, b : T) -> bool {
 
 ## Structural hash **consistent with `eq`** (the default `Hash`, §2.6): a **struct**
 ## folds its field hashes (an FNV-style mix); an **enum** hashes the matched
-## variant's payload (D90 comptime variant match); an **array** folds element
+## variant's payload (comptime variant match); an **array** folds element
 ## hashes; a scalar leaf hashes its own value. Recurses, so padding never enters the
 ## hash. Equal values (same variant / elements) hash equally — consistent with `eq`.
 hash := fn(T : type, v : T) -> u64 {

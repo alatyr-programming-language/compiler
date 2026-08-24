@@ -1,4 +1,4 @@
-## P1-BYTES: an ordinary struct with a direct byte-array field uses the shared standard-layout
+## BYTES: an ordinary struct with a direct byte-array field uses the shared standard-layout
 ## calculator and the byte-precise aggregate consumers.
 S := struct { data : [u8; 4], tail : u16 }
 

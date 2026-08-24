@@ -1,4 +1,4 @@
-## e2e/fmt — the `[e ; n]` ARRAY-FILL form (Types §6.1 / ROADMAP §1.3). The parser desugars it into n
+## e2e/fmt — the `[e ; n]` ARRAY-FILL form (Types §6.1). The parser desugars it into n
 ## copies of ONE element node, so fmt re-emitted it EXPANDED: `[0; 3]` came back `[0, 0, 0]`. Verbose
 ## but value-preserving there — and a SILENT MISCOMPILE in the other use of the same syntax, an ARRAY
 ## TYPE passed to a generic fn: `sum_gen([u64; 3], arr)` came back `sum_gen([u64, u64, u64], arr)`,

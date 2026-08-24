@@ -1,4 +1,4 @@
-## selfhost::lower_ctx — shared foundation for the x86_64 lower back end (ROADMAP §6 decomposition).
+## selfhost::lower_ctx — shared foundation for the x86_64 lower back end (decomposition).
 ##
 ## `lower.al` (>13.5k lines) is being split into cohesive cluster submodules. The clusters share a small
 ## foundation — the arena node-pointer helper + the SlotEntry vector type (and, later, the `LCtx` ctx
@@ -219,7 +219,7 @@ pub LCtx := struct {
   ## sret). `sret_call` is the frame slot whose ADDRESS to pass as the hidden %rdi for the CALL being
   ## lowered right now (set by the caller-binding site before emit_call_dispatch; -1 = ordinary call).
   ret_sret : bool, sret_slot : i64, sret_call : i64,
-  ## VERIFICATION MODE (Types §4.2, CT-11, D70/D82/I11): `true` = checked (the DEFAULT —
+  ## VERIFICATION MODE (Types §4.2, CT-11/I11): `true` = checked (the DEFAULT —
   ## overflow/underflow/div-by-zero guards present), `false` = inside an `unchecked` scope
   ## (guards comptime-absent, raw wrapping instruction). A SCOPED mode: every writer saves the
   ## old value, sets its own, emits the inner construct, then restores (`emit_gas`'s

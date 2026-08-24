@@ -1,4 +1,4 @@
-## ROADMAP §4: DEPTH-3 nested-field read of a mutable-global struct (`STATE.i1.i2.c`). global_place
+## DEPTH-3 nested-field read of a mutable-global struct (`STATE.i1.i2.c`). global_place
 ## resolves the cumulative .data offset recursively through the whole chain; a scalar final field is a
 ## single-word read. 20 + 10 + 7 + 5 = 42.
 C := struct { c : u64, d : u64 }

@@ -5,7 +5,7 @@
 ##
 ## Struct and enum have SEPARATE resolvers (`struct_decl_of` / `enum_decl_of`), so each gets its own
 ## shadowing child: `geo::child` shadows the struct, `geo::edge` shadows the enum. Measured on the
-## frozen seed before P1-TYPE-ANCESTOR: `child::run()` returned 46 (`zother`s 32-byte `Box`) and
+## frozen seed before TYPE-ANCESTOR: `child::run()` returned 46 (`zother`s 32-byte `Box`) and
 ## `edge::run()` 44 (`zother`s 32-byte `E`) — 90 instead of 42.
 ##
 ## child 22 + edge 20 = 42.

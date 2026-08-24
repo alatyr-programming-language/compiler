@@ -1,4 +1,4 @@
-## e2e — ROADMAP TYP-10 slice: the BIT-glyph operators `&` / `|` / `^` on the prelude `u128 ≡
+## e2e TYP-10 slice: the BIT-glyph operators `&` / `|` / `^` on the prelude `u128 ≡
 ## uint(128)` (Types §3/§7, TYP-2 / TYP-10; operators.md OP-1). The three ops are `@inline` GENERIC
 ## per-word bitwise folds (lib/base/u128.al), used by BARE prelude name. A bit op is independent per
 ## lane — no carry, no cross-word ripple — so a correct route computes each word separately.

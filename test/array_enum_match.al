@@ -1,4 +1,4 @@
-## ROADMAP §4: `match cs[i]` directly over an ENUM-element array element (the index dual of the
+## `match cs[i]` directly over an ENUM-element array element (the index dual of the
 ## struct-enum-field match). Previously the Index scrutinee fell to the integer path and dispatched
 ## on a garbage discriminant with all-zero arm literals (silent no-match). Now try_index_enum_scrut
 ## materializes element i's enum words into the match scratch. Elements sum to 40 + 2 = 42.

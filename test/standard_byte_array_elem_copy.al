@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(d) — the S3(c) COPIER's path THROUGH an array element: `e := xs[i]` copies a whole
+## CLAYOUT S3(d) — the S3(c) COPIER's path THROUGH an array element: `e := xs[i]` copies a whole
 ## element out into a standalone local, which is the read-side mirror of `xs[i] = Elem(…)`.
 ##
 ## `std_copy_kind` answers 1 (IMAGE) for both element types here — the destination local's own tier is

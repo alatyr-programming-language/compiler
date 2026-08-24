@@ -1,4 +1,4 @@
-## P1-CLAYOUT S3(b) — an `OMap(u64, str)` must round-trip its VALUES.
+## CLAYOUT S3(b) — an `OMap(u64, str)` must round-trip its VALUES.
 ##
 ## `alloc::omap` reaches a value through `omap_val_elem(K, V, m, i) -> ptr(mut V)`. At the use site the
 ## POINTEE type was not recoverable, so the two-word §7 `{ptr, len}` view was never materialized even
