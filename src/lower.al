@@ -5420,6 +5420,16 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
   ## non-scalar return class, but `len`/`bytes`/`sub`/`str_eq`/`print`/`return <str>` reach their operand
   ## THROUGH here without ever entering it, so the same reject has to stand at this door too.
   if is_ecallee_call(e) { panic("selfhost: FN-6 - a call through an expression callee cannot produce a `str` operand; bind the callee to a name first (`g := <callee>` then `g(args)`)") }
+  ## `unchecked` and `bitcast` are transparent for a view value. `str_at` is implemented in the
+  ## standard library as `unchecked bitcast(str, slice)`, so rejecting these wrappers would turn a
+  ## supported two-word view into a false positive. Re-enter the same pair emitter so the inner local,
+  ## call, or literal still goes through its ordinary materialization arm; an inner scalar continues
+  ## to fail at the default below rather than being guessed as a pair.
+  match deref(e) {
+    Expr::Unchecked(inner) => { emit_str_pair(inner, sb, cx, a, nl); return }
+    Expr::Bitcast(inner, bs, bn) => { emit_str_pair(inner, sb, cx, a, nl); return }
+    _ => {}
+  }
   ## `f.name`/`var.name` — the comptime field/variant NAME (a compile-time `str`): its bytes live at
   ## `.Lfld<offset>` (emitted in .rodata, keyed on the field/variant decl's name offset). Push the pair.
   cns := cf_name_span(e, cx)
@@ -5636,15 +5646,19 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
         push_str(sb, "  pushq $0\n  pushq $0\n")
       }
     }
-    ## MEASURED, and NOT safe to make fail-loud here: this default is REACHED 56 times on the
-    ## self-host build — it is the implicit (dead) TAIL of every `-> str` fn whose body ends in an
-    ## explicit `return`, where the epilogue asks for a pair it will never use. It is ALSO the arm a
-    ## genuinely un-materializable view OPERAND falls to (`str_eq(G.name, …)` over a module-level
-    ## struct GLOBAL, `str_eq(p.q.name, …)` through a NESTED field — both silently compare against
-    ## "" today). Turning it into a panic therefore needs the dead-tail case told apart from a real
-    ## operand FIRST; the CALL-ARGUMENT half of that hazard is already fail-loud
-    ## (`global_view_field_arg` in `emit_arg`).
-    _ => { push_str(sb, "  pushq $0\n  pushq $0\n") }
+    ## The default is still reached by the implicit (dead) TAIL of every `-> str` fn whose body ends
+    ## in an explicit `return`: the parser's `Num(-1)` sentinel reaches the trailing return emitter,
+    ## which asks for a pair it will never use. Preserve that dead path, but never turn a LIVE view
+    ## operand into an empty string. Types §7 says the view is the two-word value, and I11 permits a
+    ## deterministic reject where this lowerer cannot materialize it — a silent zero is neither.
+    _ => {
+      if not expr_is_no_tail(e) {
+        off := comptime_cond_src_off(e)
+        if off != 0 { lower_show_src_line(cx.src, off) }
+        panic("selfhost: live str/view expression has no lowering path; bind it to a local first or add a supported view-place arm")
+      }
+      push_str(sb, "  pushq $0\n  pushq $0\n")
+    }
   }
 }
 
@@ -8757,7 +8771,10 @@ is_str_operand := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   vn := var_name_span(e)
   if vn.n != 0 {
     ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-    if ent.ek == 4 { return true }
+    ## `entry_of` returns slot 0 for a module-global or otherwise unbound name. Check the
+    ## recovered entry's name before using its kind; otherwise any scalar global can inherit the
+    ## string kind of an unrelated first local and route a numeric expression into `emit_str_pair`.
+    if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 4 { return true }
   }
   ## Reuse the call-edge classifier for every direct str-element index: fixed `[str; N]` arrays and
   ## typed `Slice(str)` views both carry `eek == 4`, while a nominal `Slice(str)` VALUE return is

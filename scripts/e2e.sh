@@ -2331,6 +2331,9 @@ build_reject_has reject_struct_gap_no_default "struct construction leaves a non-
 ## The backstop: a call returning `ptr(<its own type parameter>)` whose type argument the call does not
 ## name at that position is a located reject, not a silently empty view.
 build_reject_has reject_deref_call_pointee "pointee cannot be resolved"
+## Types §7 / I11: a live `str`/view expression that has no materialization path must reject rather
+## than fall through to the empty `{ptr,len}` pair. The dead `Num(-1)` return sentinel remains exempt.
+build_reject_has str_pair_call_field "live str/view expression has no lowering path"
 ## §8 @packed byte-precise struct layout: sized loads/stores at byte offsets — x86_64-only emit
 ## (other backends keep the word-sized model), so run_x86 (excluded from the arch sweeps' `^run ` grep).
 run_x86 packed_struct 42
