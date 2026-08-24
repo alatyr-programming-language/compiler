@@ -1443,9 +1443,9 @@ tool13_path_validation_test() {
   rm -rf "$d"/*/target
 }
 
-## TOOL-13 / Tooling §2.6 — when a manifest declares multiple targets, the target name is part of the
-## artifact root even when the current bounded lane builds only the default target. Debug/release and
-## test artifacts must share that stable root; an unsupported --target remains a located Config reject.
+## TOOL-13 / Tooling §2.6 — when a manifest declares multiple targets, the selected target name is part
+## of the artifact root. Debug/release/test artifacts share that stable root, and --target selects the
+## requested record instead of silently building the first one.
 multi_target_layout_test() {
   p="$(_fixture_tree package)/multi_target_layout"
   rm -rf "$p/target"
@@ -1477,11 +1477,21 @@ multi_target_layout_test() {
     echo "FAIL multi_target_layout: test rc=$rc or artifact path"; fail=1
   fi
   rm -rf "$p/target"
+  ( cd "$p" && "$CC" build --target alternate package.al ) >"$T/multi_target_layout.alternate.out" 2>"$T/multi_target_layout.alternate.err"
+  rc=$?
+  out="$p/target/alternate/debug/multi-alternate"
+  if [ "$rc" = 0 ] && [ -x "$out" ]; then
+    "$out" >/dev/null 2>&1; got=$?
+    if [ "$got" = 42 ]; then echo "ok   multi_target_layout: --target alternate selects alternate/debug"; else echo "FAIL multi_target_layout: alternate exit=$got want=42"; fail=1; fi
+  else
+    echo "FAIL multi_target_layout: --target alternate rc=$rc or artifact path"; fail=1
+  fi
+  rm -rf "$p/target"
   ( cd "$p" && "$CC" build --target missing package.al ) >"$T/multi_target_layout.target.out" 2>"$T/multi_target_layout.target.err"
   rc=$?
-  if [ "$rc" = 1 ] && grep -qF 'config: --target selection is not implemented yet at line 5 in package.al' "$T/multi_target_layout.target.err" \
+  if [ "$rc" = 1 ] && grep -qF 'config: --target names no Target in the manifest at line 5 in package.al' "$T/multi_target_layout.target.err" \
     && [ ! -e "$p/target" ]; then
-    echo "ok   multi_target_layout: unsupported --target is located Config reject"
+    echo "ok   multi_target_layout: unknown --target is located Config reject"
   else
     echo "FAIL multi_target_layout: --target rc=$rc diagnostic=$(cat "$T/multi_target_layout.target.err" 2>/dev/null)"; fail=1
   fi
