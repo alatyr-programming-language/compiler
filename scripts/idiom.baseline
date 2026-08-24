@@ -14,6 +14,16 @@
 # The LAST field of every row is a LOCATION and is EXCLUDED from the comparison: a line
 # number churns on any edit above it. Everything before it is the key.
 #
+# `stale` means SAFE TO DELETE, and for TABLE/SCAN that needs saying because it once did not.
+# The NEW rule is MONOTONIC: a reviewed score of 6 suppresses an observed 4 for the same pair,
+# because the rule reads the MAXIMUM per pair, not each line. So a reviewed CEILING can outlive
+# the exact score it was recorded at while still being the only thing keeping a live, lower-score
+# observation out of NEW. The report used to call such a line stale; deleting it — as this header
+# instructs — turned that observation NEW and failed the gate. It now reports a TABLE/SCAN line
+# only when no observation shares its pair, or when a HIGHER reviewed line already covers it, and
+# the gate-of-the-gate asserts the ceiling of a still-occurring pair is never advertised.
+# So: an entry reported stale can be dropped without re-running anything.
+#
 # Written by: bash scripts/idiom_gate.sh --write
 # Thresholds: LK=4 LMAXF=20 SK=4 SMAXF=40
 #
@@ -69,6 +79,7 @@ STRIDE	lib/alloc/hashmap.al	3	-
 STRIDE	src/lower.al	5	-
 STRIDE	src/sema.al	204	-
 TABLE	src/aarch64.al	a64_cond	src/aarch64.al	a64_fcond	4	-	3709:3733
+TABLE	src/aarch64.al	emit_a64_expr	src/riscv64.al	emit_rv_expr	6	-	3870:3439
 TABLE	src/ast.al	compound_assign_op_at	src/fmt.al	fmt_op	8	-	116:149
 TABLE	src/ast.al	compound_assign_op_at	src/lower.al	local_is_plain_assign	5	-	116:2105
 TABLE	src/ast.al	compound_assign_op_at	src/lower.al	op_symbol	8	-	116:454
