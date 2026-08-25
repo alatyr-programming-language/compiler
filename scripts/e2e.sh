@@ -5472,6 +5472,7 @@ run_wat wat_labeled_value_break_aggregate 134
 run_wat wat_labeled_value_break_ptr_bitcast 134
 run_wat wat_labeled_value_break_global_bitcast 134
 run_wat wat_commented_bitcast 134
+run_wat wat_target_comment_bitcast 134
 run_wat wat_labeled_break 21
 run_wat wat_labeled_continue 21
 ## Issue #44: named continue targets the outer statement while and range-for; value-loop and other

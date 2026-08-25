@@ -2952,6 +2952,16 @@ wat_source_gap_back := fn(src : ptr(u8), p : usize) -> usize {
   r
 }
 
+## In a reverse balance scan, skip a full comment line before inspecting src[q - 1]. The caller
+## repeats after moving to the line start, so fake brackets in `#`/`##` text never affect depth.
+wat_source_comment_line_back := fn(src : ptr(u8), p : usize) -> usize {
+  mut line := p
+  while line > 0 and str_at((src + line - 1), 1) != "\n" { line = line - 1 }
+  mut first := line
+  while first < p and wat_source_blank(src, first) { first = first + 1 }
+  if first < p and str_at((src + first), 1) == "#" { line } else { p }
+}
+
 ## The parser returns only the value node for a word-sized bitcast. Starting at that node's left leaf,
 ## walk backwards through the second-argument comma and the balanced first argument; admit no expression
 ## whose enclosing callee is `bitcast`. This is deliberately source-aware and conservative: comments,
@@ -2974,12 +2984,17 @@ wat_erased_bitcast_at := fn(src : ptr(u8), pos : usize) -> bool {
   mut open := 0
   mut found := false
   while q > 0 and not found {
-    c := str_at((src + q - 1), 1)
-    if c == ")" or c == "]" { depth = depth + 1 }
-    if c == "(" or c == "[" {
-      if depth > 0 { depth = depth - 1 } else { open = q - 1 ; found = true }
+    comment_line := wat_source_comment_line_back(src, q)
+    if comment_line != q {
+      q = comment_line
+    } else {
+      c := str_at((src + q - 1), 1)
+      if c == ")" or c == "]" { depth = depth + 1 }
+      if c == "(" or c == "[" {
+        if depth > 0 { depth = depth - 1 } else { open = q - 1 ; found = true }
+      }
+      q = q - 1
     }
-    q = q - 1
   }
   if not found { return false }
   mut ne := open
