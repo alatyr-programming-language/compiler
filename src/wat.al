@@ -2856,24 +2856,226 @@ mut WAT_BRK_DB := 0
 mut WAT_CONT_DB := 0
 ## The compile-time loop-frame stack for named `break`/`continue` targets. The parser stores a label as
 ## a loop nesting depth; the WAT emitter therefore keeps every emitted loop's exit label, continue label,
-## value-bearing bit, and defer boundary in parallel. Named transfers may target only a statement loop in
-## this bounded backend slice; value-loop targets remain fail-loud. The depth cap mirrors parser/lower stacks.
+## value-bearing bit, scalar-integer admission, and defer boundary in parallel. Named value-breaks may
+## target only a proven scalar-integer value loop from statement-only intervening loops; the depth cap
+## mirrors parser/lower stacks.
 mut WAT_LOOP_BRK : [i64; 64] = [0; 64]
 mut WAT_LOOP_CONT : [i64; 64] = [0; 64]
 mut WAT_LOOP_VALUE : [bool; 64] = [false; 64]
+mut WAT_LOOP_SCALAR : [bool; 64] = [false; 64]
 mut WAT_LOOP_DB : [usize; 64] = [0; 64]
 mut WAT_LOOP_SP := 0
 mut WAT_LOOP_OVF := false
-wat_loop_push := fn(brk : i64, cont : i64, value : bool, db : usize) {
+wat_loop_push := fn(brk : i64, cont : i64, value : bool, scalar : bool, db : usize) {
   if WAT_LOOP_SP < 64 {
     WAT_LOOP_BRK[WAT_LOOP_SP] = brk
     WAT_LOOP_CONT[WAT_LOOP_SP] = cont
     WAT_LOOP_VALUE[WAT_LOOP_SP] = value
+    WAT_LOOP_SCALAR[WAT_LOOP_SP] = scalar
     WAT_LOOP_DB[WAT_LOOP_SP] = db
     WAT_LOOP_SP = WAT_LOOP_SP + 1
   } else { WAT_LOOP_OVF = true }
 }
 wat_loop_pop := fn() { if WAT_LOOP_SP > 0 { WAT_LOOP_SP = WAT_LOOP_SP - 1 } }
+
+## A named value-break is in scope only when every intervening emitted loop is statement-only. A nested
+## value loop has its own result block and remains an explicit residual even when the outer target is scalar.
+wat_loop_value_between := fn(target : usize) -> bool {
+  mut i := target + 1
+  mut r := false
+  while i < WAT_LOOP_SP {
+    if WAT_LOOP_VALUE[i] { r = true }
+    i = i + 1
+  }
+  r
+}
+
+## Is a recovered type span one of the language's INTEGER scalar types? Keep bool/float/pointer and
+## every unresolved or aggregate span out of the bounded value-break admission.
+wat_break_integer_type := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  scalar_name_is_signed(src, ts, tl) or scalar_name_is_unsigned(src, ts, tl)
+}
+
+## Whether a scalar function call has an integer return. Conversions are admitted only with an admitted
+## scalar operand; user calls require an explicit signed/unsigned integer return annotation.
+wat_break_scalar_call := fn(cs : usize, cl : usize, ah : ptr(mut Arg), params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
+  nm := str_at((src + cs), cl)
+  if scalar_name_is_int_conv(nm) {
+    if ah == 0 { return false }
+    return wat_break_scalar_expr(arg_expr_at(ah, 0, a), params_head, fn_head, src, a, decls, dep + 1)
+  }
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  mut r := false
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 1 and streq(src, d.name_start, d.name_len, cs, cl) and wat_break_integer_type(src, d.ret_ts, d.ret_tl) { r = true }
+    i = i + 1
+  }
+  r
+}
+
+## A Var is admitted only when its declaration/parameter/global or recursively recovered inferred RHS is
+## a scalar integer. The recursive fallback is bounded and poison-tolerant: a missing type is a reject.
+wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
+  if dep > 24 { return false }
+  mut p := params_head
+  while p != 0 {
+    pm := deref(param_p(p))
+    if streq(src, pm.ns, pm.nl, ns, nl) { return wat_break_integer_type(src, pm.ts, pm.tl) }
+    p = pm.next
+  }
+  an := wat_local_ann_span(fn_head, src, ns, nl, a)
+  if an.n != 0 { return wat_break_integer_type(src, an.s, an.n) }
+  if is_global(decls, src, ns, nl, a) {
+    cnt := rt::vec_len(deref(decls))
+    mut i := 0
+    while i < cnt {
+      d := deref(decl_get(decls, i))
+      if d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
+        match deref(d.value) { Expr::Num(_v, _s, _n) => { return true } _ => {} }
+      }
+      i = i + 1
+    }
+    return false
+  }
+  rhs := wat_local_rhs(fn_head, src, ns, nl, a)
+  if unchecked bitcast(usize, rhs) != 0 { return wat_break_scalar_expr(rhs, params_head, fn_head, src, a, decls, dep + 1) }
+  false
+}
+
+## The conservative scalar-integer expression classifier used by named value-break paths. It mirrors only
+## expressions that emit as one i64 word; aggregate constructors/places, bool/float, nested value loops,
+## and unknown forms remain fail-loud. `If` branches are checked; its condition is
+## already independently type-checked and an unsupported condition still emits its own trap.
+wat_break_scalar_expr := fn(e : ptr(Expr), params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
+  if dep > 24 { return false }
+  mut r := false
+  match deref(e) {
+    Expr::Num(_v, _s, _n) => { r = true }
+    Expr::Var(ns, nl) => { r = wat_break_scalar_var(ns, nl, params_head, fn_head, src, a, decls, dep + 1) }
+    Expr::Bin(op, l, rr) => {
+      if (op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36) and (not wat_is_float_expr(e, fn_head, src, a, params_head, decls, 0)) {
+        if wat_break_scalar_expr(l, params_head, fn_head, src, a, decls, dep + 1) and wat_break_scalar_expr(rr, params_head, fn_head, src, a, decls, dep + 1) { r = true }
+      }
+    }
+    Expr::If(_c, t, f) => {
+      if wat_break_scalar_expr(t, params_head, fn_head, src, a, decls, dep + 1) and wat_break_scalar_expr(f, params_head, fn_head, src, a, decls, dep + 1) { r = true }
+    }
+    Expr::Call(cs, cl, _n, ah) => { r = wat_break_scalar_call(cs, cl, ah, params_head, fn_head, src, a, decls, dep + 1) }
+    Expr::Field(_base, _fs, _fl) => {
+      ty := wat_place_ty(e, fn_head, src, a, decls)
+      if ty.n != 0 and wat_break_integer_type(src, ty.s, ty.n) { r = true }
+    }
+    Expr::Index(_base, _idx) => {
+      ty := wat_place_ty(e, fn_head, src, a, decls)
+      if ty.n != 0 and wat_break_integer_type(src, ty.s, ty.n) { r = true }
+    }
+    Expr::Unchecked(inner) => { r = wat_break_scalar_expr(inner, params_head, fn_head, src, a, decls, dep + 1) }
+    Expr::Bitcast(inner, _ts, _tl) => { r = wat_break_scalar_expr(inner, params_head, fn_head, src, a, decls, dep + 1) }
+    _ => {}
+  }
+  r
+}
+
+## Scan the body of an Expr::Loop at lexical loop depth `depth`. Result 0 means no value-break reaches
+## that loop, 1 means every such break is a proven scalar integer, and 2 means at least one reaches it
+## with an unsupported/non-scalar value. Statement loop recursion increments depth, while branches keep it.
+wat_loop_scalar_code := fn(head : ptr(mut Stmt), depth : usize, params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  mut code : i64 = 0
+  mut s := head
+  while s != 0 {
+    st := deref(stmt_p(Stmt, s))
+    match st {
+      Stmt::Break(v, d, nx) => {
+        if d == depth and unchecked bitcast(usize, v) != 0 {
+          ok := wat_break_scalar_expr(v, params_head, fn_head, src, a, decls, 0)
+          if not ok { code = 2 }
+          else if code == 0 { code = 1 }
+        }
+        s = nx
+      }
+      Stmt::While(_c, b, nx) => {
+        sub := wat_loop_scalar_code(b, depth + 1, params_head, fn_head, src, a, decls)
+        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+        s = nx
+      }
+      Stmt::For(_ns, _nl, _lo, _hi, b, nx) => {
+        sub := wat_loop_scalar_code(b, depth + 1, params_head, fn_head, src, a, decls)
+        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+        s = nx
+      }
+      Stmt::Loop(b, nx) => {
+        sub := wat_loop_scalar_code(b, depth + 1, params_head, fn_head, src, a, decls)
+        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+        s = nx
+      }
+      Stmt::If(_c, th, el, nx) => {
+        a0 := wat_loop_scalar_code(th, depth, params_head, fn_head, src, a, decls)
+        a1 := wat_loop_scalar_code(el, depth, params_head, fn_head, src, a, decls)
+        if a0 == 2 or a1 == 2 { code = 2 } else if (a0 == 1 or a1 == 1) and code == 0 { code = 1 }
+        s = nx
+      }
+      Stmt::Match(_c, ah, nx) => {
+        mut arm := ah
+        while arm != 0 {
+          am := deref(arm_p(arm))
+          sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
+          if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+          arm = am.next
+        }
+        s = nx
+      }
+      Stmt::CompIf(_c, th, el, nx) => {
+        a0 := wat_loop_scalar_code(th, depth, params_head, fn_head, src, a, decls)
+        a1 := wat_loop_scalar_code(el, depth, params_head, fn_head, src, a, decls)
+        if a0 == 2 or a1 == 2 { code = 2 } else if (a0 == 1 or a1 == 1) and code == 0 { code = 1 }
+        s = nx
+      }
+      Stmt::CompFor(_ns, _nl, _iv, b, nx) => {
+        sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
+        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+        s = nx
+      }
+      Stmt::CompMatch(_c, ah, nx) => {
+        mut arm := ah
+        while arm != 0 {
+          am := deref(arm_p(arm))
+          sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
+          if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+          arm = am.next
+        }
+        s = nx
+      }
+      Stmt::CompForRange(_ns, _nl, _lo, _hi, b, nx) => {
+        sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
+        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+        s = nx
+      }
+      Stmt::Unchecked(b, nx) => {
+        sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
+        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+        s = nx
+      }
+      Stmt::AllocWith(_ae, b, nx) => {
+        sub := wat_loop_scalar_code(b, depth, params_head, fn_head, src, a, decls)
+        if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+        s = nx
+      }
+      Stmt::Assign(_ns, _nl, _v, nx) => { s = nx }
+      Stmt::FieldAssign(_bns, _bnl, _fns, _fnl, _v, nx) => { s = nx }
+      Stmt::Return(_v, nx) => { s = nx }
+      Stmt::DerefAssign(_p, _v, nx) => { s = nx }
+      Stmt::IndexAssign(_b, _i, _v, nx) => { s = nx }
+      Stmt::IndexFieldAssign(_b, _i, _fs, _fl, _v, nx) => { s = nx }
+      Stmt::FieldPathAssign(_p, _v, nx) => { s = nx }
+      Stmt::Continue(_d, nx) => { s = nx }
+      Stmt::ExprStmt(_e, nx) => { s = nx }
+      _ => { s = 0 }
+    }
+  }
+  code
+}
 ## Recursion depth of the local-struct-type resolver's `q := p` (aggregate-COPY) chain. `local_struct_type`
 ## asks `base_struct_type` for the SOURCE var's type, which can land back in `local_struct_type` — a
 ## mutually-recursive pair a pathological `p := q ; q := p` would spin forever. Capped (6) so a deep but
@@ -4657,9 +4859,9 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         push_str(sb, "))\n    )))")
       }
     }
-    ## Scalar loop expression (§7.2): the result-bearing outer block receives the value carried by
-    ## `break <expr>`. The inner continue block preserves the existing nearest-loop control shape;
-    ## unsupported labeled breaks, aggregate values and nested non-value loop exits remain fail-loud.
+    ## Scalar loop expression (§7.2): the result-bearing outer block receives a proven scalar integer
+    ## carried by `break <expr>`. The loop-stack admission is computed from every reachable break target;
+    ## aggregate values and unknown/non-scalar forms remain fail-loud.
     Expr::Loop(lb) => {
       id := wat_next_label()
       ob := WAT_BRK
@@ -4667,12 +4869,13 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       odb := WAT_BRK_DB
       odc := WAT_CONT_DB
       obv := WAT_BRK_VALUE
+      loop_scalar := wat_loop_scalar_code(lb, 0, params_head, body_head, src, a, decls) == 1
       WAT_BRK = id
       WAT_CONT = id
       WAT_BRK_VALUE = true
       WAT_BRK_DB = WAT_DEF_N
       WAT_CONT_DB = WAT_DEF_N
-      wat_loop_push(id, id, true, WAT_DEF_N)
+      wat_loop_push(id, id, true, loop_scalar, WAT_DEF_N)
       push_str(sb, "(block $brk") ; push_int(sb, id) ; push_str(sb, " (result i64)\n")
       push_str(sb, "  (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
       push_str(sb, "    (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
@@ -5704,7 +5907,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
         WAT_BRK_DB = WAT_DEF_N
         WAT_CONT_DB = WAT_DEF_N
-        wat_loop_push(id, id, false, WAT_DEF_N)
+        wat_loop_push(id, id, false, false, WAT_DEF_N)
         push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
         push_str(sb, "      (br_if 1 (i32.eqz (i32.wrap_i64 ")
         emit_wat_expr(c, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
@@ -5830,7 +6033,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
           WAT_BRK_DB = WAT_DEF_N
           WAT_CONT_DB = WAT_DEF_N
-          wat_loop_push(idF, idF, false, WAT_DEF_N)
+          wat_loop_push(idF, idF, false, false, WAT_DEF_N)
           bn := expr_var_name(flo)
           varidx := name_local_index(fn_head, src, fns, fnl, pcount, a, decls)
           ididx := varidx + 1
@@ -5920,7 +6123,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
           WAT_BRK_DB = WAT_DEF_N
           WAT_CONT_DB = WAT_DEF_N
-          wat_loop_push(id, id, false, WAT_DEF_N)
+          wat_loop_push(id, id, false, false, WAT_DEF_N)
           push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " ")
           emit_wat_expr(flo, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
           push_str(sb, ")\n")
@@ -5958,7 +6161,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
         WAT_BRK_DB = WAT_DEF_N
         WAT_CONT_DB = WAT_DEF_N
-        wat_loop_push(id, id, false, WAT_DEF_N)
+        wat_loop_push(id, id, false, false, WAT_DEF_N)
         push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
         push_str(sb, "      (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
         emit_wat_stmts(lb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
@@ -5973,18 +6176,34 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         s = lnx
       }
       ## `break`: bare breaks target the nearest loop (WAT_BRK), while a named break uses the parallel
-      ## loop-frame stack to reach its parsed nesting depth. Only statement-loop targets are supported
-      ## here; labeled value-loop targets and labeled break values remain explicit fail-loud paths.
+      ## loop-frame stack to reach its parsed nesting depth. A value-bearing target is admitted only when
+      ## its frame was proven scalar-integer by wat_loop_scalar_code; aggregate and unknown values stay
+      ## explicit fail-loud paths.
       Stmt::Break(bv, bd, bnx) => {
         if bd != 0 {
-          if unchecked bitcast(usize, bv) != 0 { push_str(sb, "    (unreachable) (; labeled break value unsupported ;)\n") }
-          else if WAT_LOOP_OVF or bd >= WAT_LOOP_SP { push_str(sb, "    (unreachable) (; labeled break target unavailable ;)\n") }
+          if WAT_LOOP_OVF or bd >= WAT_LOOP_SP { push_str(sb, "    (unreachable) (; labeled break target unavailable ;)\n") }
           else {
             target := WAT_LOOP_SP - 1 - bd
-            if WAT_LOOP_VALUE[target] { push_str(sb, "    (unreachable) (; labeled break from WAT loop expression ;)\n") }
-            else {
-              ## DEFER (§9.3): a named break leaves every loop between the site and its target, so
-              ## replay all pending body cleanups down to the TARGET loop's entry boundary.
+            if unchecked bitcast(usize, bv) == 0 {
+              if WAT_LOOP_VALUE[target] { push_str(sb, "    (unreachable) (; labeled bare break from WAT loop expression ;)\n") }
+              else {
+                ## A bare named break remains valid for a statement loop. It leaves all intervening loop
+                ## bodies and therefore drains to the target frame's entry boundary before branching.
+                if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+                push_str(sb, "    (br $brk") ; push_int(sb, WAT_LOOP_BRK[target]) ; push_str(sb, ")\n")
+              }
+            } else if not WAT_LOOP_VALUE[target] {
+              push_str(sb, "    (unreachable) (; labeled break value targets statement-only loop ;)\n")
+            } else if wat_loop_value_between(target) {
+              push_str(sb, "    (unreachable) (; labeled break crosses a value loop ;)\n")
+            } else if not WAT_LOOP_SCALAR[target] {
+              push_str(sb, "    (unreachable) (; labeled break value is not scalar integer ;)\n")
+            } else {
+              ## Evaluate the scalar result before leaving, then replay every pending body cleanup down
+              ## to the TARGET loop's entry boundary. This keeps value evaluation ahead of the LIFO drain.
+              push_str(sb, "    ")
+              emit_wat_expr(bv, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+              push_str(sb, "\n")
               if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
               push_str(sb, "    (br $brk") ; push_int(sb, WAT_LOOP_BRK[target]) ; push_str(sb, ")\n")
             }
