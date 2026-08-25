@@ -1719,6 +1719,8 @@ check_expr_da := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
   s3abad := s3a_expr_bad(e, decls, upto, src, a, locals, nloc)
   if s3abad != 0 { return Result(Ty, CheckErr).Err(located_err(s3abad)) }
   if da_bad_expr(e, da, src) { return Result(Ty, CheckErr).Err(unbound_err(s_of(e, a), 0)) }
+  bad_capture := sema_plain_fn_capture_struct(e, decls, upto, src, locals, nloc, a)
+  if bad_capture != 0 { return Result(Ty, CheckErr).Err(mismatch_err(bad_capture, 0)) }
   check_expr(e, decls, upto, src, a, locals, nloc)
 }
 ## Poison the check: set the sticky failure bit, and — the first time a LOCATED code arrives (a
@@ -3823,6 +3825,22 @@ sema_is_dyn_type := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   if str_at((src + s), 3) != "dyn" { return false }
   c := str_at((src + s + 3), 1)
   c == " " or c == "\t" or c == "\n" or c == "\r"
+}
+
+## FN-10 — is the field type text `[s, s+n)` a PLAIN function value (`fn(...) -> R`), not
+## the two-word `dyn fn(...) -> R` closure pair? Keep this lexical: `resolve_ty` intentionally treats
+## function values as scalar/unknown, while this distinction is the ABI boundary that must reject a
+## captured environment before any backend sees the lambda.
+sema_is_plain_fn_type := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n < 3 or str_at((src + s), 2) != "fn" { return false }
+  mut p := s + 2
+  end := s + n
+  while p < end {
+    c := str_at((src + p), 1)
+    if c == " " or c == "\t" or c == "\n" or c == "\r" { p = p + 1 }
+    else { return c == "(" }
+  }
+  false
 }
 
 ## FN-11 — is `e` the prelude construction call `dyn_over(…)`? The ONLY form the spec admits as the
@@ -5973,6 +5991,117 @@ stmt_mentions_var := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : pt
     _ => {}
   }
   res
+}
+
+## Does a lambda body bind `[xs, xl)` itself? Parameters, `:=` locals, loop variables, and match
+## payloads shadow an enclosing local with the same spelling; a plain fn value is rejected only for a
+## genuine free-variable use. Reassignments (`x = ...`) are deliberately not bindings, so they remain
+## captures of the enclosing place.
+sema_lambda_binds_arms := fn(head : ptr(mut Arm), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut arm := head
+  mut hit := false
+  while arm != 0 and not hit {
+    am := deref(arm_p(arm))
+    mut bd := am.binds_head
+    while bd != 0 and not hit {
+      if streq(src, bnd_ns(bd), bnd_nl(bd), xs, xl) { hit = true }
+      bd = bnd_next(bd)
+    }
+    if not hit { hit = sema_lambda_binds_stmts(am.body_stmts, src, xs, xl, a) }
+    arm = am.next
+  }
+  hit
+}
+
+sema_lambda_binds_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut cur := head
+  mut hit := false
+  while cur != 0 and not hit {
+    st := deref(stmt_p(Stmt, cur))
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => { if not assign_is_reassign(src, ns, nl) and streq(src, ns, nl, xs, xl) { hit = true } }
+      Stmt::If(c, th, el, nx) => { hit = sema_lambda_binds_stmts(th, src, xs, xl, a); if not hit { hit = sema_lambda_binds_stmts(el, src, xs, xl, a) } }
+      Stmt::While(c, b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
+      Stmt::Loop(b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
+      Stmt::For(ns, nl, lo, hi, b, nx) => { if streq(src, ns, nl, xs, xl) { hit = true } else { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) } }
+      Stmt::Match(sc, ah, nx) => { hit = sema_lambda_binds_arms(ah, src, xs, xl, a) }
+      Stmt::CompIf(c, th, el, nx) => { hit = sema_lambda_binds_stmts(th, src, xs, xl, a); if not hit { hit = sema_lambda_binds_stmts(el, src, xs, xl, a) } }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { if streq(src, vs, vl, xs, xl) { hit = true } else { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) } }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if streq(src, vs, vl, xs, xl) { hit = true } else { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) } }
+      Stmt::CompMatch(sc, ah, nx) => { hit = sema_lambda_binds_arms(ah, src, xs, xl, a) }
+      Stmt::Unchecked(b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
+      Stmt::AllocWith(e, b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
+      _ => {}
+    }
+    cur = stmt_next_at(cur, a)
+  }
+  hit
+}
+
+sema_lambda_binds_name := fn(ph : ptr(mut Param), bh : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut p := ph
+  mut hit := false
+  while p != 0 and not hit {
+    pm := deref(param_p(p))
+    if streq(src, pm.ns, pm.nl, xs, xl) { hit = true }
+    p = pm.next
+  }
+  if not hit { hit = sema_lambda_binds_stmts(bh, src, xs, xl, a) }
+  hit
+}
+
+## Return the lambda's `fn` source position if it mentions an enclosing local; otherwise 0. The
+## existing conservative expression walker is intentional: it recognizes the ordinary value-bearing
+## lambda forms without expanding closure ABI/dyn or unrelated residual expression cases.
+sema_lambda_capture_span := fn(ph : ptr(mut Param), bh : ptr(mut Stmt), val : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+  mut bad := 0
+  mut i := 0
+  while i < nloc and bad == 0 {
+    l := lvec_at(locals, i)
+    if not sema_lambda_binds_name(ph, bh, src, l.ns, l.nl, a) {
+      if stmts_mention_var(bh, src, l.ns, l.nl, a) or expr_mentions_var(val, src, l.ns, l.nl, a) { bad = l.ns }
+    }
+    i += 1
+  }
+  bad
+}
+
+## FN-10 — a capturing lambda cannot inhabit a plain one-word fn field/value. Return its located
+## `fn` span so callers can use the normal semantic `type mismatch` diagnostic on every front end.
+sema_plain_fn_capture_span := fn(ts : usize, tl : usize, e : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+  if not sema_is_plain_fn_type(src, ts, tl) { return 0 }
+  mut bad := 0
+  match deref(e) {
+    Expr::Lambda(pos, ph, rts, rtl, bh, val) => { bad = sema_lambda_capture_span(ph, bh, val, src, locals, nloc, a); if bad != 0 { bad = pos } }
+    _ => {}
+  }
+  bad
+}
+
+## Standalone walk for the StructLit shape: `check_expr`'s large enum match is intentionally
+## conservative under the frozen seed, so the common FN-10 fence is applied by `check_expr_da` before
+## any backend-specific lowering can see the nested lambda.
+sema_plain_fn_capture_struct := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+  mut bad := 0
+  match deref(e) {
+    Expr::StructLit(ss, sl, nf, fh) => {
+      di := type_decl_index(decls, upto, src, ss, sl)
+      mut fld := 0
+      if di != 0 { fld = (deref(decl_at(Decl, rt::vec_get(deref(decls), di - 1)))).fields_head }
+      mut g := fh
+      while g != 0 and bad == 0 {
+        ga := deref(arg_p(g))
+        if fld != 0 {
+          fd := deref(fld_p(fld))
+          bad = sema_plain_fn_capture_span(fd.ts, fd.tl, ga.e, src, locals, nloc, a)
+          fld = fd.next
+        }
+        g = ga.next
+      }
+    }
+    _ => {}
+  }
+  bad
 }
 
 ## USE-AFTER-`forget` linearity check (spec §10 — the first enforced slice of `@owning` linearity):
