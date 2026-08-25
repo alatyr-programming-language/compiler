@@ -477,6 +477,34 @@ a64_param_struct_nl := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usiz
   rn
 }
 
+## The ELEMENT type span of an explicit fixed-array PARAM `[ns,nl]` with positive static length, or
+## {0,0}. The parser stores the element in `pm.ts/pm.tl`, marks the parameter with `pmode == 1`, and
+## stores the static length in `pm.pps`; it does not store the source `[E; N]` annotation as a type span.
+## Generic/slice/tuple parameters remain outside this bounded path.
+a64_param_arr_elem_span := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  mut p := params_head
+  mut r := CSpan(s = 0, n = 0)
+  while p != 0 {
+    pm := deref(param_p(p))
+    if streq(src, pm.ns, pm.nl, ns, nl) {
+      if pm.pmode == 1 and pm.pps > 0 { r = CSpan(s = pm.ts, n = pm.tl) }
+    }
+    p = pm.next
+  }
+  r
+}
+
+a64_param_fixed_array_len := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize) -> i64 {
+  mut p := params_head
+  mut r := i64(0)
+  while p != 0 {
+    pm := deref(param_p(p))
+    if streq(src, pm.ns, pm.nl, ns, nl) { if pm.pmode == 1 { r = i64(pm.pps) } }
+    p = pm.next
+  }
+  r
+}
+
 
 ## GENERICS (§8 mono): the element WORD-stride of param `[ns,nl]` when it is a generic array param —
 ## declared with the bare type-param name (`a : T`) and, in the active instance, T substitutes to an
@@ -2850,6 +2878,15 @@ a64_index_elem_struct_span := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, de
   if not ex_is_index(v) { return r }
   bx := ex_index_base(v)
   r = a64_arrname_elem_struct_span(src, ex_var_ns(bx), ex_var_nl(bx), a, decls)
+  ## A bounded deep aggregate read (`xs[i].arr[j]`) has a non-Var base. Resolve only a plain,
+  ## word-granular struct leaf; fixed-array PARAM roots use their Param metadata, while byte/packed/
+  ## heterogeneous forms stay on old paths.
+  if r.n == 0 and (not a64_ex_is_var(bx)) and A64_BODY != 0 {
+    d := a64_place_idx_ty(bx, a64_body(), src, a, decls)
+    if d.n != 0 and struct_decl_of(decls, src, d.s, d.n) >= 0 and struct_plain(decls, src, d.s, d.n) {
+      if std_struct_is_word_granular(decls, src, d.s, d.n, a) { r = d }
+    }
+  }
   r
 }
 
@@ -3030,7 +3067,7 @@ a64_local_arrty_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
 
 ## --- DEEP AGGREGATE PLACES (Types §9.4): an ADDRESS composed from a frame-local root + N hops ---
 ## `xs[i].b.c.cx`, `xs[i].arr[j]`, `b.cells[i].m` — an arbitrary chain of FIELD and INDEX hops rooted at
-## a struct or fixed-array LOCAL. The one-hop element paths address `element base + field offset` with a
+## a struct, fixed-array LOCAL, or admitted fixed-array PARAM. The one-hop element paths address `element base + field offset` with a
 ## CLOSED formula; anything deeper (a second field hop, or an index into an inline `[T; N]` FIELD) has no
 ## such formula, so every such access was fail-loud. These resolvers COMPOSE it instead:
 ##   a64_place_ty        — the TYPE span AT each hop, so the next hop's field offset / element stride is known
@@ -3040,8 +3077,8 @@ a64_local_arrty_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
 ##                         scales it by the element words and adds the popped base back
 ## The LEAF load/store is a SINGLE word, gated on the leaf type being SCALAR — an aggregate leaf stays
 ## fail-loud. Mirrors lower.al's resolve_idx_field_place / arr_field_elem composition. FRAME-LOCAL roots
-## only (an inferred homogeneous struct-array global is now also admitted; params, binds, and other global
-## roots remain rejected): those keep their existing shallow paths, and a deep chain over one still traps
+## and this slice's explicit fixed-array PARAM roots are admitted (an inferred homogeneous struct-array
+## global is also admitted); binds, other globals, generic arrays, and byte/packed roots remain rejected
 ## rather than guessing an addressing mode.
 a64_ex_is_var := fn(e : ptr(Expr)) -> bool {
   mut r := false
@@ -3050,7 +3087,8 @@ a64_ex_is_var := fn(e : ptr(Expr)) -> bool {
 }
 
 ## The TYPE span of the place `e` — a struct name, a `[E; N]` array-type span, or a scalar type name.
-## A root Var takes its LOCAL's struct type, else its DECLARED fixed-array type; a Field hop takes the
+## A root Var takes its LOCAL's struct type, its DECLARED fixed-array type, or this slice's explicit
+## fixed-array PARAM type; a Field hop takes the
 ## field's type within its (plain struct) base; an Index hop takes its base array type's element.
 a64_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   ## ONE `mut` accumulator + a bare `return r`, never `return <nested-call>` for a struct result: that
@@ -3078,6 +3116,16 @@ a64_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : 
         r = a64_garr_elem_struct_span(decls, src, ex_var_ns(ibase), ex_var_nl(ibase))
       }
     }
+    ## A fixed-array PARAM has no `[E; N]` type span in Param: `pm.ts/pm.tl` already name E and
+    ## `pm.pps` carries N. Resolve `xs[i]` directly to E before the generic array-type fallback.
+    if r.n == 0 and a64_ex_is_var(ibase) {
+      pidx := param_find(a64_params(), src, ex_var_ns(ibase), ex_var_nl(ibase), a)
+      if pidx >= 0 {
+        plenp := a64_param_fixed_array_len(a64_params(), src, ex_var_ns(ibase), ex_var_nl(ibase))
+        etp := a64_param_arr_elem_span(a64_params(), src, ex_var_ns(ibase), ex_var_nl(ibase))
+        if plenp > 0 and etp.n != 0 { r = etp }
+      }
+    }
     if r.n == 0 {
       bt := a64_place_ty(ibase, body_head, src, a, decls)
       if bt.n != 0 { r = a64_arrty_elem(src, bt.s, bt.n) }
@@ -3090,16 +3138,30 @@ a64_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : 
   lsn := a64_local_struct_nl(body_head, src, vns, vnl, a)
   if lsn != 0 { r = CSpan(s = a64_local_struct_ns(body_head, src, vns, vnl, a), n = lsn) }
   if lsn == 0 { r = a64_local_arrty_span(body_head, src, vns, vnl, a) }
+  ## For a fixed-array PARAM this returns the element span as a resolver marker. The index-hop helpers
+  ## use the same PARAM metadata to validate `[E; N]` and obtain `N`; no synthetic array type span exists.
+  if r.n == 0 { r = a64_param_arr_elem_span(a64_params(), src, vns, vnl) }
   r
 }
 
 ## Can `base[…]` be addressed as an aggregate/array element? (`base` resolvable, its type a `[E; N]`
-## form, and E's word width known.) The INDEX-hop half of a64_place_ok, split out so the statement
+## form or an explicit fixed-array PARAM, and E's word width known.) The INDEX-hop half of a64_place_ok, split out so the statement
 ## forms — which carry the base and the index as SEPARATE fields, with no `Expr::Index` node to pass —
 ## can ask the same question.
 a64_place_idx_ok := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   mut r := false
   if not a64_place_ok(base, body_head, src, params_head, pcount, a, decls) { return r }
+  if a64_ex_is_var(base) {
+    pidx := param_find(params_head, src, ex_var_ns(base), ex_var_nl(base), a)
+    if pidx >= 0 {
+      etp := a64_param_arr_elem_span(params_head, src, ex_var_ns(base), ex_var_nl(base))
+      plenp := a64_param_fixed_array_len(params_head, src, ex_var_ns(base), ex_var_nl(base))
+      if plenp > 0 and etp.n != 0 and struct_decl_of(decls, src, etp.s, etp.n) >= 0 and struct_plain(decls, src, etp.s, etp.n) {
+        if std_struct_is_word_granular(decls, src, etp.s, etp.n, a) and a64_tyname_words(src, etp.s, etp.n, a, decls) > 0 { r = true }
+      }
+      return r
+    }
+  }
   if a64_ex_is_var(base) and a64_is_array_global(decls, src, ex_var_ns(base), ex_var_nl(base)) {
     if a64_alit_homog_slit(a64_global_value(decls, src, ex_var_ns(base), ex_var_nl(base)), src) {
       etg := a64_garr_elem_struct_span(decls, src, ex_var_ns(base), ex_var_nl(base))
@@ -3120,13 +3182,21 @@ a64_place_idx_ok := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8
 ## The ELEMENT type span of `base[…]`, else {0,0} — the statement-form twin of a64_place_ty's Index hop.
 a64_place_idx_ty := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
+  if a64_ex_is_var(base) {
+    pidx := param_find(a64_params(), src, ex_var_ns(base), ex_var_nl(base), a)
+    if pidx >= 0 {
+      r = a64_param_arr_elem_span(a64_params(), src, ex_var_ns(base), ex_var_nl(base))
+      return r
+    }
+  }
   bt := a64_place_ty(base, body_head, src, a, decls)
   if bt.n != 0 { r = a64_arrty_elem(src, bt.s, bt.n) }
   r
 }
 
-## Is EVERY hop of the place `e` resolvable, with a frame-LOCAL root? A param / match-binding / global
-## root is rejected (their storage is by-reference or label-based, addressed by the existing paths).
+## Is EVERY hop of the place `e` resolvable, with a frame-LOCAL root or this explicit fixed-array PARAM
+## root? Match-bindings and globals remain rejected. The parameter admission is deliberately limited to a
+## plain struct element with a known word layout; generic/heterogeneous/packed roots stay fail-loud.
 a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   mut r := false
   if unchecked bitcast(usize, e) == 0 { return r }
@@ -3149,7 +3219,15 @@ a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
   vns := ex_var_ns(e)
   vnl := ex_var_nl(e)
   if vnl == 0 { return r }
-  if param_find(params_head, src, vns, vnl, a) >= 0 { return r }
+  pidx := param_find(params_head, src, vns, vnl, a)
+  if pidx >= 0 {
+    et := a64_param_arr_elem_span(params_head, src, vns, vnl)
+    plen := a64_param_fixed_array_len(params_head, src, vns, vnl)
+    if plen > 0 and et.n != 0 and struct_decl_of(decls, src, et.s, et.n) >= 0 and struct_plain(decls, src, et.s, et.n) {
+      if std_struct_is_word_granular(decls, src, et.s, et.n, a) and a64_tyname_words(src, et.s, et.n, a, decls) > 0 { r = true }
+    }
+    return r
+  }
   if a64_is_array_global(decls, src, vns, vnl) { r = true ; return r }
   pt := a64_place_ty(e, body_head, src, a, decls)
   if pt.n == 0 { return r }
@@ -3165,6 +3243,14 @@ emit_a64_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt:
   mut et := CSpan(s = 0, n = 0)
   mut estride := i64(0)
   mut nel := i64(0)
+  if a64_ex_is_var(base) {
+    pidx := param_find(params_head, src, ex_var_ns(base), ex_var_nl(base), a)
+    if pidx >= 0 {
+      et = a64_param_arr_elem_span(params_head, src, ex_var_ns(base), ex_var_nl(base))
+      if et.n != 0 { estride = a64_arr_elem_stride_bytes(src, et.s, et.n, a, decls) }
+      nel = a64_param_fixed_array_len(params_head, src, ex_var_ns(base), ex_var_nl(base))
+    }
+  }
   if a64_ex_is_var(base) and a64_is_array_global(decls, src, ex_var_ns(base), ex_var_nl(base)) {
     gv := a64_global_value(decls, src, ex_var_ns(base), ex_var_nl(base))
     if a64_alit_homog_slit(gv, src) {
@@ -3207,11 +3293,15 @@ emit_a64_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
   if (not isf) and (not isi) {
     vns := ex_var_ns(e)
     vnl := ex_var_nl(e)
-    if a64_is_array_global(decls, src, vns, vnl) {
+    pidx := param_find(params_head, src, vns, vnl, a)
+    if pidx >= 0 {
+      push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, 16 + pidx * 8) ; push_str(sb, "]\n")
+    }
+    if pidx < 0 and a64_is_array_global(decls, src, vns, vnl) {
       gname := str_at((src + vns), vnl)
       push_str(sb, "  adrp x0, ") ; push_str(sb, gname) ; push_str(sb, "\n  add x0, x0, :lo12:") ; push_str(sb, gname) ; push_str(sb, "\n")
     }
-    if not a64_is_array_global(decls, src, vns, vnl) {
+    if pidx < 0 and not a64_is_array_global(decls, src, vns, vnl) {
       voff := a64_local_off(body_head, src, vns, vnl, pcount, a, decls)
       push_str(sb, "  add x0, x29, #") ; push_int(sb, voff) ; push_str(sb, "\n")
     }
@@ -6078,10 +6168,10 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         ## the call — the enum analogue of issret (disjoint from iscre, which uses the ≤8-word register gate).
         cres := a64_call_ret_enum_sret_span(v, decls, src, a)
         isenumsret := cres.n != 0
-        ## a whole-ELEMENT copy `x := xs[i]` out of an array of scalar-only structs (a LOCAL array-lit or
-        ## an array GLOBAL). The element is `eixw` words wide at base + i*eixw*8; x's own slots (sized to
-        ## the same width by `a64_val_words`) receive the copy. 0 = not this shape (a scalar `x := xs[i]`
-        ## over a scalar array keeps the ordinary one-word store).
+        ## a whole-ELEMENT copy `x := xs[i]` out of a word-granular struct array (a LOCAL array-lit,
+        ## array GLOBAL, or composed deep place). The element is `eixw` words wide at base + i*eixw*8;
+        ## x's own slots (sized to the same width by `a64_val_words`) receive the copy. 0 = not this shape
+        ## (a scalar `x := xs[i]` over a scalar array keeps the ordinary one-word store).
         eixp := a64_index_elem_struct_span(v, src, a, decls)
         mut eixw := i64(0)
         mut eixbyte := false
@@ -6089,6 +6179,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         mut eixga := false
         mut eixoff := i64(0) - 1
         mut eixnel := i64(0)
+        mut eixdeep := false
         if eixp.n != 0 {
           eibx := ex_index_base(v)
           eins := ex_var_ns(eibx)
@@ -6100,6 +6191,11 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           if (eixla and eixoff >= 0) or eixga {
             if std_array_elem_byte_tier(decls, src, eixp.s, eixp.n, a) { eixw = i64(array_elem_word_reservation(decls, src, eixp.s, eixp.n, a)) ; eixbyte = true }
             if not std_array_elem_byte_tier(decls, src, eixp.s, eixp.n, a) { eixw = i64(struct_words(decls, src, eixp.s, eixp.n, a)) }
+          }
+          if eixw == 0 and (not a64_ex_is_var(eibx)) {
+            if a64_place_idx_ok(eibx, body_head, src, params_head, pcount, a, decls) {
+              if std_struct_is_word_granular(decls, src, eixp.s, eixp.n, a) { eixw = i64(struct_words(decls, src, eixp.s, eixp.n, a)) ; eixdeep = true }
+            }
           }
         }
         iseix := eixw > 0
@@ -6142,31 +6238,42 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         ## element copy: index → x0, scale by the element width, add the frame/label base into x2, then
         ## word-copy the element into x's slots. x2 survives the copy (no emit call in the loop).
         if iseix and poff >= 0 {
-          emit_a64_expr(ex_index_idx(v), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-          if A64_CHK {
-            if eixnel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, eixnel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
-          }
-          if eixbyte {
+          if eixdeep {
             emit_a64_place_idx_addr(ex_index_base(v), ex_index_idx(v), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
             push_str(sb, "  mov x2, x0\n")
-            nbix := i64(std_copy_image_bytes(decls, src, eixp.s, eixp.n, a))
-            mut eckb := i64(0)
-            while eckb < nbix {
-              push_str(sb, "  ldrb w0, [x2, #") ; push_int(sb, eckb) ; push_str(sb, "]\n  strb w0, [x29, #") ; push_int(sb, poff + eckb) ; push_str(sb, "]\n")
-              eckb = eckb + 1
+            mut eckd := i64(0)
+            while eckd < eixw {
+              push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, eckd * 8) ; push_str(sb, "]\n  str x0, [x29, #") ; push_int(sb, poff + eckd * 8) ; push_str(sb, "]\n")
+              eckd = eckd + 1
             }
           }
-          if not eixbyte {
-            push_str(sb, "  mov x1, #") ; push_int(sb, eixw * 8) ; push_str(sb, "\n  mul x0, x0, x1\n")
-            if eixla { push_str(sb, "  add x2, x0, x29\n  add x2, x2, #") ; push_int(sb, eixoff) ; push_str(sb, "\n") }
-            if eixga {
-              eign := str_at((src + ex_var_ns(ex_index_base(v))), ex_var_nl(ex_index_base(v)))
-              push_str(sb, "  adrp x2, ") ; push_str(sb, eign) ; push_str(sb, "\n  add x2, x2, :lo12:") ; push_str(sb, eign) ; push_str(sb, "\n  add x2, x2, x0\n")
+          if not eixdeep {
+            emit_a64_expr(ex_index_idx(v), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+            if A64_CHK {
+              if eixnel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, eixnel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
             }
-            mut eck := i64(0)
-            while eck < eixw {
-              push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, eck * 8) ; push_str(sb, "]\n  str x0, [x29, #") ; push_int(sb, poff + eck * 8) ; push_str(sb, "]\n")
-              eck = eck + 1
+            if eixbyte {
+              emit_a64_place_idx_addr(ex_index_base(v), ex_index_idx(v), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+              push_str(sb, "  mov x2, x0\n")
+              nbix := i64(std_copy_image_bytes(decls, src, eixp.s, eixp.n, a))
+              mut eckb := i64(0)
+              while eckb < nbix {
+                push_str(sb, "  ldrb w0, [x2, #") ; push_int(sb, eckb) ; push_str(sb, "]\n  strb w0, [x29, #") ; push_int(sb, poff + eckb) ; push_str(sb, "]\n")
+                eckb = eckb + 1
+              }
+            }
+            if not eixbyte {
+              push_str(sb, "  mov x1, #") ; push_int(sb, eixw * 8) ; push_str(sb, "\n  mul x0, x0, x1\n")
+              if eixla { push_str(sb, "  add x2, x0, x29\n  add x2, x2, #") ; push_int(sb, eixoff) ; push_str(sb, "\n") }
+              if eixga {
+                eign := str_at((src + ex_var_ns(ex_index_base(v))), ex_var_nl(ex_index_base(v)))
+                push_str(sb, "  adrp x2, ") ; push_str(sb, eign) ; push_str(sb, "\n  add x2, x2, :lo12:") ; push_str(sb, eign) ; push_str(sb, "\n  add x2, x2, x0\n")
+              }
+              mut eck := i64(0)
+              while eck < eixw {
+                push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, eck * 8) ; push_str(sb, "]\n  str x0, [x29, #") ; push_int(sb, poff + eck * 8) ; push_str(sb, "]\n")
+                eck = eck + 1
+              }
             }
           }
         }
@@ -6307,34 +6414,10 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           mut ak := 0
           while ag != 0 {
             aga := deref(arg_p(ag))
-            if a64_is_slit(aga.e) {
-              mut fg := ex_struct_lit_args(aga.e)
-              mut fk := 0
-              while fg != 0 {
-                fga := deref(arg_p(fg))
-                emit_a64_expr(fga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-                push_str(sb, "  str x0, [x29, #") ; push_int(sb, poff + (ak * estrideA + fk) * 8) ; push_str(sb, "]\n")
-                fk += 1
-                fg = fga.next
-              }
-            }
-            if a64_is_elit(aga.e) {
-              evx := variant_index(decls, src, a64_elit_ens(aga.e), a64_elit_enl(aga.e), a64_elit_vns(aga.e), a64_elit_vnl(aga.e), a)
-              push_str(sb, "  ldr x0, =") ; push_int(sb, evx) ; push_str(sb, "\n  str x0, [x29, #") ; push_int(sb, poff + ak * estrideA * 8) ; push_str(sb, "]\n")
-              mut pg := ex_enum_lit_args(aga.e)
-              mut pk := 1
-              while pg != 0 {
-                pga := deref(arg_p(pg))
-                emit_a64_expr(pga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-                push_str(sb, "  str x0, [x29, #") ; push_int(sb, poff + (ak * estrideA + pk) * 8) ; push_str(sb, "]\n")
-                pk += 1
-                pg = pga.next
-              }
-            }
-            if (not a64_is_slit(aga.e)) and (not a64_is_elit(aga.e)) {
-              emit_a64_expr(aga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-              push_str(sb, "  str x0, [x29, #") ; push_int(sb, poff + ak * estrideA * 8) ; push_str(sb, "]\n")
-            }
+            ## Use the same recursive payload writer for each word-tier element. Besides scalar fields it
+            ## materializes nested array/struct fields (the `Row.arr` setup in the bounded deep-place
+            ## fixture) at their full running offsets; the byte-tier branch above remains separate.
+            _alitw := emit_a64_store_payload_at(aga.e, poff + ak * estrideA * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
             ak += 1
             ag = aga.next
           }
@@ -6417,6 +6500,21 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         if diaty.n != 0 {
           if ty_is_scalar(diaty.s, diaty.n, decls, src) {
             if a64_place_idx_ok(ibase, body_head, src, params_head, pcount, a, decls) { deepia = true }
+          }
+        }
+        mut deepagg := false
+        mut deepagglit := false
+        mut deepaggvar := false
+        if diaty.n != 0 and struct_decl_of(decls, src, diaty.s, diaty.n) >= 0 and struct_plain(decls, src, diaty.s, diaty.n) {
+          if std_struct_is_word_granular(decls, src, diaty.s, diaty.n, a) and a64_place_idx_ok(ibase, body_head, src, params_head, pcount, a, decls) {
+            deepagg = true
+            if a64_is_slit(ival) {
+              if streq(src, a64_slit_ns(ival), a64_slit_nl(ival), diaty.s, diaty.n) { deepagglit = true }
+            }
+            if eavnl != 0 {
+              if eavoff < 0 and a64_local_struct_nl(body_head, src, ex_var_ns(ival), eavnl, a) != 0 { eavoff = a64_local_off(body_head, src, ex_var_ns(ival), eavnl, pcount, a, decls) }
+              if eavoff >= 0 and streq(src, a64_local_struct_ns(body_head, src, ex_var_ns(ival), eavnl, a), a64_local_struct_nl(body_head, src, ex_var_ns(ival), eavnl, a), diaty.s, diaty.n) { deepaggvar = true }
+            }
           }
         }
         stdidxAssignTy := a64_std_idx_path_ty(ibase, body_head, src, a, decls)
@@ -6535,6 +6633,38 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           }
           gcn := str_at((src + bns), bnl)
           push_str(sb, "  adrp x2, ") ; push_str(sb, gcn) ; push_str(sb, "\n  add x2, x2, :lo12:") ; push_str(sb, gcn) ; push_str(sb, "\n  ldr x1, [sp], #16\n  str x1, [x2, x0, lsl #3]\n")
+        }
+        else if deepagg {
+          ## `xs[i].arr[j] = P(...)` — the bounded aggregate-leaf path. The destination address is kept on
+          ## the stack while a literal's fields or a source aggregate address is evaluated; exactly the P
+          ## word image is then written, never the first word alone.
+          eaw := i64(struct_words(decls, src, diaty.s, diaty.n, a))
+          if deepagglit {
+            emit_a64_place_idx_addr(ibase, iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+            push_str(sb, "  str x0, [sp, #-16]!\n")
+            mut efg := ex_struct_lit_args(ival)
+            mut efo := i64(0)
+            while efg != 0 {
+              efa := deref(arg_p(efg))
+              efw := emit_a64_store_payload_atptr(efa.e, efo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+              efo = efo + efw * 8
+              efg = efa.next
+            }
+            push_str(sb, "  add sp, sp, #16\n")
+          }
+          if deepaggvar {
+            emit_a64_place_idx_addr(ibase, iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+            push_str(sb, "  str x0, [sp, #-16]!\n")
+            push_str(sb, "  add x0, x29, #") ; push_int(sb, eavoff) ; push_str(sb, "\n")
+            push_str(sb, "  str x0, [sp, #-16]!\n")
+            mut evk := i64(0)
+            while evk < eaw {
+              push_str(sb, "  ldr x1, [sp]\n  ldr x0, [sp, #16]\n  ldr x2, [x1, #") ; push_int(sb, evk * 8) ; push_str(sb, "]\n  str x2, [x0, #") ; push_int(sb, evk * 8) ; push_str(sb, "]\n")
+              evk = evk + 1
+            }
+            push_str(sb, "  add sp, sp, #32\n")
+          }
+          if (not deepagglit) and (not deepaggvar) { push_str(sb, "  brk #0 // unsupported deep aggregate RHS\n") }
         }
         else if deepia {
           ## `xs[i].arr[j] = v` — a DEEP element WRITE (the base is a FIELD, not a bare Var, so no closed
