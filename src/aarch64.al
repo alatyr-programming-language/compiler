@@ -4634,13 +4634,21 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         a64_resolve_typearg(decls, src, gi, args_head, params_head, a)
         tas := A64_TA_S
         tan := A64_TA_N
-        if tan == 0 {
-          push_str(sb, "  brk #0 // generic call: unresolved type-arg\n")
+        gd := deref(decl_get(decls, usize(gi)))
+        ## The enabled injected slice is deliberately scalar-u64 only. An aggregate Slice(T) needs
+        ## element-width/aggregate ABI support that this bounded fix does not provide; reject it
+        ## loudly instead of allowing a partial instance to silently read or write the wrong word.
+        mut gtypeok := tan != 0
+        if gd.is_generic and gd.mod_len == 11 and str_at((src + gd.mod_start), gd.mod_len) == "base__slice" and gd.name_len == 4 and str_at((src + gd.name_start), gd.name_len) == "sort" {
+          if tan != 3 { gtypeok = false }
+          else if str_at((src + tas), tan) != "u64" { gtypeok = false }
+        }
+        if not gtypeok {
+          push_str(sb, "  brk #0 // generic call: unsupported type-arg\n")
         } else {
           ## RECORD the instance so the mono loop emits `<fn>__<tag>` (dedup). Recorded at the emit
           ## call site — the proven resolution path — so the label here matches a defined instance.
           a64_inst_add(src, usize(gi), tas, tan)
-          gd := deref(decl_get(decls, usize(gi)))
           argc := arg_list_count(args_head, a)
           ## ERASE the comptime type-arg(s) when passed explicitly (argc == arity): a LEADING RUN of `lead`
           ## type-params erases source indices [0, lead) (`erase_lead`); a single NON-LEADING type-param
@@ -4670,13 +4678,17 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
               gavnl := ex_var_nl(ga.e)
               gisarr := gavnl != 0 and a64_is_array_local(body_head, src, gavns, gavnl, a)
               gisstruct := (not gisarr) and gavnl != 0 and a64_local_struct_nl(body_head, src, gavns, gavnl, a) != 0
+              ## A local range-slice is an inline `{ptr,len}` frame value. Generic Slice(T) parameters
+              ## receive its ADDRESS, just like struct/array/enum aggregate parameters; passing the
+              ## loaded data pointer makes the instance read arr[1] as its length (a silent wrong result).
+              gisslice := (not gisarr) and (not gisstruct) and gavnl != 0 and a64_is_slice_local(body_head, src, gavns, gavnl, a)
               ## an ENUM LOCAL is by-reference too (the callee's enum param slot holds a POINTER to the
               ## {disc, payload…} block) — without this its word 0, the DISCRIMINANT, was passed AS the
               ## pointer and the instance dereferenced it: a raw SIGSEGV, not a clean `brk`.
-              gisenum := (not gisarr) and (not gisstruct) and gavnl != 0 and a64_local_enum_nl(body_head, src, gavns, gavnl, a) != 0
+              gisenum := (not gisarr) and (not gisstruct) and (not gisslice) and gavnl != 0 and a64_local_enum_nl(body_head, src, gavns, gavnl, a) != 0
               isslit := a64_is_slit(ga.e)
               iselit := (not isslit) and a64_is_elit(ga.e)
-              isaggref := (not isslit) and (not iselit) and (gisarr or gisstruct or gisenum)
+              isaggref := (not isslit) and (not iselit) and (gisarr or gisstruct or gisenum or gisslice)
               isplain := (not isslit) and (not iselit) and (not isaggref)
               if isslit { emit_a64_aggval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
               if iselit { emit_a64_enumval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
@@ -6338,7 +6350,21 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         bns := ex_var_ns(ibase)
         bnl := ex_var_nl(ibase)
         mut isslice := false
-        if bnl != 0 { if a64_is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
+        mut issliceparam := false
+        mut sliceparamidx := i64(0) - 1
+        if bnl != 0 {
+          if a64_is_slice_local(body_head, src, bns, bnl, a) { isslice = true }
+          sliceparamidx = param_find(params_head, src, bns, bnl, a)
+          if sliceparamidx >= 0 and a64_slice_param_scalar(params_head, src, bns, bnl, a, decls) {
+            ## This write form is currently word-tier only. Resolve the active generic T before
+            ## checking width; otherwise Slice(u8) would incorrectly receive an 8-byte store.
+            pes := a64_slice_param_elem_span(params_head, src, bns, bnl)
+            mut pets := pes.s
+            mut petn := pes.n
+            if A64_SUB_GPL != 0 and streq(src, pets, petn, A64_SUB_GPS, A64_SUB_GPL) { pets = A64_SUB_ITS ; petn = A64_SUB_ITL }
+            if pets != 0 and scalar_byte_size(src, pets, petn) == 8 { issliceparam = true }
+          }
+        }
         isarr := bnl != 0 and a64_is_array_local(body_head, src, bns, bnl, a)
         aoff := a64_local_off(body_head, src, bns, bnl, pcount, a, decls)
         ## `xs[i] = v` — a whole-ELEMENT write into a fixed array of scalar-only STRUCTS (a LOCAL
@@ -6450,6 +6476,18 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             push_str(sb, "  ldr x9, [x29, #") ; push_int(sb, aoff + 8) ; push_str(sb, "]\n  cmp x0, x9\n  b.lo 1f\n  brk #0\n1:\n")
           }
           push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, aoff) ; push_str(sb, "]\n")
+          push_str(sb, "  ldr x1, [sp], #16\n  str x1, [x2, x0, lsl #3]\n")
+        }
+        else if issliceparam {
+          ## `s[i] = v` through a scalar Slice(T) PARAM: the parameter slot points at the caller's
+          ## `{ptr,len}` block, so load the length and data pointer through it before storing.
+          emit_a64_expr(ival, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, "  str x0, [sp, #-16]!\n")
+          emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          if A64_CHK {
+            push_str(sb, "  ldr x9, [x29, #") ; push_int(sb, 16 + sliceparamidx * 8) ; push_str(sb, "]\n  ldr x9, [x9, #8]\n  cmp x0, x9\n  b.lo 1f\n  brk #0\n1:\n")
+          }
+          push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, 16 + sliceparamidx * 8) ; push_str(sb, "]\n  ldr x2, [x2]\n")
           push_str(sb, "  ldr x1, [sp], #16\n  str x1, [x2, x0, lsl #3]\n")
         }
         else if isarr and aoff >= 0 {

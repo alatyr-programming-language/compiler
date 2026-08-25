@@ -5215,6 +5215,8 @@ run slice_toolkit 42
 ## a GENERIC index WRITE s[i]=x on a Slice(T) param — the element T is now substituted at bind so the
 ## param binds by-ref (was is_ref=false → the write overwrote the slot / a read returned the block ptr).
 run slice_generic_write 42
+## The AArch64 generic Slice(T) write path is also used transitively by base::slice::sort's sift_down.
+run_a64 slice_generic_write 42
 ## §7.2: a fn RETURNING Slice(T) by value — was a silent miscompile (bound as a bare scalar → .len read 0, [i]
 ## garbage; bind did NOT fix it). Now binds an ek-5 {ptr,len} slice; direct `.len`/`.ptr` read %rdx/%rax, direct
 ## `f(…)[i]` fails loud (bind first). a64/rv64/wasm trap. = 42.
@@ -5284,6 +5286,10 @@ build_reject_has reject_index_call_array_return_u8_9 "fixed-array-returning call
 run slice_struct_elem_len 19
 ## the MUTATING base::slice ops (now pub): sort / sort_by (comparator) / map_in_place / filter_into.
 run slice_mutate 42
+## Bounded AArch64 generic-library mono slice: injected base::slice::sort on a scalar Slice(T).
+## The other injected generic slice entry points remain deliberately gated.
+run a64_generic_slice_sort 42
+run_a64 a64_generic_slice_sort 42
 ## appendix §160 sort CONFORMANCE: an introsort-class algorithm (a quadratic worst case is
 ## NON-CONFORMING) — was a selection sort (O(n²)); now heapsort (O(n log n) worst-case). Locks
 ## correctness on the adversarial reversed input + duplicates + edges + sort_by + a 20k reversed sort.
