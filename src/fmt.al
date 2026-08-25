@@ -1021,9 +1021,9 @@ fmt_var_span := fn(e : ptr(Expr), out_s : ptr(mut usize), out_n : ptr(mut usize)
   r
 }
 
-## Classify the source line immediately before `end`: 0 = ordinary, 1 = comment, 2 = comment with `::`.
-## A comment is whitespace to the lexer, but its words are not a path segment. The formatter can
-## preserve a clean multiline path; a comment-shaped path is refused below instead of rewritten.
+## Classify the source line immediately before `end`: 0 = ordinary, 1 = comment, 2 = line comment
+## ending in `::`. A comment is whitespace to the lexer, but its words are not a path segment. Only
+## a trailing separator can be mistaken for the head of the next Var; prose containing `::` is fine.
 fmt_path_line_kind := fn(src : ptr(u8), end : usize) -> usize {
   mut ls := end
   while ls > 0 {
@@ -1032,18 +1032,24 @@ fmt_path_line_kind := fn(src : ptr(u8), end : usize) -> usize {
     ls -= 1
   }
   mut p := ls
-  mut has_comment := false
-  mut has_sep := false
+  mut comment_start := end
   while p + 1 < end {
     b0 := bytes(str_at((src + p), 1))[0]
     b1 := bytes(str_at((src + p + 1), 1))[0]
-    if b0 == 35 and b1 == 35 { has_comment = true }
-    if b0 == 58 and b1 == 58 { has_sep = true }
+    if b0 == 35 and b1 == 35 {
+      comment_start = p
+      break
+    }
     p += 1
   }
-  if has_comment and has_sep { return 2 }
-  if has_comment { return 1 }
-  0
+  if comment_start == end { return 0 }
+  mut tail := end
+  while tail > comment_start + 2 {
+    b := bytes(str_at((src + tail - 1), 1))[0]
+    if b == 32 or b == 9 { tail -= 1 } else { break }
+  }
+  if tail >= comment_start + 4 and str_at((src + tail - 2), 2) == "::" { return 2 }
+  1
 }
 
 ## Recover the SOURCE start of a qualified value path whose AST `Var` span kept only its tail.
