@@ -1010,23 +1010,34 @@ fmt_var_span := fn(e : ptr(Expr), out_s : ptr(mut usize), out_n : ptr(mut usize)
 
 ## Recover the SOURCE start of a qualified value path whose AST `Var` span kept only its tail.
 ## `p_factor` stores `hex::encode` as `Var(encode)`, so the formatter must use the same narrow
-## source-backed recovery as lower's `gref_split` until the AST grows a path field. A bare name, a
-## malformed separator, or a path with a non-identifier segment falls back to the stored span: a
-## miss may preserve a residual, but it must never invent bytes from nearby source.
+## source-backed recovery as lower's `gref_split` until the AST grows a path field. Blanks around
+## `::` are part of the separator's accepted source spelling. A bare name, a malformed separator,
+## or a path with a non-identifier segment falls back to the stored span: a miss may preserve a
+## residual, but it must never invent bytes from nearby source.
 fmt_var_path_start := fn(src : ptr(u8), s : usize, n : usize) -> usize {
-  if n == 0 or s < 3 { return s }
-  if str_at((src + s - 2), 2) != "::" { return s }
-  he := s - 2
-  mut p := he
+  if n == 0 { return s }
+  mut cur_end := s
+  mut path_start := s
+  mut found := false
   mut scanning := true
   while scanning {
-    mut q := p
-    while q > 0 and fmt_is_ident_byte(bytes(str_at((src + q - 1), 1))[0]) { q -= 1 }
-    if q == p { return s }
-    p = q
-    if p >= 2 and str_at((src + p - 2), 2) == "::" { p -= 2 } else { scanning = false }
+    mut sep_end := cur_end
+    while sep_end > 0 and fmt_is_blank_byte(bytes(str_at((src + sep_end - 1), 1))[0]) { sep_end -= 1 }
+    if sep_end < 2 or str_at((src + sep_end - 2), 2) != "::" {
+      scanning = false
+    } else {
+      mut head_end := sep_end - 2
+      while head_end > 0 and fmt_is_blank_byte(bytes(str_at((src + head_end - 1), 1))[0]) { head_end -= 1 }
+      mut head_start := head_end
+      while head_start > 0 and fmt_is_ident_byte(bytes(str_at((src + head_start - 1), 1))[0]) { head_start -= 1 }
+      if head_start == head_end { return s }
+      path_start = head_start
+      found = true
+      cur_end = head_start
+    }
   }
-  p
+  if found { return path_start }
+  s
 }
 
 ## The BASE of an `Index` node (`fs` in `fs[0]`), 0 for anything else — a SINGLE-match probe (same

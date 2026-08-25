@@ -307,6 +307,45 @@ if [ "$ONLY" != src ] && { [ -z "$FILTER" ] || printf '%s\n' 'test/package/fn_va
     fi
   fi
   echo "fmt package fixture=test/package/fn_value_qualified checked=1"
+
+  # The lexer/parser also accept blanks around `::`. Exercise that spelling in a COPY of the
+  # existing fixture so this formatter-only regression needs no new corpus row or oracle update.
+  # Its build is asserted here; the semantic run remains the no-space package check above because
+  # any backend/lowering defect for spaced value paths is outside this bounded formatter slice.
+  PS="$W/package/fn_value_qualified_spaced"
+  rm -rf "$PS"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PS"
+  sed -i 's/apply(hex::encode, 40)/apply(hex :: encode, 40)/' "$PS/src/main.al"
+  PSO1="$W/o/fn_value_qualified.package.spaced.f1.al"
+  PSO2="$W/o/fn_value_qualified.package.spaced.f2.al"
+  PSE="$W/o/fn_value_qualified.package.spaced.err"
+  PSB="$W/o/fn_value_qualified.package.spaced.build.out"
+  if ! ( cd "$PS" && timeout $TCC "$AL" build package.al ) >"$PSB" 2>"$PSE" </dev/null; then
+    echo "PACKAGE-SPACED-COMPILEFAIL test/package/fn_value_qualified"
+    fail=1
+  elif ! ( cd "$PS" && timeout $TCC "$AL" fmt src/main.al ) >"$PSO1" 2>"$PSE" </dev/null; then
+    echo "PACKAGE-SPACED-FMT-REFUSE test/package/fn_value_qualified"
+    fail=1
+  elif [ ! -s "$PSO1" ]; then
+    echo "PACKAGE-SPACED-FMT-REFUSE test/package/fn_value_qualified (empty output)"
+    fail=1
+  else
+    if ! grep -qF 'apply(hex :: encode, 40)' "$PSO1"; then
+      echo "PACKAGE-SPACED-QUALIFIED-PATH test/package/fn_value_qualified (qualified value path lost)"
+      fail=1
+    fi
+    cp "$PSO1" "$PS/src/main.al"
+    if ! ( cd "$PS" && timeout $TCC "$AL" fmt src/main.al ) >"$PSO2" 2>"$PSE" </dev/null; then
+      echo "PACKAGE-SPACED-NONIDEMPOTENT test/package/fn_value_qualified (second fmt refused output)"
+      fail=1
+    elif ! diff -q "$PSO1" "$PSO2" >/dev/null 2>&1; then
+      echo "PACKAGE-SPACED-NONIDEMPOTENT test/package/fn_value_qualified"
+      fail=1
+    else
+      echo "PACKAGE-SPACED-OK test/package/fn_value_qualified"
+    fi
+  fi
+  echo "fmt package fixture=test/package/fn_value_qualified checked=2"
 fi
 
 # ==========================================================================================
