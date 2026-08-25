@@ -5284,6 +5284,10 @@ build_reject_has reject_index_call_array_return_u8_9 "fixed-array-returning call
 run slice_struct_elem_len 19
 ## the MUTATING base::slice ops (now pub): sort / sort_by (comparator) / map_in_place / filter_into.
 run slice_mutate 42
+## Bounded AArch64 generic-library mono slice: injected base::slice::sort on a scalar Slice(T).
+## The other injected generic slice entry points remain deliberately gated.
+run a64_generic_slice_sort 42
+run_a64 a64_generic_slice_sort 42
 ## appendix §160 sort CONFORMANCE: an introsort-class algorithm (a quadratic worst case is
 ## NON-CONFORMING) — was a selection sort (O(n²)); now heapsort (O(n log n) worst-case). Locks
 ## correctness on the adversarial reversed input + duplicates + edges + sort_by + a 20k reversed sort.
