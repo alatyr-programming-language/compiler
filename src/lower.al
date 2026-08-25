@@ -22883,7 +22883,12 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     mut esdi0 : i64 = -1
     mut eedi0 : i64 = -1
     if early_slice.n < 64 { esdi0 = struct_decl_of(decls, src, early_slice.s, early_slice.n); eedi0 = enum_decl_of(decls, src, early_slice.s, early_slice.n) }
-    if esdi0 >= 0 { sstride0 = struct_words(decls, src, early_slice.s, early_slice.n, a); seek0 = 2; ssns0 = early_slice.s; ssnl0 = early_slice.n }
+    if esdi0 >= 0 {
+      if is_packed(decls, src, early_slice.s, early_slice.n) {
+        panic("selfhost: a Slice whose element is a @packed struct is not supported by the word-granular slice tier; byte-precise element stride and packed field offsets are a deferred slice; rejected rather than silently miscompiled")
+      }
+      sstride0 = struct_words(decls, src, early_slice.s, early_slice.n, a); seek0 = 2; ssns0 = early_slice.s; ssnl0 = early_slice.n
+    }
     else if eedi0 >= 0 { sstride0 = 1 + enum_inst_words(decls, src, early_slice.s, early_slice.n, a); seek0 = 3; ssns0 = early_slice.s; ssnl0 = early_slice.n }
     esl0 := str_at((src + early_slice.s), early_slice.n)
     ## A `Slice(str)` element is a 2-word {ptr,len} value (eek 4, stride 2) — like a str-element ARRAY

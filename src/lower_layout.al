@@ -1313,7 +1313,9 @@ pub array_elem_word_reservation := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : 
 pub require_no_byte_layout_array_elem := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, a : rt::Arena) {
   bn := base_type_name(src, ts, tl)
   if struct_decl_of(decls, src, bn.s, bn.n) < 0 { return }
-  if is_packed(decls, src, bn.s, bn.n) { return }
+  if is_packed(decls, src, bn.s, bn.n) {
+    panic("selfhost: an array whose element is a @packed struct is not supported by the word-granular array tier; byte-precise element stride and packed field offsets are a deferred slice; rejected rather than silently miscompiled")
+  }
   if std_struct_has_byte_layout(decls, src, ts, tl, a) {
     panic("selfhost: an array whose ELEMENT is a standard byte-layout struct (one carrying a `[u8|i8|bits8; N]` field, directly or through a nested struct) has no byte-precise element tier on this backend — the element is written at its §6.1 byte offsets while the array addresses it at `struct_words * 8`, so `xs[i]` and `xs[i].field` name bytes nothing wrote (measured: exit 1 on aarch64/riscv64/wasm before this fence). Rejected rather than silently miscompiled; bind the element's scalar fields through a non-array local instead.")
   }

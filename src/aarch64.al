@@ -710,7 +710,7 @@ a64_slice_param_agg_stride := fn(params_head : ptr(mut Param), src : ptr(u8), ns
   es := a64_slice_param_elem_span(params_head, src, ns, nl)
   mut r := 0
   if es.n != 0 {
-    if struct_decl_of(decls, src, es.s, es.n) >= 0 { r = i64(struct_words(decls, src, es.s, es.n, a)) }
+    if struct_decl_of(decls, src, es.s, es.n) >= 0 { require_no_byte_layout_array_elem(decls, src, es.s, es.n, a) ; r = i64(struct_words(decls, src, es.s, es.n, a)) }
     if enum_decl_of(decls, src, es.s, es.n) >= 0 { r = 1 + i64(enum_max_arity(decls, src, es.s, es.n, a)) }
   }
   r
