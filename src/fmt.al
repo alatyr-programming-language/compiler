@@ -601,12 +601,6 @@ fmt_is_ident_byte := fn(b : usize) -> bool {
   return (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
 }
 
-## Is `b` a valid identifier START byte? The lexer starts identifiers with `is_alpha`, then admits
-## digits; a backward span scan must not turn an integer literal such as `123 :: foo` into a module.
-fmt_is_ident_start_byte := fn(b : usize) -> bool {
-  return (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
-}
-
 ## Is `b` a blank byte (space / tab / LF / CR)? The one-byte form of `gap_is_blank`, for the
 ## backward source scans that recover a marker sitting just before a known name span.
 fmt_is_blank_byte := fn(b : usize) -> bool {
@@ -1058,6 +1052,34 @@ fmt_path_line_kind := fn(src : ptr(u8), end : usize) -> usize {
   1
 }
 
+## Is the separator at `sep` outside a string/char literal and before any line comment? A raw
+## backward scan can otherwise mistake the final `::` in `s := "text ::"` for a module separator
+## before the next Var. Keep this lexical fence local to the source-recovery workaround.
+fmt_path_sep_is_real := fn(src : ptr(u8), sep : usize) -> bool {
+  mut ls := sep
+  while ls > 0 {
+    b := bytes(str_at((src + ls - 1), 1))[0]
+    if b == 10 or b == 13 { break }
+    ls -= 1
+  }
+  mut p := ls
+  mut quote := 0
+  mut escaped := false
+  mut real := true
+  while p < sep and real {
+    b := bytes(str_at((src + p), 1))[0]
+    if quote != 0 {
+      if escaped { escaped = false }
+      else if b == 92 { escaped = true }
+      else if (quote == 1 and b == 34) or (quote == 2 and b == 39) { quote = 0 }
+    } else if b == 34 { quote = 1 }
+    else if b == 39 { quote = 2 }
+    else if b == 35 { real = false }
+    p += 1
+  }
+  real and quote == 0
+}
+
 ## Recover the SOURCE start of a qualified value path whose AST `Var` span kept only its tail.
 ## `p_factor` stores `hex::encode` as `Var(encode)`, so the formatter must use the same narrow
 ## source-backed recovery as lower's `gref_split` until the AST grows a path field. Blanks, including
@@ -1093,6 +1115,8 @@ fmt_var_path_start := fn(src : ptr(u8), s : usize, n : usize) -> usize {
     }
     if sep_end < 2 or str_at((src + sep_end - 2), 2) != "::" {
       scanning = false
+    } else if not fmt_path_sep_is_real(src, sep_end - 2) {
+      scanning = false
     } else {
       if saw_comment { panic("selfhost: fmt — qualified value path crosses a comment") }
       mut head_end := sep_end - 2
@@ -1102,9 +1126,6 @@ fmt_var_path_start := fn(src : ptr(u8), s : usize, n : usize) -> usize {
       mut head_start := head_end
       while head_start > 0 and fmt_is_ident_byte(bytes(str_at((src + head_start - 1), 1))[0]) { head_start -= 1 }
       if head_start == head_end { panic("selfhost: fmt — qualified value path head is not an identifier") }
-      if fmt_is_ident_start_byte(bytes(str_at((src + head_start), 1))[0]) == false {
-        panic("selfhost: fmt — qualified value path head starts with a non-identifier byte")
-      }
       mut q := head_start
       while q < s {
         b := bytes(str_at((src + q), 1))[0]
