@@ -6856,14 +6856,19 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           emit_a64_match_arms(arms, bagg.s, bagg.n, bind_base + 8, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
         }
-        mut scalarok := false
-        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) {
+        mut scalar_shape := true
+        mut scalar_arm := arms
+        while scalar_arm != 0 {
+          sam := deref(arm_p(scalar_arm))
+          if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
+          scalar_arm = sam.next
+        }
+        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and scalar_shape {
           emit_a64_expr(scrut, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           emit_a64_scalar_match_arms(arms, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
-          scalarok = true
         }
-        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and (not scalarok) { push_str(sb, "  brk #0 // unsupported match statement\n") }
+        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and (not scalar_shape) { push_str(sb, "  brk #0 // unsupported match statement\n") }
         s = nx
       }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => {

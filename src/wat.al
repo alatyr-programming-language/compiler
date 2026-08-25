@@ -5726,15 +5726,26 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           if spidx < 0 { sidx = name_local_index(fn_head, src, sn.s, sn.n, pcount, a, decls) }
           emit_wat_stmt_match(arms_head, etype.s, etype.n, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
         } else if not idxmatch {
-          ## Scalar statement match: park the value in the first per-function scratch local so arm
-          ## comparisons survive body emission. The scratch is reused by nested bodies only after the
-          ## outer comparison has selected an arm.
-          nloc := count_locals(fn_head, src, a, decls)
-          sidx := pcount + nloc
-          push_str(sb, "    (local.set ") ; push_int(sb, sidx) ; push_str(sb, " ")
-          emit_wat_expr(scrut, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-          push_str(sb, ")\n")
-          emit_wat_scalar_stmt_match(arms_head, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
+          mut scalar_shape := true
+          mut scalar_arm := arms_head
+          while scalar_arm != 0 {
+            sam := deref(arm_p(scalar_arm))
+            if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
+            scalar_arm = sam.next
+          }
+          if scalar_shape {
+            ## Scalar statement match: park the value in the first per-function scratch local so arm
+            ## comparisons survive body emission. The scratch is reused by nested bodies only after the
+            ## outer comparison has selected an arm.
+            nloc := count_locals(fn_head, src, a, decls)
+            sidx := pcount + nloc
+            push_str(sb, "    (local.set ") ; push_int(sb, sidx) ; push_str(sb, " ")
+            emit_wat_expr(scrut, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+            push_str(sb, ")\n")
+            emit_wat_scalar_stmt_match(arms_head, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
+          } else {
+            push_str(sb, "    (unreachable) (; unsupported non-scalar statement match ;)\n")
+          }
         }
         s = nx
       }
