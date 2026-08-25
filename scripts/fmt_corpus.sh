@@ -308,18 +308,20 @@ if [ "$ONLY" != src ] && { [ -z "$FILTER" ] || printf '%s\n' 'test/package/fn_va
   fi
   echo "fmt package fixture=test/package/fn_value_qualified checked=1"
 
-  # The lexer/parser also accept blanks around `::`. Exercise that spelling in an UNCALLED function
-  # in a COPY of the existing fixture so this formatter-only regression needs no new corpus row or
-  # oracle update. The package's normal main still supplies the executable behavior check; executing
-  # this spaced value is a separate lower/backend concern outside the bounded formatter slice.
+  # The lexer/parser also accept blanks around `::`. Exercise and EXECUTE that spelling in a COPY of
+  # the existing fixture so this formatter-only regression needs no new corpus row or oracle update.
   PS="$W/package/fn_value_qualified_spaced"
   rm -rf "$PS"
   cp -r "$ROOT/test/package/fn_value_qualified" "$PS"
-  sed -i '/^main := fn() -> u64 {/i\
+  sed -i \
+    -e '/^main := fn() -> u64 {/i\
 spaced_value := fn() -> u64 {\
   apply(hex :: encode, 40)\
-}\
-' "$PS/src/main.al"
+}' \
+  -e '/^  if direct == 41 and indirect == 41 { 42 } else { 0 }$/c\
+  spaced := spaced_value()\
+  if direct == 41 and indirect == 41 and spaced == 41 { 42 } else { 0 }' \
+  "$PS/src/main.al"
   PSO1="$W/o/fn_value_qualified.package.spaced.f1.al"
   PSO2="$W/o/fn_value_qualified.package.spaced.f2.al"
   PSE="$W/o/fn_value_qualified.package.spaced.err"
@@ -367,8 +369,8 @@ spaced_value := fn() -> u64 {\
   echo "fmt package fixture=test/package/fn_value_qualified checked=2"
 
   # A line comment ending in `::` must not become the head of the next Var. This variant is
-  # sandbox-only: it keeps the corpus and all three oracles unchanged while checking both the
-  # rendered source and the formatted package's behavior.
+  # sandbox-only: it keeps the corpus and all three oracles unchanged and accepts a deliberate
+  # fail-loud refusal for the ambiguous source.
   PC="$W/package/fn_value_qualified_comment"
   rm -rf "$PC"
   cp -r "$ROOT/test/package/fn_value_qualified" "$PC"
@@ -386,8 +388,7 @@ spaced_value := fn() -> u64 {\
     echo "PACKAGE-COMMENT-COMPILEFAIL test/package/fn_value_qualified"
     fail=1
   elif ! ( cd "$PC" && timeout $TCC "$AL" fmt src/main.al ) >"$PCO1" 2>"$PCE" </dev/null; then
-    echo "PACKAGE-COMMENT-FMT-REFUSE test/package/fn_value_qualified"
-    fail=1
+    echo "PACKAGE-COMMENT-REFUSED test/package/fn_value_qualified"
   elif ! grep -qE '^  x$' "$PCO1" || grep -qF 'separator ::' "$PCO1"; then
     echo "PACKAGE-COMMENT-PATH test/package/fn_value_qualified (comment altered next Var)"
     fail=1
@@ -418,7 +419,40 @@ spaced_value := fn() -> u64 {\
       fi
     fi
   fi
-  echo "fmt package fixture=test/package/fn_value_qualified checked=3"
+  # The lexer accepts multiline separators, but the current formatter/lowering boundary cannot
+  # safely render their reflowed form. It must refuse rather than silently change runtime behavior.
+  PML="$W/package/fn_value_qualified_multiline"
+  rm -rf "$PML"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PML"
+  sed -i '/^  indirect := apply(hex::encode, 40)$/c\
+  indirect := apply(hex\
+  ::\
+  encode, 40)' "$PML/src/main.al"
+  PMLO="$W/o/fn_value_qualified.package.multiline.out"
+  PMLE="$W/o/fn_value_qualified.package.multiline.err"
+  if ! ( cd "$PML" && timeout $TCC "$AL" fmt src/main.al ) >"$PMLO" 2>"$PMLE" </dev/null; then
+    echo "PACKAGE-MULTILINE-REFUSED test/package/fn_value_qualified"
+  else
+    echo "PACKAGE-MULTILINE-SILENT test/package/fn_value_qualified (multiline path was rewritten)"
+    fail=1
+  fi
+
+  # Numeric tokens are not identifier starts. If the parser exposes this malformed path-shaped
+  # source to fmt, it must refuse rather than treating `123` as a module name.
+  PN="$W/package/fn_value_qualified_numeric"
+  rm -rf "$PN"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PN"
+  sed -i 's/apply(hex::encode, 40)/apply(123 :: encode, 40)/' "$PN/src/main.al"
+  PNO="$W/o/fn_value_qualified.package.numeric.out"
+  PNE="$W/o/fn_value_qualified.package.numeric.err"
+  if ! ( cd "$PN" && timeout $TCC "$AL" fmt src/main.al ) >"$PNO" 2>"$PNE" </dev/null; then
+    echo "PACKAGE-NUMERIC-REFUSED test/package/fn_value_qualified"
+  else
+    echo "PACKAGE-NUMERIC-SILENT test/package/fn_value_qualified (numeric path head was rewritten)"
+    fail=1
+  fi
+
+  echo "fmt package fixture=test/package/fn_value_qualified checked=5"
 fi
 
 # ==========================================================================================

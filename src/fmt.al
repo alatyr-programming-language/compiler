@@ -601,16 +601,23 @@ fmt_is_ident_byte := fn(b : usize) -> bool {
   return (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
 }
 
+## Is `b` a valid identifier START byte? The lexer starts identifiers with `is_alpha`, then admits
+## digits; a backward span scan must not turn an integer literal such as `123 :: foo` into a module.
+fmt_is_ident_start_byte := fn(b : usize) -> bool {
+  return (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
+}
+
 ## Is `b` a blank byte (space / tab / LF / CR)? The one-byte form of `gap_is_blank`, for the
 ## backward source scans that recover a marker sitting just before a known name span.
 fmt_is_blank_byte := fn(b : usize) -> bool {
   return b == 32 or b == 9 or b == 10 or b == 13
 }
 
-## Blanks permitted inside a qualified value-path separator. LF/CR are deliberately excluded:
-## crossing a line boundary could reinterpret a comment ending in `::` as the head of the next Var.
+## Blanks permitted inside a qualified value-path separator. LF/CR are lexer whitespace too. The
+## backward recovery checks comment lines separately and refuses an ambiguous path rather than
+## silently dropping its head.
 fmt_is_path_blank_byte := fn(b : usize) -> bool {
-  return b == 32 or b == 9
+  return b == 32 or b == 9 or b == 10 or b == 13
 }
 
 ## A struct FIELD's `mut` marker (grammar §130: `field ::= { attribute } [ "mut" ] ident ":" type`).
@@ -1014,12 +1021,37 @@ fmt_var_span := fn(e : ptr(Expr), out_s : ptr(mut usize), out_n : ptr(mut usize)
   r
 }
 
+## Classify the source line immediately before `end`: 0 = ordinary, 1 = comment, 2 = comment with `::`.
+## A comment is whitespace to the lexer, but its words are not a path segment. The formatter can
+## preserve a clean multiline path; a comment-shaped path is refused below instead of rewritten.
+fmt_path_line_kind := fn(src : ptr(u8), end : usize) -> usize {
+  mut ls := end
+  while ls > 0 {
+    b := bytes(str_at((src + ls - 1), 1))[0]
+    if b == 10 or b == 13 { break }
+    ls -= 1
+  }
+  mut p := ls
+  mut has_comment := false
+  mut has_sep := false
+  while p + 1 < end {
+    b0 := bytes(str_at((src + p), 1))[0]
+    b1 := bytes(str_at((src + p + 1), 1))[0]
+    if b0 == 35 and b1 == 35 { has_comment = true }
+    if b0 == 58 and b1 == 58 { has_sep = true }
+    p += 1
+  }
+  if has_comment and has_sep { return 2 }
+  if has_comment { return 1 }
+  0
+}
+
 ## Recover the SOURCE start of a qualified value path whose AST `Var` span kept only its tail.
 ## `p_factor` stores `hex::encode` as `Var(encode)`, so the formatter must use the same narrow
-## source-backed recovery as lower's `gref_split` until the AST grows a path field. Blanks around
-## `::` are part of the separator's accepted source spelling. A bare name, a malformed separator,
-## or a path with a non-identifier segment falls back to the stored span: a miss may preserve a
-## residual, but it must never invent bytes from nearby source.
+## source-backed recovery as lower's `gref_split` until the AST grows a path field. Blanks, including
+## line breaks, around `::` are part of the separator's accepted source spelling. If a comment or a
+## non-identifier head makes the span ambiguous, fail loud: a formatter must never invent or drop
+## source that changes the program.
 fmt_var_path_start := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   if n == 0 { return s }
   mut cur_end := s
@@ -1028,15 +1060,47 @@ fmt_var_path_start := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   mut scanning := true
   while scanning {
     mut sep_end := cur_end
-    while sep_end > 0 and fmt_is_path_blank_byte(bytes(str_at((src + sep_end - 1), 1))[0]) { sep_end -= 1 }
+    mut saw_comment := false
+    mut gap_scanning := true
+    while gap_scanning {
+      while sep_end > 0 and fmt_is_path_blank_byte(bytes(str_at((src + sep_end - 1), 1))[0]) { sep_end -= 1 }
+      line_kind := fmt_path_line_kind(src, sep_end)
+      if line_kind == 2 { panic("selfhost: fmt — qualified value path crosses a comment containing ::") }
+      if line_kind == 1 {
+        saw_comment = true
+        mut ls := sep_end
+        while ls > 0 {
+          b := bytes(str_at((src + ls - 1), 1))[0]
+          if b == 10 or b == 13 { break }
+          ls -= 1
+        }
+        sep_end = ls
+      } else {
+        gap_scanning = false
+      }
+    }
     if sep_end < 2 or str_at((src + sep_end - 2), 2) != "::" {
       scanning = false
     } else {
+      if saw_comment { panic("selfhost: fmt — qualified value path crosses a comment") }
       mut head_end := sep_end - 2
       while head_end > 0 and fmt_is_path_blank_byte(bytes(str_at((src + head_end - 1), 1))[0]) { head_end -= 1 }
+      head_line_kind := fmt_path_line_kind(src, head_end)
+      if head_line_kind != 0 { panic("selfhost: fmt — qualified value path head is in a comment") }
       mut head_start := head_end
       while head_start > 0 and fmt_is_ident_byte(bytes(str_at((src + head_start - 1), 1))[0]) { head_start -= 1 }
-      if head_start == head_end { return s }
+      if head_start == head_end { panic("selfhost: fmt — qualified value path head is not an identifier") }
+      if fmt_is_ident_start_byte(bytes(str_at((src + head_start), 1))[0]) == false {
+        panic("selfhost: fmt — qualified value path head starts with a non-identifier byte")
+      }
+      mut q := head_start
+      while q < s {
+        b := bytes(str_at((src + q), 1))[0]
+        if b == 10 or b == 13 {
+          panic("selfhost: fmt — multiline qualified value path is not safely renderable")
+        }
+        q += 1
+      }
       path_start = head_start
       found = true
       cur_end = head_start
