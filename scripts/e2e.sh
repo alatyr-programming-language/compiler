@@ -1337,6 +1337,29 @@ EOF
       fail=1
     fi
   done
+  offset0="$root/offset0.al"
+  cat > "$offset0" <<'EOF'
+G : ([u8; 4], u64) = ([1, 2, 3, 4], 9)
+main := fn() -> u64 { G.0[1] }
+EOF
+  err="$T/standard_tuple_global_offset0.check.err"
+  "$CC" check "$offset0" >/dev/null 2>"$err"
+  rc=$?
+  if [ "$rc" = 1 ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$err" && grep -qF "at line 1 in offset0" "$err"; then
+    echo "ok   standard_tuple_global/offset0: check kept diagnostic and location"
+  else
+    echo "FAIL standard_tuple_global/offset0: check rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -f "$root/offset0.out"
+  "$CC" -o "$root/offset0.out" "$offset0" >/dev/null 2>"$T/standard_tuple_global_offset0.x86.err"
+  rc=$?
+  if [ "$rc" != 0 ] && [ ! -e "$root/offset0.out" ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$T/standard_tuple_global_offset0.x86.err"; then
+    echo "ok   standard_tuple_global/offset0: x86 kept diagnostic"
+  else
+    echo "FAIL standard_tuple_global/offset0: x86 rc=$rc artifact=$(test -e "$root/offset0.out" && echo yes || echo no) diagnostic=$(cat "$T/standard_tuple_global_offset0.x86.err" 2>/dev/null)"
+    fail=1
+  fi
   for spec in "forward|a_byte" "reverse|z_byte"; do
     IFS='|' read -r name expected <<< "$spec"
     err="$T/standard_tuple_global_$name.err"

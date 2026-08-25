@@ -3273,9 +3273,10 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   w0 := rt::push_str(db, "alatyr: check: ")
   ## The KIND + SOURCE SPAN are only reliable when the failure propagated through the `CheckErr`
   ## channel (`span > 0`); many checks poison via `mark_failed`, which carries no span, so `code` is
-  ## then the default `unbound_err(0,0)` == 1. Print the LOCATED kind + 1-based line only when
-  ## `span > 0`; otherwise an honest unlocated message. `span == 0 && kind == 3` is the duplicate case.
-  if span > 0 {
+  ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
+  ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
+  ## branch. Other zero-span failures remain honest unlocated messages.
+  if span > 0 or tuple_global {
     if limit {
       wk0 := rt::push_str(db, "@limits(")
       wk1 := rt::push_str(db, limit_name(kind))
@@ -5394,10 +5395,11 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   dw0 := rt::push_str(db, "alatyr: check: ")
   ## The KIND + SOURCE SPAN are only reliable when the failure propagated through the `CheckErr`
   ## channel (`span > 0`); many checks poison via `mark_failed` (to avoid a lean-lower early-return
-  ## gotcha), which carries no span, so `r` is then the default `unbound_err(0,0)` == 1. Print the
-  ## LOCATED kind + 1-based line only when `span > 0`; otherwise an honest unlocated message (no
-  ## misleading kind/line). `span == 0 && kind == 3` is the duplicate-name case (a known kind).
-  if span > 0 or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  ## gotcha), which carries no span, so `r` is then the default `unbound_err(0,0)` == 1. The
+  ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
+  ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
+  ## honest unlocated messages (no misleading kind/line).
+  if span > 0 or tuple_global or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
       else {
