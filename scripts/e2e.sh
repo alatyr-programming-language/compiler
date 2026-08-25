@@ -576,6 +576,20 @@ check_reject() { # name
   if [ "$got" = 1 ]; then echo "ok   $1: rejected"; else echo "FAIL $1: check rc=$got want 1"; fail=1; fi
 }
 
+# Assert the CHECK-path diagnostic as well as its non-zero verdict. This is the check-subcommand twin
+# of `build_reject_has`; a shared pre-emission fence must not only reject but retain its source location
+# and intended wording on the type-check-only surface.
+check_reject_has() { # name, needle
+  src="$E2E_TEST/$1.al"
+  [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
+  out="$T/e2e_$1.checkout"; err="$T/e2e_$1.checkerr"
+  "$CC" check "$src" >"$out" 2>"$err"; got=$?
+  if [ "$got" = 0 ]; then echo "FAIL $1: check accepted, want a located reject"; fail=1; return; fi
+  if [ -s "$out" ]; then echo "FAIL $1: check rc=$got but $(wc -c < "$out") bytes reached stdout"; fail=1; return; fi
+  if grep -qF "$2" "$err"; then echo "ok   $1: check rejected with the diagnostic"
+  else echo "FAIL $1: check rc=$got but the diagnostic is missing [$2]"; fail=1; fi
+}
+
 check_accept() { # name
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
@@ -1245,6 +1259,119 @@ exe="$p/target/debug/qualified-generic-arg"
   "$exe" >/dev/null 2>&1; got=$?
   if [ "$got" = 42 ]; then echo "ok   qualified_generic_package: artifact 42"; else echo "FAIL qualified_generic_package: artifact got $got want 42"; fail=1; fi
   rm -rf "$p/target"
+}
+
+## Types §6.1 / Modules §3 — the standard-byte tuple global fence must inspect the CURRENT declaration,
+## not a same-named global from another module. Generate two disposable packages with opposite source
+## orders so a bare-name recovery either misses the byte global or reports the ordinary one. The fixture
+## is row-local (not part of the corpus): this is a source-location/module-identity probe for `check`.
+standard_tuple_global_module_test() {
+  root="$T/e2e_standard_tuple_global_modules"
+  rm -rf "$root"
+  mkdir -p "$root/forward/src" "$root/reverse/src"
+  for p in "$root/forward" "$root/reverse"; do
+    cat > "$p/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "standard-tuple-global-modules")],
+)
+EOF
+    cat > "$p/src/main.al" <<'EOF'
+_start := fn() { exit(42) }
+EOF
+  done
+  cat > "$root/forward/src/a_byte.al" <<'EOF'
+pub mut G : ([u8; 4], u64) = ([1, 2, 3, 4], 9)
+EOF
+  cat > "$root/forward/src/z_word.al" <<'EOF'
+pub mut G : (u64, u64) = (7, 8)
+EOF
+  cat > "$root/reverse/src/a_word.al" <<'EOF'
+pub mut G : (u64, u64) = (7, 8)
+EOF
+  cat > "$root/reverse/src/z_byte.al" <<'EOF'
+pub mut G : ([u8; 4], u64) = ([1, 2, 3, 4], 9)
+EOF
+  multiline="$root/multiline.al"
+  cat > "$multiline" <<'EOF'
+## The same boundary with whitespace inside and around the tuple and array type.
+mut G : (
+	[u8;
+	4],
+	u64
+) = ([1, 2, 3, 4], 9)
+
+main := fn() -> u64 {
+  G.0[1]
+}
+EOF
+  err="$T/standard_tuple_global_multiline.check.err"
+  "$CC" check "$multiline" >/dev/null 2>"$err"
+  rc=$?
+  if [ "$rc" = 1 ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$err"; then
+    echo "ok   standard_tuple_global/multiline: check rejected"
+  else
+    echo "FAIL standard_tuple_global/multiline: check rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -f "$root/multiline.out"
+  "$CC" -o "$root/multiline.out" "$multiline" >/dev/null 2>"$T/standard_tuple_global_multiline.x86.err"
+  rc=$?
+  if [ "$rc" != 0 ] && [ ! -e "$root/multiline.out" ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$T/standard_tuple_global_multiline.x86.err"; then
+    echo "ok   standard_tuple_global/multiline: x86 build rejected before artifact"
+  else
+    echo "FAIL standard_tuple_global/multiline: x86 rc=$rc artifact=$(test -e "$root/multiline.out" && echo yes || echo no) diagnostic=$(cat "$T/standard_tuple_global_multiline.x86.err" 2>/dev/null)"
+    fail=1
+  fi
+  for backend in wat aarch64 riscv64; do
+    out="$root/multiline.$backend.out"
+    err="$T/standard_tuple_global_multiline.$backend.err"
+    "$CC" "$backend" "$multiline" >"$out" 2>"$err"
+    rc=$?
+    if [ "$rc" != 0 ] && [ ! -s "$out" ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$err"; then
+      echo "ok   standard_tuple_global/multiline: $backend rejected without emission"
+    else
+      echo "FAIL standard_tuple_global/multiline: $backend rc=$rc stdout=$(wc -c < "$out") diagnostic=$(cat "$err" 2>/dev/null)"
+      fail=1
+    fi
+  done
+  offset0="$root/offset0.al"
+  cat > "$offset0" <<'EOF'
+G : ([u8; 4], u64) = ([1, 2, 3, 4], 9)
+main := fn() -> u64 { G.0[1] }
+EOF
+  err="$T/standard_tuple_global_offset0.check.err"
+  "$CC" check "$offset0" >/dev/null 2>"$err"
+  rc=$?
+  if [ "$rc" = 1 ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$err" && grep -qF "at line 1 in offset0" "$err"; then
+    echo "ok   standard_tuple_global/offset0: check kept diagnostic and location"
+  else
+    echo "FAIL standard_tuple_global/offset0: check rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -f "$root/offset0.out"
+  "$CC" -o "$root/offset0.out" "$offset0" >/dev/null 2>"$T/standard_tuple_global_offset0.x86.err"
+  rc=$?
+  if [ "$rc" != 0 ] && [ ! -e "$root/offset0.out" ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$T/standard_tuple_global_offset0.x86.err"; then
+    echo "ok   standard_tuple_global/offset0: x86 kept diagnostic"
+  else
+    echo "FAIL standard_tuple_global/offset0: x86 rc=$rc artifact=$(test -e "$root/offset0.out" && echo yes || echo no) diagnostic=$(cat "$T/standard_tuple_global_offset0.x86.err" 2>/dev/null)"
+    fail=1
+  fi
+  for spec in "forward|a_byte" "reverse|z_byte"; do
+    IFS='|' read -r name expected <<< "$spec"
+    err="$T/standard_tuple_global_$name.err"
+    ( cd "$root/$name" && "$CC" check package.al ) >/dev/null 2>"$err"
+    rc=$?
+    if [ "$rc" = 1 ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$err" && grep -qF "in $expected" "$err"; then
+      echo "ok   standard_tuple_global_module/$name: rejected current byte global in $expected"
+    else
+      echo "FAIL standard_tuple_global_module/$name: rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"
+      fail=1
+    fi
+  done
 }
 
 ## Modules §1/§4 + Types §4.1 — same-named nominal enums must never let declaration order choose a
@@ -2233,6 +2360,10 @@ run_x86 standard_tuple_byte_component 42
 build_reject_has reject_standard_tuple_byte_param "a standard-layout byte tuple parameter is not supported yet"
 build_reject_has reject_standard_tuple_byte_return "a standard-layout byte tuple return is not supported yet"
 build_reject_has reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
+check_reject_has reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
+emit_reject_has wat reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
+emit_reject_has aarch64 reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
+emit_reject_has riscv64 reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
 ## §8 DIRECT aggregate-field READ from a @packed struct: r.inner.x (nested-struct sub-field) + r.name.len
 ## (str field), read through the packed byte layout at the aggregate's 8-aligned byte->slot position;
 ## x86_64-only, so run_x86 (sweep-excluded).
@@ -3196,6 +3327,7 @@ root_package_test module_type_ancestor "T main__main" "T geo__child__run" "T geo
 root_package_test module_type_shadow   "T main__main" "T geo__child__run" "T geo__edge__run"
 mod8_root_duplicate_test
 qualified_generic_package_test
+standard_tuple_global_module_test
 ambig_pub_test
 ambig_enum_collision_test
 check_located reject_qualified_generic_unknown 3
