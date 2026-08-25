@@ -211,13 +211,47 @@ implement. That rule is the only reason this compiler can claim conformance.
 
 ## 2 · Isolate
 
-Derive the path; never name one. Two gates in one checkout collide over `target/`.
+Derive the path; never name one. Two gates in one checkout collide over `target/`. Keep the
+launcher checkout's top-level, branch, and status as an explicit before/after invariant; the
+launcher and every user-owned worktree are outside the worker's edit scope and must remain
+unchanged.
 
 ```sh
+set -eu
+LAUNCHER_TOP="$(git rev-parse --show-toplevel)"
+LAUNCHER_BRANCH="$(git branch --show-current)"
+LAUNCHER_STATUS="$(git status --porcelain=v1)"
 W="$(mktemp -d)"
-git worktree add --detach "$W" origin/main    # or: git clone --no-local . "$W"
-cd "$W" && git switch -c <branch>
+git -C "$LAUNCHER_TOP" worktree add --detach "$W" origin/main    # or: git clone --no-local . "$W"
+test "$(git -C "$W" rev-parse --show-toplevel)" = "$W" || {
+  echo "worker worktree top-level mismatch" >&2
+  exit 1
+}
+BRANCH="lane/issue-123-short-name"
+git -C "$W" switch -c "$BRANCH"
+test "$(git -C "$W" rev-parse --show-toplevel)" = "$W" || {
+  echo "worker worktree moved during branch creation" >&2
+  exit 1
+}
+test "$(git -C "$W" branch --show-current)" = "$BRANCH" || {
+  echo "worker branch was not created in the requested worktree" >&2
+  exit 1
+}
+test "$(git -C "$LAUNCHER_TOP" branch --show-current)" = "$LAUNCHER_BRANCH" || {
+  echo "launcher branch changed" >&2
+  exit 1
+}
+test "$(git -C "$LAUNCHER_TOP" status --porcelain=v1)" = "$LAUNCHER_STATUS" || {
+  echo "launcher changes changed" >&2
+  exit 1
+}
 ```
+
+During this setup, every worker-repository operation must be addressed to `"$W"` (or run inside an
+explicitly confined subshell). Never combine a directory change into the worker path with an
+unscoped `git switch`: a caller's working directory is control-plane state, and a worker must not
+change the launcher branch or any user-owned worktree. Stop before editing if either top-level or
+launcher invariant fails.
 
 Budget ~150 MB of build artifacts. Drop it with `git worktree remove` when done — deleting the
 directory leaves a broken registry entry. **Never `git stash`**: it is one ref for the whole
