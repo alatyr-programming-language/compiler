@@ -4378,6 +4378,8 @@ run uint_generic_op 42
 ## (`+ - * / %` + the six comparisons), cross-word carry/borrow, a divisor with bits in a high
 ## word, and the `u128 ≡ uint(128)` alias interop (both names route the same generic `+`).
 run uint256 42
+run a64_large_frame 42
+run_a64 a64_large_frame 42
 ## TYP-10 admissibility: `uint(0)` (non-positive) and `uint(100)` (not a multiple of 64) must FAIL
 ## LOUD at compile time — the comptime array-length fold (`ct_arr_len`) rejects both, never a
 ## silently-narrower type. Probed against the SHIPPED prelude via the bare `uint(` injection.

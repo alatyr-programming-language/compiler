@@ -1,0 +1,71 @@
+## e2e — a valid frame larger than the AArch64 pair-load/store immediate range.
+## 64 dead u64 locals make the frame 528 bytes (plus the saved pair), so the backend must reserve and
+## release it through a register-sized SP adjustment. The locals are deliberately observable to the
+## frame scanner even though the program's result is the simple cross-backend value 42.
+main := fn() -> u64 {
+  mut dead_00 : u64 = 0
+  mut dead_01 : u64 = 0
+  mut dead_02 : u64 = 0
+  mut dead_03 : u64 = 0
+  mut dead_04 : u64 = 0
+  mut dead_05 : u64 = 0
+  mut dead_06 : u64 = 0
+  mut dead_07 : u64 = 0
+  mut dead_08 : u64 = 0
+  mut dead_09 : u64 = 0
+  mut dead_10 : u64 = 0
+  mut dead_11 : u64 = 0
+  mut dead_12 : u64 = 0
+  mut dead_13 : u64 = 0
+  mut dead_14 : u64 = 0
+  mut dead_15 : u64 = 0
+  mut dead_16 : u64 = 0
+  mut dead_17 : u64 = 0
+  mut dead_18 : u64 = 0
+  mut dead_19 : u64 = 0
+  mut dead_20 : u64 = 0
+  mut dead_21 : u64 = 0
+  mut dead_22 : u64 = 0
+  mut dead_23 : u64 = 0
+  mut dead_24 : u64 = 0
+  mut dead_25 : u64 = 0
+  mut dead_26 : u64 = 0
+  mut dead_27 : u64 = 0
+  mut dead_28 : u64 = 0
+  mut dead_29 : u64 = 0
+  mut dead_30 : u64 = 0
+  mut dead_31 : u64 = 0
+  mut dead_32 : u64 = 0
+  mut dead_33 : u64 = 0
+  mut dead_34 : u64 = 0
+  mut dead_35 : u64 = 0
+  mut dead_36 : u64 = 0
+  mut dead_37 : u64 = 0
+  mut dead_38 : u64 = 0
+  mut dead_39 : u64 = 0
+  mut dead_40 : u64 = 0
+  mut dead_41 : u64 = 0
+  mut dead_42 : u64 = 0
+  mut dead_43 : u64 = 0
+  mut dead_44 : u64 = 0
+  mut dead_45 : u64 = 0
+  mut dead_46 : u64 = 0
+  mut dead_47 : u64 = 0
+  mut dead_48 : u64 = 0
+  mut dead_49 : u64 = 0
+  mut dead_50 : u64 = 0
+  mut dead_51 : u64 = 0
+  mut dead_52 : u64 = 0
+  mut dead_53 : u64 = 0
+  mut dead_54 : u64 = 0
+  mut dead_55 : u64 = 0
+  mut dead_56 : u64 = 0
+  mut dead_57 : u64 = 0
+  mut dead_58 : u64 = 0
+  mut dead_59 : u64 = 0
+  mut dead_60 : u64 = 0
+  mut dead_61 : u64 = 0
+  mut dead_62 : u64 = 0
+  mut dead_63 : u64 = 0
+  return 42
+}
