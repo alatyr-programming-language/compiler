@@ -4309,6 +4309,13 @@ run wat_loop_expr_value 42
 ## Issue #44 bounded WAT slice: a statement-only labeled break exits a nested loop and drains both
 ## loop-body defers in LIFO order before the named-target branch.
 run wat_labeled_break 21
+## Issue #44 bounded WAT slice: a statement-only labeled continue drains nested and target-loop defers
+## in LIFO order before routing to the outer loop's next-iteration edge.
+run wat_labeled_continue 21
+## A named continue to the NEAREST value-bearing loop also has depth 0 in the AST. WAT must use the
+## authored-label span to distinguish it from bare continue and fail loud rather than emit `$cont`.
+run wat_labeled_value_continue 7
+run_wat wat_labeled_value_continue 134
 run_wat fn_value_local_lambda_cross 10
 run_a64 fn_value_local_lambda_cross 10
 run_rv64 fn_value_local_lambda_cross 10
@@ -5459,6 +5466,11 @@ run_wat wasm_value_match_local_decl 42
 run_wat cross_match_local 42
 run_wat wat_loop_expr_value 42
 run_wat wat_labeled_break 21
+run_wat wat_labeled_continue 21
+## Issue #44: named continue targets the outer statement while and range-for; value-loop and other
+## unsupported control-flow paths remain covered by their existing fail-loud corpus rows.
+run_wat loop_expr_labels 42
+run_wat for_break_labels 42
 check_backend_determinism
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
