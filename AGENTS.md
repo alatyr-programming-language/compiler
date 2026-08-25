@@ -39,8 +39,10 @@ step-by-step procedures live in `.agents/skills/`.
 ## Work reaching `main`
 
 The unit of work is: maintainer triage → owner-authored brief → one worker target → branch and PR →
-local merge and authoritative gate → push the exact gated object → issue closes through the merge.
-The GitHub merge button is not used; an approval is not a landing.
+local merge and authoritative gate → push the exact gated object → the issue closes through the merge
+when the PR completes it. A bounded slice uses an explicit `Refs #N` relation, records its residual
+scope, and leaves the issue open for a later owner-selected unit. The GitHub merge button is not used;
+an approval is not a landing.
 
 The owner may run workers and the integrator through the same GitHub account. Therefore author,
 assignee, and assignment events are bookkeeping, not an actor boundary or an ACL. The owner brief,
@@ -53,9 +55,11 @@ target selection, and independent safety checks are the operational boundary.
   the queue.
 - `in-progress` is the visible worker-claim marker. The lane adds it only after the preflight and a
   final re-read immediately before starting work; an issue carrying it is already claimed and must not
-  be selected or duplicated. Keep it while the worker or its PR is active; clear it only after the work
-  is explicitly abandoned or the issue is closed. It is coordination state, not authorization, and it
-  is not an atomic lock for workers that race before either one has written the label.
+  be selected or duplicated. Keep it while the worker or its PR is active. After a bounded slice lands,
+  the maintainer records the residual scope and clears the old claim when no worker still owns that
+  residual; a new worker claims the next slice. Clear it when the issue is completed or the work is
+  explicitly abandoned. It is coordination state, not authorization, and it is not an atomic lock for
+  workers that race before either one has written the label.
 - An integrator with a PR number uses exactly that PR. Without one, it may proceed only when there is
   exactly one non-draft open PR authored by the current account against `main`; zero or multiple
   candidates require an explicit number. A foreign PR is handled only by explicit number.

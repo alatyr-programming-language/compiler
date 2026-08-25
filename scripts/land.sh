@@ -60,13 +60,25 @@ command -v git >/dev/null 2>&1 || die "git is required"
 git rev-parse --verify -q refs/heads/main >/dev/null || die "no local main"
 echo "  clean tree, no stash, gh present"
 
-ISSUE="$(gh pr view "$PR" -R "$REPO" --json body,title \
-          --jq '[.body, .title] | join(" ") | capture("(?i)closes #(?<n>[0-9]+)").n' 2>/dev/null || true)"
+ISSUE_META="$(gh pr view "$PR" -R "$REPO" --json body,title \
+          --jq '[.body, .title] | join(" ")
+                | capture("(?i)(?<relation>closes|fixes|resolves|refs) #[[:space:]]*(?<number>[0-9]+)")
+                | "\(.relation | ascii_downcase)|\(.number)"' 2>/dev/null || true)"
+RELATION="${ISSUE_META%%|*}"
+ISSUE="${ISSUE_META#*|}"
+case "$RELATION" in
+  closes)   ISSUE_LINK="Closes #$ISSUE" ;;
+  fixes)    ISSUE_LINK="Fixes #$ISSUE" ;;
+  resolves) ISSUE_LINK="Resolves #$ISSUE" ;;
+  refs)     ISSUE_LINK="Refs #$ISSUE" ;;
+  *)        RELATION=; ISSUE=; ISSUE_LINK= ;;
+esac
 HEAD_LABEL="$(gh pr view "$PR" -R "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)"
 IS_FORK="$(gh pr view "$PR" -R "$REPO" --json headRepositoryOwner \
             --jq 'if .headRepositoryOwner.login == "alatyr-programming-language" then "no" else "yes" end' 2>/dev/null || echo unknown)"
-echo "  PR #$PR  head=${HEAD_LABEL:-?}  closes=${ISSUE:-<none declared>}  fork=$IS_FORK"
-[ -n "$ISSUE" ] || echo "  NOTE: no 'Closes #N' in the PR — the issue will NOT close itself; say so or add it."
+echo "  PR #$PR  head=${HEAD_LABEL:-?}  issue=${ISSUE_LINK:-<none declared>}  fork=$IS_FORK"
+[ -n "$ISSUE_LINK" ] || echo "  NOTE: no valid issue relation in the PR — verify the issue linkage before landing."
+[ "$RELATION" = refs ] && echo "  NOTE: bounded slice — the referenced issue remains open; record landed and residual scope in acceptance."
 
 say "PHASE 1 — fetch the PR head"
 git fetch --quiet origin main "+refs/pull/*/head:refs/remotes/pr/*" || die "fetch failed"
@@ -124,9 +136,9 @@ done
 say "PHASE 3 — merge locally (--no-ff, so the PR head stays an ancestor and GitHub marks it Merged)"
 git switch --quiet --detach "$BASE" || die "could not detach at base"
 msg="merge #$PR: ${HEAD_LABEL:-pr-$PR}"
-[ -n "$ISSUE" ] && msg="$msg
+[ -n "$ISSUE_LINK" ] && msg="$msg
 
-Closes #$ISSUE"
+$ISSUE_LINK"
 git merge --no-ff --no-verify -m "$msg" "refs/remotes/pr/$PR" >/dev/null 2>&1 || {
   git merge --abort 2>/dev/null
   git switch --quiet - 2>/dev/null

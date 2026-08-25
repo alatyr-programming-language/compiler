@@ -62,4 +62,8 @@ paste the fixpoint line, the e2e proof-of-work line, the manifest verdict and th
 
 ## Related issue
 
-<!-- Closes #… -->
+<!--
+Use `Closes #…`, `Fixes #…`, or `Resolves #…` when this PR completes the whole issue.
+For an explicitly bounded slice of a larger issue, use `Refs #…` and state in the PR body what this
+PR completes, what remains, and why the issue stays open.
+-->
