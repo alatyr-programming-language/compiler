@@ -5031,7 +5031,8 @@ run try_option_some_after 42
 run defer_lifo 57
 run defer_normal 10
 run defer_return 8
-run defer_try 1
+run defer_try 3
+run_wat defer_try 3
 ## DEFER BLOCK form (`defer { S1; S2 }`): both statements run TOGETHER as one LIFO unit, in order.
 run defer_block 12
 run_wat defer_block 12

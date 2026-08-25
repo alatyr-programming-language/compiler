@@ -1174,6 +1174,42 @@ callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   WSpan(s = rs, n = rn)
 }
 
+## The tryable ENUM type span of a WAT `?` operand. Calls use their declared enum return type; enum
+## locals use the same PARAM/LOCAL resolver as value-position `match`. The wrappers preserve the
+## expression's type while the emitter handles the actual early return.
+wat_try_enum_type := fn(inner : ptr(Expr), params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+  match deref(inner) {
+    Expr::Var(vs, vn) => { return base_enum_type(params_head, fn_head, src, vs, vn, a, decls) }
+    Expr::Call(cs, cl, nargs, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a) }
+    Expr::Unchecked(x) => { return wat_try_enum_type(x, params_head, fn_head, src, a, decls) }
+    Expr::Bitcast(x, _ts, _tl) => { return wat_try_enum_type(x, params_head, fn_head, src, a, decls) }
+    _ => {}
+  }
+  WSpan(s = 0, n = 0)
+}
+
+## The discriminant of the SUCCESS variant for a WAT `?`: `Some` for Option and `Ok` for Result. The
+## shipped stdlib Option is `{None, Some}`, so this must not assume variant zero. An unresolved type
+## folds to zero, matching the native lower's safe default.
+wat_try_success_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> i64 {
+  ebn := base_type_name(src, s, n)
+  di := enum_decl_of(decls, src, ebn.s, ebn.n)
+  if di < 0 { return 0 }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  mut f := d.fields_head
+  mut idx := 0
+  mut res := 0
+  while f != 0 {
+    fd := deref(fld_p(f))
+    nm := str_at((src + fd.ns), fd.nl)
+    if nm == "Some" { res = idx }
+    if nm == "Ok" { res = idx }
+    idx += 1
+    f = fd.next
+  }
+  res
+}
+
 ## The callee-name span of an expression IF it is a `Call` (`f(…)`), else {0,0}.
 expr_call_name := fn(v : ptr(Expr)) -> WSpan {
   mut rs := 0
@@ -4563,6 +4599,38 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         push_str(sb, "))")
       } else {
         push_str(sb, "(unreachable) (; unsupported index ;)\n")
+      }
+    }
+    ## `inner?` — evaluate a tryable enum into its linear-memory base, then inspect word 0. The
+    ## success variant yields payload word 0; any other variant returns the WHOLE enum from the
+    ## enclosing function. WAT's `return` is stack-polymorphic, so the failure arm remains a valid
+    ## i64 expression while still running all pending defers before it returns.
+    Expr::Try(inner) => {
+      tsp := wat_try_enum_type(inner, params_head, body_head, src, a, decls)
+      if tsp.n == 0 {
+        push_str(sb, "(unreachable) (; unsupported try operand ;)\n")
+      } else {
+        sdisc := wat_try_success_disc(decls, src, tsp.s, tsp.n, a)
+        dsc := wat_defer_scratch(pcount, body_head, src, a, decls)
+        push_str(sb, "(block (result i64) (local.set ")
+        push_int(sb, dsc)
+        push_str(sb, " ")
+        emit_wat_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        push_str(sb, ") (if (result i64) (i64.eq (i64.load (i32.wrap_i64 (local.get ")
+        push_int(sb, dsc)
+        push_str(sb, "))) (i64.const ")
+        push_int(sb, sdisc)
+        push_str(sb, ")) (then (i64.load (i32.wrap_i64 (i64.add (local.get ")
+        push_int(sb, dsc)
+        push_str(sb, ") (i64.const 8))))) (else\n")
+        if WAT_DEF_N > 0 {
+          sv := WAT_DEF_N
+          wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          WAT_DEF_N = sv
+        }
+        push_str(sb, "    (return (local.get ")
+        push_int(sb, dsc)
+        push_str(sb, "))\n    )))")
       }
     }
     Expr::Slice(sbe, slo, shi) => {
