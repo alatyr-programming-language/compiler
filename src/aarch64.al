@@ -6355,7 +6355,15 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         if bnl != 0 {
           if a64_is_slice_local(body_head, src, bns, bnl, a) { isslice = true }
           sliceparamidx = param_find(params_head, src, bns, bnl, a)
-          if sliceparamidx >= 0 and a64_slice_param_scalar(params_head, src, bns, bnl, a, decls) { issliceparam = true }
+          if sliceparamidx >= 0 and a64_slice_param_scalar(params_head, src, bns, bnl, a, decls) {
+            ## This write form is currently word-tier only. Resolve the active generic T before
+            ## checking width; otherwise Slice(u8) would incorrectly receive an 8-byte store.
+            pes := a64_slice_param_elem_span(params_head, src, bns, bnl)
+            mut pets := pes.s
+            mut petn := pes.n
+            if A64_SUB_GPL != 0 and streq(src, pets, petn, A64_SUB_GPS, A64_SUB_GPL) { pets = A64_SUB_ITS ; petn = A64_SUB_ITL }
+            if pets != 0 and scalar_byte_size(src, pets, petn) == 8 { issliceparam = true }
+          }
         }
         isarr := bnl != 0 and a64_is_array_local(body_head, src, bns, bnl, a)
         aoff := a64_local_off(body_head, src, bns, bnl, pcount, a, decls)
