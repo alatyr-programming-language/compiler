@@ -3151,17 +3151,6 @@ a64_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : 
 a64_place_idx_ok := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   mut r := false
   if not a64_place_ok(base, body_head, src, params_head, pcount, a, decls) { return r }
-  if a64_ex_is_var(base) {
-    pidx := param_find(params_head, src, ex_var_ns(base), ex_var_nl(base), a)
-    if pidx >= 0 {
-      etp := a64_param_arr_elem_span(params_head, src, ex_var_ns(base), ex_var_nl(base))
-      plenp := a64_param_fixed_array_len(params_head, src, ex_var_ns(base), ex_var_nl(base))
-      if plenp > 0 and etp.n != 0 and struct_decl_of(decls, src, etp.s, etp.n) >= 0 and struct_plain(decls, src, etp.s, etp.n) {
-        if std_struct_is_word_granular(decls, src, etp.s, etp.n, a) and a64_tyname_words(src, etp.s, etp.n, a, decls) > 0 { r = true }
-      }
-      return r
-    }
-  }
   if a64_ex_is_var(base) and a64_is_array_global(decls, src, ex_var_ns(base), ex_var_nl(base)) {
     if a64_alit_homog_slit(a64_global_value(decls, src, ex_var_ns(base), ex_var_nl(base)), src) {
       etg := a64_garr_elem_struct_span(decls, src, ex_var_ns(base), ex_var_nl(base))
@@ -3202,7 +3191,26 @@ a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
   if unchecked bitcast(usize, e) == 0 { return r }
   if ex_is_field(e) {
     fbase := a64_field_base(e)
-    if not a64_place_ok(fbase, body_head, src, params_head, pcount, a, decls) { return r }
+    mut fbaseok := a64_place_ok(fbase, body_head, src, params_head, pcount, a, decls)
+    ## Admit the parameter-root slice only when this field is the intermediate array in the bounded
+    ## `xs[i].arr[j]` shape. A direct `a[i].x` field must retain its existing fail-loud behavior.
+    if (not fbaseok) and ex_is_index(fbase) {
+      pbase := ex_index_base(fbase)
+      if a64_ex_is_var(pbase) {
+        pidx := param_find(params_head, src, ex_var_ns(pbase), ex_var_nl(pbase), a)
+        if pidx >= 0 {
+          etp := a64_param_arr_elem_span(params_head, src, ex_var_ns(pbase), ex_var_nl(pbase))
+          plenp := a64_param_fixed_array_len(params_head, src, ex_var_ns(pbase), ex_var_nl(pbase))
+          if plenp > 0 and etp.n != 0 and struct_decl_of(decls, src, etp.s, etp.n) >= 0 and struct_plain(decls, src, etp.s, etp.n) {
+            if std_struct_is_word_granular(decls, src, etp.s, etp.n, a) and a64_tyname_words(src, etp.s, etp.n, a, decls) > 0 {
+              ft := field_type_span(decls, src, etp.s, etp.n, a64_field_fns(e), a64_field_fnl(e), a)
+              if ft.n != 0 and arrty_semi(src, ft.s, ft.n) != 0 { fbaseok = true }
+            }
+          }
+        }
+      }
+    }
+    if not fbaseok { return r }
     bt := a64_place_ty(fbase, body_head, src, a, decls)
     if bt.n == 0 { return r }
     if struct_decl_of(decls, src, bt.s, bt.n) < 0 { return r }
