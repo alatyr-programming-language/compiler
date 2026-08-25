@@ -1033,14 +1033,20 @@ fmt_path_line_kind := fn(src : ptr(u8), end : usize) -> usize {
   }
   mut p := ls
   mut comment_start := end
-  while p + 1 < end {
+  mut quote := 0
+  mut escaped := false
+  while p + 1 < end and comment_start == end {
     b0 := bytes(str_at((src + p), 1))[0]
     b1 := bytes(str_at((src + p + 1), 1))[0]
-    if b0 == 35 and b1 == 35 {
-      comment_start = p
-      break
-    }
-    p += 1
+    if quote != 0 {
+      if escaped { escaped = false }
+      else if b0 == 92 { escaped = true }
+      else if (quote == 1 and b0 == 34) or (quote == 2 and b0 == 39) { quote = 0 }
+      p += 1
+    } else if b0 == 34 { quote = 1; p += 1 }
+    else if b0 == 39 { quote = 2; p += 1 }
+    else if b0 == 35 and b1 == 35 { comment_start = p }
+    else { p += 1 }
   }
   if comment_start == end { return 0 }
   mut tail := end
