@@ -2292,6 +2292,10 @@ emit_reject_has riscv64 packed_array "an array whose element is a @packed struct
 emit_reject_has wat reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
 emit_reject_has aarch64 reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
 emit_reject_has riscv64 reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
+build_reject_has reject_p0_packed_slice_param "whose element is a @packed struct is not supported"
+emit_reject_has wat reject_p0_packed_slice_param "whose element is a @packed struct is not supported"
+emit_reject_has aarch64 reject_p0_packed_slice_param "whose element is a @packed struct is not supported"
+emit_reject_has riscv64 reject_p0_packed_slice_param "whose element is a @packed struct is not supported"
 ## `embed(comptime path : str)` — the reproducible comptime file-embed builtin (Comptime §2.4): bakes
 ## a file's exact bytes into the program as a read-only `[u8]` sequence. `embed_bytes` embeds the
 ## 4-byte BINARY fixture (NUL / 0xFF / 'A' / newline) and checks `.len`, each byte, and their sum →
