@@ -1976,6 +1976,50 @@ rv_aggval_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls 
   c
 }
 
+## Count WIDE-SRET calls whose result is deliberately discarded by a statement. Unlike an SRET call used as
+## an aggregate argument, a bare `f(…)` has no destination local, so the caller must reserve a temporary block
+## and hand its address down. This scanner mirrors emit_rv_sret_discard; without it the temporary allocator can
+## run past the frame even though the call itself is otherwise correctly routed.
+rv_sret_discard_words_e := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  mut c := 0
+  srs := rv_call_ret_sret_span(e, decls, src, a)
+  if srs.n != 0 { c = i64(struct_words(decls, src, srs.s, srs.n, a)) }
+  if srs.n == 0 {
+    ers := rv_call_ret_enum_sret_span(e, decls, src, a)
+    if ers.n != 0 { c = 1 + i64(enum_max_arity(decls, src, ers.s, ers.n, a)) }
+  }
+  c
+}
+rv_sret_discard_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  mut s := list
+  mut c := 0
+  while s != 0 {
+    st := deref(stmt_p(Stmt, s))
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => { s = nx }
+      Stmt::Return(rv, nx) => { s = nx }
+      Stmt::ExprStmt(e, nx) => { c = c + rv_sret_discard_words_e(e, src, a, decls) ; s = nx }
+      Stmt::While(cc, b, nx) => { c = c + rv_sret_discard_words(b, src, a, decls) ; s = nx }
+      Stmt::If(cc, th, el, nx) => { c = c + rv_sret_discard_words(th, src, a, decls) + rv_sret_discard_words(el, src, a, decls) ; s = nx }
+      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; c = c + rv_sret_discard_words(am.body_stmts, src, a, decls) ; arm = am.next } ; s = mnx }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { c = c + rv_sret_discard_words(fb, src, a, decls) ; s = nx }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { c = c + rv_sret_discard_words(rb, src, a, decls) ; s = nx }
+      Stmt::CompIf(cc, th, el, nx) => { c = c + rv_sret_discard_words(th, src, a, decls) + rv_sret_discard_words(el, src, a, decls) ; s = nx }
+      Stmt::Loop(lb, lnx) => { c = c + rv_sret_discard_words(lb, src, a, decls) ; s = lnx }
+      Stmt::Unchecked(ub, unx) => { c = c + rv_sret_discard_words(ub, src, a, decls) ; s = unx }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+      Stmt::IndexFieldAssign(_ifb, _ifi, _iffs, _iffl, ifv, ifnx) => { s = ifnx }
+      Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
+      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+      Stmt::DerefAssign(dpe, dval, dnx) => { s = dnx }
+      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+      Stmt::Continue(_cd, cnx) => { s = cnx }
+      _ => { s = 0 }
+    }
+  }
+  c
+}
+
 ## The largest {disc, payload…} word count over this fn's ENUM PARAMS. An enum param is passed BY
 ## REFERENCE, and a `match <enum param>` first MATERIALIZES its words into the RV_MTMP frame temp (the
 ## `paramok` arms of both the value-Match and the statement-Match paths) before dispatching. The scanner
@@ -3270,10 +3314,33 @@ rv_call_ret_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
     mut i := 0
     while i < cnt {
       d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
-      ok := d.is_fn and d.name_len != 0 and (not d.is_generic) and i64(d.arity) <= 7
+      ok := d.is_fn and d.name_len != 0
       if ok and streq(src, d.name_start, d.name_len, cs, cl) {
         bn := base_type_name(src, d.ret_ts, d.ret_tl)
-        if bn.n != 0 and rv_ret_sret_words(decls, src, bn.s, bn.n, a) >= 1 { rs = bn.s ; rn = bn.n }
+        mut ebs := bn.s
+        mut ebn := bn.n
+        if d.is_generic {
+          tpn := rv_tparam_name(d, src)
+          mut retmatch := false
+          if tpn.n != 0 and d.ret_tl == tpn.n {
+            rrb := bytes(str_at((src + d.ret_ts), d.ret_tl))
+            grb := bytes(str_at((src + tpn.s), tpn.n))
+            mut eqk := true
+            mut bj := 0
+            while bj < d.ret_tl { if rrb[bj] != grb[bj] { eqk = false } ; bj = bj + 1 }
+            retmatch = eqk
+          }
+          if retmatch {
+            ah := ex_call_argh(v)
+            if arg_list_count(ah, a) == i64(d.arity) {
+              ea := arg_expr_at(ah, usize(decl_tparam_pos(d, src)), a)
+              ebs = ex_var_ns(ea)
+              ebn = ex_var_nl(ea)
+              if ebn == 0 { tt := tuple_typearg_span(ea, src, a) ; ebs = tt.s ; ebn = tt.n }
+            }
+          }
+        }
+        if ebn != 0 and rv_ret_sret_words(decls, src, ebs, ebn, a) >= 1 { rs = ebs ; rn = ebn }
       }
       i = i + 1
     }
@@ -3296,36 +3363,38 @@ rv_call_ret_enum_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(
     mut i := 0
     while i < cnt {
       d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
-      ok := d.is_fn and d.name_len != 0 and (not d.is_generic) and i64(d.arity) <= 7
+      ok := d.is_fn and d.name_len != 0
       if ok and streq(src, d.name_start, d.name_len, cs, cl) {
         bn := base_type_name(src, d.ret_ts, d.ret_tl)
-        if bn.n != 0 and rv_ret_enum_sret_words(decls, src, bn.s, bn.n, a) >= 1 { rs = bn.s ; rn = bn.n }
+        mut ebs := bn.s
+        mut ebn := bn.n
+        if d.is_generic {
+          tpn := rv_tparam_name(d, src)
+          mut retmatch := false
+          if tpn.n != 0 and d.ret_tl == tpn.n {
+            rrb := bytes(str_at((src + d.ret_ts), d.ret_tl))
+            grb := bytes(str_at((src + tpn.s), tpn.n))
+            mut eqk := true
+            mut bj := 0
+            while bj < d.ret_tl { if rrb[bj] != grb[bj] { eqk = false } ; bj = bj + 1 }
+            retmatch = eqk
+          }
+          if retmatch {
+            ah := ex_call_argh(v)
+            if arg_list_count(ah, a) == i64(d.arity) {
+              ea := arg_expr_at(ah, usize(decl_tparam_pos(d, src)), a)
+              ebs = ex_var_ns(ea)
+              ebn = ex_var_nl(ea)
+              if ebn == 0 { tt := tuple_typearg_span(ea, src, a) ; ebs = tt.s ; ebn = tt.n }
+            }
+          }
+        }
+        if ebn != 0 and rv_ret_enum_sret_words(decls, src, ebs, ebn, a) >= 1 { rs = ebs ; rn = ebn }
       }
       i = i + 1
     }
   }
   CSpan(s = rs, n = rn)
-}
-## Does the fn NAMED `[cs,cl]` return a wide struct via the LP64 indirect result? The CALL arm asks before
-## laying out arguments: an SRET callee takes the destination pointer in a0, so the real arguments shift
-## one integer register up. Same gates as rv_call_ret_sret_span (keep the two in lockstep).
-rv_fn_returns_sret := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a : rt::Arena) -> bool {
-  mut r := false
-  cnt := rt::vec_len(deref(decls))
-  mut i := 0
-  while i < cnt {
-    d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
-    ok := d.is_fn and d.name_len != 0 and (not d.is_generic) and i64(d.arity) <= 7
-    if ok and streq(src, d.name_start, d.name_len, cs, cl) {
-      bn := base_type_name(src, d.ret_ts, d.ret_tl)
-      if bn.n != 0 and rv_ret_sret_words(decls, src, bn.s, bn.n, a) >= 1 { r = true }
-      ## a WIDE-ENUM callee (> 8 words) also delivers through the a0 indirect result, so it needs the SAME
-      ## destination hand-off before the `call` and the SAME a1..a7 argument shift (the enum analogue).
-      if bn.n != 0 and rv_ret_enum_sret_words(decls, src, bn.s, bn.n, a) >= 1 { r = true }
-    }
-    i = i + 1
-  }
-  r
 }
 rv_float_params_before := fn(params_head : ptr(mut Param), src : ptr(u8), idx : i64, a : rt::Arena) -> i64 {
   mut p := params_head ; mut i := 0 ; mut c := 0
@@ -4012,6 +4081,9 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
     }
     Expr::Call(cs, cl, nargs, args_head) => {
       nm := str_at((src + cs), cl)
+      srs_call := rv_call_ret_sret_span(e, decls, src, a)
+      ers_call := rv_call_ret_enum_sret_span(e, decls, src, a)
+      direct_sretcall := srs_call.n != 0 or ers_call.n != 0
       ## print/println whose FIRST arg is a string literal → template emission (a plain literal has no
       ## `{}` holes). Runs → write syscalls; holes → arg via __print_u64; println → trailing newline.
       mut sarg := unchecked bitcast(ptr(Expr), 0)
@@ -4126,10 +4198,27 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
             if cntc == leadc { erase_lead = usize(leadc) }
             if cntc == 1 and leadc == 0 { erase_one = usize(decl_tparam_pos(gd, src)) }
           }
+          gwide := direct_sretcall
+          sret_on_g := RV_SRET_DST_ON
+          sret_ind_g := RV_SRET_DST_IND
+          sret_dst_g := RV_SRET_DST
+          sret_dst0_g := RV_SRET_DST
+          if gwide { RV_SRET_DST_ON = false ; RV_SRET_DST_IND = false }
+          mut gparams := gd.params_head
+          mut gskip := erase_lead
+          while gskip > 0 and gparams != 0 { gpm := deref(param_p(gparams)) ; gparams = gpm.next ; gskip = gskip - 1 }
+          mut gkeep := i64(0)
+          mut gkc := 0
+          mut gk := args_head
+          while gk != 0 { gka := deref(arg_p(gk)) ; if gkc >= erase_lead and gkc != erase_one { gkeep = gkeep + 1 } ; gkc = gkc + 1 ; gk = gka.next }
+          mut gstacksz := 0
+          if gwide { gstacksz = ((gkeep * 8 + 15) / 16) * 16 ; if gstacksz > 0 { push_str(sb, "  addi sp, sp, -") ; push_int(sb, gstacksz) ; push_str(sb, "\n") } }
           ## push each kept VALUE arg → the stack; a struct/enum LITERAL is materialized into an RV_AGG
           ## block and passed BY REFERENCE (its address in a0); a struct/array LOCAL by-ref (s0+off);
           ## scalar args ride a0 directly. FLAT separate ifs inside the guard.
           mut nv := i64(0)
+          mut gstackk := 0
+          mut gpush := 0
           mut g := args_head
           mut gidx := 0
           while g != 0 {
@@ -4142,20 +4231,61 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
               gisstruct := (not gisarr) and gavnl != 0 and rv_local_struct_nl(body_head, src, gavns, gavnl, a) != 0
               isslit := rv_is_slit(ga.e)
               iselit := (not isslit) and rv_is_elit(ga.e)
-              isaggref := (not isslit) and (not iselit) and (gisarr or gisstruct)
-              isplain := (not isslit) and (not iselit) and (not isaggref)
+              iscallret := (not isslit) and (not iselit) and rv_call_ret_struct_span(ga.e, decls, src, a).n != 0
+              isenumret := (not isslit) and (not iselit) and (not iscallret) and rv_call_ret_enum_span(ga.e, decls, src, a).n != 0
+              issretarg := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and rv_call_ret_sret_span(ga.e, decls, src, a).n != 0
+              isesretarg := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and rv_call_ret_enum_sret_span(ga.e, decls, src, a).n != 0
+              isaggref := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and (not isesretarg) and (gisarr or gisstruct)
+              isplain := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and (not isesretarg) and (not isaggref)
               if isslit { emit_rv_aggval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
               if iselit { emit_rv_enumval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if iscallret { emit_rv_callret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if isenumret { emit_rv_enumret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if issretarg { emit_rv_sretcall_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if isesretarg { emit_rv_enumsret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
               if isaggref { gaoff := rv_local_off(body_head, src, gavns, gavnl, pcount, a, decls) ; push_str(sb, "  addi a0, s0, ") ; push_int(sb, gaoff) ; push_str(sb, "\n") }
               if isplain { emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-              push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
+              if gwide {
+                gfb := rv_float_params_before(gparams, src, nv, a)
+                gif := rv_param_is_float(gparams, src, nv, a)
+                mut gcls := nv - gfb
+                if gif { gcls = gfb }
+                if not gif { gcls = gcls + 1 }
+                if gcls >= 8 { push_str(sb, "  sd a0, ") ; push_int(sb, gpush * 16 + gstackk * 8) ; push_str(sb, "(sp)\n") ; gstackk = gstackk + 1 }
+                if gcls < 8 { push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") ; gpush = gpush + 1 }
+              }
+              if not gwide { push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") }
               nv = nv + 1
             }
             gidx = gidx + 1
             g = ga.next
           }
-          mut ai := nv - 1
-          while ai >= 0 { push_str(sb, "  ld a") ; push_int(sb, ai) ; push_str(sb, ", 0(sp)\n  addi sp, sp, 16\n") ; ai = ai - 1 }
+          if not gwide {
+            mut ai := nv - 1
+            while ai >= 0 { push_str(sb, "  ld a") ; push_int(sb, ai) ; push_str(sb, ", 0(sp)\n  addi sp, sp, 16\n") ; ai = ai - 1 }
+          }
+          if gwide {
+            mut gri := argc - 1
+            while gri >= 0 {
+              grkeep := gri >= i64(erase_lead) and usize(gri) != erase_one
+              if grkeep {
+                mut gruntime := gri
+                if erase_lead > 0 { gruntime = gruntime - i64(erase_lead) }
+                if erase_one <= usize(gri) { gruntime = gruntime - 1 }
+                grfb := rv_float_params_before(gparams, src, gruntime, a)
+                grif := rv_param_is_float(gparams, src, gruntime, a)
+                mut grcls := gruntime - grfb
+                if grif { grcls = grfb }
+                if not grif { grcls = grcls + 1 }
+                if grcls < 8 and grif { push_str(sb, "  ld t1, 0(sp)\n  addi sp, sp, 16\n  fmv.d.x fa") ; push_int(sb, grfb) ; push_str(sb, ", t1\n") }
+                if grcls < 8 and (not grif) { push_str(sb, "  ld a") ; push_int(sb, grcls) ; push_str(sb, ", 0(sp)\n  addi sp, sp, 16\n") }
+              }
+              gri = gri - 1
+            }
+          }
+          if gwide and sret_on_g and (not sret_ind_g) { push_str(sb, "  addi a0, s0, ") ; push_int(sb, sret_dst_g) ; push_str(sb, "\n") }
+          if gwide and sret_on_g and sret_ind_g { push_str(sb, "  ld a0, ") ; push_int(sb, sret_dst_g) ; push_str(sb, "(s0)\n") }
+          if gwide and (not sret_on_g) { push_str(sb, "  ebreak\n") }
           ## INLINE `call <fn>__<tag>` (same reason the def label is inline — no span-through-params helper).
           push_str(sb, "  call ")
           push_str(sb, str_at((src + gd.name_start), gd.name_len))
@@ -4215,6 +4345,8 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           if RV_TA_N2 != 0 { push_str(sb, "__") ; push_str(sb, str_at((src + RV_TA_S2), RV_TA_N2)) }
           if RV_TA_N3 != 0 { push_str(sb, "__") ; push_str(sb, str_at((src + RV_TA_S3), RV_TA_N3)) }
           push_str(sb, "\n")
+          if gwide and gstacksz > 0 { push_str(sb, "  addi sp, sp, ") ; push_int(sb, gstacksz) ; push_str(sb, "\n") }
+          if gwide { RV_SRET_DST_ON = sret_on_g ; RV_SRET_DST_IND = sret_ind_g ; RV_SRET_DST = sret_dst0_g }
         }
       } else if rv_bound_lambda(body_head, src, cs, cl, decls) >= 0 {
         td := deref(decl_get(decls, usize(rv_bound_lambda(body_head, src, cs, cl, decls))))
@@ -4240,12 +4372,20 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         }
       } else if not rv_callee_defined(decls, src, cs, cl, a) {
         push_str(sb, "  ebreak\n")
-      } else if arg_list_count(args_head, a) > 8 {
+      } else if arg_list_count(args_head, a) > 8 or (direct_sretcall and arg_list_count(args_head, a) > 7) {
         ## >8 args of a class (LP64D): first 8 int in a0-a7, first 8 float in fa0-fa7 (independent
         ## counters); an arg whose class index reaches 8 overflows to the outgoing stack block. Stack
         ## slots are class-agnostic raw 8-byte words (the value model carries a float's bits in a GPR).
         ## Overflow args go at k*8(sp); register args use the push-to-scratch / pop dance, skipping them.
         n := arg_list_count(args_head, a)
+        sretcall_over := direct_sretcall
+        mut ashift_over := 0
+        if sretcall_over { ashift_over = 1 }
+        sret_on_over := RV_SRET_DST_ON
+        sret_ind_over := RV_SRET_DST_IND
+        sret_dst_over := RV_SRET_DST
+        RV_SRET_DST_ON = false
+        RV_SRET_DST_IND = false
         cparams := rv_callee_params(decls, src, cs, cl)
         ## a struct-LITERAL or struct-RETURNING-CALL arg needs the RV_AGG by-reference materialization, which
         ## the >8-arg overflow path does NOT perform. Trap FIRST (loud, never silent); the corpus has none.
@@ -4259,6 +4399,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           fb0 := rv_float_params_before(cparams, src, ci, a)
           mut cls := ci - fb0
           if rv_param_is_float(cparams, src, ci, a) { cls = fb0 }
+          if (not rv_param_is_float(cparams, src, ci, a)) { cls = cls + ashift_over }
           if cls >= 8 { nstk = nstk + 1 }
           ci = ci + 1
         }
@@ -4272,6 +4413,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           fbs := rv_float_params_before(cparams, src, gi, a)
           mut clss := gi - fbs
           if rv_param_is_float(cparams, src, gi, a) { clss = fbs }
+          if (not rv_param_is_float(cparams, src, gi, a)) { clss = clss + ashift_over }
           if clss >= 8 {
             outargS := rv_param_out_scalar(cparams, src, decls, gi)
             if outargS { rv_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
@@ -4296,6 +4438,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           fbr := rv_float_params_before(cparams, src, gj, a)
           mut clsr := gj - fbr
           if rv_param_is_float(cparams, src, gj, a) { clsr = fbr }
+          if (not rv_param_is_float(cparams, src, gj, a)) { clsr = clsr + ashift_over }
           if clsr < 8 {
             outargR := rv_param_out_scalar(cparams, src, decls, gj)
             if outargR { rv_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
@@ -4318,21 +4461,27 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           mut clsp := ii - fbp
           isfp := rv_param_is_float(cparams, src, ii, a)
           if isfp { clsp = fbp }
+          if not isfp { clsp = clsp + ashift_over }
           reg := clsp < 8
           if reg and isfp { push_str(sb, "  ld t1, 0(sp)\n  addi sp, sp, 16\n  fmv.d.x fa") ; push_int(sb, fbp) ; push_str(sb, ", t1\n") }
-          if reg and (not isfp) { push_str(sb, "  ld a") ; push_int(sb, ii - fbp) ; push_str(sb, ", 0(sp)\n  addi sp, sp, 16\n") }
+          if reg and (not isfp) { push_str(sb, "  ld a") ; push_int(sb, ii - fbp + ashift_over) ; push_str(sb, ", 0(sp)\n  addi sp, sp, 16\n") }
           ii = ii - 1
         }
+        if sretcall_over and sret_on_over and (not sret_ind_over) { push_str(sb, "  addi a0, s0, ") ; push_int(sb, sret_dst_over) ; push_str(sb, "\n") }
+        if sretcall_over and sret_on_over and sret_ind_over { push_str(sb, "  ld a0, ") ; push_int(sb, sret_dst_over) ; push_str(sb, "(s0)\n") }
+        if sretcall_over and (not sret_on_over) { push_str(sb, "  ebreak\n") }
         push_str(sb, "  call ") ; rv_emit_call_target(sb, decls, src, cs, cl) ; push_str(sb, "\n")
         if stacksz > 0 { push_str(sb, "  addi sp, sp, ") ; push_int(sb, stacksz) ; push_str(sb, "\n") }
         if callee_ret_is_float(decls, src, cs, cl) { push_str(sb, "  fmv.x.d a0, fa0\n") }
+        RV_SRET_DST_ON = sret_on_over
+        RV_SRET_DST_IND = sret_ind_over
       } else {
         ## LP64 INDIRECT RESULT (SRET): a callee returning a plain struct WIDER than the 8-word register
         ## budget takes the destination address in a0 (the implicit first argument), so the real arguments
         ## shift one integer register up (a1..a7). `mysret` needs a destination handed down by the binding
         ## arm (`s := mk(…)`); clear the hand-off while the ARGUMENTS are emitted so a nested call cannot
         ## consume the same destination, and restore it after the call.
-        sretcall := rv_fn_returns_sret(decls, src, cs, cl, a)
+        sretcall := direct_sretcall
         mysret := sretcall and RV_SRET_DST_ON
         mydst := RV_SRET_DST
         ## the INDIRECT flavour (`return mk(…)`): mydst is the frame SLOT holding the destination pointer.
@@ -4342,7 +4491,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         RV_SRET_DST_ON = false
         RV_SRET_DST_IND = false
         mut ashift := 0
-        if mysret { ashift = 1 }
+        if sretcall { ashift = 1 }
         cparams := rv_callee_params(decls, src, cs, cl)
         mut g := args_head
         mut gidx := 0
@@ -5333,6 +5482,33 @@ emit_rv_enumsret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
   if not ok { push_str(sb, "  ebreak\n") }
 }
 
+## Emit a WIDE-SRET call used as a bare statement. The value is intentionally discarded, but the ABI still
+## requires a valid destination pointer; reserve a frame block and reuse the same one-shot hand-off as an
+## SRET call argument. This also covers generic `-> T` calls after their concrete type has been resolved.
+emit_rv_sret_discard := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+  srs := rv_call_ret_sret_span(e, decls, src, a)
+  ers := rv_call_ret_enum_sret_span(e, decls, src, a)
+  mut words := i64(0)
+  if srs.n != 0 { words = i64(struct_words(decls, src, srs.s, srs.n, a)) }
+  if srs.n == 0 and ers.n != 0 { words = 1 + i64(enum_max_arity(decls, src, ers.s, ers.n, a)) }
+  ok := words > 0 and (RV_AGG + words * 8) <= RV_AGG_LIM
+  if ok {
+    blk := RV_AGG
+    RV_AGG = RV_AGG + words * 8
+    son := RV_SRET_DST_ON
+    sof := RV_SRET_DST
+    sid := RV_SRET_DST_IND
+    RV_SRET_DST_ON = true
+    RV_SRET_DST = blk
+    RV_SRET_DST_IND = false
+    emit_rv_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+    RV_SRET_DST_ON = son
+    RV_SRET_DST = sof
+    RV_SRET_DST_IND = sid
+  }
+  if not ok { push_str(sb, "  ebreak\n") }
+}
+
 emit_rv_epilogue := fn(frame : i64, in out sb : rt::StrBuf) {
   ## a float-returning fn delivers its result in fa0: move the value bits (a0) into fa0 before ret.
   if RV_RET_FLOAT { push_str(sb, "  fmv.d.x fa0, a0\n") }
@@ -6085,7 +6261,10 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         s = nx
       }
       Stmt::ExprStmt(e, nx) => {
-        emit_rv_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        srs := rv_call_ret_sret_span(e, decls, src, a)
+        ers := rv_call_ret_enum_sret_span(e, decls, src, a)
+        if srs.n != 0 or ers.n != 0 { emit_rv_sret_discard(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        if srs.n == 0 and ers.n == 0 { emit_rv_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         s = nx
       }
       Stmt::Match(scrut, arms, nx) => {
@@ -6568,7 +6747,9 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   nsargs := rv_slarg_count(d.body_stmts) + rv_slarg_count_e(d.value)
   ## ANONYMOUS AGGREGATE-VALUE args (§8, piece 1): a struct-literal passed by value → its full words,
   ## reserved in the SAME RV_AGG region (above the slice-arg blocks), tree-wide over body + tail.
-  naggw := rv_aggval_words(d.body_stmts, src, a, decls) + rv_aggval_words_e(d.value, src, a, decls)
+  mut naggw := rv_aggval_words(d.body_stmts, src, a, decls) + rv_aggval_words_e(d.value, src, a, decls)
+  naggw = naggw + rv_sret_discard_words(d.body_stmts, src, a, decls)
+  if d.ret_tl == 0 { naggw = naggw + rv_sret_discard_words_e(d.value, src, a, decls) }
   ## MATCH-over-INDEX temp (§8 enum slice-param): reserve the largest such match's enum words.
   mut mtmp := rv_match_tmp_words(d.body_stmts, src, a)
   ## …and the SAME region is written by a `match <enum PARAM>` materialization, which the statement scanner
@@ -6578,18 +6759,26 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   if pemt > mtmp { mtmp = pemt }
   ## WIDE-STRUCT SRET (LP64 indirect result): a fn returning a PLAIN struct of > 8 words takes the caller's
   ## destination pointer in a0 and must SPILL it to a reserved frame word (it has to survive nested calls
-  ## and register churn up to every Return point). Classified from the DECLARED return type here so the
-  ## reservation and the RV_RET_SRET_* classification below cannot disagree; a generic fn / a > 7-arity fn
-  ## is excluded (the shifted argument registers must stay inside a1..a7) and keeps trapping as before.
-  srbn := base_type_name(src, d.ret_ts, d.ret_tl)
+  ## and register churn up to every Return point). A generic INSTANCE is classified from its substituted
+  ## concrete return type; its source declaration still says only `T`.
+  mut sret_ts := d.ret_ts
+  mut sret_tl := d.ret_tl
+  if inst and RV_SUB_GPL != 0 and d.ret_tl == RV_SUB_GPL {
+    rbs := bytes(str_at((src + d.ret_ts), d.ret_tl))
+    gbs := bytes(str_at((src + RV_SUB_GPS), RV_SUB_GPL))
+    mut alleq_sret := true
+    mut bi_sret := 0
+    while bi_sret < d.ret_tl { if rbs[bi_sret] != gbs[bi_sret] { alleq_sret = false } ; bi_sret = bi_sret + 1 }
+    if alleq_sret { sret_ts = RV_SUB_ITS ; sret_tl = RV_SUB_ITL }
+  }
+  srbn := base_type_name(src, sret_ts, sret_tl)
   mut sret_extra := 0
-  hassret := (not isgen) and (not inst) and pcount <= 7 and i64(d.arity) <= 7 and srbn.n != 0 and rv_ret_sret_words(decls, src, srbn.s, srbn.n, a) >= 1
+  hassret := ((not isgen) or inst) and srbn.n != 0 and rv_ret_sret_words(decls, src, srbn.s, srbn.n, a) >= 1
   ## WIDE-ENUM SRET (> 8 words): a fn returning an enum wider than the 8-register budget also delivers via
   ## the LP64 indirect result, so it needs the SAME a0-spill slot (sret_extra = 1) PLUS a scratch block
   ## sized to the enum's full {disc, payload…} width, where a `return E.V(…)` literal is materialized before
-  ## the word-copy through the destination. Same generic/arity gates as the wide-struct case; 0 for every
-  ## other fn, so all other frames + offsets stay byte-identical (rv64-only — x86 is untouched).
-  hasesret := (not isgen) and (not inst) and pcount <= 7 and i64(d.arity) <= 7 and srbn.n != 0 and rv_ret_enum_sret_words(decls, src, srbn.s, srbn.n, a) >= 1
+  ## the word-copy through the destination. Generic instances use the same concrete substituted span.
+  hasesret := ((not isgen) or inst) and srbn.n != 0 and rv_ret_enum_sret_words(decls, src, srbn.s, srbn.n, a) >= 1
   mut esret_w := 0
   if hasesret { esret_w = rv_ret_enum_sret_words(decls, src, srbn.s, srbn.n, a) }
   anysret := hassret or hasesret
@@ -6776,7 +6965,12 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   ## A void function can still end in a side-effecting call: the parser stores the final expression in
   ## Decl.value, while the value-return path above is intentionally skipped for void. Execute that tail;
   ## discarding its a0 result is correct, and dropping the call is a silent ABI-visible miscompile.
-  if void and (not ex_is_no_tail(d.value)) { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+  if void and (not ex_is_no_tail(d.value)) {
+    vrs := rv_call_ret_sret_span(d.value, decls, src, a)
+    vre := rv_call_ret_enum_sret_span(d.value, decls, src, a)
+    if vrs.n != 0 or vre.n != 0 { emit_rv_sret_discard(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+    if vrs.n == 0 and vre.n == 0 { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+  }
   emit_rv_epilogue(frame, sb)
   RV_SUB_GPS = 0
   RV_SUB_GPL = 0
