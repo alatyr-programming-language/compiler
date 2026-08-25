@@ -4279,6 +4279,16 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     if ltag == 3 or ltag == 4 or ltag == 5 { rtag = ltag }
     return Result(Ty, CheckErr).Ok(Ty(tag = rtag, ns = raw.ns, nl = raw.nl))
   }
+  ## A direct `local[N]` over a fixed `[T; N]` is the one indexed shape whose bound is already
+  ## available to the common checker. Keep this before the large payload match so the frozen seed,
+  ## `check`, `-o`, and every emit-to-stdout backend observe the same located reject.
+  ib0 := expr_index_base(e)
+  if unchecked bitcast(usize, ib0) != 0 {
+    ii0 := expr_index_index(e)
+    if fixed_array_index_oob(ib0, ii0, src, locals, nloc) {
+      return Result(Ty, CheckErr).Err(located_err(expr_num_lit_start(ii0)))
+    }
+  }
   ## PRE-MATCH ptr-target CALL-ARG check (scar #2: the big-match `Call` arm is not dispatched under the
   ## seed, so call-arg type-checking runs HERE as a side-effect + fall-through, like the exhaustiveness
   ## check below). For a DIRECT, NON-generic call, walk the args: a Var arg naming a local POINTER with a
@@ -5793,6 +5803,31 @@ expr_num_lit_val := fn(e : ptr(Expr)) -> i64 {
   r
 }
 
+## Types §6.4 / Assembly §3 / issue #5 — a direct numeric index on a local fixed array is a
+## compile-time fact when the binding retains its `[T; N]` annotation. Reject only the proven
+## out-of-range case, including N = 0; an array type remains legal, and dynamic slices, non-literal
+## indices, aggregate paths, and globals stay on their existing runtime/deferred paths.
+fixed_array_index_oob := fn(base : ptr(Expr), idx : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
+  if unchecked bitcast(usize, locals) == 0 or nloc == 0 or not expr_is_num_lit(idx) { return false }
+  bv := expr_var_span(base)
+  if bv.n == 0 or not local_in(locals, nloc, src, bv.s, bv.n) { return false }
+  bt := local_ty(locals, nloc, src, bv.s, bv.n)
+  mut tag : u8 = bt.tag
+  if tag >= 128 and tag != 255 { tag = tag - 128 }
+  if tag != 7 { return false }
+  n := array_type_count(src, bt.ns, bt.nl)
+  if n < 0 { return false }
+  iv := expr_num_lit_val(idx)
+  iv < 0 or iv >= n
+}
+
+## The source start of a numeric literal, for a located reject at the offending index token.
+expr_num_lit_start := fn(e : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(e) { Expr::Num(v, s, n) => { r = s } _ => {} }
+  r
+}
+
 ## Does expression `e` MENTION the variable named `[xs, xs+xl)`? A conservative, standalone recursive
 ## walk (mirrors `expr_has_unbound`'s proven structure). Covers the common sub-expression-bearing forms;
 ## any variant not listed returns false — an UNDER-approximation, so a missed form is only a false
@@ -6397,6 +6432,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
       Stmt::IndexAssign(ib, ii, iv, nx) => {
         ## The base is a write place, not a value read. A simple local array may still be unreadied here.
         cib := check_expr(ib, decls, upto, src, a, locals, cnt)?
+        ## Types §6.4 / Assembly §3 / issue #5 — the write target has the same statically provable
+        ## bound as an `Expr::Index` read, but its base and index are stored as separate Stmt fields.
+        ## Reuse the exact direct-local fixed-array test so zero-length and ordinary fixed-array OOB
+        ## writes reject at the index literal while dynamic, nonliteral, global, and aggregate paths
+        ## remain on their existing deferred/runtime paths.
+        if fixed_array_index_oob(ib, ii, src, locals, cnt) {
+          return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(ii)))
+        }
         cii := check_expr_da(ii, decls, upto, src, a, locals, cnt, da)?
         if cii.tag != 0 and cii.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(ii, a), 0)) }
         civ := check_expr_da(iv, decls, upto, src, a, locals, cnt, da)?
@@ -6440,6 +6483,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## The indexed base is a write place (`a[i].f`), not a whole-element read. Constant-index local
         ## fixed arrays of simple structs are tracked field-by-field; dynamic indices stay conservative.
         cfa := check_expr(fia, decls, upto, src, a, locals, cnt)?
+        ## `Stmt::IndexFieldAssign` carries the direct array base and index separately, just like
+        ## `Stmt::IndexAssign`; apply the same bounded check before the field-specific DA bookkeeping.
+        if fixed_array_index_oob(fia, fii, src, locals, cnt) {
+          return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(fii)))
+        }
         cfi := check_expr_da(fii, decls, upto, src, a, locals, cnt, da)?
         if cfi.tag != 0 and cfi.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(fii, a), 0)) }
         cfv := check_expr_da(fiv, decls, upto, src, a, locals, cnt, da)?
