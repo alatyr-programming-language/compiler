@@ -1261,6 +1261,96 @@ exe="$p/target/debug/qualified-generic-arg"
   rm -rf "$p/target"
 }
 
+## Types §6.1 / Modules §3 — the standard-byte tuple global fence must inspect the CURRENT declaration,
+## not a same-named global from another module. Generate two disposable packages with opposite source
+## orders so a bare-name recovery either misses the byte global or reports the ordinary one. The fixture
+## is row-local (not part of the corpus): this is a source-location/module-identity probe for `check`.
+standard_tuple_global_module_test() {
+  root="$T/e2e_standard_tuple_global_modules"
+  rm -rf "$root"
+  mkdir -p "$root/forward/src" "$root/reverse/src"
+  for p in "$root/forward" "$root/reverse"; do
+    cat > "$p/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "standard-tuple-global-modules")],
+)
+EOF
+    cat > "$p/src/main.al" <<'EOF'
+_start := fn() { exit(42) }
+EOF
+  done
+  cat > "$root/forward/src/a_byte.al" <<'EOF'
+pub mut G : ([u8; 4], u64) = ([1, 2, 3, 4], 9)
+EOF
+  cat > "$root/forward/src/z_word.al" <<'EOF'
+pub mut G : (u64, u64) = (7, 8)
+EOF
+  cat > "$root/reverse/src/a_word.al" <<'EOF'
+pub mut G : (u64, u64) = (7, 8)
+EOF
+  cat > "$root/reverse/src/z_byte.al" <<'EOF'
+pub mut G : ([u8; 4], u64) = ([1, 2, 3, 4], 9)
+EOF
+  multiline="$root/multiline.al"
+  cat > "$multiline" <<'EOF'
+## The same boundary with whitespace inside and around the tuple and array type.
+mut G : (
+	[u8;
+	4],
+	u64
+) = ([1, 2, 3, 4], 9)
+
+main := fn() -> u64 {
+  G.0[1]
+}
+EOF
+  err="$T/standard_tuple_global_multiline.check.err"
+  "$CC" check "$multiline" >/dev/null 2>"$err"
+  rc=$?
+  if [ "$rc" = 1 ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$err"; then
+    echo "ok   standard_tuple_global/multiline: check rejected"
+  else
+    echo "FAIL standard_tuple_global/multiline: check rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -f "$root/multiline.out"
+  "$CC" -o "$root/multiline.out" "$multiline" >/dev/null 2>"$T/standard_tuple_global_multiline.x86.err"
+  rc=$?
+  if [ "$rc" != 0 ] && [ ! -e "$root/multiline.out" ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$T/standard_tuple_global_multiline.x86.err"; then
+    echo "ok   standard_tuple_global/multiline: x86 build rejected before artifact"
+  else
+    echo "FAIL standard_tuple_global/multiline: x86 rc=$rc artifact=$(test -e "$root/multiline.out" && echo yes || echo no) diagnostic=$(cat "$T/standard_tuple_global_multiline.x86.err" 2>/dev/null)"
+    fail=1
+  fi
+  for backend in wat aarch64 riscv64; do
+    out="$root/multiline.$backend.out"
+    err="$T/standard_tuple_global_multiline.$backend.err"
+    "$CC" "$backend" "$multiline" >"$out" 2>"$err"
+    rc=$?
+    if [ "$rc" != 0 ] && [ ! -s "$out" ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$err"; then
+      echo "ok   standard_tuple_global/multiline: $backend rejected without emission"
+    else
+      echo "FAIL standard_tuple_global/multiline: $backend rc=$rc stdout=$(wc -c < "$out") diagnostic=$(cat "$err" 2>/dev/null)"
+      fail=1
+    fi
+  done
+  for spec in "forward|a_byte" "reverse|z_byte"; do
+    IFS='|' read -r name expected <<< "$spec"
+    err="$T/standard_tuple_global_$name.err"
+    ( cd "$root/$name" && "$CC" check package.al ) >/dev/null 2>"$err"
+    rc=$?
+    if [ "$rc" = 1 ] && grep -qF "a standard-layout byte tuple global is not supported yet" "$err" && grep -qF "in $expected" "$err"; then
+      echo "ok   standard_tuple_global_module/$name: rejected current byte global in $expected"
+    else
+      echo "FAIL standard_tuple_global_module/$name: rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"
+      fail=1
+    fi
+  done
+}
+
 ## Modules §1/§4 + Types §4.1 — same-named nominal enums must never let declaration order choose a
 ## variant layout. The fixture lives outside test/package because it is also part of the corpus; copy it
 ## into this row's private scratch before every build. Both unequal-count orders must preserve the
@@ -3214,6 +3304,7 @@ root_package_test module_type_ancestor "T main__main" "T geo__child__run" "T geo
 root_package_test module_type_shadow   "T main__main" "T geo__child__run" "T geo__edge__run"
 mod8_root_duplicate_test
 qualified_generic_package_test
+standard_tuple_global_module_test
 ambig_pub_test
 ambig_enum_collision_test
 check_located reject_qualified_generic_unknown 3

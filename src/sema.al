@@ -3132,19 +3132,25 @@ array_elem_scalar := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 
 array_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> VSpan {
   mut z := VSpan(s = 0, n = 0)
-  if tl < 4 or str_at((src + ts), 1) != "[" { return z }
+  if tl < 4 { return z }
   end := ts + tl
-  mut p := ts + 1
+  ## `typearg_at` returns the source slice between tuple commas, so a multiline tuple may leave
+  ## `\n`/`\r`/tabs around the component. Keep this source recovery in lockstep with
+  ## `local_type_span`, which already treats all four bytes as whitespace.
+  mut head := ts
+  while head < end and (str_at((src + head), 1) == " " or str_at((src + head), 1) == "\n" or str_at((src + head), 1) == "\t" or str_at((src + head), 1) == "\r") { head += 1 }
+  if head >= end or str_at((src + head), 1) != "[" { return z }
+  mut p := head + 1
   mut semi := 0
   while p < end {
     if str_at((src + p), 1) == ";" { semi = p; break }
     p += 1
   }
   if semi == 0 { return z }
-  mut es := ts + 1
-  while es < semi and (str_at((src + es), 1) == " " or str_at((src + es), 1) == "\t") { es += 1 }
+  mut es := head + 1
+  while es < semi and (str_at((src + es), 1) == " " or str_at((src + es), 1) == "\n" or str_at((src + es), 1) == "\t" or str_at((src + es), 1) == "\r") { es += 1 }
   mut ee := semi
-  while ee > es and (str_at((src + ee - 1), 1) == " " or str_at((src + ee - 1), 1) == "\t") { ee -= 1 }
+  while ee > es and (str_at((src + ee - 1), 1) == " " or str_at((src + ee - 1), 1) == "\n" or str_at((src + ee - 1), 1) == "\t" or str_at((src + ee - 1), 1) == "\r") { ee -= 1 }
   if ee > es { z = VSpan(s = es, n = ee - es) }
   z
 }
@@ -3492,9 +3498,13 @@ sema_tuple_has_direct_byte_array := fn(src : ptr(u8), ts : usize, tl : usize) ->
 ## array is outside the word-based global ABI. Do not inspect inferred values, locals, fields, indexes,
 ## parameters, returns, packed types, or ordinary tuples here: this is the exact pre-emission boundary
 ## already enforced by lower::validate_standard_byte_tuple_boundaries.
-sema_standard_tuple_global_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+sema_standard_tuple_global_bad := fn(d : Decl, src : ptr(u8)) -> bool {
   if d.is_fn or d.kind != 0 or d.ret_tl != 0 or d.arity != 0 { return false }
-  ann := global_type_span(decls, src, d.name_start, d.name_len)
+  ## Use the CURRENT declaration's source occurrence. A bare-name lookup is unsound when two package
+  ## modules both declare `G`: it can inspect the other module's annotation and either miss the unsafe
+  ## byte tuple or reject a harmless ordinary tuple. `name_start` is the parser-owned occurrence for
+  ## this Decl, so it carries the module identity without widening the AST.
+  ann := local_type_span(src, d.name_start, d.name_len)
   ann.n != 0 and sema_tuple_has_direct_byte_array(src, ann.s, ann.n)
 }
 ## RETURN-sink conformance: recursively scan a fn body for a `return <v>` whose value is an aggregate↔
@@ -10067,7 +10077,7 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
       ## Types §6.1 / Memory — a direct byte-array component gives a tuple its standard byte layout,
       ## but module-global storage remains word-based. Reject the exact explicit global form before any
       ## backend can emit a partial word copy; the local tuple tier and ordinary tuple ABI remain open.
-      if sema_standard_tuple_global_bad(d, decls, src) { return standard_tuple_global_err(d.name_start) }
+      if sema_standard_tuple_global_bad(d, src) { return standard_tuple_global_err(d.name_start) }
       ca := sema_type_alias_chain_reject(d, decls, i, src)
       if ca != 0 { return ca }
       ## PROPOSAL 7: reject the spec's `[T]` slice spelling in PARAMETER and RETURN positions while the
