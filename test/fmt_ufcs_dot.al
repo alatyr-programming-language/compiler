@@ -2,7 +2,7 @@
 ## desugars `recv.method(args)` to `Call(method, [recv, args…])`, and it takes the SAME path for
 ## `E.V(args)` when `E`'s decl is not in this file (fmt's enum table holds only local decls — every
 ## stdlib `Option`/`Result` construction lands there). Rendered literally that is a DIFFERENT
-## program: `r.unwrap()` came back as `unwrap(r)` (check: unbound name) and `Option.Some(40)` as
+## program: the dot-call on `r` came back as `unwrap(r)` (check: unbound name) and `Option.Some(40)` as
 ## `Some(Option, 40)` (the enum TYPE passed as a value argument). Returns 42.
 Pair := struct { a : u64, b : u64 }
 

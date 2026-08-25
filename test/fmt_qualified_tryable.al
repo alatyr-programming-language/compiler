@@ -1,5 +1,5 @@
 ## e2e/fmt — a PRELUDE tryable construction whose type argument is a QUALIFIED path,
-## `Result(usize, ser::SerError).Ok(0)`. The fmt driver builds its enum-name table from the file's
+## a qualified Result/SerError constructor. The fmt driver builds its enum-name table from the file's
 ## OWN enum decls, and no file declares `Result` / `Option` — so `is_enum_name("Result")` was false,
 ## the generic-enum-ctor rewrite never fired, and the head parsed as an ordinary call. An ordinary
 ## call ARGUMENT does not consume a qualified VALUE path's `::seg` tail, so the argument loop ran

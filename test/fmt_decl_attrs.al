@@ -1,6 +1,6 @@
 ## fmt fixture — DECL ATTRIBUTES. The parser consumes every `@…` a declaration carries and records
 ## none of them on the `Decl`, so fmt dropped them all. None of the drops is a formatting difference:
-##   `mkc := @convert fn(u64) -> Celsius`  (Types §4.6)  — `Celsius(42)` no longer resolves at all;
+##   a function-valued `@convert` constructor  (Types §4.6)  — `Celsius(42)` no longer resolves at all;
 ##   `NonZero := @require(is_nonzero) u32` (Types §8.1)  — the validity contract silently disappears;
 ##   `@export("sym") producer := fn …`     (Modules §6.3) — the symbol is never exported;
 ##   `consumer := @extern("sym") fn() -> u64` (Modules §7) — a BODYLESS import came back WITH a body

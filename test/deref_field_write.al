@@ -1,4 +1,5 @@
-## e2e: a scalar FIELD WRITE THROUGH a pointer — `deref(p).field = v` where `p : ptr(mut Rec)`. The
+## e2e: a scalar FIELD WRITE THROUGH a pointer — `deref(p).field = v` where p has a mutable pointer to
+## Rec. The
 ## store dual of the `deref(p).f` READ. Was a Priority-1 SILENT MISCOMPILE: `stmt_starts` did not
 ## recognize `deref(p).field =` (a `deref` head has `(` at idx+1, not `.`), so the line parsed as a
 ## trailing RETURN expression and the store was dropped (and the whole module could emit empty); even

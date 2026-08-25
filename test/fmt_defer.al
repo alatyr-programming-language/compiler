@@ -1,5 +1,5 @@
 ## §5 fmt (Control Flow §9.3) — `defer` round-trips as SURFACE syntax. The parser desugars `defer <expr>`
-## to the marker call `__defer(<expr>)` and `defer { S1; S2 }` to the FLAT chain `__deferblk()` → S1 → S2
+## to the marker call `__defer(<expr>)` and the block form of defer to the FLAT chain `__deferblk()` → S1 → S2
 ## → `__deferblkend()`, all of which stay in the statement list; fmt rendered those markers LITERALLY, so
 ## formatting a source rewrote the user's `defer` into compiler internals (it happened to still run,
 ## because the lower re-intercepts the marker NAMES — idempotence and the exit code alone cannot catch

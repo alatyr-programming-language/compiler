@@ -1,5 +1,5 @@
 ## §5 fmt — two recent ENUM forms fmt had never been shown: a module-level ARRAY GLOBAL of enum values
-## (`mut GE := [E.A(1), E.B(2)]` — payloaded variant literals in a global initializer) and a WIDE-enum
+## (a mutable global array initialized with payloaded variant literals) and a WIDE-enum
 ## `return W.Some(<7-word struct>)` (the SRET return path). Both round-trip today; this locks them.
 ##   GE[0] 1 + GE[1] 20 + Big sum 28 = 49
 E := enum {

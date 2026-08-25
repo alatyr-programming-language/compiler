@@ -1,4 +1,5 @@
-## e2e — the VALUE spelling of the same chain: `if … { v } else if … { w } else { z }` used as a bound
+## e2e — the VALUE spelling of the same chain: `if … { v }`, repeated `else if` arms, and `else { z }`
+## used as a bound
 ## expression and as a function's tail. The statement spelling already chained (the statement parser
 ## recurses on the `else`), but the value parser demanded a brace after `else` and blindly skipped one
 ## token when an `if` was there instead — reading the nested CONDITION as the else-value and swallowing

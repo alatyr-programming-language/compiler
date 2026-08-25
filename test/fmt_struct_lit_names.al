@@ -6,7 +6,7 @@
 ## stored args are in SOURCE order. Every other literal was therefore RELABELLED — the values stay
 ## put and the NAMES move, the quietest possible miscompile:
 ##   P(y = 2, x = 40)  ->  P(x = 2, y = 40)     the two fields swap values
-##   D(b = 3)          ->  D(a = 3)             a literal omitting a defaulted field
+##   A literal omitting a defaulted field can be relabelled to the first field
 ##   D(c = 1, b = 2)   ->  D(a = 1, b = 2)
 ## The names are always spelled in the source, so fmt now scans them from the literal itself and
 ## only falls back to the decl when the field list cannot be located. Returns 42.

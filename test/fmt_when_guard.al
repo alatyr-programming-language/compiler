@@ -3,7 +3,7 @@
 ## on the `Decl`, so fmt dropped it — and two complementary guarded declarations of one name then came
 ## back as an unguarded DUPLICATE (`check: duplicate name`) instead of one live decl.
 ## Three shapes, all recovered verbatim:
-##   • a fn guard after the return type — `answer := fn() -> u64 when target.arch == Arch.x86_64 { … }`
+##   • a fn guard after the return type — the x86_64 architecture guard on `answer`
 ##   • a fn guard whose PREDICATE ITSELF CONTAINS BRACES — `when match typeinfo(T) { … } { body }`.
 ##     Stopping at the first `{` truncated the guard, the render no longer parsed, and the SECOND fmt
 ##     pass segfaulted. The body brace is the last `{…}` group of the decl, not the first.
