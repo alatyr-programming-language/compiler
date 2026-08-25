@@ -2417,6 +2417,10 @@ run_x86 convert_to_builtin 42
 build_reject_has convert_agg_reject "needs a scalar operand"
 build_reject_has convert_tuple_reject "needs a scalar operand"
 build_reject_has reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
+check_reject reject_p0_f32_zeroarg
+emit_reject_has wat reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
+emit_reject_has aarch64 reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
+emit_reject_has riscv64 reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
 run_x86 convert_agg_user 42
 run module_mut_global 42
 run module_mut_struct_global 42

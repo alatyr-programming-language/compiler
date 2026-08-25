@@ -3130,6 +3130,7 @@ DFileTab := struct { ns : ptr(rt::Vec), nl : ptr(rt::Vec), so : ptr(rt::Vec), sl
 DIAG_AMBIG_MARKER := 4611686018427387904
 DIAG_LIMIT_MARKER := 2305843009213693952
 DIAG_LINKER_SYMBOL_KIND := 7
+DIAG_SCALAR_CONVERSION_MARKER := 5764607523034234880
 ## CT-12 / Comptime §2.6 — the COMPTIME guard-failure class (shared with sema::comptime_err). Above
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
@@ -3229,7 +3230,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   limit := code >= DIAG_LIMIT_MARKER and code < DIAG_AMBIG_MARKER
   immutable := code >= DIAG_IMMUTABLE_MARKER
   ctg := code >= DIAG_CT_MARKER and code < DIAG_IMMUTABLE_MARKER
-  ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_CT_MARKER
+  conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_CT_MARKER
+  ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := code
   mut kind := 0
   mut span := 0
@@ -3244,6 +3246,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     raw = code - DIAG_CT_MARKER
     kind = raw % 8
     span = raw / 8
+  } else if conv {
+    raw = code - DIAG_SCALAR_CONVERSION_MARKER
+    span = raw / 4
   } else {
     if ambig { raw = code - DIAG_AMBIG_MARKER }
     kind = raw % 4
@@ -3262,6 +3267,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
       wk2 := rt::push_str(db, ") violation")
     } else if immutable { wki := rt::push_str(db, "immutable binding") }
     else if ctg { wkc := rt::push_str(db, comptime_guard_name(kind)) }
+    else if conv { wksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { wk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { wk := rt::push_str(db, "unbound name") }
     else if kind == 2 { wk := rt::push_str(db, "type mismatch") }
@@ -5335,7 +5341,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   limit := r >= DIAG_LIMIT_MARKER and r < DIAG_AMBIG_MARKER
   immutable := r >= DIAG_IMMUTABLE_MARKER
   ctg := r >= DIAG_CT_MARKER and r < DIAG_IMMUTABLE_MARKER
-  ambig := r >= DIAG_AMBIG_MARKER and r < DIAG_CT_MARKER
+  conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_CT_MARKER
+  ambig := r >= DIAG_AMBIG_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := r
   mut kind := 0
   mut span := 0
@@ -5350,6 +5357,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     raw = r - DIAG_CT_MARKER
     kind = raw % 8
     span = raw / 8
+  } else if conv {
+    raw = r - DIAG_SCALAR_CONVERSION_MARKER
+    span = raw / 4
   } else {
     if ambig { raw = r - DIAG_AMBIG_MARKER }
     kind = raw % 4
@@ -5372,6 +5382,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
       }
     } else if immutable { dwki := rt::push_str(db, "immutable binding") }
     else if ctg { dwkc := rt::push_str(db, comptime_guard_name(kind)) }
+    else if conv { dwksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { dwk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { dwk := rt::push_str(db, "unbound name") }
     else if kind == 2 { dwk := rt::push_str(db, "type mismatch") }
