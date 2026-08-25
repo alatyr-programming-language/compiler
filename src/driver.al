@@ -4146,6 +4146,10 @@ d_qual_target := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
 ## closure are handled by aarch64. `sort_by`, other injected generic entry points, and RV64 remain
 ## gated until they have their own reproducer and evidence.
 mut D_BACKEND := 0
+## The entry module's mangled-name span. RV64/WAT keep generic bare callees inside this module only;
+## AArch64 switches to the caller-module span for the one permitted injected mono closure.
+mut D_EMS : usize = 0
+mut D_EML : usize = 0
 d_qual_target_ok := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::Vec, src : ptr(u8)) -> usize {
   di := d_qual_target(cs, cl, ms, ml, decls, src)
   if di == 0 { return 0 }
@@ -4177,6 +4181,8 @@ mut D_QUAL_RW : usize = 0
 ## same-module helper reached by a permitted injected generic instance without making an unrelated
 ## same-named library generic reachable from the entry module. Qualified injected entry points still
 ## pass through `d_qual_target_ok` above.
+## On RV64/WAT retain the original entry-module boundary; only AArch64's bounded mono slice needs
+## the caller-module rule for its injected helper closure.
 d_mark_callee := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::Vec, src : ptr(u8)) {
   if D_KEEP == 0 { return }
   kb := unchecked bitcast(ptr(mut u8), D_KEEP)
@@ -4194,7 +4200,11 @@ d_mark_callee := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
     if d.kind == 1 and d.name_len == cl and cl != 0 {
       if str_at((src + d.name_start), d.name_len) == str_at((src + cs), cl) {
         mut allow := true
-        if d.is_generic and d_mod_seg_eq(src, d.mod_start, d.mod_len, ms, ml) == false { allow = false }
+        if d.is_generic {
+          mut same_mod := d_mod_seg_eq(src, d.mod_start, d.mod_len, D_EMS, D_EML)
+          if D_BACKEND == 1 { same_mod = d_mod_seg_eq(src, d.mod_start, d.mod_len, ms, ml) }
+          if same_mod == false { allow = false }
+        }
         if allow {
           if rt::rec_get(kb, i) == 0 { rt::rec_set(kb, i, 1) ; D_KEEP_CHANGED = 1 }
         }
@@ -4655,6 +4665,8 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   if n > 1 {
     ems := rt::vec_get(name_start, n - 1)
     eml := rt::vec_get(name_len, n - 1)
+    D_EMS = ems
+    D_EML = eml
     ## WAT AGGREGATE-COMPARE GUARD (see its note): retry WITHOUT the ambient closure, reproducing the
     ## exact single-file pipeline whose trap this program had before the closure made the comparison
     ## reachable. Only the wat backend needs it — aarch64/riscv64 compare aggregate contents correctly.

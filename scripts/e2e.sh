@@ -5215,6 +5215,8 @@ run slice_toolkit 42
 ## a GENERIC index WRITE s[i]=x on a Slice(T) param — the element T is now substituted at bind so the
 ## param binds by-ref (was is_ref=false → the write overwrote the slot / a read returned the block ptr).
 run slice_generic_write 42
+## The AArch64 generic Slice(T) write path is also used transitively by base::slice::sort's sift_down.
+run_a64 slice_generic_write 42
 ## §7.2: a fn RETURNING Slice(T) by value — was a silent miscompile (bound as a bare scalar → .len read 0, [i]
 ## garbage; bind did NOT fix it). Now binds an ek-5 {ptr,len} slice; direct `.len`/`.ptr` read %rdx/%rax, direct
 ## `f(…)[i]` fails loud (bind first). a64/rv64/wasm trap. = 42.
