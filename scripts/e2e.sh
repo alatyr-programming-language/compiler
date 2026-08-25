@@ -4386,8 +4386,11 @@ check_located reject_fn_field_agg_ret 20
 check_reject reject_dyn_fn_name
 ## FN-10 — a CAPTURING lambda coerced to a bare fn-value type has no home for its environment (a bare
 ## fn(…)->R is a one-word code pointer; capture needs `dyn`, FN-11): storing one in a fn-typed struct
-## field MUST fail loud (the un-lifted-lambda reject), never silently drop the capture.
-build_reject_has reject_fn_value_capture "un-lifted lambda"
+## field MUST fail in semantic checking with a located diagnostic, before any backend emits code.
+check_build_located reject_fn_value_capture 12 "type mismatch"
+emit_reject_has wat reject_fn_value_capture "type mismatch"
+emit_reject_has aarch64 reject_fn_value_capture "type mismatch"
+emit_reject_has riscv64 reject_fn_value_capture "type mismatch"
 ## FN-11 — the type-erased `dyn fn(T…)->R` closure = a two-word {code, env} fat pair over EXPLICIT
 ## storage. Two DIFFERENT capturing closures (add-a / add-b) erased to one `dyn fn(u64)->u64` via
 ## `dyn_over(ptr(mut store))` and called through the fat pair (indirect, env passed leading). The inline
