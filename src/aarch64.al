@@ -5877,7 +5877,17 @@ emit_a64_epilogue := fn(frame : i64, in out sb : rt::StrBuf) {
   ## a float-returning fn delivers its result in d0 (SysV): move the value bits (x0) into d0 before ret.
   if A64_RET_FLOAT { push_str(sb, "  fmov d0, x0\n") }
   push_str(sb, "  mov sp, x29\n")
-  push_str(sb, "  ldp x29, x30, [sp], #") ; push_int(sb, frame) ; push_str(sb, "\n")
+  ## AArch64 pair load/store immediates top out at +504 bytes. Keep the old post-index form for the
+  ## common small frame so its emission stays byte-identical; larger frames restore the pair at offset 0
+  ## and advance SP through a register-sized immediate. x9 is caller-saved and is free at the epilogue.
+  if frame <= 504 {
+    push_str(sb, "  ldp x29, x30, [sp], #") ; push_int(sb, frame) ; push_str(sb, "\n")
+  }
+  if frame > 504 {
+    push_str(sb, "  ldp x29, x30, [sp]\n")
+    push_str(sb, "  mov x9, #") ; push_int(sb, frame) ; push_str(sb, "\n")
+    push_str(sb, "  add sp, sp, x9\n")
+  }
   push_str(sb, "  ret\n")
 }
 
@@ -7339,7 +7349,17 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
     emit_a64_export(sb, src, d.name_start, d.name_len)
     if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(A64_TEST_DECL_INDEX)) } else if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
   }
-  push_str(sb, "  stp x29, x30, [sp, #-") ; push_int(sb, frame) ; push_str(sb, "]!\n")
+  ## AArch64's pre-index pair-store has the same +504-byte upper bound as the epilogue's post-index
+  ## pair-load. For larger frames, reserve the exact byte count through x9, then save the pair at the
+  ## frame base; all frame offsets remain unchanged because x29 still names the new SP.
+  if frame <= 504 {
+    push_str(sb, "  stp x29, x30, [sp, #-") ; push_int(sb, frame) ; push_str(sb, "]!\n")
+  }
+  if frame > 504 {
+    push_str(sb, "  mov x9, #") ; push_int(sb, frame) ; push_str(sb, "\n")
+    push_str(sb, "  sub sp, sp, x9\n")
+    push_str(sb, "  stp x29, x30, [sp]\n")
+  }
   push_str(sb, "  mov x29, sp\n")
   ## WIDE-STRUCT SRET: spill the incoming indirect-result pointer (x8) to its reserved frame slot so it
   ## survives nested calls / register churn to each Return, where the whole struct is copied through it.
