@@ -2853,6 +2853,24 @@ mut WAT_DEF_STOP := 0
 ## alongside WAT_BRK/WAT_CONT, so a nested loop drains only its own.
 mut WAT_BRK_DB := 0
 mut WAT_CONT_DB := 0
+## The compile-time loop-frame stack for named `break` targets. The parser stores a label as a loop
+## nesting depth; the WAT emitter therefore keeps every emitted loop's exit label, value-bearing bit,
+## and defer boundary in parallel. A labeled break may target only a statement loop in this bounded
+## backend slice; value-loop targets remain fail-loud. The depth cap mirrors parser/lower loop stacks.
+mut WAT_LOOP_BRK : [i64; 64] = [0; 64]
+mut WAT_LOOP_VALUE : [bool; 64] = [false; 64]
+mut WAT_LOOP_DB : [usize; 64] = [0; 64]
+mut WAT_LOOP_SP := 0
+mut WAT_LOOP_OVF := false
+wat_loop_push := fn(brk : i64, value : bool, db : usize) {
+  if WAT_LOOP_SP < 64 {
+    WAT_LOOP_BRK[WAT_LOOP_SP] = brk
+    WAT_LOOP_VALUE[WAT_LOOP_SP] = value
+    WAT_LOOP_DB[WAT_LOOP_SP] = db
+    WAT_LOOP_SP = WAT_LOOP_SP + 1
+  } else { WAT_LOOP_OVF = true }
+}
+wat_loop_pop := fn() { if WAT_LOOP_SP > 0 { WAT_LOOP_SP = WAT_LOOP_SP - 1 } }
 ## Recursion depth of the local-struct-type resolver's `q := p` (aggregate-COPY) chain. `local_struct_type`
 ## asks `base_struct_type` for the SOURCE var's type, which can land back in `local_struct_type` — a
 ## mutually-recursive pair a pathological `p := q ; q := p` would spin forever. Capped (6) so a deep but
@@ -4651,6 +4669,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       WAT_BRK_VALUE = true
       WAT_BRK_DB = WAT_DEF_N
       WAT_CONT_DB = WAT_DEF_N
+      wat_loop_push(id, true, WAT_DEF_N)
       push_str(sb, "(block $brk") ; push_int(sb, id) ; push_str(sb, " (result i64)\n")
       push_str(sb, "  (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
       push_str(sb, "    (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
@@ -4664,6 +4683,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       WAT_BRK_VALUE = obv
       WAT_BRK_DB = odb
       WAT_CONT_DB = odc
+      wat_loop_pop()
     }
     Expr::Slice(sbe, slo, shi) => {
       ## a slice VALUE in expression position — an `f(xs[lo..hi])` ARGUMENT (§8 slice-param caller).
@@ -5681,6 +5701,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
         WAT_BRK_DB = WAT_DEF_N
         WAT_CONT_DB = WAT_DEF_N
+        wat_loop_push(id, false, WAT_DEF_N)
         push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
         push_str(sb, "      (br_if 1 (i32.eqz (i32.wrap_i64 ")
         emit_wat_expr(c, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
@@ -5695,6 +5716,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         WAT_BRK_VALUE = obv
         WAT_BRK_DB = odb
         WAT_CONT_DB = odc
+        wat_loop_pop()
         s = nx
       }
       Stmt::If(c, th, el, nx) => {
@@ -5805,6 +5827,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
           WAT_BRK_DB = WAT_DEF_N
           WAT_CONT_DB = WAT_DEF_N
+          wat_loop_push(idF, false, WAT_DEF_N)
           bn := expr_var_name(flo)
           varidx := name_local_index(fn_head, src, fns, fnl, pcount, a, decls)
           ididx := varidx + 1
@@ -5879,6 +5902,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           WAT_BRK_VALUE = obvF
           WAT_BRK_DB = odbF
           WAT_CONT_DB = odcF
+          wat_loop_pop()
         } else {
           idx := name_local_index(fn_head, src, fns, fnl, pcount, a, decls)
           id := wat_next_label()
@@ -5893,6 +5917,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
           WAT_BRK_DB = WAT_DEF_N
           WAT_CONT_DB = WAT_DEF_N
+          wat_loop_push(id, false, WAT_DEF_N)
           push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " ")
           emit_wat_expr(flo, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
           push_str(sb, ")\n")
@@ -5911,6 +5936,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           WAT_BRK_VALUE = obvR
           WAT_BRK_DB = odbR
           WAT_CONT_DB = odcR
+          wat_loop_pop()
         }
         s = nx
       }
@@ -5929,6 +5955,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
         WAT_BRK_DB = WAT_DEF_N
         WAT_CONT_DB = WAT_DEF_N
+        wat_loop_push(id, false, WAT_DEF_N)
         push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
         push_str(sb, "      (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
         emit_wat_stmts(lb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
@@ -5939,13 +5966,27 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         WAT_BRK_VALUE = obvL
         WAT_BRK_DB = odbL
         WAT_CONT_DB = odcL
+        wat_loop_pop()
         s = lnx
       }
-      ## `break`: the WAT backend targets only the NEAREST loop (WAT_BRK). Labeled and bare breaks
-      ## from a value-loop remain fail-loud; a value is accepted only when that nearest target is an
-      ## Expr::Loop result block.
+      ## `break`: bare breaks target the nearest loop (WAT_BRK), while a named break uses the parallel
+      ## loop-frame stack to reach its parsed nesting depth. Only statement-loop targets are supported
+      ## here; labeled value-loop targets and labeled break values remain explicit fail-loud paths.
       Stmt::Break(bv, bd, bnx) => {
-        if bd != 0 { push_str(sb, "    (unreachable)\n") }
+        if bd != 0 {
+          if unchecked bitcast(usize, bv) != 0 { push_str(sb, "    (unreachable) (; labeled break value unsupported ;)\n") }
+          else if WAT_LOOP_OVF or bd >= WAT_LOOP_SP { push_str(sb, "    (unreachable) (; labeled break target unavailable ;)\n") }
+          else {
+            target := WAT_LOOP_SP - 1 - bd
+            if WAT_LOOP_VALUE[target] { push_str(sb, "    (unreachable) (; labeled break from WAT loop expression ;)\n") }
+            else {
+              ## DEFER (§9.3): a named break leaves every loop between the site and its target, so
+              ## replay all pending body cleanups down to the TARGET loop's entry boundary.
+              if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+              push_str(sb, "    (br $brk") ; push_int(sb, WAT_LOOP_BRK[target]) ; push_str(sb, ")\n")
+            }
+          }
+        }
         else if unchecked bitcast(usize, bv) != 0 {
           if not WAT_BRK_VALUE { push_str(sb, "    (unreachable) (; break value outside WAT loop expression ;)\n") }
           else {
@@ -6124,6 +6165,8 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   WAT_BRK_VALUE = false
   WAT_BRK_DB = 0
   WAT_CONT_DB = 0
+  WAT_LOOP_SP = 0
+  WAT_LOOP_OVF = false
   WAT_DEF_STOP = 0
   ## pass 1: declare one (local i64) per distinct non-global local name in the WHOLE fn tree
   ## (top-level + nested scopes). count_locals and name_local_index share local_slot_scan, so the
