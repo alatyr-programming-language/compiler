@@ -44,6 +44,7 @@ param_p := ast::param_p
 arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
+stmt_label_span := ast::stmt_label_span
 (push_str, push_int) := rt
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
@@ -2853,18 +2854,20 @@ mut WAT_DEF_STOP := 0
 ## alongside WAT_BRK/WAT_CONT, so a nested loop drains only its own.
 mut WAT_BRK_DB := 0
 mut WAT_CONT_DB := 0
-## The compile-time loop-frame stack for named `break` targets. The parser stores a label as a loop
-## nesting depth; the WAT emitter therefore keeps every emitted loop's exit label, value-bearing bit,
-## and defer boundary in parallel. A labeled break may target only a statement loop in this bounded
-## backend slice; value-loop targets remain fail-loud. The depth cap mirrors parser/lower loop stacks.
+## The compile-time loop-frame stack for named `break`/`continue` targets. The parser stores a label as
+## a loop nesting depth; the WAT emitter therefore keeps every emitted loop's exit label, continue label,
+## value-bearing bit, and defer boundary in parallel. Named transfers may target only a statement loop in
+## this bounded backend slice; value-loop targets remain fail-loud. The depth cap mirrors parser/lower stacks.
 mut WAT_LOOP_BRK : [i64; 64] = [0; 64]
+mut WAT_LOOP_CONT : [i64; 64] = [0; 64]
 mut WAT_LOOP_VALUE : [bool; 64] = [false; 64]
 mut WAT_LOOP_DB : [usize; 64] = [0; 64]
 mut WAT_LOOP_SP := 0
 mut WAT_LOOP_OVF := false
-wat_loop_push := fn(brk : i64, value : bool, db : usize) {
+wat_loop_push := fn(brk : i64, cont : i64, value : bool, db : usize) {
   if WAT_LOOP_SP < 64 {
     WAT_LOOP_BRK[WAT_LOOP_SP] = brk
+    WAT_LOOP_CONT[WAT_LOOP_SP] = cont
     WAT_LOOP_VALUE[WAT_LOOP_SP] = value
     WAT_LOOP_DB[WAT_LOOP_SP] = db
     WAT_LOOP_SP = WAT_LOOP_SP + 1
@@ -4669,7 +4672,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       WAT_BRK_VALUE = true
       WAT_BRK_DB = WAT_DEF_N
       WAT_CONT_DB = WAT_DEF_N
-      wat_loop_push(id, true, WAT_DEF_N)
+      wat_loop_push(id, id, true, WAT_DEF_N)
       push_str(sb, "(block $brk") ; push_int(sb, id) ; push_str(sb, " (result i64)\n")
       push_str(sb, "  (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
       push_str(sb, "    (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
@@ -5701,7 +5704,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
         WAT_BRK_DB = WAT_DEF_N
         WAT_CONT_DB = WAT_DEF_N
-        wat_loop_push(id, false, WAT_DEF_N)
+        wat_loop_push(id, id, false, WAT_DEF_N)
         push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
         push_str(sb, "      (br_if 1 (i32.eqz (i32.wrap_i64 ")
         emit_wat_expr(c, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
@@ -5827,7 +5830,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
           WAT_BRK_DB = WAT_DEF_N
           WAT_CONT_DB = WAT_DEF_N
-          wat_loop_push(idF, false, WAT_DEF_N)
+          wat_loop_push(idF, idF, false, WAT_DEF_N)
           bn := expr_var_name(flo)
           varidx := name_local_index(fn_head, src, fns, fnl, pcount, a, decls)
           ididx := varidx + 1
@@ -5917,7 +5920,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
           WAT_BRK_DB = WAT_DEF_N
           WAT_CONT_DB = WAT_DEF_N
-          wat_loop_push(id, false, WAT_DEF_N)
+          wat_loop_push(id, id, false, WAT_DEF_N)
           push_str(sb, "    (local.set ") ; push_int(sb, idx) ; push_str(sb, " ")
           emit_wat_expr(flo, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
           push_str(sb, ")\n")
@@ -5955,7 +5958,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         ## DEFER: the body's entry depth — `break`/`continue` inside it replay down to here.
         WAT_BRK_DB = WAT_DEF_N
         WAT_CONT_DB = WAT_DEF_N
-        wat_loop_push(id, false, WAT_DEF_N)
+        wat_loop_push(id, id, false, WAT_DEF_N)
         push_str(sb, "    (block $brk") ; push_int(sb, id) ; push_str(sb, " (loop $lp") ; push_int(sb, id) ; push_str(sb, "\n")
         push_str(sb, "      (block $cont") ; push_int(sb, id) ; push_str(sb, "\n")
         emit_wat_stmts(lb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
@@ -6015,7 +6018,25 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         s = bnx
       }
       Stmt::Continue(cd, cnx) => {
-        if cd != 0 { push_str(sb, "    (unreachable)\n") }
+        ## The parser stores a named target's source span separately because the nearest named target
+        ## has the same depth (0) as a bare continue. Keep that distinction: a named continue to a
+        ## value-bearing loop must hit the same fail-loud fence as every other named value target.
+        named_continue := stmt_label_span(stmt_p(Stmt, s)).n != 0
+        if cd != 0 or named_continue {
+          if WAT_LOOP_OVF or cd >= WAT_LOOP_SP { push_str(sb, "    (unreachable) (; labeled continue target unavailable ;)\n") }
+          else {
+            target := WAT_LOOP_SP - 1 - cd
+            if WAT_LOOP_VALUE[target] { push_str(sb, "    (unreachable) (; labeled continue from WAT loop expression ;)\n") }
+            else {
+              ## DEFER (§9.3): a named continue leaves every loop between the site and its target, so
+              ## replay all pending body cleanups down to the TARGET loop's entry boundary before its
+              ## next-iteration edge. Replay does not pop the compile-time ledger; the fall-through
+              ## path remains emitted from the same source scope and needs the same ledger.
+              if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+              push_str(sb, "    (br $cont") ; push_int(sb, WAT_LOOP_CONT[target]) ; push_str(sb, ")\n")
+            }
+          }
+        }
         else {
           ## DEFER (§9.3): `continue` ends THIS ITERATION of the body — its cleanups run per iteration.
           if WAT_DEF_N > WAT_CONT_DB { wat_defer_drain(WAT_DEF_N, WAT_CONT_DB, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
