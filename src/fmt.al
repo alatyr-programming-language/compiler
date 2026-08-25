@@ -607,6 +607,12 @@ fmt_is_blank_byte := fn(b : usize) -> bool {
   return b == 32 or b == 9 or b == 10 or b == 13
 }
 
+## Blanks permitted inside a qualified value-path separator. LF/CR are deliberately excluded:
+## crossing a line boundary could reinterpret a comment ending in `::` as the head of the next Var.
+fmt_is_path_blank_byte := fn(b : usize) -> bool {
+  return b == 32 or b == 9
+}
+
 ## A struct FIELD's `mut` marker (grammar §130: `field ::= { attribute } [ "mut" ] ident ":" type`).
 ## `FieldDecl` records only the name/type spans — CT-6's `Field.mutable` is re-derived FROM SOURCE at
 ## every use — so the reconstructed body dropped the marker and `comptime_typeinfo_field_mutable`
@@ -1022,12 +1028,12 @@ fmt_var_path_start := fn(src : ptr(u8), s : usize, n : usize) -> usize {
   mut scanning := true
   while scanning {
     mut sep_end := cur_end
-    while sep_end > 0 and fmt_is_blank_byte(bytes(str_at((src + sep_end - 1), 1))[0]) { sep_end -= 1 }
+    while sep_end > 0 and fmt_is_path_blank_byte(bytes(str_at((src + sep_end - 1), 1))[0]) { sep_end -= 1 }
     if sep_end < 2 or str_at((src + sep_end - 2), 2) != "::" {
       scanning = false
     } else {
       mut head_end := sep_end - 2
-      while head_end > 0 and fmt_is_blank_byte(bytes(str_at((src + head_end - 1), 1))[0]) { head_end -= 1 }
+      while head_end > 0 and fmt_is_path_blank_byte(bytes(str_at((src + head_end - 1), 1))[0]) { head_end -= 1 }
       mut head_start := head_end
       while head_start > 0 and fmt_is_ident_byte(bytes(str_at((src + head_start - 1), 1))[0]) { head_start -= 1 }
       if head_start == head_end { return s }

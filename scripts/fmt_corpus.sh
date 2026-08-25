@@ -308,14 +308,18 @@ if [ "$ONLY" != src ] && { [ -z "$FILTER" ] || printf '%s\n' 'test/package/fn_va
   fi
   echo "fmt package fixture=test/package/fn_value_qualified checked=1"
 
-  # The lexer/parser also accept blanks around `::`. Exercise that spelling in a COPY of the
-  # existing fixture so this formatter-only regression needs no new corpus row or oracle update.
-  # Its build is asserted here; the semantic run remains the no-space package check above because
-  # any backend/lowering defect for spaced value paths is outside this bounded formatter slice.
+  # The lexer/parser also accept blanks around `::`. Exercise that spelling in an UNCALLED function
+  # in a COPY of the existing fixture so this formatter-only regression needs no new corpus row or
+  # oracle update. The package's normal main still supplies the executable behavior check; executing
+  # this spaced value is a separate lower/backend concern outside the bounded formatter slice.
   PS="$W/package/fn_value_qualified_spaced"
   rm -rf "$PS"
   cp -r "$ROOT/test/package/fn_value_qualified" "$PS"
-  sed -i 's/apply(hex::encode, 40)/apply(hex :: encode, 40)/' "$PS/src/main.al"
+  sed -i '/^main := fn() -> u64 {/i\
+spaced_value := fn() -> u64 {\
+  apply(hex :: encode, 40)\
+}\
+' "$PS/src/main.al"
   PSO1="$W/o/fn_value_qualified.package.spaced.f1.al"
   PSO2="$W/o/fn_value_qualified.package.spaced.f2.al"
   PSE="$W/o/fn_value_qualified.package.spaced.err"
@@ -341,11 +345,80 @@ if [ "$ONLY" != src ] && { [ -z "$FILTER" ] || printf '%s\n' 'test/package/fn_va
     elif ! diff -q "$PSO1" "$PSO2" >/dev/null 2>&1; then
       echo "PACKAGE-SPACED-NONIDEMPOTENT test/package/fn_value_qualified"
       fail=1
+    elif ! ( cd "$PS" && timeout $TCC "$AL" build package.al ) >"$PSB" 2>"$PSE" </dev/null; then
+      echo "PACKAGE-SPACED-COMPILEFAIL test/package/fn_value_qualified (formatted)"
+      fail=1
     else
-      echo "PACKAGE-SPACED-OK test/package/fn_value_qualified"
+      psbin="$PS/target/debug/fn-value-qualified"
+      if [ ! -x "$psbin" ]; then
+        echo "PACKAGE-SPACED-COMPILEFAIL test/package/fn_value_qualified (formatted executable missing)"
+        fail=1
+      else
+        ( cd "$PS" && timeout $TRUN "$psbin" ) >"$PSB" 2>/dev/null </dev/null; pspaced_rc=$?
+        if [ "$pspaced_rc" != 42 ]; then
+          echo "PACKAGE-SPACED-BEHAVIOUR test/package/fn_value_qualified (exit $pspaced_rc want 42)"
+          fail=1
+        else
+          echo "PACKAGE-SPACED-OK test/package/fn_value_qualified"
+        fi
+      fi
     fi
   fi
   echo "fmt package fixture=test/package/fn_value_qualified checked=2"
+
+  # A line comment ending in `::` must not become the head of the next Var. This variant is
+  # sandbox-only: it keeps the corpus and all three oracles unchanged while checking both the
+  # rendered source and the formatted package's behavior.
+  PC="$W/package/fn_value_qualified_comment"
+  rm -rf "$PC"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PC"
+  sed -i \
+    -e 's/^  direct := hex::encode(40)$/  x := 41/' \
+    -e '/^  indirect := apply(hex::encode, 40)$/d' \
+    -e '/^  if direct == 41 and indirect == 41 { 42 } else { 0 }$/c\
+  ## a comment ending in a path-looking separator ::\
+  x' "$PC/src/main.al"
+  PCO1="$W/o/fn_value_qualified.package.comment.f1.al"
+  PCO2="$W/o/fn_value_qualified.package.comment.f2.al"
+  PCE="$W/o/fn_value_qualified.package.comment.err"
+  PCB="$W/o/fn_value_qualified.package.comment.build.out"
+  if ! ( cd "$PC" && timeout $TCC "$AL" build package.al ) >"$PCB" 2>"$PCE" </dev/null; then
+    echo "PACKAGE-COMMENT-COMPILEFAIL test/package/fn_value_qualified"
+    fail=1
+  elif ! ( cd "$PC" && timeout $TCC "$AL" fmt src/main.al ) >"$PCO1" 2>"$PCE" </dev/null; then
+    echo "PACKAGE-COMMENT-FMT-REFUSE test/package/fn_value_qualified"
+    fail=1
+  elif ! grep -qE '^  x$' "$PCO1" || grep -qF 'separator ::' "$PCO1"; then
+    echo "PACKAGE-COMMENT-PATH test/package/fn_value_qualified (comment altered next Var)"
+    fail=1
+  else
+    cp "$PCO1" "$PC/src/main.al"
+    if ! ( cd "$PC" && timeout $TCC "$AL" fmt src/main.al ) >"$PCO2" 2>"$PCE" </dev/null; then
+      echo "PACKAGE-COMMENT-NONIDEMPOTENT test/package/fn_value_qualified (second fmt refused output)"
+      fail=1
+    elif ! diff -q "$PCO1" "$PCO2" >/dev/null 2>&1; then
+      echo "PACKAGE-COMMENT-NONIDEMPOTENT test/package/fn_value_qualified"
+      fail=1
+    elif ! ( cd "$PC" && timeout $TCC "$AL" build package.al ) >"$PCB" 2>"$PCE" </dev/null; then
+      echo "PACKAGE-COMMENT-COMPILEFAIL test/package/fn_value_qualified (formatted)"
+      fail=1
+    else
+      pcbin="$PC/target/debug/fn-value-qualified"
+      if [ ! -x "$pcbin" ]; then
+        echo "PACKAGE-COMMENT-COMPILEFAIL test/package/fn_value_qualified (formatted executable missing)"
+        fail=1
+      else
+        ( cd "$PC" && timeout $TRUN "$pcbin" ) >"$PCB" 2>/dev/null </dev/null; pcomment_rc=$?
+        if [ "$pcomment_rc" != 41 ]; then
+          echo "PACKAGE-COMMENT-BEHAVIOUR test/package/fn_value_qualified (exit $pcomment_rc want 41)"
+          fail=1
+        else
+          echo "PACKAGE-COMMENT-OK test/package/fn_value_qualified"
+        fi
+      fi
+    fi
+  fi
+  echo "fmt package fixture=test/package/fn_value_qualified checked=3"
 fi
 
 # ==========================================================================================
