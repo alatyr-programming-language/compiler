@@ -24,23 +24,3 @@
 # mechanical failure; whether a needle is strong enough remains a reviewer's judgement.
 #
 # Format: <fixture name><TAB><needle>
-deref_field_write	ptr(mut Rec)
-elseif_chain_value_form	} else if 
-fmt_array_fill	sum_gen([u64; 3], xs)
-fmt_big_literal	18446744073709551615
-fmt_bitcast_targets	y := bitcast(B, x)
-fmt_comptime_arm_template	comptime for v in typeinfo(T).variants { T.(v)(pa) =>
-fmt_decl_attrs	@convert fn
-fmt_decl_tails	u32.require(is_nonzero)
-fmt_defer	defer {
-fmt_enum_forms	mut GE := [E.A(1), E.B(2)]
-fmt_expr_callee	fs[0](9)
-fmt_gen_enum	(T)
-fmt_generic_typefn	Either(A, B).L(a)
-fmt_pub	pub 
-fmt_qualified_tryable	Result(usize, ser::SerError).Ok(0)
-fmt_struct_lit_names	D(b = 3)
-fmt_tuple	cnt((u64, u64))
-fmt_ufcs_dot	r.unwrap()
-fmt_unchecked_postfix	unchecked (x.u)
-fmt_when_guard	when target.arch == Arch.x86_64
