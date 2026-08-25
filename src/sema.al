@@ -3440,6 +3440,8 @@ global_struct_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
       if unchecked bitcast(usize, d.value) != 0 {
         lit := expr_agg_lit(d.value)
         if lit.is_agg and struct_decl_of(decls, src, lit.s, lit.n) >= 0 { return VSpan(s = lit.s, n = lit.n) }
+        call_ty := expr_call_result_ty(d.value, decls, cnt, src)
+        if call_ty.tag == 3 and call_ty.nl != 0 { return VSpan(s = call_ty.ns, n = call_ty.nl) }
       }
     }
     i += 1
