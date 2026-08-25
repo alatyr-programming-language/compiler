@@ -231,6 +231,231 @@ fi
 fi  # end walk 1
 
 # ==========================================================================================
+# WALK 1b — the existing multi-file package fixture for qualified function values.
+#
+# The flat walk above deliberately covers only `test/*.al`; package modules live below
+# `test/package/`. Keep this one focused package check beside the formatter arbiter so a source
+# recovery in `Expr::Var` cannot silently turn `apply(hex::encode, …)` into `apply(encode, …)`.
+# It checks the known-good package result, the formatted package result, and formatter idempotence.
+# ==========================================================================================
+if [ "$ONLY" != src ] && { [ -z "$FILTER" ] || printf '%s\n' 'test/package/fn_value_qualified' | grep -Eq "$FILTER"; }; then
+  PW="$W/package/fn_value_qualified"
+  rm -rf "$PW"
+  mkdir -p "$W/package"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PW"
+  PO1="$W/o/fn_value_qualified.package.f1.al"
+  PO2="$W/o/fn_value_qualified.package.f2.al"
+  PE="$W/o/fn_value_qualified.package.err"
+  PB="$W/o/fn_value_qualified.package.base.out"
+  PF="$W/o/fn_value_qualified.package.formatted.out"
+
+  pbase_build=0
+  if ! ( cd "$PW" && timeout $TCC "$AL" build package.al ) >"$PB" 2>"$PE" </dev/null; then
+    echo "PACKAGE-COMPILEFAIL test/package/fn_value_qualified (baseline)"
+    fail=1
+  else
+    pbin="$PW/target/debug/fn-value-qualified"
+    if [ ! -x "$pbin" ]; then
+      echo "PACKAGE-COMPILEFAIL test/package/fn_value_qualified (missing executable)"
+      fail=1
+    else
+      ( cd "$PW" && timeout $TRUN "$pbin" ) >"$PB" 2>/dev/null </dev/null; pbase_rc=$?
+      if [ "$pbase_rc" != 42 ]; then
+        echo "PACKAGE-BASE-BEHAVIOUR test/package/fn_value_qualified (exit $pbase_rc want 42)"
+        fail=1
+      else
+        pbase_build=1
+      fi
+    fi
+  fi
+
+  if ! ( cd "$PW" && timeout $TCC "$AL" fmt src/main.al ) >"$PO1" 2>"$PE" </dev/null; then
+    echo "PACKAGE-FMT-REFUSE test/package/fn_value_qualified"
+    fail=1
+  elif [ ! -s "$PO1" ]; then
+    echo "PACKAGE-FMT-REFUSE test/package/fn_value_qualified (empty output)"
+    fail=1
+  else
+    if ! grep -qF 'apply(hex::encode, 40)' "$PO1"; then
+      echo "PACKAGE-QUALIFIED-PATH test/package/fn_value_qualified (qualified value path lost)"
+      fail=1
+    fi
+    cp "$PO1" "$PW/src/main.al"
+    if ! ( cd "$PW" && timeout $TCC "$AL" fmt src/main.al ) >"$PO2" 2>"$PE" </dev/null; then
+      echo "PACKAGE-NONIDEMPOTENT test/package/fn_value_qualified (second fmt refused output)"
+      fail=1
+    elif ! diff -q "$PO1" "$PO2" >/dev/null 2>&1; then
+      echo "PACKAGE-NONIDEMPOTENT test/package/fn_value_qualified"
+      fail=1
+    elif ! ( cd "$PW" && timeout $TCC "$AL" build package.al ) >"$PF" 2>"$PE" </dev/null; then
+      echo "PACKAGE-COMPILEFAIL test/package/fn_value_qualified (formatted)"
+      fail=1
+    elif [ "$pbase_build" = 1 ]; then
+      pbin="$PW/target/debug/fn-value-qualified"
+      if [ ! -x "$pbin" ]; then
+        echo "PACKAGE-COMPILEFAIL test/package/fn_value_qualified (formatted executable missing)"
+        fail=1
+      else
+        ( cd "$PW" && timeout $TRUN "$pbin" ) >"$PF" 2>/dev/null </dev/null; pformatted_rc=$?
+        if [ "$pformatted_rc" != 42 ]; then
+          echo "PACKAGE-BEHAVIOUR-EXIT test/package/fn_value_qualified (exit $pformatted_rc want 42)"
+          fail=1
+        else
+          echo "PACKAGE-OK        test/package/fn_value_qualified"
+        fi
+      fi
+    fi
+  fi
+  echo "fmt package fixture=test/package/fn_value_qualified checked=1"
+
+  # The lexer/parser also accept blanks around `::`. Exercise and EXECUTE that spelling in a COPY of
+  # the existing fixture so this formatter-only regression needs no new corpus row or oracle update.
+  PS="$W/package/fn_value_qualified_spaced"
+  rm -rf "$PS"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PS"
+  sed -i \
+    -e '/^main := fn() -> u64 {/i\
+spaced_value := fn() -> u64 {\
+  apply(hex :: encode, 40)\
+}' \
+  -e '/^  if direct == 41 and indirect == 41 { 42 } else { 0 }$/c\
+  spaced := spaced_value()\
+  if direct == 41 and indirect == 41 and spaced == 41 { 42 } else { 0 }' \
+  "$PS/src/main.al"
+  PSO1="$W/o/fn_value_qualified.package.spaced.f1.al"
+  PSO2="$W/o/fn_value_qualified.package.spaced.f2.al"
+  PSE="$W/o/fn_value_qualified.package.spaced.err"
+  PSB="$W/o/fn_value_qualified.package.spaced.build.out"
+  if ! ( cd "$PS" && timeout $TCC "$AL" build package.al ) >"$PSB" 2>"$PSE" </dev/null; then
+    echo "PACKAGE-SPACED-COMPILEFAIL test/package/fn_value_qualified"
+    fail=1
+  elif ! ( cd "$PS" && timeout $TCC "$AL" fmt src/main.al ) >"$PSO1" 2>"$PSE" </dev/null; then
+    echo "PACKAGE-SPACED-FMT-REFUSE test/package/fn_value_qualified"
+    fail=1
+  elif [ ! -s "$PSO1" ]; then
+    echo "PACKAGE-SPACED-FMT-REFUSE test/package/fn_value_qualified (empty output)"
+    fail=1
+  else
+    if ! grep -qF 'apply(hex :: encode, 40)' "$PSO1"; then
+      echo "PACKAGE-SPACED-QUALIFIED-PATH test/package/fn_value_qualified (qualified value path lost)"
+      fail=1
+    fi
+    cp "$PSO1" "$PS/src/main.al"
+    if ! ( cd "$PS" && timeout $TCC "$AL" fmt src/main.al ) >"$PSO2" 2>"$PSE" </dev/null; then
+      echo "PACKAGE-SPACED-NONIDEMPOTENT test/package/fn_value_qualified (second fmt refused output)"
+      fail=1
+    elif ! diff -q "$PSO1" "$PSO2" >/dev/null 2>&1; then
+      echo "PACKAGE-SPACED-NONIDEMPOTENT test/package/fn_value_qualified"
+      fail=1
+    elif ! ( cd "$PS" && timeout $TCC "$AL" build package.al ) >"$PSB" 2>"$PSE" </dev/null; then
+      echo "PACKAGE-SPACED-COMPILEFAIL test/package/fn_value_qualified (formatted)"
+      fail=1
+    else
+      psbin="$PS/target/debug/fn-value-qualified"
+      if [ ! -x "$psbin" ]; then
+        echo "PACKAGE-SPACED-COMPILEFAIL test/package/fn_value_qualified (formatted executable missing)"
+        fail=1
+      else
+        ( cd "$PS" && timeout $TRUN "$psbin" ) >"$PSB" 2>/dev/null </dev/null; pspaced_rc=$?
+        if [ "$pspaced_rc" != 42 ]; then
+          echo "PACKAGE-SPACED-BEHAVIOUR test/package/fn_value_qualified (exit $pspaced_rc want 42)"
+          fail=1
+        else
+          echo "PACKAGE-SPACED-OK test/package/fn_value_qualified"
+        fi
+      fi
+    fi
+  fi
+  echo "fmt package fixture=test/package/fn_value_qualified checked=2"
+
+  # A line comment ending in `::` must not become the head of the next Var. This variant is
+  # sandbox-only: it keeps the corpus and all three oracles unchanged and accepts a deliberate
+  # fail-loud refusal for the ambiguous source.
+  PC="$W/package/fn_value_qualified_comment"
+  rm -rf "$PC"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PC"
+  sed -i \
+    -e 's/^  direct := hex::encode(40)$/  x := 41/' \
+    -e '/^  indirect := apply(hex::encode, 40)$/d' \
+    -e '/^  if direct == 41 and indirect == 41 { 42 } else { 0 }$/c\
+  ## a comment ending in a path-looking separator ::\
+  x' "$PC/src/main.al"
+  PCO1="$W/o/fn_value_qualified.package.comment.f1.al"
+  PCO2="$W/o/fn_value_qualified.package.comment.f2.al"
+  PCE="$W/o/fn_value_qualified.package.comment.err"
+  PCB="$W/o/fn_value_qualified.package.comment.build.out"
+  if ! ( cd "$PC" && timeout $TCC "$AL" build package.al ) >"$PCB" 2>"$PCE" </dev/null; then
+    echo "PACKAGE-COMMENT-COMPILEFAIL test/package/fn_value_qualified"
+    fail=1
+  elif ! ( cd "$PC" && timeout $TCC "$AL" fmt src/main.al ) >"$PCO1" 2>"$PCE" </dev/null; then
+    echo "PACKAGE-COMMENT-REFUSED test/package/fn_value_qualified"
+  elif ! grep -qE '^  x$' "$PCO1" || grep -qF 'separator ::' "$PCO1"; then
+    echo "PACKAGE-COMMENT-PATH test/package/fn_value_qualified (comment altered next Var)"
+    fail=1
+  else
+    cp "$PCO1" "$PC/src/main.al"
+    if ! ( cd "$PC" && timeout $TCC "$AL" fmt src/main.al ) >"$PCO2" 2>"$PCE" </dev/null; then
+      echo "PACKAGE-COMMENT-NONIDEMPOTENT test/package/fn_value_qualified (second fmt refused output)"
+      fail=1
+    elif ! diff -q "$PCO1" "$PCO2" >/dev/null 2>&1; then
+      echo "PACKAGE-COMMENT-NONIDEMPOTENT test/package/fn_value_qualified"
+      fail=1
+    elif ! ( cd "$PC" && timeout $TCC "$AL" build package.al ) >"$PCB" 2>"$PCE" </dev/null; then
+      echo "PACKAGE-COMMENT-COMPILEFAIL test/package/fn_value_qualified (formatted)"
+      fail=1
+    else
+      pcbin="$PC/target/debug/fn-value-qualified"
+      if [ ! -x "$pcbin" ]; then
+        echo "PACKAGE-COMMENT-COMPILEFAIL test/package/fn_value_qualified (formatted executable missing)"
+        fail=1
+      else
+        ( cd "$PC" && timeout $TRUN "$pcbin" ) >"$PCB" 2>/dev/null </dev/null; pcomment_rc=$?
+        if [ "$pcomment_rc" != 41 ]; then
+          echo "PACKAGE-COMMENT-BEHAVIOUR test/package/fn_value_qualified (exit $pcomment_rc want 41)"
+          fail=1
+        else
+          echo "PACKAGE-COMMENT-OK test/package/fn_value_qualified"
+        fi
+      fi
+    fi
+  fi
+  # The lexer accepts multiline separators, but the current formatter/lowering boundary cannot
+  # safely render their reflowed form. It must refuse rather than silently change runtime behavior.
+  PML="$W/package/fn_value_qualified_multiline"
+  rm -rf "$PML"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PML"
+  sed -i '/^  indirect := apply(hex::encode, 40)$/c\
+  indirect := apply(hex\
+  ::\
+  encode, 40)' "$PML/src/main.al"
+  PMLO="$W/o/fn_value_qualified.package.multiline.out"
+  PMLE="$W/o/fn_value_qualified.package.multiline.err"
+  if ! ( cd "$PML" && timeout $TCC "$AL" fmt src/main.al ) >"$PMLO" 2>"$PMLE" </dev/null; then
+    echo "PACKAGE-MULTILINE-REFUSED test/package/fn_value_qualified"
+  else
+    echo "PACKAGE-MULTILINE-SILENT test/package/fn_value_qualified (multiline path was rewritten)"
+    fail=1
+  fi
+
+  # Numeric tokens are not identifier starts. If the parser exposes this malformed path-shaped
+  # source to fmt, it must refuse rather than treating `123` as a module name.
+  PN="$W/package/fn_value_qualified_numeric"
+  rm -rf "$PN"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PN"
+  sed -i 's/apply(hex::encode, 40)/apply(123 :: encode, 40)/' "$PN/src/main.al"
+  PNO="$W/o/fn_value_qualified.package.numeric.out"
+  PNE="$W/o/fn_value_qualified.package.numeric.err"
+  if ! ( cd "$PN" && timeout $TCC "$AL" fmt src/main.al ) >"$PNO" 2>"$PNE" </dev/null; then
+    echo "PACKAGE-NUMERIC-REFUSED test/package/fn_value_qualified"
+  else
+    echo "PACKAGE-NUMERIC-SILENT test/package/fn_value_qualified (numeric path head was rewritten)"
+    fail=1
+  fi
+
+  echo "fmt package fixture=test/package/fn_value_qualified checked=5"
+fi
+
+# ==========================================================================================
 # WALK 2 — `src/` + `lib/`: the compiler's own MODULES, IDEMPOTENCE ONLY.
 #
 # A module has no `_start`, so there is no program to run and `run(fmt(x)) == run(x)` is not a
