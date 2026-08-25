@@ -4274,6 +4274,8 @@ run fn_value_bound_callee 70
 ## FN-6 cross-backend seam: the driver-lifted non-capturing lambda is bound to a local name and called.
 ## The focused 10 result keeps this path independent from the larger x86-only fn-value fixture above.
 run fn_value_local_lambda_cross 10
+## Issue #7 bounded slice: a statement integer match must preserve the local result across the join.
+run cross_match_local 42
 run_wat fn_value_local_lambda_cross 10
 run_a64 fn_value_local_lambda_cross 10
 run_rv64 fn_value_local_lambda_cross 10
@@ -5420,6 +5422,7 @@ run_wat operator_compare 42
 run_wat hex_literal 42
 run_wat wasm_nested_local 45
 run_wat wasm_value_match_local_decl 42
+run_wat cross_match_local 42
 check_backend_determinism
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
@@ -5477,6 +5480,7 @@ run_a64 wasm_array_index 42
 ## §8.2 aarch64 nested locals (tree-wide slot resolution): `:=` in while/if/match-arm bodies.
 run_a64 wasm_nested_local 45
 run_a64 wasm_value_match_local_decl 42
+run_a64 cross_match_local 42
 run_a64 raw_asm_a64 42
 run_a64 naked_a64 42
 run_a64 raw_asm_a64_sub 42
@@ -5525,6 +5529,7 @@ run_rv64 wasm_array_index 42
 ## §8.3 riscv64 nested locals (tree-wide slot resolution): `:=` in while/if/match-arm bodies.
 run_rv64 wasm_nested_local 45
 run_rv64 wasm_value_match_local_decl 42
+run_rv64 cross_match_local 42
 run_rv64 raw_asm_rv64 42
 run_rv64 naked_rv64 42
 run_rv64 raw_asm_rv64_sub 42

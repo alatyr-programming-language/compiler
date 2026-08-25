@@ -4927,6 +4927,31 @@ emit_wat_stmt_match := fn(arm : usize, es : usize, en : usize, sidx : i64, fn_he
   }
 }
 
+## Statement-position SCALAR match dispatch. The caller stores the already-evaluated integer scrutinee
+## in the supplied scratch local; literal arms compare that local and wildcard arms run unconditionally.
+## This is separate from emit_wat_stmt_match because enum arms load a discriminant from linear memory,
+## while scalar matches have no aggregate address or payload-binding context.
+emit_wat_scalar_stmt_match := fn(arm : usize, sidx : i64, fn_head : ptr(mut Stmt), vyield : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, decls : ptr(rt::Vec)) {
+  if arm == 0 {
+    push_str(sb, "    (unreachable) (; no matching scalar arm ;)\n")
+  } else {
+    am := deref(arm_p(arm))
+    if am.wild == 5 or am.wild == 6 {
+      push_str(sb, "    (unreachable) (; range-pattern match arm not supported on wasm (x86_64 only) ;)\n")
+    } else if am.wild != 0 and am.wild != 1 {
+      push_str(sb, "    (unreachable) (; unsupported scalar match pattern on wasm ;)\n")
+    } else if am.wild == 1 {
+      emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, 0)
+    } else {
+      push_str(sb, "    (if (i64.eq (local.get ") ; push_int(sb, sidx) ; push_str(sb, ") (i64.const ") ; push_int(sb, am.lit) ; push_str(sb, ")) (then\n")
+      emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, 0)
+      push_str(sb, "    ) (else\n")
+      emit_wat_scalar_stmt_match(am.next, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
+      push_str(sb, "    ))\n")
+    }
+  }
+}
+
 ## Emit a statement LIST (recursively for nested while/if bodies). `fn_head` is the FUNCTION's
 ## top-level head — resolution keys off it, so a reassignment inside a loop/branch binds the same
 ## local/global as at top level. Return→WASM `return`; While→block/loop+br_if; If→value-less WASM if;
@@ -5701,7 +5726,15 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           if spidx < 0 { sidx = name_local_index(fn_head, src, sn.s, sn.n, pcount, a, decls) }
           emit_wat_stmt_match(arms_head, etype.s, etype.n, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
         } else if not idxmatch {
-          push_str(sb, "    (unreachable) (; unsupported stmt match ;)\n")
+          ## Scalar statement match: park the value in the first per-function scratch local so arm
+          ## comparisons survive body emission. The scratch is reused by nested bodies only after the
+          ## outer comparison has selected an arm.
+          nloc := count_locals(fn_head, src, a, decls)
+          sidx := pcount + nloc
+          push_str(sb, "    (local.set ") ; push_int(sb, sidx) ; push_str(sb, " ")
+          emit_wat_expr(scrut, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+          push_str(sb, ")\n")
+          emit_wat_scalar_stmt_match(arms_head, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
         }
         s = nx
       }
