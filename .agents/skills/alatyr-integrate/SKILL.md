@@ -236,6 +236,7 @@ Accepted and landed by the maintainer.
 - oracle changes: <none, or the separately gated oracle commit(s)>
 - feature branch: \`$BRANCH\` <deleted and verified, or fork-owned and left untouched>
 - issue relation: <Closes/Fixes/Resolves #<issue>, or Refs #<issue> — bounded slice: <landed scope>; residual: <remaining scope>>
+- worker claim: <\`in-progress\` removed and verified, or retained because another named worker/PR owns the residual>
 EOF
 ```
 
@@ -244,6 +245,21 @@ object and branch outcome are present. Keep the comment limited to public commit
 issue linkage, and the branch outcome; redact secrets, private host details, environment data, and
 raw suspicious payloads. If the comment cannot be published, the landing is incomplete: do not
 silently replace it with a local report.
+
+Release the worker claim as a separate, verified state change. First inspect the issue and all open PRs
+or maintainer comments for another active owner of the residual scope. If none exists, remove only the
+`in-progress` label and re-read the issue to prove it is gone:
+
+```sh
+gh issue edit <issue> -R "$R" --remove-label in-progress
+gh issue view <issue> -R "$R" --json labels --jq 'any(.labels[]; .name == "in-progress")'
+# must print false
+```
+
+For a complete issue, do this even though the merge relation closes the issue: GitHub does not remove
+coordination labels automatically. For a bounded `Refs` slice, do it after recording the residual and
+only when no worker or PR still owns that residual. If another owner exists, retain the label and name
+that owner in the acceptance record; never clear someone else's active claim.
 
 ## 6 · Refuse rather than review
 
