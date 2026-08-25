@@ -2881,7 +2881,7 @@ a64_index_elem_struct_span := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, de
   ## A bounded deep aggregate read (`xs[i].arr[j]`) has a non-Var base. Resolve only a plain,
   ## word-granular struct leaf; fixed-array PARAM roots use their Param metadata, while byte/packed/
   ## heterogeneous forms stay on old paths.
-  if r.n == 0 and (not a64_ex_is_var(bx)) and A64_BODY != 0 {
+  if r.n == 0 and (not a64_ex_is_var(bx)) and A64_BODY != 0 and (not a64_place_root_inferred_local(bx, a64_body(), src, a, decls)) {
     d := a64_place_idx_ty(bx, a64_body(), src, a, decls)
     if d.n != 0 and struct_decl_of(decls, src, d.s, d.n) >= 0 and struct_plain(decls, src, d.s, d.n) {
       if std_struct_is_word_granular(decls, src, d.s, d.n, a) { r = d }
@@ -3065,6 +3065,41 @@ a64_local_arrty_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
   r
 }
 
+## The deep-place resolver's inferred LOCAL root marker. Keep the admission narrower than the ordinary
+## array-element paths: only an unannotated array-literal local whose homogeneous struct element has
+## word-granular layout can use the composed address formula. Globals, params, annotated locals,
+## packed/byte-tier, heterogeneous, and non-struct arrays continue through existing paths or stay loud.
+a64_inferred_local_elem_span := fn(src : ptr(u8), body_head : ptr(mut Stmt), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
+  if a64_is_array_local(body_head, src, ns, nl, a) and a64_local_ann_span(body_head, src, ns, nl, a).n == 0 {
+    v := a64_local_rhs(body_head, src, ns, nl, a)
+    if a64_alit_homog_slit(v, src) {
+      es := a64_arr_elem_struct_span(body_head, src, ns, nl, a)
+      if es.n != 0 and std_struct_is_word_granular(decls, src, es.s, es.n, a) { r = es }
+    }
+  }
+  r
+}
+
+## Whether a deep place is rooted at the bounded inferred-local array admission above. The scalar
+## `xs[i].cell.vals[j]` slice may compose through that root, but aggregate leaves remain fail-loud;
+## keep this predicate separate so the shared type resolver does not accidentally open `xs[i].arr[j] = P(...)`.
+a64_place_root_inferred_local := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+  mut r := false
+  if unchecked bitcast(usize, e) == 0 { return r }
+  match deref(e) {
+    Expr::Var(ns, nl) => {
+      if a64_is_array_local(body_head, src, ns, nl, a) and a64_local_ann_span(body_head, src, ns, nl, a).n == 0 {
+        if a64_inferred_local_elem_span(src, body_head, ns, nl, a, decls).n != 0 { r = true }
+      }
+    }
+    Expr::Field(base, fs, fl) => { r = a64_place_root_inferred_local(base, body_head, src, a, decls) }
+    Expr::Index(base, idx) => { r = a64_place_root_inferred_local(base, body_head, src, a, decls) }
+    _ => {}
+  }
+  r
+}
+
 ## --- DEEP AGGREGATE PLACES (Types §9.4): an ADDRESS composed from a frame-local root + N hops ---
 ## `xs[i].b.c.cx`, `xs[i].arr[j]`, `b.cells[i].m` — an arbitrary chain of FIELD and INDEX hops rooted at
 ## a struct, fixed-array LOCAL, or admitted fixed-array PARAM. The one-hop element paths address `element base + field offset` with a
@@ -3116,6 +3151,9 @@ a64_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : 
         r = a64_garr_elem_struct_span(decls, src, ex_var_ns(ibase), ex_var_nl(ibase))
       }
     }
+    if r.n == 0 and a64_ex_is_var(ibase) {
+      r = a64_inferred_local_elem_span(src, body_head, ex_var_ns(ibase), ex_var_nl(ibase), a, decls)
+    }
     ## A fixed-array PARAM has no `[E; N]` type span in Param: `pm.ts/pm.tl` already name E and
     ## `pm.pps` carries N. Resolve `xs[i]` directly to E before the generic array-type fallback.
     if r.n == 0 and a64_ex_is_var(ibase) {
@@ -3157,6 +3195,10 @@ a64_place_idx_ok := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8
       if etg.n != 0 and a64_tyname_words(src, etg.s, etg.n, a, decls) > 0 { r = true }
     }
   }
+  if not r and a64_ex_is_var(base) {
+    etl := a64_inferred_local_elem_span(src, body_head, ex_var_ns(base), ex_var_nl(base), a, decls)
+    if etl.n != 0 and a64_tyname_words(src, etl.s, etl.n, a, decls) > 0 { r = true }
+  }
   if not r {
     bt := a64_place_ty(base, body_head, src, a, decls)
     if bt.n == 0 { return r }
@@ -3177,6 +3219,8 @@ a64_place_idx_ty := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8
       r = a64_param_arr_elem_span(a64_params(), src, ex_var_ns(base), ex_var_nl(base))
       return r
     }
+    r = a64_inferred_local_elem_span(src, body_head, ex_var_ns(base), ex_var_nl(base), a, decls)
+    if r.n != 0 { return r }
   }
   bt := a64_place_ty(base, body_head, src, a, decls)
   if bt.n != 0 { r = a64_arrty_elem(src, bt.s, bt.n) }
@@ -3237,6 +3281,10 @@ a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
     return r
   }
   if a64_is_array_global(decls, src, vns, vnl) { r = true ; return r }
+  if A64_BODY != 0 {
+    elt := a64_inferred_local_elem_span(src, body_head, vns, vnl, a, decls)
+    if elt.n != 0 and a64_local_off(body_head, src, vns, vnl, pcount, a, decls) >= 0 { r = true ; return r }
+  }
   pt := a64_place_ty(e, body_head, src, a, decls)
   if pt.n == 0 { return r }
   if a64_local_off(body_head, src, vns, vnl, pcount, a, decls) >= 0 { r = true }
@@ -3265,6 +3313,14 @@ emit_a64_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt:
       et = a64_garr_elem_struct_span(decls, src, ex_var_ns(base), ex_var_nl(base))
       if et.n != 0 { estride = a64_arr_elem_stride_bytes(src, et.s, et.n, a, decls) }
       nel = a64_alit_nel(gv)
+    }
+  }
+  if et.n == 0 and a64_ex_is_var(base) {
+    elt := a64_inferred_local_elem_span(src, body_head, ex_var_ns(base), ex_var_nl(base), a, decls)
+    if elt.n != 0 {
+      et = elt
+      estride = a64_arr_elem_stride_bytes(src, et.s, et.n, a, decls)
+      nel = a64_array_nel(body_head, src, ex_var_ns(base), ex_var_nl(base), a)
     }
   }
   if et.n == 0 {
@@ -6514,7 +6570,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         mut deepagglit := false
         mut deepaggvar := false
         if diaty.n != 0 and struct_decl_of(decls, src, diaty.s, diaty.n) >= 0 and struct_plain(decls, src, diaty.s, diaty.n) {
-          if std_struct_is_word_granular(decls, src, diaty.s, diaty.n, a) and a64_place_idx_ok(ibase, body_head, src, params_head, pcount, a, decls) {
+          if std_struct_is_word_granular(decls, src, diaty.s, diaty.n, a) and a64_place_idx_ok(ibase, body_head, src, params_head, pcount, a, decls) and (not a64_place_root_inferred_local(ibase, body_head, src, a, decls)) {
             deepagg = true
             if a64_is_slit(ival) {
               if streq(src, a64_slit_ns(ival), a64_slit_nl(ival), diaty.s, diaty.n) { deepagglit = true }
