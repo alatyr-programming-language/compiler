@@ -3100,6 +3100,21 @@ a64_place_root_inferred_local := fn(e : ptr(Expr), body_head : ptr(mut Stmt), sr
   r
 }
 
+## The exact bounded aggregate-write base `xs[i].arr`: one FIELD directly on one INDEX of an inferred
+## homogeneous local array. Keep this narrower than the recursive root predicate so nested fields,
+## globals, parameters, annotated locals, and other deep aggregate forms retain their existing gates.
+a64_inferred_local_agg_elem_base := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+  mut r := false
+  if ex_is_field(e) {
+    fb := a64_field_base(e)
+    if ex_is_index(fb) {
+      root := ex_index_base(fb)
+      if a64_ex_is_var(root) and a64_place_root_inferred_local(root, body_head, src, a, decls) { r = true }
+    }
+  }
+  r
+}
+
 ## --- DEEP AGGREGATE PLACES (Types §9.4): an ADDRESS composed from a frame-local root + N hops ---
 ## `xs[i].b.c.cx`, `xs[i].arr[j]`, `b.cells[i].m` — an arbitrary chain of FIELD and INDEX hops rooted at
 ## a struct, fixed-array LOCAL, or admitted fixed-array PARAM. The one-hop element paths address `element base + field offset` with a
@@ -6569,8 +6584,12 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         mut deepagg := false
         mut deepagglit := false
         mut deepaggvar := false
+        mut inferredagg := false
         if diaty.n != 0 and struct_decl_of(decls, src, diaty.s, diaty.n) >= 0 and struct_plain(decls, src, diaty.s, diaty.n) {
-          if std_struct_is_word_granular(decls, src, diaty.s, diaty.n, a) and a64_place_idx_ok(ibase, body_head, src, params_head, pcount, a, decls) and (not a64_place_root_inferred_local(ibase, body_head, src, a, decls)) {
+          inferredagg = a64_inferred_local_agg_elem_base(ibase, body_head, src, a, decls)
+          mut deepaggadmit := not a64_place_root_inferred_local(ibase, body_head, src, a, decls)
+          if inferredagg { deepaggadmit = true }
+          if std_struct_is_word_granular(decls, src, diaty.s, diaty.n, a) and a64_place_idx_ok(ibase, body_head, src, params_head, pcount, a, decls) and deepaggadmit {
             deepagg = true
             if a64_is_slit(ival) {
               if streq(src, a64_slit_ns(ival), a64_slit_nl(ival), diaty.s, diaty.n) { deepagglit = true }
@@ -6581,6 +6600,10 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             }
           }
         }
+        ## The new inferred-local admission is deliberately literal-only: aggregate VAR reads/copies
+        ## remain the existing fail-loud residual, and the previously admitted non-inferred roots keep
+        ## their existing literal/VAR behavior.
+        if inferredagg and (not deepagglit) { deepagg = false ; deepaggvar = false }
         stdidxAssignTy := a64_std_idx_path_ty(ibase, body_head, src, a, decls)
         stdidxAssignEl := a64_arrty_elem(src, stdidxAssignTy.s, stdidxAssignTy.n)
         mut stdidxassign := false
