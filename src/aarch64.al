@@ -3040,8 +3040,14 @@ a64_local_arrty_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
 ##                         scales it by the element words and adds the popped base back
 ## The LEAF load/store is a SINGLE word, gated on the leaf type being SCALAR — an aggregate leaf stays
 ## fail-loud. Mirrors lower.al's resolve_idx_field_place / arr_field_elem composition. FRAME-LOCAL roots
-## only (a param / bind / global root is rejected): those keep their existing shallow paths, and a deep
-## chain over one still traps rather than guessing an addressing mode.
+## only (an inferred homogeneous struct-array global is now also admitted; params, binds, and other global
+## roots remain rejected): those keep their existing shallow paths, and a deep chain over one still traps
+## rather than guessing an addressing mode.
+a64_ex_is_var := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) { Expr::Var(_s, _n) => { r = true } _ => {} }
+  r
+}
 
 ## The TYPE span of the place `e` — a struct name, a `[E; N]` array-type span, or a scalar type name.
 ## A root Var takes its LOCAL's struct type, else its DECLARED fixed-array type; a Field hop takes the
@@ -3064,8 +3070,18 @@ a64_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : 
     return r
   }
   if ex_is_index(e) {
-    bt := a64_place_ty(ex_index_base(e), body_head, src, a, decls)
-    if bt.n != 0 { r = a64_arrty_elem(src, bt.s, bt.n) }
+    ibase := ex_index_base(e)
+    ## An inferred ARRAY GLOBAL has no source `[E; N]` annotation to hand to a64_arrty_elem. Its
+    ## homogeneous StructLit initializer is the equivalent type oracle for the deep global-root path.
+    if a64_ex_is_var(ibase) and a64_is_array_global(decls, src, ex_var_ns(ibase), ex_var_nl(ibase)) {
+      if a64_alit_homog_slit(a64_global_value(decls, src, ex_var_ns(ibase), ex_var_nl(ibase)), src) {
+        r = a64_garr_elem_struct_span(decls, src, ex_var_ns(ibase), ex_var_nl(ibase))
+      }
+    }
+    if r.n == 0 {
+      bt := a64_place_ty(ibase, body_head, src, a, decls)
+      if bt.n != 0 { r = a64_arrty_elem(src, bt.s, bt.n) }
+    }
     return r
   }
   vns := ex_var_ns(e)
@@ -3084,12 +3100,20 @@ a64_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : 
 a64_place_idx_ok := fn(base : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   mut r := false
   if not a64_place_ok(base, body_head, src, params_head, pcount, a, decls) { return r }
-  bt := a64_place_ty(base, body_head, src, a, decls)
-  if bt.n == 0 { return r }
-  if arrty_semi(src, bt.s, bt.n) == 0 { return r }
-  et := a64_arrty_elem(src, bt.s, bt.n)
-  if et.n == 0 { return r }
-  if a64_tyname_words(src, et.s, et.n, a, decls) > 0 { r = true }
+  if a64_ex_is_var(base) and a64_is_array_global(decls, src, ex_var_ns(base), ex_var_nl(base)) {
+    if a64_alit_homog_slit(a64_global_value(decls, src, ex_var_ns(base), ex_var_nl(base)), src) {
+      etg := a64_garr_elem_struct_span(decls, src, ex_var_ns(base), ex_var_nl(base))
+      if etg.n != 0 and a64_tyname_words(src, etg.s, etg.n, a, decls) > 0 { r = true }
+    }
+  }
+  if not r {
+    bt := a64_place_ty(base, body_head, src, a, decls)
+    if bt.n == 0 { return r }
+    if arrty_semi(src, bt.s, bt.n) == 0 { return r }
+    et := a64_arrty_elem(src, bt.s, bt.n)
+    if et.n == 0 { return r }
+    if a64_tyname_words(src, et.s, et.n, a, decls) > 0 { r = true }
+  }
   r
 }
 
@@ -3126,6 +3150,7 @@ a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
   vnl := ex_var_nl(e)
   if vnl == 0 { return r }
   if param_find(params_head, src, vns, vnl, a) >= 0 { return r }
+  if a64_is_array_global(decls, src, vns, vnl) { r = true ; return r }
   pt := a64_place_ty(e, body_head, src, a, decls)
   if pt.n == 0 { return r }
   if a64_local_off(body_head, src, vns, vnl, pcount, a, decls) >= 0 { r = true }
@@ -3137,10 +3162,23 @@ a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
 ## to the popped base. Bounds vs the array type's STATIC element count, dropped under `unchecked` (CG-7);
 ## `b.lo` also traps a negative i64 index (a huge unsigned).
 emit_a64_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
-  bt := a64_place_ty(base, body_head, src, a, decls)
-  et := a64_arrty_elem(src, bt.s, bt.n)
-  estride := a64_arr_elem_stride_bytes(src, et.s, et.n, a, decls)
-  nel := a64_arrty_nel(src, bt.s, bt.n)
+  mut et := CSpan(s = 0, n = 0)
+  mut estride := i64(0)
+  mut nel := i64(0)
+  if a64_ex_is_var(base) and a64_is_array_global(decls, src, ex_var_ns(base), ex_var_nl(base)) {
+    gv := a64_global_value(decls, src, ex_var_ns(base), ex_var_nl(base))
+    if a64_alit_homog_slit(gv, src) {
+      et = a64_garr_elem_struct_span(decls, src, ex_var_ns(base), ex_var_nl(base))
+      if et.n != 0 { estride = a64_arr_elem_stride_bytes(src, et.s, et.n, a, decls) }
+      nel = a64_alit_nel(gv)
+    }
+  }
+  if et.n == 0 {
+    bt := a64_place_ty(base, body_head, src, a, decls)
+    et = a64_arrty_elem(src, bt.s, bt.n)
+    estride = a64_arr_elem_stride_bytes(src, et.s, et.n, a, decls)
+    nel = a64_arrty_nel(src, bt.s, bt.n)
+  }
   emit_a64_place_addr(base, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, "  str x0, [sp, #-16]!\n")
   emit_a64_expr(idx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -3167,8 +3205,16 @@ emit_a64_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
     emit_a64_place_idx_addr(ex_index_base(e), ex_index_idx(e), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   }
   if (not isf) and (not isi) {
-    voff := a64_local_off(body_head, src, ex_var_ns(e), ex_var_nl(e), pcount, a, decls)
-    push_str(sb, "  add x0, x29, #") ; push_int(sb, voff) ; push_str(sb, "\n")
+    vns := ex_var_ns(e)
+    vnl := ex_var_nl(e)
+    if a64_is_array_global(decls, src, vns, vnl) {
+      gname := str_at((src + vns), vnl)
+      push_str(sb, "  adrp x0, ") ; push_str(sb, gname) ; push_str(sb, "\n  add x0, x0, :lo12:") ; push_str(sb, gname) ; push_str(sb, "\n")
+    }
+    if not a64_is_array_global(decls, src, vns, vnl) {
+      voff := a64_local_off(body_head, src, vns, vnl, pcount, a, decls)
+      push_str(sb, "  add x0, x29, #") ; push_int(sb, voff) ; push_str(sb, "\n")
+    }
   }
 }
 
