@@ -4472,6 +4472,10 @@ run sret_trailing_local 31
 ## declared span `T`, which resolves to no struct → bound as a bare scalar) and an explicit `return` of a WIDE
 ## ENUM (routing checked ret_enum before ret_sret; a wide enum has both). Boundary: 7 words register, 8+ SRET.
 run gen_sret_wide_return 26
+run_rv64 gen_sret_wide_return 26
+## rv64 SRET call boundary: bare discard, eight-real-argument overflow after hidden a0, generic `-> T`,
+## and a generic call receiving a nested wide-SRET aggregate argument.
+run_rv64 rv64_sret_call_paths 67
 ## a generic type reference keeps only its HEAD in the AST (`Box`, with `(…)` left in src), and no seam ever
 ## handed a RESOLVED application span to subst_field_ty — so `Box(T)`'s field was sized as ONE word on both the
 ## callee's return and the caller's binding. With a struct type-arg the value read 0; with an ENUM type-arg the
