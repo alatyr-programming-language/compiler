@@ -2928,38 +2928,35 @@ wat_source_ident := fn(src : ptr(u8), i : usize) -> bool {
   (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
 }
 
-## Move backwards over whitespace and full-line `#`/`##` comments between an expression leaf and its
-## enclosing delimiter. An inline hash or ambiguous source span remains a conservative reject.
+## Find any line-comment marker before p on p's source line. Returning the hash position preserves all
+## code before it, including a comma or opening delimiter; callers then continue their own scan there.
+wat_source_comment_back := fn(src : ptr(u8), p : usize) -> usize {
+  mut line := p
+  while line > 0 and str_at((src + line - 1), 1) != "\n" { line = line - 1 }
+  mut i := line
+  while i < p {
+    if str_at((src + i), 1) == "#" { return i }
+    i = i + 1
+  }
+  p
+}
+
+## Move backwards over whitespace and any #/## line comments between an expression leaf and its
+## enclosing delimiter. Once a comment marker is found, resume immediately before the hash so code
+## before an inline comment remains visible to the comma/delimiter scan.
 wat_source_gap_back := fn(src : ptr(u8), p : usize) -> usize {
   mut r := p
   mut searching := true
   while searching {
     while r > 0 and wat_source_blank(src, r - 1) { r = r - 1 }
-    if r == 0 {
-      searching = false
+    comment := wat_source_comment_back(src, r)
+    if comment != r {
+      r = comment
     } else {
-      mut line := r
-      while line > 0 and str_at((src + line - 1), 1) != "\n" { line = line - 1 }
-      mut first := line
-      while first < r and wat_source_blank(src, first) { first = first + 1 }
-      if first < r and str_at((src + first), 1) == "#" {
-        r = line
-      } else {
-        searching = false
-      }
+      searching = false
     }
   }
   r
-}
-
-## In a reverse balance scan, skip a full comment line before inspecting src[q - 1]. The caller
-## repeats after moving to the line start, so fake brackets in `#`/`##` text never affect depth.
-wat_source_comment_line_back := fn(src : ptr(u8), p : usize) -> usize {
-  mut line := p
-  while line > 0 and str_at((src + line - 1), 1) != "\n" { line = line - 1 }
-  mut first := line
-  while first < p and wat_source_blank(src, first) { first = first + 1 }
-  if first < p and str_at((src + first), 1) == "#" { line } else { p }
 }
 
 ## The parser returns only the value node for a word-sized bitcast. Starting at that node's left leaf,
@@ -2984,9 +2981,9 @@ wat_erased_bitcast_at := fn(src : ptr(u8), pos : usize) -> bool {
   mut open := 0
   mut found := false
   while q > 0 and not found {
-    comment_line := wat_source_comment_line_back(src, q)
-    if comment_line != q {
-      q = comment_line
+    comment := wat_source_comment_back(src, q)
+    if comment != q {
+      q = comment
     } else {
       c := str_at((src + q - 1), 1)
       if c == ")" or c == "]" { depth = depth + 1 }
