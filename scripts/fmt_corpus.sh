@@ -379,6 +379,7 @@ spaced_value := fn() -> u64 {\
     -e '/^  indirect := apply(hex::encode, 40)$/d' \
     -e '/^  if direct == 41 and indirect == 41 { 42 } else { 0 }$/c\
   ## a comment ending in a path-looking separator ::\
+  s := "##"\
   x' "$PC/src/main.al"
   PCO1="$W/o/fn_value_qualified.package.comment.f1.al"
   PCO2="$W/o/fn_value_qualified.package.comment.f2.al"
