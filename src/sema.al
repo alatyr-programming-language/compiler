@@ -75,6 +75,11 @@ immutable_err := fn(s : usize) -> CheckErr { IMMUTABLE_DIAG_MARKER + s * 4 }
 ## values above remain byte-identical.
 LIMIT_DIAG_MARKER := 2305843009213693952
 limit_err := fn(s : usize, kind : usize) -> CheckErr { LIMIT_DIAG_MARKER + s * 8 + kind }
+## A distinct located diagnostic for the Types §4.6 scalar/brand conversion constructor arity rule.
+## Keep it between the existing ambiguous-call and comptime markers so every older CheckErr range
+## remains unchanged while check/build/emit surfaces can preserve the lower's established wording.
+SCALAR_CONVERSION_DIAG_MARKER := 5764607523034234880
+scalar_conversion_err := fn(s : usize) -> CheckErr { SCALAR_CONVERSION_DIAG_MARKER + s * 4 }
 
 ## A synthesized type: a tag (0 unknown/error, 1 int, 2 bool, 3 struct, 4 enum, 5 pointer,
 ## 6 str, 7 array) and, for a struct/enum, the type's name span `[ns, ns+nl)`.
@@ -4316,6 +4321,12 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## false reject. Stepped bools (the isolated `streq` dodges the `cmp-and-fn-call` mis-lower scar).
   ecs := expr_call_callee_span(e)
   cgen := callee_is_generic(decls, upto, src, ecs.s, ecs.n)
+  ## Types §4.6 — reject the scalar/brand constructor shape before any consumer can read arg 0.
+  ## This is shared by ordinary checking and the private `compiles` transaction; the latter snapshots
+  ## the sticky diagnostic and turns the same invalid expression into `false` without emitting.
+  if ecs.n != 0 and sema_scalar_conversion_arity_bad(e, decls, src) {
+    mark_failed(locals, scalar_conversion_err(ecs.s))
+  }
   ## A builtin numeric conversion from a string is outside the conversion lattice. Keep this guard on
   ## the shared pre-match path so a direct call and the private `compiles` transaction observe the same
   ## rejection; the frozen seed may otherwise skip the payload-heavy Call arm and leave it unknown.
@@ -7772,6 +7783,17 @@ sema_conv_kind := fn(name : str) -> i64 {
   if name == "f64" or name == "f32" { return 1 }
   if name == "usize" or name == "isize" or name == "u8" or name == "u16" or name == "u32" or name == "u64" or name == "i8" or name == "i16" or name == "i32" or name == "i64" { return 0 }
   return 0 - 1
+}
+## Types §4.6 — a scalar/brand conversion constructor is exactly `T(v)`. This mirrors the lower's
+## dispatch boundary: the built-in integer/float names use `sema_conv_kind`, while `brand_underlying`
+## recognises bool/char and nominal brands. Ordinary calls are deliberately untouched, including a
+## zero-argument user function whose name does not resolve as one of these conversion constructors.
+sema_scalar_conversion_arity_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 or expr_call_arity(e) == 1 { return false }
+  nm := str_at((src + cs.s), cs.n)
+  if sema_conv_kind(nm) >= 0 { return true }
+  brand_underlying(decls, src, cs.s, cs.n).n != 0
 }
 ## Is `nm` a built-in SCALAR type spelling (a recognized concrete scalar — never a user type-param name)?
 ## The kernel scalars are NOT brands (only bool/char/f32/f64 are), so `brand_underlying` cannot see them;
