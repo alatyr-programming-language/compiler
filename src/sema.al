@@ -6432,6 +6432,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
       Stmt::IndexAssign(ib, ii, iv, nx) => {
         ## The base is a write place, not a value read. A simple local array may still be unreadied here.
         cib := check_expr(ib, decls, upto, src, a, locals, cnt)?
+        ## Types §6.4 / Assembly §3 / issue #5 — the write target has the same statically provable
+        ## bound as an `Expr::Index` read, but its base and index are stored as separate Stmt fields.
+        ## Reuse the exact direct-local fixed-array test so zero-length and ordinary fixed-array OOB
+        ## writes reject at the index literal while dynamic, nonliteral, global, and aggregate paths
+        ## remain on their existing deferred/runtime paths.
+        if fixed_array_index_oob(ib, ii, src, locals, cnt) {
+          return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(ii)))
+        }
         cii := check_expr_da(ii, decls, upto, src, a, locals, cnt, da)?
         if cii.tag != 0 and cii.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(ii, a), 0)) }
         civ := check_expr_da(iv, decls, upto, src, a, locals, cnt, da)?
@@ -6475,6 +6483,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## The indexed base is a write place (`a[i].f`), not a whole-element read. Constant-index local
         ## fixed arrays of simple structs are tracked field-by-field; dynamic indices stay conservative.
         cfa := check_expr(fia, decls, upto, src, a, locals, cnt)?
+        ## `Stmt::IndexFieldAssign` carries the direct array base and index separately, just like
+        ## `Stmt::IndexAssign`; apply the same bounded check before the field-specific DA bookkeeping.
+        if fixed_array_index_oob(fia, fii, src, locals, cnt) {
+          return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(fii)))
+        }
         cfi := check_expr_da(fii, decls, upto, src, a, locals, cnt, da)?
         if cfi.tag != 0 and cfi.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(fii, a), 0)) }
         cfv := check_expr_da(fiv, decls, upto, src, a, locals, cnt, da)?

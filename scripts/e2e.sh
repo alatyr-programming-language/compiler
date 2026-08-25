@@ -4620,6 +4620,18 @@ check_build_located reject_p1_bytes_zero_u8_index 6 "invalid"
 emit_reject_has wat reject_p1_bytes_zero_u8_index "invalid at line"
 emit_reject_has aarch64 reject_p1_bytes_zero_u8_index "invalid at line"
 emit_reject_has riscv64 reject_p1_bytes_zero_u8_index "invalid at line"
+check_build_located reject_p1_bytes_zero_u8_index_assign 4 "invalid"
+emit_reject_has wat reject_p1_bytes_zero_u8_index_assign "invalid at line"
+emit_reject_has aarch64 reject_p1_bytes_zero_u8_index_assign "invalid at line"
+emit_reject_has riscv64 reject_p1_bytes_zero_u8_index_assign "invalid at line"
+check_build_located reject_p1_fixed_u64_index_assign 4 "invalid"
+emit_reject_has wat reject_p1_fixed_u64_index_assign "invalid at line"
+emit_reject_has aarch64 reject_p1_fixed_u64_index_assign "invalid at line"
+emit_reject_has riscv64 reject_p1_fixed_u64_index_assign "invalid at line"
+check_build_located reject_p1_struct_index_field_assign 5 "invalid"
+emit_reject_has wat reject_p1_struct_index_field_assign "invalid at line"
+emit_reject_has aarch64 reject_p1_struct_index_field_assign "invalid at line"
+emit_reject_has riscv64 reject_p1_struct_index_field_assign "invalid at line"
 ## `alatyr run` reported a SIGNAL-terminated program as exit 0 (an unconditional WEXITSTATUS), so a trapping
 ## program looked like a clean success from the user-facing command. Covers SIGILL (132) and SIGFPE (136); a
 ## normal exit still reports its real status (every other `run …` line here proves that).
