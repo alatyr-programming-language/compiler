@@ -27,6 +27,8 @@ how this repository proves itself, not part of what it ships.
 
 - Fixed path dependencies whose source tree contains `lib/`: their modules now retain the dependency
   alias instead of being mistaken for ambient standard-library modules.
+- AArch64 now supports scalar nested field access through inferred homogeneous struct-array locals
+  with runtime indices.
 
 First public release in preparation. Nothing is tagged yet; the entries below start once it is.
 
