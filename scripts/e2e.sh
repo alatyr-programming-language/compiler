@@ -603,8 +603,11 @@ check_accept() { # name
 build_reject() { # name
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
-  "$CC" -o "$T/e2e_$1.out" "$src" >/dev/null 2>&1; got=$?
-  if [ "$got" != 0 ]; then echo "ok   $1: build rejected"; else echo "FAIL $1: build succeeded, want fail-loud"; fail=1; fi
+  out="$T/e2e_$1.out"
+  "$CC" -o "$out" "$src" >/dev/null 2>&1; got=$?
+  if [ "$got" = 0 ]; then echo "FAIL $1: build succeeded, want fail-loud"; fail=1; return; fi
+  if [ -e "$out" ]; then echo "FAIL $1: rejected but left an output artifact"; fail=1; return; fi
+  echo "ok   $1: build rejected"
 }
 
 # Assert the BUILD fails with a SPECIFIC diagnostic — stronger than `build_reject`, which a fail-loud
@@ -633,9 +636,11 @@ emit_reject_has() { # backend, name, needle
 build_reject_has() { # name, needle
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
+  out="$T/e2e_$1.out"
   err="$T/e2e_$1.err"
-  "$CC" -o "$T/e2e_$1.out" "$src" >/dev/null 2>"$err"; got=$?
+  "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
   if [ "$got" = 0 ]; then echo "FAIL $1: build succeeded, want a located reject"; fail=1; return; fi
+  if [ -e "$out" ]; then echo "FAIL $1: rejected but left an output artifact"; fail=1; return; fi
   if grep -qF "$2" "$err"; then echo "ok   $1: build rejected with the diagnostic"
   else echo "FAIL $1: rc=$got but the diagnostic is missing [$2]"; fail=1; fi
 }
@@ -2671,7 +2676,11 @@ run global_enum_array_rw 42
 run global_enum_array_disc_repr 42
 ## the shapes that stay FAIL-LOUD rather than take one word from mid-element: an element in VALUE position,
 ## a call/by-ref/global-element/if-match RHS, and `for x in GE`.
-build_reject_has global_enum_array_value_pos_reject "ENUM-element ARRAY GLOBAL element"
+build_reject_has global_enum_array_value_pos_reject "ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly) at line 9 in global_enum_array_value_pos_reject"
+check_reject_has global_enum_array_value_pos_reject "ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly) at line 9 in global_enum_array_value_pos_reject"
+emit_reject_has wat global_enum_array_value_pos_reject "ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly) at line 9 in global_enum_array_value_pos_reject"
+emit_reject_has aarch64 global_enum_array_value_pos_reject "ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly) at line 9 in global_enum_array_value_pos_reject"
+emit_reject_has riscv64 global_enum_array_value_pos_reject "ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly) at line 9 in global_enum_array_value_pos_reject"
 build_reject_has global_enum_array_call_rhs_reject "module-level ENUM-element array GLOBAL"
 build_reject_has global_enum_array_for_in_reject "for x in <ENUM-element ARRAY GLOBAL>"
 run float_global 42

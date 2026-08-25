@@ -3138,6 +3138,9 @@ DIAG_GLOBAL_AGG_MARKER := 6341068275337658368
 ## Types §6.1 / Memory — the explicit standard-byte tuple global has a separate located diagnostic so
 ## check/build/emit surfaces can share the lower's existing ABI-boundary wording.
 DIAG_STANDARD_TUPLE_GLOBAL_MARKER := 6629298651489350912
+## Shared with sema::enum_global_array_err: a direct enum-element array global read in a generic value
+## position cannot use the backend's one-word Index path. Keep the class between tuple globals and CT.
+DIAG_ENUM_GLOBAL_ARRAY_MARKER := 6773413839565216384
 ## CT-12 / Comptime §2.6 — the COMPTIME guard-failure class (shared with sema::comptime_err). Above
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
@@ -3238,7 +3241,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   immutable := code >= DIAG_IMMUTABLE_MARKER
   ctg := code >= DIAG_CT_MARKER and code < DIAG_IMMUTABLE_MARKER
   gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
-  tuple_global := code >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and code < DIAG_CT_MARKER
+  enum_global_array := code >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and code < DIAG_CT_MARKER
+  tuple_global := code >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and code < DIAG_ENUM_GLOBAL_ARRAY_MARKER
   conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_GLOBAL_AGG_MARKER
   ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := code
@@ -3258,6 +3262,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if gagg {
     raw = code - DIAG_GLOBAL_AGG_MARKER
     span = raw / 4
+  } else if enum_global_array {
+    raw = code - DIAG_ENUM_GLOBAL_ARRAY_MARKER
+    span = raw / 4
   } else if tuple_global {
     raw = code - DIAG_STANDARD_TUPLE_GLOBAL_MARKER
     span = raw / 4
@@ -3276,7 +3283,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or tuple_global {
+  if span > 0 or tuple_global or enum_global_array {
     if limit {
       wk0 := rt::push_str(db, "@limits(")
       wk1 := rt::push_str(db, limit_name(kind))
@@ -3284,6 +3291,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     } else if immutable { wki := rt::push_str(db, "immutable binding") }
     else if ctg { wkc := rt::push_str(db, comptime_guard_name(kind)) }
     else if gagg { wkg := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
+    else if enum_global_array { wkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if tuple_global { wktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if conv { wksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { wk := rt::push_str(db, "ambiguous call") }
@@ -5360,7 +5368,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   immutable := r >= DIAG_IMMUTABLE_MARKER
   ctg := r >= DIAG_CT_MARKER and r < DIAG_IMMUTABLE_MARKER
   gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
-  tuple_global := r >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and r < DIAG_CT_MARKER
+  enum_global_array := r >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and r < DIAG_CT_MARKER
+  tuple_global := r >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and r < DIAG_ENUM_GLOBAL_ARRAY_MARKER
   conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_GLOBAL_AGG_MARKER
   ambig := r >= DIAG_AMBIG_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := r
@@ -5379,6 +5388,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     span = raw / 8
   } else if gagg {
     raw = r - DIAG_GLOBAL_AGG_MARKER
+    span = raw / 4
+  } else if enum_global_array {
+    raw = r - DIAG_ENUM_GLOBAL_ARRAY_MARKER
     span = raw / 4
   } else if tuple_global {
     raw = r - DIAG_STANDARD_TUPLE_GLOBAL_MARKER
@@ -5399,7 +5411,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or tuple_global or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or tuple_global or enum_global_array or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
       else {
@@ -5410,6 +5422,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     } else if immutable { dwki := rt::push_str(db, "immutable binding") }
     else if ctg { dwkc := rt::push_str(db, comptime_guard_name(kind)) }
     else if gagg { dwkga := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
+    else if enum_global_array { dwkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if tuple_global { dwktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if conv { dwksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { dwk := rt::push_str(db, "ambiguous call") }

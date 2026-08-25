@@ -90,6 +90,11 @@ global_agg_err := fn(s : usize) -> CheckErr { GLOBAL_AGG_DIAG_MARKER + s * 4 }
 ## byte-identical while check/build/emit surfaces can share the lower's established wording.
 STANDARD_TUPLE_GLOBAL_DIAG_MARKER := 6629298651489350912
 standard_tuple_global_err := fn(s : usize) -> CheckErr { STANDARD_TUPLE_GLOBAL_DIAG_MARKER + s * 4 }
+## A distinct located diagnostic for an ENUM-element ARRAY GLOBAL element consumed as a value. Keep it
+## between the standard-tuple-global and comptime classes so every older CheckErr range remains stable
+## while check/build/emit surfaces can reject the width-blind generic value load consistently.
+ENUM_GLOBAL_ARRAY_DIAG_MARKER := 6773413839565216384
+enum_global_array_err := fn(s : usize) -> CheckErr { ENUM_GLOBAL_ARRAY_DIAG_MARKER + s * 4 }
 
 ## A synthesized type: a tag (0 unknown/error, 1 int, 2 bool, 3 struct, 4 enum, 5 pointer,
 ## 6 str, 7 array) and, for a struct/enum, the type's name span `[ns, ns+nl)`.
@@ -1730,13 +1735,24 @@ da_bad_expr := fn(e : ptr(Expr), da : ptr(DA), src : ptr(u8)) -> bool {
   }
 }
 
-check_expr_da := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize, da : ptr(DA)) -> Result(Ty, CheckErr) {
+check_expr_da_mode := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize, da : ptr(DA), allow_root_enum_array : bool) -> Result(Ty, CheckErr) {
+  egab := sema_enum_global_array_value_bad(e, decls, upto, src, locals, nloc, a, allow_root_enum_array)
+  if egab != 0 { return Result(Ty, CheckErr).Err(enum_global_array_err(egab)) }
   s3abad := s3a_expr_bad(e, decls, upto, src, a, locals, nloc)
   if s3abad != 0 { return Result(Ty, CheckErr).Err(located_err(s3abad)) }
   if da_bad_expr(e, da, src) { return Result(Ty, CheckErr).Err(unbound_err(s_of(e, a), 0)) }
   bad_capture := sema_plain_fn_capture_struct(e, decls, upto, src, locals, nloc, a)
   if bad_capture != 0 { return Result(Ty, CheckErr).Err(mismatch_err(bad_capture, 0)) }
   check_expr(e, decls, upto, src, a, locals, nloc)
+}
+check_expr_da := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize, da : ptr(DA)) -> Result(Ty, CheckErr) {
+  check_expr_da_mode(e, decls, upto, src, a, locals, nloc, da, false)
+}
+## A direct enum-array element is a supported WHOLE-VALUE place only at the root of an inferred
+## binding (`e := GE[i]`) or a match scrutinee. Nested consumers and typed/reassigned bindings still
+## run the ordinary value-position fence.
+check_expr_da_allow_enum_array_root := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize, da : ptr(DA)) -> Result(Ty, CheckErr) {
+  check_expr_da_mode(e, decls, upto, src, a, locals, nloc, da, true)
 }
 ## Poison the check: set the sticky failure bit, and — the first time a LOCATED code arrives (a
 ## `CheckErr` whose source span `code / 4` is nonzero) — record it in `fspan` so the diagnostic can
@@ -6256,8 +6272,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## poison via `mark_failed` (an early `return` mid-arm mis-lowers the arm's later logic).
         if call_atomic_ordering_bad(v, src, a) { mark_failed(locals, mismatch_err(s_of(v, a), 0)) }
         if expr_has_unbound(v, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_err(s_of(v, a), 0)) }
-        tv := check_expr_da(v, decls, upto, src, a, locals, cnt, da)?
         ann := local_type_span(src, ns, nl)
+        ## The lower has one deliberate whole-element consumer for this shape: an inferred local
+        ## binding (`e := GE[i]`). An annotation or a reassignment may select a narrower/existing
+        ## slot, so keep those in the ordinary value-position fence rather than letting the later
+        ## aggregate copy outrun the destination's proven layout.
+        tv := check_expr_da_mode(v, decls, upto, src, a, locals, cnt, da,
+          not assign_is_reassign(src, ns, nl) and ann.n == 0)?
         ## FN-11 (Functions §1.6) — a `dyn fn(T…)->R` value is the type-erased two-word {code, env} fat
         ## pair, and the ONLY construction form the spec admits is `dyn_over(ptr(mut <store>))` over a
         ## NAMED PLACE holding a static closure (the env is explicit storage the `dyn` borrows, I3). Any
@@ -6559,7 +6580,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cur = nx
       }
       Stmt::Match(sc, ah, nx) => {
-        cs := check_expr_da(sc, decls, upto, src, a, locals, cnt, da)?
+        cs := check_expr_da_allow_enum_array_root(sc, decls, upto, src, a, locals, cnt, da)?
         mut arm := ah
         while arm != 0 {
           am := deref(arm_p(arm))
@@ -6772,7 +6793,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
         cur = nx
       }
-      Stmt::Break(_bv, _bd, nx) => { cur = nx }
+      Stmt::Break(_bv, _bd, nx) => {
+        egab0 := sema_enum_global_array_value_bad(_bv, decls, upto, src, locals, cnt, a, false)
+        if egab0 != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egab0)) }
+        cur = nx
+      }
       Stmt::Continue(_cd, nx) => { cur = nx }
       ## A bare expression statement (a call / `?` for effect): type-check the expression for
       ## well-formedness; its result is discarded, so it introduces no local.
@@ -6788,12 +6813,25 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
       ## unselected target-absent branch is not resolved/checked (§3.2). Without these arms the match had
       ## no case for them and no wildcard, so `cur` never advanced → `check` INFINITE-LOOPED on any
       ## `comptime if` (e.g. `arch_intrinsic.al`, num.al's operator shape) — a real hang, not just a gap.
-      Stmt::CompIf(cc, cthen, celse, nx) => { cur = nx }
+      Stmt::CompIf(cc, cthen, celse, nx) => {
+        ## The ordinary checker intentionally skips comptime bodies because target folding selects them
+        ## later. The enum-array safety boundary is target-independent, however: whichever target makes
+        ## an arm live must still reject a width-blind `GE[i]` value before its backend emits code.
+        egcc := sema_enum_global_array_value_bad(cc, decls, upto, src, locals, cnt, a, false)
+        if egcc != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcc)) }
+        egct := sema_enum_global_array_value_bad_stmts(cthen, decls, upto, src, locals, cnt, a)
+        if egct != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egct)) }
+        egce := sema_enum_global_array_value_bad_stmts(celse, decls, upto, src, locals, cnt, a)
+        if egce != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egce)) }
+        cur = nx
+      }
       Stmt::CompFor(cvs, cvl, civ, cb, nx) => {
         if civ == 0 and sema_compfor_is_fields(src, cvs, cvl) {
           bad := sema_bad_typeinfo_field_stmts(cb, src, cvs, cvl, a)
           if bad != 0 { return Result(usize, CheckErr).Err(located_err(bad)) }
         }
+        egcf := sema_enum_global_array_value_bad_stmts(cb, decls, upto, src, locals, cnt, a)
+        if egcf != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcf)) }
         cur = nx
       }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
@@ -6803,9 +6841,37 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if expr_is_num_lit(rlo) and expr_is_num_lit(rhi) and expr_num_lit_val(rhi) - expr_num_lit_val(rlo) > 100000 {
           return Result(usize, CheckErr).Err(located_err(s_of(rlo, a)))
         }
+        mut egcr := sema_enum_global_array_value_bad(rlo, decls, upto, src, locals, cnt, a, false)
+        if egcr == 0 { egcr = sema_enum_global_array_value_bad(rhi, decls, upto, src, locals, cnt, a, false) }
+        if egcr == 0 { egcr = sema_enum_global_array_value_bad_stmts(rb, decls, upto, src, locals, cnt, a) }
+        if egcr != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcr)) }
         cur = nx
       }
-      Stmt::CompMatch(cmsc, cmah, nx) => { cur = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => {
+        mut egcm := sema_enum_global_array_value_bad(cmsc, decls, upto, src, locals, cnt, a, true)
+        mut armc := cmah
+        while armc != 0 and egcm == 0 {
+          amc := deref(arm_p(armc))
+          basec := cnt
+          mut arm_cntc := cnt
+          mut bdc := amc.binds_head
+          while bdc != 0 {
+            bnsc := bnd_ns(bdc)
+            bnlc := bnd_nl(bdc)
+            if not local_in(locals, arm_cntc, src, bnsc, bnlc) {
+              lvec_push(deref(locals), Local(ns = bnsc, nl = bnlc, tag = 0, prov = 0, tns = 0, tnl = 0))
+              arm_cntc += 1
+            }
+            bdc = bnd_next(bdc)
+          }
+          egcm = sema_enum_global_array_value_bad(amc.body, decls, upto, src, locals, arm_cntc, a, false)
+          if egcm == 0 { egcm = sema_enum_global_array_value_bad_stmts(amc.body_stmts, decls, upto, src, locals, arm_cntc, a) }
+          lvec_truncate(deref(locals), basec)
+          armc = amc.next
+        }
+        if egcm != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcm)) }
+        cur = nx
+      }
     }
   }
   Result(usize, CheckErr).Ok(cnt)
@@ -7653,6 +7719,8 @@ check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a 
     mut failed_word := 0
     mut fspan_word := 0
     mut none := lvec_new(a, 1, ptr(failed_word), ptr(fspan_word), d.mod_start, d.mod_len)
+    egab := sema_enum_global_array_value_bad(d.value, decls, upto, src, ptr(none), 0, a, false)
+    if egab != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egab)) }
     vr0 := sema_vis_expr(d.value, decls, src, d.mod_start, d.mod_len, ptr(none), 0, a)
     if vr0 != 0 { return Result(usize, CheckErr).Err(located_err(vr0)) }
     rv := check_expr(d.value, decls, upto, src, a, ptr(none), 0)
@@ -9872,6 +9940,356 @@ sema_global_ref_bad := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
   }
   if any and visible == false { return g.ns }
   0
+}
+
+## True when `d` is a storage-backed module value whose initializer is an array whose first element is an
+## enum value. The parser's checked two-pass path represents the first element as `EnumLit`, matching the
+## lower's `global_arr_enum` classifier and keeping the declaration/read/write layout in one shape.
+sema_enum_global_array_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> bool {
+  if not sema_is_global_decl(d, src) { return false }
+  first := expr_array_first(d.value)
+  if unchecked bitcast(usize, first) == 0 { return false }
+  ep := expr_enum_parts(first)
+  ep.is_enum and enum_decl_of(decls, src, ep.es, ep.el) >= 0
+}
+
+## Whether the enum-array declaration has the exact first-element shape that lower::global_arr_enum can
+## consume. This intentionally mirrors the classifier above instead of treating a source-level nullary
+## variant spelling as a separate AST shape: the checked parser pass has already normalized it to `EnumLit`.
+sema_enum_global_array_decl_lowerable := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  if not sema_is_global_decl(d, src) { return false }
+  first := expr_array_first(d.value)
+  if unchecked bitcast(usize, first) == 0 { return false }
+  ep := expr_enum_parts(first)
+  ep.is_enum and enum_decl_of(decls, src, ep.es, ep.el) >= 0
+}
+
+## Resolve a bare alias/projection binding to the qualified value it names. The lower follows this
+## binding before selecting a module global; the safety fence must do the same or `(GE) := geo` / `GE[i]`
+## would bypass the common reject and reach the backend's late guard. `qual = false` means the name is not
+## a value binding (a plain module alias or an ordinary local is deliberately left to its own resolver).
+sema_enum_global_array_binding := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, cs : usize, cl : usize) -> SemaGRef {
+  z := SemaGRef(ms = 0, ml = 0, ns = 0, nl = 0, qual = false)
+  if n == 0 or cl == 0 { return z }
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  while i < cnt {
+    b := deref(decl_get(decls, i))
+    if b.is_fn == false and b.kind == 0 and b.arity == 0 and b.ret_tl != 0
+       and sema_mod_seg_eq(src, b.mod_start, b.mod_len, cs, cl) {
+      if b.name_len != 0 and streq(src, b.name_start, b.name_len, s, n) {
+        g := sema_gref_split(src, b.ret_ts, b.ret_tl)
+        if g.qual { return g }
+      } else if b.name_len == 0 {
+        ph := sema_projection_head_for(src, b.ret_ts, b.ret_tl, s, n)
+        if ph.qual { return SemaGRef(ms = ph.ms, ml = ph.ml, ns = s, nl = n, qual = true) }
+      }
+    }
+    i += 1
+  }
+  z
+}
+
+## Return the base-name span of a visible enum-array global used through `base[index]`, or 0 when the
+## base is local/non-global. `allow_root` admits only the lowerable whole-element root forms; a
+## Qualified and bare names follow the same module visibility rules as the existing global-reference
+## walk; an inaccessible sibling is left to that walk's own diagnostic.
+sema_enum_global_array_use_bad := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, allow_root : bool) -> usize {
+  bv := expr_var_span(base)
+  if bv.n == 0 { return 0 }
+  if nloc != 0 and local_in(locals, nloc, src, bv.s, bv.n) { return 0 }
+  g := sema_gref_split(src, bv.s, bv.n)
+  if g.nl == 0 { return 0 }
+  cs := (deref(locals)).mod_s
+  cl := (deref(locals)).mod_l
+  cnt := rt::vec_len(deref(decls))
+  if not g.qual {
+    ## A named alias or listed projection wins over same-name globals in the current module. Resolve it
+    ## before the generic `sema_bound_name_in_module` escape, then apply the target declaration's own
+    ## visibility and enum-array classification exactly as the lower's binding_head_span path does.
+    ba := sema_enum_global_array_binding(decls, src, g.ns, g.nl, cs, cl)
+    if ba.qual {
+      mut ai := 0
+      while ai < cnt {
+        ad := deref(decl_get(decls, ai))
+        if sema_enum_global_array_decl(ad, decls, upto, src)
+           and streq(src, ad.name_start, ad.name_len, ba.ns, ba.nl)
+           and sema_mod_seg_eq(src, ad.mod_start, ad.mod_len, ba.ms, ba.ml)
+           and sema_decl_visible_from(src, ad, cs, cl) {
+          if not allow_root or not sema_enum_global_array_decl_lowerable(ad, decls, src) { return bv.s }
+          return 0
+        }
+        ai += 1
+      }
+      ## The binding is known, but its target is not an enum-array global. Do not fall through to a
+      ## same-name global from another module; the alias already determines what the source means.
+      return 0
+    }
+    if sema_bound_name_in_module(decls, src, g.ns, g.nl, cs, cl) { return 0 }
+  }
+  mut best := 0 - 1
+  if not g.qual {
+    mut bi := 0
+    while bi < cnt {
+      bd := deref(decl_get(decls, bi))
+      if sema_is_global_decl(bd, src) and streq(src, bd.name_start, bd.name_len, g.ns, g.nl) {
+        br := sema_mod_anc_rank(src, bd.mod_start, bd.mod_len, cs, cl)
+        if br > best { best = br }
+      }
+      bi += 1
+    }
+  }
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if sema_enum_global_array_decl(d, decls, upto, src) and streq(src, d.name_start, d.name_len, g.ns, g.nl) {
+      mut visible := false
+      if g.qual {
+        if sema_mod_seg_eq(src, d.mod_start, d.mod_len, g.ms, g.ml) and sema_decl_visible_from(src, d, cs, cl) { visible = true }
+      } else if sema_mod_anc_rank(src, d.mod_start, d.mod_len, cs, cl) == best { visible = true }
+      if visible and (not allow_root or not sema_enum_global_array_decl_lowerable(d, decls, src)) { return bv.s }
+    }
+    i += 1
+  }
+  0
+}
+
+## Context-aware structural walk for the global enum-array boundary. `allow_root` is used only for the
+## supported whole-element root forms: a binding RHS, a write place, or a match scrutinee. Every nested
+## expression is a VALUE consumer, so `f(GE[i])`, arithmetic, returns, and branch values are rejected
+## before a backend can apply its width-blind one-word Index path.
+sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena), allow_root : bool) -> usize {
+  if unchecked bitcast(usize, e) == 0 { return 0 }
+  ib := expr_index_base(e)
+  if unchecked bitcast(usize, ib) != 0 {
+    mut bad := sema_enum_global_array_value_bad(ib, decls, upto, src, locals, nloc, a, false)
+    if bad == 0 { bad = sema_enum_global_array_use_bad(ib, decls, upto, src, locals, nloc, allow_root) }
+    if bad == 0 { bad = sema_enum_global_array_value_bad(expr_index_index(e), decls, upto, src, locals, nloc, a, false) }
+    return bad
+  }
+  emp := expr_match_parts(e)
+  if emp.is_match {
+    mut bad := sema_enum_global_array_value_bad(emp.scrut, decls, upto, src, locals, nloc, a, true)
+    mut arm := emp.head
+    while arm != 0 and bad == 0 {
+      am := deref(arm_p(arm))
+      arm_base := nloc
+      mut arm_cnt := nloc
+      mut bd := am.binds_head
+      while bd != 0 {
+        bnns := bnd_ns(bd)
+        bnnl := bnd_nl(bd)
+        if not local_in(locals, arm_cnt, src, bnns, bnnl) {
+          lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+          arm_cnt += 1
+        }
+        bd = bnd_next(bd)
+      }
+      bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
+      if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
+      lvec_truncate(deref(locals), arm_base)
+      arm = am.next
+    }
+    return bad
+  }
+  ah0 := expr_call_args_head(e)
+  if ah0 != 0 {
+    mut g := ah0
+    mut bad0 := 0
+    while g != 0 and bad0 == 0 {
+      ga := deref(arg_p(g))
+      bad0 = sema_enum_global_array_value_bad(ga.e, decls, upto, src, locals, nloc, a, false)
+      g = ga.next
+    }
+    return bad0
+  }
+  match deref(e) {
+    Expr::Bin(op, l, r) => {
+      bad1 := sema_enum_global_array_value_bad(l, decls, upto, src, locals, nloc, a, false)
+      if bad1 != 0 { return bad1 }
+      sema_enum_global_array_value_bad(r, decls, upto, src, locals, nloc, a, false)
+    }
+    Expr::If(c, t, f) => {
+      bad2 := sema_enum_global_array_value_bad(c, decls, upto, src, locals, nloc, a, false)
+      if bad2 != 0 { return bad2 }
+      bad3 := sema_enum_global_array_value_bad(t, decls, upto, src, locals, nloc, a, false)
+      if bad3 != 0 { return bad3 }
+      sema_enum_global_array_value_bad(f, decls, upto, src, locals, nloc, a, false)
+    }
+    Expr::StructLit(ss, sl, nf, fh) => {
+      mut g1 := fh
+      mut bad4 := 0
+      while g1 != 0 and bad4 == 0 { ga1 := deref(arg_p(g1)); bad4 = sema_enum_global_array_value_bad(ga1.e, decls, upto, src, locals, nloc, a, false); g1 = ga1.next }
+      bad4
+    }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => {
+      mut g2 := ph
+      mut bad5 := 0
+      while g2 != 0 and bad5 == 0 { ga2 := deref(arg_p(g2)); bad5 = sema_enum_global_array_value_bad(ga2.e, decls, upto, src, locals, nloc, a, false); g2 = ga2.next }
+      bad5
+    }
+    Expr::Field(base, fs, fl) => { sema_enum_global_array_value_bad(base, decls, upto, src, locals, nloc, a, false) }
+    Expr::AddrOf(p) => { sema_enum_global_array_value_bad(p, decls, upto, src, locals, nloc, a, false) }
+    Expr::Deref(p) => { sema_enum_global_array_value_bad(p, decls, upto, src, locals, nloc, a, false) }
+    Expr::ArrayLit(ne, eh) => {
+      mut g3 := eh
+      mut bad6 := 0
+      while g3 != 0 and bad6 == 0 { ga3 := deref(arg_p(g3)); bad6 = sema_enum_global_array_value_bad(ga3.e, decls, upto, src, locals, nloc, a, false); g3 = ga3.next }
+      bad6
+    }
+    Expr::Try(inner) => { sema_enum_global_array_value_bad(inner, decls, upto, src, locals, nloc, a, false) }
+    Expr::Slice(base, lo, hi) => {
+      bad7 := sema_enum_global_array_value_bad(base, decls, upto, src, locals, nloc, a, false)
+      if bad7 != 0 { return bad7 }
+      bad8 := sema_enum_global_array_value_bad(lo, decls, upto, src, locals, nloc, a, false)
+      if bad8 != 0 { return bad8 }
+      sema_enum_global_array_value_bad(hi, decls, upto, src, locals, nloc, a, false)
+    }
+    Expr::CompField(base, ix) => {
+      bad9 := sema_enum_global_array_value_bad(base, decls, upto, src, locals, nloc, a, false)
+      if bad9 != 0 { return bad9 }
+      sema_enum_global_array_value_bad(ix, decls, upto, src, locals, nloc, a, false)
+    }
+    Expr::Unchecked(inner) => { sema_enum_global_array_value_bad(inner, decls, upto, src, locals, nloc, a, false) }
+    Expr::Lambda(pos, ph, rts, rtl, bh, value) => {
+      lambda_base := nloc
+      mut lambda_cnt := nloc
+      mut lp := ph
+      while lp != 0 {
+        pm := deref(param_p(lp))
+        if not local_in(locals, lambda_cnt, src, pm.ns, pm.nl) {
+          lvec_push(deref(locals), Local(ns = pm.ns, nl = pm.nl, tag = 0, prov = 0, tns = 0, tnl = 0))
+          lambda_cnt += 1
+        }
+        lp = pm.next
+      }
+      bad10 := sema_enum_global_array_value_bad_stmts(bh, decls, upto, src, locals, lambda_cnt, a)
+      if bad10 != 0 { lvec_truncate(deref(locals), lambda_base); return bad10 }
+      bad11 := sema_enum_global_array_value_bad(value, decls, upto, src, locals, lambda_cnt, a, false)
+      lvec_truncate(deref(locals), lambda_base)
+      bad11
+    }
+    Expr::Bitcast(inner, ts, tl) => { sema_enum_global_array_value_bad(inner, decls, upto, src, locals, nloc, a, false) }
+    Expr::Loop(body) => { sema_enum_global_array_value_bad_stmts(body, decls, upto, src, locals, nloc, a) }
+    _ => { 0 }
+  }
+}
+
+sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+  saved_len := deref(locals).len
+  saved_pcnt := deref(locals).pcnt
+  mut cur := head
+  mut bad := 0
+  mut cnt := nloc
+  while cur != 0 and bad == 0 {
+    st := deref(stmt_p(Stmt, cur))
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        ann := local_type_span(src, ns, nl)
+        allow := not assign_is_reassign(src, ns, nl) and ann.n == 0
+        bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, allow)
+        if bad == 0 and not assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) {
+          lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = 0, prov = 0, tns = 0, tnl = 0))
+          cnt += 1
+        }
+      }
+      Stmt::While(c, b, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) } }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
+      Stmt::Return(v, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
+      Stmt::If(c, th, el, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(th, decls, upto, src, locals, cnt, a) }; if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(el, decls, upto, src, locals, cnt, a) } }
+      Stmt::Match(sc, ah, nx) => {
+        bad = sema_enum_global_array_value_bad(sc, decls, upto, src, locals, cnt, a, true)
+        mut arm := ah
+        while arm != 0 and bad == 0 {
+          am := deref(arm_p(arm))
+          arm_base := cnt
+          mut arm_cnt := cnt
+          mut bd := am.binds_head
+          while bd != 0 {
+            bnns := bnd_ns(bd)
+            bnnl := bnd_nl(bd)
+            if not local_in(locals, arm_cnt, src, bnns, bnnl) {
+              lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+              arm_cnt += 1
+            }
+            bd = bnd_next(bd)
+          }
+          bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
+          if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
+          lvec_truncate(deref(locals), arm_base)
+          arm = am.next
+        }
+      }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => {
+        bad = sema_enum_global_array_value_bad(lo, decls, upto, src, locals, cnt, a, false)
+        if bad == 0 and unchecked bitcast(usize, hi) != 0 { bad = sema_enum_global_array_value_bad(hi, decls, upto, src, locals, cnt, a, false) }
+        if bad == 0 {
+          loop_base := cnt
+          if not local_in(locals, cnt, src, fns, fnl) { lvec_push(deref(locals), Local(ns = fns, nl = fnl, tag = 0, prov = 0, tns = 0, tnl = 0)); cnt += 1 }
+          bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a)
+          lvec_truncate(deref(locals), loop_base)
+          cnt = loop_base
+        }
+      }
+      Stmt::DerefAssign(p, v, nx) => { bad = sema_enum_global_array_value_bad(p, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
+      Stmt::IndexAssign(b, i, v, nx) => { bad = sema_enum_global_array_value_bad(b, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(i, decls, upto, src, locals, cnt, a, false) }; if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
+      Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { bad = sema_enum_global_array_value_bad(b, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(i, decls, upto, src, locals, cnt, a, false) }; if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
+      Stmt::FieldPathAssign(p, v, nx) => { bad = sema_enum_global_array_value_bad(p, decls, upto, src, locals, cnt, a, true); if bad == 0 { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) } }
+      Stmt::Loop(b, nx) => { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) }
+      Stmt::Unchecked(b, nx) => { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) }
+      Stmt::Break(v, bd, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
+      Stmt::ExprStmt(v, nx) => { bad = sema_enum_global_array_value_bad(v, decls, upto, src, locals, cnt, a, false) }
+      Stmt::AllocWith(e0, b, nx) => { bad = sema_enum_global_array_value_bad(e0, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a) } }
+      ## Comptime bodies are normally skipped by the type checker because only the selected branch
+      ## is semantically active. This fence is structural and intentionally visits both branches: a
+      ## known enum-array global in either source branch must not reach a backend's width-blind path
+      ## when the target fold selects it.
+      Stmt::CompIf(c, th, el, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(th, decls, upto, src, locals, cnt, a) }; if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(el, decls, upto, src, locals, cnt, a) } }
+      Stmt::CompFor(vs, vl, iv, b, nx) => {
+        base := cnt
+        if not local_in(locals, cnt, src, vs, vl) { lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = 0, prov = 0, tns = 0, tnl = 0)); cnt += 1 }
+        bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a)
+        lvec_truncate(deref(locals), base)
+        cnt = base
+      }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => {
+        bad = sema_enum_global_array_value_bad(lo, decls, upto, src, locals, cnt, a, false)
+        if bad == 0 { bad = sema_enum_global_array_value_bad(hi, decls, upto, src, locals, cnt, a, false) }
+        if bad == 0 {
+          base := cnt
+          if not local_in(locals, cnt, src, vs, vl) { lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = 0, prov = 0, tns = 0, tnl = 0)); cnt += 1 }
+          bad = sema_enum_global_array_value_bad_stmts(b, decls, upto, src, locals, cnt, a)
+          lvec_truncate(deref(locals), base)
+          cnt = base
+        }
+      }
+      Stmt::CompMatch(sc, ah, nx) => {
+        bad = sema_enum_global_array_value_bad(sc, decls, upto, src, locals, cnt, a, true)
+        mut arm := ah
+        while arm != 0 and bad == 0 {
+          am := deref(arm_p(arm))
+          base := cnt
+          mut arm_cnt := cnt
+          mut bd := am.binds_head
+          while bd != 0 {
+            bnns := bnd_ns(bd)
+            bnnl := bnd_nl(bd)
+            if not local_in(locals, arm_cnt, src, bnns, bnnl) { lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0)); arm_cnt += 1 }
+            bd = bnd_next(bd)
+          }
+          bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
+          if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
+          lvec_truncate(deref(locals), base)
+          arm = am.next
+        }
+      }
+      _ => {}
+    }
+    cur = stmt_next_at(cur, a)
+  }
+  lvec_truncate(deref(locals), saved_len)
+  deref(locals).pcnt = saved_pcnt
+  bad
 }
 
 ## Structural expression walk for the body half.  It checks qualified callable/type references and
