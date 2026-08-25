@@ -80,6 +80,11 @@ limit_err := fn(s : usize, kind : usize) -> CheckErr { LIMIT_DIAG_MARKER + s * 8
 ## remains unchanged while check/build/emit surfaces can preserve the lower's established wording.
 SCALAR_CONVERSION_DIAG_MARKER := 5764607523034234880
 scalar_conversion_err := fn(s : usize) -> CheckErr { SCALAR_CONVERSION_DIAG_MARKER + s * 4 }
+## A distinct located diagnostic for the unsupported non-literal mutable-struct-global assignment
+## fence. Keep it between the scalar-conversion and comptime classes so older CheckErr ranges remain
+## byte-identical while every CLI renderer can retain the existing lower's useful wording.
+GLOBAL_AGG_DIAG_MARKER := 6341068275337658368
+global_agg_err := fn(s : usize) -> CheckErr { GLOBAL_AGG_DIAG_MARKER + s * 4 }
 
 ## A synthesized type: a tag (0 unknown/error, 1 int, 2 bool, 3 struct, 4 enum, 5 pointer,
 ## 6 str, 7 array) and, for a struct/enum, the type's name span `[ns, ns+nl)`.
@@ -3421,6 +3426,38 @@ global_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   }
   r
 }
+## Recover the concrete STRUCT type of a mutable global. An explicit `: R` annotation is the first
+## source; an inferred `mut G := R(...)` uses the initializer's StructLit type. No other inferred
+## shape is admitted here, so this fence cannot turn an unknown/scalar global into an aggregate reject.
+global_struct_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> VSpan {
+  ann := global_type_span(decls, src, s, n)
+  if ann.n != 0 and struct_decl_of(decls, src, ann.s, ann.n) >= 0 { return ann }
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.is_fn == false and d.kind == 0 and streq(src, d.name_start, d.name_len, s, n) {
+      if unchecked bitcast(usize, d.value) != 0 {
+        lit := expr_agg_lit(d.value)
+        if lit.is_agg and struct_decl_of(decls, src, lit.s, lit.n) >= 0 { return VSpan(s = lit.s, n = lit.n) }
+      }
+    }
+    i += 1
+  }
+  VSpan(s = 0, n = 0)
+}
+## The x86 lower has a fail-loud fence for exactly this shape: a compatible, non-literal struct value
+## entering a bare mutable struct global. Mirror only that proven boundary in sema so WAT/AArch64/RISC-V
+## cannot emit a word-0-only store. Struct literals remain supported; unknown/scalar values stay open for
+## the ordinary type checks and all local/field/index assignment paths remain untouched.
+global_nonlit_struct_assign_bad := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, v : ptr(Expr), tv : Ty, locals : ptr(LVec), nloc : usize) -> bool {
+  if expr_agg_lit(v).is_agg { return false }
+  mut vt := tv
+  if vt.tag != 3 { vt = value_agg_ty(v, decls, upto, src, locals, nloc) }
+  if vt.tag != 3 { vt = expr_call_result_ty(v, decls, upto, src) }
+  if vt.tag != 3 { return false }
+  global_struct_type_span(decls, src, s, n).n != 0
+}
 ## RETURN-sink conformance: recursively scan a fn body for a `return <v>` whose value is an aggregate↔
 ## scalar clash against the declared return type span `[rts,rtl)` (both directions, via `agg_scalar_bad`).
 ## Recurses into nested control-flow blocks so a return in an if/while/for/match branch is covered. This
@@ -6205,6 +6242,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## emit net. Recover `G`'s declared `: T` from source and check it against the RHS.
           gsp := global_type_span(decls, src, ns, nl)
           if agg_scalar_bad(gsp.s, gsp.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
+          if global_nonlit_struct_assign_bad(decls, upto, src, ns, nl, v, tv, locals, cnt) { mark_failed(locals, global_agg_err(ns)) }
         } else if local_in(locals, cnt, src, ns, nl) and assign_is_reassign(src, ns, nl) {
           raw := local_ty(locals, cnt, src, ns, nl)
           ## Declarations §3.1 / Memory §1.6 — an existing local without `mut` is a validly typed
