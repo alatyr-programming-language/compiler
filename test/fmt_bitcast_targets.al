@@ -3,7 +3,7 @@
 ## WHOLE pointer type of `ptr(mut S)` (span `ptr(mut S)`), and the bare TARGET TYPE of an
 ## aggregate→aggregate reinterpret `bitcast(B, x)` (span `B`). fmt used to decide by "does the span
 ## start with `ptr(`" and put `ptr(…)` round everything that did not — conflating the aggregate target
-## with a sub-word pointee, so `y := bitcast(B, x)` came back `y := unchecked bitcast(ptr(B), x)`: a
+## with a sub-word pointee, so the binding that bitcasts to `B` came back as `unchecked bitcast(ptr(B), x)`: a
 ## POINTER where a struct value stood. `bitcast_agg2word` ran 42 before a reformat and SEGFAULTED
 ## after. The parser's own gate (a bare pointee is preserved only when it is a SUB-WORD SCALAR) is
 ## what fmt now mirrors.

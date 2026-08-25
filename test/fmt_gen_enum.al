@@ -1,5 +1,5 @@
-## fmt — a GENERIC enum declaration `Name(T) := enum { … }` round-trips (§5 tooling): the `(T)`
-## type-parameter header (the generic-struct/enum tier; parsed by the parser's `skip_type_param`,
+## fmt — a GENERIC enum declaration with a type-parameter header round-trips (§5 tooling). The header
+## (the generic-struct/enum tier; parsed by the parser's `skip_type_param`,
 ## stored on the Decl only as `is_generic`) must survive the format, else fmt is NON-idempotent AND
 ## changes meaning (generic → non-generic). Two instantiations at DISTINCT payload types (u64 and a
 ## nested Box(u64)) prove the header is not tied to one element type. Result = 40 + 2 = 42.

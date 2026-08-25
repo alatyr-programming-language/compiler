@@ -5,7 +5,8 @@
 ## DIFFERENT program, and a silent one (it still built and ran, to another value). Locked here: the four
 ## spellings (element / runtime index / struct-field array / parenthesized) plus an ORDINARY call in the
 ## same file, so the disambiguation is exercised in both directions.
-##   fs[0](9) 10 + fs[1](5) 10 + fs[i](3) loop 10 + (fs[0])(9) 10 + add1(9) 10 + t.fs[j](3) loop 10
+##   first function-value call 10 + second function-value call 10 + runtime-index call 10 +
+##   parenthesized call 10 + add1(9) 10 + t.fs[j](3) loop 10
 ##   + ops[0](4, 6) 10 + id(ops[1](14, 4)) 10 = 80
 add1 := fn(x : u64) -> u64 {
   return x + 1

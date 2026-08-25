@@ -6,8 +6,8 @@
 ##       `Either(A : type, B : type) := fn(A : type, B : type) -> type { L(A), R(B), }`
 ##     — which is not a declaration in any form. fmt now checks that the recovered `:=`-to-`{` head
 ##     really ends in `struct`/`enum`/`union` and, when it does not, copies the whole decl verbatim.
-##   • `Either(A, B).L(a)` keeps only the BASE name span in its `EnumLit`, so the type-argument group
-##     was dropped and `Either.L(a)` named no type. Recovered verbatim: the only thing that can
+##   • a generic-instance enum construction keeps only the BASE name span in its `EnumLit`, so the
+##     type-argument group was dropped and `Either.L(a)` named no type. Recovered verbatim: the only thing that can
 ##     directly follow an enum-name span is that group (a payload comes after the `.V`).
 ## Returns 42.
 Either := fn(A : type, B : type) -> type { return enum { L(A), R(B) } }

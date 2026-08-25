@@ -5,7 +5,7 @@
 ##     binding" — so fmt re-emitted `x := x - 50`, SHADOWING the mutable local instead of updating it.
 ##   • a `when` guard written after an aggregate's closing BRACE (Comptime §7.1/§9, CT-5) was dropped,
 ##     so two complementary arch-gated `Cfg` decls came back as an unguarded duplicate.
-##   • `NonZero := u32.require(is_nonzero)` — the UFCS spelling of a validity contract (Types §8.1) —
+##   • a `NonZero` alias using the `u32` validity contract (Types §8.1) —
 ##     kept only the bare PATH span `u32`, so the contract silently vanished. The alias RHS is now
 ##     copied verbatim to end of line, which is exact for every alias form.
 ## Returns 42.

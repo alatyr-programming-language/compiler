@@ -7,8 +7,8 @@
 ## `comptime_for_typeinfo_n` all died that way after a reformat).
 ## `zs` is the fill as an initializer (every element is the same node, so it must come back as
 ## `[0; 3]`); `xs` and `ss` are written-out literals that must NOT be folded into a fill — their
-## element nodes are distinct even when the text repeats; `sum_gen([u64; 3], xs)` is the array
-## TYPE as a generic type argument, the spelling a reformat used to destroy.
+## element nodes are distinct even when the text repeats; the generic call whose first argument is the
+## array-fill type is the spelling a reformat used to destroy.
 sum_gen := fn(T : type, a : T) -> u64 {
   mut s : u64 = 0
   mut i : usize = 0

@@ -5532,8 +5532,8 @@ E2E_RECORDED="$E2E_N"
 ## A `*_has` needle that appears in its OWN fixture's comments makes the assertion VACUOUS. The
 ## helpers grep the whole formatted artifact, and `fmt_test` separately asserts comment fidelity, so
 ## the comment is GUARANTEED to be in the text being searched: the row prints `ok` on an unfixed
-## compiler. This was written down in two places — one of them a PR checkbox — and measured at 21
-## live violations anyway, which is why it is a check and not a sentence. Needs no compiler: the
+## compiler. This was written down in two places — one of them a PR checkbox — and had accumulated
+## twenty live violations anyway, which is why it is a check and not a sentence. Needs no compiler: the
 ## recording phase already holds every row's kind and arguments.
 ##
 ## Pre-existing violations live in `scripts/needle.baseline` and are REPORTED on every run rather

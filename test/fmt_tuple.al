@@ -1,7 +1,8 @@
 ## `alatyr fmt` fixture — the TUPLE spellings, plus a `mut` struct FIELD. Every form here shares its
 ## AST node with an ARRAY form, so fmt has to read the written bracket back out of the source or it
 ## silently rewrites the program: a tuple LITERAL `(3, 4)` and a tuple TYPE in expression position
-## (`cnt((u64, u64))`) are both `Expr::ArrayLit`, exactly as `[3, 4]` is; a component read `p.0`, a
+## (the tuple type supplied to `cnt`) are both `Expr::ArrayLit`, exactly as `[3, 4]` is; a component read
+## `p.0`, a
 ## nested one `t.1.0`, and the write `t.1.0 = v` are all `Index(base, Num(N, 0, 0))`, exactly as
 ## `p[0]` is; and `a.0[2]` mixes a `.N` step with a real `[i]` step in one chain. `S`'s `mut x` is
 ## recorded nowhere in the AST either — CT-6 `Field.mutable` re-reads it from source, so dropping the
