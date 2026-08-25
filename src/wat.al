@@ -7,7 +7,8 @@
 ## expressions over literals (`Num`/`BoolLit`), params/locals/globals (`Var`), arithmetic + comparison
 ## + boolean `Bin` (uniform i64 value model), value-position `if` (`Expr::If`), direct calls
 ## (`Call`), statement lists with `while` (block/loop/br_if), statement-`if`, `return` at any depth,
-## and call-as-statement (`ExprStmt`, dropping a non-void result). It emits a WASI module whose
+## and call-as-statement (`ExprStmt`, dropping a non-void result), plus scalar `defer` cleanup actions
+## including `defer { … }` block forms. It emits a WASI module whose
 ## exported `_start` calls `$main` and turns the `i64` result into `proc_exit`'s `i32` exit code —
 ## `wat2wasm` (structural + type validation) then `wasmtime` (exit code, checked like the x86_64 e2e)
 ## prove the module round-trips. Anything outside the kernel (structs, strings, print, arch
@@ -2801,8 +2802,13 @@ mut WAT_CONT := 0
 ## more than 64 simultaneously-live defers overflows the stack; the push then fail-louds (see
 ## wat_defer_push) rather than silently dropping a cleanup.
 mut WAT_DEF_E : [usize; 64] = [0; 64]
+mut WAT_DEF_BLOCK : [bool; 64] = [false; 64]
 mut WAT_DEF_N := 0
 mut WAT_DEF_OVF := false
+## When non-zero, emit_wat_stmts stops BEFORE this statement handle. A block defer's linked list
+## continues through its __deferblkend marker into the enclosing list, so the drain temporarily sets
+## this stop to keep the deferred unit together and avoid re-emitting the enclosing statements.
+mut WAT_DEF_STOP := 0
 ## The defer-stack depth at the ENTRY of the nearest enclosing loop body — `break`/`continue` replay
 ## down to it (exactly the actions registered inside that body). Saved/restored around each loop
 ## alongside WAT_BRK/WAT_CONT, so a nested loop drains only its own.
@@ -4609,6 +4615,37 @@ exprstmt_needs_drop := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a 
   r
 }
 
+## The next statement handle of an arena-linked Stmt. Defer blocks are physically linked into their
+## enclosing list, so the WAT emitter needs the same exhaustive chain walk as the parser and native
+## lowerers when it skips a consumed block. Keep this exhaustive: a new Stmt variant must not silently
+## truncate the scan at the first statement after it.
+wat_stmt_next := fn(h : usize) -> usize {
+  st := deref(stmt_p(Stmt, h))
+  match st {
+    Stmt::Assign(ns, nl, v, nx) => { nx }
+    Stmt::While(c, b, nx) => { nx }
+    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { nx }
+    Stmt::Return(rv, nx) => { nx }
+    Stmt::If(c, th, el, nx) => { nx }
+    Stmt::Match(sc, ah, nx) => { nx }
+    Stmt::For(fns, fnl, flo, fhi, fb, nx) => { nx }
+    Stmt::DerefAssign(p, v, nx) => { nx }
+    Stmt::IndexAssign(b, i, v, nx) => { nx }
+    Stmt::Loop(b, nx) => { nx }
+    Stmt::Unchecked(b, nx) => { nx }
+    Stmt::AllocWith(ae, b, nx) => { nx }
+    Stmt::Break(bv, bd, nx) => { nx }
+    Stmt::Continue(cd, nx) => { nx }
+    Stmt::ExprStmt(e, nx) => { nx }
+    Stmt::CompIf(c, th, el, nx) => { nx }
+    Stmt::CompFor(vs, vl, iv, b, nx) => { nx }
+    Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { nx }
+    Stmt::CompMatch(sc, ah, nx) => { nx }
+    Stmt::FieldPathAssign(pl, pv, nx) => { nx }
+    Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { nx }
+  }
+}
+
 ## The ACTION expression of a `defer` marker statement — the single argument of the synthetic
 ## `__defer(<expr>)` call the parser desugars `defer <expr>` to — else a NULL pointer (not a defer).
 ## Returns ptr(Expr) (NOT a new struct — the frozen seed miscompiles a new struct return type).
@@ -4623,18 +4660,45 @@ wat_defer_action := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> ptr(Expr)
   r
 }
 
-## Is `e` a `defer { … }` BLOCK-action marker? That form desugars to a 3-part chain `__deferblk()` →
-## the block's statements (which REMAIN inline in the list) → `__deferblkend()`. The WAT emitter does
-## not model it: emitting the chain inline would run the cleanup AT REGISTRATION (a silent miscompile),
-## so the marker fail-louds with `(unreachable)` and the rest of the list is skipped.
+## Is `e` the START of a `defer { … }` BLOCK-action chain? That form desugars to a 3-part chain
+## `__deferblk()` → the block's statements (which remain inline in the list) → `__deferblkend()`.
 wat_is_defer_blk := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   mut r := false
   match deref(e) {
     Expr::Call(cs, cl, nn, ah) => {
       nm := str_at((src + cs), cl)
-      if nm == "__deferblk" or nm == "__deferblkend" { r = true }
+      if nm == "__deferblk" { r = true }
     }
     _ => {}
+  }
+  r
+}
+
+## Is `e` the END marker of a `defer { … }` BLOCK-action chain?
+wat_is_defer_blk_end := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Call(cs, cl, nn, ah) => {
+      if str_at((src + cs), cl) == "__deferblkend" { r = true }
+    }
+    _ => {}
+  }
+  r
+}
+
+## Find the `__deferblkend()` marker belonging to a block head. A missing marker violates the parser's
+## pairing invariant; return 0 so the emitter can fail loud rather than register a truncated cleanup.
+wat_defer_blk_end := fn(start : usize, src : ptr(u8)) -> usize {
+  mut s := start
+  mut r := 0
+  while s != 0 and r == 0 {
+    st := deref(stmt_p(Stmt, s))
+    match st {
+      Stmt::ExprStmt(e, nx) => {
+        if wat_is_defer_blk_end(e, src) { r = s } else { s = wat_stmt_next(s) }
+      }
+      _ => { s = wat_stmt_next(s) }
+    }
   }
   r
 }
@@ -4642,7 +4706,14 @@ wat_is_defer_blk := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
 ## Register a defer action on the pending stack. A full stack sets WAT_DEF_OVF — the fn then emits a
 ## fail-loud `(unreachable)` at its first drain rather than silently losing a cleanup.
 wat_defer_push := fn(e : ptr(Expr)) {
-  if WAT_DEF_N < 64 { WAT_DEF_E[WAT_DEF_N] = unchecked bitcast(usize, e) ; WAT_DEF_N = WAT_DEF_N + 1 }
+  if WAT_DEF_N < 64 { WAT_DEF_E[WAT_DEF_N] = unchecked bitcast(usize, e) ; WAT_DEF_BLOCK[WAT_DEF_N] = false ; WAT_DEF_N = WAT_DEF_N + 1 }
+  else { WAT_DEF_OVF = true }
+}
+
+## Register a whole `defer { … }` chain as ONE pending unit. The block statements run together at this
+## entry's LIFO position, rather than becoming separate deferred actions.
+wat_defer_push_block := fn(head : usize) {
+  if WAT_DEF_N < 64 { WAT_DEF_E[WAT_DEF_N] = head ; WAT_DEF_BLOCK[WAT_DEF_N] = true ; WAT_DEF_N = WAT_DEF_N + 1 }
   else { WAT_DEF_OVF = true }
 }
 
@@ -4654,11 +4725,24 @@ wat_defer_drain := fn(top : i64, base : i64, in out sb : rt::StrBuf, a : rt::Are
   mut k := top
   while k > base {
     k = k - 1
-    de := unchecked bitcast(ptr(Expr), WAT_DEF_E[k])
-    push_str(sb, "    ")
-    emit_wat_expr(de, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
-    if exprstmt_needs_drop(de, src, decls, a) { push_str(sb, " (drop)") }
-    push_str(sb, "\n")
+    if WAT_DEF_BLOCK[k] {
+      bh := WAT_DEF_E[k]
+      bend := wat_defer_blk_end(bh, src)
+      if bend == 0 {
+        push_str(sb, "    (unreachable) (; defer block end marker missing ;)\n")
+      } else {
+        ostop := WAT_DEF_STOP
+        WAT_DEF_STOP = bend
+        emit_wat_stmts(bh, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+        WAT_DEF_STOP = ostop
+      }
+    } else {
+      de := unchecked bitcast(ptr(Expr), WAT_DEF_E[k])
+      push_str(sb, "    ")
+      emit_wat_expr(de, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
+      if exprstmt_needs_drop(de, src, decls, a) { push_str(sb, " (drop)") }
+      push_str(sb, "\n")
+    }
   }
 }
 
@@ -4787,7 +4871,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
   ## expression is evaluated, so emit_wat_body owns it (see there).
   dscope := WAT_DEF_N
   mut s := list_head
-  while s != 0 {
+  while s != 0 and s != WAT_DEF_STOP {
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
@@ -5119,13 +5203,21 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         dact := wat_defer_action(e, src, a)
         pi := print_call_info(e, src, a)
         mut dstop := false
+        mut dnext := nx
         if unchecked bitcast(usize, dact) != 0 {
           wat_defer_push(dact)
         } else if wat_is_defer_blk(e, src) {
-          ## `defer { … }` — the chain's statements stay INLINE, so emitting them here would run the
-          ## cleanup at registration time. Fail loud and stop this list (never a mis-timed cleanup).
-          push_str(sb, "    (unreachable) (; defer { } block action (wasm: unmodelled) ;)\n")
-          dstop = true
+          ## Register the whole linked chain and jump over its inline body. The body is emitted only by
+          ## wat_defer_drain, at the cleanup's LIFO position; a malformed chain remains fail-loud.
+          bh := unchecked bitcast(usize, nx)
+          bend := wat_defer_blk_end(bh, src)
+          if bend == 0 {
+            push_str(sb, "    (unreachable) (; defer block end marker missing ;)\n")
+            dstop = true
+          } else {
+            wat_defer_push_block(bh)
+            dnext = unchecked bitcast(ptr(mut Stmt), wat_stmt_next(bend))
+          }
         } else if pi.ok {
           if has_hole(src, pi.ss, pi.sl, a) { emit_print_template(pi, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
           else { emit_print(sb, pi) }
@@ -5156,7 +5248,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           if exprstmt_needs_drop(e, src, decls, a) { push_str(sb, " (drop)") }
           push_str(sb, "\n")
         }
-        if dstop { s = 0 } else { s = nx }
+        if dstop { s = 0 } else { s = dnext }
       }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
         ## `p.field = v` for a struct PARAM or LOCAL p: i64.store v at (p's base + field offset).
@@ -5857,6 +5949,7 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   WAT_CONT = 0
   WAT_BRK_DB = 0
   WAT_CONT_DB = 0
+  WAT_DEF_STOP = 0
   ## pass 1: declare one (local i64) per distinct non-global local name in the WHOLE fn tree
   ## (top-level + nested scopes). count_locals and name_local_index share local_slot_scan, so the
   ## slot each Var resolves to is exactly its pre-order declaration index.

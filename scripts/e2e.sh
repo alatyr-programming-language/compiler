@@ -5031,8 +5031,10 @@ run defer_return 8
 run defer_try 1
 ## DEFER BLOCK form (`defer { S1; S2 }`): both statements run TOGETHER as one LIFO unit, in order.
 run defer_block 12
+run_wat defer_block 12
 ## Two `defer { }` blocks run LIFO (last registered first) as separate units.
 run defer_block_lifo 21
+run_wat defer_block_lifo 21
 ## A `defer { }` whose body declares a LOCAL + uses a STRING LITERAL (block stmts are still ordinary
 ## statements to the slot-collector and `.rodata` walker): ACC = len("hello") = 5.
 run defer_block_local 5
