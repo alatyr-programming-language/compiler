@@ -2890,6 +2890,80 @@ wat_loop_value_between := fn(target : usize) -> bool {
   r
 }
 
+## The source start of an expression's leftmost written leaf. The parser intentionally erases
+## word-sized `bitcast` targets, so the remaining `Num`/`Var`/`Call` node is the only position from which
+## the WAT admission can recover the enclosing second argument without changing the shared AST.
+wat_expr_start := fn(e : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(e) {
+    Expr::Num(_v, s, _n) => { r = s }
+    Expr::Var(s, _n) => { r = s }
+    Expr::FloatLit(s, _n) => { r = s }
+    Expr::Call(s, _n, _a, _ah) => { r = s }
+    Expr::Bin(_op, l, rr) => {
+      r = wat_expr_start(l)
+      if r == 0 { r = wat_expr_start(rr) }
+    }
+    Expr::If(c, _t, _f) => { r = wat_expr_start(c) }
+    Expr::Field(base, _s, _n) => { r = wat_expr_start(base) }
+    Expr::Index(base, _idx) => { r = wat_expr_start(base) }
+    Expr::Slice(base, _lo, _hi) => { r = wat_expr_start(base) }
+    Expr::CompField(base, _idx) => { r = wat_expr_start(base) }
+    Expr::AddrOf(inner) => { r = wat_expr_start(inner) }
+    Expr::Deref(inner) => { r = wat_expr_start(inner) }
+    Expr::Unchecked(inner) => { r = wat_expr_start(inner) }
+    Expr::Bitcast(inner, _ts, _tl) => { r = wat_expr_start(inner) }
+    _ => {}
+  }
+  r
+}
+
+wat_source_blank := fn(src : ptr(u8), i : usize) -> bool {
+  c := bytes(str_at((src + i), 1))[0]
+  c == 32 or c == 9 or c == 10 or c == 13
+}
+
+wat_source_ident := fn(src : ptr(u8), i : usize) -> bool {
+  c := bytes(str_at((src + i), 1))[0]
+  (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+}
+
+## The parser returns only the value node for a word-sized bitcast. Starting at that node's left leaf,
+## walk backwards through the second-argument comma and the balanced first argument; admit no expression
+## whose enclosing callee is `bitcast`. This is deliberately source-aware and conservative: comments,
+## malformed spans, and source-less compiler constants do not receive a scalar admission.
+wat_erased_bitcast_at := fn(src : ptr(u8), pos : usize) -> bool {
+  if pos == 0 { return false }
+  mut p := pos
+  mut moving := true
+  while moving {
+    while p > 0 and (wat_source_blank(src, p - 1) or str_at((src + p - 1), 1) == "(" or str_at((src + p - 1), 1) == "+" or str_at((src + p - 1), 1) == "-") { p = p - 1 }
+    mut end := p
+    mut start := end
+    while start > 0 and wat_source_ident(src, start - 1) { start = start - 1 }
+    if end > start and str_at((src + start), end - start) == "unchecked" { p = start } else { moving = false }
+  }
+  if p == 0 or str_at((src + p - 1), 1) != "," { return false }
+  mut q := p - 1
+  mut depth := 0
+  mut open := 0
+  mut found := false
+  while q > 0 and not found {
+    c := str_at((src + q - 1), 1)
+    if c == ")" or c == "]" { depth = depth + 1 }
+    if c == "(" or c == "[" {
+      if depth > 0 { depth = depth - 1 } else { open = q - 1 ; found = true }
+    }
+    q = q - 1
+  }
+  if not found { return false }
+  mut ne := open
+  while ne > 0 and wat_source_blank(src, ne - 1) { ne = ne - 1 }
+  mut ns := ne
+  while ns > 0 and wat_source_ident(src, ns - 1) { ns = ns - 1 }
+  ne - ns == 7 and str_at((src + ns), 7) == "bitcast"
+}
+
 ## Is a recovered type span one of the language's INTEGER scalar types? Keep bool/float/pointer and
 ## every unresolved or aggregate span out of the bounded value-break admission.
 wat_break_integer_type := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
@@ -2950,6 +3024,8 @@ wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : ptr(mut Param),
 ## already independently type-checked and an unsupported condition still emits its own trap.
 wat_break_scalar_expr := fn(e : ptr(Expr), params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
   if dep > 24 { return false }
+  start := wat_expr_start(e)
+  if start == 0 or wat_erased_bitcast_at(src, start) { return false }
   mut r := false
   match deref(e) {
     Expr::Num(_v, _s, _n) => { r = true }
@@ -2972,7 +3048,9 @@ wat_break_scalar_expr := fn(e : ptr(Expr), params_head : ptr(mut Param), fn_head
       if ty.n != 0 and wat_break_integer_type(src, ty.s, ty.n) { r = true }
     }
     Expr::Unchecked(inner) => { r = wat_break_scalar_expr(inner, params_head, fn_head, src, a, decls, dep + 1) }
-    Expr::Bitcast(inner, _ts, _tl) => { r = wat_break_scalar_expr(inner, params_head, fn_head, src, a, decls, dep + 1) }
+    ## A bitcast's source may be an integer while its TARGET is a pointer or another non-integer word.
+    ## Keep that unresolved target-type shape fail-loud until a target-span proof is available.
+    Expr::Bitcast(_inner, _ts, _tl) => {}
     _ => {}
   }
   r
