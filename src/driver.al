@@ -367,9 +367,9 @@ d_export_matches_mangled_decl := fn(src : ptr(u8), es : usize, en : usize, d : D
   streq(src, es + pn + 2, d.name_len, d.name_start, d.name_len)
 }
 
-d_check_linker_symbols := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+d_check_linker_symbols := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> DSpan {
   cnt := rt::vec_len(deref(decls))
-  mut bad := false
+  mut hit := DSpan(s = 0, n = 0)
   for i in 0..cnt {
     di := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
     ei := d_export_name(src, di.name_start, di.name_len)
@@ -377,15 +377,15 @@ d_check_linker_symbols := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
       for j in 0..i {
         dj := deref(decl_at(Decl, rt::vec_get(deref(decls), j)))
         ej := d_export_name(src, dj.name_start, dj.name_len)
-        if ej.n != 0 and streq(src, ei.s, ei.n, ej.s, ej.n) { bad = true }
+        if hit.n == 0 and ej.n != 0 and streq(src, ei.s, ei.n, ej.s, ej.n) { hit = DSpan(s = di.name_start, n = di.name_len) }
       }
       for k in 0..cnt {
         dk := deref(decl_at(Decl, rt::vec_get(deref(decls), k)))
-        if d_export_matches_mangled_decl(src, ei.s, ei.n, dk) { bad = true }
+        if hit.n == 0 and d_export_matches_mangled_decl(src, ei.s, ei.n, dk) { hit = DSpan(s = di.name_start, n = di.name_len) }
       }
     }
   }
-  bad
+  hit
 }
 
 ## Modules §6.1 CLASH RULE — a ROOT-level declaration (in the anonymous `package.al` module) emits its
@@ -3129,6 +3129,7 @@ DFileTab := struct { ns : ptr(rt::Vec), nl : ptr(rt::Vec), so : ptr(rt::Vec), sl
 ## low-two-bit CheckErr encoding while giving the public check/build renderers one distinct message.
 DIAG_AMBIG_MARKER := 4611686018427387904
 DIAG_LIMIT_MARKER := 2305843009213693952
+DIAG_LINKER_SYMBOL_KIND := 7
 ## CT-12 / Comptime §2.6 — the COMPTIME guard-failure class (shared with sema::comptime_err). Above
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
@@ -3180,13 +3181,16 @@ d_limit_reject := fn(code : usize, what : str, base : usize, ft : ptr(DFileTab),
   mut db := rt::strbuf(a, 256)
   w0 := rt::push_str(db, "alatyr: build: ")
   if limit {
-    w1 := rt::push_str(db, "@limits(")
-    w2 := rt::push_str(db, limit_name(lkind))
-    w3 := rt::push_str(db, ") violation")
+    if lkind == DIAG_LINKER_SYMBOL_KIND { w1 := rt::push_str(db, "duplicate linker symbol") }
+    else {
+      w1 := rt::push_str(db, "@limits(")
+      w2 := rt::push_str(db, limit_name(lkind))
+      w3 := rt::push_str(db, ") violation")
+    }
   } else {
     w1 := rt::push_str(db, what)
   }
-  if span > 0 {
+  if span > 0 or (limit and lkind == DIAG_LINKER_SYMBOL_KIND) {
     ## Map the GLOBAL concatenated-buffer offset back to the owning file (`so[k] <= span < so[k]+sl[k]`)
     ## so the line is FILE-relative and the module is named — never a line counted across earlier files.
     mut fk := 0
@@ -3731,9 +3735,8 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   if cc != 0 { d_limit_reject(cc, "a file's @limits is laxer than the manifest limits ceiling", base, ptr(ftab), tar) }
   ec := sema::enforce_ceiling(ptr(decls), base, ptr(na), ceiling)
   if ec != 0 { d_limit_reject(ec, "a module violates a manifest limits ceiling restriction", base, ptr(ftab), tar) }
-  if d_check_linker_symbols(ptr(decls), base) {
-    panic("selfhost: duplicate linker symbol")
-  }
+  linker := d_check_linker_symbols(ptr(decls), base)
+  if linker.n != 0 { d_limit_reject(DIAG_LIMIT_MARKER + linker.s * 8 + DIAG_LINKER_SYMBOL_KIND, "duplicate linker symbol", base, ptr(ftab), tar) }
   ## Modules §6.1 — a root-level (unprefixed) declaration must not collide with a submodule's mangled
   ## symbol. Never fires without a package-root module in the compile list → dormant for the self-build.
   rsc := d_root_symbol_clash(ptr(decls), base)
@@ -5320,6 +5323,10 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## `compile_files_mode`, so both commands report the same failure first.
   if r == 0 { r = d_check_limits_ceiling(ceiling, ptr(decls), base) }
   if r == 0 { r = sema::enforce_ceiling(ptr(decls), base, ptr(na), ceiling) }
+  if r == 0 {
+    linker := d_check_linker_symbols(ptr(decls), base)
+    if linker.n != 0 { r = DIAG_LIMIT_MARKER + linker.s * 8 + DIAG_LINKER_SYMBOL_KIND }
+  }
   if r == 0 { return 0 }
   ## DIAGNOSTIC (§1 item 6 / §5): decode the `CheckErr` code — kind in the low 2 bits (1 unbound name,
   ## 2 type mismatch, 3 duplicate name), the source START offset in the rest (`r / 4`) — and print a
@@ -5355,11 +5362,14 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## gotcha), which carries no span, so `r` is then the default `unbound_err(0,0)` == 1. Print the
   ## LOCATED kind + 1-based line only when `span > 0`; otherwise an honest unlocated message (no
   ## misleading kind/line). `span == 0 && kind == 3` is the duplicate-name case (a known kind).
-  if span > 0 {
+  if span > 0 or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
-      dwk0 := rt::push_str(db, "@limits(")
-      dwk1 := rt::push_str(db, limit_name(kind))
-      dwk2 := rt::push_str(db, ") violation")
+      if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
+      else {
+        dwk0 := rt::push_str(db, "@limits(")
+        dwk1 := rt::push_str(db, limit_name(kind))
+        dwk2 := rt::push_str(db, ") violation")
+      }
     } else if immutable { dwki := rt::push_str(db, "immutable binding") }
     else if ctg { dwkc := rt::push_str(db, comptime_guard_name(kind)) }
     else if ambig { dwk := rt::push_str(db, "ambiguous call") }

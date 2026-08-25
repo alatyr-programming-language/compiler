@@ -1,4 +1,4 @@
-## MOD §6.6: an explicit `@export` symbol must not collide with a path-derived symbol emitted for
+## MOD §6.7: an explicit `@export` symbol must not collide with a path-derived symbol emitted for
 ## another declaration. In a single-file build this file's stem is the module prefix, so `helper`
 ## naturally emits `reject_export_mangled_collision__helper`; exporting that same exact linker name
 ## would otherwise reach GAS as a duplicate label.

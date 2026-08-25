@@ -2707,7 +2707,11 @@ check_reject reject_p1_unknown_enum_variant
 check_build_located reject_immutable_write 3 "immutable binding"
 check_accept check_struct_field_order
 check_reject reject_check_unknown_struct_field
-build_reject_has reject_export_mangled_collision "duplicate linker symbol"
+build_reject_has reject_export_mangled_collision "duplicate linker symbol at line 5"
+check_reject reject_export_mangled_collision
+emit_reject_has wat reject_export_mangled_collision "duplicate linker symbol at line 5"
+emit_reject_has aarch64 reject_export_mangled_collision "duplicate linker symbol at line 5"
+emit_reject_has riscv64 reject_export_mangled_collision "duplicate linker symbol at line 5"
 check_reject reject_missing_result
 check_reject reject_break_outside_loop
 check_reject reject_continue_outside_loop
