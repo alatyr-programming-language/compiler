@@ -4220,6 +4220,7 @@ check_accept match_binding_root
 run match_binding_root_value 80
 check_accept match_binding_root_value
 run deep_arr_field_agg_elem 13
+run_a64 deep_arr_field_agg_elem 13
 check_accept deep_arr_field_agg_elem
 run deref_nested_field 75
 check_accept deref_nested_field
