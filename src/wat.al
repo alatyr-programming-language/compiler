@@ -5941,8 +5941,9 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         WAT_CONT_DB = odcL
         s = lnx
       }
-      ## `break`: the WAT backend targets only the NEAREST loop (WAT_BRK). Labeled breaks remain
-      ## fail-loud; a value is accepted only when that nearest target is an Expr::Loop result block.
+      ## `break`: the WAT backend targets only the NEAREST loop (WAT_BRK). Labeled and bare breaks
+      ## from a value-loop remain fail-loud; a value is accepted only when that nearest target is an
+      ## Expr::Loop result block.
       Stmt::Break(bv, bd, bnx) => {
         if bd != 0 { push_str(sb, "    (unreachable)\n") }
         else if unchecked bitcast(usize, bv) != 0 {
@@ -5956,6 +5957,12 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
             if WAT_DEF_N > WAT_BRK_DB { wat_defer_drain(WAT_DEF_N, WAT_BRK_DB, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
             push_str(sb, "    (br $brk") ; push_int(sb, WAT_BRK) ; push_str(sb, ")\n")
           }
+        }
+        else if WAT_BRK_VALUE {
+          ## A bare break has no result to satisfy the value block. The language accepts this as a
+          ## diverging exit for type consistency, but this backend slice does not model that path;
+          ## keep it an explicit runtime trap instead of emitting an invalid branch stack.
+          push_str(sb, "    (unreachable) (; bare break from WAT loop expression ;)\n")
         }
         else {
           ## DEFER (§9.3): leaving the loop body runs the cleanups registered INSIDE it (down to the
