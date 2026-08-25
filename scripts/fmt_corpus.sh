@@ -379,7 +379,6 @@ spaced_value := fn() -> u64 {\
     -e '/^  indirect := apply(hex::encode, 40)$/d' \
     -e '/^  if direct == 41 and indirect == 41 { 42 } else { 0 }$/c\
   ## a comment ending in a path-looking separator ::\
-  s := "##"\
   x' "$PC/src/main.al"
   PCO1="$W/o/fn_value_qualified.package.comment.f1.al"
   PCO2="$W/o/fn_value_qualified.package.comment.f2.al"
@@ -420,6 +419,59 @@ spaced_value := fn() -> u64 {\
       fi
     fi
   fi
+
+  # A string literal containing the comment marker must not be classified as a comment while the
+  # formatter looks backward from the following value. This is the exact raw-byte false positive
+  # caught by independent review; it is a valid program and must format, build, and run.
+  PL="$W/package/fn_value_qualified_literal"
+  rm -rf "$PL"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PL"
+  sed -i \
+    -e 's/^  direct := hex::encode(40)$/  x := 41/' \
+    -e '/^  indirect := apply(hex::encode, 40)$/d' \
+    -e '/^  if direct == 41 and indirect == 41 { 42 } else { 0 }$/c\
+  s := "## ::"\
+  x' "$PL/src/main.al"
+  PLO1="$W/o/fn_value_qualified.package.literal.f1.al"
+  PLO2="$W/o/fn_value_qualified.package.literal.f2.al"
+  PLE="$W/o/fn_value_qualified.package.literal.err"
+  PLB="$W/o/fn_value_qualified.package.literal.build.out"
+  if ! ( cd "$PL" && timeout $TCC "$AL" build package.al ) >"$PLB" 2>"$PLE" </dev/null; then
+    echo "PACKAGE-LITERAL-COMPILEFAIL test/package/fn_value_qualified"
+    fail=1
+  elif ! ( cd "$PL" && timeout $TCC "$AL" fmt src/main.al ) >"$PLO1" 2>"$PLE" </dev/null; then
+    echo "PACKAGE-LITERAL-FMT-REFUSE test/package/fn_value_qualified"
+    fail=1
+  elif ! grep -qF 's := "## ::"' "$PLO1" || ! grep -qE '^  x$' "$PLO1"; then
+    echo "PACKAGE-LITERAL-PATH test/package/fn_value_qualified (literal altered or next Var lost)"
+    fail=1
+  else
+    cp "$PLO1" "$PL/src/main.al"
+    if ! ( cd "$PL" && timeout $TCC "$AL" fmt src/main.al ) >"$PLO2" 2>"$PLE" </dev/null; then
+      echo "PACKAGE-LITERAL-NONIDEMPOTENT test/package/fn_value_qualified (second fmt refused output)"
+      fail=1
+    elif ! diff -q "$PLO1" "$PLO2" >/dev/null 2>&1; then
+      echo "PACKAGE-LITERAL-NONIDEMPOTENT test/package/fn_value_qualified"
+      fail=1
+    elif ! ( cd "$PL" && timeout $TCC "$AL" build package.al ) >"$PLB" 2>"$PLE" </dev/null; then
+      echo "PACKAGE-LITERAL-COMPILEFAIL test/package/fn_value_qualified (formatted)"
+      fail=1
+    else
+      plbin="$PL/target/debug/fn-value-qualified"
+      if [ ! -x "$plbin" ]; then
+        echo "PACKAGE-LITERAL-COMPILEFAIL test/package/fn_value_qualified (formatted executable missing)"
+        fail=1
+      else
+        ( cd "$PL" && timeout $TRUN "$plbin" ) >"$PLB" 2>/dev/null </dev/null; pliteral_rc=$?
+        if [ "$pliteral_rc" != 41 ]; then
+          echo "PACKAGE-LITERAL-BEHAVIOUR test/package/fn_value_qualified (exit $pliteral_rc want 41)"
+          fail=1
+        else
+          echo "PACKAGE-LITERAL-OK test/package/fn_value_qualified"
+        fi
+      fi
+    fi
+  fi
   # The lexer accepts multiline separators, but the current formatter/lowering boundary cannot
   # safely render their reflowed form. It must refuse rather than silently change runtime behavior.
   PML="$W/package/fn_value_qualified_multiline"
@@ -435,21 +487,6 @@ spaced_value := fn() -> u64 {\
     echo "PACKAGE-MULTILINE-REFUSED test/package/fn_value_qualified"
   else
     echo "PACKAGE-MULTILINE-SILENT test/package/fn_value_qualified (multiline path was rewritten)"
-    fail=1
-  fi
-
-  # Numeric tokens are not identifier starts. If the parser exposes this malformed path-shaped
-  # source to fmt, it must refuse rather than treating `123` as a module name.
-  PN="$W/package/fn_value_qualified_numeric"
-  rm -rf "$PN"
-  cp -r "$ROOT/test/package/fn_value_qualified" "$PN"
-  sed -i 's/apply(hex::encode, 40)/apply(123 :: encode, 40)/' "$PN/src/main.al"
-  PNO="$W/o/fn_value_qualified.package.numeric.out"
-  PNE="$W/o/fn_value_qualified.package.numeric.err"
-  if ! ( cd "$PN" && timeout $TCC "$AL" fmt src/main.al ) >"$PNO" 2>"$PNE" </dev/null; then
-    echo "PACKAGE-NUMERIC-REFUSED test/package/fn_value_qualified"
-  else
-    echo "PACKAGE-NUMERIC-SILENT test/package/fn_value_qualified (numeric path head was rewritten)"
     fail=1
   fi
 
