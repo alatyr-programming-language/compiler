@@ -4201,6 +4201,7 @@ check_accept deep_arr_field_elem
 run deep_arr_field_roots 14
 check_accept deep_arr_field_roots
 run deep_arr_field_global 85
+run_a64 deep_arr_field_global 85
 check_accept deep_arr_field_global
 run match_binding_root 119
 check_accept match_binding_root
