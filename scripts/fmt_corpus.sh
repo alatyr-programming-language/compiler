@@ -231,6 +231,85 @@ fi
 fi  # end walk 1
 
 # ==========================================================================================
+# WALK 1b — the existing multi-file package fixture for qualified function values.
+#
+# The flat walk above deliberately covers only `test/*.al`; package modules live below
+# `test/package/`. Keep this one focused package check beside the formatter arbiter so a source
+# recovery in `Expr::Var` cannot silently turn `apply(hex::encode, …)` into `apply(encode, …)`.
+# It checks the known-good package result, the formatted package result, and formatter idempotence.
+# ==========================================================================================
+if [ "$ONLY" != src ] && { [ -z "$FILTER" ] || printf '%s\n' 'test/package/fn_value_qualified' | grep -Eq "$FILTER"; }; then
+  PW="$W/package/fn_value_qualified"
+  rm -rf "$PW"
+  mkdir -p "$W/package"
+  cp -r "$ROOT/test/package/fn_value_qualified" "$PW"
+  PO1="$W/o/fn_value_qualified.package.f1.al"
+  PO2="$W/o/fn_value_qualified.package.f2.al"
+  PE="$W/o/fn_value_qualified.package.err"
+  PB="$W/o/fn_value_qualified.package.base.out"
+  PF="$W/o/fn_value_qualified.package.formatted.out"
+
+  pbase_build=0
+  if ! ( cd "$PW" && timeout $TCC "$AL" build package.al ) >"$PB" 2>"$PE" </dev/null; then
+    echo "PACKAGE-COMPILEFAIL test/package/fn_value_qualified (baseline)"
+    fail=1
+  else
+    pbin="$PW/target/debug/fn-value-qualified"
+    if [ ! -x "$pbin" ]; then
+      echo "PACKAGE-COMPILEFAIL test/package/fn_value_qualified (missing executable)"
+      fail=1
+    else
+      ( cd "$PW" && timeout $TRUN "$pbin" ) >"$PB" 2>/dev/null </dev/null; pbase_rc=$?
+      if [ "$pbase_rc" != 42 ]; then
+        echo "PACKAGE-BASE-BEHAVIOUR test/package/fn_value_qualified (exit $pbase_rc want 42)"
+        fail=1
+      else
+        pbase_build=1
+      fi
+    fi
+  fi
+
+  if ! ( cd "$PW" && timeout $TCC "$AL" fmt src/main.al ) >"$PO1" 2>"$PE" </dev/null; then
+    echo "PACKAGE-FMT-REFUSE test/package/fn_value_qualified"
+    fail=1
+  elif [ ! -s "$PO1" ]; then
+    echo "PACKAGE-FMT-REFUSE test/package/fn_value_qualified (empty output)"
+    fail=1
+  else
+    if ! grep -qF 'apply(hex::encode, 40)' "$PO1"; then
+      echo "PACKAGE-QUALIFIED-PATH test/package/fn_value_qualified (qualified value path lost)"
+      fail=1
+    fi
+    cp "$PO1" "$PW/src/main.al"
+    if ! ( cd "$PW" && timeout $TCC "$AL" fmt src/main.al ) >"$PO2" 2>"$PE" </dev/null; then
+      echo "PACKAGE-NONIDEMPOTENT test/package/fn_value_qualified (second fmt refused output)"
+      fail=1
+    elif ! diff -q "$PO1" "$PO2" >/dev/null 2>&1; then
+      echo "PACKAGE-NONIDEMPOTENT test/package/fn_value_qualified"
+      fail=1
+    elif ! ( cd "$PW" && timeout $TCC "$AL" build package.al ) >"$PF" 2>"$PE" </dev/null; then
+      echo "PACKAGE-COMPILEFAIL test/package/fn_value_qualified (formatted)"
+      fail=1
+    elif [ "$pbase_build" = 1 ]; then
+      pbin="$PW/target/debug/fn-value-qualified"
+      if [ ! -x "$pbin" ]; then
+        echo "PACKAGE-COMPILEFAIL test/package/fn_value_qualified (formatted executable missing)"
+        fail=1
+      else
+        ( cd "$PW" && timeout $TRUN "$pbin" ) >"$PF" 2>/dev/null </dev/null; pformatted_rc=$?
+        if [ "$pformatted_rc" != 42 ]; then
+          echo "PACKAGE-BEHAVIOUR-EXIT test/package/fn_value_qualified (exit $pformatted_rc want 42)"
+          fail=1
+        else
+          echo "PACKAGE-OK        test/package/fn_value_qualified"
+        fi
+      fi
+    fi
+  fi
+  echo "fmt package fixture=test/package/fn_value_qualified checked=1"
+fi
+
+# ==========================================================================================
 # WALK 2 — `src/` + `lib/`: the compiler's own MODULES, IDEMPOTENCE ONLY.
 #
 # A module has no `_start`, so there is no program to run and `run(fmt(x)) == run(x)` is not a

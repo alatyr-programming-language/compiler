@@ -1008,6 +1008,27 @@ fmt_var_span := fn(e : ptr(Expr), out_s : ptr(mut usize), out_n : ptr(mut usize)
   r
 }
 
+## Recover the SOURCE start of a qualified value path whose AST `Var` span kept only its tail.
+## `p_factor` stores `hex::encode` as `Var(encode)`, so the formatter must use the same narrow
+## source-backed recovery as lower's `gref_split` until the AST grows a path field. A bare name, a
+## malformed separator, or a path with a non-identifier segment falls back to the stored span: a
+## miss may preserve a residual, but it must never invent bytes from nearby source.
+fmt_var_path_start := fn(src : ptr(u8), s : usize, n : usize) -> usize {
+  if n == 0 or s < 3 { return s }
+  if str_at((src + s - 2), 2) != "::" { return s }
+  he := s - 2
+  mut p := he
+  mut scanning := true
+  while scanning {
+    mut q := p
+    while q > 0 and fmt_is_ident_byte(bytes(str_at((src + q - 1), 1))[0]) { q -= 1 }
+    if q == p { return s }
+    p = q
+    if p >= 2 and str_at((src + p - 2), 2) == "::" { p -= 2 } else { scanning = false }
+  }
+  p
+}
+
 ## The BASE of an `Index` node (`fs` in `fs[0]`), 0 for anything else — a SINGLE-match probe (same
 ## seed landmine as `fmt_var_span`: a `match` nested directly inside another `match` arm mis-lowers).
 fmt_index_base := fn(e : ptr(Expr)) -> ptr(Expr) {
@@ -1260,7 +1281,10 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
       }
     }
     Expr::BoolLit(v) => { if v == 0 { push_str(sb, "false") } else { push_str(sb, "true") } }
-    Expr::Var(s, n) => { push_str(sb, str_at((src + s), n)) }
+    Expr::Var(s, n) => {
+      vstart := fmt_var_path_start(src, s, n)
+      push_str(sb, str_at((src + vstart), s + n - vstart))
+    }
     Expr::StrLit(s, n, lbl) => {
       ## `embed("path")` (Comptime §2.4) rides the `StrLit` node, but its payload is the FILE'S BYTES
       ## at an ABSOLUTE arena address — not an offset into `src` — and it carries the embed marker in
