@@ -3131,6 +3131,10 @@ DIAG_AMBIG_MARKER := 4611686018427387904
 DIAG_LIMIT_MARKER := 2305843009213693952
 DIAG_LINKER_SYMBOL_KIND := 7
 DIAG_SCALAR_CONVERSION_MARKER := 5764607523034234880
+## Types §9.4 / Memory §§1.6, 5.9 — the pre-emission fence for a non-literal aggregate
+## assigned to a mutable struct global. Keep it between scalar-conversion and comptime classes so
+## every pre-existing CheckErr range remains byte-identical while all CLI renderers agree.
+DIAG_GLOBAL_AGG_MARKER := 6341068275337658368
 ## CT-12 / Comptime §2.6 — the COMPTIME guard-failure class (shared with sema::comptime_err). Above
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
@@ -3230,7 +3234,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   limit := code >= DIAG_LIMIT_MARKER and code < DIAG_AMBIG_MARKER
   immutable := code >= DIAG_IMMUTABLE_MARKER
   ctg := code >= DIAG_CT_MARKER and code < DIAG_IMMUTABLE_MARKER
-  conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_CT_MARKER
+  gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_CT_MARKER
+  conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_GLOBAL_AGG_MARKER
   ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := code
   mut kind := 0
@@ -3246,6 +3251,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     raw = code - DIAG_CT_MARKER
     kind = raw % 8
     span = raw / 8
+  } else if gagg {
+    raw = code - DIAG_GLOBAL_AGG_MARKER
+    span = raw / 4
   } else if conv {
     raw = code - DIAG_SCALAR_CONVERSION_MARKER
     span = raw / 4
@@ -3267,6 +3275,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
       wk2 := rt::push_str(db, ") violation")
     } else if immutable { wki := rt::push_str(db, "immutable binding") }
     else if ctg { wkc := rt::push_str(db, comptime_guard_name(kind)) }
+    else if gagg { wkg := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
     else if conv { wksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { wk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { wk := rt::push_str(db, "unbound name") }
@@ -5341,7 +5350,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   limit := r >= DIAG_LIMIT_MARKER and r < DIAG_AMBIG_MARKER
   immutable := r >= DIAG_IMMUTABLE_MARKER
   ctg := r >= DIAG_CT_MARKER and r < DIAG_IMMUTABLE_MARKER
-  conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_CT_MARKER
+  gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_CT_MARKER
+  conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_GLOBAL_AGG_MARKER
   ambig := r >= DIAG_AMBIG_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := r
   mut kind := 0
@@ -5357,6 +5367,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     raw = r - DIAG_CT_MARKER
     kind = raw % 8
     span = raw / 8
+  } else if gagg {
+    raw = r - DIAG_GLOBAL_AGG_MARKER
+    span = raw / 4
   } else if conv {
     raw = r - DIAG_SCALAR_CONVERSION_MARKER
     span = raw / 4
@@ -5382,6 +5395,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
       }
     } else if immutable { dwki := rt::push_str(db, "immutable binding") }
     else if ctg { dwkc := rt::push_str(db, comptime_guard_name(kind)) }
+    else if gagg { dwkga := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
     else if conv { dwksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { dwk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { dwk := rt::push_str(db, "unbound name") }

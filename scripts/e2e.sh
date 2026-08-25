@@ -2308,6 +2308,14 @@ build_reject_has embed_missing "embed cannot open file"
 ## destination, so a scalar store would silently drop words — the lower FAILS LOUD instead. (`G = S(…)`
 ## with a struct LITERAL is fully supported — see global_agg_struct_whole_assign.)
 build_reject_has reject_global_struct_nonlit_assign "whole-value assignment of a NON-LITERAL aggregate"
+check_reject reject_global_struct_nonlit_assign
+emit_reject_has wat reject_global_struct_nonlit_assign "whole-value assignment of a NON-LITERAL aggregate"
+emit_reject_has aarch64 reject_global_struct_nonlit_assign "whole-value assignment of a NON-LITERAL aggregate"
+emit_reject_has riscv64 reject_global_struct_nonlit_assign "whole-value assignment of a NON-LITERAL aggregate"
+check_reject reject_global_struct_call_init_nonlit_assign
+emit_reject_has wat reject_global_struct_call_init_nonlit_assign "whole-value assignment of a NON-LITERAL aggregate"
+emit_reject_has aarch64 reject_global_struct_call_init_nonlit_assign "whole-value assignment of a NON-LITERAL aggregate"
+emit_reject_has riscv64 reject_global_struct_call_init_nonlit_assign "whole-value assignment of a NON-LITERAL aggregate"
 ## WHOLE-STRUCT store through a pointer from an if/match BRANCH (`deref(p) = if … { Rec(…) } …`) into a
 ## MULTI-WORD pointee: a branch value is not a struct-lit / var / pointee-deref (the multi-word source
 ## paths), so it fell to the scalar store path and dropped words — the lower FAILS LOUD. (Bind the branch
