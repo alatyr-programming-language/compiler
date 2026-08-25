@@ -4616,7 +4616,10 @@ run array_literal_newline_separator 42
 ## type-name form `size(u64)`/`align(u64)` (a type arg, not an unbound value).
 run size_array_type 42
 run_x86 p1_bytes_zero_u8_local 42
-run_x86_trap reject_p1_bytes_zero_u8_index 132
+check_build_located reject_p1_bytes_zero_u8_index 6 "invalid"
+emit_reject_has wat reject_p1_bytes_zero_u8_index "invalid at line"
+emit_reject_has aarch64 reject_p1_bytes_zero_u8_index "invalid at line"
+emit_reject_has riscv64 reject_p1_bytes_zero_u8_index "invalid at line"
 ## `alatyr run` reported a SIGNAL-terminated program as exit 0 (an unconditional WEXITSTATUS), so a trapping
 ## program looked like a clean success from the user-facing command. Covers SIGILL (132) and SIGFPE (136); a
 ## normal exit still reports its real status (every other `run …` line here proves that).

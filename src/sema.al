@@ -4279,6 +4279,16 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     if ltag == 3 or ltag == 4 or ltag == 5 { rtag = ltag }
     return Result(Ty, CheckErr).Ok(Ty(tag = rtag, ns = raw.ns, nl = raw.nl))
   }
+  ## A direct `local[N]` over a fixed `[T; N]` is the one indexed shape whose bound is already
+  ## available to the common checker. Keep this before the large payload match so the frozen seed,
+  ## `check`, `-o`, and every emit-to-stdout backend observe the same located reject.
+  ib0 := expr_index_base(e)
+  if unchecked bitcast(usize, ib0) != 0 {
+    ii0 := expr_index_index(e)
+    if fixed_array_index_oob(ib0, ii0, src, locals, nloc) {
+      return Result(Ty, CheckErr).Err(located_err(expr_num_lit_start(ii0)))
+    }
+  }
   ## PRE-MATCH ptr-target CALL-ARG check (scar #2: the big-match `Call` arm is not dispatched under the
   ## seed, so call-arg type-checking runs HERE as a side-effect + fall-through, like the exhaustiveness
   ## check below). For a DIRECT, NON-generic call, walk the args: a Var arg naming a local POINTER with a
@@ -5790,6 +5800,31 @@ expr_is_num_lit := fn(e : ptr(Expr)) -> bool {
 expr_num_lit_val := fn(e : ptr(Expr)) -> i64 {
   mut r := 0
   match deref(e) { Expr::Num(v, s, n) => { r = v } _ => {} }
+  r
+}
+
+## Types §6.4 / Assembly §3 / issue #5 — a direct numeric index on a local fixed array is a
+## compile-time fact when the binding retains its `[T; N]` annotation. Reject only the proven
+## out-of-range case, including N = 0; an array type remains legal, and dynamic slices, non-literal
+## indices, aggregate paths, and globals stay on their existing runtime/deferred paths.
+fixed_array_index_oob := fn(base : ptr(Expr), idx : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
+  if unchecked bitcast(usize, locals) == 0 or nloc == 0 or not expr_is_num_lit(idx) { return false }
+  bv := expr_var_span(base)
+  if bv.n == 0 or not local_in(locals, nloc, src, bv.s, bv.n) { return false }
+  bt := local_ty(locals, nloc, src, bv.s, bv.n)
+  mut tag : u8 = bt.tag
+  if tag >= 128 and tag != 255 { tag = tag - 128 }
+  if tag != 7 { return false }
+  n := array_type_count(src, bt.ns, bt.nl)
+  if n < 0 { return false }
+  iv := expr_num_lit_val(idx)
+  iv < 0 or iv >= n
+}
+
+## The source start of a numeric literal, for a located reject at the offending index token.
+expr_num_lit_start := fn(e : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(e) { Expr::Num(v, s, n) => { r = s } _ => {} }
   r
 }
 
