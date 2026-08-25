@@ -4182,7 +4182,8 @@ mut D_QUAL_RW : usize = 0
 ## same-named library generic reachable from the entry module. Qualified injected entry points still
 ## pass through `d_qual_target_ok` above.
 ## On RV64/WAT retain the original entry-module boundary; only AArch64's bounded mono slice needs
-## the caller-module rule for its injected helper closure.
+## the caller-module rule while walking a generic function body.
+mut D_GENERIC_WALK := 0
 d_mark_callee := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::Vec, src : ptr(u8)) {
   if D_KEEP == 0 { return }
   kb := unchecked bitcast(ptr(mut u8), D_KEEP)
@@ -4202,7 +4203,7 @@ d_mark_callee := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
         mut allow := true
         if d.is_generic {
           mut same_mod := d_mod_seg_eq(src, d.mod_start, d.mod_len, D_EMS, D_EML)
-          if D_BACKEND == 1 { same_mod = d_mod_seg_eq(src, d.mod_start, d.mod_len, ms, ml) }
+          if D_BACKEND == 1 and D_GENERIC_WALK != 0 { same_mod = d_mod_seg_eq(src, d.mod_start, d.mod_len, ms, ml) }
           if same_mod == false { allow = false }
         }
         if allow {
@@ -4282,8 +4283,12 @@ d_qual_sweep := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8), keep
     if live {
       d := deref(decl_at(Decl, rt::vec_get(decls, i)))
       if d.kind == 1 or d.kind == 5 {
+        prev_generic_walk := D_GENERIC_WALK
+        D_GENERIC_WALK = 0
+        if d.is_generic { D_GENERIC_WALK = 1 }
         d_qual_stmts(d.body_stmts, d.mod_start, d.mod_len, decls, na, src)
         if unchecked bitcast(usize, d.value) != 0 { d_qual_expr(d.value, d.mod_start, d.mod_len, decls, na, src) }
+        D_GENERIC_WALK = prev_generic_walk
       }
     }
     i += 1
