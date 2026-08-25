@@ -13,7 +13,7 @@
 ## evaluates rhs into x0, pops lhs (rhs → x1), combines. The frame holds params (1 word each) then
 ## locals; a struct local occupies `struct_words` CONTIGUOUS words (variable-size slots) and its fields
 ## are accessed directly at `[x29, #(base_off + field_word_offset*8)]` — no separate base pointer.
-## Anything outside the supported set (struct params/return/copy, enums, arrays, strings, match, nested
+## Anything outside the supported set (struct params/return/copy, enums, arrays, strings, enum match, nested
 ## new `:=`, >8 args, generics, multi-word struct fields) emits `brk #0` — a fail-loud trap (SIGTRAP →
 ## exit 133 under qemu), never a silently-wrong result.
 ##
@@ -5203,6 +5203,32 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
   }
 }
 
+## Emit a SCALAR statement-match arm chain. The caller has already evaluated the integer scrutinee into
+## x0; compare it against each literal without clobbering x0, then emit the selected body. A wildcard
+## always matches. Unsupported pattern kinds remain a loud brk. This is deliberately separate from the
+## enum-discriminant chain below: scalar matches have no payload frame context and no variant lookup.
+emit_a64_scalar_match_arms := fn(arm : usize, endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
+  mut ar := arm
+  while ar != 0 {
+    am := deref(arm_p(ar))
+    aid := a64_next_label()
+    if am.wild == 0 {
+      push_str(sb, "  ldr x1, =") ; push_int(sb, am.lit) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
+    } else if am.wild != 1 {
+      push_str(sb, "  brk #0 // unsupported scalar match pattern on aarch64\n")
+    }
+    hasexpr := am.body_stmts == 0
+    dostmt := (am.body_stmts != 0) and (frame >= 0)
+    if hasexpr { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, 0) }
+    if dostmt { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, 0) }
+    if (not hasexpr) and (not dostmt) { push_str(sb, "  brk #0 // scalar match statement body in value position deferred\n") }
+    push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
+    if am.wild == 0 { push_str(sb, ".Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
+    ar = am.next
+  }
+  push_str(sb, "  brk #0 // no matching scalar arm\n")
+}
+
 ## Emit a match arm chain: compare the scrutinee discriminant (word 0 at frame byte offset `eoff`) to
 ## each arm's variant index; on a match emit the arm body (payload bindings active — `am.binds_head`,
 ## base `eoff`) and branch to `.Lmend<endid>`. An EXPRESSION-body arm (`am.body_stmts == 0`) leaves its
@@ -6830,7 +6856,19 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           emit_a64_match_arms(arms, bagg.s, bagg.n, bind_base + 8, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
         }
-        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) { push_str(sb, "  brk #0 // unsupported match statement\n") }
+        mut scalar_shape := true
+        mut scalar_arm := arms
+        while scalar_arm != 0 {
+          sam := deref(arm_p(scalar_arm))
+          if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
+          scalar_arm = sam.next
+        }
+        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and scalar_shape {
+          emit_a64_expr(scrut, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          emit_a64_scalar_match_arms(arms, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+          push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
+        }
+        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and (not scalar_shape) { push_str(sb, "  brk #0 // unsupported match statement\n") }
         s = nx
       }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => {

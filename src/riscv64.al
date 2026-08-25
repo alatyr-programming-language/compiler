@@ -12,7 +12,7 @@
 ## CODEGEN MODEL: the same naive STACK MACHINE as aarch64 — every expression computes into a0; a binary
 ## op pushes lhs (`sd a0, -16(sp)!` via addi+sd), evaluates rhs into a0, pops lhs (rhs → a1), combines.
 ## Locals/params live in the frame at `(16 + slot*8)(s0)`. Anything outside the kernel (structs,
-## enums, arrays, strings, match, nested new `:=`, >8 args, generics) emits `ebreak` — a fail-loud trap
+## enums, arrays, strings, enum match, nested new `:=`, >8 args, generics) emits `ebreak` — a fail-loud trap
 ## (SIGTRAP → exit 133 under qemu), never a silently-wrong result. The lean-lower workarounds baked into
 ## aarch64.al are preserved here (standalone ifs not else-if chains as a fn body; bind inline str-call
 ## results to a local; flat resolution not nested if/else; <=6-param helpers).
@@ -4805,6 +4805,31 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
   }
 }
 
+## Emit a SCALAR statement-match arm chain (RV). The caller has already evaluated the integer scrutinee
+## into a0; compare it against each literal without clobbering a0, then emit the selected body. A wildcard
+## always matches. Unsupported pattern kinds remain a loud ebreak and never become a wrong value.
+emit_rv_scalar_match_arms := fn(arm : usize, endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
+  mut ar := arm
+  while ar != 0 {
+    am := deref(arm_p(ar))
+    aid := rv_next_label()
+    if am.wild == 0 {
+      push_str(sb, "  li a1, ") ; push_int(sb, am.lit) ; push_str(sb, "\n  bne a0, a1, .Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
+    } else if am.wild != 1 {
+      push_str(sb, "  ebreak # unsupported scalar match pattern on riscv64\n")
+    }
+    hasexpr := am.body_stmts == 0
+    dostmt := (am.body_stmts != 0) and (frame >= 0)
+    if hasexpr { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, 0) }
+    if dostmt { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, 0) }
+    if (not hasexpr) and (not dostmt) { push_str(sb, "  ebreak # scalar match statement body in value position deferred\n") }
+    push_str(sb, "  j .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
+    if am.wild == 0 { push_str(sb, ".Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
+    ar = am.next
+  }
+  push_str(sb, "  ebreak # no matching scalar arm\n")
+}
+
 ## Emit a match arm chain (RV): compare the scrutinee discriminant (word 0 at `eoff(s0)`) to each arm's
 ## variant index; on match emit the body (payload bindings active: am.binds_head@eoff) and jump to
 ## `.Lmend<endid>`. An EXPRESSION-body arm leaves its value in a0; a STATEMENT-body arm runs via
@@ -6324,7 +6349,19 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           emit_rv_match_arms(arms, bagg.s, bagg.n, bind_base + 8, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
         }
-        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) { push_str(sb, "  ebreak\n") }
+        mut scalar_shape := true
+        mut scalar_arm := arms
+        while scalar_arm != 0 {
+          sam := deref(arm_p(scalar_arm))
+          if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
+          scalar_arm = sam.next
+        }
+        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and scalar_shape {
+          emit_rv_expr(scrut, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          emit_rv_scalar_match_arms(arms, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+          push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
+        }
+        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and (not scalar_shape) { push_str(sb, "  ebreak\n") }
         s = nx
       }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
