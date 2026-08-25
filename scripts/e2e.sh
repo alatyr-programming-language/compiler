@@ -4313,6 +4313,8 @@ run fn_value_local_lambda_cross 10
 run cross_match_local 42
 ## Issue #44 bounded WAT slice: scalar loop-expression break values survive the loop join.
 run wat_loop_expr_value 42
+## Issue #44 bounded WAT slice: scalar value breaks from nested loop/while/for bodies drain defers.
+run wat_labeled_value_break 25
 ## Issue #44 bounded WAT slice: a statement-only labeled break exits a nested loop and drains both
 ## loop-body defers in LIFO order before the named-target branch.
 run wat_labeled_break 21
@@ -5472,6 +5474,14 @@ run_wat wasm_nested_local 45
 run_wat wasm_value_match_local_decl 42
 run_wat cross_match_local 42
 run_wat wat_loop_expr_value 42
+run_wat wat_labeled_value_break 25
+run_wat wat_labeled_value_break_aggregate 134
+run_wat wat_labeled_value_break_ptr_bitcast 134
+run_wat wat_labeled_value_break_global_bitcast 134
+run_wat wat_commented_bitcast 134
+run_wat wat_target_comment_bitcast 134
+run_wat wat_inline_comment_bitcast 134
+run_wat wat_grouped_comment_global_bitcast 134
 run_wat wat_labeled_break 21
 run_wat wat_labeled_continue 21
 ## Issue #44: named continue targets the outer statement while and range-for; value-loop and other
