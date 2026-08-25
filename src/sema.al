@@ -85,6 +85,11 @@ scalar_conversion_err := fn(s : usize) -> CheckErr { SCALAR_CONVERSION_DIAG_MARK
 ## byte-identical while every CLI renderer can retain the existing lower's useful wording.
 GLOBAL_AGG_DIAG_MARKER := 6341068275337658368
 global_agg_err := fn(s : usize) -> CheckErr { GLOBAL_AGG_DIAG_MARKER + s * 4 }
+## A distinct located diagnostic for the unsupported standard-byte tuple global ABI boundary. Keep it
+## above the non-literal aggregate-global class and below comptime so every older CheckErr range stays
+## byte-identical while check/build/emit surfaces can share the lower's established wording.
+STANDARD_TUPLE_GLOBAL_DIAG_MARKER := 6629298651489350912
+standard_tuple_global_err := fn(s : usize) -> CheckErr { STANDARD_TUPLE_GLOBAL_DIAG_MARKER + s * 4 }
 
 ## A synthesized type: a tag (0 unknown/error, 1 int, 2 bool, 3 struct, 4 enum, 5 pointer,
 ## 6 str, 7 array) and, for a struct/enum, the type's name span `[ns, ns+nl)`.
@@ -3459,6 +3464,38 @@ global_nonlit_struct_assign_bad := fn(decls : ptr(rt::Vec), upto : usize, src : 
   if vt.tag != 3 { vt = expr_call_result_ty(v, decls, upto, src) }
   if vt.tag != 3 { return false }
   global_struct_type_span(decls, src, s, n).n != 0
+}
+## The explicit byte-array component accepted by the standard tuple-local tier (Types §6.1). This is
+## deliberately narrower than every byte-sized scalar: only a direct `[u8|i8|bits8; N]` component
+## selects the byte tuple representation. A nested array/struct or an ordinary tuple stays outside this
+## fence, as do tuple parameters and returns handled by the existing lower guard.
+sema_byte_array_elem := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 2 and (str_at((src + s), 2) == "u8" or str_at((src + s), 2) == "i8") { return true }
+  n == 5 and str_at((src + s), 5) == "bits8"
+}
+sema_tuple_has_direct_byte_array := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  if tl == 0 or str_at((src + ts), 1) != "(" { return false }
+  mut i := 0
+  mut found := false
+  mut scanning := true
+  while scanning {
+    cs := typearg_at(src, ts, 0, usize(i))
+    if cs.n == 0 { scanning = false } else {
+      ae := array_elem_span(src, cs.s, cs.n)
+      if ae.n != 0 and sema_byte_array_elem(src, ae.s, ae.n) { found = true }
+      i += 1
+    }
+  }
+  found
+}
+## A module-level VALUE declaration with an explicit tuple annotation containing a direct standard byte
+## array is outside the word-based global ABI. Do not inspect inferred values, locals, fields, indexes,
+## parameters, returns, packed types, or ordinary tuples here: this is the exact pre-emission boundary
+## already enforced by lower::validate_standard_byte_tuple_boundaries.
+sema_standard_tuple_global_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  if d.is_fn or d.kind != 0 or d.ret_tl != 0 or d.arity != 0 { return false }
+  ann := global_type_span(decls, src, d.name_start, d.name_len)
+  ann.n != 0 and sema_tuple_has_direct_byte_array(src, ann.s, ann.n)
 }
 ## RETURN-sink conformance: recursively scan a fn body for a `return <v>` whose value is an aggregate↔
 ## scalar clash against the declared return type span `[rts,rtl)` (both directions, via `agg_scalar_bad`).
@@ -10027,6 +10064,10 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
     ## duplicate + body check entirely, exactly as `lower::emit_program` neuters it before emission.
     else if guard_is_false(d, src) { }
     else {
+      ## Types §6.1 / Memory — a direct byte-array component gives a tuple its standard byte layout,
+      ## but module-global storage remains word-based. Reject the exact explicit global form before any
+      ## backend can emit a partial word copy; the local tuple tier and ordinary tuple ABI remain open.
+      if sema_standard_tuple_global_bad(d, decls, src) { return standard_tuple_global_err(d.name_start) }
       ca := sema_type_alias_chain_reject(d, decls, i, src)
       if ca != 0 { return ca }
       ## PROPOSAL 7: reject the spec's `[T]` slice spelling in PARAMETER and RETURN positions while the

@@ -3135,6 +3135,9 @@ DIAG_SCALAR_CONVERSION_MARKER := 5764607523034234880
 ## assigned to a mutable struct global. Keep it between scalar-conversion and comptime classes so
 ## every pre-existing CheckErr range remains byte-identical while all CLI renderers agree.
 DIAG_GLOBAL_AGG_MARKER := 6341068275337658368
+## Types §6.1 / Memory — the explicit standard-byte tuple global has a separate located diagnostic so
+## check/build/emit surfaces can share the lower's existing ABI-boundary wording.
+DIAG_STANDARD_TUPLE_GLOBAL_MARKER := 6629298651489350912
 ## CT-12 / Comptime §2.6 — the COMPTIME guard-failure class (shared with sema::comptime_err). Above
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
@@ -3234,7 +3237,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   limit := code >= DIAG_LIMIT_MARKER and code < DIAG_AMBIG_MARKER
   immutable := code >= DIAG_IMMUTABLE_MARKER
   ctg := code >= DIAG_CT_MARKER and code < DIAG_IMMUTABLE_MARKER
-  gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_CT_MARKER
+  gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
+  tuple_global := code >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and code < DIAG_CT_MARKER
   conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_GLOBAL_AGG_MARKER
   ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := code
@@ -3253,6 +3257,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     span = raw / 8
   } else if gagg {
     raw = code - DIAG_GLOBAL_AGG_MARKER
+    span = raw / 4
+  } else if tuple_global {
+    raw = code - DIAG_STANDARD_TUPLE_GLOBAL_MARKER
     span = raw / 4
   } else if conv {
     raw = code - DIAG_SCALAR_CONVERSION_MARKER
@@ -3276,6 +3283,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     } else if immutable { wki := rt::push_str(db, "immutable binding") }
     else if ctg { wkc := rt::push_str(db, comptime_guard_name(kind)) }
     else if gagg { wkg := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
+    else if tuple_global { wktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if conv { wksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { wk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { wk := rt::push_str(db, "unbound name") }
@@ -5350,7 +5358,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   limit := r >= DIAG_LIMIT_MARKER and r < DIAG_AMBIG_MARKER
   immutable := r >= DIAG_IMMUTABLE_MARKER
   ctg := r >= DIAG_CT_MARKER and r < DIAG_IMMUTABLE_MARKER
-  gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_CT_MARKER
+  gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
+  tuple_global := r >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and r < DIAG_CT_MARKER
   conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_GLOBAL_AGG_MARKER
   ambig := r >= DIAG_AMBIG_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := r
@@ -5369,6 +5378,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     span = raw / 8
   } else if gagg {
     raw = r - DIAG_GLOBAL_AGG_MARKER
+    span = raw / 4
+  } else if tuple_global {
+    raw = r - DIAG_STANDARD_TUPLE_GLOBAL_MARKER
     span = raw / 4
   } else if conv {
     raw = r - DIAG_SCALAR_CONVERSION_MARKER
@@ -5396,6 +5408,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     } else if immutable { dwki := rt::push_str(db, "immutable binding") }
     else if ctg { dwkc := rt::push_str(db, comptime_guard_name(kind)) }
     else if gagg { dwkga := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
+    else if tuple_global { dwktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if conv { dwksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { dwk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { dwk := rt::push_str(db, "unbound name") }

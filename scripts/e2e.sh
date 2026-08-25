@@ -576,6 +576,20 @@ check_reject() { # name
   if [ "$got" = 1 ]; then echo "ok   $1: rejected"; else echo "FAIL $1: check rc=$got want 1"; fail=1; fi
 }
 
+# Assert the CHECK-path diagnostic as well as its non-zero verdict. This is the check-subcommand twin
+# of `build_reject_has`; a shared pre-emission fence must not only reject but retain its source location
+# and intended wording on the type-check-only surface.
+check_reject_has() { # name, needle
+  src="$E2E_TEST/$1.al"
+  [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
+  out="$T/e2e_$1.checkout"; err="$T/e2e_$1.checkerr"
+  "$CC" check "$src" >"$out" 2>"$err"; got=$?
+  if [ "$got" = 0 ]; then echo "FAIL $1: check accepted, want a located reject"; fail=1; return; fi
+  if [ -s "$out" ]; then echo "FAIL $1: check rc=$got but $(wc -c < "$out") bytes reached stdout"; fail=1; return; fi
+  if grep -qF "$2" "$err"; then echo "ok   $1: check rejected with the diagnostic"
+  else echo "FAIL $1: check rc=$got but the diagnostic is missing [$2]"; fail=1; fi
+}
+
 check_accept() { # name
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
@@ -2233,6 +2247,10 @@ run_x86 standard_tuple_byte_component 42
 build_reject_has reject_standard_tuple_byte_param "a standard-layout byte tuple parameter is not supported yet"
 build_reject_has reject_standard_tuple_byte_return "a standard-layout byte tuple return is not supported yet"
 build_reject_has reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
+check_reject_has reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
+emit_reject_has wat reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
+emit_reject_has aarch64 reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
+emit_reject_has riscv64 reject_standard_tuple_byte_global "a standard-layout byte tuple global is not supported yet"
 ## §8 DIRECT aggregate-field READ from a @packed struct: r.inner.x (nested-struct sub-field) + r.name.len
 ## (str field), read through the packed byte layout at the aggregate's 8-aligned byte->slot position;
 ## x86_64-only, so run_x86 (sweep-excluded).
