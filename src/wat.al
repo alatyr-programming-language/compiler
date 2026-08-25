@@ -2928,6 +2928,30 @@ wat_source_ident := fn(src : ptr(u8), i : usize) -> bool {
   (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
 }
 
+## Move backwards over whitespace and full-line `#`/`##` comments between an expression leaf and its
+## enclosing delimiter. An inline hash or ambiguous source span remains a conservative reject.
+wat_source_gap_back := fn(src : ptr(u8), p : usize) -> usize {
+  mut r := p
+  mut searching := true
+  while searching {
+    while r > 0 and wat_source_blank(src, r - 1) { r = r - 1 }
+    if r == 0 {
+      searching = false
+    } else {
+      mut line := r
+      while line > 0 and str_at((src + line - 1), 1) != "\n" { line = line - 1 }
+      mut first := line
+      while first < r and wat_source_blank(src, first) { first = first + 1 }
+      if first < r and str_at((src + first), 1) == "#" {
+        r = line
+      } else {
+        searching = false
+      }
+    }
+  }
+  r
+}
+
 ## The parser returns only the value node for a word-sized bitcast. Starting at that node's left leaf,
 ## walk backwards through the second-argument comma and the balanced first argument; admit no expression
 ## whose enclosing callee is `bitcast`. This is deliberately source-aware and conservative: comments,
@@ -2937,7 +2961,8 @@ wat_erased_bitcast_at := fn(src : ptr(u8), pos : usize) -> bool {
   mut p := pos
   mut moving := true
   while moving {
-    while p > 0 and (wat_source_blank(src, p - 1) or str_at((src + p - 1), 1) == "(" or str_at((src + p - 1), 1) == "+" or str_at((src + p - 1), 1) == "-") { p = p - 1 }
+    p = wat_source_gap_back(src, p)
+    while p > 0 and (str_at((src + p - 1), 1) == "(" or str_at((src + p - 1), 1) == "+" or str_at((src + p - 1), 1) == "-") { p = p - 1 }
     mut end := p
     mut start := end
     while start > 0 and wat_source_ident(src, start - 1) { start = start - 1 }
@@ -3007,7 +3032,7 @@ wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : ptr(mut Param),
     while i < cnt {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
-        match deref(d.value) { Expr::Num(_v, _s, _n) => { return true } _ => {} }
+        match deref(d.value) { Expr::Num(_v, _s, _n) => { return wat_break_scalar_expr(d.value, params_head, fn_head, src, a, decls, dep + 1) } _ => {} }
       }
       i = i + 1
     }
