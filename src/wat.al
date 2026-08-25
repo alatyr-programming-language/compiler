@@ -2969,7 +2969,15 @@ wat_erased_bitcast_at := fn(src : ptr(u8), pos : usize) -> bool {
   mut moving := true
   while moving {
     p = wat_source_gap_back(src, p)
-    while p > 0 and (str_at((src + p - 1), 1) == "(" or str_at((src + p - 1), 1) == "+" or str_at((src + p - 1), 1) == "-") { p = p - 1 }
+    mut punct := true
+    while punct {
+      punct = false
+      while p > 0 and (str_at((src + p - 1), 1) == "(" or str_at((src + p - 1), 1) == "+" or str_at((src + p - 1), 1) == "-") {
+        p = p - 1
+        punct = true
+      }
+      if punct { p = wat_source_gap_back(src, p) }
+    }
     mut end := p
     mut start := end
     while start > 0 and wat_source_ident(src, start - 1) { start = start - 1 }
