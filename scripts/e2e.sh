@@ -4227,6 +4227,13 @@ run_a64 reject_inferred_arr_field_agg_read 133
 run_rv64 reject_inferred_arr_field_agg_read 133
 run_wat reject_inferred_arr_field_agg_read 134
 check_accept reject_inferred_arr_field_agg_read
+## Issue #43 bounded slice: an inferred unannotated homogeneous word-granular local array now accepts
+## `xs[i].arr[j] = P(...)` on AArch64; aggregate reads and unsupported backends remain fail-loud.
+run deep_arr_field_inferred_local_agg_write 42
+run_a64 deep_arr_field_inferred_local_agg_write 42
+run_rv64 deep_arr_field_inferred_local_agg_write 133
+run_wat deep_arr_field_inferred_local_agg_write 134
+check_accept deep_arr_field_inferred_local_agg_write
 run deep_arr_field_global 85
 run_a64 deep_arr_field_global 85
 check_accept deep_arr_field_global
