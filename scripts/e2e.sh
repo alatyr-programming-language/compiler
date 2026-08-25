@@ -4276,6 +4276,8 @@ run fn_value_bound_callee 70
 run fn_value_local_lambda_cross 10
 ## Issue #7 bounded slice: a statement integer match must preserve the local result across the join.
 run cross_match_local 42
+## Issue #44 bounded WAT slice: scalar loop-expression break values survive the loop join.
+run wat_loop_expr_value 42
 run_wat fn_value_local_lambda_cross 10
 run_a64 fn_value_local_lambda_cross 10
 run_rv64 fn_value_local_lambda_cross 10
@@ -5061,6 +5063,7 @@ run defer_value_order 44
 ## A `defer` in a VALUE-BEARING `loop` (`x := loop { … break 5 }`): the break value and the drain coexist
 ## (value pushed, drain sits above it, done-label converges with exactly one value).
 run defer_value_loop 16
+run_wat defer_value_loop 16
 ## DEFER BLOCK FAIL-LOUD: a `defer { }` may not contain control flow (`return`/`break`/`continue`/`?`) —
 ## a jump out of a cleanup would skip the rest of it / jump into stale labels (partial-cleanup hazard).
 build_reject_has defer_blk_reject "defer — a"
@@ -5423,6 +5426,7 @@ run_wat hex_literal 42
 run_wat wasm_nested_local 45
 run_wat wasm_value_match_local_decl 42
 run_wat cross_match_local 42
+run_wat wat_loop_expr_value 42
 check_backend_determinism
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
