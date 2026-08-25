@@ -2284,6 +2284,14 @@ build_reject_has packed_in_plain_struct "a @packed/@offset/@align/@endian struct
 ## the non-zero build rc (a valid binary with a wrong result would be the forbidden silent miscompile).
 build_reject_has packed_array "an array whose element is a @packed struct is not supported"
 build_reject_has reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
+## The same ARRAY-OF-@packed fence must hold on every emit-to-stdout backend. These surfaces run their
+## front-end check first, then the shared lower_layout query must reject before any GAS/WAT reaches stdout.
+emit_reject_has wat packed_array "an array whose element is a @packed struct is not supported"
+emit_reject_has aarch64 packed_array "an array whose element is a @packed struct is not supported"
+emit_reject_has riscv64 packed_array "an array whose element is a @packed struct is not supported"
+emit_reject_has wat reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
+emit_reject_has aarch64 reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
+emit_reject_has riscv64 reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
 ## `embed(comptime path : str)` — the reproducible comptime file-embed builtin (Comptime §2.4): bakes
 ## a file's exact bytes into the program as a read-only `[u8]` sequence. `embed_bytes` embeds the
 ## 4-byte BINARY fixture (NUL / 0xFF / 'A' / newline) and checks `.len`, each byte, and their sum →
