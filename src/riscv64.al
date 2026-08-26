@@ -43,7 +43,7 @@ field_type_is_float := lower_layout::field_type_is_float
 variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
@@ -95,23 +95,7 @@ rv_param_find := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl 
   return -1
 }
 
-## --- struct support (mirror of aarch64.al; separate usize accessors, never a returned struct) ---
-rv_is_slit := fn(v : ptr(Expr)) -> bool {
-  mut r := false
-  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = true } _ => {} }
-  r
-}
-rv_slit_ns := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = ss } _ => {} }
-  r
-}
-rv_slit_nl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = sn } _ => {} }
-  r
-}
-
+## --- struct support (shared StructLit accessors are imported from lower_ctx) ---
 
 ## THIS BACKEND'S OWN ARCH IDENTITY (Tooling §2.7). `target.*` is the RESOLVED SELECTED machine model —
 ## the machine being compiled FOR — so when this emitter runs, `target.arch` IS `Arch.riscv64`. It used
@@ -205,7 +189,7 @@ rv_local_struct_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) and rv_is_slit(v) { rs = rv_slit_ns(v) ; done = true }
+        if streq(src, ans, anl, ns, nl) and expr_is_struct_lit(v) { rs = expr_struct_lit_ns(v) ; done = true }
         ## a local bound to a struct-RETURNING CALL takes the callee's returned struct type (§8 piece 2).
         if streq(src, ans, anl, ns, nl) and (not done) { crs := rv_call_ret_struct_span(v, rv_decls(), src, a) ; if crs.n != 0 { rs = crs.s ; done = true } }
         ## a local bound to a WIDE-struct-returning CALL (`s := mk()`, LP64 indirect result) takes the same
@@ -271,7 +255,7 @@ rv_local_struct_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) and rv_is_slit(v) { rn = rv_slit_nl(v) ; done = true }
+        if streq(src, ans, anl, ns, nl) and expr_is_struct_lit(v) { rn = expr_struct_lit_nl(v) ; done = true }
         if streq(src, ans, anl, ns, nl) and (not done) { crs := rv_call_ret_struct_span(v, rv_decls(), src, a) ; if crs.n != 0 { rn = crs.n ; done = true } }
         ## a WIDE-struct-returning CALL bind (`s := mk()`, LP64 indirect result) — same span, see the _ns twin.
         if streq(src, ans, anl, ns, nl) and (not done) { crt := rv_call_ret_sret_span(v, rv_decls(), src, a) ; if crt.n != 0 { rn = crt.n ; done = true } }
@@ -580,21 +564,6 @@ rv_cf_offset_value := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a :
   }
 }
 
-rv_field_base := fn(e : ptr(Expr)) -> ptr(Expr) {
-  mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
-  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = fb } _ => {} }
-  r
-}
-rv_field_fns := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = ffs } _ => {} }
-  r
-}
-rv_field_fnl := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = ffl } _ => {} }
-  r
-}
 ## The generic type-param's NAME span (the `T` of `T : type`), 0/0 if `d` has none.
 rv_tparam_name := fn(d : Decl, src : ptr(u8)) -> CSpan {
   mut p := d.params_head
@@ -628,11 +597,11 @@ rv_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_hea
     ## `f.type` (§8 field-derive) — the type-arg is `Field(Var(f), "type")` where `f` is the active
     ## comptime field-unroll loop var (RV_CF_VAR set): resolve to the CURRENT field's TYPE (RV_CF_TY).
     if tl == 0 and RV_CF_VAR_L != 0 and ex_is_field(ea) {
-      cfb := rv_field_base(ea)
+      cfb := expr_field_base(ea)
       cfbs := ex_var_ns(cfb)
       cfbl := ex_var_nl(cfb)
-      cffs := rv_field_fns(ea)
-      cffl := rv_field_fnl(ea)
+      cffs := expr_field_name_s(ea)
+      cffl := expr_field_name_l(ea)
       if cfbl != 0 and streq(src, cfbs, cfbl, RV_CF_VAR_S, RV_CF_VAR_L) and str_at((src + cffs), cffl) == "type" {
         ts = RV_CF_TY_S
         tl = RV_CF_TY_L
@@ -660,7 +629,7 @@ rv_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_hea
       mut p := penv
       while p != 0 { pm := deref(param_p(p)) ; if tl == 0 and streq(src, pm.ns, pm.nl, vns, vnl) { ts = pm.ts ; tl = pm.tl } ; p = pm.next }
     }
-    if tl == 0 and rv_is_slit(a0) { ts = rv_slit_ns(a0) ; tl = rv_slit_nl(a0) }
+    if tl == 0 and expr_is_struct_lit(a0) { ts = expr_struct_lit_ns(a0) ; tl = expr_struct_lit_nl(a0) }
     if tl == 0 and rv_is_elit(a0) { ts = rv_elit_ens(a0) ; tl = rv_elit_enl(a0) }
     ## a Var naming the CURRENT match arm's SINGLE payload BINDING: infer T from the variant's payload type.
     if tl == 0 and vnl != 0 and RV_ARM_ENL != 0 and RV_ARM_BINDS != 0 {
@@ -869,9 +838,9 @@ rv_field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
 rv_std_path_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
   if ex_is_field(e) {
-    base := rv_field_base(e)
+    base := expr_field_base(e)
     bt := rv_std_path_ty(base, body_head, src, a, decls)
-    if bt.n != 0 { r = field_type_span(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a) }
+    if bt.n != 0 { r = field_type_span(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a) }
   }
   if not ex_is_field(e) {
     ns := ex_var_ns(e)
@@ -887,24 +856,24 @@ rv_std_path_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a 
 
 rv_std_path_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   if not ex_is_field(e) { return false }
-  base := rv_field_base(e)
+  base := expr_field_base(e)
   bt := rv_std_path_ty(base, body_head, src, a, decls)
   if bt.n == 0 { return false }
-  layout_field_offset_bytes(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a) >= 0
+  layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a) >= 0
 }
 
 rv_std_path_bo := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if not rv_std_path_ok(e, body_head, src, a, decls) { return 0 - 1 }
-  base := rv_field_base(e)
+  base := expr_field_base(e)
   mut pbo := i64(0)
   if ex_is_field(base) { pbo = rv_std_path_bo(base, body_head, src, a, decls) }
   bt := rv_std_path_ty(base, body_head, src, a, decls)
-  pbo + layout_field_offset_bytes(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a)
+  pbo + layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a)
 }
 
 rv_std_path_root_off := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if not rv_std_path_ok(e, body_head, src, a, decls) { return 0 - 1 }
-  base := rv_field_base(e)
+  base := expr_field_base(e)
   if ex_is_field(base) { return rv_std_path_root_off(base, body_head, src, pcount, a, decls) }
   rv_local_off(body_head, src, ex_var_ns(base), ex_var_nl(base), pcount, a, decls)
 }
@@ -916,9 +885,9 @@ rv_std_path_root_off := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u
 rv_std_param_path_ty := fn(e : ptr(Expr), params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
   if ex_is_field(e) {
-    base := rv_field_base(e)
+    base := expr_field_base(e)
     bt := rv_std_param_path_ty(base, params_head, src, a, decls)
-    if bt.n != 0 { r = field_type_span(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a) }
+    if bt.n != 0 { r = field_type_span(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a) }
   }
   if not ex_is_field(e) {
     ns := ex_var_ns(e)
@@ -935,24 +904,24 @@ rv_std_param_path_ty := fn(e : ptr(Expr), params_head : ptr(mut Param), src : pt
 
 rv_std_param_path_ok := fn(e : ptr(Expr), params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   if not ex_is_field(e) { return false }
-  base := rv_field_base(e)
+  base := expr_field_base(e)
   bt := rv_std_param_path_ty(base, params_head, src, a, decls)
   if bt.n == 0 { return false }
-  layout_field_offset_bytes(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a) >= 0
+  layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a) >= 0
 }
 
 rv_std_param_path_bo := fn(e : ptr(Expr), params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if not rv_std_param_path_ok(e, params_head, src, a, decls) { return 0 - 1 }
-  base := rv_field_base(e)
+  base := expr_field_base(e)
   mut pbo := i64(0)
   if ex_is_field(base) { pbo = rv_std_param_path_bo(base, params_head, src, a, decls) }
   bt := rv_std_param_path_ty(base, params_head, src, a, decls)
-  pbo + layout_field_offset_bytes(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a)
+  pbo + layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a)
 }
 
 rv_std_param_path_idx := fn(e : ptr(Expr), params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if not rv_std_param_path_ok(e, params_head, src, a, decls) { return 0 - 1 }
-  base := rv_field_base(e)
+  base := expr_field_base(e)
   if ex_is_field(base) { return rv_std_param_path_idx(base, params_head, src, a, decls) }
   rv_param_find(params_head, src, ex_var_ns(base), ex_var_nl(base), a)
 }
@@ -971,11 +940,11 @@ rv_std_idx_path_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8)
     return r
   }
   if ex_is_field(e) {
-    base := rv_field_base(e)
+    base := expr_field_base(e)
     bt := rv_std_idx_path_ty(base, body_head, src, a, decls)
     if bt.n != 0 {
-      bo := layout_field_offset_bytes(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a)
-      if bo >= 0 { r = field_type_span(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a) }
+      bo := layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a)
+      if bo >= 0 { r = field_type_span(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a) }
     }
   }
   r
@@ -989,20 +958,20 @@ rv_std_idx_path_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8)
 rv_std_idx_path_bo := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if not rv_std_idx_path_ok(e, body_head, src, a, decls) { return 0 - 1 }
   if ex_is_index(e) { return 0 }
-  base := rv_field_base(e)
+  base := expr_field_base(e)
   bt := rv_std_idx_path_ty(base, body_head, src, a, decls)
-  rv_std_idx_path_bo(base, body_head, src, a, decls) + layout_field_offset_bytes(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a)
+  rv_std_idx_path_bo(base, body_head, src, a, decls) + layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a)
 }
 
 rv_std_idx_root_arr := fn(e : ptr(Expr)) -> ptr(Expr) {
   if ex_is_index(e) { return ex_index_base(e) }
-  if ex_is_field(e) { return rv_std_idx_root_arr(rv_field_base(e)) }
+  if ex_is_field(e) { return rv_std_idx_root_arr(expr_field_base(e)) }
   unchecked bitcast(ptr(Expr), 0)
 }
 
 rv_std_idx_root_idx := fn(e : ptr(Expr)) -> ptr(Expr) {
   if ex_is_index(e) { return ex_index_idx(e) }
-  if ex_is_field(e) { return rv_std_idx_root_idx(rv_field_base(e)) }
+  if ex_is_field(e) { return rv_std_idx_root_idx(expr_field_base(e)) }
   unchecked bitcast(ptr(Expr), 0)
 }
 
@@ -1113,7 +1082,7 @@ rv_std_store_value := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsiz
   ## 0 on x86_64, so all four were made to refuse (I11 permits a trap, never a wrong value). A child
   ## OUTSIDE the domain — one carrying a `str`, an enum, a union, a tuple or a non-byte array — still
   ## has no store here and still traps.
-    if rv_is_slit(pe) and std_struct_is_byte_writable(decls, src, ts, tl, a) { return rv_std_store_struct(pe, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+    if expr_is_struct_lit(pe) and std_struct_is_byte_writable(decls, src, ts, tl, a) { return rv_std_store_struct(pe, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
     push_str(sb, "  ebreak # unsupported standard aggregate field construction\n")
     return i64(struct_words(decls, src, ts, tl, a))
   }
@@ -1123,8 +1092,8 @@ rv_std_store_value := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsiz
 }
 
 rv_std_store_struct := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
-  sns := rv_slit_ns(pe)
-  snl := rv_slit_nl(pe)
+  sns := expr_struct_lit_ns(pe)
+  snl := expr_struct_lit_nl(pe)
   di := struct_decl_of(decls, src, sns, snl)
   if di < 0 { push_str(sb, "  ebreak # unknown standard struct literal\n") ; return 0 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
@@ -1166,7 +1135,7 @@ rv_std_store_value_atptr := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize
   }
   bn := base_type_name(src, ts, tl)
   if struct_decl_of(decls, src, bn.s, bn.n) >= 0 {
-    if rv_is_slit(pe) and std_struct_is_byte_writable(decls, src, ts, tl, a) { return rv_std_store_struct_atptr(pe, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+    if expr_is_struct_lit(pe) and std_struct_is_byte_writable(decls, src, ts, tl, a) { return rv_std_store_struct_atptr(pe, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
     push_str(sb, "  ebreak # unsupported byte-tier aggregate construction at pointer\n")
     return i64(wsize)
   }
@@ -1182,8 +1151,8 @@ rv_std_store_value_atptr := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize
 }
 
 rv_std_store_struct_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
-  sns := rv_slit_ns(pe)
-  snl := rv_slit_nl(pe)
+  sns := expr_struct_lit_ns(pe)
+  snl := expr_struct_lit_nl(pe)
   di := struct_decl_of(decls, src, sns, snl)
   if di < 0 { push_str(sb, "  ebreak # unknown byte-tier struct literal at pointer\n") ; return 0 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
@@ -1340,7 +1309,7 @@ rv_param_enum_nl := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, 
 rv_elit_payload_scalar := fn(v : ptr(Expr)) -> bool {
   mut g := ex_enum_lit_args(v)
   mut ok := true
-  while g != 0 { ga := deref(arg_p(g)) ; if rv_is_slit(ga.e) or rv_is_elit(ga.e) or rv_is_strlit(ga.e) { ok = false } ; g = ga.next }
+  while g != 0 { ga := deref(arg_p(g)) ; if expr_is_struct_lit(ga.e) or rv_is_elit(ga.e) or rv_is_strlit(ga.e) { ok = false } ; g = ga.next }
   ok
 }
 
@@ -1454,9 +1423,9 @@ rv_alit_stride := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt
   if eh != 0 {
     a0 := deref(arg_p(eh))
     e0 := a0.e
-    if rv_is_slit(e0) {
-      if std_array_elem_byte_tier(decls, src, rv_slit_ns(e0), rv_slit_nl(e0), a) { w = i64(array_elem_word_reservation(decls, src, rv_slit_ns(e0), rv_slit_nl(e0), a)) }
-      if not std_array_elem_byte_tier(decls, src, rv_slit_ns(e0), rv_slit_nl(e0), a) { require_no_byte_layout_array_elem(decls, src, rv_slit_ns(e0), rv_slit_nl(e0), a) ; w = i64(struct_words(decls, src, rv_slit_ns(e0), rv_slit_nl(e0), a)) }
+    if expr_is_struct_lit(e0) {
+      if std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) { w = i64(array_elem_word_reservation(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a)) }
+      if not std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) { require_no_byte_layout_array_elem(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) ; w = i64(struct_words(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a)) }
     }
     if rv_is_elit(e0) { w = 1 + i64(enum_max_arity(decls, src, rv_elit_ens(e0), rv_elit_enl(e0), a)) }
   }
@@ -1475,7 +1444,7 @@ rv_arr_elem_struct_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
         if streq(src, ans, anl, ns, nl) {
           if ex_is_array_lit(v) {
             eh := ex_array_lit_ehead(v)
-            if eh != 0 { a0 := deref(arg_p(eh)) ; e0 := a0.e ; if rv_is_slit(e0) { r = CSpan(s = rv_slit_ns(e0), n = rv_slit_nl(e0)) } }
+            if eh != 0 { a0 := deref(arg_p(eh)) ; e0 := a0.e ; if expr_is_struct_lit(e0) { r = CSpan(s = expr_struct_lit_ns(e0), n = expr_struct_lit_nl(e0)) } }
             done = true
           }
           ## a range-slice VIEW `s := base[lo..hi]` inherits its element struct from the base ARRAY.
@@ -1660,7 +1629,7 @@ emit_rv_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8
 
 rv_val_words := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   mut w := 1
-  if rv_is_slit(v) { w = i64(struct_words(decls, src, rv_slit_ns(v), rv_slit_nl(v), a)) }
+  if expr_is_struct_lit(v) { w = i64(struct_words(decls, src, expr_struct_lit_ns(v), expr_struct_lit_nl(v), a)) }
   ## enum instance = 1 discriminant word + enum_max_arity payload words (enum_inst_words omits the disc).
   if rv_is_elit(v) { w = 1 + i64(enum_max_arity(decls, src, rv_elit_ens(v), rv_elit_enl(v), a)) }
   if ex_is_array_lit(v) { w = rv_alit_nel(v) * rv_alit_stride(v, src, a, decls) }
@@ -1923,7 +1892,7 @@ rv_aggval_words_e := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr
   match deref(e) {
     Expr::Bin(op, l, r) => { c = rv_aggval_words_e(l, src, a, decls) + rv_aggval_words_e(r, src, a, decls) }
     Expr::If(cc, t, f) => { c = rv_aggval_words_e(cc, src, a, decls) + rv_aggval_words_e(t, src, a, decls) + rv_aggval_words_e(f, src, a, decls) }
-    Expr::Call(cs, cl, n, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if rv_is_slit(ga.e) { c = c + i64(struct_words(decls, src, rv_slit_ns(ga.e), rv_slit_nl(ga.e), a)) } ; if rv_is_elit(ga.e) { c = c + 1 + i64(enum_max_arity(decls, src, rv_elit_ens(ga.e), rv_elit_enl(ga.e), a)) } ; crc := rv_call_ret_struct_span(ga.e, decls, src, a) ; if crc.n != 0 { c = c + i64(struct_words(decls, src, crc.s, crc.n, a)) } ; cre := rv_call_ret_enum_span(ga.e, decls, src, a) ; if cre.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a)) } ; srr := rv_call_ret_sret_span(ga.e, decls, src, a) ; if srr.n != 0 { c = c + i64(struct_words(decls, src, srr.s, srr.n, a)) } ; esr := rv_call_ret_enum_sret_span(ga.e, decls, src, a) ; if esr.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, esr.s, esr.n, a)) } ; c = c + rv_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
+    Expr::Call(cs, cl, n, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_is_struct_lit(ga.e) { c = c + i64(struct_words(decls, src, expr_struct_lit_ns(ga.e), expr_struct_lit_nl(ga.e), a)) } ; if rv_is_elit(ga.e) { c = c + 1 + i64(enum_max_arity(decls, src, rv_elit_ens(ga.e), rv_elit_enl(ga.e), a)) } ; crc := rv_call_ret_struct_span(ga.e, decls, src, a) ; if crc.n != 0 { c = c + i64(struct_words(decls, src, crc.s, crc.n, a)) } ; cre := rv_call_ret_enum_span(ga.e, decls, src, a) ; if cre.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a)) } ; srr := rv_call_ret_sret_span(ga.e, decls, src, a) ; if srr.n != 0 { c = c + i64(struct_words(decls, src, srr.s, srr.n, a)) } ; esr := rv_call_ret_enum_sret_span(ga.e, decls, src, a) ; if esr.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, esr.s, esr.n, a)) } ; c = c + rv_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
     Expr::Field(base, fs, fl) => { c = rv_aggval_words_e(base, src, a, decls) }
     Expr::Index(base, idx) => { c = rv_aggval_words_e(base, src, a, decls) + rv_aggval_words_e(idx, src, a, decls) }
     Expr::Unchecked(inner) => { c = rv_aggval_words_e(inner, src, a, decls) }
@@ -2275,7 +2244,7 @@ rv_is_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, 
 ## Mirrors aarch64.al: an aggregate global is laid in `.data` as ascending 8-byte cells (nested structs
 ## flattened inline, like the x86 lower), addressed by its plain source-name label; a field chain rooted
 ## at it reads/writes at LABEL + cumulative-word-offset*8 (scalar leaf only).
-rv_value_is_agg := fn(v : ptr(Expr)) -> bool { rv_is_slit(v) or rv_is_elit(v) or ex_is_array_lit(v) }
+rv_value_is_agg := fn(v : ptr(Expr)) -> bool { expr_is_struct_lit(v) or rv_is_elit(v) or ex_is_array_lit(v) }
 
 rv_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> ptr(Expr) {
   cnt := rt::vec_len(deref(decls))
@@ -2293,7 +2262,7 @@ rv_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usiz
 ## a struct-lit emits its field args in order (nested struct flattens); an array-lit its elements; an enum-lit
 ## `[disc, payload…, pad]` to `1+enum_inst_words`; a float `.double`; anything else `.quad` of its int value.
 emit_rv_global_cells := fn(e : ptr(Expr), in out sb : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
-  if rv_is_slit(e) {
+  if expr_is_struct_lit(e) {
     mut g := ex_struct_lit_args(e)
     while g != 0 { ga := deref(arg_p(g)) ; emit_rv_global_cells(ga.e, sb, decls, src, a) ; g = ga.next }
   } else if ex_is_array_lit(e) {
@@ -2320,7 +2289,7 @@ rv_gchain_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
   match deref(e) {
     Expr::Var(s, n) => {
       gv := rv_global_value(decls, src, s, n)
-      if unchecked bitcast(usize, gv) != 0 { if rv_is_slit(gv) { r = CSpan(s = rv_slit_ns(gv), n = rv_slit_nl(gv)) } }
+      if unchecked bitcast(usize, gv) != 0 { if expr_is_struct_lit(gv) { r = CSpan(s = expr_struct_lit_ns(gv), n = expr_struct_lit_nl(gv)) } }
     }
     Expr::Field(base, fs, fl) => {
       bt := rv_gchain_type(base, decls, src, a)
@@ -2337,7 +2306,7 @@ rv_gchain_woff := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
   match deref(e) {
     Expr::Var(s, n) => {
       gv := rv_global_value(decls, src, s, n)
-      if unchecked bitcast(usize, gv) != 0 { if rv_is_slit(gv) { r = 0 } }
+      if unchecked bitcast(usize, gv) != 0 { if expr_is_struct_lit(gv) { r = 0 } }
     }
     Expr::Field(base, fs, fl) => {
       boff := rv_gchain_woff(base, decls, src, a)
@@ -2420,7 +2389,7 @@ rv_garr_elem_struct_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, 
   if eh != 0 {
     ga0 := deref(arg_p(eh))
     ge0 := ga0.e
-    if rv_is_slit(ge0) { r = CSpan(s = rv_slit_ns(ge0), n = rv_slit_nl(ge0)) }
+    if expr_is_struct_lit(ge0) { r = CSpan(s = expr_struct_lit_ns(ge0), n = expr_struct_lit_nl(ge0)) }
   }
   r
 }
@@ -2437,16 +2406,16 @@ rv_alit_homog_slit := fn(v : ptr(Expr), src : ptr(u8)) -> bool {
   if eh == 0 { return false }
   h0 := deref(arg_p(eh))
   e0 := h0.e
-  if not rv_is_slit(e0) { return false }
-  hs := rv_slit_ns(e0)
-  hn := rv_slit_nl(e0)
+  if not expr_is_struct_lit(e0) { return false }
+  hs := expr_struct_lit_ns(e0)
+  hn := expr_struct_lit_nl(e0)
   mut g := eh
   mut ok := true
   while g != 0 {
     ga := deref(arg_p(g))
-    if not rv_is_slit(ga.e) { ok = false }
-    if rv_is_slit(ga.e) {
-      if not streq(src, rv_slit_ns(ga.e), rv_slit_nl(ga.e), hs, hn) { ok = false }
+    if not expr_is_struct_lit(ga.e) { ok = false }
+    if expr_is_struct_lit(ga.e) {
+      if not streq(src, expr_struct_lit_ns(ga.e), expr_struct_lit_nl(ga.e), hs, hn) { ok = false }
     }
     g = ga.next
   }
@@ -2695,14 +2664,14 @@ rv_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : r
   mut r := CSpan(s = 0, n = 0)
   if unchecked bitcast(usize, e) == 0 { return r }
   if ex_is_field(e) {
-    bt := rv_place_ty(rv_field_base(e), body_head, src, a, decls)
+    bt := rv_place_ty(expr_field_base(e), body_head, src, a, decls)
     mut fok := false
     if bt.n != 0 {
       if struct_decl_of(decls, src, bt.s, bt.n) >= 0 {
         if struct_plain(decls, src, bt.s, bt.n) { fok = true }
       }
     }
-    if fok { r = field_type_span(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a) }
+    if fok { r = field_type_span(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a) }
     return r
   }
   if ex_is_index(e) {
@@ -2749,14 +2718,14 @@ rv_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), param
   mut r := false
   if unchecked bitcast(usize, e) == 0 { return r }
   if ex_is_field(e) {
-    fbase := rv_field_base(e)
+    fbase := expr_field_base(e)
     if not rv_place_ok(fbase, body_head, src, params_head, pcount, a, decls) { return r }
     bt := rv_place_ty(fbase, body_head, src, a, decls)
     if bt.n == 0 { return r }
     if struct_decl_of(decls, src, bt.s, bt.n) < 0 { return r }
     if not struct_plain(decls, src, bt.s, bt.n) { return r }
-    mut foffok := field_word_offset(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a) >= 0
-    if rv_std_idx_path_ok(e, body_head, src, a, decls) { foffok = layout_field_offset_bytes(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a) >= 0 }
+    mut foffok := field_word_offset(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a) >= 0
+    if rv_std_idx_path_ok(e, body_head, src, a, decls) { foffok = layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a) >= 0 }
     if foffok { r = true }
     return r
   }
@@ -2800,10 +2769,10 @@ emit_rv_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
   isf := ex_is_field(e)
   isi := ex_is_index(e)
   if isf {
-    fbase := rv_field_base(e)
+    fbase := expr_field_base(e)
     bt := rv_place_ty(fbase, body_head, src, a, decls)
-    mut boff := i64(field_word_offset(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a)) * 8
-    if rv_std_idx_path_ok(e, body_head, src, a, decls) { boff = layout_field_offset_bytes(decls, src, bt.s, bt.n, rv_field_fns(e), rv_field_fnl(e), a) }
+    mut boff := i64(field_word_offset(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a)) * 8
+    if rv_std_idx_path_ok(e, body_head, src, a, decls) { boff = layout_field_offset_bytes(decls, src, bt.s, bt.n, expr_field_name_s(e), expr_field_name_l(e), a) }
     emit_rv_place_addr(fbase, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
     if boff > 0 { push_str(sb, "  li a1, ") ; push_int(sb, boff) ; push_str(sb, "\n  add a0, a0, a1\n") }
   }
@@ -4216,7 +4185,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
               gavnl := ex_var_nl(ga.e)
               gisarr := gavnl != 0 and rv_is_array_local(body_head, src, gavns, gavnl, a)
               gisstruct := (not gisarr) and gavnl != 0 and rv_local_struct_nl(body_head, src, gavns, gavnl, a) != 0
-              isslit := rv_is_slit(ga.e)
+              isslit := expr_is_struct_lit(ga.e)
               iselit := (not isslit) and rv_is_elit(ga.e)
               iscallret := (not isslit) and (not iselit) and rv_call_ret_struct_span(ga.e, decls, src, a).n != 0
               isenumret := (not isslit) and (not iselit) and (not iscallret) and rv_call_ret_enum_span(ga.e, decls, src, a).n != 0
@@ -4378,7 +4347,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ## the >8-arg overflow path does NOT perform. Trap FIRST (loud, never silent); the corpus has none.
         mut aggarg := false
         mut gsc := args_head
-        while gsc != 0 { gsa := deref(arg_p(gsc)) ; if rv_is_slit(gsa.e) or rv_is_elit(gsa.e) or (rv_call_ret_struct_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_sret_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_sret_span(gsa.e, decls, src, a).n != 0) { aggarg = true } ; gsc = gsa.next }
+        while gsc != 0 { gsa := deref(arg_p(gsc)) ; if expr_is_struct_lit(gsa.e) or rv_is_elit(gsa.e) or (rv_call_ret_struct_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_sret_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_sret_span(gsa.e, decls, src, a).n != 0) { aggarg = true } ; gsc = gsa.next }
         if aggarg { push_str(sb, "  ebreak\n") }
         mut nstk := 0
         mut ci := 0
@@ -4491,7 +4460,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           isslicearg := ex_is_slice(ga.e)
           ## an anonymous STRUCT-LITERAL VALUE arg (`f(S(…))`) — materialized into an RV_AGG block and
           ## passed BY REFERENCE (§8 anonymous-aggregate materialization, piece 1).
-          isaggval := rv_is_slit(ga.e)
+          isaggval := expr_is_struct_lit(ga.e)
           ## an anonymous ENUM-LITERAL VALUE arg (`f(E.V(…))`) — materialized into an RV_AGG block and
           ## passed BY REFERENCE (§8 piece 3).
           isenumval := rv_is_elit(ga.e)
@@ -4604,11 +4573,11 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       ## field's declared enum type. Single-match Field accessors (never matching the bound scrut inline).
       mut fldok := false
       if ex_is_field(scrut) {
-        fbase := rv_field_base(scrut)
+        fbase := expr_field_base(scrut)
         fbns := ex_var_ns(fbase)
         fbnl := ex_var_nl(fbase)
-        ffs := rv_field_fns(scrut)
-        ffl := rv_field_fnl(scrut)
+        ffs := expr_field_name_s(scrut)
+        ffl := expr_field_name_l(scrut)
         fstys := rv_local_struct_ns(body_head, src, fbns, fbnl, a)
         fstyn := rv_local_struct_nl(body_head, src, fbns, fbnl, a)
         fsoff := rv_local_off(body_head, src, fbns, fbnl, pcount, a, decls)
@@ -4949,8 +4918,8 @@ emit_rv_slice_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, sr
 ## str/float-field literals stay a LOUD `ebreak`. Bumps RV_AGG by the struct's words; an overflow past
 ## RV_AGG_LIM (an under-reservation) is a loud `ebreak`. Distinct blocks (monotonic bump) → no aliasing.
 emit_rv_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
-  ns := rv_slit_ns(e)
-  nl := rv_slit_nl(e)
+  ns := expr_struct_lit_ns(e)
+  nl := expr_struct_lit_nl(e)
   words := i64(struct_words(decls, src, ns, nl, a))
   ok := nl != 0 and (RV_AGG + words * 8) <= RV_AGG_LIM
   if ok {
@@ -4981,12 +4950,12 @@ emit_rv_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
 ## occupies (§8 piece 3b): scalar → 1; struct literal (all-scalar) → its fields; nested enum literal →
 ## {disc, payload…} recursively (full width); str literal → deferred loud `ebreak` (2 words reserved).
 emit_rv_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
-  if rv_is_slit(pe) {
+  if expr_is_struct_lit(pe) {
     ## A STRUCT literal: write each field at its RUNNING byte offset via the same multi-word writer, so a
     ## field that is itself a nested STRUCT (or enum) lands in full and following fields stay aligned. An
     ## all-scalar struct is byte-identical to a positional store. Lets a NESTED struct literal materialize.
-    sns := rv_slit_ns(pe)
-    snl := rv_slit_nl(pe)
+    sns := expr_struct_lit_ns(pe)
+    snl := expr_struct_lit_nl(pe)
     mut g := ex_struct_lit_args(pe)
     mut o2 := off
     while g != 0 {
@@ -5047,9 +5016,9 @@ emit_rv_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf
 ## of an aggregate field past the first AND mis-aligned every field after it. For an ALL-SCALAR literal
 ## the emitted text is byte-identical to that positional store.
 emit_rv_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
-  if rv_is_slit(pe) {
-    sns := rv_slit_ns(pe)
-    snl := rv_slit_nl(pe)
+  if expr_is_struct_lit(pe) {
+    sns := expr_struct_lit_ns(pe)
+    snl := expr_struct_lit_nl(pe)
     mut g := ex_struct_lit_args(pe)
     mut o2 := off
     while g != 0 {
@@ -5149,9 +5118,9 @@ emit_rv_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
     if nel < 1 or nel > 7 { push_str(sb, "  ebreak // unsupported tuple return width\n") }
     return
   }
-  if rv_is_slit(e) {
-    slns := rv_slit_ns(e)
-    slnl := rv_slit_nl(e)
+  if expr_is_struct_lit(e) {
+    slns := expr_struct_lit_ns(e)
+    slnl := expr_struct_lit_nl(e)
     ## an ALL-SCALAR struct literal: push each 1-word field, pop in REVERSE so word k → a_k (unchanged).
     if rv_struct_all_scalar(decls, src, slns, slnl, a) {
       mut g := ex_struct_lit_args(e)
@@ -5287,8 +5256,8 @@ emit_rv_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
   w := i64(struct_words(decls, src, RV_RET_SRET_NS, RV_RET_SRET_NL, a))
   slot := RV_SRET_SLOT
   mut done := false
-  if rv_is_slit(e) {
-    if rv_struct_all_scalar(decls, src, rv_slit_ns(e), rv_slit_nl(e), a) {
+  if expr_is_struct_lit(e) {
+    if rv_struct_all_scalar(decls, src, expr_struct_lit_ns(e), expr_struct_lit_nl(e), a) {
       mut g := ex_struct_lit_args(e)
       mut k := 0
       while g != 0 {
@@ -5537,7 +5506,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
         ## FLAT: a StructLit constructs fields; an EnumLit constructs {disc, payload…}; else scalar store.
-        isslit := rv_is_slit(v)
+        isslit := expr_is_struct_lit(v)
         iselit := rv_is_elit(v)
         isalit := ex_is_array_lit(v)
         isslice := ex_is_slice(v)
@@ -5752,8 +5721,8 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           }
           if poff < 0 { push_str(sb, "  ebreak\n") }
         }
-        stys := rv_slit_ns(v)
-        styn := rv_slit_nl(v)
+        stys := expr_struct_lit_ns(v)
+        styn := expr_struct_lit_nl(v)
         slitstd := isslit and poff >= 0 and layout_kind_is_byte(layout_kind(decls, src, stys, styn, a))
         if slitstd { _stdw := rv_std_store_struct(v, poff, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         slitok := isslit and (not slitstd) and poff >= 0 and rv_struct_all_scalar(decls, src, stys, styn, a)
@@ -5808,15 +5777,15 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           ag0 := ex_array_lit_ehead(v)
           if ag0 != 0 {
             aga0 := deref(arg_p(ag0))
-            if rv_is_slit(aga0.e) and std_array_elem_byte_tier(decls, src, rv_slit_ns(aga0.e), rv_slit_nl(aga0.e), a) {
+            if expr_is_struct_lit(aga0.e) and std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(aga0.e), expr_struct_lit_nl(aga0.e), a) {
               alitbyte = true
-              astrideB := i64(layout_elem_stride_bytes(decls, src, rv_slit_ns(aga0.e), rv_slit_nl(aga0.e), a))
+              astrideB := i64(layout_elem_stride_bytes(decls, src, expr_struct_lit_ns(aga0.e), expr_struct_lit_nl(aga0.e), a))
               mut abg := ag0
               mut abo := poff
               while abg != 0 {
                 abga := deref(arg_p(abg))
-                if rv_is_slit(abga.e) { _abs := rv_std_store_struct(abga.e, abo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-                if not rv_is_slit(abga.e) { push_str(sb, "  ebreak # mixed byte-tier array literal\n") }
+                if expr_is_struct_lit(abga.e) { _abs := rv_std_store_struct(abga.e, abo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                if not expr_is_struct_lit(abga.e) { push_str(sb, "  ebreak # mixed byte-tier array literal\n") }
                 abo = abo + astrideB
                 abg = abga.next
               }
@@ -5829,7 +5798,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           mut ak := 0
           while ag != 0 {
             aga := deref(arg_p(ag))
-            if rv_is_slit(aga.e) {
+            if expr_is_struct_lit(aga.e) {
               mut fg := ex_struct_lit_args(aga.e)
               mut fk := 0
               while fg != 0 {
@@ -5853,7 +5822,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
                 pg = pga.next
               }
             }
-            if (not rv_is_slit(aga.e)) and (not rv_is_elit(aga.e)) {
+            if (not expr_is_struct_lit(aga.e)) and (not rv_is_elit(aga.e)) {
               emit_rv_expr(aga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
               push_str(sb, "  sd a0, ") ; push_int(sb, poff + ak * estrideA * 8) ; push_str(sb, "(s0)\n")
             }
@@ -5909,7 +5878,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         eaisla := easp.n != 0 and rv_is_array_local(body_head, src, bns, bnl, a)
         eaisga := easp.n != 0 and (not eaisla) and rv_is_array_global(decls, src, bns, bnl)
         ## the RHS must be a struct LITERAL of that type, or a bare Var naming a struct LOCAL (frame copy).
-        eaislit := easp.n != 0 and rv_is_slit(ival)
+        eaislit := easp.n != 0 and expr_is_struct_lit(ival)
         eavnl := ex_var_nl(ival)
         mut eavoff := i64(0) - 1
         if easp.n != 0 and (not eaislit) and eavnl != 0 {
@@ -6050,8 +6019,8 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           sft := field_type_span(decls, src, stys, styn, fns, fnl, a)
           if sbo >= 0 and sft.n != 0 {
             if std_ty_aggregate(sft.s, sft.n, decls, src) {
-              if rv_is_slit(fv) { _stdw := rv_std_store_struct(fv, poff + sbo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-              if not rv_is_slit(fv) { push_str(sb, "  ebreak # unsupported standard aggregate field assign\n") }
+              if expr_is_struct_lit(fv) { _stdw := rv_std_store_struct(fv, poff + sbo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if not expr_is_struct_lit(fv) { push_str(sb, "  ebreak # unsupported standard aggregate field assign\n") }
               stdhandled = true
             }
             if not std_ty_aggregate(sft.s, sft.n, decls, src) {
@@ -6083,9 +6052,9 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         ## Disjoint from the local path (a global has no frame slot → poff < 0 → ok false).
         gv := rv_global_value(decls, src, bns, bnl)
         mut gok := false
-        if unchecked bitcast(usize, gv) != 0 { if rv_is_slit(gv) {
-          gstys := rv_slit_ns(gv)
-          gstyn := rv_slit_nl(gv)
+        if unchecked bitcast(usize, gv) != 0 { if expr_is_struct_lit(gv) {
+          gstys := expr_struct_lit_ns(gv)
+          gstyn := expr_struct_lit_nl(gv)
           gfts := field_type_span(decls, src, gstys, gstyn, fns, fnl, a)
           if ty_is_scalar(gfts.s, gfts.n, decls, src) {
             gwoff := field_word_offset(decls, src, gstys, gstyn, fns, fnl, a)
@@ -6527,7 +6496,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
       ## pointer → a1; `sd a0, 0(a1)`. SCALAR value only: a struct/enum/array LITERAL value store is
       ## DEFERRED (multi-word), fail-loud (`ebreak`). Mirrors the x86 DerefAssign scalar fast path.
       Stmt::DerefAssign(pe, val, nx) => {
-        isslitv := rv_is_slit(val)
+        isslitv := expr_is_struct_lit(val)
         iselitv := rv_is_elit(val)
         isalitv := ex_is_array_lit(val)
         isslicev := ex_is_slice(val)

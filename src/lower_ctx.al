@@ -40,6 +40,39 @@ pub streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usiz
   str_at((src + a_s), a_n) == str_at((src + b_s), b_n)
 }
 
+## Architecture-neutral Expr accessors shared by the scalar backends. Keep the scalar returns separate:
+## the frozen seed has a known mis-lowering scar for newly introduced struct return types.
+pub expr_is_struct_lit := fn(v : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = true } _ => {} }
+  r
+}
+pub expr_struct_lit_ns := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = ss } _ => {} }
+  r
+}
+pub expr_struct_lit_nl := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = sn } _ => {} }
+  r
+}
+pub expr_field_base := fn(e : ptr(Expr)) -> ptr(Expr) {
+  mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
+  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = fb } _ => {} }
+  r
+}
+pub expr_field_name_s := fn(e : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = ffs } _ => {} }
+  r
+}
+pub expr_field_name_l := fn(e : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = ffl } _ => {} }
+  r
+}
+
 ## The name span of a `Var` (0/0 if not a `Var`); the inner content span of a `StrLit` (`asm_str_span`);
 ## a single decimal digit's value (`asm_digit`) — small standalone accessors shared by the raw-asm cluster.
 pub CSpan := struct { s : usize, n : usize }
