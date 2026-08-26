@@ -4617,7 +4617,11 @@ run array_lit_single_elem 42
 ## TYP-10 latent bug (exposed by the uint(N) work): a generic-CONSTRUCTION-shaped literal
 ## `X(128)(words = […])` with an UNDECLARED head `X` compiled to a silent all-zero value instead of
 ## failing loud (the erased type-arg list left an unresolvable StructLit head).
+check_reject_has reject_unknown_generic_ctor "unknown type constructor"
 build_reject_has reject_unknown_generic_ctor "unknown type constructor"
+emit_reject_has wat reject_unknown_generic_ctor "unknown type constructor"
+emit_reject_has aarch64 reject_unknown_generic_ctor "unknown type constructor"
+emit_reject_has riscv64 reject_unknown_generic_ctor "unknown type constructor"
 run range_slice 42
 run higher_order 42
 run higher_order_map 42

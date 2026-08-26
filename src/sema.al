@@ -63,6 +63,11 @@ located_err := fn(s : usize) -> CheckErr { s * 4 }
 ## Source buffers are necessarily far smaller than 2^62 bytes, so the marker cannot collide with an
 ## existing encoded location. This keeps every existing kind/value byte-for-byte unchanged.
 ambiguous_err := fn(s : usize) -> CheckErr { 4611686018427387904 + s * 4 }
+## A distinct located diagnostic for a struct-construction-shaped expression whose head is neither a
+## declared aggregate/type alias nor a declared generic type constructor. Keep it between ambiguous
+## calls and scalar conversions so every older CheckErr range remains byte-identical.
+UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER := 5188146770730811392
+unknown_type_ctor_err := fn(s : usize) -> CheckErr { UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER + s * 4 }
 ## A distinct located diagnostic for the Declarations §3.1 / Memory §1.6 rule that an existing
 ## binding must be declared `mut` before a write. Keep the marker above the comptime class and below
 ## 2^63 so the existing unsigned CheckErr representation remains bootstrap-safe; the driver strips it
@@ -2560,6 +2565,89 @@ expr_agg_lit := fn(e : ptr(Expr)) -> AggLit {
     _ => { AggLit(is_agg = false, s = 0, n = 0) }
   }
 }
+## True only for the parser's generic-construction shape `Name(type-args)(field = value, …)`.
+## `StructLit` stores only the head after the parser erases the first parenthesized group, so recover
+## that distinction from source: skip whitespace, consume the first balanced group, skip whitespace,
+## then require the second `(` to begin an identifier followed by `=`. The bound is a malformed-source
+## escape hatch; valid parser inputs stay far below it, while an unterminated scan remains non-matching.
+sema_generic_ctor_shape := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  mut p := s + n
+  mut steps := 0
+  while steps < 4096 and (str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r") {
+    p += 1
+    steps += 1
+  }
+  if str_at((src + p), 1) != "(" { return false }
+  mut depth := 0
+  mut has_arg := false
+  mut closed := false
+  while steps < 4096 {
+    c := str_at((src + p), 1)
+    if c == "(" { depth += 1; if depth > 1 { has_arg = true } }
+    else if c == ")" {
+      if depth == 0 { return false }
+      depth -= 1
+      if depth == 0 { p += 1; steps += 1; closed = true; break }
+    } else if depth == 1 and c != " " and c != "\n" and c != "\t" and c != "\r" { has_arg = true }
+    p += 1
+    steps += 1
+  }
+  if not closed or has_arg == false { return false }
+  while steps < 4096 and (str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r") {
+    p += 1
+    steps += 1
+  }
+  if str_at((src + p), 1) != "(" { return false }
+  p += 1
+  steps += 1
+  while steps < 4096 and (str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r") {
+    p += 1
+    steps += 1
+  }
+  b := bytes(str_at((src + p), 1))[0]
+  if not ((b >= 97 and b <= 122) or (b >= 65 and b <= 90) or (b >= 48 and b <= 57) or b == 95) { return false }
+  mut ident := true
+  while steps < 4096 and ident {
+    q := bytes(str_at((src + p), 1))[0]
+    if (q >= 97 and q <= 122) or (q >= 65 and q <= 90) or (q >= 48 and q <= 57) or q == 95 { p += 1; steps += 1 }
+    else { ident = false }
+  }
+  while steps < 4096 and (str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r") {
+    p += 1
+    steps += 1
+  }
+  str_at((src + p), 1) == "="
+}
+## Types §§5.1–5.2, 9.3 / Declarations §1.3 / Modules §§1–2 — a named-field literal is a
+## construction only when its head resolves to a declared aggregate, a generic type constructor, or
+## a one-hop alias of one. The parser deliberately erases `X(128)` before producing `StructLit(X, …)`;
+## keeping this check on the shared semantic path prevents an unresolved head from reaching any lower.
+## The alias scan covers generic-instance aliases such as the prelude's `u128 := uint(128)` without
+## widening the ordinary type-name resolver or changing generic ABI/layout rules.
+sema_unknown_type_ctor_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> VSpan {
+  lit := expr_agg_lit(e)
+  if not lit.is_agg { return VSpan(s = 0, n = 0) }
+  mut is_struct := false
+  match deref(e) {
+    Expr::StructLit(scs0, scl0, snf0, sfh0) => { is_struct = true }
+    _ => {}
+  }
+  if not is_struct { return VSpan(s = 0, n = 0) }
+  if not sema_generic_ctor_shape(src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
+  if qualified_type_name_known(decls, src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
+  if callee_is_generic(decls, upto, src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, lit.s, lit.n) {
+      ah := base_type_name(src, d.alias_ts, d.alias_tl)
+      if callee_is_generic(decls, upto, src, ah.s, ah.n) { return VSpan(s = 0, n = 0) }
+    }
+    i += 1
+  }
+  VSpan(s = lit.s, n = lit.n)
+}
 ## The BASE-Var name span of a `Field(Var(b), f)` expression (else {0,0}) — recovers `EnumType` from a
 ## NULLARY variant access `EnumType.Variant` (parsed as a Field, not an EnumLit), so value_agg_ty can
 ## recognise it as an enum VALUE.
@@ -4411,6 +4499,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## under the bootstrap seed (scar #2); recursing on the inner reliably yields the inner's type.
   bci := bitcast_inner(e)
   if unchecked bitcast(usize, bci) != 0 { return check_expr(bci, decls, upto, src, a, locals, nloc) }
+  uct0 := sema_unknown_type_ctor_span(e, decls, upto, src)
+  if uct0.n != 0 { return Result(Ty, CheckErr).Err(unknown_type_ctor_err(uct0.s)) }
   ## Value-loop type inference belongs on the pre-match path for the same bootstrap-dispatch reason as
   ## the other payload-heavy expression helpers. The loop body itself is classified by the established
   ## break walker; no runtime evaluation occurs here.
