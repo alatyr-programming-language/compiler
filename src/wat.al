@@ -3432,6 +3432,17 @@ struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
   ok
 }
 
+## Is the ACTIVE field of struct `[s,n)` a scalar value rather than merely a one-word field? A nested
+## struct/enum (and `[T;1]` / a tuple with one word) can occupy one word in the layout while its value
+## representation is still an aggregate address in the WAT emitter. `field_words == 1` alone therefore
+## admits a pointer-as-integer read; use the resolved field type so the `CompField` arm's scalar guard
+## agrees with the ordinary field-value boundary. Aggregate-aware call arguments do not use this query.
+wat_field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> bool {
+  ft := field_type_span(decls, src, s, n, fs, fl, a)
+  if ft.n == 0 { return false }
+  not std_ty_aggregate(ft.s, ft.n, decls, src)
+}
+
 ## Emit the linear-memory address operand (an i32) for a base + `byte_off`. `base_idx >= 0` is a WASM
 ## LOCAL holding the base address (`local.get`); `base_idx < 0` encodes a COMPILE-TIME-CONSTANT base
 ## `(0 - base_idx - 1)` (an aggregate GLOBAL's fixed offset) → a plain `i32.const`. The negative
@@ -4496,7 +4507,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         lsp := local_struct_type(body_head, src, cbns, cbnl, a, decls)
         cstys = lsp.s ; cstyn = lsp.n
       }
-      cok := cfactive and cbnl != 0 and cstyn != 0 and struct_all_scalar(decls, src, cstys, cstyn, a)
+      cok := cfactive and cbnl != 0 and cstyn != 0 and struct_all_scalar(decls, src, cstys, cstyn, a) and wat_field_is_scalar(decls, src, cstys, cstyn, WAT_CF_FLD_S, WAT_CF_FLD_L, a)
       if cok {
         cwoff := field_word_offset(decls, src, cstys, cstyn, WAT_CF_FLD_S, WAT_CF_FLD_L, a)
         mut cbidx := cpidx

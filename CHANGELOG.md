@@ -39,6 +39,8 @@ how this repository proves itself, not part of what it ships.
   with runtime indices.
 - WAT now supports labeled `continue name` across statement-only `loop`, `while`, and `for` targets,
   including deferred cleanup for loops crossed by the transfer.
+- WAT now rejects aggregate comptime-field projections loudly instead of loading an aggregate address
+  as a scalar value.
 - Explicit standard-byte tuple globals now reject before backend emission with a located diagnostic
   instead of reaching the unsupported word-based global representation.
 
