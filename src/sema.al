@@ -23,8 +23,7 @@
 ## checking (only the first payload type span is captured), generic type expressions (`Vec(T)`),
 ## and unifying a `Var` that resolves to a top-level value binding (treated as unknown).
 vec := alloc::vec
-(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut) := ast
-compound_assign_op_at := ast::compound_assign_op_at
+(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_reassign) := ast
 (bnd_ns, bnd_nl, bnd_next) := ast
 fld_p := ast::fld_p
 param_p := ast::param_p
@@ -7761,28 +7760,6 @@ is_mod_mut_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
     i += 1
   }
   res
-}
-
-## Is the `Stmt::Assign` at name `[ns, ns+nl)` a REASSIGN (`G = e`) rather than a binding (`G := e`)?
-## The parser erases the token from the node but the source keeps it: scan forward past the name +
-## whitespace — `:=` is a binding (introduces a fresh local, never an escape), a bare `=` a reassign
-## (writes an existing place). Distinguishes a `:=`-bound local that shadows a module global's name
-## (well-formed) from a `=` write to the global itself (the escape). `==` is excluded (a comparison).
-assign_is_reassign := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
-  mut p := ns + nl
-  while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p = p + 1 }
-  if str_at((src + p), 2) == ":=" { return false }
-  ## a COMPOUND assign (any of Grammar §130 line 287's EIGHT glyphs, parser-desugared to
-  ## `Assign(x, Bin(op, x, e))`) writes an EXISTING place — a reassignment, never a fresh binding.
-  ## Without this it took the binding path and re-pushed the (mut) counter as a fresh NON-mut local, so
-  ## a later `x = e` read it as an immutable write (false positive on every `i += 1 … i = j` counter
-  ## loop). `x` must already be bound. The operator set lives in ONE place, `ast::compound_assign_op_at`
-  ## — this used to be a private table listing only `+= -= *= /=`, and when the lexer/parser learned
-  ## `%= &= |= ^=` it fell out of step with the grammar: `x &= 58 … x = 1` was rejected, and `x &= 58`
-  ## on an IMMUTABLE binding was accepted.
-  if compound_assign_op_at(src, ns, nl).len != 0 { return true }
-  if str_at((src + p), 1) == "=" and str_at((src + p + 1), 1) != "=" { return true }
-  false
 }
 
 ## True if `[s, n)` names an `out` / `in out` parameter of the fn whose params are `params_head`

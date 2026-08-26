@@ -2170,23 +2170,6 @@ vis_check_program := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
   }
 }
 
-## Whether the source at `[s, n)` is spelled as an ASSIGNMENT (`x = v`, `x += v`) rather than a
-## DECLARATION (`x := v`, `x : T = v`, `x : T`). The parser erases the distinction from `Stmt::Assign`
-## (like `mut`, recovered by `local_is_mut`), yet it is exactly what tells a legitimate SHADOWING local
-## apart from a write to a global: a declaration always introduces a NEW name, so it may freely reuse a
-## global's spelling; only an assignment can be a global write and therefore only an assignment may be
-## rejected for naming a global this module cannot address.
-local_is_plain_assign := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  mut p := s + n
-  end := p + 64
-  mut c := str_at((src + p), 1)
-  while p < end and (c == " " or c == "\t" or c == "\r") { p += 1 ; c = str_at((src + p), 1) }
-  if c == ":" { return false }
-  if c == "=" { return str_at((src + p + 1), 1) != "=" }
-  if c == "+" or c == "-" or c == "*" or c == "/" or c == "%" { return str_at((src + p + 1), 1) == "=" }
-  false
-}
-
 module_const_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ptr(Expr) {
   h := _lnhash(src, s, n)
   if _mcv_n[h] == n and _mcv_src[h] == src and _mcv_ctx[h] == GLOBAL_REF_MOD_SET

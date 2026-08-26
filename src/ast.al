@@ -103,13 +103,16 @@ pub local_is_uninit := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ## the surface token — the same front-end-only erasure `local_is_mut` / `local_is_uninit` recover from
 ## source, and for the same reason (the Stmt.Assign layout is bootstrap-sensitive).
 ##
-## This is the SINGLE source of that recovery. It used to be three private tables — `sema`'s
-## `assign_is_reassign`, `fmt`'s `fmt_local_is_reassign` and `fmt`'s compound-spelling probe — and all
-## three listed only `+= -= *= /=`, so when the lexer/parser learned the other four glyphs each table
-## silently disagreed with the grammar: `mut x : u64 = 100 ; x &= 58 ; x = 1` was REJECTED (sema took
-## the binding path and re-pushed `x` as a fresh NON-`mut` local), a write to an IMMUTABLE binding
-## (`x : u64 = 100 ; x &= 58`) was ACCEPTED, and `alatyr fmt` rewrote `x &= 58` into the declaration
-## `x := x & 58`. One predicate means the accepted set cannot drift between consumers again.
+## This is the SINGLE source of the compound-operator table and, together with
+## `assign_is_reassign` below, the source-level assignment-form recovery used by `sema`, `fmt`, and
+## `lower`.
+## Before it existed, `sema` and `fmt` each carried a private binding/reassignment probe, while `lower`
+## carried a narrower global-write probe. The first two delegated compound-glyph recognition to this
+## table, but `lower::local_is_plain_assign` independently listed only `+ - * / %` and skipped fewer
+## whitespace forms, so the consumers could disagree for `&=`, `|=`, `^=`, or a newline before the
+## operator. The full `assign_is_reassign` predicate below now owns the source-level
+## binding/reassignment decision, so these consumers cannot drift. The parser's token-kind predicate
+## remains separate because it runs before AST construction and answers a different question.
 ##
 ## The SECOND byte must be `=`, so a bare `x - 50` expression statement is not mistaken for `x -= 50`,
 ## and `x == y` / `x != y` / `x <= y` are excluded by the operator set itself.
@@ -125,6 +128,23 @@ pub compound_assign_op_at := fn(src : ptr(u8), ns : usize, nl : usize) -> str {
   if c == "+" or c == "-" or c == "*" or c == "/" { return c }
   if c == "%" or c == "&" or c == "|" or c == "^" { return c }
   ""
+}
+
+## Whether the source at `[ns, ns+nl)` is an ASSIGNMENT (`x = v`, `x += v`) rather than a
+## DECLARATION (`x := v`, `x : T = v`, `x : T`). The parser erases this distinction from
+## `Stmt::Assign`; keep the recovery in one place so sema, lower, and fmt cannot drift.
+pub assign_is_reassign := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
+  mut p := ns + nl
+  end := p + 512
+  mut c := (src + p).str_at(1)
+  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") {
+    p = p + 1
+    c = (src + p).str_at(1)
+  }
+  if c == ":" { return false }
+  if compound_assign_op_at(src, ns, nl).len != 0 { return true }
+  if c == "=" and (src + p + 1).str_at(1) != "=" { return true }
+  false
 }
 
 ## Whether a local binding name is immediately preceded by the `mut` declaration marker. The
