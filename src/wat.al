@@ -62,29 +62,7 @@ variant_payload_type := lower_layout::variant_payload_type
 field_type_is_float := lower_layout::field_type_is_float
 field_type_span := lower::field_type_span
 compfor_iter_arg := lower::compfor_iter_arg
-(CSpan) := lower_ctx
-
-## A typed pointer to a Decl node at absolute handle `h` (the per-module `decl_at`, duplicated per
-## module in the self-host tree — mirrors lower.al / driver.al).
-decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
-## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
-decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return decl_at(Decl, hh) }
-
-## A typed pointer to an AST node at arena OFFSET `h` (Stmt/Arg/Param handles are offsets into the AST
-## arena `a`; `Expr` children carried as `ptr(Expr)` are absolute and deref directly).
-node_ptr := fn(T : type, a : rt::Arena, h : usize) -> ptr(mut T) {
-  base_int := unchecked bitcast(usize, a.base)
-  return unchecked bitcast(ptr(mut T), base_int + h)
-}
-
-## Span equality over the shared source (the per-module `streq`).
-streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
-  ## `src + a_s`/`src + b_s` are POINTER arithmetic (a span start may be a REBASED handle for a
-  ## comptime-synthesized name) → route through `rt::addr`, not a checked integer `+` (I11 / CG-8).
-  wa := str_at((src + a_s), a_n)
-  wb := str_at((src + b_s), b_n)
-  wa == wb
-}
+(CSpan, decl_at, decl_get, node_ptr, streq) := lower_ctx
 
 ## The EXACT linker symbol of a `@export("name")` attribute attached to `[name_s, name_s+name_l)`
 ## (Modules §6.3), or {0,0}. The parser discards attributes, so recover declaration-prefix and

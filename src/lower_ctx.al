@@ -8,7 +8,7 @@
 ## First extraction (probe): `SVec` (a plain struct) + `node_ptr` (the GENERIC arena accessor) — the latter
 ## verifies cross-module generic monomorphization works before the larger cluster moves. Second: the small
 ## expression-span accessors (`CSpan` + `var_name_span`/`asm_str_span`/`asm_digit`) the raw-asm cluster needs.
-(Arg, Expr) := ast
+(Arg, Decl, Expr) := ast
 arg_p := ast::arg_p
 ## Compatibility surface for lower_asm: the shared table lives only in lower_layout.
 pub asm_digit := fn(c : str) -> i64 { lower_layout::dec_digit_val(c) }
@@ -23,6 +23,21 @@ pub SVec := struct { base : usize, len : usize, cap : usize, arena : ptr(mut rt:
 pub node_ptr := fn(T : type, a : rt::Arena, h : usize) -> ptr(mut T) {
   base_int := unchecked bitcast(usize, a.base)
   return unchecked bitcast(ptr(mut T), base_int + h)
+}
+
+## A typed pointer to an AST declaration at absolute handle `h`, plus the indexed declaration lookup
+## used by every backend. Keeping these beside `node_ptr` gives all emitters one implementation of the
+## arena/vector handle recovery; the backend modules remain adapters for target-specific emission.
+pub decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
+pub decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) {
+  hh := rt::vec_get(deref(decls), i)
+  return decl_at(Decl, hh)
+}
+
+## Equality of two source-relative spans. The source pointer arithmetic is intentional (I11/CG-8):
+## callers pass parser/lower offsets, including rebased comptime-synthesized spans.
+pub streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
+  str_at((src + a_s), a_n) == str_at((src + b_s), b_n)
 }
 
 ## The name span of a `Var` (0/0 if not a `Var`); the inner content span of a `StrLit` (`asm_str_span`);
