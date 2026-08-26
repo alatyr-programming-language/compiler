@@ -73,7 +73,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, arrty_nel, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
@@ -486,33 +486,6 @@ a64_param_gen_arr_stride := fn(params_head : ptr(mut Param), src : ptr(u8), ns :
   if struct_decl_of(decls, src, aes, aet - aes) >= 0 { return 0 }
   if enum_decl_of(decls, src, aes, aet - aes) >= 0 { return 0 }
   1
-}
-
-## GENERICS (§8 mono): the element COUNT N of the active instance array type `[E; N]` (A64_SUB_ITS/ITL),
-## for the CG-7 bounds check on a generic array param index. 0 if the instance type is not an array.
-## Inline `;`-scan + digit parse over the globals (scalar return — safe in the emit path).
-a64_sub_arr_len := fn(src : ptr(u8)) -> i64 {
-  if str_at((src + A64_SUB_ITS), 1) != "[" { return 0 }
-  mut ndep := 0
-  mut nsemi := A64_SUB_ITS + 1
-  mut np := A64_SUB_ITS + 1
-  mut ngo := true
-  while ngo and np < A64_SUB_ITS + A64_SUB_ITL {
-    nc := str_at((src + np), 1)
-    if nc == "(" or nc == "[" { ndep = ndep + 1 }
-    else if (nc == ")" or nc == "]") and ndep > 0 { ndep = ndep - 1 }
-    else if nc == ";" and ndep == 0 { nsemi = np ; ngo = false }
-    np = np + 1
-  }
-  mut nlp := nsemi + 1
-  mut nval := 0
-  while nlp < A64_SUB_ITS + A64_SUB_ITL {
-    nbs := bytes(str_at((src + nlp), 1))
-    nb := nbs[0]
-    if nb >= 48 and nb <= 57 { nval = nval * 10 + i64(nb - 48) }
-    nlp = nlp + 1
-  }
-  nval
 }
 
 ## The ELEMENT-type span of a `Slice(E)` PARAM named `[s,n)`, recovered by scanning SOURCE forward from
@@ -5204,7 +5177,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         pslotG := 16 + pidxI * 8
         if A64_CHK {
-          gnelP := a64_sub_arr_len(src)
+          gnelP := sub_arr_len(src, A64_SUB_ITS, A64_SUB_ITL)
           if gnelP > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, gnelP) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
         }
         push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, pslotG) ; push_str(sb, "]\n  ldr x0, [x2, x0, lsl #3]\n")

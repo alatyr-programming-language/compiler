@@ -95,6 +95,33 @@ pub arrty_nel := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
   n
 }
 
+## Generic fixed-array parameter length scan for a backend's active substitution span. This is deliberately
+## distinct from `arrty_nel`: preserve the existing permissive `;`-scan and digit parsing used by the
+## native and WAT generic-parameter bounds paths, including their malformed/non-array fallback behavior.
+pub sub_arr_len := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
+  if str_at((src + ts), 1) != "[" { return 0 }
+  mut ndep := 0
+  mut nsemi := ts + 1
+  mut np := ts + 1
+  mut ngo := true
+  while ngo and np < ts + tl {
+    nc := str_at((src + np), 1)
+    if nc == "(" or nc == "[" { ndep = ndep + 1 }
+    else if (nc == ")" or nc == "]") and ndep > 0 { ndep = ndep - 1 }
+    else if nc == ";" and ndep == 0 { nsemi = np ; ngo = false }
+    np = np + 1
+  }
+  mut nlp := nsemi + 1
+  mut nval := 0
+  while nlp < ts + tl {
+    nbs := bytes(str_at((src + nlp), 1))
+    nb := nbs[0]
+    if nb >= 48 and nb <= 57 { nval = nval * 10 + i64(nb - 48) }
+    nlp = nlp + 1
+  }
+  nval
+}
+
 ## Architecture-neutral Expr accessors shared by the scalar backends. Keep the scalar returns separate:
 ## the frozen seed has a known mis-lowering scar for newly introduced struct return types.
 pub expr_is_struct_lit := fn(v : ptr(Expr)) -> bool {
