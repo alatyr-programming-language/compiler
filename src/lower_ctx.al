@@ -191,6 +191,48 @@ pub expr_call_name_nl := fn(v : ptr(Expr)) -> usize {
 ## The name span of a `Var` (0/0 if not a `Var`); the inner content span of a `StrLit` (`asm_str_span`);
 ## a single decimal digit's value (`asm_digit`) — small standalone accessors shared by the raw-asm cluster.
 pub CSpan := struct { s : usize, n : usize }
+
+## The shared native entry point for a `: T` annotation span. Keep the existing three-argument contract
+## at backend call sites; the implementation carries the native whitespace policy explicitly so this
+## source scan cannot be mistaken for the distinct AST/WAT annotation contracts by the idiom gate.
+pub ann_span := fn(src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  scan_ann_span(src, ns, nl, false)
+}
+
+## Scan a declaration annotation. `allow_newline` is false for the native backend contract: only
+## horizontal whitespace surrounds the name/type boundary and the returned span. The extra policy
+## parameter is deliberate; `ast::local_type_span` and `wat_ann_span` retain their own contracts.
+scan_ann_span := fn(src : ptr(u8), ns : usize, nl : usize, allow_newline : bool) -> CSpan {
+  mut p := ns + nl
+  lim := p + 512
+  mut go := true
+  while go { c := str_at((src + p), 1) ; if c == " " or c == "\t" or c == "\r" or (allow_newline and c == "\n") { p = p + 1 } else { go = false } }
+  if str_at((src + p), 1) != ":" { return CSpan(s = 0, n = 0) }
+  p = p + 1
+  go = true
+  while go { c := str_at((src + p), 1) ; if c == " " or c == "\t" or c == "\r" or (allow_newline and c == "\n") { p = p + 1 } else { go = false } }
+  if str_at((src + p), 1) == "=" { return CSpan(s = 0, n = 0) }
+  ts := p
+  mut depth := 0
+  mut term := false
+  while p < lim and (not term) {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" { depth = depth + 1 }
+    if c == ")" or c == "]" { if depth > 0 { depth = depth - 1 } }
+    stop := depth == 0 and (c == "=" or c == "\n" or c == ";" or c == "}")
+    if stop { term = true } else { p = p + 1 }
+  }
+  if not term { return CSpan(s = 0, n = 0) }
+  mut te := p
+  mut trim := true
+  while trim and te > ts {
+    t := str_at((src + te - 1), 1)
+    if t == " " or t == "\t" or t == "\r" or (allow_newline and t == "\n") { te = te - 1 } else { trim = false }
+  }
+  if te <= ts { return CSpan(s = 0, n = 0) }
+  CSpan(s = ts, n = te - ts)
+}
+
 pub var_name_span := fn(e : ptr(Expr)) -> CSpan {
   mut res := CSpan(s = 0, n = 0)
   match deref(e) {
