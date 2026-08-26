@@ -1,11 +1,11 @@
-## §8 ARRAY-OF-@packed (spec Types §8) — the DEFERRED corner, asserted FAIL-LOUD (build_reject).
+## §8 ARRAY-OF-@packed (spec Types §8) — the DEFERRED corner, asserted FAIL-LOUD on every frontend/backend surface.
 ## An array whose ELEMENT is a `@packed` struct (`P` = {u8 a, u32 b} = 5 bytes) wants a byte-precise
 ## element stride of 5 (the C-ABI layout — `arr[i]` at byte 5*i) and byte-precise packed field offsets.
 ## The array-of-aggregate machinery is WORD-granular (`base - i*estride*8`, `field_word_offset`), so it
 ## cannot express a 5-byte stride; emitting the word path would SILENTLY MISCOMPILE (`arr[i]` at byte 8i,
 ## `.b` read from the next element's word). `arr_elem_info` therefore REJECTS a packed struct element —
 ## the build fails loud (a valid binary with a wrong result is the forbidden silent-miscompile).
-## Wired as `build_reject packed_array` (asserts a NON-ZERO build rc), not `run` (it never links).
+## Wired as `check_reject`/`build_reject`/`emit_reject` for the initialized local literal, not `run` (it never links).
 P := @packed struct { a : u8, b : u32 }
 
 main := fn() -> u64 {

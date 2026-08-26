@@ -36,7 +36,7 @@ stmt_p := ast::stmt_p
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
 ## does not depend on sema → no import cycle. (`struct_decl_of`/`base_type_name`/`brand_underlying` added
 ## for the is-KIND + field-COUNT fold — they classify the resolved type exactly as the lower's own fold.)
-(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, std_struct_has_byte_layout, std_struct_has_aggregate_field) := lower_layout
+(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field) := lower_layout
 ## §8 `@repr(T)` tag-type primitives (shared with `lower::validate_repr`) for the LOCATED @repr reject:
 ## sema classifies an enum's `@repr(T)` tag exactly as the build's `validate_repr` does (same span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
@@ -100,6 +100,12 @@ standard_tuple_global_err := fn(s : usize) -> CheckErr { STANDARD_TUPLE_GLOBAL_D
 ## while check/build/emit surfaces can reject the width-blind generic value load consistently.
 ENUM_GLOBAL_ARRAY_DIAG_MARKER := 6773413839565216384
 enum_global_array_err := fn(s : usize) -> CheckErr { ENUM_GLOBAL_ARRAY_DIAG_MARKER + s * 4 }
+
+## A distinct located diagnostic for an initialized local array literal whose element is a @packed
+## struct. Keep it between the enum-array and comptime classes so the common sema/pre-emission path
+## rejects the exact deferred array shape without changing any older CheckErr range.
+PACKED_ARRAY_DIAG_MARKER := 6845468423603140608
+packed_array_err := fn(s : usize) -> CheckErr { PACKED_ARRAY_DIAG_MARKER + s * 4 }
 
 ## A synthesized type: a tag (0 unknown/error, 1 int, 2 bool, 3 struct, 4 enum, 5 pointer,
 ## 6 str, 7 array) and, for a struct/enum, the type's name span `[ns, ns+nl)`.
@@ -2550,6 +2556,18 @@ expr_array_first := fn(e : ptr(Expr)) -> ptr(Expr) {
     }
     _ => { unchecked bitcast(ptr(Expr), 0) }
   }
+}
+## True iff e is the initialized local-array shape whose first element is a direct literal of a
+## resolved @packed struct. This mirrors lower::arr_elem_info's existing fail-loud fence while
+## keeping the new rejection in the shared semantic/pre-emission path. Empty arrays, non-literal
+## elements, ordinary structs, and non-initializing assignments remain outside this bounded slice.
+sema_packed_array_literal := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  if unchecked bitcast(usize, e) == 0 { return false }
+  first := expr_array_first(e)
+  if unchecked bitcast(usize, first) == 0 { return false }
+  al := expr_agg_lit(first)
+  if not al.is_agg { return false }
+  is_packed(decls, src, al.s, al.n)
 }
 ## Is `v` a CONFIDENT numeric/boolean LITERAL (the REVERSE-direction scalar value)? Literals only — a
 ## scalar `Var` local is left tolerant (scalars are not reliably tag-recorded), so no valid program is
@@ -6304,6 +6322,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
     s := deref(stmt_p(Stmt, cur))
     match s {
       Stmt::Assign(ns, nl, v, nx) => {
+        ## Types §8 — reject the initialized local array literal before any lower/backend can apply
+        ## the word-granular array stride to a byte-precise @packed element. Reassignments stay on
+        ## their ordinary path; this is intentionally the exact local-initializer slice only.
+        if not assign_is_reassign(src, ns, nl) {
+          if sema_packed_array_literal(v, decls, src) {
+            return Result(usize, CheckErr).Err(packed_array_err(ns))
+          }
+        }
         ## `name : T` is represented by the parser as Assign(name, zero-sentinel) to preserve the
         ## bootstrap-sensitive AST shape. Recover its declared type from source, record the local as
         ## unreadied, and do not type-check or mark the sentinel as an initializer.

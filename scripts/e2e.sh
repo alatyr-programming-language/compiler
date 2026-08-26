@@ -2421,17 +2421,20 @@ build_reject_has packed_ret_value "a @packed/@offset/@align/@endian struct retur
 ## g.p.a read all three packed fields OR-ed into one word). The MIRROR direction — a plain struct nested
 ## INSIDE a @packed struct — is supported (packed_agg_read / packed_nested_struct) and is unaffected.
 build_reject_has packed_in_plain_struct "a @packed/@offset/@align/@endian struct used as a FIELD of a NON-packed struct is not yet supported"
-## §8 ARRAY-OF-@packed (DEFERRED): an array whose element is a @packed struct wants a byte-precise
-## element stride (C-ABI) the word-granular array machinery can't express; arr_elem_info REJECTS it so
-## the build FAILS LOUD rather than silently miscompiling to a word-padded layout. build_reject asserts
-## the non-zero build rc (a valid binary with a wrong result would be the forbidden silent miscompile).
-build_reject_has packed_array "an array whose element is a @packed struct is not supported"
+## §8 ARRAY-OF-@packed (DEFERRED): the initialized local array literal must be rejected in sema before
+## any backend can apply a word-granular stride to a byte-precise element. Keep the same diagnostic
+## needle across check/build/WAT/AArch64/RISC-V; the uninitialized and slice cases below retain their
+## separate late lower fences.
+check_reject_has packed_array "initialized local array literal whose element is a @packed struct"
+build_reject_has packed_array "initialized local array literal whose element is a @packed struct"
+## Control: an ordinary array literal remains accepted; its tuple element is not a @packed struct.
+check_accept array_of_tuples
 build_reject_has reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
 ## The same ARRAY-OF-@packed fence must hold on every emit-to-stdout backend. These surfaces run their
 ## front-end check first, then the shared lower_layout query must reject before any GAS/WAT reaches stdout.
-emit_reject_has wat packed_array "an array whose element is a @packed struct is not supported"
-emit_reject_has aarch64 packed_array "an array whose element is a @packed struct is not supported"
-emit_reject_has riscv64 packed_array "an array whose element is a @packed struct is not supported"
+emit_reject_has wat packed_array "initialized local array literal whose element is a @packed struct"
+emit_reject_has aarch64 packed_array "initialized local array literal whose element is a @packed struct"
+emit_reject_has riscv64 packed_array "initialized local array literal whose element is a @packed struct"
 emit_reject_has wat reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
 emit_reject_has aarch64 reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
 emit_reject_has riscv64 reject_p0_packed_array_uninit "an array whose element is a @packed struct is not supported"
@@ -4325,7 +4328,6 @@ run const_global_array 42
 check_accept const_global_array
 ## §4 layout: an array of tuples [(A,B); N] — tuple-element stride + nested xs[i].N component read.
 run array_of_tuples 42
-check_accept array_of_tuples
 ## §4 layout: a str field of an array-of-struct element (xs[i].key value + xs[i].key.len).
 run array_struct_str_field 42
 check_accept array_struct_str_field
