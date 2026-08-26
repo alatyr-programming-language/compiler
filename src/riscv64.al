@@ -2190,7 +2190,7 @@ rv_is_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, 
   while i < cnt {
     d := deref(decl_get(decls, i))
     ## a scalar (Num/Bool) OR a float (FloatLit) module global — both live in `.data`, read/written via label.
-    if d.is_fn == false and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) { if ex_value_is_scalar(d.value) { found = true } ; if rv_is_floatlit(d.value) { found = true } }
+    if d.is_fn == false and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) { if ex_value_is_scalar(d.value) { found = true } ; if expr_is_float_lit(d.value) { found = true } }
     i += 1
   }
   found
@@ -2232,8 +2232,8 @@ emit_rv_global_cells := fn(e : ptr(Expr), in out sb : rt::StrBuf, decls : ptr(rt
     emxw := i64(enum_inst_words(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), a))
     mut padk := np
     while padk < emxw { push_str(sb, "  .quad 0\n") ; padk += 1 }
-  } else if rv_is_floatlit(e) {
-    push_str(sb, "  .double ") ; push_str(sb, str_at((src + rv_floatlit_ss(e)), rv_floatlit_sl(e))) ; push_str(sb, "\n")
+  } else if expr_is_float_lit(e) {
+    push_str(sb, "  .double ") ; push_str(sb, str_at((src + expr_float_lit_ns(e)), expr_float_lit_nl(e))) ; push_str(sb, "\n")
   } else {
     push_str(sb, "  .quad ") ; push_int(sb, ex_value_init(e)) ; push_str(sb, "\n")
   }
@@ -3024,9 +3024,6 @@ rv_emit_narrow_trap := fn(name : str, in out sb : rt::StrBuf) {
 
 ## ── FLOAT value model (rv64 dual of the aarch64 float path) — IEEE bits ride the integer path (a0 /
 ## frame slot / .data cell); only arith/conversion/ABI touch the FP (ft/fa) registers. ──────────────
-rv_floatlit_ss := fn(e : ptr(Expr)) -> usize { mut r := 0 ; match deref(e) { Expr::FloatLit(fs, fl) => { r = fs } _ => {} } ; r }
-rv_floatlit_sl := fn(e : ptr(Expr)) -> usize { mut r := 0 ; match deref(e) { Expr::FloatLit(fs, fl) => { r = fl } _ => {} } ; r }
-rv_is_floatlit := fn(e : ptr(Expr)) -> bool { mut r := false ; match deref(e) { Expr::FloatLit(fs, fl) => { r = true } _ => {} } ; r }
 ## Is module GLOBAL `[ns,nl)` float (`: f64` annotation OR inferred FloatLit init)? Null-guards d.value.
 rv_global_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
@@ -3037,7 +3034,7 @@ rv_global_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
     if d.kind == 0 and d.name_len != 0 {
       if streq(src, d.name_start, d.name_len, ns, nl) {
         if ann_scan_float(src, d.name_start + d.name_len) { r = true }
-        if unchecked bitcast(usize, d.value) != 0 { if rv_is_floatlit(d.value) { r = true } }
+        if unchecked bitcast(usize, d.value) != 0 { if expr_is_float_lit(d.value) { r = true } }
       }
     }
     i += 1
@@ -7175,9 +7172,9 @@ pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
     ## a FLOAT-valued global — `.data` cell is a `.double`. Null-guard d.value before touching it.
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.name_len != 0 {
       if unchecked bitcast(usize, d.value) != 0 {
-        if rv_is_floatlit(d.value) {
+        if expr_is_float_lit(d.value) {
           gname := str_at((src + d.name_start), d.name_len)
-          push_str(sb, ".align 3\n") ; push_str(sb, gname) ; push_str(sb, ":\n  .double ") ; push_str(sb, str_at((src + rv_floatlit_ss(d.value)), rv_floatlit_sl(d.value))) ; push_str(sb, "\n")
+          push_str(sb, ".align 3\n") ; push_str(sb, gname) ; push_str(sb, ":\n  .double ") ; push_str(sb, str_at((src + expr_float_lit_ns(d.value)), expr_float_lit_nl(d.value))) ; push_str(sb, "\n")
         }
       }
     }

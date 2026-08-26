@@ -2528,7 +2528,7 @@ a64_is_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize,
     d := deref(decl_get(decls, i))
     ## a scalar (Num/Bool) OR a float (FloatLit) module global — both live in `.data` and are read/written
     ## through their label (a float global's cell is a `.double`; its bits ride the integer global path).
-    if d.is_fn == false and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) { if ex_value_is_scalar(d.value) { found = true } ; if a64_is_floatlit(d.value) { found = true } }
+    if d.is_fn == false and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) { if ex_value_is_scalar(d.value) { found = true } ; if expr_is_float_lit(d.value) { found = true } }
     i += 1
   }
   found
@@ -2588,8 +2588,8 @@ emit_a64_global_cells := fn(e : ptr(Expr), in out sb : rt::StrBuf, decls : ptr(r
     emxw := i64(enum_inst_words(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), a))
     mut padk := np
     while padk < emxw { push_str(sb, "  .quad 0\n") ; padk += 1 }
-  } else if a64_is_floatlit(e) {
-    push_str(sb, "  .double ") ; push_str(sb, str_at((src + a64_floatlit_ss(e)), a64_floatlit_sl(e))) ; push_str(sb, "\n")
+  } else if expr_is_float_lit(e) {
+    push_str(sb, "  .double ") ; push_str(sb, str_at((src + expr_float_lit_ns(e)), expr_float_lit_nl(e))) ; push_str(sb, "\n")
   } else {
     push_str(sb, "  .quad ") ; push_int(sb, ex_value_init(e)) ; push_str(sb, "\n")
   }
@@ -3642,11 +3642,6 @@ a64_emit_narrow_trap := fn(name : str, in out sb : rt::StrBuf) {
   else if name == "i32" { push_str(sb, "  sxtw x2, w0\n  cmp x2, x0\n  b.eq 1f\n  brk #0\n1:\n") }
 }
 
-## FloatLit source-text span accessors; the span start keys its `.Lflt<start>` rodata label.
-a64_floatlit_ss := fn(e : ptr(Expr)) -> usize { mut r := 0 ; match deref(e) { Expr::FloatLit(fs, fl) => { r = fs } _ => {} } ; r }
-a64_floatlit_sl := fn(e : ptr(Expr)) -> usize { mut r := 0 ; match deref(e) { Expr::FloatLit(fs, fl) => { r = fl } _ => {} } ; r }
-## Is expr `e` a FloatLit? (a direct, no-recursion float signal.)
-a64_is_floatlit := fn(e : ptr(Expr)) -> bool { mut r := false ; match deref(e) { Expr::FloatLit(fs, fl) => { r = true } _ => {} } ; r }
 ## Is a module GLOBAL `[ns,nl)` float-typed? A `: f64`/`: f32` annotation OR an inferred FloatLit init
 ## (`mut F := 40.0`). Guards `deref(d.value)` on a null value (some decls carry no value expr).
 a64_global_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> bool {
@@ -3658,7 +3653,7 @@ a64_global_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : 
     if d.kind == 0 and d.name_len != 0 {
       if streq(src, d.name_start, d.name_len, ns, nl) {
         if ann_scan_float(src, d.name_start + d.name_len) { r = true }
-        if unchecked bitcast(usize, d.value) != 0 { if a64_is_floatlit(d.value) { r = true } }
+        if unchecked bitcast(usize, d.value) != 0 { if expr_is_float_lit(d.value) { r = true } }
       }
     }
     i += 1
@@ -7994,9 +7989,9 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
     ## `.quad`. Guard `d.value` on null (some kind-0 decls carry no value expr) before touching it.
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.name_len != 0 {
       if unchecked bitcast(usize, d.value) != 0 {
-        if a64_is_floatlit(d.value) {
+        if expr_is_float_lit(d.value) {
           gname := str_at((src + d.name_start), d.name_len)
-          push_str(sb, ".align 3\n") ; push_str(sb, gname) ; push_str(sb, ":\n  .double ") ; push_str(sb, str_at((src + a64_floatlit_ss(d.value)), a64_floatlit_sl(d.value))) ; push_str(sb, "\n")
+          push_str(sb, ".align 3\n") ; push_str(sb, gname) ; push_str(sb, ":\n  .double ") ; push_str(sb, str_at((src + expr_float_lit_ns(d.value)), expr_float_lit_nl(d.value))) ; push_str(sb, "\n")
         }
       }
     }
