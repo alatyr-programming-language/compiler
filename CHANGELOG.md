@@ -27,6 +27,8 @@ how this repository proves itself, not part of what it ships.
 
 - Statically known out-of-range indexes into fixed arrays now reject at compile time, including every
   index into `[T; 0]`, before any backend emits code.
+- Made unsupported live `str`/view operands fail loudly instead of silently becoming an empty pair.
+- Made non-x86 entry exclusion explicit so backend wrappers cannot collide with a source `_start`.
 - Fixed path dependencies whose source tree contains `lib/`: their modules now retain the dependency
   alias instead of being mistaken for ambient standard-library modules.
 - AArch64 now supports scalar nested field access through inferred homogeneous struct-array locals

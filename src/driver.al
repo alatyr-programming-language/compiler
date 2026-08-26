@@ -4720,11 +4720,11 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     }
     ed = d_resolve_and_prune(decls, ptr(na), base, ems, eml, ptr(tar))
   }
-  ## TOOL-7 — the cross-target test artifact has the same entry exclusion as the canonical x86 test
-  ## artifact. The cross runner supplies its own `_start`; retaining the package entry would either
-  ## create a duplicate linker symbol or, for a named entry, link code that the test artifact must not
-  ## contain. Apply this after pruning so the backend sees one coherent declaration vector.
-  if D_TEST_MODE != 0 {
+  ## TOOL-7 — every non-x86 artifact supplies its own entry: raw backend emission has a synthetic
+  ## `_start` wrapper, while cross-target test artifacts have their runner. Exclude the package entry in
+  ## both modes. This must not depend on D_TEST_MODE: raw backend emission deliberately leaves that flag
+  ## false, and the entry exclusion is still required to avoid a duplicate `_start` symbol.
+  if backend == 0 or backend == 1 or backend == 2 {
     mut cross_entry := "_start"
     if D_TEST_ENTRY_N != 0 {
       cross_entry = str_at(unchecked bitcast(ptr(u8), D_TEST_ENTRY_P), D_TEST_ENTRY_N)
