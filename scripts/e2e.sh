@@ -5080,7 +5080,11 @@ run_x86 when_size_boundary_24 42
 ## one-word fallback. Registered with the diagnostic needle, not a bare `build_reject`: on the pre-fix
 ## compiler this same fixture already failed — as "unbound name", an unrelated reason — so a plain
 ## reject assertion would have passed before the fix and proved nothing.
-build_reject_has reject_option_bool_size "requires the declared bool niche"
+check_reject_has reject_option_bool_size "at line 4"
+build_reject_has reject_option_bool_size "at line 4"
+emit_reject_has wat reject_option_bool_size "at line 4"
+emit_reject_has aarch64 reject_option_bool_size "at line 4"
+emit_reject_has riscv64 reject_option_bool_size "at line 4"
 run for_over_nonvar 42
 run for_over_bytes 42
 run for_over_struct_array 42
