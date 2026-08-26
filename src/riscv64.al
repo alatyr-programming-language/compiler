@@ -43,7 +43,7 @@ field_type_is_float := lower_layout::field_type_is_float
 variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
@@ -1284,7 +1284,7 @@ rv_param_enum_nl := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, 
 rv_elit_payload_scalar := fn(v : ptr(Expr)) -> bool {
   mut g := ex_enum_lit_args(v)
   mut ok := true
-  while g != 0 { ga := deref(arg_p(g)) ; if expr_is_struct_lit(ga.e) or expr_is_enum_lit(ga.e) or rv_is_strlit(ga.e) { ok = false } ; g = ga.next }
+  while g != 0 { ga := deref(arg_p(g)) ; if expr_is_struct_lit(ga.e) or expr_is_enum_lit(ga.e) or expr_is_str_lit(ga.e) { ok = false } ; g = ga.next }
   ok
 }
 
@@ -1518,27 +1518,8 @@ mut RV_CHK := true
 mut RV_BRK := 0
 mut RV_CONT := 0
 
-## --- string literals + print (direct `write` syscall) — mirror of aarch64 ---
-rv_is_strlit := fn(e : ptr(Expr)) -> bool {
-  mut r := false
-  match deref(e) { Expr::StrLit(ss, sl, lbl) => { r = true } _ => {} }
-  r
-}
-rv_strlit_ss := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(e) { Expr::StrLit(ss, sl, lbl) => { r = ss } _ => {} }
-  r
-}
-rv_strlit_sl := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(e) { Expr::StrLit(ss, sl, lbl) => { r = sl } _ => {} }
-  r
-}
-rv_strlit_lbl := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(e) { Expr::StrLit(ss, sl, lbl) => { r = lbl } _ => {} }
-  r
-}
+## --- string literals + print (direct `write` syscall) — mirror of aarch64. StringLit shape
+## accessors are shared through lower_ctx; decoding and emission remain backend-local. ---
 emit_rv_str_bytes := fn(in out sb : rt::StrBuf, src : ptr(u8), ss : usize, sl : usize, lbl : usize) {
   push_str(sb, ".Lstr") ; push_int(sb, i64(lbl)) ; push_str(sb, ":\n  .byte ")
   raw := str_at((src + ss), sl * 4 + 16)
@@ -4020,13 +4001,13 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       mut sarg := unchecked bitcast(ptr(Expr), 0)
       if args_head != 0 { ga0 := deref(arg_p(args_head)) ; sarg = ga0.e }
       ispln := nm == "println"
-      isprint := (nm == "print" or ispln) and args_head != 0 and rv_is_strlit(sarg)
+      isprint := (nm == "print" or ispln) and args_head != 0 and expr_is_str_lit(sarg)
       isconv := scalar_name_is_int_conv(nm)
       mut isfconv := false
       if nm == "f64" { isfconv = true }
       if nm == "f32" { isfconv = true }
       if isprint {
-        emit_rv_print_template(sb, a, src, rv_strlit_ss(sarg), rv_strlit_sl(sarg), rv_strlit_lbl(sarg), ispln, args_head, params_head, pcount, body_head, decls, bind_head, bind_base)
+        emit_rv_print_template(sb, a, src, expr_str_lit_ns(sarg), expr_str_lit_nl(sarg), expr_str_lit_label(sarg), ispln, args_head, params_head, pcount, body_head, decls, bind_head, bind_base)
       } else if (isconv or isfconv) and args_head != 0 {
         ## CONVERSION `uN(x)`/`iN(x)`/`fN(x)` — value bits in a0; FP conversions round-trip via an f-reg.
         ## int→float `fcvt.d.l` (signed, matching x86 cvtsi2sd); float→int `fcvt.lu.d`/`fcvt.l.d` (rtz,
@@ -4045,13 +4026,13 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
             rv_emit_narrow(nm, sb)
           }
         }
-      } else if nm == "asm" and args_head != 0 and rv_is_strlit(sarg) {
+      } else if nm == "asm" and args_head != 0 and expr_is_str_lit(sarg) {
         ## `asm("<GAS>", op…)` raw escape (spec ch.80 §4/§11): emit the RV64-GAS template with the
         ## positional-`{i}` scheme — each `{i}` → the bare decimal value of operand `i` (a comptime IMMEDIATE;
         ## RV64 immediates are bare, e.g. `li a0, {0}` with `42` → `li a0, 42`). Register operands would need
         ## RV64 register-name exemption in `check` — a follow-up; immediate-only here.
-        ss := rv_strlit_ss(sarg)
-        sl := rv_strlit_sl(sarg)
+        ss := expr_str_lit_ns(sarg)
+        sl := expr_str_lit_nl(sarg)
         push_str(sb, "  ")
         mut j := 0
         while j < sl {
@@ -4973,7 +4954,7 @@ emit_rv_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf
     }
     return atot
   }
-  if rv_is_strlit(pe) {
+  if expr_is_str_lit(pe) {
     push_str(sb, "  ebreak\n")
     return 2
   }
@@ -5032,7 +5013,7 @@ emit_rv_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::Str
     }
     return atot
   }
-  if rv_is_strlit(pe) {
+  if expr_is_str_lit(pe) {
     ## a `str` element payload ({ptr,len}) needs its `.Lstr` rodata emitted — fail LOUD rather than
     ## store a dangling pointer. Reserve 2 words.
     push_str(sb, "  ebreak\n")
@@ -6953,8 +6934,8 @@ rv_str_data_if_print := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8),
       isp := (nm == "print" or ispln) and args_head != 0
       mut sarg := unchecked bitcast(ptr(Expr), 0)
       if args_head != 0 { ga := deref(arg_p(args_head)) ; sarg = ga.e }
-      ok := isp and rv_is_strlit(sarg)
-      if ok { emit_rv_str_bytes(sb, src, rv_strlit_ss(sarg), rv_strlit_sl(sarg), rv_strlit_lbl(sarg)) }
+      ok := isp and expr_is_str_lit(sarg)
+      if ok { emit_rv_str_bytes(sb, src, expr_str_lit_ns(sarg), expr_str_lit_nl(sarg), expr_str_lit_label(sarg)) }
     }
     _ => {}
   }
