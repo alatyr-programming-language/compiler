@@ -1144,3 +1144,21 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # Pre-promote gates under Stage2/Stage3: e2e 1712/1712 rows, 2383 assertions, 0 failures; corpus
 # 6440/6440 across all four backends; a64 246/301/113, rv64 240/308/112, wasm 248/404/8
 # (match/trap/reject), all missing=0 and no silent miscompiles.
+
+# Self-promoted 2026-08-26 — bounded live `str`/view fail-loud fence (#21) with the required non-x86
+# entry-exclusion regression protection (#93). `emit_str_pair` now rejects a live unsupported operand
+# instead of materializing `{0, 0}`, while preserving the dead `Num(-1)` return-tail sentinel and
+# unwrapping transparent `unchecked`/`bitcast` views. The non-x86 driver path explicitly prunes the
+# package entry for raw WAT/AArch64/RISC-V artifacts as well as cross-target test artifacts; this no
+# longer depends on the stale string classification of `D_TEST_MODE`.
+# The old seed emitted 1072885 GAS lines; Stage1 == Stage2 == Stage3 emitted byte-identical GAS at
+# 1072758 lines. The normalized seed→Stage1 delta was 297 lines in six expected scalar-global recovery
+# hunks: `cli__scan_cli_inputs` (`CLI_INPUT_COUNT`), `driver__d_manifest_package_path` (`MODULE_ROOT_N`),
+# `driver__dep_root_prefix` (`DEP_ROOTS_N`), `driver__d_compile_file_multi` (`D_TEST_ENTRY_N`), and
+# `lower__ctfold__build_flag_scan`/`build_flag_str_eq` (`BUILD_FLAGS_N`); no unexpected call-edge or
+# emission change was found. Stage1 GAS SHA-256: 25b6f8073f8729cb33bdb2d159592939a1b2cccd21b8650d88d15350c2ce41c1.
+# Stage1 binary SHA-256: c7cb0bd75f70039e2fc3c49e52464c51ce0d4846e27188e8ebcea636f951579d.
+# Stage2 == Stage3 binary SHA-256: bae66122abaf370c236dabfa50064db38540db2b6ca0c8c9b712d3eced1e06aa.
+# Promoted `seed/alatyr` is Stage2. Pre-promotion merged-object gates: e2e 1862/1862, formatter and
+# idiom gate clean, corpus differed only by the four intentional new-fixture pairs, and a64/rv64/wasm
+# sweeps had no silent miscompiles.
