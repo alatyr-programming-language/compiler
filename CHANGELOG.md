@@ -35,6 +35,7 @@ how this repository proves itself, not part of what it ships.
   alias instead of being mistaken for ambient standard-library modules.
 - Fixed qualified function-value aliases through nested module paths so direct calls resolve to the
   defining function instead of an undefined importing-module symbol.
+- One-element listed projections after a bare module alias now parse as module imports.
 - AArch64 now supports scalar nested field access through inferred homogeneous struct-array locals
   with runtime indices.
 - AArch64 now supports whole aggregate-element writes through inferred homogeneous struct-array locals

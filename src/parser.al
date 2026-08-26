@@ -1944,12 +1944,18 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       ## the same `Vec` layout). So `Vec(u64)(…)` and `Vec(i64)(…)` both build a `StructLit(Vec, …)`.
       gin := is_generic_inst(pc)
       if gin.is_i { pc.idx = gin.after }   ## skip the WHOLE type-arg list `(T)` / `(K, V)` → cursor at the ctor `(`
+      ## The lexer omits NEWLINE, so a bare module alias can be followed immediately in the token
+      ## stream by a one-element (or multi-element) listed projection: `rt` then `(Expr) := ast`.
+      ## Do not consume that group as call arguments. Ordinary `name(args)` remains unchanged; the
+      ## balanced-group lookahead only classifies a group whose following token is a binding operator.
+      mut is_call := false
+      if cur(pc).kind == 10 and paren_group_is_binding(pc) == false { is_call = true }
       ## `ident ( …args… )` — a call (kinds: 10 `(`, 11 `)`, 9 `,`), OR a struct
       ## construction `ident ( field = expr , … )` distinguished by an `=` (kind 21) after
       ## the first argument's field-name ident. A bare ident is a variable reference. The
       ## arguments are parsed into an arena-linked `Arg` list (up to 6 — the System V integer
       ## argument registers; >6 is not supported here).
-      if cur(pc).kind == 10 {
+      if is_call {
         pc.idx = pc.idx + 1               ## '('
         ## struct-lit lookahead: `(` ident `=` …  — a field assignment, not a call arg. Also the
         ## ZERO-named-field constructor `TypeName()` (spec Types §6.5 / §9.4 / grammar §130 struct-ctor

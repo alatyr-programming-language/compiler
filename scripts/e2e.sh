@@ -3325,6 +3325,9 @@ root_package_test fn_value_qualified "T _start" "T main__main" "T main__apply" "
 ## `h := lower::a::a_helper; h()` must call `lower__a__a_helper`, not an undefined alias symbol in
 ## `lower__b` (or a caller-module fallback). The row also proves reachability retains the resolved fn.
 root_package_test qualified_fn_alias "T _start" "T main__main" "T lower__b__run" "T lower__a__a_helper"
+## Modules §§4.1/4.1.1 — a one-element listed projection after a bare module alias must remain a
+## declaration: `strbuf := rt` followed by `(Expr) := ast` must not be parsed as a call `rt(Expr)`.
+root_package_test one_element_projection "T _start" "T main__main"
 run_x86 global_str_bytes_view 42
 check_accept global_str_bytes_view
 run_x86 global_bytes_initializer 42
