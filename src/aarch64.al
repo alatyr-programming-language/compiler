@@ -73,7 +73,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
@@ -1298,7 +1298,7 @@ a64_elit_payload_scalar := fn(v : ptr(Expr)) -> bool {
   mut ok := true
   while g != 0 {
     ga := deref(arg_p(g))
-    if expr_is_struct_lit(ga.e) or expr_is_enum_lit(ga.e) or a64_is_strlit(ga.e) { ok = false }
+    if expr_is_struct_lit(ga.e) or expr_is_enum_lit(ga.e) or expr_is_str_lit(ga.e) { ok = false }
     g = ga.next
   }
   ok
@@ -1701,27 +1701,8 @@ a64_bind_agg_span := fn(bind_head : ptr(mut Bind), src : ptr(u8), ns : usize, nl
 }
 
 ## --- string literals + print (direct `write` syscall, like WASM's WASI path — NOT the x86_64 stdlib
-## path, which the single-file native driver does not link). ---
-a64_is_strlit := fn(e : ptr(Expr)) -> bool {
-  mut r := false
-  match deref(e) { Expr::StrLit(ss, sl, lbl) => { r = true } _ => {} }
-  r
-}
-a64_strlit_ss := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(e) { Expr::StrLit(ss, sl, lbl) => { r = ss } _ => {} }
-  r
-}
-a64_strlit_sl := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(e) { Expr::StrLit(ss, sl, lbl) => { r = sl } _ => {} }
-  r
-}
-a64_strlit_lbl := fn(e : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(e) { Expr::StrLit(ss, sl, lbl) => { r = lbl } _ => {} }
-  r
-}
+## path, which the single-file native driver does not link). StringLit shape accessors are shared
+## through lower_ctx; decoding and emission remain backend-local. ---
 ## Emit `.Lstr<lbl>: .byte …` for a print string: decode the raw inner span at `ss` into exactly `sl`
 ## bytes (the parser pre-subtracted escapes so `sl` is the decoded length). NO trailing newline — a
 ## println emits a separate newline write, and `{}`-template runs reference sub-ranges of this data.
@@ -4643,13 +4624,13 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       mut sarg := unchecked bitcast(ptr(Expr), 0)
       if args_head != 0 { ga0 := deref(arg_p(args_head)) ; sarg = ga0.e }
       ispln := nm == "println"
-      isprint := (nm == "print" or ispln) and args_head != 0 and a64_is_strlit(sarg)
+      isprint := (nm == "print" or ispln) and args_head != 0 and expr_is_str_lit(sarg)
       isconv := scalar_name_is_int_conv(nm)
       mut isfconv := false
       if nm == "f64" { isfconv = true }
       if nm == "f32" { isfconv = true }
       if isprint {
-        emit_a64_print_template(sb, a, src, a64_strlit_ss(sarg), a64_strlit_sl(sarg), a64_strlit_lbl(sarg), ispln, args_head, params_head, pcount, body_head, decls, bind_head, bind_base)
+        emit_a64_print_template(sb, a, src, expr_str_lit_ns(sarg), expr_str_lit_nl(sarg), expr_str_lit_label(sarg), ispln, args_head, params_head, pcount, body_head, decls, bind_head, bind_base)
       } else if (isconv or isfconv) and args_head != 0 {
         ## CONVERSION `uN(x)`/`iN(x)`/`fN(x)` — value bits in x0; FP conversions round-trip via a d-register.
         ## int→float `scvtf`; float→int `fcvtzu`/`fcvtzs` (truncating) + narrow; int→int the plain narrow.
@@ -4667,13 +4648,13 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
             a64_emit_narrow(nm, sb)
           }
         }
-      } else if nm == "asm" and args_head != 0 and a64_is_strlit(sarg) {
+      } else if nm == "asm" and args_head != 0 and expr_is_str_lit(sarg) {
         ## `asm("<GAS>", op…)` raw escape (spec ch.80 §4/§11): emit the AArch64-GAS template, with the
         ## positional-`{i}` scheme — each `{i}` → the bare decimal value of operand `i` (a comptime
         ## IMMEDIATE; the template supplies any `#`, so `mov x0, #{0}` with `42` → `mov x0, #42`). A register
         ## operand would need aarch64 register-name exemption in `check` — a follow-up; immediate-only here.
-        ss := a64_strlit_ss(sarg)
-        sl := a64_strlit_sl(sarg)
+        ss := expr_str_lit_ns(sarg)
+        sl := expr_str_lit_nl(sarg)
         push_str(sb, "  ")
         mut j := 0
         while j < sl {
@@ -5583,7 +5564,7 @@ emit_a64_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
     }
     return atot
   }
-  if a64_is_strlit(pe) {
+  if expr_is_str_lit(pe) {
     ## a `str` payload ({ptr,len}) needs its `.Lstr` rodata emitted for the enum-value data walk (not yet
     ## wired for non-print str-lits) — fail LOUD rather than store a dangling pointer. Reserve 2 words.
     push_str(sb, "  brk #0 // str enum payload (deferred)\n")
@@ -5644,7 +5625,7 @@ emit_a64_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::St
     }
     return atot
   }
-  if a64_is_strlit(pe) {
+  if expr_is_str_lit(pe) {
     push_str(sb, "  brk #0 // str element payload (deferred)\n")
     return 2
   }
@@ -7764,8 +7745,8 @@ a64_str_data_if_print := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8)
       isp := (nm == "print" or ispln) and args_head != 0
       mut sarg := unchecked bitcast(ptr(Expr), 0)
       if args_head != 0 { ga := deref(arg_p(args_head)) ; sarg = ga.e }
-      ok := isp and a64_is_strlit(sarg)
-      if ok { emit_a64_str_bytes(sb, src, a64_strlit_ss(sarg), a64_strlit_sl(sarg), a64_strlit_lbl(sarg)) }
+      ok := isp and expr_is_str_lit(sarg)
+      if ok { emit_a64_str_bytes(sb, src, expr_str_lit_ns(sarg), expr_str_lit_nl(sarg), expr_str_lit_label(sarg)) }
     }
     _ => {}
   }
