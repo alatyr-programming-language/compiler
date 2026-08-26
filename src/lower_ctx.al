@@ -8,9 +8,10 @@
 ## First extraction (probe): `SVec` (a plain struct) + `node_ptr` (the GENERIC arena accessor) — the latter
 ## verifies cross-module generic monomorphization works before the larger cluster moves. Second: the small
 ## expression-span accessors (`CSpan` + `var_name_span`/`asm_str_span`/`asm_digit`) the raw-asm cluster needs.
-(Arg, Decl, Expr, Param) := ast
+(Arg, Decl, Expr, Param, Stmt) := ast
 arg_p := ast::arg_p
 param_p := ast::param_p
+stmt_p := ast::stmt_p
 ## Compatibility surface for lower_asm: the shared table lives only in lower_layout.
 pub asm_digit := fn(c : str) -> i64 { lower_layout::dec_digit_val(c) }
 
@@ -54,6 +55,22 @@ pub param_find := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl
     p = pm.next
   }
   return -1
+}
+
+## True when the first declaration assignment for `[ns, ns+nl)` in a statement list initializes an
+## `Expr::Slice`; false when the name is absent or has another initializer. This shape-only detector is
+## shared by the native and WAT backends; slice typing and emission remain backend-specific.
+pub is_slice_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+  d := lower_layout::local_decl_assign(fn_head, src, ns, nl)
+  mut r := false
+  if unchecked bitcast(usize, d) != 0 {
+    stmt := deref(stmt_p(Stmt, d))
+    match stmt {
+      Stmt::Assign(ans, anl, v, nx) => { if lower_layout::ex_is_slice(v) { r = true } }
+      _ => {}
+    }
+  }
+  r
 }
 
 ## Architecture-neutral Expr accessors shared by the scalar backends. Keep the scalar returns separate:

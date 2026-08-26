@@ -62,7 +62,7 @@ variant_payload_type := lower_layout::variant_payload_type
 field_type_is_float := lower_layout::field_type_is_float
 field_type_span := lower::field_type_span
 compfor_iter_arg := lower::compfor_iter_arg
-(CSpan, decl_at, decl_get, node_ptr, streq) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, is_slice_local) := lower_ctx
 
 ## The EXACT linker symbol of a `@export("name")` attribute attached to `[name_s, name_s+name_l)`
 ## (Modules §6.3), or {0,0}. The parser discards attributes, so recover declaration-prefix and
@@ -1697,20 +1697,6 @@ wat_call_ret_tuple_words := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   }
   r
 }
-## Is the LOCAL `[ns, ns+nl)` a range-SLICE view (its `:=` init is an Expr::Slice)?
-is_slice_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d := lower_layout::local_decl_assign(fn_head, src, ns, nl)
-  mut r := false
-  if unchecked bitcast(usize, d) != 0 {
-    stmt := deref(stmt_p(Stmt, d))
-    match stmt {
-      Stmt::Assign(ans, anl, v, nx) => { if ex_is_slice(v) { r = true } }
-      _ => {}
-    }
-  }
-  r
-}
-
 ## The ELEMENT-type span of a `Slice(E)` PARAM named `[s,n)`, by scanning SOURCE forward from the param
 ## name (`: Slice(E)`) — the wasm twin of lower.al's `slice_param_elem_span`. {0,0} when not a slice param.
 wat_slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> WSpan {

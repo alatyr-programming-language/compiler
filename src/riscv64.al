@@ -43,7 +43,7 @@ field_type_is_float := lower_layout::field_type_is_float
 variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, param_find, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
@@ -726,7 +726,7 @@ rv_len_recv_slice := fn(recv : ptr(Expr), params_head : ptr(mut Param), src : pt
   mut r := false
   if rnl != 0 {
     if rv_slice_param_scalar(params_head, src, rns, rnl, a, decls) { r = true }
-    if rv_is_slice_local(body_head, src, rns, rnl, a) { r = true }
+    if is_slice_local(body_head, src, rns, rnl, a) { r = true }
   }
   r
 }
@@ -1299,19 +1299,6 @@ rv_tuple_words := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
     i = i + 1
   }
   i64(commas + 1)
-}
-## Is the LOCAL `[ns,nl]` a range-SLICE view (its first `:=` value is an `Expr::Slice`)?
-rv_is_slice_local := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d := lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := false
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { if ex_is_slice(v) { r = true } }
-      _ => {}
-    }
-  }
-  r
 }
 rv_is_array_local := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   d := lower_layout::local_decl_assign(head, src, ns, nl)
@@ -3505,7 +3492,7 @@ rv_is_agg_place := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : p
   if rv_local_enum_nl(body_head, src, ns, nl, a) != 0 { return true }
   if rv_param_enum_nl(params_head, src, ns, nl, decls) != 0 { return true }
   if rv_is_array_local(body_head, src, ns, nl, a) { return true }
-  if rv_is_slice_local(body_head, src, ns, nl, a) { return true }
+  if is_slice_local(body_head, src, ns, nl, a) { return true }
   false
 }
 ## The INDEX twin: `xs[i]` over an AGGREGATE-ELEMENT array yields the ELEMENT's base address (elements
@@ -3782,7 +3769,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       ## `s.len` on a range-slice local — the runtime length lives in word1 (frame byte offset poff+8).
       mut isslicelen := false
       if bnl != 0 {
-        if rv_is_slice_local(body_head, src, bns, bnl, a) {
+        if is_slice_local(body_head, src, bns, bnl, a) {
           if str_at((src + fs), fl) == "len" { isslicelen = true }
         }
       }
@@ -4424,7 +4411,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           ## scalar path and its word 0 — the DISCRIMINANT — was passed AS the pointer, so the callee
           ## dereferenced e.g. 0: a RAW SIGSEGV (narrow and wide enums alike), not a clean `ebreak`.
           isenumlocal := anl != 0 and rv_local_enum_nl(body_head, src, ans, anl, a) != 0
-          isagg := (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and anl != 0 and ((rv_local_struct_nl(body_head, src, ans, anl, a) != 0) or isenumlocal or rv_is_array_local(body_head, src, ans, anl, a) or rv_is_slice_local(body_head, src, ans, anl, a))
+          isagg := (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and anl != 0 and ((rv_local_struct_nl(body_head, src, ans, anl, a) != 0) or isenumlocal or rv_is_array_local(body_head, src, ans, anl, a) or is_slice_local(body_head, src, ans, anl, a))
           aoff := rv_local_off(body_head, src, ans, anl, pcount, a, decls)
           outarg := rv_param_out_scalar(cparams, src, decls, gidx)
           if outarg { rv_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
@@ -4540,7 +4527,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       bns := ex_var_ns(ibase)
       bnl := ex_var_nl(ibase)
       mut isslice := false
-      if bnl != 0 { if rv_is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
+      if bnl != 0 { if is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
       isarr := (not isslice) and bnl != 0 and rv_is_array_local(body_head, src, bns, bnl, a)
       pidxI := param_find(params_head, src, bns, bnl, a)
       mut isparamslice := false
@@ -5806,7 +5793,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         bns := ex_var_ns(ibase)
         bnl := ex_var_nl(ibase)
         mut isslice := false
-        if bnl != 0 { if rv_is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
+        if bnl != 0 { if is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
         isarr := bnl != 0 and rv_is_array_local(body_head, src, bns, bnl, a)
         aoff := rv_local_off(body_head, src, bns, bnl, pcount, a, decls)
         ## `xs[i] = v` — a whole-ELEMENT write into a fixed array of scalar-only STRUCTS (a LOCAL
@@ -6275,7 +6262,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           ioff := voff + 8
           aoff := rv_local_off(body_head, src, bns, bnl, pcount, a, decls)
           mut isslice := false
-          if bnl != 0 { if rv_is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
+          if bnl != 0 { if is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
           mut isarr := false
           if (not isslice) and bnl != 0 { if rv_is_array_local(body_head, src, bns, bnl, a) { isarr = true } }
           pidxF := param_find(params_head, src, bns, bnl, a)
