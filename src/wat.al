@@ -62,7 +62,7 @@ variant_payload_type := lower_layout::variant_payload_type
 field_type_is_float := lower_layout::field_type_is_float
 field_type_span := lower::field_type_span
 compfor_iter_arg := lower::compfor_iter_arg
-(CSpan, decl_at, decl_get, node_ptr, streq, is_slice_local, arrty_nel) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, is_slice_local, arrty_nel, sub_arr_len) := lower_ctx
 
 ## The EXACT linker symbol of a `@export("name")` attribute attached to `[name_s, name_s+name_l)`
 ## (Modules §6.3), or {0,0}. The parser discards attributes, so recover declaration-prefix and
@@ -1899,32 +1899,6 @@ wat_param_gen_arr_stride := fn(params_head : ptr(mut Param), src : ptr(u8), ns :
   if struct_decl_of(decls, src, aes, aet - aes) >= 0 { return 0 }
   if enum_decl_of(decls, src, aes, aet - aes) >= 0 { return 0 }
   1
-}
-## GENERICS (§8 mono): the element COUNT N of the active instance array type `[E; N]` (WAT_SUB_ITS/ITL),
-## for the CG-7 bounds check on a generic array-param index. 0 if the instance type is not an array.
-## Inline `;`-scan + digit parse over the globals. Mirrors a64_sub_arr_len.
-wat_sub_arr_len := fn(src : ptr(u8)) -> i64 {
-  if str_at((src + WAT_SUB_ITS), 1) != "[" { return 0 }
-  mut ndep := 0
-  mut nsemi := WAT_SUB_ITS + 1
-  mut np := WAT_SUB_ITS + 1
-  mut ngo := true
-  while ngo and np < WAT_SUB_ITS + WAT_SUB_ITL {
-    nc := str_at((src + np), 1)
-    if nc == "(" or nc == "[" { ndep = ndep + 1 }
-    else if (nc == ")" or nc == "]") and ndep > 0 { ndep = ndep - 1 }
-    else if nc == ";" and ndep == 0 { nsemi = np ; ngo = false }
-    np = np + 1
-  }
-  mut nlp := nsemi + 1
-  mut nval := 0
-  while nlp < WAT_SUB_ITS + WAT_SUB_ITL {
-    nbs := bytes(str_at((src + nlp), 1))
-    nb := nbs[0]
-    if nb >= 48 and nb <= 57 { nval = nval * 10 + i64(nb - 48) }
-    nlp = nlp + 1
-  }
-  nval
 }
 ## The CURRENT match arm's variant context (§8 comptime-variant unroll), set per generated arm in
 ## emit_wat_stmt_match's wild==2 unroll: the scrutinee enum span (WAT_ARM_ENS/ENL), the CURRENT variant
@@ -4868,11 +4842,11 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## `a[i]` on a GENERIC array PARAM (`a : T`, T → `[E; N]` scalar element in this instance): the
         ## param wasm local (`pidxidx`) holds the array BASE ADDRESS (passed by-reference by the caller),
         ## so element i (1 word) is at `base + i*8`. Bounds vs the static N (from the instance array type),
-        ## dropped under `unchecked`. Mirrors a64_param_gen_arr_stride / a64_sub_arr_len.
+        ## dropped under `unchecked`. Mirrors a64_param_gen_arr_stride / shared sub_arr_len.
         push_str(sb, "(i64.load (i32.wrap_i64 (i64.add (local.get ")
         push_int(sb, pidxidx)
         push_str(sb, ") (i64.mul ")
-        wnelp := wat_sub_arr_len(src)
+        wnelp := sub_arr_len(src, WAT_SUB_ITS, WAT_SUB_ITL)
         if WAT_CHK and wnelp > 0 {
           sc := pcount + count_locals(body_head, src, a, decls)
           push_str(sb, "(block (result i64) (local.set ") ; push_int(sb, sc) ; push_str(sb, " ")
