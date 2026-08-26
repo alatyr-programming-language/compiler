@@ -73,21 +73,8 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
-(CSpan) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
-
-decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
-## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
-decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { hh := rt::vec_get(deref(decls), i) ; return decl_at(Decl, hh) }
-
-node_ptr := fn(T : type, a : rt::Arena, h : usize) -> ptr(mut T) {
-  base_int := unchecked bitcast(usize, a.base)
-  return unchecked bitcast(ptr(mut T), base_int + h)
-}
-
-streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
-  str_at((src + a_s), a_n) == str_at((src + b_s), b_n)   ## src+off = pointer arith (I11/CG-8)
-}
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
 
