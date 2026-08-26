@@ -43,7 +43,7 @@ field_type_is_float := lower_layout::field_type_is_float
 variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
@@ -3102,8 +3102,8 @@ rv_emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Aren
 ## return type is an enum of 1..8 words (§8 piece 3 register enum-return convention: word 0 = disc, word
 ## k+1 = payload in a0..a7). Sizes an enum-returning-call-bound LOCAL + materializes such an ARG by ref.
 rv_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  cs := rv_call_ns(v)
-  cl := rv_call_nl(v)
+  cs := expr_call_name_ns(v)
+  cl := expr_call_name_nl(v)
   mut rs := 0
   mut rn := 0
   if cl != 0 {
@@ -3154,11 +3154,9 @@ rv_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
 ## piece 2: the callee delivers word k in a_k, a0..a7). Used to size a struct-returning-call-bound LOCAL,
 ## resolve its `.field` reads, and materialize a struct-returning-call ARGUMENT by reference. Restricting
 ## to all-scalar ≤8-word keeps the convention self-consistent; a wider/str/float return stays a LOUD trap.
-rv_call_ns := fn(e : ptr(Expr)) -> usize { mut r := 0 ; match deref(e) { Expr::Call(cs, cl, n, ah) => { r = cs } _ => {} } ; r }
-rv_call_nl := fn(e : ptr(Expr)) -> usize { mut r := 0 ; match deref(e) { Expr::Call(cs, cl, n, ah) => { r = cl } _ => {} } ; r }
 rv_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  cs := rv_call_ns(v)
-  cl := rv_call_nl(v)
+  cs := expr_call_name_ns(v)
+  cl := expr_call_name_nl(v)
   mut rs := 0
   mut rn := 0
   if cl != 0 {
@@ -3214,8 +3212,8 @@ rv_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
 ## pointer); a generic callee is out of scope (its instance return type is not resolved here) and stays a
 ## LOUD trap. Disjoint from rv_call_ret_struct_span (1..8 words) by the width split.
 rv_call_ret_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  cs := rv_call_ns(v)
-  cl := rv_call_nl(v)
+  cs := expr_call_name_ns(v)
+  cl := expr_call_name_nl(v)
   mut rs := 0
   mut rn := 0
   if cl != 0 {
@@ -3263,8 +3261,8 @@ rv_call_ret_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
 ## used to SIZE + TYPE the bound local and to route the a0 hand-off. Disjoint from rv_call_ret_enum_span
 ## (the 1..8-word register gate) by the width split; a generic wide-enum return stays a LOUD trap.
 rv_call_ret_enum_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  cs := rv_call_ns(v)
-  cl := rv_call_nl(v)
+  cs := expr_call_name_ns(v)
+  cl := expr_call_name_nl(v)
   mut rs := 0
   mut rn := 0
   if cl != 0 {

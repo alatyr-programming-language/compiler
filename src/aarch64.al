@@ -73,7 +73,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
@@ -3685,11 +3685,9 @@ a64_param_is_float := fn(params_head : ptr(mut Param), src : ptr(u8), idx : i64,
 ## LOCAL, (b) resolve its `.field` reads, and (c) materialize a struct-returning-call ARGUMENT by
 ## reference. Restricting to all-scalar ≤8-word keeps the convention self-consistent; a wider/str/float
 ## return stays a LOUD trap.
-a64_call_ns := fn(e : ptr(Expr)) -> usize { mut r := 0 ; match deref(e) { Expr::Call(cs, cl, n, ah) => { r = cs } _ => {} } ; r }
-a64_call_nl := fn(e : ptr(Expr)) -> usize { mut r := 0 ; match deref(e) { Expr::Call(cs, cl, n, ah) => { r = cl } _ => {} } ; r }
 a64_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  cs := a64_call_ns(v)
-  cl := a64_call_nl(v)
+  cs := expr_call_name_ns(v)
+  cl := expr_call_name_nl(v)
   mut rs := 0
   mut rn := 0
   if cl != 0 {
@@ -3746,8 +3744,8 @@ a64_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
 ## gate; only a direct call to a plain (non-generic) struct-returning fn is recognized (generic SRET is
 ## out of scope and stays trapping). Used to SIZE + TYPE such a binding local and to route its delivery.
 a64_call_ret_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  cs := a64_call_ns(v)
-  cl := a64_call_nl(v)
+  cs := expr_call_name_ns(v)
+  cl := expr_call_name_nl(v)
   mut rs := 0
   mut rn := 0
   if cl != 0 {
@@ -3811,8 +3809,8 @@ a64_binding_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
 ## resolve its `match`, and materialize an enum-returning-call ARGUMENT by reference. Word-copy delivery
 ## works for any payload; a downstream struct/str-payload match still fails loud.
 a64_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  cs := a64_call_ns(v)
-  cl := a64_call_nl(v)
+  cs := expr_call_name_ns(v)
+  cl := expr_call_name_nl(v)
   mut rs := 0
   mut rn := 0
   if cl != 0 {
@@ -3866,8 +3864,8 @@ a64_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
 ## supplied destination); used to SIZE + TYPE the bound local and to route its x8 hand-off. A generic
 ## wide-enum return is out of scope here (stays trapping), mirroring a64_call_ret_sret_span's plain gate.
 a64_call_ret_enum_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
-  cs := a64_call_ns(v)
-  cl := a64_call_nl(v)
+  cs := expr_call_name_ns(v)
+  cl := expr_call_name_nl(v)
   mut rs := 0
   mut rn := 0
   if cl != 0 {
