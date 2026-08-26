@@ -4488,10 +4488,13 @@ run wat_labeled_break 21
 ## Issue #44 bounded WAT slice: a statement-only labeled continue drains nested and target-loop defers
 ## in LIFO order before routing to the outer loop's next-iteration edge.
 run wat_labeled_continue 21
+## Issue #44 bounded WAT slice: scalar value-loop labeled continue drains nested statement-only loops.
+run wat_labeled_value_continue_defer 42
+run_wat wat_labeled_value_continue_defer 42
 ## A named continue to the NEAREST value-bearing loop also has depth 0 in the AST. WAT must use the
-## authored-label span to distinguish it from bare continue and fail loud rather than emit `$cont`.
+## authored-label span to distinguish it from bare continue and route the named transfer to `$cont`.
 run wat_labeled_value_continue 7
-run_wat wat_labeled_value_continue 134
+run_wat wat_labeled_value_continue 7
 run_wat fn_value_local_lambda_cross 10
 run_a64 fn_value_local_lambda_cross 10
 run_rv64 fn_value_local_lambda_cross 10
