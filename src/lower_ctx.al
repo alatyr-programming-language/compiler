@@ -73,6 +73,34 @@ pub expr_field_name_l := fn(e : ptr(Expr)) -> usize {
   r
 }
 
+## Architecture-neutral Expr enum-literal accessors shared by the scalar backends. Keep the scalar
+## returns separate for the frozen-seed-compatible shape used by the neighboring accessors.
+pub expr_is_enum_lit := fn(v : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = true } _ => {} }
+  r
+}
+pub expr_enum_lit_ns := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = es } _ => {} }
+  r
+}
+pub expr_enum_lit_nl := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = en } _ => {} }
+  r
+}
+pub expr_enum_variant_ns := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vs } _ => {} }
+  r
+}
+pub expr_enum_variant_nl := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vn } _ => {} }
+  r
+}
+
 ## The name span of a `Var` (0/0 if not a `Var`); the inner content span of a `StrLit` (`asm_str_span`);
 ## a single decimal digit's value (`asm_digit`) — small standalone accessors shared by the raw-asm cluster.
 pub CSpan := struct { s : usize, n : usize }
