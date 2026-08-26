@@ -6,7 +6,7 @@
 ## `name := / = e`, `return e`, `e` (expr-statement), `if`/`while`, `p.f = e`; and expressions over
 ## literals (`Num`/`BoolLit`/`StrLit`), names (`Var`), `Bin` (with `op_symbol`), calls, field/index
 ## access, `deref`/`ptr`, and a value-`if`. `:=` vs `=` is RECONSTRUCTED (the parser erases the token
-## into a bare `Assign`) by a value-returning "seen a prior Assign of this name?" scan — the FIRST
+## into a bare `Assign`) by `ast::assign_is_reassign` — the FIRST
 ## binding of a name in a fn body prints `:=`, a later one prints `=`; this canonical rule makes the
 ## output IDEMPOTENT (`fmt(fmt(x)) == fmt(x)`). Anything outside the core (struct/enum decls, `match`,
 ## aggregate literals, comptime forms) is FAIL-LOUD (`panic`) — never a silently-wrong reformat.
@@ -14,11 +14,11 @@
 ## ADDITIVE: nothing in the self-build invokes `emit_fmt_program` (the self-build uses `build`, not
 ## `fmt`), so the x86_64 GAS the tree emits for itself is byte-identical and the TOOL-1 fixpoint
 ## (seed==Stage1==Stage2) is unaffected — like `wat.al`/`aarch64.al`/`riscv64.al`.
-(Arg, Arm, Bind, Decl, Expr, FieldDecl, LabelSpan, Param, Stmt, local_type_span) := ast
+(Arg, Arm, Bind, Decl, Expr, FieldDecl, LabelSpan, Param, Stmt, local_type_span, assign_is_reassign) := ast
 local_is_mut := ast::local_is_mut
 ## Grammar §130 line 287 / OP-2 — the compound-assignment glyph the source wrote after a place's name
-## span, or "" (see `ast.al`). The ONE table of the eight operators, shared with `sema`; fmt used to
-## carry two private copies of it, one listing five glyphs and one listing four.
+## span, or "" (see `ast.al`). The ONE table of the eight operators is shared through `ast`; fmt uses
+## it to restore the erased spelling while `ast::assign_is_reassign` restores the assignment form.
 compound_assign_op_at := ast::compound_assign_op_at
 ## The no-initializer local form `name : T` (source metadata — `Stmt.Assign` carries a placeholder
 ## value for it, so without this probe fmt re-emits `name : T = 0`, a different program).
@@ -2329,30 +2329,6 @@ fmt_stmt_lead_attr := fn(src : ptr(u8), name_s : usize, out_s : ptr(mut usize)) 
   en - s
 }
 
-## Did this Assign originate from the reassignment token `=` rather than a binding `:=` / `: T =`?
-## Stmt.Assign erases that distinction, but the name's source span ends immediately before the token
-## (modulo whitespace). Recovering it directly is scope-correct for nested blocks and match arms, where
-## scanning only the enclosing fn body cannot distinguish an arm-local reassignment from a new binding.
-fmt_local_is_reassign := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
-  mut p := ns + nl
-  end := p + 512
-  mut c := str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") {
-    p += 1
-    c = str_at((src + p), 1)
-  }
-  ## A COMPOUND assignment (`x -= 50`, `x *= 3`, spec §10) is DESUGARED by the parser into
-  ## `Assign(x, Bin(-, x, 50))`, and the source at the name reads `-=`, not `=` — so the probe said
-  ## "not seen before" and fmt re-emitted the statement as a fresh BINDING, `x := x - 50`, shadowing
-  ## the mutable local instead of updating it (`compound_assign_ops` stopped compiling). ALL EIGHT
-  ## compound spellings are reassignments too — and the set is `ast::compound_assign_op_at`'s, not a
-  ## local list: this line used to name five of the eight, so `x &= 58` still rendered as the
-  ## declaration `x := x & 58`. That predicate requires the second byte to be `=`, so a bare `x - 50`
-  ## expression statement cannot match.
-  if c == "=" { return true }
-  return compound_assign_op_at(src, ns, nl).len != 0
-}
-
 ## The RIGHT operand of a `Bin` value, or null for any other shape. Its own function because the
 ## `Stmt::Assign` arm must stay flat — a nested match/if-else there mis-lowers in a fn this big (the arm's
 ## own comment records it), so the destructuring lives out here. It is also the third of the `Bin`
@@ -2617,7 +2593,7 @@ emit_fmt_stmts := fn(list : ptr(mut Stmt), body_head : ptr(mut Stmt), in out sb 
         sal := fmt_stmt_lead_attr(src, ans, ptr(sas))
         plain := sal == 0
         if sal != 0 { push_str(sb, str_at((src + sas), sal)) }
-        seen := fmt_local_is_reassign(src, ans, anl)
+        seen := assign_is_reassign(src, ans, anl)
         if plain and (not seen) and local_is_mut(src, ans) { push_str(sb, "mut ") }
         if plain { push_str(sb, str_at((src + ans), anl)) }
         lts := local_type_span(src, ans, anl)
@@ -2626,9 +2602,8 @@ emit_fmt_stmts := fn(list : ptr(mut Stmt), body_head : ptr(mut Stmt), in out sb 
         ## `x = x + 1`. Rendering the desugared shape is not a free choice of canonical form: Grammar §130
         ## line 287 defines the compound form as sugar with the place evaluated ONCE, so for a place with a
         ## side-effecting index (`a[f()] += 1`) the expanded spelling would evaluate it twice. All EIGHT
-        ## glyphs come from `ast::compound_assign_op_at` — the private probe this replaced listed only
-        ## four, so `x &= 58` lost its spelling AND (via `fmt_local_is_reassign`, which listed five)
-        ## became the DECLARATION `x := x & 58`. BOTH conditions must hold: the source shows `op=` AND the
+        ## glyphs come from `ast::compound_assign_op_at`; the source-level assignment decision comes
+        ## from `ast::assign_is_reassign`. BOTH conditions must hold: the source shows `op=` AND the
         ## value really is a `Bin`, so an unexpected shape falls back to the plain rendering.
         cop := compound_assign_op_at(src, ans, anl)
         mut crhs := unchecked bitcast(ptr(Expr), 0)

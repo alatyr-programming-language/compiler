@@ -19,6 +19,7 @@ arm_p := ast::arm_p
 stmt_p := ast::stmt_p
 local_type_span := ast::local_type_span
 local_is_uninit := ast::local_is_uninit
+assign_is_reassign := ast::assign_is_reassign
 (Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
 (SVec, arg_expr_at, var_name_span) := lower_ctx
 (base_type_name, enum_decl_of, enum_inst_words, is_niche_folded, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
@@ -63,7 +64,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
         if is_module_mut_global(decls, src, ns, nl) {
           ## a write to a MUTABLE module GLOBAL (`COUNTER = …`) — no local slot; the global is
           ## `.data`-addressed by label. (Never a `:=` binding: `mut NAME := …` is a module decl.)
-        } else if slot_of(ptr(slots), src, ns, nl) < 0 and local_is_plain_assign(src, ns, nl)
+        } else if slot_of(ptr(slots), src, ns, nl) < 0 and assign_is_reassign(src, ns, nl)
                   and gref_unresolved(decls, src, ns, nl) {
           ## Modules §3 — `NAME = v` where `NAME` is a global of a module this one may not address.
           ## Binding a slot here is what turned a cross-module write into a frame store that smashed
