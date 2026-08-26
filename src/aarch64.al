@@ -73,7 +73,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, param_find, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
@@ -709,7 +709,7 @@ a64_len_recv_slice := fn(recv : ptr(Expr), params_head : ptr(mut Param), src : p
   mut r := false
   if rnl != 0 {
     if a64_slice_param_scalar(params_head, src, rns, rnl, a, decls) { r = true }
-    if a64_is_slice_local(body_head, src, rns, rnl, a) { r = true }
+    if is_slice_local(body_head, src, rns, rnl, a) { r = true }
   }
   r
 }
@@ -1318,18 +1318,6 @@ a64_tuple_words := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
   i64(commas + 1)
 }
 ## Is the LOCAL `[ns,nl]` a range-SLICE view (its first `:=` value is an `Expr::Slice`)?
-a64_is_slice_local := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
-  d := lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := false
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { if ex_is_slice(v) { r = true } }
-      _ => {}
-    }
-  }
-  r
-}
 ## Is the LOCAL `[ns,nl]` an ARRAY (its first `:=` value is an ArrayLit)?
 a64_is_array_local := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   d := lower_layout::local_decl_assign(head, src, ns, nl)
@@ -4098,7 +4086,7 @@ a64_is_agg_place := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : 
   if a64_local_enum_nl(body_head, src, ns, nl, a) != 0 { return true }
   if a64_param_enum_nl(params_head, src, ns, nl, decls) != 0 { return true }
   if a64_is_array_local(body_head, src, ns, nl, a) { return true }
-  if a64_is_slice_local(body_head, src, ns, nl, a) { return true }
+  if is_slice_local(body_head, src, ns, nl, a) { return true }
   false
 }
 ## The INDEX twin: `xs[i]` over an AGGREGATE-ELEMENT array yields the ELEMENT's base address (elements
@@ -4371,7 +4359,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       ## `s.len` on a range-slice local — the runtime length lives in word1 (frame byte offset poff+8).
       mut isslicelen := false
       if bnl != 0 {
-        if a64_is_slice_local(body_head, src, bns, bnl, a) {
+        if is_slice_local(body_head, src, bns, bnl, a) {
           if str_at((src + fs), fl) == "len" { isslicelen = true }
         }
       }
@@ -4756,7 +4744,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
               ## A local range-slice is an inline `{ptr,len}` frame value. Generic Slice(T) parameters
               ## receive its ADDRESS, just like struct/array/enum aggregate parameters; passing the
               ## loaded data pointer makes the instance read arr[1] as its length (a silent wrong result).
-              gisslice := (not gisarr) and (not gisstruct) and gavnl != 0 and a64_is_slice_local(body_head, src, gavns, gavnl, a)
+              gisslice := (not gisarr) and (not gisstruct) and gavnl != 0 and is_slice_local(body_head, src, gavns, gavnl, a)
               ## an ENUM LOCAL is by-reference too (the callee's enum param slot holds a POINTER to the
               ## {disc, payload…} block) — without this its word 0, the DISCRIMINANT, was passed AS the
               ## pointer and the instance dereferenced it: a raw SIGSEGV, not a clean `brk`.
@@ -5003,7 +4991,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           ## scalar path and its word 0 — the DISCRIMINANT — was passed AS the pointer, so the callee
           ## dereferenced e.g. 0: a RAW SIGSEGV (both narrow and wide enums), not a clean `brk`.
           isenumlocal := anl != 0 and a64_local_enum_nl(body_head, src, ans, anl, a) != 0
-          isagg := (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and anl != 0 and ((a64_local_struct_nl(body_head, src, ans, anl, a) != 0) or isenumlocal or a64_is_array_local(body_head, src, ans, anl, a) or a64_is_slice_local(body_head, src, ans, anl, a))
+          isagg := (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and anl != 0 and ((a64_local_struct_nl(body_head, src, ans, anl, a) != 0) or isenumlocal or a64_is_array_local(body_head, src, ans, anl, a) or is_slice_local(body_head, src, ans, anl, a))
           aoff := a64_local_off(body_head, src, ans, anl, pcount, a, decls)
           if isbytearg { push_str(sb, "  brk #0 // bounded byte-array return argument ABI is unsupported\n") }
           if isslicearg { emit_a64_slice_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
@@ -5125,7 +5113,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       bns := ex_var_ns(ibase)
       bnl := ex_var_nl(ibase)
       mut isslice := false
-      if bnl != 0 { if a64_is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
+      if bnl != 0 { if is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
       isarr := (not isslice) and bnl != 0 and a64_is_array_local(body_head, src, bns, bnl, a)
       pidxI := param_find(params_head, src, bns, bnl, a)
       isparamslice := (not isslice) and (not isarr) and pidxI >= 0 and a64_slice_param_scalar(params_head, src, bns, bnl, a, decls)
@@ -6498,7 +6486,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         mut issliceparam := false
         mut sliceparamidx := i64(0) - 1
         if bnl != 0 {
-          if a64_is_slice_local(body_head, src, bns, bnl, a) { isslice = true }
+          if is_slice_local(body_head, src, bns, bnl, a) { isslice = true }
           sliceparamidx = param_find(params_head, src, bns, bnl, a)
           if sliceparamidx >= 0 and a64_slice_param_scalar(params_head, src, bns, bnl, a, decls) {
             ## This write form is currently word-tier only. Resolve the active generic T before
@@ -7062,7 +7050,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           ioff := voff + 8
           aoff := a64_local_off(body_head, src, bns, bnl, pcount, a, decls)
           mut isslice := false
-          if bnl != 0 { if a64_is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
+          if bnl != 0 { if is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
           mut isarr := false
           if (not isslice) and bnl != 0 { if a64_is_array_local(body_head, src, bns, bnl, a) { isarr = true } }
           pidxF := param_find(params_head, src, bns, bnl, a)
