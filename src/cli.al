@@ -2443,7 +2443,8 @@ manifest_profile_flags := fn(in out a : rt::Arena, pkg_al : str, sel : str) -> s
 
 ## The SELECTED build profile (Tooling §2.6/§4), resolved from the CLI first: `--release` =
 ## `--profile release`; else `--profile <name>`; else the manifest's `default_profile`; else `debug`.
-## Scanned over the arg list (a `--profile` consumes the next arg as its name).
+## Scanned over the compiler-argument portion (the `run` caller bounds it at `--`; a `--profile`
+## consumes the next compiler argument as its name).
 cli_profile := fn(in out a : rt::Arena, cmd : str, n : usize, emp : str) -> str {
   mut k := 2
   while k < n {
@@ -3924,6 +3925,10 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       path_n = n - 1
     }
   }
+  ## Only `run` has a program-argv tail; keep profile parsing on the original argument bound for
+  ## other commands (including `test`'s final description filter).
+  mut profile_n := n
+  if mode == 2 { profile_n = path_n }
   mut pkg_arg := ""
   mut is_pkg := false
   mut selected_profile := "debug"
@@ -3974,7 +3979,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       is_pkg = true
     }
   }
-  selected_profile = cli_profile(a, cmd, n, pkg_arg)
+  selected_profile = cli_profile(a, cmd, profile_n, pkg_arg)
   mut lim_ceiling := ""
   if is_pkg and (mode == 2 or mode == 3 or mode == 5 or mode == 6) {
     lim_ceiling = manifest_limits(a, pkg_arg)
@@ -4068,7 +4073,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     ## uniform across all four commands (Tooling §4).
     emp := pkg_arg
     if mode == 2 { entry_sym = manifest_entry(a, emp) }
-    sel := cli_profile(a, cmd, n, emp)
+    sel := cli_profile(a, cmd, profile_n, emp)
     mut dbg := "false"
     if sel == "debug" { dbg = "true" }
     pf := manifest_profile_flags(a, emp, sel)
@@ -4096,7 +4101,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     ## runner is emitted. Bare file-list tests have no manifest and therefore retain empty flags.
     if is_pkg {
       emp := pkg_arg
-      sel := cli_profile(a, cmd, n, emp)
+      sel := cli_profile(a, cmd, profile_n, emp)
       mut dbg := "false"
       if sel == "debug" { dbg = "true" }
 	      pf := manifest_profile_flags(a, emp, sel)
@@ -4184,7 +4189,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     ## `build.*` fact → fixpoint-neutral.
     mut emp := pkg_arg
     mut sel := "debug"
-    if is_pkg { sel = cli_profile(a, cmd, n, emp) }
+    if is_pkg { sel = cli_profile(a, cmd, profile_n, emp) }
     mut dbg := "false"
     if sel == "debug" { dbg = "true" }
     mut pf := ""

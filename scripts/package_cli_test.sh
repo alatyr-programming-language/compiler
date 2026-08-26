@@ -152,6 +152,80 @@ run_expect() {
   fi
 }
 
+# Tooling §4 / Stdlib §7 — compiler profile selectors stop at the `run` program-argument separator.
+# The temporary package returns a distinct value for each exact argv token and selected profile, so a
+# profile-looking token cannot pass by merely preserving argv length or by selecting the wrong profile.
+run_profile_program_args() {
+  local tmp="$ROOT/target/profile-program-args"
+  rm -rf "$tmp"
+  mkdir -p "$tmp/src"
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  profile_flags = [
+    FlagDecl(name = "release_path", type = bool, default = false),
+  ],
+  profiles = [
+    Profile(
+      name = "release",
+      flags = [FlagSet(name = "release_path", value = true)],
+    ),
+  ],
+  targets = [
+    Target(
+      arch = Arch.x86_64,
+      os = Os.linux,
+      env = Env.gnu,
+      container = Container.elf,
+      entry = "_start",
+      output = "profile-program-args",
+    ),
+  ],
+)
+EOF
+  cat >"$tmp/src/main.al" <<'EOF'
+main := fn() -> u64 {
+  own := std::os::arena(131072)
+  mut ar := std::os::region(ptr(own))
+  av := std::os::args(ptr(mut ar))
+  mut ok : u64 = 0
+  if av.len == 2 {
+    arg := av[1]
+    if arg == "--release" or arg == "--profile release" {
+      comptime if build.release_path { ok = 42 } else { ok = 7 }
+    } else if arg == "neutral-arg" {
+      comptime if build.release_path { ok = 43 } else { ok = 41 }
+    }
+  }
+  std::os::free(own)
+  return ok
+}
+EOF
+
+  profile_case() {
+    local name="$1" want="$2"
+    shift 2
+    (cd "$tmp" && "$CC" "$@") >/dev/null 2>&1
+    local got=$?
+    if [ "$got" = "$want" ]; then
+      echo "ok   $name: rc $got"
+    else
+      echo "FAIL $name: rc $got want $want"
+      fail=1
+    fi
+  }
+
+  profile_case profile_arg_default_release 7 run package.al -- --release
+  profile_case profile_arg_default_named 7 run package.al -- "--profile release"
+  profile_case profile_arg_default_neutral 41 run package.al -- neutral-arg
+  profile_case profile_arg_explicit_release 42 run --release package.al -- --release
+  profile_case profile_arg_explicit_named 42 run --profile release package.al -- "--profile release"
+  profile_case profile_arg_explicit_neutral 43 run --release package.al -- neutral-arg
+  rm -rf "$tmp"
+}
+
 # Modules §8 / Tooling §2.4 — PATH DEPENDENCIES.
 #
 # (1) DECLARING a dependency must not move the root package's own emission. Adding a `dependencies`
@@ -919,6 +993,7 @@ run_expect profile_check_release 0 check --release package.al
 run_expect profile_run_debug 7 run package.al
 run_expect profile_run_named 42 run --profile release package.al
 run_expect profile_run_release 42 run --release package.al
+run_profile_program_args
 run_expect profile_test_parallel 0 test -j2 --profile release package.al
 run_path_dep dep_declared main__main
 run_path_dep dep_alias_use d__math__answer

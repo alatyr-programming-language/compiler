@@ -25,6 +25,7 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- Fixed `run` so profile-looking program arguments after `--` cannot change the selected build profile.
 - Fixed silent wrong values when indexing an ordinary byte array through a pointer-derived struct
   field on x86_64.
 - Statically known out-of-range indexes into fixed arrays now reject at compile time, including every
