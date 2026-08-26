@@ -43,7 +43,7 @@ field_type_is_float := lower_layout::field_type_is_float
 variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
@@ -630,7 +630,7 @@ rv_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_hea
       while p != 0 { pm := deref(param_p(p)) ; if tl == 0 and streq(src, pm.ns, pm.nl, vns, vnl) { ts = pm.ts ; tl = pm.tl } ; p = pm.next }
     }
     if tl == 0 and expr_is_struct_lit(a0) { ts = expr_struct_lit_ns(a0) ; tl = expr_struct_lit_nl(a0) }
-    if tl == 0 and rv_is_elit(a0) { ts = rv_elit_ens(a0) ; tl = rv_elit_enl(a0) }
+    if tl == 0 and expr_is_enum_lit(a0) { ts = expr_enum_lit_ns(a0) ; tl = expr_enum_lit_nl(a0) }
     ## a Var naming the CURRENT match arm's SINGLE payload BINDING: infer T from the variant's payload type.
     if tl == 0 and vnl != 0 and RV_ARM_ENL != 0 and RV_ARM_BINDS != 0 {
       bh := unchecked bitcast(ptr(mut Bind), RV_ARM_BINDS)
@@ -1170,32 +1170,7 @@ rv_std_store_struct_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
   }
   i64(standard_type_byte_size(decls, src, sns, snl, 1, a))
 }
-## --- enum accessors (mirror aarch64; separate usize returns) ---
-rv_is_elit := fn(v : ptr(Expr)) -> bool {
-  mut r := false
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = true } _ => {} }
-  r
-}
-rv_elit_ens := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = es } _ => {} }
-  r
-}
-rv_elit_enl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = en } _ => {} }
-  r
-}
-rv_elit_vns := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vs } _ => {} }
-  r
-}
-rv_elit_vnl := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vn } _ => {} }
-  r
-}
+## EnumLit shape accessors are shared through lower_ctx; enum resolution remains backend-local.
 rv_local_enum_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> usize {
   mut s := head
   mut rs := 0
@@ -1204,7 +1179,7 @@ rv_local_enum_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) and rv_is_elit(v) { rs = rv_elit_ens(v) ; done = true }
+        if streq(src, ans, anl, ns, nl) and expr_is_enum_lit(v) { rs = expr_enum_lit_ns(v) ; done = true }
         ## a local bound to an enum-RETURNING CALL takes the callee's returned enum type (§8 piece 3).
         if streq(src, ans, anl, ns, nl) and (not done) { cre := rv_call_ret_enum_span(v, rv_decls(), src, a) ; if cre.n != 0 { rs = cre.s ; done = true } }
         ## a local bound to a WIDE-enum-RETURNING CALL (> 8 words, a0 SRET) takes the callee's enum type too.
@@ -1240,7 +1215,7 @@ rv_local_enum_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) and rv_is_elit(v) { rn = rv_elit_enl(v) ; done = true }
+        if streq(src, ans, anl, ns, nl) and expr_is_enum_lit(v) { rn = expr_enum_lit_nl(v) ; done = true }
         if streq(src, ans, anl, ns, nl) and (not done) { cre := rv_call_ret_enum_span(v, rv_decls(), src, a) ; if cre.n != 0 { rn = cre.n ; done = true } }
         ## a local bound to a WIDE-enum-RETURNING CALL (> 8 words, a0 SRET) takes the callee's enum width too.
         if streq(src, ans, anl, ns, nl) and (not done) { cres := rv_call_ret_enum_sret_span(v, rv_decls(), src, a) ; if cres.n != 0 { rn = cres.n ; done = true } }
@@ -1309,7 +1284,7 @@ rv_param_enum_nl := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, 
 rv_elit_payload_scalar := fn(v : ptr(Expr)) -> bool {
   mut g := ex_enum_lit_args(v)
   mut ok := true
-  while g != 0 { ga := deref(arg_p(g)) ; if expr_is_struct_lit(ga.e) or rv_is_elit(ga.e) or rv_is_strlit(ga.e) { ok = false } ; g = ga.next }
+  while g != 0 { ga := deref(arg_p(g)) ; if expr_is_struct_lit(ga.e) or expr_is_enum_lit(ga.e) or rv_is_strlit(ga.e) { ok = false } ; g = ga.next }
   ok
 }
 
@@ -1427,7 +1402,7 @@ rv_alit_stride := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt
       if std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) { w = i64(array_elem_word_reservation(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a)) }
       if not std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) { require_no_byte_layout_array_elem(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) ; w = i64(struct_words(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a)) }
     }
-    if rv_is_elit(e0) { w = 1 + i64(enum_max_arity(decls, src, rv_elit_ens(e0), rv_elit_enl(e0), a)) }
+    if expr_is_enum_lit(e0) { w = 1 + i64(enum_max_arity(decls, src, expr_enum_lit_ns(e0), expr_enum_lit_nl(e0), a)) }
   }
   w
 }
@@ -1631,7 +1606,7 @@ rv_val_words := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt::
   mut w := 1
   if expr_is_struct_lit(v) { w = i64(struct_words(decls, src, expr_struct_lit_ns(v), expr_struct_lit_nl(v), a)) }
   ## enum instance = 1 discriminant word + enum_max_arity payload words (enum_inst_words omits the disc).
-  if rv_is_elit(v) { w = 1 + i64(enum_max_arity(decls, src, rv_elit_ens(v), rv_elit_enl(v), a)) }
+  if expr_is_enum_lit(v) { w = 1 + i64(enum_max_arity(decls, src, expr_enum_lit_ns(v), expr_enum_lit_nl(v), a)) }
   if ex_is_array_lit(v) { w = rv_alit_nel(v) * rv_alit_stride(v, src, a, decls) }
   ## a range-slice binds a 2-word {ptr, len} view.
   if ex_is_slice(v) { w = 2 }
@@ -1892,7 +1867,7 @@ rv_aggval_words_e := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr
   match deref(e) {
     Expr::Bin(op, l, r) => { c = rv_aggval_words_e(l, src, a, decls) + rv_aggval_words_e(r, src, a, decls) }
     Expr::If(cc, t, f) => { c = rv_aggval_words_e(cc, src, a, decls) + rv_aggval_words_e(t, src, a, decls) + rv_aggval_words_e(f, src, a, decls) }
-    Expr::Call(cs, cl, n, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_is_struct_lit(ga.e) { c = c + i64(struct_words(decls, src, expr_struct_lit_ns(ga.e), expr_struct_lit_nl(ga.e), a)) } ; if rv_is_elit(ga.e) { c = c + 1 + i64(enum_max_arity(decls, src, rv_elit_ens(ga.e), rv_elit_enl(ga.e), a)) } ; crc := rv_call_ret_struct_span(ga.e, decls, src, a) ; if crc.n != 0 { c = c + i64(struct_words(decls, src, crc.s, crc.n, a)) } ; cre := rv_call_ret_enum_span(ga.e, decls, src, a) ; if cre.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a)) } ; srr := rv_call_ret_sret_span(ga.e, decls, src, a) ; if srr.n != 0 { c = c + i64(struct_words(decls, src, srr.s, srr.n, a)) } ; esr := rv_call_ret_enum_sret_span(ga.e, decls, src, a) ; if esr.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, esr.s, esr.n, a)) } ; c = c + rv_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
+    Expr::Call(cs, cl, n, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_is_struct_lit(ga.e) { c = c + i64(struct_words(decls, src, expr_struct_lit_ns(ga.e), expr_struct_lit_nl(ga.e), a)) } ; if expr_is_enum_lit(ga.e) { c = c + 1 + i64(enum_max_arity(decls, src, expr_enum_lit_ns(ga.e), expr_enum_lit_nl(ga.e), a)) } ; crc := rv_call_ret_struct_span(ga.e, decls, src, a) ; if crc.n != 0 { c = c + i64(struct_words(decls, src, crc.s, crc.n, a)) } ; cre := rv_call_ret_enum_span(ga.e, decls, src, a) ; if cre.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a)) } ; srr := rv_call_ret_sret_span(ga.e, decls, src, a) ; if srr.n != 0 { c = c + i64(struct_words(decls, src, srr.s, srr.n, a)) } ; esr := rv_call_ret_enum_sret_span(ga.e, decls, src, a) ; if esr.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, esr.s, esr.n, a)) } ; c = c + rv_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
     Expr::Field(base, fs, fl) => { c = rv_aggval_words_e(base, src, a, decls) }
     Expr::Index(base, idx) => { c = rv_aggval_words_e(base, src, a, decls) + rv_aggval_words_e(idx, src, a, decls) }
     Expr::Unchecked(inner) => { c = rv_aggval_words_e(inner, src, a, decls) }
@@ -2244,7 +2219,7 @@ rv_is_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, 
 ## Mirrors aarch64.al: an aggregate global is laid in `.data` as ascending 8-byte cells (nested structs
 ## flattened inline, like the x86 lower), addressed by its plain source-name label; a field chain rooted
 ## at it reads/writes at LABEL + cumulative-word-offset*8 (scalar leaf only).
-rv_value_is_agg := fn(v : ptr(Expr)) -> bool { expr_is_struct_lit(v) or rv_is_elit(v) or ex_is_array_lit(v) }
+rv_value_is_agg := fn(v : ptr(Expr)) -> bool { expr_is_struct_lit(v) or expr_is_enum_lit(v) or ex_is_array_lit(v) }
 
 rv_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> ptr(Expr) {
   cnt := rt::vec_len(deref(decls))
@@ -2268,12 +2243,12 @@ emit_rv_global_cells := fn(e : ptr(Expr), in out sb : rt::StrBuf, decls : ptr(rt
   } else if ex_is_array_lit(e) {
     mut ag := ex_array_lit_ehead(e)
     while ag != 0 { aga := deref(arg_p(ag)) ; emit_rv_global_cells(aga.e, sb, decls, src, a) ; ag = aga.next }
-  } else if rv_is_elit(e) {
-    push_str(sb, "  .quad ") ; push_int(sb, variant_index(decls, src, rv_elit_ens(e), rv_elit_enl(e), rv_elit_vns(e), rv_elit_vnl(e), a)) ; push_str(sb, "\n")
+  } else if expr_is_enum_lit(e) {
+    push_str(sb, "  .quad ") ; push_int(sb, variant_index(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)) ; push_str(sb, "\n")
     mut np := 0
     mut eg := ex_enum_lit_args(e)
     while eg != 0 { ega := deref(arg_p(eg)) ; push_str(sb, "  .quad ") ; push_int(sb, ex_value_init(ega.e)) ; push_str(sb, "\n") ; np += 1 ; eg = ega.next }
-    emxw := i64(enum_inst_words(decls, src, rv_elit_ens(e), rv_elit_enl(e), a))
+    emxw := i64(enum_inst_words(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), a))
     mut padk := np
     while padk < emxw { push_str(sb, "  .quad 0\n") ; padk += 1 }
   } else if rv_is_floatlit(e) {
@@ -4186,7 +4161,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
               gisarr := gavnl != 0 and rv_is_array_local(body_head, src, gavns, gavnl, a)
               gisstruct := (not gisarr) and gavnl != 0 and rv_local_struct_nl(body_head, src, gavns, gavnl, a) != 0
               isslit := expr_is_struct_lit(ga.e)
-              iselit := (not isslit) and rv_is_elit(ga.e)
+              iselit := (not isslit) and expr_is_enum_lit(ga.e)
               iscallret := (not isslit) and (not iselit) and rv_call_ret_struct_span(ga.e, decls, src, a).n != 0
               isenumret := (not isslit) and (not iselit) and (not iscallret) and rv_call_ret_enum_span(ga.e, decls, src, a).n != 0
               issretarg := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and rv_call_ret_sret_span(ga.e, decls, src, a).n != 0
@@ -4347,7 +4322,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ## the >8-arg overflow path does NOT perform. Trap FIRST (loud, never silent); the corpus has none.
         mut aggarg := false
         mut gsc := args_head
-        while gsc != 0 { gsa := deref(arg_p(gsc)) ; if expr_is_struct_lit(gsa.e) or rv_is_elit(gsa.e) or (rv_call_ret_struct_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_sret_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_sret_span(gsa.e, decls, src, a).n != 0) { aggarg = true } ; gsc = gsa.next }
+        while gsc != 0 { gsa := deref(arg_p(gsc)) ; if expr_is_struct_lit(gsa.e) or expr_is_enum_lit(gsa.e) or (rv_call_ret_struct_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_sret_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_sret_span(gsa.e, decls, src, a).n != 0) { aggarg = true } ; gsc = gsa.next }
         if aggarg { push_str(sb, "  ebreak\n") }
         mut nstk := 0
         mut ci := 0
@@ -4463,7 +4438,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           isaggval := expr_is_struct_lit(ga.e)
           ## an anonymous ENUM-LITERAL VALUE arg (`f(E.V(…))`) — materialized into an RV_AGG block and
           ## passed BY REFERENCE (§8 piece 3).
-          isenumval := rv_is_elit(ga.e)
+          isenumval := expr_is_enum_lit(ga.e)
           ## a struct-RETURNING CALL arg (`f(mk(…))`) — register-returned words materialized into an RV_AGG
           ## block and passed BY REFERENCE (§8 piece 2).
           iscallretarg := (not isaggval) and (not isenumval) and rv_call_ret_struct_span(ga.e, decls, src, a).n != 0
@@ -4966,10 +4941,10 @@ emit_rv_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf
     }
     return i64(struct_words(decls, src, sns, snl, a))
   }
-  if rv_is_elit(pe) {
-    pens := rv_elit_ens(pe)
-    penl := rv_elit_enl(pe)
-    pvidx := variant_index(decls, src, pens, penl, rv_elit_vns(pe), rv_elit_vnl(pe), a)
+  if expr_is_enum_lit(pe) {
+    pens := expr_enum_lit_ns(pe)
+    penl := expr_enum_lit_nl(pe)
+    pvidx := variant_index(decls, src, pens, penl, expr_enum_variant_ns(pe), expr_enum_variant_nl(pe), a)
     push_str(sb, "  li a0, ") ; push_int(sb, pvidx) ; push_str(sb, "\n  sd a0, ") ; push_int(sb, off) ; push_str(sb, "(s0)\n")
     mut g := ex_enum_lit_args(pe)
     mut wo := 1
@@ -5029,10 +5004,10 @@ emit_rv_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::Str
     }
     return i64(struct_words(decls, src, sns, snl, a))
   }
-  if rv_is_elit(pe) {
-    pens := rv_elit_ens(pe)
-    penl := rv_elit_enl(pe)
-    pvidx := variant_index(decls, src, pens, penl, rv_elit_vns(pe), rv_elit_vnl(pe), a)
+  if expr_is_enum_lit(pe) {
+    pens := expr_enum_lit_ns(pe)
+    penl := expr_enum_lit_nl(pe)
+    pvidx := variant_index(decls, src, pens, penl, expr_enum_variant_ns(pe), expr_enum_variant_nl(pe), a)
     push_str(sb, "  li a0, ") ; push_int(sb, pvidx) ; push_str(sb, "\n  ld a1, 0(sp)\n  sd a0, ") ; push_int(sb, off) ; push_str(sb, "(a1)\n")
     mut g := ex_enum_lit_args(pe)
     mut wo := 1
@@ -5069,9 +5044,9 @@ emit_rv_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::Str
 }
 
 emit_rv_enumval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
-  ens := rv_elit_ens(e)
-  enl := rv_elit_enl(e)
-  vidx := variant_index(decls, src, ens, enl, rv_elit_vns(e), rv_elit_vnl(e), a)
+  ens := expr_enum_lit_ns(e)
+  enl := expr_enum_lit_nl(e)
+  vidx := variant_index(decls, src, ens, enl, expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)
   words := 1 + i64(enum_max_arity(decls, src, ens, enl, a))
   ok := vidx >= 0 and (RV_AGG + words * 8) <= RV_AGG_LIM
   if ok {
@@ -5215,9 +5190,9 @@ emit_rv_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
         edone = true
       }
     }
-    if (not edone) and rv_is_elit(e) {
+    if (not edone) and expr_is_enum_lit(e) {
       eblk := RV_ENUM_SRET_BLK
-      evidx := variant_index(decls, src, rv_elit_ens(e), rv_elit_enl(e), rv_elit_vns(e), rv_elit_vnl(e), a)
+      evidx := variant_index(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)
       push_str(sb, "  li a0, ") ; push_int(sb, evidx) ; push_str(sb, "\n  sd a0, ") ; push_int(sb, eblk) ; push_str(sb, "(s0)\n")
       mut eg := ex_enum_lit_args(e)
       mut ewo := 1
@@ -5320,8 +5295,8 @@ emit_rv_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
 ## Handles an EnumLit (push disc + payload, pop reverse into a_k), a tail enum-returning CALL, and an enum
 ## Var LOCAL / by-reference PARAM. A narrow variant leaves unused high regs uninitialized (never read). ≤8 words.
 emit_rv_enum_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
-  if rv_is_elit(e) {
-    vidx := variant_index(decls, src, rv_elit_ens(e), rv_elit_enl(e), rv_elit_vns(e), rv_elit_vnl(e), a)
+  if expr_is_enum_lit(e) {
+    vidx := variant_index(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)
     push_str(sb, "  li a0, ") ; push_int(sb, vidx) ; push_str(sb, "\n  addi sp, sp, -16\n  sd a0, 0(sp)\n")
     mut g := ex_enum_lit_args(e)
     mut k := 1
@@ -5507,7 +5482,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
       Stmt::Assign(ns, nl, v, nx) => {
         ## FLAT: a StructLit constructs fields; an EnumLit constructs {disc, payload…}; else scalar store.
         isslit := expr_is_struct_lit(v)
-        iselit := rv_is_elit(v)
+        iselit := expr_is_enum_lit(v)
         isalit := ex_is_array_lit(v)
         isslice := ex_is_slice(v)
         ## an aggregate-VAR copy `q := p` — RHS is a bare Var naming a struct/enum LOCAL. Word-copy the whole
@@ -5752,7 +5727,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           }
         }
         if isslit and (not slitok) and (not slitstd) and (not slitnest) { push_str(sb, "  ebreak\n") }
-        vidx := variant_index(decls, src, rv_elit_ens(v), rv_elit_enl(v), rv_elit_vns(v), rv_elit_vnl(v), a)
+        vidx := variant_index(decls, src, expr_enum_lit_ns(v), expr_enum_lit_nl(v), expr_enum_variant_ns(v), expr_enum_variant_nl(v), a)
         ## enum local construct `s := E.V(p…)`: disc at word 0, then each payload arg via the shared
         ## multi-word writer (scalar / struct / nested-enum payloads — §8 piece 3b; str stays loud).
         elitok := iselit and poff >= 0 and vidx >= 0
@@ -5809,8 +5784,8 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
                 fg = fga.next
               }
             }
-            if rv_is_elit(aga.e) {
-              evx := variant_index(decls, src, rv_elit_ens(aga.e), rv_elit_enl(aga.e), rv_elit_vns(aga.e), rv_elit_vnl(aga.e), a)
+            if expr_is_enum_lit(aga.e) {
+              evx := variant_index(decls, src, expr_enum_lit_ns(aga.e), expr_enum_lit_nl(aga.e), expr_enum_variant_ns(aga.e), expr_enum_variant_nl(aga.e), a)
               push_str(sb, "  li a0, ") ; push_int(sb, evx) ; push_str(sb, "\n  sd a0, ") ; push_int(sb, poff + ak * estrideA * 8) ; push_str(sb, "(s0)\n")
               mut pg := ex_enum_lit_args(aga.e)
               mut pk := 1
@@ -5822,7 +5797,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
                 pg = pga.next
               }
             }
-            if (not expr_is_struct_lit(aga.e)) and (not rv_is_elit(aga.e)) {
+            if (not expr_is_struct_lit(aga.e)) and (not expr_is_enum_lit(aga.e)) {
               emit_rv_expr(aga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
               push_str(sb, "  sd a0, ") ; push_int(sb, poff + ak * estrideA * 8) ; push_str(sb, "(s0)\n")
             }
@@ -6497,7 +6472,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
       ## DEFERRED (multi-word), fail-loud (`ebreak`). Mirrors the x86 DerefAssign scalar fast path.
       Stmt::DerefAssign(pe, val, nx) => {
         isslitv := expr_is_struct_lit(val)
-        iselitv := rv_is_elit(val)
+        iselitv := expr_is_enum_lit(val)
         isalitv := ex_is_array_lit(val)
         isslicev := ex_is_slice(val)
         if isslitv or iselitv or isalitv or isslicev { push_str(sb, "  ebreak\n") }
