@@ -3813,6 +3813,7 @@ run_rv64 comptime_typeinfo_field_projection 42
 run_wat comptime_typeinfo_field_projection 42
 ## Aggregate Field values remain outside this bounded scalar slice and must fail loud at lower time.
 build_reject_has reject_comptime_typeinfo_aggregate_projection "comptime field projection of an aggregate"
+check_wat_has reject_comptime_typeinfo_aggregate_projection "unsupported comptime-field access"
 ## CT-6: `Field.offset` is comptime metadata, using the same byte/word layout calculators as value
 ## access. Covers ordinary word layout, @packed byte layout, and a standard direct byte-array layout.
 run_x86 comptime_typeinfo_field_offset 34
