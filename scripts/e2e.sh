@@ -5510,12 +5510,13 @@ run view_ptr_deref_byte 100
 ## frame (0 / a neighbouring element / 95 / 80 / 104). Working spellings: deref(p), bytes(s)[i], Slice(u8)(…)[i].
 build_reject_has reject_index_scalar_ptr "indexing a SCALAR local/param"
 ## BYTES bounded return ABI: `[u8; N]` with 1 <= N <= 8 is returned as one packed word and can be
-## indexed both after binding and directly. The positive rows are x86-only because this packed `%rax`
-## carrier is the first bounded backend slice; the wider/non-u8 direct forms below remain located rejects.
+## indexed both after binding and directly. The bound form remains x86-only; the direct form is also
+## covered on AArch64 by its matching x0 carrier. The wider/non-u8 direct forms below remain located rejects.
 run_x86 array_return_bound_u8 42
 check_accept array_return_bound_u8
 run_x86 array_return_direct_u8 42
 check_accept array_return_direct_u8
+run_a64 array_return_direct_u8 42
 ## I11 / Types §6.4 / OP-3: unsupported fixed-array RETURN shapes still reject rather than truncating a
 ## result or treating return registers as an inline array. The mutable `k` locks dynamic-index diagnostics.
 build_reject_has reject_index_call_array_return "fixed-array-returning call result directly"
