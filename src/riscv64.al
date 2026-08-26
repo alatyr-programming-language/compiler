@@ -43,7 +43,7 @@ field_type_is_float := lower_layout::field_type_is_float
 variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
@@ -81,18 +81,6 @@ rv_count_params := fn(params_head : ptr(mut Param), a : rt::Arena) -> i64 {
   mut k := 0
   while p != 0 { pm := deref(param_p(p)) ; k = k + 1 ; p = pm.next }
   i64(k)
-}
-
-rv_param_find := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> i64 {
-  mut p := params_head
-  mut idx := 0
-  while p != 0 {
-    pm := deref(param_p(p))
-    if streq(src, pm.ns, pm.nl, ns, nl) { return i64(idx) }
-    idx += 1
-    p = pm.next
-  }
-  return -1
 }
 
 ## --- struct support (shared StructLit accessors are imported from lower_ctx) ---
@@ -892,7 +880,7 @@ rv_std_param_path_ty := fn(e : ptr(Expr), params_head : ptr(mut Param), src : pt
   if not ex_is_field(e) {
     ns := ex_var_ns(e)
     nl := ex_var_nl(e)
-    pidx := rv_param_find(params_head, src, ns, nl, a)
+    pidx := param_find(params_head, src, ns, nl, a)
     if pidx >= 0 {
       rs := rv_param_struct_ns(params_head, src, ns, nl, a, decls)
       rn := rv_param_struct_nl(params_head, src, ns, nl, a, decls)
@@ -923,7 +911,7 @@ rv_std_param_path_idx := fn(e : ptr(Expr), params_head : ptr(mut Param), src : p
   if not rv_std_param_path_ok(e, params_head, src, a, decls) { return 0 - 1 }
   base := expr_field_base(e)
   if ex_is_field(base) { return rv_std_param_path_idx(base, params_head, src, a, decls) }
-  rv_param_find(params_head, src, ex_var_ns(base), ex_var_nl(base), a)
+  param_find(params_head, src, ex_var_ns(base), ex_var_nl(base), a)
 }
 
 ## STANDARD BYTE-LAYOUT ARRAY-ELEMENT PATH (CLAYOUT S3(d)). The root is an INDEX of a
@@ -2692,7 +2680,7 @@ rv_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), param
   vns := ex_var_ns(e)
   vnl := ex_var_nl(e)
   if vnl == 0 { return r }
-  if rv_param_find(params_head, src, vns, vnl, a) >= 0 { return r }
+  if param_find(params_head, src, vns, vnl, a) >= 0 { return r }
   pt := rv_place_ty(e, body_head, src, a, decls)
   if pt.n == 0 { return r }
   if rv_local_off(body_head, src, vns, vnl, pcount, a, decls) >= 0 { r = true }
@@ -3083,7 +3071,7 @@ rv_emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Aren
   mut done := false
   match deref(e) {
     Expr::Var(ns, nl) => {
-      pidx := rv_param_find(params_head, src, ns, nl, a)
+      pidx := param_find(params_head, src, ns, nl, a)
       mut off := rv_local_off(body_head, src, ns, nl, pcount, a, decls)
       if pidx >= 0 { off = 16 + pidx * 8 }
       if pidx >= 0 {
@@ -3618,7 +3606,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       isstruct := rv_local_struct_nl(body_head, src, ns, nl, a) != 0
       isarray := rv_is_array_local(body_head, src, ns, nl, a)
       isagg := isstruct or isarray
-      pidx := rv_param_find(params_head, src, ns, nl, a)
+      pidx := param_find(params_head, src, ns, nl, a)
       isglob := rv_is_global(decls, src, ns, nl, a)
       mut voff := rv_local_off(body_head, src, ns, nl, pcount, a, decls)
       if pidx >= 0 { voff = 16 + pidx * 8 }
@@ -3693,7 +3681,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       ## gate on THIS FIELD being scalar (not the whole struct) — a scalar field of a struct that also has
       ## an aggregate field reads at its layout word offset (which already accounts for the wide field).
       localok := (not stdhandled) and bnl != 0 and styn != 0 and poff >= 0 and rv_field_is_scalar(decls, src, stys, styn, fs, fl, a)
-      pidx := rv_param_find(params_head, src, bns, bnl, a)
+      pidx := param_find(params_head, src, bns, bnl, a)
       pstys := rv_param_struct_ns(params_head, src, bns, bnl, a, decls)
       pstyn := rv_param_struct_nl(params_head, src, bns, bnl, a, decls)
       paramok := (not stdhandled) and (not localok) and pidx >= 0 and pstyn != 0 and rv_struct_all_scalar(decls, src, pstys, pstyn, a)
@@ -3712,7 +3700,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ibx := ex_index_base(base)
         ins := ex_var_ns(ibx)
         inl := ex_var_nl(ibx)
-        ipidx := rv_param_find(params_head, src, ins, inl, a)
+        ipidx := param_find(params_head, src, ins, inl, a)
         psp := rv_slice_param_struct_span(params_head, src, ins, inl, decls)
         if ipidx >= 0 and psp.n != 0 and rv_struct_all_scalar(decls, src, psp.s, psp.n, a) {
           fldidxdone = true
@@ -3870,7 +3858,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       cstyn := rv_local_struct_nl(body_head, src, cbns, cbnl, a)
       cpoff := rv_local_off(body_head, src, cbns, cbnl, pcount, a, decls)
       clocalok := cfactive and cbnl != 0 and cstyn != 0 and cpoff >= 0 and rv_field_is_scalar(decls, src, cstys, cstyn, cfs, cfl, a)
-      cpidx := rv_param_find(params_head, src, cbns, cbnl, a)
+      cpidx := param_find(params_head, src, cbns, cbnl, a)
       cpstys := rv_param_struct_ns(params_head, src, cbns, cbnl, a, decls)
       cpstyn := rv_param_struct_nl(params_head, src, cbns, cbnl, a, decls)
       cparamok := cfactive and (not clocalok) and cpidx >= 0 and cpstyn != 0 and rv_struct_all_scalar(decls, src, cpstys, cpstyn, a)
@@ -3895,7 +3883,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       isstruct := rv_local_struct_nl(body_head, src, ins, inl, a) != 0
       isarray := rv_is_array_local(body_head, src, ins, inl, a)
       isagg := isstruct or isarray
-      pidx := rv_param_find(params_head, src, ins, inl, a)
+      pidx := param_find(params_head, src, ins, inl, a)
       isglob := rv_is_global(decls, src, ins, inl, a)
       mut voff := rv_local_off(body_head, src, ins, inl, pcount, a, decls)
       if pidx >= 0 { voff = 16 + pidx * 8 }
@@ -4073,7 +4061,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ## VIEW holds `{ptr,len}` inline, so len = word1 at `aoff+8(s0)`.
         rns := ex_var_ns(sarg)
         rnl := ex_var_nl(sarg)
-        pidxL := rv_param_find(params_head, src, rns, rnl, a)
+        pidxL := param_find(params_head, src, rns, rnl, a)
         mut isparam := false
         if pidxL >= 0 { if rv_slice_param_scalar(params_head, src, rns, rnl, a, decls) { isparam = true } }
         aoffL := rv_local_off(body_head, src, rns, rnl, pcount, a, decls)
@@ -4496,7 +4484,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       ok := snl != 0 and enl != 0 and eoff >= 0
       ## a `match <enum PARAM>` (§8 piece 3): the param slot holds a POINTER to the {disc,payload…} block;
       ## materialize its words into RV_MTMP, then match on that offset.
-      pidxM := rv_param_find(params_head, src, sns, snl, a)
+      pidxM := param_find(params_head, src, sns, snl, a)
       penlM := rv_param_enum_nl(params_head, src, sns, snl, decls)
       paramok := (not ok) and pidxM >= 0 and penlM != 0
       ## a nested `match <enum payload BINDING>` (§8 piece 3b): match directly at frame offset bind_base + 8.
@@ -4554,7 +4542,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       mut isslice := false
       if bnl != 0 { if rv_is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
       isarr := (not isslice) and bnl != 0 and rv_is_array_local(body_head, src, bns, bnl, a)
-      pidxI := rv_param_find(params_head, src, bns, bnl, a)
+      pidxI := param_find(params_head, src, bns, bnl, a)
       mut isparamslice := false
       if (not isslice) and (not isarr) and pidxI >= 0 { if rv_slice_param_scalar(params_head, src, bns, bnl, a, decls) { isparamslice = true } }
       tupn := if (not isslice) and (not isarr) and (not isparamslice) and pidxI >= 0 { param_tuple_allscalar_n(params_head, src, bns, bnl, decls, a) } else { 0 }
@@ -5119,7 +5107,7 @@ emit_rv_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
       done = true
     }
     if not done {
-      pidx := rv_param_find(params_head, src, ns, nl, a)
+      pidx := param_find(params_head, src, ns, nl, a)
       psnl := rv_param_struct_nl(params_head, src, ns, nl, a, decls)
       if pidx >= 0 and psnl != 0 {
         psns := rv_param_struct_ns(params_head, src, ns, nl, a, decls)
@@ -5231,7 +5219,7 @@ emit_rv_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
       done = true
     }
     if not done {
-      pidx := rv_param_find(params_head, src, ns, nl, a)
+      pidx := param_find(params_head, src, ns, nl, a)
       psnl := rv_param_struct_nl(params_head, src, ns, nl, a, decls)
       if pidx >= 0 and psnl != 0 {
         push_str(sb, "  ld t1, ") ; push_int(sb, slot) ; push_str(sb, "(s0)\n  ld t2, ") ; push_int(sb, 16 + pidx * 8) ; push_str(sb, "(s0)\n")
@@ -5309,7 +5297,7 @@ emit_rv_enum_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
       done = true
     }
     if not done {
-      pidx := rv_param_find(params_head, src, ns, nl, a)
+      pidx := param_find(params_head, src, ns, nl, a)
       penl := rv_param_enum_nl(params_head, src, ns, nl, decls)
       if pidx >= 0 and penl != 0 {
         pens := rv_param_enum_ns(params_head, src, ns, nl, decls)
@@ -5567,7 +5555,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             push_str(sb, "  fcvt.d") ; push_str(sb, ".l ft0, a0\n  fmv.x.d a0, ft0\n")
           } else { emit_rv_expr(v, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         }
-        pidx := rv_param_find(params_head, src, ns, nl, a)
+        pidx := param_find(params_head, src, ns, nl, a)
         isglob := rv_is_global(decls, src, ns, nl, a)
         poff := rv_local_off(body_head, src, ns, nl, pcount, a, decls)
         mut voff := poff
@@ -5991,7 +5979,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         ## `q.f = v` for a struct PARAM q (by-reference: `in out q : Box(T)` / a by-value struct param) —
         ## the param slot holds the base ADDRESS, so store v at `[base + field word offset]`. Mirrors the
         ## Field-READ paramok path; resolves the generic-struct param type via rv_param_struct_ns/nl.
-        pidxFA := rv_param_find(params_head, src, bns, bnl, a)
+        pidxFA := param_find(params_head, src, bns, bnl, a)
         pstys := rv_param_struct_ns(params_head, src, bns, bnl, a, decls)
         pstyn := rv_param_struct_nl(params_head, src, bns, bnl, a, decls)
         paramok := (not ok) and pidxFA >= 0 and pstyn != 0 and rv_struct_all_scalar(decls, src, pstys, pstyn, a)
@@ -6213,7 +6201,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           ibx := ex_index_base(scrut)
           ins := ex_var_ns(ibx)
           inl := ex_var_nl(ibx)
-          ipidx := rv_param_find(params_head, src, ins, inl, a)
+          ipidx := param_find(params_head, src, ins, inl, a)
           ees := rv_slice_param_enum_span(params_head, src, ins, inl, decls)
           if ipidx >= 0 and ees.n != 0 {
             idxmatch = true
@@ -6233,7 +6221,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         }
         ok := (not idxmatch) and snl != 0 and enl != 0 and eoff >= 0
         ## a `match <enum PARAM>` (§8 piece 3): materialize the by-reference {disc,payload…} into RV_MTMP.
-        pidxM := rv_param_find(params_head, src, sns, snl, a)
+        pidxM := param_find(params_head, src, sns, snl, a)
         penlM := rv_param_enum_nl(params_head, src, sns, snl, decls)
         paramok := (not idxmatch) and (not ok) and pidxM >= 0 and penlM != 0
         ## a nested `match <enum payload BINDING>` (§8 piece 3b): match directly at frame offset bind_base + 8.
@@ -6290,7 +6278,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           if bnl != 0 { if rv_is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
           mut isarr := false
           if (not isslice) and bnl != 0 { if rv_is_array_local(body_head, src, bns, bnl, a) { isarr = true } }
-          pidxF := rv_param_find(params_head, src, bns, bnl, a)
+          pidxF := param_find(params_head, src, bns, bnl, a)
           ## `for x in s` over a scalar `Slice(E)` PARAM: the param slot holds a POINTER to the caller's
           ## `{ptr,len}` block, so len = `8(blk)` and data ptr = `0(blk)` (a DOUBLE deref). Not a local, so
           ## `aoff` is -1; gate on the param slot. Guard `16 + pidxF*8` behind pidxF >= 0 (frozen-seed
