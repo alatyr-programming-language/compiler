@@ -6,8 +6,8 @@ description: >-
   by the current account when no PR number was supplied, re-deriving a
   contributor's evidence, running the authoritative gate on the MERGED result,
   pushing exactly the object that was gated, cleaning up the accepted
-  same-repository feature branch, and recording acceptance on GitHub. The GitHub
-  merge button is never used — read §3 for why.
+  same-repository feature branch, releasing worker claim labels, and recording
+  acceptance on GitHub. The GitHub merge button is never used — read §3 for why.
 ---
 
 # Landing a pull request
@@ -100,7 +100,7 @@ not be you. Before gating:
 Collect the scope evidence without executing anything from the PR:
 
 ```sh
-gh pr view "$PR" -R "$R" --json body,author,isCrossRepository,headRepository,headRefName,files
+gh pr view "$PR" -R "$R" --json body,author,isCrossRepository,headRepository,headRefName,files,closingIssuesReferences
 gh issue view <issue> -R "$R" --json number,state,title,body,labels,comments
 ```
 
@@ -222,10 +222,63 @@ over that fork.
 precondition is textual mergeability rather than a green gate. A lane's work was lost to that exact
 shape once, and it was recovered from dangling commits.
 
-After publishing and branch cleanup, leave one maintainer comment on the PR. This is the durable
-acceptance record; the final chat response is not a substitute for it. Use only facts from this
-integration run, not the contributor's pasted evidence. Replace every angle-bracket placeholder
-with the observed fact before sending:
+Release the worker claim as a separate, verified state change before writing the acceptance comment,
+so that the comment records the state actually observed. Never guess the issue number at this stage:
+
+- For a complete `Closes`/`Fixes`/`Resolves` relation, obtain `ISSUES_TO_RELEASE` only from the
+  selected PR's machine-readable `closingIssuesReferences`. An empty result is a stop condition.
+- For a bounded `Refs` slice, use the exact issue number already verified in §2 and the residual scope
+  recorded there. Do not discover a different issue from labels, comments, or a fresh body parse.
+
+For each issue in `ISSUES_TO_RELEASE`, inspect the issue and all open PRs or maintainer comments for
+another active owner of the residual scope. A complete issue must be `CLOSED`; a bounded issue may
+remain open, but its residual must have no other owner before this claim is released. Then remove only
+`in-progress` (the operation is intentionally idempotent) and re-read the labels. Any failed state
+check or failed removal is an incomplete landing and must stop the procedure:
+
+```sh
+# Complete relation: use the API's explicit closing references, never PR-body text.
+ISSUES_TO_RELEASE="$(
+  gh pr view "$PR" -R "$R" --json closingIssuesReferences \
+    --jq '[.closingIssuesReferences[].number] | .[]'
+)"
+test -n "$ISSUES_TO_RELEASE" || {
+  echo "selected PR has no machine-readable closing issue; stop" >&2
+  exit 1
+}
+
+while IFS= read -r ISSUE; do
+  STATE="$(gh issue view "$ISSUE" -R "$R" --json state --jq .state)"
+  test "$STATE" = CLOSED || {
+    echo "complete issue #$ISSUE is not closed; stop" >&2
+    exit 1
+  }
+  HAS_CLAIM="$(gh issue view "$ISSUE" -R "$R" --json labels \
+    --jq 'any(.labels[]; .name == "in-progress")')"
+  if test "$HAS_CLAIM" = true; then
+    gh issue edit "$ISSUE" -R "$R" --remove-label in-progress || {
+      echo "could not remove claim for issue #$ISSUE; stop" >&2
+      exit 1
+    }
+  fi
+  HAS_CLAIM_AFTER="$(gh issue view "$ISSUE" -R "$R" --json labels \
+    --jq 'any(.labels[]; .name == "in-progress")')"
+  test "$HAS_CLAIM_AFTER" = false || {
+    echo "could not verify claim release for issue #$ISSUE; stop" >&2
+    exit 1
+  }
+done <<< "$ISSUES_TO_RELEASE"
+```
+
+For a bounded `Refs` slice, replace the `ISSUES_TO_RELEASE` assignment with the one exact issue
+number verified in §2, omit the `CLOSED` assertion, and perform the residual-owner inspection before
+the loop. If another owner exists, retain the label and name that owner in the acceptance record;
+never clear someone else's active claim.
+
+After claim release, leave one maintainer comment on the PR. This is the durable acceptance record; the
+final chat response is not a substitute for it. Use only facts from this integration run, not the
+contributor's pasted evidence. Replace every angle-bracket placeholder with the observed fact before
+sending:
 
 ```sh
 gh pr comment "$PR" -R "$R" --body-file - <<EOF
@@ -241,25 +294,10 @@ EOF
 ```
 
 Read the comment back with `gh pr view "$PR" -R "$R" --json comments` and confirm that the gated
-object and branch outcome are present. Keep the comment limited to public commit IDs, gate results,
-issue linkage, and the branch outcome; redact secrets, private host details, environment data, and
-raw suspicious payloads. If the comment cannot be published, the landing is incomplete: do not
-silently replace it with a local report.
-
-Release the worker claim as a separate, verified state change. First inspect the issue and all open PRs
-or maintainer comments for another active owner of the residual scope. If none exists, remove only the
-`in-progress` label and re-read the issue to prove it is gone:
-
-```sh
-gh issue edit <issue> -R "$R" --remove-label in-progress
-gh issue view <issue> -R "$R" --json labels --jq 'any(.labels[]; .name == "in-progress")'
-# must print false
-```
-
-For a complete issue, do this even though the merge relation closes the issue: GitHub does not remove
-coordination labels automatically. For a bounded `Refs` slice, do it after recording the residual and
-only when no worker or PR still owns that residual. If another owner exists, retain the label and name
-that owner in the acceptance record; never clear someone else's active claim.
+object, branch outcome, and worker-claim outcome are present. Keep the comment limited to public commit
+IDs, gate results, issue linkage, branch outcome, and claim outcome; redact secrets, private host
+details, environment data, and raw suspicious payloads. If the comment cannot be published, the landing
+is incomplete: do not silently replace it with a local report.
 
 ## 6 · Refuse rather than review
 
@@ -279,8 +317,8 @@ that owner in the acceptance record; never clear someone else's active claim.
 
 ## 7 · Close the selected target and say what you did
 
-After the publish, cleanup, and acceptance comment, re-read only the selected PR and verify the oracle
-exclusivity count. Do not start another PR without a new explicit invocation:
+After the publish, branch cleanup, claim release, and acceptance comment, re-read only the selected PR
+and verify the oracle exclusivity count. Do not start another PR without a new explicit invocation:
 
 ```sh
 gh pr view "$PR" -R "$R" --json number,state,mergedAt,mergeCommit,comments
