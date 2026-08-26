@@ -73,7 +73,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
@@ -2787,42 +2787,6 @@ a64_index_elem_struct_span := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, de
 ## paths can TYPE it. Without them a `mut xs : [S; N]` reserved ONE word and every access was fail-loud.
 
 
-## The `: T` annotation span that FOLLOWS the declaration name `[ns,nl)`, or {0,0} for `:=` (inferred),
-## a missing annotation, or a malformed one. `[`/`(` nesting is tracked so `[Cell; 3]` spans whole; the
-## span ENDS at a depth-0 `=` (an INITIALIZED `name : T = v` still yields its annotation), newline, `;`
-## or `}`. Mirrors ast::local_type_span but returns the a64 `CSpan` (no new struct return type here).
-a64_ann_span := fn(src : ptr(u8), ns : usize, nl : usize) -> CSpan {
-  mut p := ns + nl
-  lim := p + 512
-  mut go := true
-  while go { c := str_at((src + p), 1) ; if c == " " or c == "\t" or c == "\r" { p = p + 1 } else { go = false } }
-  if str_at((src + p), 1) != ":" { return CSpan(s = 0, n = 0) }
-  p = p + 1
-  go = true
-  while go { c := str_at((src + p), 1) ; if c == " " or c == "\t" or c == "\r" { p = p + 1 } else { go = false } }
-  if str_at((src + p), 1) == "=" { return CSpan(s = 0, n = 0) }
-  ts := p
-  mut depth := 0
-  mut term := false
-  while p < lim and (not term) {
-    c := str_at((src + p), 1)
-    if c == "(" or c == "[" { depth = depth + 1 }
-    if c == ")" or c == "]" { if depth > 0 { depth = depth - 1 } }
-    stop := depth == 0 and (c == "=" or c == "\n" or c == ";" or c == "}")
-    if stop { term = true } else { p = p + 1 }
-  }
-  if not term { return CSpan(s = 0, n = 0) }
-  mut te := p
-  mut trim := true
-  while trim and te > ts {
-    t := str_at((src + te - 1), 1)
-    if t == " " or t == "\t" or t == "\r" { te = te - 1 } else { trim = false }
-  }
-  if te <= ts { return CSpan(s = 0, n = 0) }
-  CSpan(s = ts, n = te - ts)
-}
-
-
 ## `[E; N]` → the ELEMENT type span E (trimmed), else {0,0}.
 a64_arrty_elem := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
@@ -2903,7 +2867,7 @@ a64_arr_elem_stride_bytes := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::A
 ## ArrayLit-driven answer byte-identical.
 a64_ann_arr_nel := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> i64 {
   if ex_is_array_lit(v) { return 0 }
-  an := a64_ann_span(src, ns, nl)
+  an := ann_span(src, ns, nl)
   if an.n == 0 { return 0 }
   a64_arrty_nel(src, an.s, an.n)
 }
@@ -2912,7 +2876,7 @@ a64_ann_arr_nel := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> i
 a64_ann_arr_elem := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
   if ex_is_array_lit(v) { return r }
-  an := a64_ann_span(src, ns, nl)
+  an := ann_span(src, ns, nl)
   if an.n != 0 { r = a64_arrty_elem(src, an.s, an.n) }
   r
 }
@@ -2922,7 +2886,7 @@ a64_ann_arr_elem := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> 
 ## changes its `a64_val_words` sizing — those keep resolving from the value exactly as before.
 a64_ann_arr_words := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   if ex_is_array_lit(v) { return 0 }
-  an := a64_ann_span(src, ns, nl)
+  an := ann_span(src, ns, nl)
   if an.n == 0 { return 0 }
   if arrty_semi(src, an.s, an.n) == 0 { return 0 }
   a64_tyname_words(src, an.s, an.n, a, decls)
@@ -2937,7 +2901,7 @@ a64_local_ann_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
   if unchecked bitcast(usize, d) != 0 {
     st := deref(stmt_p(Stmt, d))
     match st {
-      Stmt::Assign(ans, anl, v, nx) => { r = a64_ann_span(src, ans, anl) }
+      Stmt::Assign(ans, anl, v, nx) => { r = ann_span(src, ans, anl) }
       _ => {}
     }
   }
