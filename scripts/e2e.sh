@@ -147,6 +147,99 @@ T="$WORK/s/unassigned"
 mkdir -p "$T"
 fail=0
 
+# Every produced target that this runner executes goes through one finite deadline.  The wrapper
+# shell writes the child's status only after the child has returned; when the marker is absent, the
+# timeout killed the wrapper before it could report completion.  This deliberately does not use
+# timeout's status alone: a legal target exit of 124 (or 137) must remain a target result, not become
+# a false timeout.  The one-second kill grace bounds a child that ignores TERM without touching the
+# longer-running external scripts below.
+E2E_RUNTIME_TIMEOUT=10s
+E2E_RUNTIME_KILL_AFTER=1s
+E2E_RUNTIME_STATE=not-run
+
+_e2e_exec_timed() { # duration, command ...
+  local _e2e_duration="$1" _e2e_marker _e2e_timeout_rc _e2e_child_rc
+  shift
+  _e2e_marker="$T/.runtime-${BASHPID}-${RANDOM}"
+  rm -f "$_e2e_marker"
+  timeout --kill-after="$E2E_RUNTIME_KILL_AFTER" "$_e2e_duration" \
+    bash -c '
+      _e2e_status_file=$1
+      shift
+      "$@"
+      _e2e_child_rc=$?
+      printf "%s\n" "$_e2e_child_rc" > "$_e2e_status_file"
+      exit "$_e2e_child_rc"
+    ' _ "$_e2e_marker" "$@"
+  _e2e_timeout_rc=$?
+  if [ -s "$_e2e_marker" ]; then
+    IFS= read -r _e2e_child_rc < "$_e2e_marker"
+    rm -f "$_e2e_marker"
+    case "$_e2e_child_rc" in
+      ''|*[!0-9]*)
+        E2E_RUNTIME_STATE=runner-error
+        return 125
+        ;;
+    esac
+    E2E_RUNTIME_STATE=exited
+    return "$_e2e_child_rc"
+  fi
+  rm -f "$_e2e_marker"
+  if [ "$_e2e_timeout_rc" = 124 ] || [ "$_e2e_timeout_rc" = 137 ]; then
+    E2E_RUNTIME_STATE=timeout
+    return 124
+  fi
+  E2E_RUNTIME_STATE=runner-error
+  return "$_e2e_timeout_rc"
+}
+
+_e2e_exec() {
+  _e2e_exec_timed "$E2E_RUNTIME_TIMEOUT" "$@"
+}
+
+_e2e_exec_capture() { # stdout-file, command ...
+  local _e2e_stdout="$1"
+  shift
+  _e2e_exec "$@" >"$_e2e_stdout"
+}
+
+_e2e_exec_in() { # directory, command ...
+  local _e2e_dir="$1" _e2e_saved_pwd="$PWD" _e2e_rc
+  shift
+  cd "$_e2e_dir" || { E2E_RUNTIME_STATE=runner-error; return 125; }
+  _e2e_exec "$@"
+  _e2e_rc=$?
+  cd "$_e2e_saved_pwd" || { E2E_RUNTIME_STATE=runner-error; return 125; }
+  return "$_e2e_rc"
+}
+
+_e2e_exec_capture_in() { # stdout-file, directory, command ...
+  local _e2e_stdout="$1" _e2e_dir="$2" _e2e_saved_pwd="$PWD" _e2e_rc
+  shift 2
+  cd "$_e2e_dir" || { E2E_RUNTIME_STATE=runner-error; return 125; }
+  _e2e_exec_capture "$_e2e_stdout" "$@"
+  _e2e_rc=$?
+  cd "$_e2e_saved_pwd" || { E2E_RUNTIME_STATE=runner-error; return 125; }
+  return "$_e2e_rc"
+}
+
+_e2e_runtime_failure() { # label, observed-status
+  local _e2e_label="$1" _e2e_rc="$2"
+  case "$E2E_RUNTIME_STATE" in
+    timeout)
+      echo "FAIL $_e2e_label: runtime timeout after $E2E_RUNTIME_TIMEOUT"
+      fail=1
+      return 0
+      ;;
+    runner-error)
+      echo "FAIL $_e2e_label: runtime wrapper failed (rc=$_e2e_rc)"
+      fail=1
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 ## A row-private copy of a fixture subtree that this row is going to BUILD in (see the snapshot note
 ## in the prologue). Echoes the row-private root; the copy is made once per row, on first use.
 _fixture_tree() { # subtree: package | link
@@ -163,7 +256,8 @@ run() { # name, want
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
   out="$T/e2e_$1.out"
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL $1: compile/link"; fail=1; return; }
-  "$out" >/dev/null 2>&1; got=$?
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1: $got"; else echo "FAIL $1: got $got want $2"; fail=1; fi
 }
 
@@ -174,7 +268,8 @@ check_export() { # name, want-exit, symbol
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
   out="$T/e2e_$1.out"
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL $1: compile/link"; fail=1; return; }
-  "$out" >/dev/null 2>&1; got=$?
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1" "$got"; then return; fi
   if [ "$got" != "$2" ]; then echo "FAIL $1: got $got want $2"; fail=1; return; fi
   if nm "$out" 2>/dev/null | grep -qE " T $3\$"; then echo "ok   $1: $got + exported $3"; else echo "FAIL $1: symbol $3 not a global"; fail=1; fi
 }
@@ -199,7 +294,8 @@ run_x86() { # name, want
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
   out="$T/e2e_$1.out"
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL $1: compile/link"; fail=1; return; }
-  "$out" >/dev/null 2>&1; got=$?
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1: $got"; else echo "FAIL $1: got $got want $2"; fail=1; fi
 }
 
@@ -212,7 +308,8 @@ run_x86_out() { # name, want-exit; expected output is test/<name>.out
   out="$T/e2e_$1.out"
   gotout="$T/e2e_$1.stdout"
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL $1: compile/link"; fail=1; return; }
-  "$out" >"$gotout" 2>/dev/null; got=$?
+  _e2e_exec_capture "$gotout" "$out" 2>/dev/null; got=$?
+  if _e2e_runtime_failure "$1" "$got"; then return; fi
   if [ "$got" = "$2" ] && cmp -s "$gotout" "$want"; then
     echo "ok   $1: exact stdout + $got"
   else
@@ -228,7 +325,8 @@ run_x86_trap() { # name, want-status
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
   out="$T/e2e_$1.out"
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL $1: compile/link"; fail=1; return; }
-  ( ulimit -c 0; "$out" >/dev/null 2>&1 ); got=$?
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1: trapped $got"; else echo "FAIL $1: got $got want trap $2"; fail=1; fi
 }
 
@@ -240,7 +338,8 @@ run_x86_trap() { # name, want-status
 run_cli_trap() { # name, want-status
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS cli_run_$1: no $src"; fail=1; return; }
-  ( ulimit -c 0; "$CC" run "$src" >/dev/null 2>&1 ); got=$?
+  _e2e_exec "$CC" run "$src" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "cli_run_$1" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   cli_run_$1: run reported trap $got"; else echo "FAIL cli_run_$1: got $got want $2"; fail=1; fi
 }
 
@@ -250,7 +349,8 @@ run_cli_trap() { # name, want-status
 run_cli_args() { # name, want-status
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS cli_run_$1: no $src"; fail=1; return; }
-  ( ulimit -c 0; "$CC" run "$src" -- "cli-arg-0" >/dev/null 2>&1 ); got=$?
+  _e2e_exec "$CC" run "$src" -- "cli-arg-0" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "cli_run_$1" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   cli_run_$1: forwarded program argv"; else echo "FAIL cli_run_$1: got $got want $2"; fail=1; fi
 }
 
@@ -275,7 +375,8 @@ run_ffi() { # name, want
   "$CC" "$src" > "$asm" 2>/dev/null || { echo "FAIL $1(ffi): emit"; fail=1; return; }
   as "$asm" -o "$alobj" >/dev/null 2>&1 || { echo "FAIL $1(ffi): as"; fail=1; return; }
   ld "$alobj" "$cobj" -o "$bin" >/dev/null 2>&1 || { echo "FAIL $1(ffi): ld"; fail=1; return; }
-  "$bin" >/dev/null 2>&1; got=$?
+  _e2e_exec "$bin" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1(ffi)" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1(ffi): $got"; else echo "FAIL $1(ffi): got $got want $2"; fail=1; fi
 }
 
@@ -293,9 +394,10 @@ run_link() { # name, want   (DYNAMIC: committed package.al, -l<name> via cc)
   pkg="$(_fixture_tree link)/$1/package.al"
   [ -f "$pkg" ] || { echo "MISS $1(link): no $pkg"; fail=1; return; }
   "$CC" build "$pkg" >/dev/null 2>&1 || { echo "FAIL $1(link): build"; fail=1; return; }
-bin="$(_fixture_tree link)/$1/target/debug/$1"
+  bin="$(_fixture_tree link)/$1/target/debug/$1"
   [ -x "$bin" ] || { echo "FAIL $1(link): no artifact $bin"; fail=1; return; }
-  "$bin" >/dev/null 2>&1; got=$?
+  _e2e_exec "$bin" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1(link)" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1(link): $got"; else echo "FAIL $1(link): got $got want $2"; fail=1; fi
 }
 
@@ -321,9 +423,10 @@ app := Package(
 )
 EOF
   "$CC" build "$d/package.al" >/dev/null 2>&1 || { echo "FAIL $1(link-static): build"; fail=1; return; }
-bin="$d/target/debug/$1"
+  bin="$d/target/debug/$1"
   [ -x "$bin" ] || { echo "FAIL $1(link-static): no artifact $bin"; fail=1; return; }
-  "$bin" >/dev/null 2>&1; got=$?
+  _e2e_exec "$bin" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1(link-static)" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1(link-static): $got"; else echo "FAIL $1(link-static): got $got want $2"; fail=1; fi
 }
 
@@ -362,7 +465,8 @@ run_library_target() { # package name, kind, expected exit
   "$CC" "$consumer" > "$gas" 2>/dev/null || { echo "FAIL $1($2): consumer emit"; fail=1; return; }
   as "$gas" -o "$obj" >/dev/null 2>&1 || { echo "FAIL $1($2): consumer assemble"; fail=1; return; }
   ld "$obj" "$artifact" -o "$bin" >/dev/null 2>&1 || { echo "FAIL $1($2): consumer link"; fail=1; return; }
-  "$bin" >/dev/null 2>&1; got=$?
+  _e2e_exec "$bin" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1($2)" "$got"; then return; fi
   if [ "$got" = "$3" ]; then echo "ok   $1($2): $got"; else echo "FAIL $1($2): got $got want $3"; fail=1; fi
 }
 
@@ -442,7 +546,8 @@ run_wat() { # name, want
   wat="$T/e2e_$1.wat"; wasm="$T/e2e_$1.wasm"
   "$CC" wat "$src" > "$wat" 2>/dev/null || { echo "FAIL $1(wat): emit"; fail=1; return; }
   wat2wasm "$wat" -o "$wasm" 2>/dev/null || { echo "FAIL $1(wat): wat2wasm"; fail=1; return; }
-  timeout 10 wasmtime "$wasm" >/dev/null 2>&1; got=$?
+  _e2e_exec wasmtime "$wasm" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1(wat)" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1(wat): $got"; else echo "FAIL $1(wat): got $got want $2"; fail=1; fi
 }
 
@@ -455,7 +560,9 @@ run_wat_out() { # name, want-out, want-exit
   wat="$T/e2e_$1.wat"; wasm="$T/e2e_$1.wasm"
   "$CC" wat "$src" > "$wat" 2>/dev/null || { echo "FAIL $1(wat-out): emit"; fail=1; return; }
   wat2wasm "$wat" -o "$wasm" 2>/dev/null || { echo "FAIL $1(wat-out): wat2wasm"; fail=1; return; }
-  got=$(timeout 10 wasmtime "$wasm" 2>/dev/null); ec=$?
+  _e2e_exec_capture "$T/e2e_$1.wat.stdout" wasmtime "$wasm" 2>/dev/null; ec=$?
+  got="$(<"$T/e2e_$1.wat.stdout")"
+  if _e2e_runtime_failure "$1(wat-out)" "$ec"; then return; fi
   if [ "$got" = "$2" ] && [ "$ec" = "$3" ]; then echo "ok   $1(wat-out): out+exit"; else echo "FAIL $1(wat-out): out=[$got] exit=$ec want=[$2]/$3"; fail=1; fi
 }
 
@@ -524,7 +631,8 @@ run_a64() { # name, want
   "$CC" aarch64 "$src" > "$s" 2>/dev/null || { echo "FAIL $1(a64): emit"; fail=1; return; }
   aarch64-unknown-linux-gnu-as "$s" -o "$o" 2>/dev/null || { echo "FAIL $1(a64): as"; fail=1; return; }
   aarch64-unknown-linux-gnu-ld "$o" -o "$elf" 2>/dev/null || { echo "FAIL $1(a64): ld"; fail=1; return; }
-  ( ulimit -c 0; timeout 10 qemu-aarch64 "$elf" >/dev/null 2>&1; exit $? ); got=$?   # ulimit -c 0: a brk trap dumps no core into the repo (match the rv64 path)
+  _e2e_exec qemu-aarch64 "$elf" >/dev/null 2>&1; got=$?   # ulimit -c 0 is set in the prologue; a brk trap must not dump a core
+  if _e2e_runtime_failure "$1(a64)" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1(a64): $got"; else echo "FAIL $1(a64): got $got want $2"; fail=1; fi
 }
 
@@ -537,7 +645,9 @@ run_a64_out() { # name, want-out, want-exit
   "$CC" aarch64 "$src" > "$s" 2>/dev/null || { echo "FAIL $1(a64-out): emit"; fail=1; return; }
   aarch64-unknown-linux-gnu-as "$s" -o "$o" 2>/dev/null || { echo "FAIL $1(a64-out): as"; fail=1; return; }
   aarch64-unknown-linux-gnu-ld "$o" -o "$elf" 2>/dev/null || { echo "FAIL $1(a64-out): ld"; fail=1; return; }
-  got=$( ulimit -c 0; timeout 10 qemu-aarch64 "$elf" 2>/dev/null); ec=$?   # ulimit -c 0: no core litter on a trap
+  _e2e_exec_capture "$T/e2e_$1.a64.stdout" qemu-aarch64 "$elf" 2>/dev/null; ec=$?   # ulimit -c 0: no core litter on a trap
+  got="$(<"$T/e2e_$1.a64.stdout")"
+  if _e2e_runtime_failure "$1(a64-out)" "$ec"; then return; fi
   if [ "$got" = "$2" ] && [ "$ec" = "$3" ]; then echo "ok   $1(a64-out): out+exit"; else echo "FAIL $1(a64-out): out=[$got] exit=$ec want=[$2]/$3"; fail=1; fi
 }
 
@@ -552,7 +662,9 @@ run_rv64() { # name, want
   "$CC" riscv64 "$src" > "$s" 2>/dev/null || { echo "FAIL $1(rv64): emit"; fail=1; return; }
   riscv64-unknown-linux-gnu-as "$s" -o "$o" 2>/dev/null || { echo "FAIL $1(rv64): as"; fail=1; return; }
   riscv64-unknown-linux-gnu-ld "$o" -o "$elf" 2>/dev/null || { echo "FAIL $1(rv64): ld"; fail=1; return; }
-  ( ulimit -c 0; timeout 10 qemu-riscv64 "$elf" >/dev/null 2>&1; exit $? ); got=$?
+  _e2e_exec qemu-riscv64 "$elf" >/dev/null 2>&1
+  got=$?
+  if _e2e_runtime_failure "$1(rv64)" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1(rv64): $got"; else echo "FAIL $1(rv64): got $got want $2"; fail=1; fi
 }
 
@@ -565,7 +677,9 @@ run_rv64_out() { # name, want-out, want-exit
   "$CC" riscv64 "$src" > "$s" 2>/dev/null || { echo "FAIL $1(rv64-out): emit"; fail=1; return; }
   riscv64-unknown-linux-gnu-as "$s" -o "$o" 2>/dev/null || { echo "FAIL $1(rv64-out): as"; fail=1; return; }
   riscv64-unknown-linux-gnu-ld "$o" -o "$elf" 2>/dev/null || { echo "FAIL $1(rv64-out): ld"; fail=1; return; }
-  got=$(timeout 10 qemu-riscv64 "$elf" 2>/dev/null); ec=$?
+  _e2e_exec_capture "$T/e2e_$1.rv64.stdout" qemu-riscv64 "$elf" 2>/dev/null; ec=$?
+  got="$(<"$T/e2e_$1.rv64.stdout")"
+  if _e2e_runtime_failure "$1(rv64-out)" "$ec"; then return; fi
   if [ "$got" = "$2" ] && [ "$ec" = "$3" ]; then echo "ok   $1(rv64-out): out+exit"; else echo "FAIL $1(rv64-out): out=[$got] exit=$ec want=[$2]/$3"; fail=1; fi
 }
 
@@ -669,7 +783,8 @@ fmt_test() { # name, want-exit
   # anything the compiler leaves in the cwd is the row's own.
   run_al="$T/$1_fmtrun.al"
   cp "$o1" "$run_al"
-  ( cd "$T" && "$CC" run "$run_al" >/dev/null 2>&1 ); got=$?
+  _e2e_exec_in "$T" "$CC" run "$run_al" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$1(fmt)" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   $1(fmt): idempotent + runs $got"; else echo "FAIL $1(fmt): formatted runs $got want $2"; fail=1; fi
 }
 
@@ -819,7 +934,8 @@ fmt_large_input_test() { # min-bytes, want-exit
   diff -q "$o1" "$o2" >/dev/null || { echo "FAIL fmt_large_input: NOT idempotent"; fail=1; return; }
   sc=$(grep -c '##' "$src"); oc=$(grep -c '##' "$o1")
   [ "$sc" = "$oc" ] || { echo "FAIL fmt_large_input: comments $oc want $sc"; fail=1; return; }
-  ( cd "$fd" && ulimit -c 0; "$CC" run "$o1" >/dev/null 2>&1 ); got=$?
+  _e2e_exec_in "$fd" "$CC" run "$o1" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "fmt_large_input" "$got"; then return; fi
   if [ "$got" = "$2" ]; then echo "ok   fmt_large_input: $n B formatted, idempotent, $sc comments kept, runs $got"
   else echo "FAIL fmt_large_input: formatted runs $got want $2"; fail=1; fi
 }
@@ -878,7 +994,8 @@ manifest_entry_test() { # want-exit
   printf 'app := Package(version = "0.1.0", source_dir = "src", target_dir = "target", targets = [\n  Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "myentry", output = "prog"),\n])\n' > "$pd/package.al"
   printf '@export("myentry") entry := fn() { exit(%s) }\nmain := fn() -> u64 { return 7 }\n' "$1" > "$pd/src/main.al"
   ( cd "$pd" && "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL manifest_entry: build"; fail=1; return; }
-  "$pd/target/debug/prog"; got=$?
+  _e2e_exec "$pd/target/debug/prog" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "manifest_entry" "$got"; then return; fi
   if [ "$got" != "$1" ]; then echo "FAIL manifest_entry: exit=$got want=$1"; fail=1; return; fi
   if nm "$pd/target/debug/prog" 2>/dev/null | grep -q ' T myentry'; then echo "ok   manifest_entry: exit $got, entry symbol myentry"; else echo "FAIL manifest_entry: no 'myentry' entry symbol"; fail=1; fi
 }
@@ -905,7 +1022,8 @@ EOF
 bin="$pd/target/debug/iface"; side="$pd/target/debug/iface.interface"
   [ -x "$bin" ] || { echo "FAIL interface_summary: no artifact"; fail=1; return; }
   [ -s "$side" ] || { echo "FAIL interface_summary: no sidecar"; fail=1; return; }
-  "$bin" >/dev/null 2>&1; got=$?
+  _e2e_exec "$bin" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "interface_summary" "$got"; then return; fi
   if [ "$got" != 42 ]; then echo "FAIL interface_summary: artifact exit=$got want=42"; fail=1; return; fi
   grep -qF 'format=alatyr-interface-summary' "$side" || { echo "FAIL interface_summary: format marker"; fail=1; return; }
   grep -qF 'hash=fnv1a64' "$side" || { echo "FAIL interface_summary: hash marker"; fail=1; return; }
@@ -942,7 +1060,8 @@ rm -f "$pd/target/debug/iface" "$pd/target/debug/iface.interface" "$pd/target/de
 rm -f "$pd/target/debug/iface" "$pd/target/debug/iface.interface" "$pd/target/debug/iface.manifest"
   ( cd "$pd" && ALATYR_OSPLIT=1 "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL interface_summary: changed-API cold rebuild"; fail=1; return; }
   cmp -s "$pd/changed.interface" "$side" || { echo "FAIL interface_summary: changed-API cold sidecar is not deterministic"; fail=1; return; }
-  "$bin" >/dev/null 2>&1; got=$?
+  _e2e_exec "$bin" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "interface_summary" "$got"; then return; fi
   if [ "$got" != 42 ]; then echo "FAIL interface_summary: changed-API artifact exit=$got want=42"; fail=1; return; fi
   echo "ok   interface_summary: API/layout facts + cold determinism + adversarial invalidation"
 }
@@ -964,11 +1083,17 @@ _start := fn() {
 EOF
   ( cd "$pd" && "$CC" check package.al ) >/dev/null 2>&1 || { echo "FAIL single_file_start: check"; fail=1; return; }
   ( cd "$pd" && "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL single_file_start: build"; fail=1; return; }
-  out="$($pd/target/debug/a.out 2>/dev/null)"; rc=$?
+  stdout="$T/e2e_single_start.stdout"
+  _e2e_exec_capture "$stdout" "$pd/target/debug/a.out" 2>/dev/null; rc=$?
+  out="$(<"$stdout")"
+  if _e2e_runtime_failure "single_file_start(artifact)" "$rc"; then return; fi
   if [ "$rc" != 0 ] || [ "$out" != "Hello, world!" ]; then
     echo "FAIL single_file_start: artifact output=[$out] rc=$rc"; fail=1; return
   fi
-  out="$( cd "$pd" && "$CC" run package.al 2>/dev/null )"; rc=$?
+  stdout="$T/e2e_single_start.run.stdout"
+  _e2e_exec_capture_in "$stdout" "$pd" "$CC" run package.al 2>/dev/null; rc=$?
+  out="$(<"$stdout")"
+  if _e2e_runtime_failure "single_file_start(run)" "$rc"; then return; fi
   if [ "$rc" = 0 ] && [ "$out" = "Hello, world!" ]; then
     echo "ok   single_file_start: check + build/run + default _start"
   else
@@ -1001,7 +1126,8 @@ manifest_limits_ceiling_test() {
   printf "$hdr" > "$pa/package.al"
   printf '@limits(no_alloc, no_comptime)\nmain := fn() -> u64 { return 7 }\n' > "$pa/src/main.al"
   ( cd "$pa" && "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL manifest_limits_ceiling(accept): build"; fail=1; return; }
-  "$pa/target/debug/prog"; got=$?
+  _e2e_exec "$pa/target/debug/prog" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "manifest_limits_ceiling(accept)" "$got"; then return; fi
   if [ "$got" = 7 ]; then echo "ok   manifest_limits_ceiling(accept): stricter @limits builds + runs 7"; else echo "FAIL manifest_limits_ceiling(accept): exit=$got want=7"; fail=1; fi
   # INHERIT (no @limits)
   pi="$T/e2e_limceil_inh"; rm -rf "$pi"; mkdir -p "$pi/src"
@@ -1059,13 +1185,15 @@ manifest_limits_qualified_package_test() {
   rm -rf "$p/target"
   ( cd "$p" && "$CC" build package.al ) >/dev/null 2>&1; got=$?
 if [ "$got" = 0 ] && [ -x "$p/target/debug/limits-equal" ]; then
-"$p/target/debug/limits-equal" >/dev/null 2>&1; artifact=$?
+    _e2e_exec "$p/target/debug/limits-equal" >/dev/null 2>&1; artifact=$?
+    if _e2e_runtime_failure "manifest_limits_qualified_package(equal/build)" "$artifact"; then return; fi
     if [ "$artifact" = 42 ]; then echo "ok   manifest_limits_qualified_package(equal/build): artifact 42"; else echo "FAIL manifest_limits_qualified_package(equal/build): artifact=$artifact want 42"; fail=1; fi
   else
     echo "FAIL manifest_limits_qualified_package(equal/build): rc=$got or artifact missing"; fail=1
   fi
   rm -rf "$p/target"
-  ( cd "$p" && "$CC" run package.al ) >/dev/null 2>&1; got=$?
+  _e2e_exec_in "$p" "$CC" run package.al >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "manifest_limits_qualified_package(equal/run)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   manifest_limits_qualified_package(equal/run): 42"; else echo "FAIL manifest_limits_qualified_package(equal/run): rc=$got want 42"; fail=1; fi
   ( cd "$p" && "$CC" test package.al ) >/dev/null 2>&1; got=$?
   if [ "$got" = 0 ]; then echo "ok   manifest_limits_qualified_package(equal/test): 0"; else echo "FAIL manifest_limits_qualified_package(equal/test): rc=$got want 0"; fail=1; fi
@@ -1139,13 +1267,15 @@ root_package_test() { # dir, expected-symbols...
     arg=""; [ "$form" = "package.al" ] && arg="package.al"
     ( cd "$p" && "$CC" check $arg ) >/dev/null 2>&1; got=$?
     if [ "$got" = 0 ]; then echo "ok   root_package($d/$form): check 0"; else echo "FAIL root_package($d/$form): check got $got want 0"; fail=1; fi
-    ( cd "$p" && "$CC" run $arg ) >/dev/null 2>&1; got=$?
+    _e2e_exec_in "$p" "$CC" run $arg >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "root_package($d/$form)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   root_package($d/$form): run 42"; else echo "FAIL root_package($d/$form): run got $got want 42"; fail=1; fi
     rm -rf "$p/target"
     ( cd "$p" && "$CC" build $arg ) >/dev/null 2>&1
     exe=$(find "$p/target/debug" -maxdepth 1 -type f ! -name '*.s' ! -name '*.o' 2>/dev/null | head -1)
     [ -x "${exe:-/nonexistent}" ] || { echo "FAIL root_package($d/$form): build produced no artifact"; fail=1; rm -rf "$p/target"; continue; }
-    "$exe" >/dev/null 2>&1; got=$?
+    _e2e_exec "$exe" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "root_package($d/$form)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   root_package($d/$form): artifact 42"; else echo "FAIL root_package($d/$form): artifact got $got want 42"; fail=1; fi
     syms=$(nm "$exe")
     for want in "$@"; do
@@ -1204,7 +1334,8 @@ mod8_root_duplicate_test() {
   rc=$?
   exe=$(find "$p/target/debug" -maxdepth 1 -type f ! -name '*.s' ! -name '*.o' 2>/dev/null | head -1)
   if [ "$rc" = 0 ] && [ -x "${exe:-/nonexistent}" ]; then
-    "$exe" >/dev/null 2>&1; got=$?
+    _e2e_exec "$exe" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "mod8_root_duplicate/legal_root_child" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   mod8_root_duplicate/legal_root_child: artifact 42"; else echo "FAIL mod8_root_duplicate/legal_root_child: artifact=$got want 42"; fail=1; fi
   else
     echo "FAIL mod8_root_duplicate/legal_root_child: build rc=$rc artifact missing diagnostic=$(cat "$T/mod8-legal.build.err" 2>/dev/null)"; fail=1
@@ -1256,12 +1387,14 @@ qualified_generic_package_test() {
   rm -rf "$p/target"
   ( cd "$p" && "$CC" check package.al ) >/dev/null 2>&1; got=$?
   if [ "$got" = 0 ]; then echo "ok   qualified_generic_package: check 0"; else echo "FAIL qualified_generic_package: check got $got want 0"; fail=1; return; fi
-  ( cd "$p" && "$CC" run package.al ) >/dev/null 2>&1; got=$?
+  _e2e_exec_in "$p" "$CC" run package.al >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "qualified_generic_package(run)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   qualified_generic_package: run 42"; else echo "FAIL qualified_generic_package: run got $got want 42"; fail=1; return; fi
   rm -rf "$p/target"
   ( cd "$p" && "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL qualified_generic_package: build"; fail=1; return; }
 exe="$p/target/debug/qualified-generic-arg"
-  "$exe" >/dev/null 2>&1; got=$?
+  _e2e_exec "$exe" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "qualified_generic_package(artifact)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   qualified_generic_package: artifact 42"; else echo "FAIL qualified_generic_package: artifact got $got want 42"; fail=1; fi
   rm -rf "$p/target"
 }
@@ -1396,12 +1529,14 @@ ambig_enum_collision_test() {
     p="$d/$name"
     ( cd "$p" && "$CC" check package.al ) >/dev/null 2>&1; rc=$?
     if [ "$rc" = 0 ]; then echo "ok   ambig_enum_collision/$name: check accepted"; else echo "FAIL ambig_enum_collision/$name: check rc=$rc"; fail=1; fi
-    ( cd "$p" && "$CC" run package.al ) >/dev/null 2>&1; got=$?
+    _e2e_exec_in "$p" "$CC" run package.al >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "ambig_enum_collision/$name(run)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   ambig_enum_collision/$name: run 42"; else echo "FAIL ambig_enum_collision/$name: run=$got want=42"; fail=1; fi
     rm -rf "$p/target"
     ( cd "$p" && "$CC" build package.al ) >/dev/null 2>&1; rc=$?
     if [ "$rc" != 0 ]; then echo "FAIL ambig_enum_collision/$name: build rc=$rc"; fail=1; continue; fi
-  "$p/target/debug/$output" >/dev/null 2>&1; got=$?
+    _e2e_exec "$p/target/debug/$output" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "ambig_enum_collision/$name(artifact)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   ambig_enum_collision/$name: artifact 42"; else echo "FAIL ambig_enum_collision/$name: artifact=$got want=42"; fail=1; fi
   done
   for name in equal different; do
@@ -1412,12 +1547,14 @@ ambig_enum_collision_test() {
     p="$d/$name"
     ( cd "$p" && "$CC" check package.al ) >/dev/null 2>&1; rc=$?
     if [ "$rc" = 0 ]; then echo "ok   ambig_enum_collision/$name: check accepted"; else echo "FAIL ambig_enum_collision/$name: check rc=$rc"; fail=1; fi
-    ( cd "$p" && "$CC" run package.al ) >/dev/null 2>&1; got=$?
+    _e2e_exec_in "$p" "$CC" run package.al >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "ambig_enum_collision/$name(run)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   ambig_enum_collision/$name: run 42"; else echo "FAIL ambig_enum_collision/$name: run=$got want=42"; fail=1; fi
     rm -rf "$p/target"
     ( cd "$p" && "$CC" build package.al ) >/dev/null 2>&1; rc=$?
     if [ "$rc" != 0 ]; then echo "FAIL ambig_enum_collision/$name: build rc=$rc"; fail=1; continue; fi
-  "$p/target/debug/$output" >/dev/null 2>&1; got=$?
+  _e2e_exec "$p/target/debug/$output" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "ambig_enum_collision/$name(artifact)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   ambig_enum_collision/$name: artifact 42"; else echo "FAIL ambig_enum_collision/$name: artifact=$got want=42"; fail=1; fi
   done
 }
@@ -1440,12 +1577,14 @@ ambig_pub_test() {
     p="$d/$name"
     ( cd "$p" && "$CC" check package.al ) >/dev/null 2>&1; rc=$?
     if [ "$rc" = 0 ]; then echo "ok   ambig_pub/$name: check accepted"; else echo "FAIL ambig_pub/$name: check rc=$rc"; fail=1; fi
-    ( cd "$p" && "$CC" run package.al ) >/dev/null 2>&1; got=$?
+    _e2e_exec_in "$p" "$CC" run package.al >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "ambig_pub/$name(run)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   ambig_pub/$name: run 42"; else echo "FAIL ambig_pub/$name: run=$got want=42"; fail=1; fi
     rm -rf "$p/target"
     ( cd "$p" && "$CC" build package.al ) >/dev/null 2>&1; rc=$?
     if [ "$rc" != 0 ]; then echo "FAIL ambig_pub/$name: build rc=$rc"; fail=1; continue; fi
-    "$p/target/debug/$output" >/dev/null 2>&1; got=$?
+    _e2e_exec "$p/target/debug/$output" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "ambig_pub/$name(artifact)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   ambig_pub/$name: artifact 42"; else echo "FAIL ambig_pub/$name: artifact=$got want=42"; fail=1; fi
   done
 }
@@ -1516,7 +1655,8 @@ tool11_output_validation_test() {
   done
   ( cd "$d/control" && "$CC" build package.al >/dev/null 2>"$T/tool11-control.err" ); rc=$?
   if [ "$rc" = 0 ] && [ -x "$d/control/target/debug/a.out" ]; then
-    "$d/control/target/debug/a.out" >/dev/null 2>&1; got=$?
+    _e2e_exec "$d/control/target/debug/a.out" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "tool11_output_validation/omitted" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   tool11_output_validation/omitted: default output accepted"; else echo "FAIL tool11_output_validation/omitted: artifact=$got"; fail=1; fi
   else
     echo "FAIL tool11_output_validation/omitted: rc=$rc"; fail=1
@@ -1554,7 +1694,8 @@ tool13_path_validation_test() {
   p="$d/control"
   ( cd "$p" && "$CC" build package.al >/dev/null 2>"$T/tool13-control.err" ); rc=$?
   if [ "$rc" = 0 ] && [ -x "$p/target/debug/tool13-control" ]; then
-    "$p/target/debug/tool13-control" >/dev/null 2>&1; got=$?
+    _e2e_exec "$p/target/debug/tool13-control" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "tool13_path_validation/control" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   tool13_path_validation/control: explicit src/target accepted"; else echo "FAIL tool13_path_validation/control: artifact=$got"; fail=1; fi
   else
     echo "FAIL tool13_path_validation/control: rc=$rc"; fail=1
@@ -1562,7 +1703,8 @@ tool13_path_validation_test() {
   p="$d/default_src"
   ( cd "$p" && "$CC" build package.al >/dev/null 2>"$T/tool13-default.err" ); rc=$?
   if [ "$rc" = 0 ] && [ -x "$p/target/debug/a.out" ]; then
-    "$p/target/debug/a.out" >/dev/null 2>&1; got=$?
+    _e2e_exec "$p/target/debug/a.out" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "tool13_path_validation/default" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   tool13_path_validation/default: omitted source_dir uses src layout"; else echo "FAIL tool13_path_validation/default: artifact=$got"; fail=1; fi
     if nm "$p/target/debug/a.out" 2>/dev/null | grep -qE ' T tool13_outside_default_probe$'; then
       echo "FAIL tool13_path_validation/default: root-level outside module was discovered"; fail=1
@@ -1584,7 +1726,8 @@ multi_target_layout_test() {
   ( cd "$p" && "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL multi_target_layout: debug build"; fail=1; return; }
   out="$p/target/host/debug/multi-host"
   if [ -x "$out" ] && [ ! -e "$p/target/debug/multi-host" ]; then
-    "$out" >/dev/null 2>&1; got=$?
+    _e2e_exec "$out" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "multi_target_layout(debug)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   multi_target_layout: debug artifact host/debug 42"; else echo "FAIL multi_target_layout: debug artifact exit=$got want=42"; fail=1; fi
   else
     echo "FAIL multi_target_layout: debug artifact path"; fail=1
@@ -1593,7 +1736,8 @@ multi_target_layout_test() {
   ( cd "$p" && "$CC" build --release package.al ) >/dev/null 2>&1 || { echo "FAIL multi_target_layout: release build"; fail=1; return; }
   out="$p/target/host/release/multi-host"
   if [ -x "$out" ]; then
-    "$out" >/dev/null 2>&1; got=$?
+    _e2e_exec "$out" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "multi_target_layout(release)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   multi_target_layout: release artifact host/release 42"; else echo "FAIL multi_target_layout: release artifact exit=$got want=42"; fail=1; fi
   else
     echo "FAIL multi_target_layout: release artifact path"; fail=1
@@ -1613,7 +1757,8 @@ multi_target_layout_test() {
   rc=$?
   out="$p/target/alternate/debug/multi-alternate"
   if [ "$rc" = 0 ] && [ -x "$out" ]; then
-    "$out" >/dev/null 2>&1; got=$?
+    _e2e_exec "$out" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "multi_target_layout(alternate)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   multi_target_layout: --target alternate selects alternate/debug"; else echo "FAIL multi_target_layout: alternate exit=$got want=42"; fail=1; fi
   else
     echo "FAIL multi_target_layout: --target alternate rc=$rc or artifact path"; fail=1
@@ -1673,7 +1818,8 @@ tool17_target_kind_test() {
   rc=$?
   bin="$p/target/debug/tool17-kind-red"
   if [ "$rc" = 0 ] && [ -x "$bin" ]; then
-    "$bin" >/dev/null 2>&1; got=$?
+    _e2e_exec "$bin" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "tool17_target_kind" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   tool17_target_kind: executable ==/!= folds and runs 42"; else echo "FAIL tool17_target_kind: executable exit=$got want 42"; fail=1; fi
   else
     echo "FAIL tool17_target_kind: executable build rc=$rc diagnostic=$(cat "$T/tool17_target_kind.red.err" 2>/dev/null)"; fail=1
@@ -1750,8 +1896,9 @@ tool17_target_code_size_test() {
   rc=$?
   bin="$p/target/debug/code-size-default"
   if [ "$rc" = 0 ] && [ -x "$bin" ]; then
-    "$bin" >/dev/null 2>&1
+    _e2e_exec "$bin" >/dev/null 2>&1
     got=$?
+    if _e2e_runtime_failure "tool17_target_code_size(default)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   tool17_target_code_size: omitted code_size defaults to b64"; else echo "FAIL tool17_target_code_size: default exit=$got want 42"; fail=1; fi
   else
     echo "FAIL tool17_target_code_size: default build rc=$rc diagnostic=$(cat "$T/tool17_target_code_size.default.err" 2>/dev/null)"; fail=1
@@ -1763,8 +1910,9 @@ tool17_target_code_size_test() {
   rc=$?
   bin="$p/target/debug/code-size-b32"
   if [ "$rc" = 0 ] && [ -x "$bin" ]; then
-    "$bin" >/dev/null 2>&1
+    _e2e_exec "$bin" >/dev/null 2>&1
     got=$?
+    if _e2e_runtime_failure "tool17_target_code_size(b32)" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   tool17_target_code_size: explicit b32 selected"; else echo "FAIL tool17_target_code_size: b32 exit=$got want 42"; fail=1; fi
   else
     echo "FAIL tool17_target_code_size: b32 build rc=$rc diagnostic=$(cat "$T/tool17_target_code_size.b32.err" 2>/dev/null)"; fail=1
@@ -1795,7 +1943,8 @@ main := fn() -> u64 {
 }
 EOF
   ( cd "$pd" && "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(fold): build"; fail=1; return; }
-  "$pd/target/debug/prog"; got=$?
+  _e2e_exec "$pd/target/debug/prog" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(fold)" "$got"; then return; fi
   if [ "$got" = 10 ]; then echo "ok   build_profile_flags(fold): comptime-if bool + bare int value = 10"; else echo "FAIL build_profile_flags(fold): exit=$got want=10"; fail=1; fi
   # (2) default_profile = release folds build.debug FALSE
   pr="$T/e2e_pflags_rel"; rm -rf "$pr"; mkdir -p "$pr/src"
@@ -1814,7 +1963,8 @@ main := fn() -> u64 {
 }
 EOF
   ( cd "$pr" && "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(release): build"; fail=1; return; }
-  "$pr/target/release/prog"; got=$?
+  _e2e_exec "$pr/target/release/prog" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(release)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   build_profile_flags(release): default_profile=release folds build.debug false = 42"; else echo "FAIL build_profile_flags(release): exit=$got want=42"; fail=1; fi
   # (3) explicit profile selection and per-profile override
   po="$T/e2e_pflags_override"; rm -rf "$po"; mkdir -p "$po/src"
@@ -1833,13 +1983,15 @@ main := fn() -> u64 {
 }
 EOF
   ( cd "$po" && "$CC" build --profile release package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(override): --profile build"; fail=1; return; }
-  "$po/target/release/prog"; got=$?
+  _e2e_exec "$po/target/release/prog" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(override)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   build_profile_flags(override): --profile release applies FlagSet override = 42"; else echo "FAIL build_profile_flags(override): exit=$got want=42"; fail=1; fi
   ( cd "$po" && "$CC" test --profile release package.al ) >/dev/null 2>&1; got=$?
   if [ "$got" = 0 ]; then echo "ok   build_profile_flags(test): package test receives --profile release"; else echo "FAIL build_profile_flags(test): --profile release exit=$got want=0"; fail=1; fi
   rm -rf "$po/target"
   ( cd "$po" && "$CC" build --release package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(override): --release build"; fail=1; return; }
-  "$po/target/release/prog"; got=$?
+  _e2e_exec "$po/target/release/prog" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(override-release)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   build_profile_flags(override): --release applies release FlagSet = 42"; else echo "FAIL build_profile_flags(override): --release exit=$got want=42"; fail=1; fi
   # (4) undeclared build.<name> fails loud
   pb="$T/e2e_pflags_bad"; rm -rf "$pb"; mkdir -p "$pb/src"
@@ -1865,25 +2017,30 @@ EOF
   # and `build.<name> == Enum.Variant` compare by str-equality / enum-variant, exactly like arch guards.
   pv="$(_fixture_tree package)/profile_values"; rm -rf "$pv/target"
   ( cd "$pv" && "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(str/enum): default build"; fail=1; rm -rf "$pv/target"; return; }
-  "$pv/target/debug/profile-values"; got=$?
+  _e2e_exec "$pv/target/debug/profile-values" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(str/enum-default)" "$got"; then return; fi
   if [ "$got" = 11 ]; then echo "ok   build_profile_flags(str/enum): default str+enum fold = 11"; else echo "FAIL build_profile_flags(str/enum): default exit=$got want=11"; fail=1; fi
   rm -rf "$pv/target"
   ( cd "$pv" && "$CC" build --profile fast package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(str/enum): --profile fast build"; fail=1; rm -rf "$pv/target"; return; }
-  "$pv/target/fast/profile-values"; got=$?
+  _e2e_exec "$pv/target/fast/profile-values" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(str/enum-fast)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   build_profile_flags(str/enum): --profile fast str+enum override = 42"; else echo "FAIL build_profile_flags(str/enum): --profile fast exit=$got want=42"; fail=1; fi
   rm -rf "$pv/target"
   ( cd "$pv" && "$CC" build --release package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(str/enum): --release build"; fail=1; rm -rf "$pv/target"; return; }
-  "$pv/target/release/profile-values"; got=$?
+  _e2e_exec "$pv/target/release/profile-values" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(str/enum-release)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   build_profile_flags(str/enum): --release str+enum override = 42"; else echo "FAIL build_profile_flags(str/enum): --release exit=$got want=42"; fail=1; fi
   rm -rf "$pv/target"
   # (6) integer profile values fold bare literal equality/inequality in comptime conditions.
   pi="$(_fixture_tree package)/profile_int_values"; rm -rf "$pi/target"
   ( cd "$pi" && "$CC" build package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(int): default build"; fail=1; rm -rf "$pi/target"; return; }
-  "$pi/target/debug/profile-int-values"; got=$?
+  _e2e_exec "$pi/target/debug/profile-int-values" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(int-default)" "$got"; then return; fi
   if [ "$got" = 7 ]; then echo "ok   build_profile_flags(int): default integer comparisons = 7"; else echo "FAIL build_profile_flags(int): default exit=$got want=7"; fail=1; fi
   rm -rf "$pi/target"
   ( cd "$pi" && "$CC" build --profile release package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(int): --profile release build"; fail=1; rm -rf "$pi/target"; return; }
-  "$pi/target/release/profile-int-values"; got=$?
+  _e2e_exec "$pi/target/release/profile-int-values" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(int-release)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   build_profile_flags(int): --profile release comparisons = 42"; else echo "FAIL build_profile_flags(int): release exit=$got want=42"; fail=1; fi
   rm -rf "$pi/target"
 }
@@ -2147,10 +2304,12 @@ check_ra_const_fold() {
     echo "FAIL ra_const_fold: immediate bitwise op survived scalar-IR folding"; fail=1; return
   fi
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL ra_const_fold: build"; fail=1; return; }
-  "$out" >/dev/null 2>&1; got=$?
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_const_fold" "$got"; then return; fi
   if [ "$got" != 42 ]; then echo "FAIL ra_const_fold: got $got want 42"; fail=1; return; fi
   ALATYR_RA=0 "$CC" -o "$fallback" "$src" >/dev/null 2>&1 || { echo "FAIL ra_const_fold: fallback build"; fail=1; return; }
-  "$fallback" >/dev/null 2>&1; got=$?
+  _e2e_exec "$fallback" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_const_fold(fallback)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   ra_const_fold: folded GAS + fallback 42"; else echo "FAIL ra_const_fold: fallback got $got want 42"; fail=1; fi
 }
 
@@ -2166,10 +2325,12 @@ check_ra_arith_const_fold() {
     echo "FAIL ra_arith_const_fold: unchecked immediate arithmetic survived scalar-IR folding"; fail=1; return
   fi
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL ra_arith_const_fold: build"; fail=1; return; }
-  "$out" >/dev/null 2>&1; got=$?
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_arith_const_fold" "$got"; then return; fi
   if [ "$got" != 42 ]; then echo "FAIL ra_arith_const_fold: got $got want 42"; fail=1; return; fi
   ALATYR_RA=0 "$CC" -o "$fallback" "$src" >/dev/null 2>&1 || { echo "FAIL ra_arith_const_fold: fallback build"; fail=1; return; }
-  "$fallback" >/dev/null 2>&1; got=$?
+  _e2e_exec "$fallback" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_arith_const_fold(fallback)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   ra_arith_const_fold: add/sub/imul GAS fold + fallback 42"; else echo "FAIL ra_arith_const_fold: fallback got $got want 42"; fail=1; fi
 }
 
@@ -2185,10 +2346,12 @@ check_ra_shift_const_fold() {
     echo "FAIL ra_shift_const_fold: unchecked immediate shift survived scalar-IR folding"; fail=1; return
   fi
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL ra_shift_const_fold: build"; fail=1; return; }
-  "$out" >/dev/null 2>&1; got=$?
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_shift_const_fold" "$got"; then return; fi
   if [ "$got" != 42 ]; then echo "FAIL ra_shift_const_fold: got $got want 42"; fail=1; return; fi
   ALATYR_RA=0 "$CC" -o "$fallback" "$src" >/dev/null 2>&1 || { echo "FAIL ra_shift_const_fold: fallback build"; fail=1; return; }
-  "$fallback" >/dev/null 2>&1; got=$?
+  _e2e_exec "$fallback" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_shift_const_fold(fallback)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   ra_shift_const_fold: logical shift GAS fold + fallback 42"; else echo "FAIL ra_shift_const_fold: fallback got $got want 42"; fail=1; fi
 }
 
@@ -2210,12 +2373,15 @@ check_ra_imm64_widen() {
     echo "FAIL ra_imm64_widen: a u64::MAX mask (sign-extends from imm32) was needlessly widened"; fail=1; return
   fi
   "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL ra_imm64_widen: build (as rejected the text)"; fail=1; return; }
-  "$out" >/dev/null 2>&1; got=$?
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_imm64_widen" "$got"; then return; fi
   if [ "$got" != 42 ]; then echo "FAIL ra_imm64_widen: got $got want 42"; fail=1; return; fi
-  ( ulimit -c 0; "$CC" run "$src" >/dev/null 2>&1 ); got=$?
+  _e2e_exec "$CC" run "$src" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_imm64_widen(run)" "$got"; then return; fi
   if [ "$got" != 42 ]; then echo "FAIL ra_imm64_widen: alatyr run got $got want 42"; fail=1; return; fi
   ALATYR_RA=0 "$CC" -o "$fallback" "$src" >/dev/null 2>&1 || { echo "FAIL ra_imm64_widen: fallback build"; fail=1; return; }
-  "$fallback" >/dev/null 2>&1; got=$?
+  _e2e_exec "$fallback" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "ra_imm64_widen(fallback)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   ra_imm64_widen: widened GAS assembles, run == build, fallback 42"; else echo "FAIL ra_imm64_widen: fallback got $got want 42"; fail=1; fi
 }
 
@@ -2223,7 +2389,8 @@ check_ra_imm64_widen() {
 # These were four inline `if … fi` blocks; as a helper they become ordinary ROWS, which is what lets
 # them be SCHEDULED — `ext_test env_size_test` is the single most expensive row in the gate (measured
 # 83 s: 8 serial in-place self-builds inside scripts/env_size_test.sh, ~10.2 s each), so leaving it
-# unschedulable set the floor for the whole suite.
+# unschedulable set the floor for the whole suite. Its whole-script duration is intentionally not
+# passed through the per-target runtime deadline below.
 # The script's own output is replayed VERBATIM either way: its `ok …`/`FAIL …` lines are assertions in
 # their own right and belong in this log. The old blocks discarded nothing on success but collapsed a
 # failure to the single word `FAIL <name>`, which is how "FAIL env_size_test" became the entire public
@@ -2589,8 +2756,8 @@ run atomic_global_counter 42
 run atomic_global_field 42
 run atomic_global_elem 42
 ## concurrency primitives (Concurrency CC-1/4/7): OS threads over raw `clone` + a futex Mutex(T).
-## These spawn real OS threads; they exit reliably (verified under `timeout` in development), but a
-## regression here could hang the (timeout-less) suite — check them first if the run stalls.
+## These spawn real OS threads; each produced target is bounded by the shared runtime deadline, but a
+## regression here still reports a concrete row failure — check them first if the run stalls.
 run mutex_st 42
 run thread_spawn 42
 run thread_join_many 42
@@ -5900,6 +6067,18 @@ _row_exec() { # idx
   printf '%s %s\n' "$fail" "$(( (_rx_t1 - _rx_t0) / 1000 ))" > "$WORK/rc/$_rx_idx"
 }
 
+_e2e_runtime_timeout_probe() {
+  _e2e_exec_timed 0.1s sleep 30 >/dev/null 2>&1
+  local _e2e_rc=$?
+  if [ "$E2E_RUNTIME_STATE" = timeout ]; then
+    echo "FAIL e2e_timeout_probe: runtime timeout after 0.1s"
+    fail=1
+  else
+    echo "FAIL e2e_timeout_probe: child returned rc=$_e2e_rc state=$E2E_RUNTIME_STATE"
+    fail=1
+  fi
+}
+
 ## THE GATE OF THE GATE (AGENTS.md: "an invariant nobody has seen fail is decoration").
 ##
 ## This runs on EVERY invocation, before the suite, and proves by experiment that the machinery still
@@ -5937,21 +6116,39 @@ _e2e_selftest() {
   _st fail does_not_build      run gate_no_compile 42
   # 4. a fixture that is ABSENT is a failure (MISS), not a silent pass.
   _st fail absent_fixture      run gate_no_such_fixture 42
-  # 5. `build_reject` is satisfied only by a NON-ZERO build …
+  # 5. a hanging child is a located FAIL row, and the self-test itself returns.
+  _st fail runtime_timeout     _e2e_runtime_timeout_probe
+  if grep -qF 'FAIL e2e_timeout_probe: runtime timeout after 0.1s' "$d/last.out"; then
+    echo "ok   e2e_selftest(runtime_timeout): bounded child produced a concrete FAIL row"
+  else
+    echo "FAIL e2e_selftest(runtime_timeout): timeout row was not concrete"
+    bad=1
+  fi
+  # 6. a legal timeout-looking child status is preserved when the completion marker is present.
+  local status_124 status_137 state_124 state_137
+  _e2e_exec_timed 0.1s bash -c 'exit 124' >/dev/null 2>&1; status_124=$?; state_124="$E2E_RUNTIME_STATE"
+  _e2e_exec_timed 0.1s bash -c 'exit 137' >/dev/null 2>&1; status_137=$?; state_137="$E2E_RUNTIME_STATE"
+  if [ "$state_124" = exited ] && [ "$status_124" = 124 ] && [ "$state_137" = exited ] && [ "$status_137" = 137 ]; then
+    echo "ok   e2e_selftest(runtime_status): preserved child exits 124 and 137"
+  else
+    echo "FAIL e2e_selftest(runtime_status): 124=$status_124/$state_124 137=$status_137/$state_137"
+    bad=1
+  fi
+  # 7. `build_reject` is satisfied only by a NON-ZERO build …
   _st ok   build_reject_hit    build_reject gate_no_compile
-  # 6. … and must NOT be satisfied by a program that builds fine.
+  # 8. … and must NOT be satisfied by a program that builds fine.
   _st fail build_reject_miss   build_reject gate_ok
-  # 7. `build_reject_has`'s NEEDLE is load-bearing: an unsatisfiable needle must fail even though the
+  # 9. `build_reject_has`'s NEEDLE is load-bearing: an unsatisfiable needle must fail even though the
   #    build did fail (this is the difference between `build_reject` and `build_reject_has`).
   _st fail needle_unsatisfiable build_reject_has gate_no_compile 'no compiler will ever print this'
-  # 8. … while the real diagnostic satisfies it.
+  # 10. … while the real diagnostic satisfies it.
   _st ok   needle_satisfied    build_reject_has gate_no_compile 'unbound name at line 2 in gate_no_compile'
-  # 9. `check_accept`/`check_reject` are not interchangeable.
+  # 11. `check_accept`/`check_reject` are not interchangeable.
   _st ok   check_accept_hit    check_accept gate_ok
   _st fail check_accept_miss   check_accept gate_no_compile
   _st ok   check_reject_hit    check_reject gate_no_compile
   _st fail check_reject_miss   check_reject gate_ok
-  # 10. artifacts land in the ROW's scratch directory and nowhere else — the property that makes two
+  # 12. artifacts land in the ROW's scratch directory and nowhere else — the property that makes two
   #     rows naming one fixture safe. A helper writing to a name-keyed path under `target/` would
   #     leave this file unwritten (and clobber the other row's binary).
   T="$WORK/s/selftest"; rm -rf "$T"; mkdir -p "$T"; fail=0; E2E_PHASE=run
@@ -5962,7 +6159,7 @@ _e2e_selftest() {
     echo "FAIL e2e_selftest(row_isolation): artifact not confined to \$T ($T)"
     bad=1
   fi
-  # 11. arming really happened: the table-facing name is the recording stub, and the CLONE is the
+  # 13. arming really happened: the table-facing name is the recording stub, and the CLONE is the
   #     helper itself (not the stub, and not a textual approximation of it — cloning the clone
   #     reproduces it exactly, which is the `declare -f` round-trip the whole scheme rests on).
   if declare -f run | grep -q '_dispatch run'; then
