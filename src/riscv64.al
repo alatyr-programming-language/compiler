@@ -43,7 +43,7 @@ field_type_is_float := lower_layout::field_type_is_float
 variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, arrty_nel, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
@@ -2423,26 +2423,6 @@ rv_arrty_elem := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   r
 }
 
-## `[E; N]` → the static element COUNT N, else 0 (not a fixed-array type, or a non-literal length — a
-## `[T; <comptime expr>]` stays 0 so every dependent path falls back to the fail-loud default).
-rv_arrty_nel := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
-  semi := arrty_semi(src, ts, tl)
-  if semi == 0 { return 0 }
-  mut p := semi + 1
-  lim := ts + tl
-  mut go := true
-  while go and p < lim { c := str_at((src + p), 1) ; if c == " " or c == "\t" { p = p + 1 } else { go = false } }
-  mut n := 0
-  mut any := false
-  mut scan := true
-  while scan and p < lim {
-    d := dec_digit_val(str_at((src + p), 1))
-    if d >= 0 { n = n * 10 + d ; any = true ; p = p + 1 } else { scan = false }
-  }
-  if not any { return 0 }
-  n
-}
-
 ## The WORD width of the type named `[ts,tl)`: `struct_words` for a PLAIN struct, `1 + enum_max_arity`
 ## for an enum, `N * width(E)` for a nested `[E; N]`, 1 for a scalar; 0 = UNSUPPORTED (a generic /
 ## comptime-value type-fn whose layout resolve would PANIC without a binding, a `str`, or an unresolvable
@@ -2464,7 +2444,7 @@ rv_tyname_words := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, decl
   es := rv_arrty_elem(src, ts, tl)
   if es.n != 0 {
     ew := rv_tyname_words(src, es.s, es.n, a, decls)
-    nel := rv_arrty_nel(src, ts, tl)
+    nel := arrty_nel(src, ts, tl)
     if ew > 0 { if nel > 0 { r = nel * ew } }
     return r
   }
@@ -2486,7 +2466,7 @@ rv_ann_arr_nel := fn(src : ptr(u8), ns : usize, nl : usize, v : ptr(Expr)) -> i6
   if ex_is_array_lit(v) { return 0 }
   an := ann_span(src, ns, nl)
   if an.n == 0 { return 0 }
-  rv_arrty_nel(src, an.s, an.n)
+  arrty_nel(src, an.s, an.n)
 }
 
 ## The declared ELEMENT type span of the same, else {0,0}.
@@ -2646,7 +2626,7 @@ emit_rv_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::
   bt := rv_place_ty(base, body_head, src, a, decls)
   et := rv_arrty_elem(src, bt.s, bt.n)
   estride := rv_arr_elem_stride_bytes(src, et.s, et.n, a, decls)
-  nel := rv_arrty_nel(src, bt.s, bt.n)
+  nel := arrty_nel(src, bt.s, bt.n)
   emit_rv_place_addr(base, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
   emit_rv_expr(idx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -4537,7 +4517,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         if siboE != 0 { push_str(sb, "  li a1, ") ; push_int(sb, siboE) ; push_str(sb, "\n  add a0, a0, a1\n") }
         push_str(sb, "  ld a1, 0(sp)\n  addi sp, sp, 16\n")
         if RV_CHK {
-          snelE := rv_arrty_nel(src, stdidxarr.s, stdidxarr.n)
+          snelE := arrty_nel(src, stdidxarr.s, stdidxarr.n)
           if snelE > 0 { push_str(sb, "  li a2, ") ; push_int(sb, snelE) ; push_str(sb, "\n  bltu a1, a2, 1f\n  ebreak\n1:\n") }
         }
         push_str(sb, "  add a0, a0, a1\n")
@@ -4549,7 +4529,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ## stride is one byte, unlike the legacy word-array path below.
         emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         if RV_CHK {
-          snel := rv_arrty_nel(src, stdarr.s, stdarr.n)
+          snel := arrty_nel(src, stdarr.s, stdarr.n)
           if snel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, snel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
         }
         mut sboI := i64(0)
@@ -5802,7 +5782,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           if siboA != 0 { push_str(sb, "  li a1, ") ; push_int(sb, siboA) ; push_str(sb, "\n  add a0, a0, a1\n") }
           push_str(sb, "  ld a1, 0(sp)\n  addi sp, sp, 16\n")
           if RV_CHK {
-            snelA := rv_arrty_nel(src, stdidxAssignTy.s, stdidxAssignTy.n)
+            snelA := arrty_nel(src, stdidxAssignTy.s, stdidxAssignTy.n)
             if snelA > 0 { push_str(sb, "  li a2, ") ; push_int(sb, snelA) ; push_str(sb, "\n  bltu a1, a2, 1f\n  ebreak\n1:\n") }
           }
           push_str(sb, "  add a0, a0, a1\n  ld a2, 0(sp)\n  addi sp, sp, 16\n  sb a2, 0(a0)\n")

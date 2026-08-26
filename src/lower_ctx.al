@@ -73,6 +73,28 @@ pub is_slice_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
   r
 }
 
+## `[E; N]` → the static element COUNT N, else 0 (not a fixed-array type, or a non-literal length — a
+## `[T; <comptime expr>]` stays 0 so every dependent path falls back to the fail-loud default).
+## The scan is shared because the three target backends consume the same source-relative type spans and
+## have no backend-specific state in this query.
+pub arrty_nel := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
+  semi := lower_layout::arrty_semi(src, ts, tl)
+  if semi == 0 { return 0 }
+  mut p := semi + 1
+  lim := ts + tl
+  mut go := true
+  while go and p < lim { c := str_at((src + p), 1) ; if c == " " or c == "\t" { p = p + 1 } else { go = false } }
+  mut n := 0
+  mut any := false
+  mut scan := true
+  while scan and p < lim {
+    d := lower_layout::dec_digit_val(str_at((src + p), 1))
+    if d >= 0 { n = n * 10 + d ; any = true ; p = p + 1 } else { scan = false }
+  }
+  if not any { return 0 }
+  n
+}
+
 ## Architecture-neutral Expr accessors shared by the scalar backends. Keep the scalar returns separate:
 ## the frozen seed has a known mis-lowering scar for newly introduced struct return types.
 pub expr_is_struct_lit := fn(v : ptr(Expr)) -> bool {
