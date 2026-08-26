@@ -3135,6 +3135,10 @@ DIAG_SCALAR_CONVERSION_MARKER := 5764607523034234880
 ## assigned to a mutable struct global. Keep it between scalar-conversion and comptime classes so
 ## every pre-existing CheckErr range remains byte-identical while all CLI renderers agree.
 DIAG_GLOBAL_AGG_MARKER := 6341068275337658368
+## Memory §2.2 — a CONST module-level aggregate runtime-call initializer has no implicit execution phase.
+## Keep its located diagnostic between the mutable-global and standard-byte-tuple classes so all public
+## semantic entry points identify the same pre-emission boundary without changing older error ranges.
+DIAG_GLOBAL_INIT_CALL_MARKER := 6485183463413514240
 ## Types §6.1 / Memory — the explicit standard-byte tuple global has a separate located diagnostic so
 ## check/build/emit surfaces can share the lower's existing ABI-boundary wording.
 DIAG_STANDARD_TUPLE_GLOBAL_MARKER := 6629298651489350912
@@ -3240,7 +3244,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   limit := code >= DIAG_LIMIT_MARKER and code < DIAG_AMBIG_MARKER
   immutable := code >= DIAG_IMMUTABLE_MARKER
   ctg := code >= DIAG_CT_MARKER and code < DIAG_IMMUTABLE_MARKER
-  gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
+  global_init_call := code >= DIAG_GLOBAL_INIT_CALL_MARKER and code < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
+  gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_GLOBAL_INIT_CALL_MARKER
   enum_global_array := code >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and code < DIAG_CT_MARKER
   tuple_global := code >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and code < DIAG_ENUM_GLOBAL_ARRAY_MARKER
   conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_GLOBAL_AGG_MARKER
@@ -3261,6 +3266,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     span = raw / 8
   } else if gagg {
     raw = code - DIAG_GLOBAL_AGG_MARKER
+    span = raw / 4
+  } else if global_init_call {
+    raw = code - DIAG_GLOBAL_INIT_CALL_MARKER
     span = raw / 4
   } else if enum_global_array {
     raw = code - DIAG_ENUM_GLOBAL_ARRAY_MARKER
@@ -3283,7 +3291,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or tuple_global or enum_global_array {
+  if span > 0 or tuple_global or enum_global_array or global_init_call {
     if limit {
       wk0 := rt::push_str(db, "@limits(")
       wk1 := rt::push_str(db, limit_name(kind))
@@ -3291,6 +3299,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     } else if immutable { wki := rt::push_str(db, "immutable binding") }
     else if ctg { wkc := rt::push_str(db, comptime_guard_name(kind)) }
     else if gagg { wkg := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
+    else if global_init_call { wkgc := rt::push_str(db, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
     else if enum_global_array { wkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if tuple_global { wktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if conv { wksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
@@ -5367,7 +5376,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   limit := r >= DIAG_LIMIT_MARKER and r < DIAG_AMBIG_MARKER
   immutable := r >= DIAG_IMMUTABLE_MARKER
   ctg := r >= DIAG_CT_MARKER and r < DIAG_IMMUTABLE_MARKER
-  gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
+  global_init_call := r >= DIAG_GLOBAL_INIT_CALL_MARKER and r < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
+  gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_GLOBAL_INIT_CALL_MARKER
   enum_global_array := r >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and r < DIAG_CT_MARKER
   tuple_global := r >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and r < DIAG_ENUM_GLOBAL_ARRAY_MARKER
   conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_GLOBAL_AGG_MARKER
@@ -5388,6 +5398,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     span = raw / 8
   } else if gagg {
     raw = r - DIAG_GLOBAL_AGG_MARKER
+    span = raw / 4
+  } else if global_init_call {
+    raw = r - DIAG_GLOBAL_INIT_CALL_MARKER
     span = raw / 4
   } else if enum_global_array {
     raw = r - DIAG_ENUM_GLOBAL_ARRAY_MARKER
@@ -5411,7 +5424,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or tuple_global or enum_global_array or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or tuple_global or enum_global_array or global_init_call or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
       else {
@@ -5422,6 +5435,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     } else if immutable { dwki := rt::push_str(db, "immutable binding") }
     else if ctg { dwkc := rt::push_str(db, comptime_guard_name(kind)) }
     else if gagg { dwkga := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
+    else if global_init_call { dwkgc := rt::push_str(db, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
     else if enum_global_array { dwkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if tuple_global { dwktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if conv { dwksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
