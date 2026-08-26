@@ -730,7 +730,16 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
     emit_gas(idx, sb, cx, a, nl)
     sfb := field_index_base(base, cx)
     fent := deref(svec_at(SlotEntry, cx.slots, sfb.ent_idx))
-    emit_agg_base_addr(fent, sb)
+    ## An ordinary local/by-ref aggregate uses its frame block directly. For `deref(p).field[i]`,
+    ## the containing entry is the pointer slot (ek 7), whose value is already the pointee's word-0
+    ## address. Loading it here avoids treating the pointer slot itself as an inline aggregate.
+    if fent.ek == 7 {
+      push_str(sb, "  movq -")
+      push_int(sb, i64((fent.off + 1) * 8))
+      push_str(sb, "(%rbp), %rax\n")
+    } else {
+      emit_agg_base_addr(fent, sb)
+    }
     push_str(sb, "  movq %rax, %rbx\n")
     if sbf.off != 0 {
       push_str(sb, "  addq $")

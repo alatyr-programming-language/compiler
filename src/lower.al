@@ -19266,16 +19266,20 @@ packed_byte_field_eek := fn(base : ptr(Expr), cx : ptr(LCtx)) -> u8 {
 
 ## The ordinary-struct dual of `packed_byte_field`: an explicitly byte-typed fixed-array FIELD whose
 ## containing struct uses the shared standard layout tier. The returned offset is ASCENDING from the
-## aggregate word-0 address, so the same address consumer works for an inline local and a by-ref param.
+## aggregate word-0 address, so the same address consumer works for an inline local, a by-ref param,
+## and the pointee of `deref(p)` when `p` is a pointer-to-struct slot.
 StandardByteField := struct { ok : bool, off : i64, len : i64 }
 standard_byte_field := fn(base : ptr(Expr), cx : ptr(LCtx)) -> StandardByteField {
   mut res := StandardByteField(ok = false, off = 0, len = 0)
   fp := field_place_parts(base)
   if unchecked bitcast(usize, fp.base) == 0 { return res }
-  bv := field_base_var(fp.base)
+  bv := field_base_vp(fp.base)
   if not bv.ok { return res }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-  if ent.ek != 2 or ent.snl == 0 or is_packed(cx.decls, cx.src, ent.sns, ent.snl) { return res }
+  ## A pointer-derived root stores the pointee address in an ek-7 scalar slot. Its `sns`/`snl`
+  ## still name the containing struct, so the byte-layout oracle is valid; all other non-struct
+  ## roots remain outside this helper's domain.
+  if ent.snl == 0 or (ent.ek != 2 and (ent.ek != 7 or not bv.via_ptr)) or is_packed(cx.decls, cx.src, ent.sns, ent.snl) { return res }
   if not std_struct_has_direct_byte_layout(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) { return res }
   fts := field_type_span(cx.decls, cx.src, ent.sns, ent.snl, fp.fs, fp.fl, deref(cx.mar))
   aes := array_elem_span(cx.src, fts.s, fts.n)
@@ -19290,10 +19294,10 @@ standard_byte_field := fn(base : ptr(Expr), cx : ptr(LCtx)) -> StandardByteField
 standard_byte_field_eek := fn(base : ptr(Expr), cx : ptr(LCtx)) -> u8 {
   fp := field_place_parts(base)
   if unchecked bitcast(usize, fp.base) == 0 { return 0 }
-  bv := field_base_var(fp.base)
+  bv := field_base_vp(fp.base)
   if not bv.ok { return 0 }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-  if ent.ek != 2 or ent.snl == 0 or is_packed(cx.decls, cx.src, ent.sns, ent.snl) { return 0 }
+  if ent.snl == 0 or (ent.ek != 2 and (ent.ek != 7 or not bv.via_ptr)) or is_packed(cx.decls, cx.src, ent.sns, ent.snl) { return 0 }
   if not std_struct_has_direct_byte_layout(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) { return 0 }
   fts := field_type_span(cx.decls, cx.src, ent.sns, ent.snl, fp.fs, fp.fl, deref(cx.mar))
   aes := array_elem_span(cx.src, fts.s, fts.n)

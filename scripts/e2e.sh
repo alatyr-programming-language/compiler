@@ -2360,6 +2360,10 @@ run_x86 packed_byte_array_field 42
 ## BYTES: ordinary standard-layout structs with direct byte-array fields use exact byte offsets
 ## for construction, copy, indexed read/write, address-of, by-ref aggregate passing, size and align.
 run_x86 standard_byte_array_field 42
+## CLAYOUT S3(d): the same byte offset must survive a pointer-derived struct root. The non-x86
+## emitters keep their existing fail-loud pointer-to-aggregate boundary, so this focused x86 row does
+## not widen their claimed surface.
+run_x86 deref_ptr_standard_byte_array_field 42
 ## CLAYOUT S3(e): a standard byte-tier struct crosses an ordinary by-value parameter and return;
 ## all four emitters must load its byte fields through the parameter's caller-owned address.
 run standard_byte_abi 42
