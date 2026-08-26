@@ -203,6 +203,12 @@ _e2e_exec_capture() { # stdout-file, command ...
   _e2e_exec "$@" >"$_e2e_stdout"
 }
 
+_e2e_exec_capture_combined() { # stdout+stderr-file, command ...
+  local _e2e_output="$1"
+  shift
+  _e2e_exec "$@" >"$_e2e_output" 2>&1
+}
+
 _e2e_exec_in() { # directory, command ...
   local _e2e_dir="$1" _e2e_saved_pwd="$PWD" _e2e_rc
   shift
@@ -224,8 +230,8 @@ _e2e_exec_capture_in() { # stdout-file, directory, command ...
 }
 
 _e2e_runtime_failure() { # label, observed-status
-  local _e2e_label="$1" _e2e_rc="$2"
-  case "$E2E_RUNTIME_STATE" in
+  local _e2e_label="$1" _e2e_rc="$2" _e2e_state="${3:-$E2E_RUNTIME_STATE}"
+  case "$_e2e_state" in
     timeout)
       echo "FAIL $_e2e_label: runtime timeout after $E2E_RUNTIME_TIMEOUT"
       fail=1
@@ -507,7 +513,10 @@ archive="$p/target/debug/libabi-reachability.a"
       echo "ok   abi_reachability_dce: test-only @abi omitted from $(basename "$artifact")"
     fi
   done
-  report=$("$CC" test -k "$p/package.al" 2>&1); got=$?
+  report_file="$T/abi_reachability.test.out"
+  _e2e_exec_capture_combined "$report_file" "$CC" test -k "$p/package.al"; got=$?
+  report="$(<"$report_file")"
+  if _e2e_runtime_failure "abi_reachability_dce(test)" "$got"; then return; fi
   if [ "$got" = 0 ] && case "$report" in *"test test-only abi remains in dedicated test artifact: ok"*) true ;; *) false ;; esac; then
     echo "ok   abi_reachability_dce: dedicated test retains and runs test-only @abi"
   else
@@ -1170,7 +1179,12 @@ manifest_limits_qualified_package_test() {
   p="$root/inherited"
   for verb in check build run test; do
     err="$T/limits_inherited_$verb.err"
-    ( cd "$p" && "$CC" "$verb" package.al ) >/dev/null 2>"$err"; got=$?
+    if [ "$verb" = run ] || [ "$verb" = test ]; then
+      _e2e_exec_in "$p" "$CC" "$verb" package.al >/dev/null 2>"$err"; got=$?
+      if _e2e_runtime_failure "manifest_limits_qualified_package(inherited/$verb)" "$got"; then return; fi
+    else
+      ( cd "$p" && "$CC" "$verb" package.al ) >/dev/null 2>"$err"; got=$?
+    fi
     if [ "$got" != 0 ] && grep -qF "@limits(no_unchecked) violation" "$err"; then
       echo "ok   manifest_limits_qualified_package(inherited/$verb): rejected with inherited ceiling"
     else
@@ -1195,14 +1209,20 @@ if [ "$got" = 0 ] && [ -x "$p/target/debug/limits-equal" ]; then
   _e2e_exec_in "$p" "$CC" run package.al >/dev/null 2>&1; got=$?
   if _e2e_runtime_failure "manifest_limits_qualified_package(equal/run)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   manifest_limits_qualified_package(equal/run): 42"; else echo "FAIL manifest_limits_qualified_package(equal/run): rc=$got want 42"; fail=1; fi
-  ( cd "$p" && "$CC" test package.al ) >/dev/null 2>&1; got=$?
+  _e2e_exec_in "$p" "$CC" test package.al >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "manifest_limits_qualified_package(equal/test)" "$got"; then return; fi
   if [ "$got" = 0 ]; then echo "ok   manifest_limits_qualified_package(equal/test): 0"; else echo "FAIL manifest_limits_qualified_package(equal/test): rc=$got want 0"; fail=1; fi
   rm -rf "$p/target"
 
   p="$root/capabilities"
   for verb in check build run test; do
     err="$T/limits_capabilities_$verb.err"
-    ( cd "$p" && "$CC" "$verb" package.al ) >/dev/null 2>"$err"; got=$?
+    if [ "$verb" = run ] || [ "$verb" = test ]; then
+      _e2e_exec_in "$p" "$CC" "$verb" package.al >/dev/null 2>"$err"; got=$?
+      if _e2e_runtime_failure "manifest_limits_qualified_package(capabilities/$verb)" "$got"; then return; fi
+    else
+      ( cd "$p" && "$CC" "$verb" package.al ) >/dev/null 2>"$err"; got=$?
+    fi
     if [ "$got" != 0 ] && grep -qF "@limits(no_alloc) violation" "$err"; then
       echo "ok   manifest_limits_qualified_package(capabilities/$verb): rejected with no_alloc ceiling"
     else
@@ -1232,7 +1252,12 @@ main := fn() -> u64 {
 EOF
   for verb in check build run test; do
     err="$T/limits_freestanding_$verb.err"
-    ( cd "$pf" && "$CC" "$verb" package.al ) >/dev/null 2>"$err"; got=$?
+    if [ "$verb" = run ] || [ "$verb" = test ]; then
+      _e2e_exec_in "$pf" "$CC" "$verb" package.al >/dev/null 2>"$err"; got=$?
+      if _e2e_runtime_failure "manifest_limits_qualified_package(freestanding/$verb)" "$got"; then return; fi
+    else
+      ( cd "$pf" && "$CC" "$verb" package.al ) >/dev/null 2>"$err"; got=$?
+    fi
     if [ "$got" != 0 ] && grep -qF "@limits(freestanding) violation" "$err"; then
       echo "ok   manifest_limits_qualified_package(freestanding/$verb): rejected with freestanding ceiling"
     else
@@ -1596,7 +1621,14 @@ no_input_diag_test() {
   ## package.al, so `$T/e2e_no_input` would be a package invocation rather than a no-input case.
   d=$(mktemp -d /tmp/alatyr-e2e-no-input.XXXXXX) || { echo "FAIL no_input_diag: mktemp"; fail=1; return; }
   for c in run build check test; do
-    out=$( cd "$d" && "$CC" "$c" 2>&1 >/dev/null ); got=$?
+    if [ "$c" = run ] || [ "$c" = test ]; then
+      out_file="$T/no_input_$c.err"
+      _e2e_exec_in "$d" "$CC" "$c" >/dev/null 2>"$out_file"; got=$?
+      out="$(<"$out_file")"
+      if _e2e_runtime_failure "no_input_diag($c)" "$got"; then rm -rf "$d"; return; fi
+    else
+      out=$( cd "$d" && "$CC" "$c" 2>&1 >/dev/null ); got=$?
+    fi
     if [ "$got" = 40 ] && case "$out" in "alatyr: $c: config: no discoverable package.al and no file list (searched upward from "*) true ;; *) false ;; esac; then
       echo "ok   no_input_diag($c): rc 40 + located diagnostic"
     else
@@ -1743,8 +1775,10 @@ multi_target_layout_test() {
     echo "FAIL multi_target_layout: release artifact path"; fail=1
   fi
   rm -rf "$p/target"
-  ( cd "$p" && "$CC" test package.al ) >"$T/multi_target_layout.test.out" 2>"$T/multi_target_layout.test.err"
+  _e2e_exec_capture_in "$T/multi_target_layout.test.out" "$p" "$CC" test package.al \
+    2>"$T/multi_target_layout.test.err"
   rc=$?
+  if _e2e_runtime_failure "multi_target_layout(test)" "$rc"; then rm -rf "$p/target"; return; fi
   if [ "$rc" = 0 ] && grep -qF 'alatyr test: 0 tests' "$T/multi_target_layout.test.out" \
     && [ -x "$p/target/host/debug/multi-host.test" ] \
     && [ ! -e "$p/target/debug/multi-host.test" ]; then
@@ -1986,7 +2020,8 @@ EOF
   _e2e_exec "$po/target/release/prog" >/dev/null 2>&1; got=$?
   if _e2e_runtime_failure "build_profile_flags(override)" "$got"; then return; fi
   if [ "$got" = 42 ]; then echo "ok   build_profile_flags(override): --profile release applies FlagSet override = 42"; else echo "FAIL build_profile_flags(override): exit=$got want=42"; fail=1; fi
-  ( cd "$po" && "$CC" test --profile release package.al ) >/dev/null 2>&1; got=$?
+  _e2e_exec_in "$po" "$CC" test --profile release package.al >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "build_profile_flags(test)" "$got"; then return; fi
   if [ "$got" = 0 ]; then echo "ok   build_profile_flags(test): package test receives --profile release"; else echo "FAIL build_profile_flags(test): --profile release exit=$got want=0"; fail=1; fi
   rm -rf "$po/target"
   ( cd "$po" && "$CC" build --release package.al ) >/dev/null 2>&1 || { echo "FAIL build_profile_flags(override): --release build"; fail=1; return; }
@@ -2050,6 +2085,7 @@ EOF
 # later test from running. The final case therefore distinguishes isolation from the old in-process
 # runner: the trap would terminate the whole runner with a signal before the following void test.
 native_test_runner_test() {
+  local report_file state1 state4
   p="$T/e2e_native_test_runner.al"
   cat > "$p" <<'EOF'
 @test("void before") fn() {
@@ -2060,9 +2096,13 @@ native_test_runner_test() {
 @test("void after soft failure") fn() {
 }
 EOF
-  "$CC" test -k "$p" >/dev/null 2>&1; got=$?
+  _e2e_exec "$CC" test -k "$p" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "native_test_runner(result)" "$got"; then return; fi
   if [ "$got" = 1 ]; then echo "ok   native_test_runner(result): void + soft Err = 1"; else echo "FAIL native_test_runner(result): got $got want 1"; fail=1; fi
-  report=$("$CC" test "$p" 2>&1); report_rc=$?
+  report_file="$T/native_test_runner.default.out"
+  _e2e_exec_capture_combined "$report_file" "$CC" test "$p"; report_rc=$?
+  report="$(<"$report_file")"
+  if _e2e_runtime_failure "native_test_runner(report)" "$report_rc"; then return; fi
   if [ "$report_rc" = 1 ] && case "$report" in *"test void before: ok"*) true ;; *) false ;; esac; then
     echo "ok   native_test_runner(report): passing descriptions are reported"
   else
@@ -2078,15 +2118,20 @@ EOF
   else
     echo "FAIL native_test_runner(fail-fast): default reported a later test, rc=$report_rc, output=$report"; fail=1
   fi
-  report=$("$CC" test -k "$p" 2>&1); report_rc=$?
+  report_file="$T/native_test_runner.keep_going.out"
+  _e2e_exec_capture_combined "$report_file" "$CC" test -k "$p"; report_rc=$?
+  report="$(<"$report_file")"
+  if _e2e_runtime_failure "native_test_runner(keep-going)" "$report_rc"; then return; fi
   if [ "$report_rc" = 1 ] && case "$report" in *"test void after soft failure: ok"*) true ;; *) false ;; esac; then
     echo "ok   native_test_runner(keep-going): -k reports continue after soft failure"
   else
     echo "FAIL native_test_runner(keep-going): later test report missing, rc=$report_rc, output=$report"; fail=1
   fi
-  "$CC" test "$p" void >/dev/null 2>&1; got=$?
+  _e2e_exec "$CC" test "$p" void >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "native_test_runner(filter/void)" "$got"; then return; fi
   if [ "$got" = 0 ]; then echo "ok   native_test_runner(filter): void substring selects passing tests"; else echo "FAIL native_test_runner(filter): got $got want 0"; fail=1; fi
-  "$CC" test "$p" soft >/dev/null 2>&1; got=$?
+  _e2e_exec "$CC" test "$p" soft >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "native_test_runner(filter/soft)" "$got"; then return; fi
   if [ "$got" = 1 ]; then echo "ok   native_test_runner(filter): soft substring selects failing test"; else echo "FAIL native_test_runner(filter): got $got want 1"; fail=1; fi
 
   p="$T/e2e_native_test_runner_trap.al"
@@ -2097,16 +2142,23 @@ EOF
 @test("after trap") fn() {
 }
 EOF
-  "$CC" test -k "$p" >/dev/null 2>&1; got=$?
+  _e2e_exec "$CC" test -k "$p" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "native_test_runner(isolation)" "$got"; then return; fi
   if [ "$got" = 1 ]; then echo "ok   native_test_runner(isolation): trap + later void = 1"; else echo "FAIL native_test_runner(isolation): got $got want 1"; fail=1; fi
-  report=$("$CC" test -k "$p" 2>&1); report_rc=$?
+  report_file="$T/native_test_runner.trap.out"
+  _e2e_exec_capture_combined "$report_file" "$CC" test -k "$p"; report_rc=$?
+  report="$(<"$report_file")"
+  if _e2e_runtime_failure "native_test_runner(trap-report)" "$report_rc"; then return; fi
   if [ "$report_rc" = 1 ] && case "$report" in *"test trap: FAIL (trap)"*) true ;; *) false ;; esac; then
     echo "ok   native_test_runner(report): traps identify abnormal child exits"
   else
     echo "FAIL native_test_runner(report): missing trap detail, rc=$report_rc, output=$report"; fail=1
   fi
 
-  bad=$("$CC" test -j0 "$p" 2>&1); bad_rc=$?
+  report_file="$T/native_test_runner.invalid_jobs.out"
+  _e2e_exec_capture_combined "$report_file" "$CC" test -j0 "$p"; bad_rc=$?
+  bad="$(<"$report_file")"
+  if _e2e_runtime_failure "native_test_runner(jobs-invalid)" "$bad_rc"; then return; fi
   if [ "$bad_rc" = 40 ] && case "$bad" in *"invalid -j"*"positive integer"*) true ;; *) false ;; esac; then
     echo "ok   native_test_runner(jobs): invalid -j0 diagnosed"
   else
@@ -2159,10 +2211,14 @@ sys_nanosleep := @abi(syscall) fn(num : usize, req : usize, rem : usize) -> isiz
   z := unchecked sys_nanosleep(35, base, 0)
 }
 EOF
-  t0=$(date +%s%N); "$CC" test -j1 "$p" >/dev/null 2>&1; rc1=$?; t1=$(date +%s%N)
-  t2=$(date +%s%N); "$CC" test -j4 "$p" >/dev/null 2>&1; rc4=$?; t3=$(date +%s%N)
+  t0=$(date +%s%N); _e2e_exec "$CC" test -j1 "$p" >/dev/null 2>&1; rc1=$?; t1=$(date +%s%N)
+  state1="$E2E_RUNTIME_STATE"
+  t2=$(date +%s%N); _e2e_exec "$CC" test -j4 "$p" >/dev/null 2>&1; rc4=$?; t3=$(date +%s%N)
+  state4="$E2E_RUNTIME_STATE"
   seq_ms=$(( (t1 - t0) / 1000000 ))
   par_ms=$(( (t3 - t2) / 1000000 ))
+  if _e2e_runtime_failure "native_test_runner(jobs/-j1)" "$rc1" "$state1"; then return; fi
+  if _e2e_runtime_failure "native_test_runner(jobs/-j4)" "$rc4" "$state4"; then return; fi
   if [ "$rc1" = 0 ] && [ "$rc4" = 0 ] && [ "$seq_ms" -ge 3500 ] && [ "$par_ms" -le 2500 ] && [ $((seq_ms - par_ms)) -ge 1200 ]; then
     # The measured durations are deliberately NOT in the success line: this is the only assertion in
     # the suite whose verdict is a timing comparison, and printing the numbers on success made the log
@@ -2179,7 +2235,10 @@ EOF
 # fail at link time; a lost enum discriminant would report success instead of two soft failures.
 tool5_contract_test() {
   p="$(_fixture_tree package)/tool5_contract/package.al"
-  report=$("$CC" test -k "$p" 2>&1); got=$?
+  report_file="$T/tool5_contract.test.out"
+  _e2e_exec_capture_combined "$report_file" "$CC" test -k "$p"; got=$?
+  report="$(<"$report_file")"
+  if _e2e_runtime_failure "tool5_contract(test)" "$got"; then return; fi
   if [ "$got" = 2 ] && case "$report" in *"test conditional Err tag without helper: FAIL (soft)"*) true ;; *) false ;; esac \
       && case "$report" in *"test private helper and conditional Err: FAIL (soft)"*) true ;; *) false ;; esac; then
     echo "ok   tool5_contract: private helper root + two conditional Err soft failures"
@@ -6125,13 +6184,24 @@ _e2e_selftest() {
     bad=1
   fi
   # 6. a legal timeout-looking child status is preserved when the completion marker is present.
-  local status_124 status_137 state_124 state_137
+  local status_124 status_137 state_124 state_137 capture_status capture_state capture_output
   _e2e_exec_timed 0.1s bash -c 'exit 124' >/dev/null 2>&1; status_124=$?; state_124="$E2E_RUNTIME_STATE"
   _e2e_exec_timed 0.1s bash -c 'exit 137' >/dev/null 2>&1; status_137=$?; state_137="$E2E_RUNTIME_STATE"
   if [ "$state_124" = exited ] && [ "$status_124" = 124 ] && [ "$state_137" = exited ] && [ "$status_137" = 137 ]; then
     echo "ok   e2e_selftest(runtime_status): preserved child exits 124 and 137"
   else
     echo "FAIL e2e_selftest(runtime_status): 124=$status_124/$state_124 137=$status_137/$state_137"
+    bad=1
+  fi
+  _e2e_exec_capture_combined "$d/runtime_capture.out" bash -c 'printf "runtime stdout\n"; printf "runtime stderr\n" >&2; exit 124'
+  capture_status=$?
+  capture_state="$E2E_RUNTIME_STATE"
+  capture_output="$(<"$d/runtime_capture.out")"
+  if [ "$capture_state" = exited ] && [ "$capture_status" = 124 ] \
+    && [ "$capture_output" = $'runtime stdout\nruntime stderr' ]; then
+    echo "ok   e2e_selftest(runtime_capture): preserved combined stdout/stderr and status 124"
+  else
+    echo "FAIL e2e_selftest(runtime_capture): status=$capture_status state=$capture_state output=[$capture_output]"
     bad=1
   fi
   # 7. `build_reject` is satisfied only by a NON-ZERO build …
