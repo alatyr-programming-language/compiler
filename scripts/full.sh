@@ -14,8 +14,58 @@
 # reseed (seed != Stage1 expected), verify Stage2 == Stage3 separately (see "Reseed discipline" in AGENTS.md).
 #
 # Usage (inside `nix develop`):  bash scripts/full.sh [--force-sweeps] [<base-ref>]
+#                                bash scripts/full.sh --self-test
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT" || exit 1
+
+_full_gate_filter_guard() {
+  if [ -n "${ALATYR_E2E_FILTER:-}" ]; then
+    echo "FAIL: authoritative scripts/full.sh refuses non-empty ALATYR_E2E_FILTER; use scripts/e2e_fast.sh <filter> or run filtered scripts/e2e.sh directly." >&2
+    return 2
+  fi
+  return 0
+}
+
+_full_gate_filter_self_test() {
+  local _full_probe_output _full_probe_rc
+  _full_probe_output="$(
+    ALATYR_E2E_FILTER=__full_gate_filter_probe__ bash "$ROOT/scripts/full.sh" 2>&1
+  )"
+  _full_probe_rc=$?
+  if [ "$_full_probe_rc" = 0 ]; then
+    echo "FAIL full gate self-test: filtered full.sh invocation exited successfully" >&2
+    return 1
+  fi
+  case "$_full_probe_output" in
+    *"FULL GATE: GREEN"*)
+      echo "FAIL full gate self-test: filtered invocation announced an authoritative green result" >&2
+      return 1
+      ;;
+  esac
+  if [ "$_full_probe_rc" != 2 ]; then
+    echo "FAIL full gate self-test: filtered full.sh exited with $_full_probe_rc, want 2" >&2
+    return 1
+  fi
+  case "$_full_probe_output" in
+    *"ALATYR_E2E_FILTER"*"scripts/e2e_fast.sh"*"scripts/e2e.sh"*) ;;
+    *)
+      echo "FAIL full gate self-test: rejection did not name the filter and allowed iteration paths" >&2
+      return 1
+      ;;
+  esac
+  echo "ok   full gate self-test: non-empty ALATYR_E2E_FILTER is rejected before the gate"
+}
+
+_full_gate_filter_guard || exit $?
+if [ "${1:-}" = "--self-test" ]; then
+  _full_gate_filter_self_test
+  exit $?
+fi
+
+echo "### FULL GATE SELF-TEST ###"
+bash "$ROOT/scripts/full.sh" --self-test
+_full_self_test_rc=$?
+[ "$_full_self_test_rc" = 0 ] || { echo "  full gate self-test failed (rc=$_full_self_test_rc)"; exit 1; }
 
 SWEEP_ARGS=()
 if [ "${1:-}" = "--force-sweeps" ]; then SWEEP_ARGS+=(--force); shift; fi
