@@ -2856,8 +2856,9 @@ mut WAT_BRK_DB := 0
 mut WAT_CONT_DB := 0
 ## The compile-time loop-frame stack for named `break`/`continue` targets. The parser stores a label as
 ## a loop nesting depth; the WAT emitter therefore keeps every emitted loop's exit label, continue label,
-## value-bearing bit, scalar-integer admission, and defer boundary in parallel. Named value-breaks may
-## target only a proven scalar-integer value loop from statement-only intervening loops; the depth cap
+## value-bearing bit, scalar-integer admission, and defer boundary in parallel. Named value-breaks and
+## named continues to value loops may target only a proven scalar-integer value loop from statement-only
+## intervening loops; the depth cap
 ## mirrors parser/lower stacks.
 mut WAT_LOOP_BRK : [i64; 64] = [0; 64]
 mut WAT_LOOP_CONT : [i64; 64] = [0; 64]
@@ -6373,14 +6374,23 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
       Stmt::Continue(cd, cnx) => {
         ## The parser stores a named target's source span separately because the nearest named target
         ## has the same depth (0) as a bare continue. Keep that distinction: a named continue to a
-        ## value-bearing loop must hit the same fail-loud fence as every other named value target.
+        ## scalar value-bearing loop is valid, while unsupported value-loop paths remain fail-loud.
         named_continue := stmt_label_span(stmt_p(Stmt, s)).n != 0
         if cd != 0 or named_continue {
           if WAT_LOOP_OVF or cd >= WAT_LOOP_SP { push_str(sb, "    (unreachable) (; labeled continue target unavailable ;)\n") }
           else {
             target := WAT_LOOP_SP - 1 - cd
-            if WAT_LOOP_VALUE[target] { push_str(sb, "    (unreachable) (; labeled continue from WAT loop expression ;)\n") }
-            else {
+            if WAT_LOOP_VALUE[target] {
+              if wat_loop_value_between(target) { push_str(sb, "    (unreachable) (; labeled continue crosses a value loop ;)\n") }
+              else if not WAT_LOOP_SCALAR[target] { push_str(sb, "    (unreachable) (; labeled continue from non-scalar WAT loop expression ;)\n") }
+              else {
+                ## DEFER (§9.3): a named continue to a value loop leaves every statement-only loop
+                ## between the site and its target, plus the target body itself. Replay all crossed
+                ## cleanups down to the TARGET loop's entry boundary before its next-iteration edge.
+                if WAT_DEF_N > WAT_LOOP_DB[target] { wat_defer_drain(WAT_DEF_N, WAT_LOOP_DB[target], sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
+                push_str(sb, "    (br $cont") ; push_int(sb, WAT_LOOP_CONT[target]) ; push_str(sb, ")\n")
+              }
+            } else {
               ## DEFER (§9.3): a named continue leaves every loop between the site and its target, so
               ## replay all pending body cleanups down to the TARGET loop's entry boundary before its
               ## next-iteration edge. Replay does not pop the compile-time ledger; the fall-through
