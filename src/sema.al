@@ -45,7 +45,7 @@ stmt_p := ast::stmt_p
 ## Module visibility is source metadata consumed by more than the lowerer.  Keep the single
 ## `pub` reader shared with the build-side Modules §3 pass; the sema pass must not grow a second
 ## spelling table for `pub mut` / first-line declarations.
-(decl_is_pub) := lower_attrs
+(decl_is_pub, param_is_comptime) := lower_attrs
 
 ## Internal semantic errors use one word: kind in the low two bits, source start in the rest.
 ## The lean lower cannot yet carry a nested `CheckErr` enum reliably as generic `Result`'s error
@@ -106,6 +106,12 @@ enum_global_array_err := fn(s : usize) -> CheckErr { ENUM_GLOBAL_ARRAY_DIAG_MARK
 ## rejects the exact deferred array shape without changing any older CheckErr range.
 PACKED_ARRAY_DIAG_MARKER := 6845468423603140608
 packed_array_err := fn(s : usize) -> CheckErr { PACKED_ARRAY_DIAG_MARKER + s * 4 }
+
+## A distinct located diagnostic for a `comptime if` whose condition reads a runtime local. Keep it
+## between the CT-12 guard class and immutable bindings so every older CheckErr range remains stable;
+## the four-byte payload carries the offending local's source offset.
+COMPTIME_COND_DIAG_MARKER := 7493989779944505344
+comptime_cond_err := fn(s : usize) -> CheckErr { COMPTIME_COND_DIAG_MARKER + s * 4 }
 
 ## A synthesized type: a tag (0 unknown/error, 1 int, 2 bool, 3 struct, 4 enum, 5 pointer,
 ## 6 str, 7 array) and, for a struct/enum, the type's name span `[ns, ns+nl)`.
@@ -2282,6 +2288,22 @@ local_in := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : u
     if streq(src, l.ns, l.nl, s, n) { return true }
   }
   false
+}
+
+## Whether a local record is a COMPTIME binding rather than a runtime value. The parser erases both
+## `comptime N` and the `: type` marker from `Param`, so recover the two source spellings here. Type
+## parameters (`T : type`) and comptime value parameters (`comptime N : u64`) are valid in a foldable
+## condition and must not be mistaken for runtime locals; ordinary body bindings remain runtime values.
+sema_local_is_comptime := fn(src : ptr(u8), l : Local) -> bool {
+  if param_is_comptime(src, l.ns) { return true }
+  mut p := l.ns + l.nl
+  while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p += 1 }
+  if str_at((src + p), 1) != ":" { return false }
+  p += 1
+  while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p += 1 }
+  if str_at((src + p), 4) != "type" { return false }
+  c := str_at((src + p + 4), 1)
+  c == " " or c == "\n" or c == "\t" or c == "\r" or c == ")" or c == ","
 }
 
 ## The [s, s+n) name span of a `Var` expression (0/0 otherwise). A SMALL inline `match deref(e)`: the
@@ -6062,6 +6084,99 @@ expr_mentions_var := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a 
   }
 }
 
+## The first RUNTIME LOCAL mentioned by a `comptime if` condition, or `{0,0}` when the condition only
+## uses literals, module facts, target facts, or other non-local expressions. This is deliberately a
+## local-dependency fence rather than a second comptime evaluator: `lower::comptime_cond_eval` remains
+## the authority for the complete foldable set, while `check` must reject the unambiguous runtime-local
+## case before any backend can see it. The walk covers every expression child that can carry a value;
+## an omitted AST form is only a conservative false negative and remains fail-loud in the lower.
+sema_comptime_cond_runtime_local := fn(e : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> VSpan {
+  mut out := VSpan(s = 0, n = 0)
+  if unchecked bitcast(usize, e) == 0 { return out }
+  match deref(e) {
+    Expr::Var(s, n) => {
+      mut i := 0
+      while i < nloc and out.n == 0 {
+        l := lvec_at(locals, i)
+        if streq(src, l.ns, l.nl, s, n) and not sema_local_is_comptime(src, l) { out = VSpan(s = s, n = n) }
+        i += 1
+      }
+    }
+    Expr::Bin(op, l, r) => {
+      out = sema_comptime_cond_runtime_local(l, src, locals, nloc)
+      if out.n == 0 { out = sema_comptime_cond_runtime_local(r, src, locals, nloc) }
+    }
+    Expr::If(c, t, f) => {
+      out = sema_comptime_cond_runtime_local(c, src, locals, nloc)
+      if out.n == 0 { out = sema_comptime_cond_runtime_local(t, src, locals, nloc) }
+      if out.n == 0 { out = sema_comptime_cond_runtime_local(f, src, locals, nloc) }
+    }
+    Expr::Match(sc, ah) => {
+      out = sema_comptime_cond_runtime_local(sc, src, locals, nloc)
+      mut arm := ah
+      while arm != 0 and out.n == 0 {
+        am := deref(arm_p(arm))
+        out = sema_comptime_cond_runtime_local(am.body, src, locals, nloc)
+        arm = am.next
+      }
+    }
+    Expr::Call(cs, cl, na, ah) => {
+      mut g := ah
+      while g != 0 and out.n == 0 {
+        ga := deref(arg_p(g))
+        out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
+        g = ga.next
+      }
+    }
+    Expr::StructLit(ss, sl, nf, fh) => {
+      mut g := fh
+      while g != 0 and out.n == 0 {
+        ga := deref(arg_p(g))
+        out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
+        g = ga.next
+      }
+    }
+    Expr::Field(b, fs, fl) => { out = sema_comptime_cond_runtime_local(b, src, locals, nloc) }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => {
+      mut g := ph
+      while g != 0 and out.n == 0 {
+        ga := deref(arg_p(g))
+        out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
+        g = ga.next
+      }
+    }
+    Expr::AddrOf(p) => { out = sema_comptime_cond_runtime_local(p, src, locals, nloc) }
+    Expr::Deref(p) => { out = sema_comptime_cond_runtime_local(p, src, locals, nloc) }
+    Expr::ArrayLit(ne, eh) => {
+      mut g := eh
+      while g != 0 and out.n == 0 {
+        ga := deref(arg_p(g))
+        out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
+        g = ga.next
+      }
+    }
+    Expr::Index(b, ix) => {
+      out = sema_comptime_cond_runtime_local(b, src, locals, nloc)
+      if out.n == 0 { out = sema_comptime_cond_runtime_local(ix, src, locals, nloc) }
+    }
+    Expr::Try(inner) => { out = sema_comptime_cond_runtime_local(inner, src, locals, nloc) }
+    Expr::Slice(b, lo, hi) => {
+      out = sema_comptime_cond_runtime_local(b, src, locals, nloc)
+      if out.n == 0 { out = sema_comptime_cond_runtime_local(lo, src, locals, nloc) }
+      if out.n == 0 { out = sema_comptime_cond_runtime_local(hi, src, locals, nloc) }
+    }
+    Expr::CompField(b, ix) => {
+      out = sema_comptime_cond_runtime_local(b, src, locals, nloc)
+      if out.n == 0 { out = sema_comptime_cond_runtime_local(ix, src, locals, nloc) }
+    }
+    Expr::Unchecked(inner) => { out = sema_comptime_cond_runtime_local(inner, src, locals, nloc) }
+    Expr::Lambda(pos, ph, rts, rtl, bh, val) => { out = sema_comptime_cond_runtime_local(val, src, locals, nloc) }
+    Expr::Bitcast(inner, ts, tl) => { out = sema_comptime_cond_runtime_local(inner, src, locals, nloc) }
+    _ => {}
+  }
+  out
+}
+
 ## If statement handle `h` is a discharge `forget(x)` (an `ExprStmt` calling `forget` with one `Var`
 ## argument), the forgotten variable's name span; else `{0, 0}`. `forget` is the linearity discharge
 ## primitive — only ever applied to an `@owning` handle — so no type resolution is needed here.
@@ -6895,6 +7010,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## The ordinary checker intentionally skips comptime bodies because target folding selects them
         ## later. The enum-array safety boundary is target-independent, however: whichever target makes
         ## an arm live must still reject a width-blind `GE[i]` value before its backend emits code.
+        ctlocal := sema_comptime_cond_runtime_local(cc, src, locals, cnt)
+        if ctlocal.n != 0 { return Result(usize, CheckErr).Err(comptime_cond_err(ctlocal.s)) }
         egcc := sema_enum_global_array_value_bad(cc, decls, upto, src, locals, cnt, a, false)
         if egcc != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcc)) }
         egct := sema_enum_global_array_value_bad_stmts(cthen, decls, upto, src, locals, cnt, a)
