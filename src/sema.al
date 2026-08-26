@@ -2460,6 +2460,63 @@ expr_call_arity := fn(e : ptr(Expr)) -> usize {
   }
 }
 
+## Recover the full source span of a call-shaped type expression (`Option(bool)`, `Slice(u8)`, …).
+## The parser represents a generic instance as `Expr::Call` but stores only the callee-name span;
+## the layout helpers need the enclosing parentheses to inspect its type arguments. Keep this small
+## source scan in sema so the common checker can recognize the one deferred layout shape without
+## teaching the type checker a broader generic-type model. A malformed or unbounded span is rejected
+## by returning 0/0, never by scanning past the source indefinitely.
+sema_generic_inst_type_span := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
+  if unchecked bitcast(usize, e) == 0 { return VSpan(s = 0, n = 0) }
+  match deref(e) {
+    Expr::Call(cs, cl, na, ah) => {
+      if na == 0 or cl == 0 { return VSpan(s = 0, n = 0) }
+      mut i := cs + cl
+      mut op := 0
+      mut lim := cs + cl + 8
+      while op == 0 and i < lim {
+        c := str_at((src + i), 1)
+        if c == "(" { op = i }
+        else if c == " " or c == "\n" or c == "\t" or c == "\r" { i += 1 }
+        else { return VSpan(s = 0, n = 0) }
+      }
+      if op == 0 { return VSpan(s = 0, n = 0) }
+      mut depth := 0
+      mut j := op
+      mut cp := 0
+      mut lim2 := op + 4096
+      while cp == 0 and j < lim2 {
+        c := str_at((src + j), 1)
+        if c == "(" { depth += 1 }
+        else if c == ")" {
+          depth -= 1
+          if depth == 0 { cp = j }
+        }
+        if cp == 0 { j += 1 }
+      }
+      if cp == 0 { return VSpan(s = 0, n = 0) }
+      VSpan(s = cs, n = cp + 1 - cs)
+    }
+    _ => { VSpan(s = 0, n = 0) }
+  }
+}
+
+## True only for the direct, one-argument `size(Option(bool))` fold. The bool niche is a deferred
+## CLAYOUT S6 producer, so accepting the ordinary tag+payload fallback would answer a layout query
+## with a value the implementation cannot yet justify. Keep `Option(ptr(T))`, `Option(u64)`, and all
+## other size forms on their existing paths.
+sema_size_bool_niche_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 or str_at((src + cs.s), cs.n) != "size" { return false }
+  if expr_call_arity(e) != 1 { return false }
+  ah := expr_call_args_head(e)
+  if ah == 0 { return false }
+  aa := deref(arg_p(ah))
+  ts := sema_generic_inst_type_span(aa.e, src)
+  if ts.n == 0 { return false }
+  is_bool_niche_pending(src, ts.s, ts.n)
+}
+
 ## The complete parts of an enum-variant expression, else a zeroed result. This small accessor keeps
 ## variant-name validation on the bootstrap-safe pre-match path: the large `check_expr` match can skip
 ## payload-heavy `EnumLit` arms under the frozen seed, but a known enum with an unknown variant must never
@@ -4615,6 +4672,12 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## the shared pre-match path so a direct call and the private `compiles` transaction observe the same
   ## rejection; the frozen seed may otherwise skip the payload-heavy Call arm and leave it unknown.
   if sema_builtin_str_integer_cast_bad(e, src) { mark_failed(locals, mismatch_err(s_of(e, a), 0)) }
+  ## CLAYOUT S2 — the bool niche producer is deferred until S6. Reject the exact direct size fold
+  ## before any backend can apply the ordinary one-word fallback; `located_err` keeps check, x86 build,
+  ## and all emit-to-stdout entry points on one source-located diagnostic path.
+  if ecs.n != 0 and sema_size_bool_niche_bad(e, src) {
+    return Result(Ty, CheckErr).Err(located_err(ecs.s))
+  }
   ## QUERY: reject a known aggregate operand in an arithmetic/bitwise binary expression before the
   ## payload-heavy `Bin` arm can be skipped by the frozen seed. This is intentionally shared by ordinary
   ## `check` and the query's private `check_expr` attempt, so neither path accepts a silent word-zero.
