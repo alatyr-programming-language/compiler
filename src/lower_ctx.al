@@ -142,6 +142,19 @@ pub expr_float_lit_nl := fn(v : ptr(Expr)) -> usize {
   r
 }
 
+## Architecture-neutral Expr::Call callee-name span projections shared by the scalar backends. Keep
+## the scalar returns separate for the frozen-seed-compatible shape used by the neighboring accessors.
+pub expr_call_name_ns := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::Call(cs, cl, n, ah) => { r = cs } _ => {} }
+  r
+}
+pub expr_call_name_nl := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::Call(cs, cl, n, ah) => { r = cl } _ => {} }
+  r
+}
+
 ## The name span of a `Var` (0/0 if not a `Var`); the inner content span of a `StrLit` (`asm_str_span`);
 ## a single decimal digit's value (`asm_digit`) — small standalone accessors shared by the raw-asm cluster.
 pub CSpan := struct { s : usize, n : usize }
