@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- Fixed silent wrong values when indexing an ordinary byte array through a pointer-derived struct
+  field on x86_64.
 - Statically known out-of-range indexes into fixed arrays now reject at compile time, including every
   index into `[T; 0]`, before any backend emits code.
 - Made unsupported live `str`/view operands fail loudly instead of silently becoming an empty pair.
