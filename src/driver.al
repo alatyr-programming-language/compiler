@@ -3130,6 +3130,7 @@ DFileTab := struct { ns : ptr(rt::Vec), nl : ptr(rt::Vec), so : ptr(rt::Vec), sl
 DIAG_AMBIG_MARKER := 4611686018427387904
 DIAG_LIMIT_MARKER := 2305843009213693952
 DIAG_LINKER_SYMBOL_KIND := 7
+DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER := 5188146770730811392
 DIAG_SCALAR_CONVERSION_MARKER := 5764607523034234880
 ## Types §9.4 / Memory §§1.6, 5.9 — the pre-emission fence for a non-literal aggregate
 ## assigned to a mutable struct global. Keep it between scalar-conversion and comptime classes so
@@ -3256,6 +3257,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   packed_array := code >= DIAG_PACKED_ARRAY_MARKER and code < DIAG_CT_MARKER
   enum_global_array := code >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and code < DIAG_PACKED_ARRAY_MARKER
   tuple_global := code >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and code < DIAG_ENUM_GLOBAL_ARRAY_MARKER
+  unknown_ctor := code >= DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_GLOBAL_AGG_MARKER
   ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := code
@@ -3290,6 +3292,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if tuple_global {
     raw = code - DIAG_STANDARD_TUPLE_GLOBAL_MARKER
     span = raw / 4
+  } else if unknown_ctor {
+    raw = code - DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER
+    span = raw / 4
   } else if conv {
     raw = code - DIAG_SCALAR_CONVERSION_MARKER
     span = raw / 4
@@ -3305,7 +3310,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call or unknown_ctor {
     if limit {
       wk0 := rt::push_str(db, "@limits(")
       wk1 := rt::push_str(db, limit_name(kind))
@@ -3318,6 +3323,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if enum_global_array { wkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if packed_array { wkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
     else if tuple_global { wktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
+    else if unknown_ctor { wku := rt::push_str(db, "unknown type constructor") }
     else if conv { wksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { wk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { wk := rt::push_str(db, "unbound name") }
@@ -5398,6 +5404,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   packed_array := r >= DIAG_PACKED_ARRAY_MARKER and r < DIAG_CT_MARKER
   enum_global_array := r >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and r < DIAG_PACKED_ARRAY_MARKER
   tuple_global := r >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and r < DIAG_ENUM_GLOBAL_ARRAY_MARKER
+  unknown_ctor := r >= DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_GLOBAL_AGG_MARKER
   ambig := r >= DIAG_AMBIG_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := r
@@ -5432,6 +5439,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if tuple_global {
     raw = r - DIAG_STANDARD_TUPLE_GLOBAL_MARKER
     span = raw / 4
+  } else if unknown_ctor {
+    raw = r - DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER
+    span = raw / 4
   } else if conv {
     raw = r - DIAG_SCALAR_CONVERSION_MARKER
     span = raw / 4
@@ -5448,7 +5458,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call or unknown_ctor or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
       else {
@@ -5464,6 +5474,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if enum_global_array { dwkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if packed_array { dwkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
     else if tuple_global { dwktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
+    else if unknown_ctor { dwku := rt::push_str(db, "unknown type constructor") }
     else if conv { dwksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { dwk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { dwk := rt::push_str(db, "unbound name") }
