@@ -5188,8 +5188,13 @@ run comptime_target_facets 42
 run comptime_if_facts 42
 run comptime_typeinfo_arg 42
 run comptime_resolves_args 42
-## `alatyr check` does not look at comptime-if conditions at all, so the reject is build-time only.
-build_reject_has reject_comptime_cond_unfoldable "cannot fold this comptime condition"
+## Comptime §9.1/§9.2 — every public entry point must reject a runtime-dependent comptime-if condition
+## before emission, with the same located diagnostic and no output/artifact.
+check_reject_has reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
+build_reject_has reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
+emit_reject_has wat reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
+emit_reject_has aarch64 reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
+emit_reject_has riscv64 reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
 check_accept comptime_for_typeinfo_n
 ## §4: indexing a generic array param fn(T:type, a:T) with T=[E;N] — a[i] (runtime + comptime-unrolled).
 run generic_array_param 42

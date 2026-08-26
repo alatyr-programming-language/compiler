@@ -3152,6 +3152,9 @@ DIAG_PACKED_ARRAY_MARKER := 6845468423603140608
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
 DIAG_CT_MARKER := 6917529027641081856
+## Comptime §9.1/§9.2 — a `comptime if` condition that reads a runtime local is rejected before
+## emission. The four-byte payload carries the offending source offset, matching sema's class.
+DIAG_COMPTIME_COND_MARKER := 7493989779944505344
 ## Declarations §3.1 / Memory §1.6 — a write to an existing binding without `mut`. This sits above
 ## the comptime marker and below 2^63, preserving every older CheckErr range while giving both public
 ## semantic entry points one stable, located message.
@@ -3246,7 +3249,8 @@ d_limit_reject := fn(code : usize, what : str, base : usize, ft : ptr(DFileTab),
 d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : rt::Arena) {
   limit := code >= DIAG_LIMIT_MARKER and code < DIAG_AMBIG_MARKER
   immutable := code >= DIAG_IMMUTABLE_MARKER
-  ctg := code >= DIAG_CT_MARKER and code < DIAG_IMMUTABLE_MARKER
+  ctcond := code >= DIAG_COMPTIME_COND_MARKER and code < DIAG_IMMUTABLE_MARKER
+  ctg := code >= DIAG_CT_MARKER and code < DIAG_COMPTIME_COND_MARKER
   global_init_call := code >= DIAG_GLOBAL_INIT_CALL_MARKER and code < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_GLOBAL_INIT_CALL_MARKER
   packed_array := code >= DIAG_PACKED_ARRAY_MARKER and code < DIAG_CT_MARKER
@@ -3263,6 +3267,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     span = raw / 8
   } else if immutable {
     raw = code - DIAG_IMMUTABLE_MARKER
+    span = raw / 4
+  } else if ctcond {
+    raw = code - DIAG_COMPTIME_COND_MARKER
     span = raw / 4
   } else if ctg {
     raw = code - DIAG_CT_MARKER
@@ -3298,12 +3305,13 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or tuple_global or enum_global_array or packed_array or global_init_call {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call {
     if limit {
       wk0 := rt::push_str(db, "@limits(")
       wk1 := rt::push_str(db, limit_name(kind))
       wk2 := rt::push_str(db, ") violation")
     } else if immutable { wki := rt::push_str(db, "immutable binding") }
+    else if ctcond { wkcc := rt::push_str(db, "comptime if condition must be comptime-known (runtime-dependent value)") }
     else if ctg { wkc := rt::push_str(db, comptime_guard_name(kind)) }
     else if gagg { wkg := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
     else if global_init_call { wkgc := rt::push_str(db, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
@@ -5383,7 +5391,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## The verdict is normalized back to `1` (reject) so the `check` exit code is unchanged.
   limit := r >= DIAG_LIMIT_MARKER and r < DIAG_AMBIG_MARKER
   immutable := r >= DIAG_IMMUTABLE_MARKER
-  ctg := r >= DIAG_CT_MARKER and r < DIAG_IMMUTABLE_MARKER
+  ctcond := r >= DIAG_COMPTIME_COND_MARKER and r < DIAG_IMMUTABLE_MARKER
+  ctg := r >= DIAG_CT_MARKER and r < DIAG_COMPTIME_COND_MARKER
   global_init_call := r >= DIAG_GLOBAL_INIT_CALL_MARKER and r < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_GLOBAL_INIT_CALL_MARKER
   packed_array := r >= DIAG_PACKED_ARRAY_MARKER and r < DIAG_CT_MARKER
@@ -5400,6 +5409,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     span = raw / 8
   } else if immutable {
     raw = r - DIAG_IMMUTABLE_MARKER
+    span = raw / 4
+  } else if ctcond {
+    raw = r - DIAG_COMPTIME_COND_MARKER
     span = raw / 4
   } else if ctg {
     raw = r - DIAG_CT_MARKER
@@ -5436,7 +5448,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or tuple_global or enum_global_array or packed_array or global_init_call or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
       else {
@@ -5445,6 +5457,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
         dwk2 := rt::push_str(db, ") violation")
       }
     } else if immutable { dwki := rt::push_str(db, "immutable binding") }
+    else if ctcond { dwkcc := rt::push_str(db, "comptime if condition must be comptime-known (runtime-dependent value)") }
     else if ctg { dwkc := rt::push_str(db, comptime_guard_name(kind)) }
     else if gagg { dwkga := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
     else if global_init_call { dwkgc := rt::push_str(db, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
