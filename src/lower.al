@@ -11954,7 +11954,7 @@ fixed_array_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
 ## separate from `fixed_array_ret_call`: every other array (including `[i8; N]`, `[bits8; N]`, wider
 ## arrays and zero-length arrays) remains on the existing located reject path rather than guessing an
 ## ABI or silently truncating a result.
-fixed_array_byte_return_len_span := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
+pub fixed_array_byte_return_len_span := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
   if tl == 0 or str_at((src + ts), 1) != "[" { return -1 }
   mut rs := CSpan(s = ts, n = tl)
   if tl == 1 {
@@ -11974,7 +11974,7 @@ fixed_array_byte_return_len_span := fn(src : ptr(u8), ts : usize, tl : usize) ->
 ## The call-site dual of `fixed_array_byte_return_len_span`: recover the callee's complete return
 ## span before asking for the bounded byte ABI. A non-resolved/indirect call stays unsupported here;
 ## it must not inherit a guessed one-word return convention.
-fixed_array_byte_return_len := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
+pub fixed_array_byte_return_len := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
   match deref(e) {
     Expr::Call(cs, cl, nargs, args_head) => {
       ci := ret_call_target(decls, src, cs, cl, nargs, args_head, a)

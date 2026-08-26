@@ -74,7 +74,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
 (CSpan) := lower_ctx
-(export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
+(export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
 
 decl_at := fn(T : type, h : usize) -> ptr(T) { return unchecked bitcast(ptr(T), h) }
 ## a direct typed accessor for decl `i` (encapsulates the usize-handle recovery).
@@ -1613,6 +1613,10 @@ mut A64_CHK := true
 ## by emit_a64_epilogue to move the result bits x0 → d0 (the SysV float return register) before `ret`.
 ## A module global (the A64_CHK pattern) to avoid threading a param through emit_a64_stmts/match_arms.
 mut A64_RET_FLOAT := false
+## FN-return bounded BYTE ARRAY length (§8): a `[u8; N]`, 1 <= N <= 8, is returned as one packed word
+## in x0. A64 locals retain their existing one-word-per-element representation; the return path packs
+## those bytes only at the ABI boundary. Other fixed arrays stay fail-loud.
+mut A64_RET_BYTE_N := 0
 ## FN-return STRUCT span (§8 piece 2, register struct-return convention): when the current fn returns an
 ## all-scalar struct of 1..8 words, holds its type name span (0/0 otherwise). Set per-fn in emit_a64_fn;
 ## read by the Return stmt + trailing-value paths to route the value through emit_a64_struct_value (word
@@ -4804,6 +4808,17 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         tas := A64_TA_S
         tan := A64_TA_N
         gd := deref(decl_get(decls, usize(gi)))
+        ## A bounded byte-array return has an x0 carrier but no A64 fixed-array parameter ABI yet. Keep
+        ## it out of the generic scalar/by-reference path: passing the carrier as a pointer produced a
+        ## silent wrong value in the preflight consumer seam. Direct indexing and return-forwarding are
+        ## handled separately; a direct byte-array return used as an argument remains fail-loud.
+        mut bytearg := false
+        mut barg := args_head
+        while barg != 0 {
+          bga := deref(arg_p(barg))
+          if fixed_array_byte_return_len(bga.e, decls, src, a) >= 1 { bytearg = true }
+          barg = bga.next
+        }
         ## The enabled injected slice is deliberately scalar-u64 only. An aggregate Slice(T) needs
         ## element-width/aggregate ABI support that this bounded fix does not provide; reject it
         ## loudly instead of allowing a partial instance to silently read or write the wrong word.
@@ -4812,8 +4827,9 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           if tan != 3 { gtypeok = false }
           else if str_at((src + tas), tan) != "u64" { gtypeok = false }
         }
-        if not gtypeok {
-          push_str(sb, "  brk #0 // generic call: unsupported type-arg\n")
+        if not gtypeok or bytearg {
+          if not gtypeok { push_str(sb, "  brk #0 // generic call: unsupported type-arg\n") }
+          if bytearg { push_str(sb, "  brk #0 // bounded byte-array return argument ABI is unsupported\n") }
         } else {
           ## RECORD the instance so the mono loop emits `<fn>__<tag>` (dedup). Recorded at the emit
           ## call site — the proven resolution path — so the label here matches a defined instance.
@@ -5070,6 +5086,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           ans := ex_var_ns(ga.e)
           anl := ex_var_nl(ga.e)
           isslicearg := ex_is_slice(ga.e)
+          isbytearg := fixed_array_byte_return_len(ga.e, decls, src, a) >= 1
           ## an anonymous STRUCT-LITERAL VALUE arg (`f(S(…))`) — materialized into an A64_AGG block and
           ## passed BY REFERENCE (§8 anonymous-aggregate materialization, piece 1).
           isaggval := a64_is_slit(ga.e)
@@ -5098,6 +5115,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           isenumlocal := anl != 0 and a64_local_enum_nl(body_head, src, ans, anl, a) != 0
           isagg := (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and anl != 0 and ((a64_local_struct_nl(body_head, src, ans, anl, a) != 0) or isenumlocal or a64_is_array_local(body_head, src, ans, anl, a) or a64_is_slice_local(body_head, src, ans, anl, a))
           aoff := a64_local_off(body_head, src, ans, anl, pcount, a, decls)
+          if isbytearg { push_str(sb, "  brk #0 // bounded byte-array return argument ABI is unsupported\n") }
           if isslicearg { emit_a64_slice_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
           if isaggval { emit_a64_aggval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
           if isenumval { emit_a64_enumval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
@@ -5108,7 +5126,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           isout := a64_callee_out_scalar(decls, src, cs, cl, gidx)
           if isout { a64_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
           if isagg and aoff >= 0 { push_str(sb, "  add x0, x29, #") ; push_int(sb, aoff) ; push_str(sb, "\n") }
-          if (not isout) and (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and (not (isagg and aoff >= 0)) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+          if (not isbytearg) and (not isout) and (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and (not (isagg and aoff >= 0)) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
           push_str(sb, "  str x0, [sp, #-16]!\n")
           gidx += 1
           g = ga.next
@@ -5250,6 +5268,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       mut stdidxelem := false
       stdidxel := a64_arrty_elem(src, stdidxarr.s, stdidxarr.n)
       if a64_std_idx_path_ok(ibase, body_head, src, a, decls) and stdidxel.n != 0 and scalar_byte_size(src, stdidxel.s, stdidxel.n) == 1 { stdidxelem = true }
+      byte_ret_n := fixed_array_byte_return_len(ibase, decls, src, a)
       if stdidxelem {
         ## `xs[i].data[j]` (and the same shape through deeper byte-writable fields): outer element address
         ## is byte-strided, the cumulative field path is byte-offset, and the inner byte array has stride 1.
@@ -5286,6 +5305,18 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         if not stdparamidx { sibo = a64_std_path_bo(ibase, body_head, src, a, decls) }
         if sibo != 0 { push_str(sb, "  add x2, x2, #") ; push_int(sb, sibo) ; push_str(sb, "\n") }
         push_str(sb, "  ldrb w0, [x2, x0]\n")
+      }
+      else if byte_ret_n >= 1 {
+        ## BYTES bounded direct read: the call returns a little-endian packed carrier in x0. Preserve it
+        ## across the index expression, check the static bound in checked mode, then extract byte `k`.
+        ## This is read-only; unsupported fixed-array return shapes remain on the located trap path.
+        emit_a64_expr(ibase, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        push_str(sb, "  str x0, [sp, #-16]!\n")
+        emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        if A64_CHK {
+          push_str(sb, "  mov x1, #") ; push_int(sb, byte_ret_n) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n")
+        }
+        push_str(sb, "  lsl x1, x0, #3\n  ldr x2, [sp], #16\n  lsr x0, x2, x1\n  and x0, x0, #255\n")
       }
       else if tupn > 0 {
         ## `t.N` (= Index(Var(t), Num(N))) on an ALL-SCALAR tuple PARAM: the param slot (`16 + pidxI*8`)
@@ -6124,6 +6155,42 @@ emit_a64_enumsret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
     push_str(sb, "  add x0, x29, #") ; push_int(sb, blk) ; push_str(sb, "\n")
   }
   if not ok { push_str(sb, "  brk #0 // unsupported wide (SRET) enum-returning-call argument\n") }
+}
+
+## Deliver the bounded `[u8; N]` return carrier in x0. A64's existing local-array representation is
+## word-granular, so pack the low byte of each local element at this ABI boundary. A direct call already
+## returns the same carrier in x0 and is forwarded unchanged. This is deliberately limited to the shared
+## `[u8; N]`, 1 <= N <= 8, classifier; every other array shape remains a located trap.
+emit_a64_byte_array_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, nel : i64, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+  mut done := false
+  match deref(e) {
+    Expr::Var(ns, nl) => {
+      off := a64_local_off(body_head, src, ns, nl, pcount, a, decls)
+      arrlocal := a64_is_array_local(body_head, src, ns, nl, a)
+      mut localok := nel >= 1 and nel <= 8
+      if off < 0 { localok = false }
+      if not arrlocal { localok = false }
+      if localok {
+        push_str(sb, "  mov x0, #0\n")
+        mut k := 0
+        while k < nel {
+          push_str(sb, "  ldr x1, [x29, #") ; push_int(sb, off + k * 8) ; push_str(sb, "]\n  and x1, x1, #255\n")
+          if k > 0 { push_str(sb, "  lsl x1, x1, #") ; push_int(sb, k * 8) ; push_str(sb, "\n") }
+          push_str(sb, "  orr x0, x0, x1\n")
+          k = k + 1
+        }
+        done = true
+      }
+    }
+    Expr::Call(cs, cl, nargs, args_head) => {
+      if fixed_array_byte_return_len(e, decls, src, a) == nel {
+        emit_a64_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        done = true
+      }
+    }
+    _ => {}
+  }
+  if not done { push_str(sb, "  brk #0 // unsupported bounded byte-array return value\n") }
 }
 
 emit_a64_epilogue := fn(frame : i64, in out sb : rt::StrBuf) {
@@ -6967,10 +7034,11 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
       Stmt::Return(rv, nx) => {
         ## a struct-returning fn (§8 piece 2) or enum-returning fn (§8 piece 3) delivers the value via the
         ## register convention (word k → x_k); a scalar/float fn uses the ordinary value emit.
+        if A64_RET_BYTE_N >= 1 { emit_a64_byte_array_value(rv, sb, A64_RET_BYTE_N, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         if A64_RET_SRET_NL != 0 { emit_a64_sret_store(rv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         if A64_RET_STRUCT_NL != 0 { emit_a64_struct_value(rv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         if A64_RET_ENUM_NL != 0 { emit_a64_enum_value(rv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-        if A64_RET_STRUCT_NL == 0 and A64_RET_ENUM_NL == 0 and A64_RET_SRET_NL == 0 { emit_a64_expr(rv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        if A64_RET_BYTE_N == 0 and A64_RET_STRUCT_NL == 0 and A64_RET_ENUM_NL == 0 and A64_RET_SRET_NL == 0 { emit_a64_expr(rv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         emit_a64_epilogue(frame, sb)
         s = nx
       }
@@ -7579,6 +7647,10 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
     }
   }
   A64_RET_FLOAT = scalar_name_is_float(src, rts, rtl)
+  A64_RET_BYTE_N = 0
+  mut byte_ret_n := 0
+  byte_ret_span_n := fixed_array_byte_return_len_span(src, rts, rtl)
+  if byte_ret_span_n >= 1 { byte_ret_n = byte_ret_span_n ; A64_RET_BYTE_N = byte_ret_span_n }
   ## STRUCT-RETURN convention (§8 piece 2): if the fn returns a 1..8-word struct, record its span so
   ## Return / trailing-value deliver word k → x_k (via emit_a64_struct_value). The delivery is a
   ## type-agnostic word copy, so a struct with an ENUM / str field (not all-scalar) is delivered too.
@@ -7743,10 +7815,11 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
     ## 2b — same as the explicit-Return path at Stmt::Return); a 1..8-word struct-returning fn's trailing
     ## value delivers word k → x_k (§8 piece 2); an enum-returning fn delivers disc+payload (§8 piece 3);
     ## otherwise the scalar emit. These four are mutually exclusive (see the A64_RET_* set-up in this fn).
+    if byte_ret_n >= 1 { emit_a64_byte_array_value(d.value, sb, byte_ret_n, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
     if A64_RET_SRET_NL != 0 { emit_a64_sret_store(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
     if A64_RET_STRUCT_NL != 0 { emit_a64_struct_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
     if A64_RET_ENUM_NL != 0 { emit_a64_enum_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
-    if A64_RET_STRUCT_NL == 0 and A64_RET_ENUM_NL == 0 and A64_RET_SRET_NL == 0 { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+    if byte_ret_n == 0 and A64_RET_STRUCT_NL == 0 and A64_RET_ENUM_NL == 0 and A64_RET_SRET_NL == 0 { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
   }
   emit_a64_epilogue(frame, sb)
   A64_SUB_GPS = 0
