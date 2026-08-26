@@ -43,6 +43,8 @@ how this repository proves itself, not part of what it ships.
   as a scalar value.
 - Explicit standard-byte tuple globals now reject before backend emission with a located diagnostic
   instead of reaching the unsupported word-based global representation.
+- Immutable module-level aggregate initializers that call at runtime now reject before backend emission
+  with a located diagnostic instead of silently becoming zero-initialized static storage.
 
 First public release in preparation. Nothing is tagged yet; the entries below start once it is.
 

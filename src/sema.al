@@ -85,6 +85,11 @@ scalar_conversion_err := fn(s : usize) -> CheckErr { SCALAR_CONVERSION_DIAG_MARK
 ## byte-identical while every CLI renderer can retain the existing lower's useful wording.
 GLOBAL_AGG_DIAG_MARKER := 6341068275337658368
 global_agg_err := fn(s : usize) -> CheckErr { GLOBAL_AGG_DIAG_MARKER + s * 4 }
+## A distinct located diagnostic for a CONST module-level aggregate runtime-call initializer. Keep it
+## between the mutable-global and standard-byte-tuple classes so older CheckErr ranges remain byte-for-
+## byte unchanged while check/build/emit surfaces can name the same pre-emission rule.
+GLOBAL_INIT_CALL_DIAG_MARKER := 6485183463413514240
+global_init_call_err := fn(s : usize) -> CheckErr { GLOBAL_INIT_CALL_DIAG_MARKER + s * 4 }
 ## A distinct located diagnostic for the unsupported standard-byte tuple global ABI boundary. Keep it
 ## above the non-literal aggregate-global class and below comptime so every older CheckErr range stays
 ## byte-identical while check/build/emit surfaces can share the lower's established wording.
@@ -3634,6 +3639,53 @@ expr_call_result_ty := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src
     return Ty(tag = 1, ns = cs.s, nl = cs.n)
   }
   callee_ret_ty(decls, upto, src, cs.s, cs.n)
+}
+
+## Is a direct CALL's uniquely resolved exact-arity callee an aggregate return? This is the sema-side
+## mirror of the lower's global-init fence, deliberately kept conservative: only one exact-name,
+## exact-arity declaration is classified, and qualified/overloaded/defaulted/indirect calls stay for
+## the existing backend boundary. A false negative leaves the lower's established reject in place; a
+## false positive here would reject a valid global, so no tail-name fallback is guessed. The return
+## spelling covers the aggregate families in this slice that are visible without lowering state: named
+## struct/enum, tuple, str, and Slice(T). Fixed-array call returns stay outside this issue's boundary;
+## their existing lower-side byte-array guard remains authoritative.
+sema_call_returns_aggregate := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 { return false }
+  nargs := expr_call_arity(e)
+  cnt := rt::vec_len(deref(decls))
+  mut chosen : i64 = -1
+  mut matches := 0
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 1 and d.arity == nargs and streq(src, d.name_start, d.name_len, cs.s, cs.n) { chosen = i64(i); matches += 1 }
+    i += 1
+  }
+  if chosen < 0 or matches != 1 { return false }
+  d := deref(decl_get(decls, usize(chosen)))
+  if d.ret_tl == 0 { return false }
+  if struct_decl_of(decls, src, d.ret_ts, d.ret_tl) >= 0 { return true }
+  if enum_decl_of(decls, src, d.ret_ts, d.ret_tl) >= 0 { return true }
+  head := str_at((src + d.ret_ts), 1)
+  if head == "(" { return true }
+  bn := base_type_name(src, d.ret_ts, d.ret_tl)
+  if bn.n != 0 {
+    bt := str_at((src + bn.s), bn.n)
+    if bt == "str" or bt == "Slice" { return true }
+  }
+  false
+}
+
+## A CONST module-level VALUE with a runtime aggregate CALL has no executable initialization phase.
+## Keep this predicate byte-for-byte aligned with lower::emit_rodata_decl's proven fence: mutable globals,
+## function/type metadata, and non-call initializers remain on their existing paths. The declaration's
+## name span is the stable diagnostic location, independent of where the callee was declared.
+sema_global_init_call_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  if d.is_fn or d.kind != 0 or d.ret_tl != 0 or d.arity != 0 { return false }
+  if local_is_mut(src, d.name_start) { return false }
+  if unchecked bitcast(usize, d.value) == 0 { return false }
+  sema_call_returns_aggregate(d.value, decls, src)
 }
 
 ## Types §4.2/§4.4 — a string value has no value-conversion path into an integer. The lower treats
@@ -10492,6 +10544,10 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
     ## duplicate + body check entirely, exactly as `lower::emit_program` neuters it before emission.
     else if guard_is_false(d, src) { }
     else {
+      ## Memory §2.2 — module-level data bindings have no implicit runtime initializer. A direct aggregate
+      ## CALL would therefore be folded as zeroed/static storage while its callee never runs; reject the
+      ## same CONST shape before any backend can emit it, with one diagnostic class for every CLI path.
+      if sema_global_init_call_bad(d, decls, src) { return global_init_call_err(d.name_start) }
       ## Types §6.1 / Memory — a direct byte-array component gives a tuple its standard byte layout,
       ## but module-global storage remains word-based. Reject the exact explicit global form before any
       ## backend can emit a partial word copy; the local tuple tier and ordinary tuple ABI remain open.

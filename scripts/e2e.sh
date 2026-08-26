@@ -5118,6 +5118,10 @@ run tuple_sret_wide_return 54
 ## value silently read 0. Const binding rejected; `mut` global FIELD READ rejected (the zeroed `mut` storage itself
 ## stays legal — the global-Mutex idiom in mutex_basic). A start-up-initializer phase is an open question.
 build_reject_has reject_global_call_init "CONST module-level global initialized by a runtime CALL"
+check_reject_has reject_global_call_init "CONST module-level global initialized by a runtime CALL"
+emit_reject_has wat reject_global_call_init "CONST module-level global initialized by a runtime CALL"
+emit_reject_has aarch64 reject_global_call_init "CONST module-level global initialized by a runtime CALL"
+emit_reject_has riscv64 reject_global_call_init "CONST module-level global initialized by a runtime CALL"
 build_reject_has reject_mut_global_call_init_field "reading a FIELD of a module-level global initialized by a runtime CALL"
 p1_bytes_global_test
 run call_bind_paren 42
