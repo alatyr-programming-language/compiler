@@ -8,8 +8,9 @@
 ## First extraction (probe): `SVec` (a plain struct) + `node_ptr` (the GENERIC arena accessor) — the latter
 ## verifies cross-module generic monomorphization works before the larger cluster moves. Second: the small
 ## expression-span accessors (`CSpan` + `var_name_span`/`asm_str_span`/`asm_digit`) the raw-asm cluster needs.
-(Arg, Decl, Expr) := ast
+(Arg, Decl, Expr, Param) := ast
 arg_p := ast::arg_p
+param_p := ast::param_p
 ## Compatibility surface for lower_asm: the shared table lives only in lower_layout.
 pub asm_digit := fn(c : str) -> i64 { lower_layout::dec_digit_val(c) }
 
@@ -38,6 +39,21 @@ pub decl_get := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) {
 ## callers pass parser/lower offsets, including rebased comptime-synthesized spans.
 pub streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
   str_at((src + a_s), a_n) == str_at((src + b_s), b_n)
+}
+
+## 0-based index of the PARAM named `[ns, ns+nl)`, or -1 when the supplied arena-linked list does not
+## contain it. Native scalar backends pass either the complete parameter list or the value-only tail after
+## their existing generic handling; this helper deliberately does not reinterpret or skip type parameters.
+pub param_find := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> i64 {
+  mut p := params_head
+  mut idx := 0
+  while p != 0 {
+    pm := deref(param_p(p))
+    if streq(src, pm.ns, pm.nl, ns, nl) { return i64(idx) }
+    idx += 1
+    p = pm.next
+  }
+  return -1
 }
 
 ## Architecture-neutral Expr accessors shared by the scalar backends. Keep the scalar returns separate:

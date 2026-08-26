@@ -73,7 +73,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
@@ -95,18 +95,6 @@ count_params := fn(params_head : ptr(mut Param), a : rt::Arena) -> i64 {
   mut k := 0
   while p != 0 { pm := deref(param_p(p)) ; k = k + 1 ; p = pm.next }
   i64(k)
-}
-
-param_find := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> i64 {
-  mut p := params_head
-  mut idx := 0
-  while p != 0 {
-    pm := deref(param_p(p))
-    if streq(src, pm.ns, pm.nl, ns, nl) { return i64(idx) }
-    idx += 1
-    p = pm.next
-  }
-  return -1
 }
 
 ## Single-match `If` accessors — `is` + the then-branch expr. A struct-valued if-EXPRESSION
