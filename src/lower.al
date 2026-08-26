@@ -745,7 +745,13 @@ mut DCV_N : usize = 0
 ## there instead of guessing; `reject_callee_ambiguous` turns it into a located diagnostic at the one
 ## emit site that mangles a call, so the ambiguity cannot fail silently either way.
 callee_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize) -> i64 {
-  callee_decl_ranked(decls, src, cs, cl, ms, ml, true)
+  idx := callee_decl_ranked(decls, src, cs, cl, ms, ml, true)
+  if idx >= 0 { return idx }
+  ## A named alias (`f := M::g`) has no function declaration under the spelling `f`, so the
+  ## ordinary name scan necessarily returns -1. Resolve the binding before the emitter falls back to
+  ## `<caller>__f`; otherwise a valid cross-module function alias becomes an undefined caller-module
+  ## symbol. `binding_callee_idx` also preserves the explicit RHS tail for nested module paths.
+  binding_callee_idx(decls, src, cs, cl, ms, ml)
 }
 ## The same resolution for a QUALIFIED callee, whose `ms`/`ml` is the spelled module HEAD rather than
 ## the calling module: an ancestor-chain rank of the CALLER means nothing there. A one-segment module
@@ -2672,16 +2678,23 @@ emit_mangled_call := fn(in out sb : strbuf::StrBuf, src : ptr(u8), cs : usize, c
     ## every call that does resolve, so this costs one hash probe on the failing path only).
     reject_callee_ambiguous(decls, src, cs, cl, ms, ml)
     idx := callee_decl_idx(decls, src, cs, cl, ms, ml)
+    mut out_ns := cs
+    mut out_nl := cl
     if idx >= 0 {
       cd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(idx))))
       ## `@extern` callee (Modules §7): emit the EXTERNAL symbol, not the mangled name.
       esn := extern_symbol(src, cd.name_start, cd.name_len)
       if esn.n != 0 { push_str(sb, str_at((src + esn.s), esn.n)); return }
       emit_mod_qual(sb, src, cd.mod_start, cd.mod_len)
+      ## A named binding may resolve the source spelling to a differently named declaration
+      ## (`h := lower::a::a_helper`). Keep the defining module AND the defining tail; emitting
+      ## `lower__a__h` would merely move the original undefined-symbol bug to another module.
+      out_ns = cd.name_start
+      out_nl = cd.name_len
     } else {
       emit_mod_qual(sb, src, ms, ml)
     }
-    push_str(sb, str_at((src + cs), cl))
+    push_str(sb, str_at((src + out_ns), out_nl))
   }
 }
 
@@ -25160,7 +25173,12 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
         }
       } else {
         nm := callee_name_span(src, cs, cl)
-        mark_name(rb, decls, src, nm.s, nm.n)
+        ## A named alias (`h := lower::a::a_helper`) has no declaration named `h` for the
+        ## basename over-approximation to retain. Mark its resolved target explicitly, or DCE drops
+        ## the defining function even though emit_mangled_call now routes the call there. Keep the
+        ## historical mark_name over-approximation for ordinary calls and unresolved/intrinsic names.
+        bi := binding_callee_idx(decls, src, nm.s, nm.n, _mark_ms, _mark_ml)
+        if bi >= 0 { rb_set(rb, usize(bi), 1) } else { mark_name(rb, decls, src, nm.s, nm.n) }
       }
       ## USER CONVERSION-CONSTRUCTOR `T(v)` (Types §4.6 / TYP-6): the callee `T` names no fn, so
       ## `mark_name` marked nothing — but an in-scope `@convert fn(…) -> T` is the real callee. Mark it

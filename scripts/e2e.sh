@@ -3321,6 +3321,10 @@ root_package_test module_global_collision_scalar "T main__main" "T left__limit" 
 ## FN-6 qualified function value across sibling modules: direct and indirect `hex::encode` calls
 ## must select hex rather than the same-tail base64 declaration and both package entry paths agree.
 root_package_test fn_value_qualified "T _start" "T main__main" "T main__apply" "T hex__encode" "T base64__encode"
+## Modules §§4.1/6.1 — a named function-value alias keeps both the defining module and defining tail:
+## `h := lower::a::a_helper; h()` must call `lower__a__a_helper`, not an undefined alias symbol in
+## `lower__b` (or a caller-module fallback). The row also proves reachability retains the resolved fn.
+root_package_test qualified_fn_alias "T _start" "T main__main" "T lower__b__run" "T lower__a__a_helper"
 run_x86 global_str_bytes_view 42
 check_accept global_str_bytes_view
 run_x86 global_bytes_initializer 42

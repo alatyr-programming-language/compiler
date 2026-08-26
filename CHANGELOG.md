@@ -33,6 +33,8 @@ how this repository proves itself, not part of what it ships.
 - Made non-x86 entry exclusion explicit so backend wrappers cannot collide with a source `_start`.
 - Fixed path dependencies whose source tree contains `lib/`: their modules now retain the dependency
   alias instead of being mistaken for ambient standard-library modules.
+- Fixed qualified function-value aliases through nested module paths so direct calls resolve to the
+  defining function instead of an undefined importing-module symbol.
 - AArch64 now supports scalar nested field access through inferred homogeneous struct-array locals
   with runtime indices.
 - AArch64 now supports whole aggregate-element writes through inferred homogeneous struct-array locals
