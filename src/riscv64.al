@@ -3345,15 +3345,43 @@ mut RV_SRET_DST_IND := false
 ## and RV_AGG_LIM to the frame top; each materialized slice arg grabs the next 16 bytes. Overflow = loud ebreak.
 mut RV_AGG := 0
 mut RV_AGG_LIM := 0
-## MATCH-over-INDEX temp region (§8 enum slice-param): a `match s[i]` on an enum `Slice(E)` PARAM
-## materializes the by-reference element's enum words into this reserved frame region, then matches on it.
+## MATCH scratch region (§8 enum slice-param / enum PARAM): materialized by-reference enum words live in
+## this per-fn frame region. A nested payload match must not overwrite its enclosing match, so the region
+## has two lexical levels. A third level is rejected by a generation-time panic rather than lowered with
+## overlapping storage. RV_MTMP is the region start; RV_MTMP_STRIDE is one level's word span.
 mut RV_MTMP := 0
+mut RV_MTMP_STRIDE : i64 = 0
+mut RV_MDEPTH : i64 = 0
 ## Current MATCH-ARM enum context (§8 piece 3b) — set/restored per arm in emit_rv_match_arms so an
 ## aggregate payload BINDING (`pt.x`, nested `match i`) resolves its type + frame offset (bind_base + 8).
 mut RV_ARM_ENS := 0
 mut RV_ARM_ENL := 0
 mut RV_ARM_VS := 0
 mut RV_ARM_VL := 0
+## The active arm-binding stack. Recursive arm emission passes only the innermost Bind list to emitters,
+## while a nested payload body can still refer to an outer binding. Direct inner bindings retain shadowing
+## precedence; saved outer lists provide lexical visibility after the inner lookup misses.
+mut RV_BIND_DEPTH : i64 = 0
+mut RV_BIND_HEADS : [usize; 32] = [0; 32]
+mut RV_BIND_BASES : [i64; 32] = [0; 32]
+
+rv_bind_push := fn(head : ptr(mut Bind), base : i64) {
+  if unchecked bitcast(usize, head) != 0 {
+    if RV_BIND_DEPTH >= 32 { panic("riscv64: match binding nesting exceeds 32 levels") }
+    RV_BIND_HEADS[RV_BIND_DEPTH] = unchecked bitcast(usize, head)
+    RV_BIND_BASES[RV_BIND_DEPTH] = base
+    RV_BIND_DEPTH = RV_BIND_DEPTH + 1
+  }
+}
+
+rv_bind_pop := fn(head : ptr(mut Bind)) {
+  if unchecked bitcast(usize, head) != 0 { RV_BIND_DEPTH = RV_BIND_DEPTH - 1 }
+}
+
+rv_match_tmp_offset := fn() -> i64 {
+  if RV_MDEPTH >= 2 { panic("riscv64: enum match scratch nesting exceeds two levels") }
+  RV_MTMP + RV_MDEPTH * RV_MTMP_STRIDE
+}
 ## The AGGREGATE payload-type span of binding `[ns,nl]` — non-0/0 only when it is the CURRENT arm's SINGLE
 ## payload binding AND the variant payload type is a struct / enum / str (§8 piece 3b).
 rv_bind_agg_span := fn(bind_head : ptr(mut Bind), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
@@ -3521,7 +3549,21 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
     Expr::BoolLit(v) => { push_str(sb, "  li a0, ") ; push_int(sb, i64(v)) ; push_str(sb, "\n") }
     Expr::Var(ns, nl) => {
       ## BIND > PARAM > GLOBAL > LOCAL, flat standalone ifs. A bare struct-local Var has no scalar value → brk.
-      bidx := bind_list_index(bind_head, src, ns, nl, a)
+      mut bidx := bind_list_index(bind_head, src, ns, nl, a)
+      mut bbase := bind_base
+      ## Recursive arm emission replaces bind_head with the inner arm's list. If the name is not in
+      ## that list, walk the saved outer lists so `pa` remains visible inside `match b`.
+      if bidx < 0 and RV_BIND_DEPTH > 0 {
+        mut bi := RV_BIND_DEPTH
+        while bi > 0 and bidx < 0 {
+          bi = bi - 1
+          bh := unchecked bitcast(ptr(mut Bind), RV_BIND_HEADS[bi])
+          if unchecked bitcast(usize, bh) != 0 {
+            bx := bind_list_index(bh, src, ns, nl, a)
+            if bx >= 0 { bidx = bx ; bbase = RV_BIND_BASES[bi] }
+          }
+        }
+      }
       isstruct := rv_local_struct_nl(body_head, src, ns, nl, a) != 0
       isarray := rv_is_array_local(body_head, src, ns, nl, a)
       isagg := isstruct or isarray
@@ -3533,7 +3575,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       if pidx >= 0 { if rv_param_out_scalar(params_head, src, decls, pidx) { outscalar = true } }
       useframe := (bidx < 0) and (not isagg) and (not outscalar) and ((pidx >= 0) or (voff >= 0 and (not isglob)))
       gname := str_at((src + ns), nl)
-      if bidx >= 0 { push_str(sb, "  ld a0, ") ; push_int(sb, bind_base + (bidx + 1) * 8) ; push_str(sb, "(s0)\n") }
+      if bidx >= 0 { push_str(sb, "  ld a0, ") ; push_int(sb, bbase + (bidx + 1) * 8) ; push_str(sb, "(s0)\n") }
       if outscalar { push_str(sb, "  ld t1, ") ; push_int(sb, voff) ; push_str(sb, "(s0)\n  ld a0, 0(t1)\n") }
       if useframe { push_str(sb, "  ld a0, ") ; push_int(sb, voff) ; push_str(sb, "(s0)\n") }
       if (bidx < 0) and (not isagg) and (not outscalar) and (not useframe) and isglob {
@@ -4416,10 +4458,13 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       if paramok {
         pensM := rv_param_enum_ns(params_head, src, sns, snl, decls)
         wM := 1 + i64(enum_max_arity(decls, src, pensM, penlM, a))
+        mtmpM := rv_match_tmp_offset()
         push_str(sb, "  ld t0, ") ; push_int(sb, 16 + pidxM * 8) ; push_str(sb, "(s0)\n")
         mut km := 0
-        while km < wM { push_str(sb, "  ld a0, ") ; push_int(sb, km * 8) ; push_str(sb, "(t0)\n  sd a0, ") ; push_int(sb, RV_MTMP + km * 8) ; push_str(sb, "(s0)\n") ; km = km + 1 }
-        emit_rv_match_arms(arms, pensM, penlM, RV_MTMP, endid, sb, a, src, params_head, pcount, body_head, decls, 0 - 1)
+        while km < wM { push_str(sb, "  ld a0, ") ; push_int(sb, km * 8) ; push_str(sb, "(t0)\n  sd a0, ") ; push_int(sb, mtmpM + km * 8) ; push_str(sb, "(s0)\n") ; km = km + 1 }
+        RV_MDEPTH = RV_MDEPTH + 1
+        emit_rv_match_arms(arms, pensM, penlM, mtmpM, endid, sb, a, src, params_head, pcount, body_head, decls, 0 - 1)
+        RV_MDEPTH = RV_MDEPTH - 1
         push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
       }
       if bindok {
@@ -4681,9 +4726,11 @@ emit_rv_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, endi
           ocvs := RV_CFVAR_S ; ocvl := RV_CFVAR_L ; obV := RV_ARM_BINDS
           RV_ARM_ENS = ens ; RV_ARM_ENL = enl ; RV_ARM_VS = vfm.ns ; RV_ARM_VL = vfm.nl
           RV_CFVAR_S = vfm.ns ; RV_CFVAR_L = vfm.nl ; RV_ARM_BINDS = unchecked bitcast(usize, am.binds_head)
+          rv_bind_push(am.binds_head, eoff)
           if hasexprV { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
           if dostmtV { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
           if (not hasexprV) and (not dostmtV) { push_str(sb, "  ebreak\n") }
+          rv_bind_pop(am.binds_head)
           RV_ARM_ENS = oensV ; RV_ARM_ENL = oenlV ; RV_ARM_VS = ovsV ; RV_ARM_VL = ovlV
           RV_CFVAR_S = ocvs ; RV_CFVAR_L = ocvl ; RV_ARM_BINDS = obV
           push_str(sb, "  j .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
@@ -4720,9 +4767,11 @@ emit_rv_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, endi
     RV_ARM_VS = evs
     RV_ARM_VL = evl
     RV_ARM_BINDS = unchecked bitcast(usize, am.binds_head)
+    rv_bind_push(am.binds_head, eoff)
     if am.wild != 2 and hasexpr { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
     if am.wild != 2 and dostmt { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
     if am.wild != 2 and (not hasexpr) and (not dostmt) { push_str(sb, "  ebreak\n") }
+    rv_bind_pop(am.binds_head)
     RV_ARM_ENS = oens
     RV_ARM_ENL = oenl
     RV_ARM_VS = ovs
@@ -6130,11 +6179,14 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             if RV_CHK { push_str(sb, "  ld a3, ") ; push_int(sb, pslot) ; push_str(sb, "(s0)\n  ld a1, 8(a3)\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
             push_str(sb, "  ld a3, ") ; push_int(sb, pslot) ; push_str(sb, "(s0)\n  ld a2, 0(a3)\n  li a1, ") ; push_int(sb, stride * 8) ; push_str(sb, "\n  mul a0, a0, a1\n  add a2, a2, a0\n")
             mut ck := 0
+            mtmpI := rv_match_tmp_offset()
             while ck < stride {
-              push_str(sb, "  ld a0, ") ; push_int(sb, ck * 8) ; push_str(sb, "(a2)\n  sd a0, ") ; push_int(sb, RV_MTMP + ck * 8) ; push_str(sb, "(s0)\n")
+              push_str(sb, "  ld a0, ") ; push_int(sb, ck * 8) ; push_str(sb, "(a2)\n  sd a0, ") ; push_int(sb, mtmpI + ck * 8) ; push_str(sb, "(s0)\n")
               ck = ck + 1
             }
-            emit_rv_match_arms(arms, ees.s, ees.n, RV_MTMP, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+            RV_MDEPTH = RV_MDEPTH + 1
+            emit_rv_match_arms(arms, ees.s, ees.n, mtmpI, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+            RV_MDEPTH = RV_MDEPTH - 1
             push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
           }
         }
@@ -6153,10 +6205,13 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         if paramok {
           pensM := rv_param_enum_ns(params_head, src, sns, snl, decls)
           wM := 1 + i64(enum_max_arity(decls, src, pensM, penlM, a))
+          mtmpM := rv_match_tmp_offset()
           push_str(sb, "  ld t0, ") ; push_int(sb, 16 + pidxM * 8) ; push_str(sb, "(s0)\n")
           mut km := 0
-          while km < wM { push_str(sb, "  ld a0, ") ; push_int(sb, km * 8) ; push_str(sb, "(t0)\n  sd a0, ") ; push_int(sb, RV_MTMP + km * 8) ; push_str(sb, "(s0)\n") ; km = km + 1 }
-          emit_rv_match_arms(arms, pensM, penlM, RV_MTMP, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+          while km < wM { push_str(sb, "  ld a0, ") ; push_int(sb, km * 8) ; push_str(sb, "(t0)\n  sd a0, ") ; push_int(sb, mtmpM + km * 8) ; push_str(sb, "(s0)\n") ; km = km + 1 }
+          RV_MDEPTH = RV_MDEPTH + 1
+          emit_rv_match_arms(arms, pensM, penlM, mtmpM, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+          RV_MDEPTH = RV_MDEPTH - 1
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
         }
         if bindok {
@@ -6608,6 +6663,10 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   ## materialization writes past the frame top into the CALLER's frame (a raw fault, not a clean trap).
   pemt := rv_param_enum_tmp_words(ephead, src, decls, a)
   if pemt > mtmp { mtmp = pemt }
+  ## Nested enum matches need an independent scratch block for the inner materialization. Reserve two
+  ## lexical levels; rv_match_tmp_offset rejects a deeper shape instead of allowing silent overlap.
+  mtmp_stride := mtmp
+  if mtmp > 0 { mtmp = mtmp * 2 }
   ## WIDE-STRUCT SRET (LP64 indirect result): a fn returning a PLAIN struct of > 8 words takes the caller's
   ## destination pointer in a0 and must SPILL it to a reserved frame word (it has to survive nested calls
   ## and register churn up to every Return point). A generic INSTANCE is classified from its substituted
@@ -6650,6 +6709,9 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   RV_AGG = 16 + (pcount + nloc) * 8
   RV_AGG_LIM = 16 + (pcount + nloc + 2 * nsargs + naggw) * 8
   RV_MTMP = 16 + (pcount + nloc + 2 * nsargs + naggw) * 8
+  RV_MTMP_STRIDE = mtmp_stride * 8
+  RV_MDEPTH = 0
+  RV_BIND_DEPTH = 0
   ## `@abi(naked)` (spec ch.80): label + raw body (asm() lines) + trailing value only; no prologue/epilogue.
   if rv_fn_is_naked(src, d.name_start, d.name_len) {
     emit_rv_export(sb, src, d.name_start, d.name_len)
