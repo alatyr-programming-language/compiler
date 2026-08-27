@@ -100,9 +100,11 @@ their PR evidence and acceptance record still provide the full description.
 - The gate runs on the locally merged result, not the contributor branch. Re-derive the evidence, gate
   that merge, and push exactly the object that passed. Never re-merge or modify it between gate and push.
 - Hosted CI or pull-request status is not authoritative; the local full gate is the only landing verdict.
-- After a successful landing, the integrator removes an accepted same-repository feature branch and
-  records the acceptance and branch outcome on GitHub. A fork-owned branch is not deleted through the
-  upstream repository.
+- After a successful landing, the integrator removes the accepted same-repository remote feature
+  branch and, only when its local tip exactly equals the landed PR head and its dedicated worktree is
+  clean, removes the matching local worktree and branch too. A dirty, diverged, or ambiguous local
+  checkout is retained and reported; never force-delete it. A fork-owned branch is not deleted through
+  the upstream repository, and its name is not used to clean local state.
 
 ## What the gates prove
 

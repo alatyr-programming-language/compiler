@@ -198,6 +198,8 @@ if [ "$DO_PUSH" = 1 ]; then
     exit 1
   }
   verdict "LANDED — main is now $M"
-  echo "The branch deletion is deliberately NOT chained to this push. Run it yourself, above."
+  echo "The remote branch deletion is deliberately NOT chained to this push. Run it yourself, above."
+  echo "After remote deletion, follow alatyr-integrate §5 to inspect and clean the matching local"
+  echo "feature worktree and branch; retain dirty, diverged, or ambiguous local state."
 fi
 exit 0

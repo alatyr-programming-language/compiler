@@ -254,9 +254,14 @@ unscoped `git switch`: a caller's working directory is control-plane state, and 
 change the launcher branch or any user-owned worktree. Stop before editing if either top-level or
 launcher invariant fails.
 
-Budget ~150 MB of build artifacts. Drop it with `git worktree remove` when done — deleting the
-directory leaves a broken registry entry. **Never `git stash`**: it is one ref for the whole
-repository and two trees stashing at the same moment swap each other's uncommitted work.
+Budget ~150 MB of build artifacts. A lane-created worktree and its feature branch remain available to
+the integrator after a pull request is opened; do not remove either as part of the lane's completion.
+After a successful landing, `alatyr-integrate` removes the matching clean worktree and local branch
+under its exact-head checks. If work is abandoned before a pull request exists, the lane may remove
+only its own clean worktree and branch after releasing its own claim; never use `--force` or delete a
+worktree that contains uncommitted work. Deleting only the directory leaves a broken registry entry.
+**Never `git stash`**: it is one ref for the whole repository and two trees stashing at the same moment
+swap each other's uncommitted work.
 
 Never move a built compiler out of a directory with `../lib` beside it — `lib_dir` is
 `dirname(/proc/self/exe)/../lib`, and the stdlib injection disappears silently.
