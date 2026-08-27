@@ -3387,6 +3387,24 @@ rv_is_float_cmp := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a
   }
   r
 }
+
+## A direct LOCAL whose concrete, non-generic enum type has no payload words. Such a value is exactly
+## its discriminant, so ==/!= may use the ordinary scalar compare without losing structural content.
+## Var-only through ex_var_* + local-only through rv_local_enum_*: params, fields, indexes and calls
+## remain outside this classification, while a payload-bearing or generic enum stays aggregate.
+rv_is_unit_enum_local := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+  ns := ex_var_ns(e)
+  nl := ex_var_nl(e)
+  if nl == 0 { return false }
+  en := rv_local_enum_nl(body_head, src, ns, nl, a)
+  if en == 0 { return false }
+  es := rv_local_enum_ns(body_head, src, ns, nl, a)
+  di := enum_decl_of(decls, src, es, en)
+  if di < 0 { return false }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  if d.is_generic { return false }
+  enum_max_arity(decls, src, es, en, a) == 0
+}
 ## Is `e` a bare PLACE whose a0 word is an aggregate BASE ADDRESS (a struct/array/slice PARAM, whose
 ## frame slot holds the caller's block address) or only word 0 of a wider value (an ENUM local/param,
 ## whose word 0 is the DISCRIMINANT)? Either way the word is NOT the value, so the `sub`/`sltu` compare
@@ -3424,6 +3442,9 @@ rv_is_agg_cmp := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a :
   match deref(e) {
     Expr::Bin(op, l, rr) => {
       if ex_is_cmp_op(op) {
+        ## For two concrete payload-less enum LOCALS, word 0 is the whole structural value. Keep every
+        ## other enum form loud, including ordering over these locals.
+        if (op == 20 or op == 28) and rv_is_unit_enum_local(l, body_head, src, a, decls) and rv_is_unit_enum_local(rr, body_head, src, a, decls) { return false }
         if rv_is_agg_place(l, params_head, body_head, src, a, decls) { r = true }
         if rv_is_agg_place(rr, params_head, body_head, src, a, decls) { r = true }
         if rv_is_agg_index(l, src, a, decls) { r = true }
