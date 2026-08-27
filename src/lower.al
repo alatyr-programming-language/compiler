@@ -1415,19 +1415,18 @@ slice_view_cmp_kind := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize
     if slice_arr_eek(e, cx.slots, cx.src) != 0 { return 2 }
     return 1
   }
-  ## A `Slice(T)` STRUCT FIELD (`p.v`) is also a two-word view, but it is an Expr::Field rather than a
-  ## Var, so the slot-entry path below cannot classify it. Reuse `str_field_place` for the proven pair
-  ## address and `pair_field_elem_stride` for the element representation. Only an 8-byte, one-word
-  ## element reaches the word comparer; byte-packed and aggregate elements stay fail-loud. The emitter
-  ## below calls `emit_str_pair`, so both the inline-local and by-reference-struct-field pair layouts
-  ## use the same already-proven materialization path.
+  ## A `Slice(T)` STRUCT FIELD (`p.v` / nested `p.q.v`) is also a two-word view, but it is an Expr::Field
+  ## rather than a Var, so the slot-entry path below cannot classify it. Reuse `str_field_place` for the
+  ## proven pair address and resolve the FINAL field against its immediate base struct; the old
+  ## depth-1 slot-entry lookup missed nested fields. Only an 8-byte, one-word element reaches the word
+  ## comparer; byte-packed and aggregate elements stay fail-loud. The emitter below calls `emit_str_pair`,
+  ## so both the inline-local and by-reference-struct-field pair layouts use the same materialization path.
   sfp := str_field_place(e, cx, a)
   if sfp.found {
     fp := field_place_parts(e)
-    bv := field_base_var(fp.base)
-    if bv.ok {
-      se := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-      fts := field_type_span(cx.decls, cx.src, se.sns, se.snl, fp.fs, fp.fl, a)
+    bt := base_struct_span(fp.base, cx)
+    if bt.n != 0 {
+      fts := field_type_span(cx.decls, cx.src, bt.s, bt.n, fp.fs, fp.fl, a)
       ftb := base_type_name(cx.src, fts.s, fts.n)
       if str_at((cx.src + ftb.s), ftb.n) == "Slice" {
         if pair_field_elem_stride(e, cx, a) == 8 { return 1 }
@@ -19059,9 +19058,9 @@ var_has_tcomps := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
 pair_field_elem_stride := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> i64 {
   if str_field_place(base, cx, a).found == false { return 0 }
   fp := field_place_parts(base)
-  bv := field_base_var(fp.base)
-  se := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-  fts := field_type_span(cx.decls, cx.src, se.sns, se.snl, fp.fs, fp.fl, a)
+  bt := base_struct_span(fp.base, cx)
+  if bt.n == 0 { return 0 }
+  fts := field_type_span(cx.decls, cx.src, bt.s, bt.n, fp.fs, fp.fl, a)
   if str_at((cx.src + fts.s), fts.n) == "str" { return 1 }
   eta := typearg_at(cx.src, fts.s, fts.n, 0)
   if eta.n == 0 { return 8 }
