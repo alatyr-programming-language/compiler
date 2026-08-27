@@ -252,6 +252,38 @@ test "$PR_SNAPSHOT_AFTER_PUSH" = "$PR_SNAPSHOT" || {
 }
 ```
 
+The published object must also leave the launcher's local `main` reference synchronized. This is
+bookkeeping, not a substitute for the remote push or the gate. Do it only after the push and only as
+a checked fast-forward: never overwrite a diverged local branch, and do not move a `main` checked out
+in another worktree. Record `MAIN_REF_OUTCOME` in the acceptance comment.
+
+```sh
+LOCAL_MAIN="$(git rev-parse --verify refs/heads/main 2>/dev/null || true)"
+MAIN_WORKTREE="$({
+  git worktree list --porcelain |
+    awk '
+      /^worktree / { path = substr($0, 10) }
+      /^branch refs\/heads\/main$/ { print path; exit }
+    '
+} || true)"
+CURRENT_TOP="$(git rev-parse --show-toplevel)"
+if test -z "$LOCAL_MAIN"; then
+  MAIN_REF_OUTCOME="local main ref absent; no local ref changed"
+elif test -n "$MAIN_WORKTREE" && test "$MAIN_WORKTREE" != "$CURRENT_TOP"; then
+  MAIN_REF_OUTCOME="local main retained: checked out in another worktree"
+elif test "$(git branch --show-current)" = main; then
+  test "$(git rev-parse HEAD)" = "$M" || git merge --ff-only "$M"
+  test "$(git rev-parse refs/heads/main)" = "$M"
+  MAIN_REF_OUTCOME="checked-out local main fast-forwarded and verified"
+elif git merge-base --is-ancestor "$LOCAL_MAIN" "$M"; then
+  git update-ref refs/heads/main "$M" "$LOCAL_MAIN"
+  test "$(git rev-parse refs/heads/main)" = "$M"
+  MAIN_REF_OUTCOME="local main ref fast-forwarded and verified"
+else
+  MAIN_REF_OUTCOME="local main retained: diverged from the gated object"
+fi
+```
+
 For a PR whose head is in this repository, delete the remote feature branch and then clean the matching
 local branch/worktree as **separate commands with their own preconditions**, never chained to the push.
 The local cleanup is deliberately conservative: it is performed only for the exact PR head, an already
@@ -395,6 +427,7 @@ Accepted and landed by the maintainer.
 - gated main object: \`$M\`
 - authoritative gate: GREEN (sweeps RAN)
 - oracle changes: <none, or the separately gated oracle commit(s)>
+- local main: \`$MAIN_REF_OUTCOME\`
 - feature branch: \`$BRANCH\` $BRANCH_OUTCOME
 - issue relation: <Closes/Fixes/Resolves #<issue>, or Refs #<issue> — bounded slice: <landed scope>; residual: <remaining scope>>
 - worker claim: <removed and verified, already absent and verified, or retained because ownership was uncertain or another named worker/PR owns the residual>
