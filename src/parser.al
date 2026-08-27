@@ -83,19 +83,6 @@ pub cur := fn(pc : PC) -> Token { tok_at(pc, pc.idx) }
 ## Is the cursor on the **keyword** `w`? The lexer tags every keyword with one kind (2,
 ## `is_kw`), so keyword **identity** is resolved here by comparing the token's lexeme to
 ## `w` (`str_at` over the source span). This is what lets the parser branch on `if` /
-## The byte width (1/2/4) of a KNOWN sub-word scalar type named `[s, s+n)`, or 0 for a word-sized /
-## unknown name. Mirrors `lower_layout::scalar_byte_size`'s sub-word rows; the parser uses it to
-## decide whether a `bitcast(ptr(<name>), v)` must be PRESERVED (name is sub-word) or identity-erased
-## (name is word-sized/aggregate/unknown → 0). Kept in sync with `scalar_byte_size`.
-subword_scalar_bytes := fn(src : ptr(u8), s : usize, n : usize) -> usize {
-  if n == 0 { return 0 }
-  t := str_at((src + s), n)
-  if t == "u8" or t == "i8" or t == "bool" { return 1 }
-  if t == "u16" or t == "i16" { return 2 }
-  if t == "u32" or t == "i32" or t == "char" or t == "f32" { return 4 }
-  0
-}
-
 ## A bare built-in SCALAR or `str` type NAME — the set of `bitcast` targets that stay IDENTITY-erased
 ## (a register no-op / a 2-word value the return-slot coercion already types). Everything else that is
 ## a bare identifier is a USER type name (a struct), whose `bitcast` target must be PRESERVED so a
@@ -1794,7 +1781,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         pc.idx = pc.idx + 1               ## ','
         bv := p_or(pc)                    ## the value — bitcast is identity (same bits)
         pc.idx = pc.idx + 1               ## ')'
-        if sawptr and subword_scalar_bytes(pc.src, pps, ppl) != 0 {
+        if sawptr and scalar_width::subword_bytes(pc.src, pps, ppl) != 0 {
           return newnode(pc.arena, Expr.Bitcast(bv, pps, ppl))
         }
         ## An aggregate→aggregate reinterpret to a bare USER type name (a struct — NOT a scalar/`str`/
