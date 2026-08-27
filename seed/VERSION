@@ -1162,3 +1162,16 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # Promoted `seed/alatyr` is Stage2. Pre-promotion merged-object gates: e2e 1862/1862, formatter and
 # idiom gate clean, corpus differed only by the four intentional new-fixture pairs, and a64/rv64/wasm
 # sweeps had no silent miscompiles.
+# Self-promoted 2026-08-27 — standard scalar-field layout for flat ordinary structs (#10). Direct
+# scalar fields now use their natural byte widths, alignment, padding and offsets; unsupported
+# aggregate/layout forms remain fail-loud. The old seed emitted 1080145 GAS lines; Stage1 == Stage2
+# == Stage3 emitted byte-identical GAS at 1080910 lines. The normalized seed→Stage1 delta was 3552
+# hunks (5428 added, 4663 deleted) after local labels, frame-pointer displacements, frame allocation
+# and immediates were normalized. Changed functions were confined to `aarch64`, `driver`, `fmt`,
+# `iface`, `lower`, `lower_attrs`, `lower_layout`, `parser`, `riscv64`, `sema` and `wat`; opcode
+# counts changed only in the expected narrow byte moves and frame push/pop, and all 31936 call
+# targets were unchanged. Stage1 GAS SHA-256: 85cec5bb1f933e76b4990760bc8ae1660e1caade575023d3c5d2b4b801cbba5b.
+# Stage1 binary SHA-256: 7f313d74795e103ee1f4e2efe354e8fa09054dc925c1fd96dfe093c5ed7fc1fb.
+# Stage2 == Stage3 binary SHA-256: 5253f180a3e02b81d2ee27bf45e2d1ab0efd8da69e9d97d2e27b85ee9e638995.
+# Promoted `seed/alatyr` is Stage2. Pre-promotion merged-object gates: e2e 1893/1893, formatter
+# and idiom gate clean, corpus 6832/6832, and a64/rv64/wasm sweeps had no silent miscompiles.
