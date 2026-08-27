@@ -153,7 +153,7 @@ run_expect() {
 }
 
 # Tooling §4 / Stdlib §7 — compiler profile selectors stop at the `run` program-argument separator.
-# The temporary package returns a distinct value for each exact argv token and selected profile, so a
+# The temporary package returns a distinct value for each exact argv shape and selected profile, so a
 # profile-looking token cannot pass by merely preserving argv length or by selecting the wrong profile.
 run_profile_program_args() {
   local tmp="$ROOT/target/profile-program-args"
@@ -193,10 +193,14 @@ main := fn() -> u64 {
   mut ok : u64 = 0
   if av.len == 2 {
     arg := av[1]
-    if arg == "--release" or arg == "--profile release" {
+    if arg == "--release" {
       comptime if build.release_path { ok = 42 } else { ok = 7 }
     } else if arg == "neutral-arg" {
       comptime if build.release_path { ok = 43 } else { ok = 41 }
+    }
+  } else if av.len == 3 {
+    if av[1] == "--profile" and av[2] == "release" {
+      comptime if build.release_path { ok = 42 } else { ok = 7 }
     }
   }
   std::os::free(own)
@@ -218,10 +222,10 @@ EOF
   }
 
   profile_case profile_arg_default_release 7 run package.al -- --release
-  profile_case profile_arg_default_named 7 run package.al -- "--profile release"
+  profile_case profile_arg_default_named 7 run package.al -- --profile release
   profile_case profile_arg_default_neutral 41 run package.al -- neutral-arg
   profile_case profile_arg_explicit_release 42 run --release package.al -- --release
-  profile_case profile_arg_explicit_named 42 run --profile release package.al -- "--profile release"
+  profile_case profile_arg_explicit_named 42 run --profile release package.al -- --profile release
   profile_case profile_arg_explicit_neutral 43 run --release package.al -- neutral-arg
   rm -rf "$tmp"
 }
