@@ -4301,6 +4301,22 @@ sema_type_arg_ok := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bo
   array_type_lit(e, decls, src, es, en) >= 0
 }
 
+## Return the source span of a DIRECT type-builtin argument that names no known type, or 0.  This is
+## deliberately narrower than a general type checker: it covers only a bare NAME in a package-owned
+## nested module.  Qualified paths/aliases, generic type expressions, sibling-private resolution and
+## signature annotations remain separate slices.  A preceding dot identifies the UFCS/value form
+## (`x.size()`), whose first argument is a value rather than a type name and must stay on its existing
+## path.
+sema_package_type_builtin_arg_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> usize {
+  if SEMA_PACKAGE_MODULES_N == 0 or not sema_module_in_package(src, cs, cl) { return 0 }
+  if cs != 0 and str_at((src + cs - 1), 1) == "." { return 0 }
+  ev := expr_var_span(e)
+  if ev.n == 0 { return 0 }
+  if sema_gref_split(src, ev.s, ev.n).qual { return 0 }
+  if not type_name_known(decls, src, ev.s, ev.n) { return ev.s }
+  0
+}
+
 ## Is the callee `[s, s+n)` a BUILT-IN callee — a prelude identifier the lower handles directly rather
 ## than a declared fn? Covers the width/type CASTS (`u32(x)`, `f64(x)`, `bits32(x)`), the
 ## layout/pointer METHODS reached via UFCS `x.m()` → `Call(m, [x])` (`ptr`/`len`/`size`/`align`),
@@ -10800,6 +10816,12 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       cr0 = sema_callee_ambiguous(decls, src, ec0.s, ec0.n, cs, cl)
     }
     mut cg0 := expr_call_args_head(e)
+    if cr0 == 0 and callee_is_type_builtin(src, ec0.s, ec0.n) {
+      if cg0 != 0 {
+        cga0 := deref(arg_p(cg0))
+        cr0 = sema_package_type_builtin_arg_bad(cga0.e, decls, src, cs, cl)
+      }
+    }
     while cg0 != 0 and cr0 == 0 {
       cga0 := deref(arg_p(cg0))
       cr0 = sema_vis_expr(cga0.e, decls, src, cs, cl, locals, nloc, a)

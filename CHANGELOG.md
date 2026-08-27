@@ -56,6 +56,8 @@ how this repository proves itself, not part of what it ships.
   instead of reaching the unsupported word-based global representation.
 - Immutable module-level aggregate initializers that call at runtime now reject before backend emission
   with a located diagnostic instead of silently becoming zero-initialized static storage.
+- Undeclared bare type names used by package nested-module type builtins now reject with a located
+  diagnostic before backend emission instead of silently producing a wrong layout-dependent value.
 
 First public release in preparation. Nothing is tagged yet; the entries below start once it is.
 
