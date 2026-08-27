@@ -1175,3 +1175,16 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # Stage2 == Stage3 binary SHA-256: 5253f180a3e02b81d2ee27bf45e2d1ab0efd8da69e9d97d2e27b85ee9e638995.
 # Promoted `seed/alatyr` is Stage2. Pre-promotion merged-object gates: e2e 1893/1893, formatter
 # and idiom gate clean, corpus 6832/6832, and a64/rv64/wasm sweeps had no silent miscompiles.
+
+# Follow-up self-promoted 2026-08-27 — completed the #10 standard-layout pointer consumers. The
+# first promotion above was held back: its fixpoint was green, but the post-promotion behavioral gate
+# exposed 11 regressions. A pointer-returning field read still used the old word offset, and
+# `deref(p) = Decl(...)` stored only word 0 after `Decl` entered the natural byte layout. The repair
+# uses the shared standard byte-offset oracle and sized stores for direct scalar pointer targets;
+# unsupported aggregate pointer stores remain fail-loud.
+# Stage1 == Stage2 == Stage3 emitted byte-identical GAS at 1082427 lines; GAS SHA-256:
+# 40af11b885aa3b3a2a50fe551ed6536e8b6d518fcc93ff98ef6f72c9e954d45b. Stage1 == Stage2 == Stage3
+# binary SHA-256: 01aef87ee1ca35b893edbe37559a2d926b7be6a932dcedebc085f740c69812cd. Promoted
+# `seed/alatyr` is Stage2. Full gate: e2e 1893/1893 with 2652 assertions; corpus 6832/6832;
+# formatter 1708 programs + 69 modules; idiom findings=55, baseline=69, new=0; sweeps clean:
+# a64 265/310/113, rv64 254/321/113, wasm 280/400/8 (match/trap/reject), missing=0.
