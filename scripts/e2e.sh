@@ -5623,6 +5623,13 @@ run standard_byte_array_elem_control 42
 run standard_byte_array_elem_dynamic 42
 run standard_byte_array_elem_dynamic_control 42
 run reject_standard_byte_array_elem_field 42
+## Issue #170: direct scalar standard-byte struct arrays use the shared byte stride for both
+## construction and indexed places on x86_64. AArch64/RISC-V already match; WAT remains explicitly
+## fail-loud because its array-literal writer has not joined this slice yet.
+run_x86 issue170_array_stride 42
+run_a64 issue170_array_stride 42
+run_rv64 issue170_array_stride 42
+run_wat issue170_array_stride 134
 check_build_located reject_standard_byte_param 17 "check: invalid"
 check_build_located reject_standard_byte_field_by_value 22 "check: invalid"
 check_build_located reject_standard_byte_nested_field_addr 19 "check: invalid"

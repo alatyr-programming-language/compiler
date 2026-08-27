@@ -3428,6 +3428,20 @@ wat_standard_byte_abi_fence := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize
   true
 }
 
+## A direct scalar standard-byte struct array literal is not yet emitted byte-precisely by this WAT
+## initializer. Keep the existing fail-loud policy at the construction boundary until that backend has
+## the same literal writer as x86_64/AArch64/RISC-V; indexed WAT access must never meet a word-strided
+## literal image and return a wrong value.
+wat_array_lit_standard_byte_fence := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+  eh := ex_array_lit_ehead(v)
+  if eh == 0 { return false }
+  ga := deref(arg_p(eh))
+  sp := expr_struct_name(ga.e)
+  if sp.n == 0 { return false }
+  if not std_array_elem_byte_tier(decls, src, sp.s, sp.n, a) { return false }
+  wat_standard_byte_abi_fence(decls, src, sp.s, sp.n, a)
+}
+
 ## Is the ACTIVE field of struct `[s,n)` a scalar value rather than merely a one-word field? A nested
 ## struct/enum (and `[T;1]` / a tuple with one word) can occupy one word in the layout while its value
 ## representation is still an aggregate address in the WAT emitter. `field_words == 1` alone therefore
@@ -5520,6 +5534,11 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
             k += 1
             g = ga.next
           }
+          s = nx
+        } else if ex_is_array_lit(v) and wat_array_lit_standard_byte_fence(v, decls, src, a) {
+          ## The WAT array literal writer still has word-positioned struct stores for this tier. Trap
+          ## at the construction site rather than let the byte-strided indexed reader observe garbage.
+          push_str(sb, "    (unreachable) (; unsupported standard-byte struct array literal ;)\n")
           s = nx
         } else if ex_is_array_lit(v) {
           ## array construction `a := [e0, …]`: bump nel*estride words, store each element at base +

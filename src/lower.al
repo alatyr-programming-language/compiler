@@ -103,7 +103,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, std_array_elem_byte_tier) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -4803,6 +4803,12 @@ fixed_array_byte_eek := fn(src : ptr(u8), ns : usize, nl : usize) -> u8 {
 ## `slots` (a `ptr(SVec)`) resolves a POINTER element `[ptr(mut b0), …]` to its pointee struct span;
 ## it may be 0 (the IR-scan caller has no frame yet) — the ptr-element branch then folds to the scalar
 ## default, byte-identical (an AddrOf element is never const, so the IR barrier rejects it anyway).
+## This x86 slice admits only a direct scalar standard-byte struct as an array element. Byte-array and
+## nested aggregate elements remain behind the existing array-element fence.
+std_array_direct_scalar_byte_tier := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, a : rt::Arena) -> bool {
+  std_array_elem_byte_tier(decls, src, ts, tl, a) and not std_struct_has_byte_layout(decls, src, ts, tl, a)
+}
+
 arr_elem_info := fn(ehead : ptr(mut Arg), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, slots : ptr(SVec)) -> AElem {
   mut res := AElem(eek = 0, ess = 0, esl = 0, stride = 1)
   if ehead == 0 { return res }
@@ -4822,9 +4828,13 @@ arr_elem_info := fn(ehead : ptr(mut Arg), src : ptr(u8), decls : ptr(rt::Vec), a
     ## → NEUTRAL for every non-packed struct array (byte-identical) and for the self-build (no `@packed`
     ## in `src/`/`lib/`). Removing this panic is the entry point for a real byte-strided packed-array tier.
     if is_packed(decls, src, si.ss, si.sl) { panic("selfhost: an array whose element is a @packed struct is not supported (byte-precise element stride + packed field offsets would need byte-granular array addressing, a deferred slice); rejected rather than silently miscompiled to a word-padded layout") }
-    if std_struct_has_byte_layout(decls, src, si.ss, si.sl, a) { panic("selfhost: an array whose element is a standard-layout byte aggregate is not yet supported (byte-precise element stride + aggregate consumers need a dedicated tier); rejected rather than silently miscompiled to a word-padded layout") }
-    nf := struct_words(decls, src, si.ss, si.sl, a)
-    res = AElem(eek = 2, ess = si.ss, esl = si.sl, stride = nf)
+    if std_array_direct_scalar_byte_tier(decls, src, si.ss, si.sl, a) {
+      res = AElem(eek = 2, ess = si.ss, esl = si.sl, stride = array_elem_word_reservation(decls, src, si.ss, si.sl, a))
+    } else {
+      if std_struct_has_byte_layout(decls, src, si.ss, si.sl, a) { panic("selfhost: an array whose element is a standard-layout byte aggregate is not yet supported (byte-precise element stride + aggregate consumers need a dedicated tier); rejected rather than silently miscompiled to a word-padded layout") }
+      nf := struct_words(decls, src, si.ss, si.sl, a)
+      res = AElem(eek = 2, ess = si.ss, esl = si.sl, stride = nf)
+    }
   } else if ei.is_e {
     mx := enum_inst_words(decls, src, ei.es, ei.el, a)
     res = AElem(eek = 3, ess = ei.es, esl = ei.el, stride = 1 + mx)
@@ -18534,6 +18544,42 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
     emit_tuple_byte_assign(v, base, sb, cx, a, nl)
     return
   }
+  ## STANDARD BYTE-STRUCT ARRAY INIT. The indexed place resolver already scales by the shared
+  ## `layout_elem_stride_bytes`; the old literal path instead gave every struct literal a separate
+  ## word base. Clear the reserved carrier once, then write each direct scalar element at the same
+  ## byte stride and through the same standard-layout field writer used by indexed places.
+  sbslot := standard_byte_array_slot_for_off(base, cx, a)
+  if sbslot >= 0 {
+    ent := deref(svec_at(SlotEntry, cx.slots, usize(sbslot)))
+    strideb := layout_elem_stride_bytes(cx.decls, cx.src, ent.sns, ent.snl, a)
+    reserve := array_elem_word_reservation(cx.decls, cx.src, ent.sns, ent.snl, a)
+    match deref(v) {
+      Expr::ArrayLit(nel, ehead) => {
+        mut z := 0
+        nw := nel * reserve
+        while z < nw {
+          push_str(sb, "  movq $0, -")
+          push_int(sb, (base - i64(z) + 1) * 8)
+          push_str(sb, "(%rbp)\n")
+          z += 1
+        }
+        mut g := ehead
+        mut k := 0
+        while g != 0 {
+          ga := deref(arg_p(g))
+          si := struct_lit_info(ga.e)
+          if si.is_s == false or not streq(cx.src, si.ss, si.sl, ent.sns, ent.snl) {
+            panic("selfhost: a direct scalar standard-byte array literal must contain elements of its declared struct type")
+          }
+          emit_standard_value(ga.e, base, i64(k) * i64(strideb), sb, cx, a, nl)
+          k += 1
+          g = ga.next
+        }
+      }
+      _ => { panic("selfhost: a direct scalar standard-byte array assignment requires an array literal") }
+    }
+    return
+  }
   ## BYTE-PACKED LOCAL ARRAY INIT. The historical array emitter writes one full word per element;
   ## using it for `[u8|i8|bits8; N]` would both waste 7 bytes per element and make the next local
   ## overlap the live byte region once storage is packed. The base slot is metadata; the reserved
@@ -18668,6 +18714,23 @@ packed_byte_slot_for_off := fn(base : i64, cx : ptr(LCtx)) -> i64 {
   while i < cnt {
     ent := deref(svec_at(SlotEntry, cx.slots, i))
     if i64(ent.off) == base and ent.ek == 5 and ent.is_ref == false and is_byte_array_eek(ent.eek) { return i64(i) }
+    i += 1
+  }
+  -1
+}
+
+## Return the slot index of a local array whose element is the direct scalar standard-byte tier. The
+## literal writer uses this same descriptor as the indexed place resolver; all other array-element
+## shapes stay on their existing word-granular or fail-loud paths.
+standard_byte_array_slot_for_off := fn(base : i64, cx : ptr(LCtx), a : rt::Arena) -> i64 {
+  if base < 0 { return -1 }
+  mut i := 0
+  cnt := svec_len(cx.slots)
+  while i < cnt {
+    ent := deref(svec_at(SlotEntry, cx.slots, i))
+    if i64(ent.off) == base and ent.ek == 5 and ent.eek == 2 and ent.is_ref == false and ent.snl != 0 {
+      if std_array_direct_scalar_byte_tier(cx.decls, cx.src, ent.sns, ent.snl, a) { return i64(i) }
+    }
     i += 1
   }
   -1
