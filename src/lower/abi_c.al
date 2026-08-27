@@ -149,14 +149,18 @@ pub abi_c_param_tyspan := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64, pi
 
 ## Per-eightbyte SysV class of an `@abi(c)` struct type [s, s+n): eightbyte `ei` is SSE iff its field
 ## is `f64`/`f32`, else INTEGER (spec 150 §FN-9 — an eightbyte is SSE only when every field in it is
-## float). Scoped to structs whose fields are each ONE eightbyte (`struct_words` == field count); a
-## sub-8-byte-packed or multi-word field fails loud (deferred), so eightbyte `ei` == field `ei`. Used
-## both for a struct ARG (which register each eightbyte rides) and a struct RETURN (which result
-## register each eightbyte arrives in).
+## float). Scoped to structs whose fields are each ONE eightbyte (`struct_words` == field count), with
+## one exact exception: `abi_c_is_u8_pair` already proves that the two standard-byte fields share one
+## INTEGER carrier word. Any other sub-8-byte-packed or multi-word field fails loud (deferred), so
+## eightbyte `ei` == field `ei` there. Used both for a struct ARG (which register each eightbyte rides)
+## and a struct RETURN (which result register each eightbyte arrives in).
 pub abi_c_eightbyte_is_sse := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, s : usize, n : usize, ei : usize) -> bool {
   di := struct_decl_of(decls, src, s, n)
   if di < 0 { return false }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  ## The exact two-u8 seam is already one standard-byte word and therefore one INTEGER eightbyte;
+  ## there is no per-field SSE decision to make on either caller or callee side.
+  if abi_c_is_u8_pair(decls, src, s, n) { return false }
   mut f := d.fields_head
   mut nf := 0
   while f != 0 { fd := deref(fld_p(f)); nf = nf + 1; f = fd.next }
