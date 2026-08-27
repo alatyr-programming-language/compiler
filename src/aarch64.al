@@ -1540,11 +1540,13 @@ mut A64_CONT := 0
 ## (an under-count) is a LOUD `brk`, never a silent frame corruption. Module globals (the A64_CHK pattern).
 mut A64_AGG := 0
 mut A64_AGG_LIM := 0
-## MATCH-over-INDEX temp region (§8 enum slice-param): a `match s[i]` on an enum `Slice(E)` PARAM
-## materializes the by-reference element's enum words (disc+payload) into this reserved frame region,
-## then matches on it (emit_a64_match_arms reads a frame offset). Set per-fn in emit_a64_fn (byte offset
-## of the region start), sized to the largest such match-over-index enum. 0 = no such match.
+## MATCH scratch region (§8 enum slice-param / enum PARAM): materialized by-reference enum words live in
+## this per-fn frame region. A nested payload match must not overwrite its enclosing match, so the region
+## has two lexical levels. A third level is rejected by a generation-time panic rather than lowered with
+## overlapping storage. A64_MTMP is the region start; A64_MTMP_STRIDE is one level's word span.
 mut A64_MTMP := 0
+mut A64_MTMP_STRIDE : i64 = 0
+mut A64_MDEPTH : i64 = 0
 ## Current MATCH-ARM enum context (§8 piece 3b): the enum type + variant of the arm whose body is being
 ## emitted, so a `.field` / nested `match` / copy of an AGGREGATE payload BINDING can resolve the binding's
 ## type + frame offset. Set (save/restore) per arm in emit_a64_match_arms. 0 = not inside an aggregate-
@@ -1553,6 +1555,30 @@ mut A64_ARM_ENS := 0
 mut A64_ARM_ENL := 0
 mut A64_ARM_VS := 0
 mut A64_ARM_VL := 0
+## The active arm-binding stack. emit_a64_match_arms passes only the innermost Bind list to recursive
+## emitters, while a nested payload body can still refer to an outer binding. Keep each outer list and
+## its frame base available for the Var resolver; direct inner bindings retain shadowing precedence.
+mut A64_BIND_DEPTH : i64 = 0
+mut A64_BIND_HEADS : [usize; 32] = [0; 32]
+mut A64_BIND_BASES : [i64; 32] = [0; 32]
+
+a64_bind_push := fn(head : ptr(mut Bind), base : i64) {
+  if unchecked bitcast(usize, head) != 0 {
+    if A64_BIND_DEPTH >= 32 { panic("aarch64: match binding nesting exceeds 32 levels") }
+    A64_BIND_HEADS[A64_BIND_DEPTH] = unchecked bitcast(usize, head)
+    A64_BIND_BASES[A64_BIND_DEPTH] = base
+    A64_BIND_DEPTH = A64_BIND_DEPTH + 1
+  }
+}
+
+a64_bind_pop := fn(head : ptr(mut Bind)) {
+  if unchecked bitcast(usize, head) != 0 { A64_BIND_DEPTH = A64_BIND_DEPTH - 1 }
+}
+
+a64_match_tmp_offset := fn() -> i64 {
+  if A64_MDEPTH >= 2 { panic("aarch64: enum match scratch nesting exceeds two levels") }
+  A64_MTMP + A64_MDEPTH * A64_MTMP_STRIDE
+}
 ## Current COMPTIME-FOR-VARIANT loop variant (the variant name span the enclosing `wild == 2` unroll is
 ## emitting): a nested/inner match's `T.(v)` comptime-variant PATTERN arm (`wild == 3`) resolves `v` to
 ## THIS variant. Set (save/restore) per generated arm in the wild==2 expansion. 0 = not inside an unroll.
@@ -4106,7 +4132,21 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
     Expr::Var(ns, nl) => {
       ## BIND > PARAM > GLOBAL > LOCAL, flat standalone ifs. A payload binding aliases scrutinee word
       ## bindidx+1. A bare struct-local Var has no scalar value → fail-loud; only `p.f` reads a struct.
-      bidx := bind_list_index(bind_head, src, ns, nl, a)
+      mut bidx := bind_list_index(bind_head, src, ns, nl, a)
+      mut bbase := bind_base
+      ## Recursive arm emission replaces bind_head with the inner arm's list. If the name is not in
+      ## that list, walk the saved outer lists so `pa` remains visible inside `match b`.
+      if bidx < 0 and A64_BIND_DEPTH > 0 {
+        mut bi := A64_BIND_DEPTH
+        while bi > 0 and bidx < 0 {
+          bi = bi - 1
+          bh := unchecked bitcast(ptr(mut Bind), A64_BIND_HEADS[bi])
+          if unchecked bitcast(usize, bh) != 0 {
+            bx := bind_list_index(bh, src, ns, nl, a)
+            if bx >= 0 { bidx = bx ; bbase = A64_BIND_BASES[bi] }
+          }
+        }
+      }
       isstruct := a64_local_struct_nl(body_head, src, ns, nl, a) != 0
       isarray := a64_is_array_local(body_head, src, ns, nl, a)
       isagg := isstruct or isarray
@@ -4117,8 +4157,8 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       if pidx >= 0 { voff = 16 + pidx * 8 }
       useframe := (bidx < 0) and (not isagg) and (not isout) and ((pidx >= 0) or (voff >= 0 and (not isglob)))
       gname := str_at((src + ns), nl)
-      if bidx >= 0 { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, bind_base + (bidx + 1) * 8) ; push_str(sb, "]\n") }
-      if isout { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, voff) ; push_str(sb, "]\n  ldr x0, [x0]\n") }
+      if bidx >= 0 { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, bbase + (bidx + 1) * 8) ; push_str(sb, "]\n") }
+      if (bidx < 0) and isout { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, voff) ; push_str(sb, "]\n  ldr x0, [x0]\n") }
       if useframe { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, voff) ; push_str(sb, "]\n") }
       if (bidx < 0) and (not isagg) and (not isout) and (not useframe) and isglob {
         push_str(sb, "  adrp x0, ") ; push_str(sb, gname) ; push_str(sb, "\n  add x0, x0, :lo12:") ; push_str(sb, gname) ; push_str(sb, "\n  ldr x0, [x0]\n")
@@ -5000,10 +5040,13 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       if paramok {
         pensM := a64_param_enum_ns(params_head, src, sns, snl, decls)
         wM := 1 + i64(enum_max_arity(decls, src, pensM, penlM, a))
+        mtmpM := a64_match_tmp_offset()
         push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, 16 + pidxM * 8) ; push_str(sb, "]\n")
         mut km := 0
-        while km < wM { push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, km * 8) ; push_str(sb, "]\n  str x0, [x29, #") ; push_int(sb, A64_MTMP + km * 8) ; push_str(sb, "]\n") ; km = km + 1 }
-        emit_a64_match_arms(arms, pensM, penlM, A64_MTMP, endid, sb, a, src, params_head, pcount, body_head, decls, 0 - 1)
+        while km < wM { push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, km * 8) ; push_str(sb, "]\n  str x0, [x29, #") ; push_int(sb, mtmpM + km * 8) ; push_str(sb, "]\n") ; km = km + 1 }
+        A64_MDEPTH = A64_MDEPTH + 1
+        emit_a64_match_arms(arms, pensM, penlM, mtmpM, endid, sb, a, src, params_head, pcount, body_head, decls, 0 - 1)
+        A64_MDEPTH = A64_MDEPTH - 1
         push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
       }
       if bindok {
@@ -5277,9 +5320,11 @@ emit_a64_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, end
           ocvs := A64_CFVAR_S ; ocvl := A64_CFVAR_L ; obV := A64_ARM_BINDS
           A64_ARM_ENS = ens ; A64_ARM_ENL = enl ; A64_ARM_VS = vfm.ns ; A64_ARM_VL = vfm.nl
           A64_CFVAR_S = vfm.ns ; A64_CFVAR_L = vfm.nl ; A64_ARM_BINDS = unchecked bitcast(usize, am.binds_head)
+          a64_bind_push(am.binds_head, eoff)
           if hasexprV { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
           if dostmtV { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
           if (not hasexprV) and (not dostmtV) { push_str(sb, "  brk #0 // statement-body match arm in value position deferred\n") }
+          a64_bind_pop(am.binds_head)
           A64_ARM_ENS = oensV ; A64_ARM_ENL = oenlV ; A64_ARM_VS = ovsV ; A64_ARM_VL = ovlV
           A64_CFVAR_S = ocvs ; A64_CFVAR_L = ocvl ; A64_ARM_BINDS = obV
           push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
@@ -5315,9 +5360,11 @@ emit_a64_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, end
     A64_ARM_VS = evs
     A64_ARM_VL = evl
     A64_ARM_BINDS = unchecked bitcast(usize, am.binds_head)
+    a64_bind_push(am.binds_head, eoff)
     if am.wild != 2 and hasexpr { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
     if am.wild != 2 and dostmt { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
     if am.wild != 2 and (not hasexpr) and (not dostmt) { push_str(sb, "  brk #0 // statement-body match arm in value position deferred\n") }
+    a64_bind_pop(am.binds_head)
     A64_ARM_ENS = oens
     A64_ARM_ENL = oenl
     A64_ARM_VS = ovs
@@ -6913,11 +6960,14 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             if A64_CHK { push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslot) ; push_str(sb, "]\n  ldr x1, [x3, #8]\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
             push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslot) ; push_str(sb, "]\n  ldr x2, [x3]\n  mov x1, #") ; push_int(sb, stride * 8) ; push_str(sb, "\n  mul x0, x0, x1\n  add x2, x2, x0\n")
             mut ck := 0
+            mtmpI := a64_match_tmp_offset()
             while ck < stride {
-              push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, ck * 8) ; push_str(sb, "]\n  str x0, [x29, #") ; push_int(sb, A64_MTMP + ck * 8) ; push_str(sb, "]\n")
+              push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, ck * 8) ; push_str(sb, "]\n  str x0, [x29, #") ; push_int(sb, mtmpI + ck * 8) ; push_str(sb, "]\n")
               ck = ck + 1
             }
-            emit_a64_match_arms(arms, ees.s, ees.n, A64_MTMP, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+            A64_MDEPTH = A64_MDEPTH + 1
+            emit_a64_match_arms(arms, ees.s, ees.n, mtmpI, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+            A64_MDEPTH = A64_MDEPTH - 1
             push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
           }
         }
@@ -6940,10 +6990,13 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         if paramok {
           pensM := a64_param_enum_ns(params_head, src, sns, snl, decls)
           wM := 1 + i64(enum_max_arity(decls, src, pensM, penlM, a))
+          mtmpM := a64_match_tmp_offset()
           push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, 16 + pidxM * 8) ; push_str(sb, "]\n")
           mut km := 0
-          while km < wM { push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, km * 8) ; push_str(sb, "]\n  str x0, [x29, #") ; push_int(sb, A64_MTMP + km * 8) ; push_str(sb, "]\n") ; km = km + 1 }
-          emit_a64_match_arms(arms, pensM, penlM, A64_MTMP, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+          while km < wM { push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, km * 8) ; push_str(sb, "]\n  str x0, [x29, #") ; push_int(sb, mtmpM + km * 8) ; push_str(sb, "]\n") ; km = km + 1 }
+          A64_MDEPTH = A64_MDEPTH + 1
+          emit_a64_match_arms(arms, pensM, penlM, mtmpM, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
+          A64_MDEPTH = A64_MDEPTH - 1
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
         }
         if bindok {
@@ -7383,6 +7436,10 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   ## trailing VALUE at all). Size it from the PARAM LIST instead — see a64_param_enum_tmp_words.
   pemt := a64_param_enum_tmp_words(ephead, src, decls, a)
   if pemt > mtmp { mtmp = pemt }
+  ## Nested enum matches need an independent scratch block for the inner materialization. Reserve two
+  ## lexical levels; a64_match_tmp_offset rejects a deeper shape instead of allowing silent overlap.
+  mtmp_stride := mtmp
+  if mtmp > 0 { mtmp = mtmp * 2 }
   ## WIDE-STRUCT SRET (§8 piece 2b): a fn returning a plain struct of > 8 words reserves ONE extra frame
   ## word ABOVE everything to spill the incoming x8 (indirect result pointer). Computed from the DECLARED
   ## return type (a generic `T` return is not a plain struct here → 0, so generic SRET stays trapping),
@@ -7420,6 +7477,9 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   A64_AGG = 16 + (pcount + nloc) * 8
   A64_AGG_LIM = 16 + (pcount + nloc + 2 * nsargs + naggw) * 8
   A64_MTMP = 16 + (pcount + nloc + 2 * nsargs + naggw) * 8
+  A64_MTMP_STRIDE = mtmp_stride * 8
+  A64_MDEPTH = 0
+  A64_BIND_DEPTH = 0
   ## `@abi(naked)` (spec ch.80): emit label + raw body ONLY (no prologue/param-spill/epilogue). The body
   ## is asm() lines over the AArch64 registers; the trailing value (a closing `asm("ret")`) is emitted too.
   if a64_fn_is_naked(src, d.name_start, d.name_len) {
