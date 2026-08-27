@@ -2780,6 +2780,9 @@ run_x86 repr_tag_store 42
 run_x86 enum_disc_pin 42
 run_x86 enum_disc_autoinc 42
 run enum_disc_match 42
+run enum_unit_local_cmp 42
+run_a64 enum_unit_local_cmp 42
+run_rv64 enum_unit_local_cmp 42
 run_x86 enum_disc_unpinned 42
 build_reject_has enum_disc_dup "two enum variants resolve to the same discriminant"
 build_reject_has enum_disc_expr_reject "enum discriminant pin must be a SINGLE integer literal"

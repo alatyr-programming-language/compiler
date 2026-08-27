@@ -41,6 +41,7 @@ how this repository proves itself, not part of what it ships.
   with runtime indices.
 - AArch64 now supports whole aggregate-element writes through inferred homogeneous struct-array locals
   with runtime indices.
+- AArch64 and RV64 now compare concrete payload-less enum locals with `==` and `!=`.
 - WAT now supports labeled `continue name` across statement-only `loop`, `while`, and `for` targets,
   including deferred cleanup for loops crossed by the transfer.
 - WAT now supports `continue name` to a scalar-integer value-bearing `@label(name) loop`, including
