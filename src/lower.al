@@ -9628,6 +9628,29 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## the multi-word-field test see the REAL layout. Unchanged for every other head.
       irs := inst_struct_span_cx(cs, cl, cx)
       swf := struct_words(cx.decls, cx.src, irs.s, irs.n, a)
+      ## CLAYOUT S4 — a BYTE-tier flat scalar literal has a packed byte image, so the old positional
+      ## field push is no longer a valid return ABI: `AggLit { bool, usize, usize }`, for example,
+      ## reserves three physical words but its fields occupy byte offsets 0, 8, and 16. Materialize
+      ## through the same standard writer used by local assignment, then return the image words. This
+      ## is also what lets the self-host compiler return its own newly byte-laid-out helper records;
+      ## without it the caller reads a three-word reservation after the callee emitted four fields.
+      ## The direct-byte predicate is the same closed admission list as `struct_words`/`layout_kind`;
+      ## packed and unsupported nested shapes stay on their existing paths or fail-loud fences.
+      if layout_kind_is_byte(layout_kind(cx.decls, cx.src, irs.s, irs.n, a)) and std_struct_is_byte_writable(cx.decls, cx.src, irs.s, irs.n, a) {
+        if cx.agg_tmp < 0 { panic("selfhost: a byte-layout struct literal returned by value needs aggregate scratch to materialize its physical byte image") }
+        ## The ABI returns physical words, while narrow fields write only their own bytes. The
+        ## standard assignment helper clears the rounded image first so padding cannot leak into a
+        ## whole-word scalar read by the caller.
+        emit_struct_assign(e, cx.agg_tmp, sb, cx, a, nl)
+        for k in 0..swf {
+          push_str(sb, "  movq -")
+          push_int(sb, i64((cx.agg_tmp - i64(k) + 1) * 8))
+          push_str(sb, "(%rbp), ")
+          emit_retreg(sb, k)
+          push_str(sb, "\n")
+        }
+        return
+      }
       ## …and route through it TOO when a field VALUE is a by-reference aggregate PARAM, which the
       ## width gate misses for a ONE-word aggregate field (see `lit_has_byref_agg_value`). Correct-or-
       ## trap: without a reserved aggregate scratch there is nowhere to materialize, so panic rather
@@ -17143,7 +17166,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           pdbo = packed_field_byte_offset(cx.decls, cx.src, dsb.s, dsb.n, fs, fl, deref(cx.mar))
           pdfty = field_type_span(cx.decls, cx.src, dsb.s, dsb.n, fs, fl, deref(cx.mar))
         }
-        pstd := std_struct_has_direct_byte_layout(cx.decls, cx.src, dsb.s, dsb.n, deref(cx.mar))
+        ## PACKED has precedence over the standard direct-scalar predicate: the same scalar fields
+        ## must still use the packed cursor when reached through `deref(p)`.
+        pstd := not ppk and std_struct_has_direct_byte_layout(cx.decls, cx.src, dsb.s, dsb.n, deref(cx.mar))
         if pstd {
           pdbo = standard_field_byte_offset(cx.decls, cx.src, dsb.s, dsb.n, fs, fl, deref(cx.mar))
           pdfty = field_type_span(cx.decls, cx.src, dsb.s, dsb.n, fs, fl, deref(cx.mar))
@@ -17384,7 +17409,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             bbo = packed_field_byte_offset(cx.decls, cx.src, bent2.sns, bent2.snl, fs, fl, deref(cx.mar))
             bfty = field_type_span(cx.decls, cx.src, bent2.sns, bent2.snl, fs, fl, deref(cx.mar))
           }
-          bstd := std_struct_has_direct_byte_layout(cx.decls, cx.src, bent2.sns, bent2.snl, deref(cx.mar))
+          ## PACKED has precedence over the standard direct-scalar predicate: every packed scalar
+          ## struct also satisfies the S4 shape, but its by-reference fields use the packed cursor.
+          bstd := not bpk and std_struct_has_direct_byte_layout(cx.decls, cx.src, bent2.sns, bent2.snl, deref(cx.mar))
           if bstd {
             bbo = standard_field_byte_offset(cx.decls, cx.src, bent2.sns, bent2.snl, fs, fl, deref(cx.mar))
             bfty = field_type_span(cx.decls, cx.src, bent2.sns, bent2.snl, fs, fl, deref(cx.mar))
@@ -17422,7 +17449,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
                 p7bo = packed_field_byte_offset(cx.decls, cx.src, p7e.sns, p7e.snl, fs, fl, deref(cx.mar))
                 p7fty = field_type_span(cx.decls, cx.src, p7e.sns, p7e.snl, fs, fl, deref(cx.mar))
               }
-              p7std := std_struct_has_direct_byte_layout(cx.decls, cx.src, p7e.sns, p7e.snl, deref(cx.mar))
+              ## PACKED has precedence over the standard direct-scalar predicate: every packed scalar
+              ## struct also satisfies the S4 shape, but its byte cursor (not §6.1 padding) owns the offset.
+              p7std := not p7pk and std_struct_has_direct_byte_layout(cx.decls, cx.src, p7e.sns, p7e.snl, deref(cx.mar))
               if p7std {
                 p7bo = standard_field_byte_offset(cx.decls, cx.src, p7e.sns, p7e.snl, fs, fl, deref(cx.mar))
                 p7fty = field_type_span(cx.decls, cx.src, p7e.sns, p7e.snl, fs, fl, deref(cx.mar))

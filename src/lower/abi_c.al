@@ -76,8 +76,8 @@ pub callee_decl_is_abi_c := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64) 
   callee_is_abi_c(src, d.name_start, d.name_len)
 }
 
-## Bounded caller-side packing seam: the compiler's current internal slots keep every struct field in a
-## word, while SysV C lays exactly two consecutive `u8` fields in one INTEGER eightbyte. This helper is
+## Bounded caller-side packing seam: the standard byte tier stores two consecutive `u8` fields at byte
+## offsets 0 and 1, while SysV C carries that two-byte image in one INTEGER eightbyte. This helper is
 ## deliberately exact; all other sub-word and multi-word field shapes remain behind the located reject.
 abi_c_is_u8_pair := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   di := struct_decl_of(decls, src, s, n)
@@ -599,7 +599,7 @@ pub emit_abi_c_call_args := fn(args_head : ptr(mut Arg), nvals : usize, cidx : i
       if vac_is_agg(cx, args_head, a, cidx, nfixed, mk) {
         ts := abi_c_param_tyspan(cx.decls, cx.src, cidx, mk)
         if abi_c_is_u8_pair(cx.decls, cx.src, ts.s, ts.n) {
-          push_str(sb, "  movzbq 0(%rax), %r10\n  movzbq 8(%rax), %r11\n  shlq $8, %r11\n  orq %r11, %r10\n  movq %r10, ")
+          push_str(sb, "  movzbq 0(%rax), %r10\n  movzbq 1(%rax), %r11\n  shlq $8, %r11\n  orq %r11, %r10\n  movq %r10, ")
           push_int(sb, i64(dm.swoff * 8))
           push_str(sb, "(%rsp)\n")
           mk += 1
@@ -649,7 +649,7 @@ pub emit_abi_c_call_args := fn(args_head : ptr(mut Arg), nvals : usize, cidx : i
         w := abi_c_param_words(cx.decls, cx.src, a, cidx, j)
         push_str(sb, "  popq %rax\n")
         if abi_c_is_u8_pair(cx.decls, cx.src, ts.s, ts.n) {
-          push_str(sb, "  movzbq 0(%rax), %r10\n  movzbq 8(%rax), %r11\n  shlq $8, %r11\n  orq %r11, %r10\n  movq %r10, ")
+          push_str(sb, "  movzbq 0(%rax), %r10\n  movzbq 1(%rax), %r11\n  shlq $8, %r11\n  orq %r11, %r10\n  movq %r10, ")
           emit_argreg(sb, ibase)
           push_str(sb, "\n")
           continue

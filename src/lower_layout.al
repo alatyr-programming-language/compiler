@@ -922,30 +922,83 @@ layout_byte_type_eek := fn(src : ptr(u8), ts : usize, tl : usize) -> u8 {
   0
 }
 
+## The scalar widths admitted by the first ordinary §6.1 byte-layout slice.  Keep the admission list
+## closed: `scalar_byte_size` intentionally returns 8 for unresolved/brand names, but treating such a
+## name as a known byte-layout field would make a later semantic error observable as a layout change.
+## A struct enters this slice only when EVERY field is a known direct scalar and at least one is narrow;
+## word-only structs retain the word model.
+std_direct_scalar_byte_width := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
+  sw := scalar_width::subword_bytes(src, ts, tl)
+  if sw != 0 { return sw }
+  if tl == 2 and str_at((src + ts), 2) == "u64" { return 8 }
+  if tl == 2 and str_at((src + ts), 2) == "i64" { return 8 }
+  if tl == 5 and str_at((src + ts), 5) == "usize" { return 8 }
+  if tl == 5 and str_at((src + ts), 5) == "isize" { return 8 }
+  if tl == 4 and str_at((src + ts), 4) == "f64" { return 8 }
+  if tl == 5 and str_at((src + ts), 5) == "bits64" { return 8 }
+  if tl >= 3 and str_at((src + ts), 3) == "ptr" {
+    c := str_at((src + ts + 3), 1)
+    if c == "(" or c == " " or c == "\n" or c == "\t" or c == "\r" { return 8 }
+  }
+  if tl >= 2 and str_at((src + ts), 2) == "fn" {
+    c := str_at((src + ts + 2), 1)
+    if c == "(" or c == " " or c == "\n" or c == "\t" or c == "\r" { return 8 }
+  }
+  0
+}
+
 ## STANDARD BYTE LAYOUT TIER — the first shared implementation of Types §6.1/§6.4 for an
-## ordinary struct that contains an explicitly byte-typed fixed array.  The historical lowering
-## reserves whole words and is still the default for every type that does not reach this predicate;
-## this tier is therefore opt-in by representation, not a second interpretation of existing values.
+## ordinary struct that contains either an explicitly byte-typed fixed array or only supported scalar
+## fields (with at least one sub-word leaf), closing the scalar branch over nested ordinary structs.
+## The historical lowering reserves whole words and is still the default for every type that does not
+## reach this predicate; this tier is therefore opt-in by representation, not a second interpretation
+## of existing values.
 ##
 ## The helpers deliberately live here, beside `field_words`/`field_word_offset`, so local slots,
-## aggregate parameters, globals, and ABI sizing can consume one layout vocabulary.  The first
-## consumer slice handles scalar fields plus `[u8|i8|bits8; N]` fields.  The recursive queries are
-## already complete for nested standard-layout structs, while codegen keeps unsupported aggregate
-## consumers fail-loud until their byte-copy/ABI paths are wired to the same offsets.
+## aggregate parameters, globals, and ABI sizing can consume one layout vocabulary.  The consumer
+## slice handles scalar fields, recursively supported nested structs, plus `[u8|i8|bits8; N]` fields.
+## Unsupported aggregate consumers still fail-loud until their byte-copy/ABI paths are wired to the
+## same offsets.
 pub std_struct_has_direct_byte_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
   di := struct_decl_of(decls, src, s, n)
   if di < 0 { return false }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut found := false
+  mut found_array := false
+  mut found_subword := false
+  mut scalar_only := true
   while f != 0 {
     fd := deref(fld_p(f))
     eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
     es := arr_field_elem_span(src, eff.s, eff.n)
-    if es.n != 0 and layout_byte_type_eek(src, es.s, es.n) != 0 { found = true }
+    if es.n != 0 {
+      ## Preserve the established direct-byte-array admission exactly.  A later non-byte field
+      ## remains the existing fail-loud boundary in its consumer; this predicate must not turn an
+      ## already-supported byte-array shape into a different classification while widening the
+      ## scalar-only branch below.
+      if layout_byte_type_eek(src, es.s, es.n) != 0 { found_array = true }
+      else { scalar_only = false }
+    } else {
+      ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+      sbn := base_type_name(src, eff.s, eff.n)
+      mut nested_byte := false
+      if ew == 1 and struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 and not is_packed(decls, src, eff.s, eff.n) and not is_union_decl(decls, src, eff.s, eff.n) {
+        ## Close the scalar tier under a nested direct-scalar child.  Without this, S4 makes
+        ## `Small` byte-laid out while `Deep { inner : Small }` remains word-laid out, so the
+        ## parent writer and the standalone child copy speak different representations.
+        nested_byte = std_struct_has_direct_byte_layout(decls, src, eff.s, eff.n, a)
+      }
+      if nested_byte { found_subword = true }
+      else {
+        sw := std_direct_scalar_byte_width(src, eff.s, eff.n)
+        if ew != 1 or sw == 0 { scalar_only = false }
+        else if sw < 8 { found_subword = true }
+      }
+    }
     f = fd.next
   }
-  found
+  if found_array { return true }
+  scalar_only and found_subword
 }
 
 std_type_has_byte_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, wsize : usize, a : rt::Arena) -> bool {
@@ -985,8 +1038,8 @@ pub std_struct_has_byte_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), s : us
 ##   1 PACKED — `@packed` (§8): a byte cursor plus the `@offset`/`@align`/`@endian` field levers.
 ##   2 BYTE   — the standard byte-precise §6.1 tier (declaration order, natural alignment, standard
 ##              padding). Currently GATED on the struct carrying a direct `[u8|i8|bits8; N]` field:
-##              the calculators (`standard_*`) are already complete, but not every consumer reads
-##              byte offsets yet.
+##              including recursively supported direct-scalar children. Unsupported aggregate shapes
+##              remain outside the predicate and keep their existing fail-loud fences.
 ##   3 WORD   — the historical word-granular model (one machine word per field). This is the tier
 ##              that spec §6.1 says must go away; widening the byte tier is a change to THIS
 ##              function alone (CLAYOUT S4), which is the point of the oracle.
@@ -1429,7 +1482,7 @@ pub standard_type_byte_align := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usi
   if wsize == 1 {
     sbn := base_type_name(src, ts, tl)
     if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 {
-      if std_struct_has_byte_layout(decls, src, ts, tl, a) { return standard_struct_align(decls, src, ts, tl, a) }
+      if layout_kind_is_byte(layout_kind(decls, src, ts, tl, a)) { return standard_struct_align(decls, src, ts, tl, a) }
       return 8
     }
     if enum_decl_of(decls, src, ts, tl) >= 0 {
@@ -1442,8 +1495,8 @@ pub standard_type_byte_align := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usi
 }
 
 ## The SIZE of a type in bytes for the same tier. Arrays use the normative stride rule (size rounded
-## up to alignment), byte arrays consequently have stride 1, and a non-byte aggregate retains its
-## established word size until that aggregate itself opts into this tier.
+  ## up to alignment), byte arrays consequently have stride 1, and a WORD-tier aggregate retains its
+  ## established word size until that aggregate itself opts into the standard byte tier.
 pub standard_type_byte_size := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, wsize : usize, a : rt::Arena) -> usize {
   es := arr_field_elem_span(src, ts, tl)
   if es.n != 0 {
@@ -1454,7 +1507,7 @@ pub standard_type_byte_size := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usiz
   if wsize == 1 {
     sbn := base_type_name(src, ts, tl)
     if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 {
-      if std_struct_has_byte_layout(decls, src, ts, tl, a) { return standard_struct_bytes(decls, src, ts, tl, a) }
+      if layout_kind_is_byte(layout_kind(decls, src, ts, tl, a)) { return standard_struct_bytes(decls, src, ts, tl, a) }
       return struct_words(decls, src, ts, tl, a) * 8
     }
     if enum_decl_of(decls, src, ts, tl) >= 0 { return enum_layout(decls, src, ts, tl, a).size }
@@ -1674,14 +1727,16 @@ pub struct_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   sbn := base_type_name(src, s, n)
   di := struct_decl_of(decls, src, sbn.s, sbn.n)
   if di < 0 { return 0 }
-  ## THE ORACLE decides the tier once for this whole function (`layout_kind`). The direct byte-array
-  ## shape is the first standard-layout implementation. A nested byte-layout aggregate is intentionally
-  ## rejected here until its aggregate-field/array/ABI consumers use the same byte offsets; otherwise a
-  ## correct reservation would still be paired with an old word read.
+  ## THE ORACLE decides the tier once for this whole function (`layout_kind`). A BYTE-tier struct's
+  ## reservation must cover its exact byte image, including the scalar shape admitted by CLAYOUT S4
+  ## and its recursively supported nested children. A remaining plain struct that only contains an
+  ## unsupported byte-layout aggregate is rejected below until all of its consumers share the offsets.
   lk := layout_kind(decls, src, s, n, a)
-  if not layout_kind_is_packed(lk) and std_struct_has_byte_layout(decls, src, s, n, a) {
-    if not layout_kind_is_byte(lk) { panic("selfhost: a plain struct containing a byte-layout aggregate field is not yet supported by all aggregate consumers — bind the inner value separately or use @packed") }
+  if layout_kind_is_byte(lk) {
     return (standard_struct_bytes(decls, src, s, n, a) + 7) / 8
+  }
+  if not layout_kind_is_packed(lk) and std_struct_has_byte_layout(decls, src, s, n, a) {
+    panic("selfhost: a plain struct containing a byte-layout aggregate field is not yet supported by all aggregate consumers — bind the inner value separately or use @packed")
   }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head

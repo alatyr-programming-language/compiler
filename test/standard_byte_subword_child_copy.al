@@ -5,15 +5,16 @@
 ## offsets, so `copy.a` read 0 — a WRONG VALUE where the pre-S3(b) compiler trapped, which I11 forbids,
 ## and it was fenced rather than shipped.
 ##
-## The copy is not a memcpy: the SOURCE is the child's §6.1 byte image inside the root, the DESTINATION
-## is a standalone local read in the tier `layout_kind` gives the child's own type — one machine word per
-## field for every struct here, since none of them carries a byte array. So each scalar leaf moves from
-## its §6.1 byte to its destination WORD, sign-extended from the field's own width for an `iN`.
-## `lower_layout::std_copy_kind` decides that once for all four backends; `emit_standard_copy` /
-## `a64_std_copy` / `rv_std_copy` / `wat_std_copy` only spell the moves.
+## The copy is not a blind word copy: the SOURCE is the child's §6.1 byte image inside the root, and the
+## DESTINATION is a standalone local in the tier `layout_kind` gives the child's own type. CLAYOUT S4
+## makes the narrow children below BYTE-tier too, so `std_copy_kind` selects the byte IMAGE path and
+## copies exactly `standard_struct_bytes` bytes. `lower_layout::std_copy_kind` still decides that once
+## for all four backends; `emit_standard_copy` / `a64_std_copy` / `rv_std_copy` / `wat_std_copy` only
+## spell the selected operation.
 ##
-## The selection criterion (audit §7 risk 4): every child here is one whose WORD image and §6.1 image
-## DISAGREE, so a green run cannot be a coincidence — `b` sits at byte 2/4/2/2 and at word 1 = byte 8.
+## The selection criterion (audit §7 risk 4) remains the representation seam: before S4 every child here
+## had a WORD destination whose image disagreed with its §6.1 source (`b` sat at byte 2/4/2/2 and at
+## word 1 = byte 8). The post-S4 run proves that the recursive byte image is now copied intact.
 ##
 ## MEASURED exit code (x86_64 native / aarch64 qemu / riscv64 qemu / wasm wasmtime), 42 = correct:
 ##   base 04b221d               reject / 133 / 133 / 134   (the S3(b) copy fence)
@@ -34,13 +35,14 @@ O4 := struct { data : [u8; 3], inner : Signed }
 O5 := struct { data : [u8; 8], mid : Deep }
 
 main := fn() -> u64 {
-  ## u16 + u16 — the shape the fence named. Source bytes 8 and 10; destination words 0 and 1.
+  ## u16 + u16 — the shape the fence named. The source child image is 4 bytes and now stays byte-tier
+  ## in the destination; the old word destination would have read bytes 8 and 10 as words 0 and 1.
   mut o1 := O1(data = [1, 2, 3, 4, 5, 6, 7, 8], inner = Small(a = 20, b = 22))
   c1 := o1.inner
   if u64(c1.a) != 20 { return 1 }
   if u64(c1.b) != 22 { return 2 }
 
-  ## u32 + u32 — a 4-byte leaf, so the load must be `movl`/`ldr w0`/`lwu`/`i64.load32_u`, not a word.
+  ## u32 + u32 — the 8-byte child image is copied as bytes; each 4-byte leaf remains fully represented.
   mut o2 := O2(data = [1, 2, 3, 4, 5, 6, 7, 8], inner = Wide(a = 70000, b = 80000))
   c2 := o2.inner
   if u64(c2.a) != 70000 { return 3 }
@@ -52,15 +54,16 @@ main := fn() -> u64 {
   if u64(c3.a) != 200 { return 5 }
   if u64(c3.b) != 40000 { return 6 }
 
-  ## i8 + i16 — SIGNED leaves: the copy must sign-extend from the field's OWN width before it stores a
-  ## whole word, or a negative value reads back as a large positive one.
+  ## i8 + i16 — SIGNED leaves remain byte-precise in the copied image; the destination's typed reads
+  ## must still sign-extend from each field's OWN width.
   mut o4 := O4(data = [1, 2, 3], inner = Signed(a = 0 - 3, b = 0 - 300))
   c4 := o4.inner
   if i64(c4.a) != 0 - 3 { return 7 }
   if i64(c4.b) != 0 - 300 { return 8 }
 
-  ## TWO DEEP — the copied child itself has a struct field, so the plan recurses: `inner.b` is at
-  ## source byte 8+8+2 = 18 and at destination word 1+1 = 2.
+  ## TWO DEEP — the copied child itself has a struct field, so the image path recurses through its
+  ## standard layout: `inner.b` is at source byte 8+2 = 10 in the `Deep` image and at the same byte
+  ## offset in the destination.
   mut o5 := O5(data = [1, 2, 3, 4, 5, 6, 7, 8], mid = Deep(lo = 11, inner = Small(a = 13, b = 17)))
   c5 := o5.mid
   if u64(c5.lo) != 11 { return 9 }

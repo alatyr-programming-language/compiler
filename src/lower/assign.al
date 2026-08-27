@@ -474,6 +474,18 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
         return
       }
       if std_struct_has_direct_byte_layout(cx.decls, cx.src, ss, sl, a) {
+        ## A standard-layout record may contain sub-word fields.  Its ABI still returns whole machine
+        ## words, so bytes between (or after) those fields are padding, not part of any source field.
+        ## Clear the rounded image before the sized stores: otherwise a later whole-word return/read
+        ## can observe stale stack bytes as a nonzero bool or integer high bits.  This is especially
+        ## important for helper records returned by value (for example `StrFldPlace`), where the
+        ## caller's compact field projection shares the ABI word with the padding.
+        swb := struct_words(cx.decls, cx.src, ss, sl, a)
+        for k in 0..swb {
+          push_str(sb, "  movq $0, -")
+          push_int(sb, i64((base - i64(k) + 1) * 8))
+          push_str(sb, "(%rbp)\n")
+        }
         emit_standard_assign(ss, sl, fhead, base, 0, sb, cx, a, nl)
         return
       }
@@ -729,7 +741,9 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
       wbbo = packed_field_byte_offset(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
       wbfty = field_type_span(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
     }
-    wbstd := std_struct_has_direct_byte_layout(cx.decls, cx.src, bent.sns, bent.snl, deref(cx.mar))
+    ## PACKED has precedence over the standard direct-scalar predicate: a packed scalar struct
+    ## must retain its packed cursor for by-reference stores.
+    wbstd := not wbpk and std_struct_has_direct_byte_layout(cx.decls, cx.src, bent.sns, bent.snl, deref(cx.mar))
     if wbstd {
       wbbo = standard_field_byte_offset(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
       wbfty = field_type_span(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
@@ -757,7 +771,33 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
     mut fw_handled := false
     if bent.ek == 2 {
       fts := field_type_span(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
-      if std_struct_has_direct_byte_layout(cx.decls, cx.src, bent.sns, bent.snl, deref(cx.mar)) {
+      ## §8 `@packed` LOCAL field write: the local reservation is still word-sized, but the value
+      ## lives at its packed byte cursor. The standard S4 predicate also matches packed scalar
+      ## structs, so this branch must win before the standard-layout path; otherwise `p.b = v`
+      ## writes at the natural padded offset instead of the packed offset (a silent corruption).
+      pkw := is_packed(cx.decls, cx.src, bent.sns, bent.snl)
+      if pkw {
+        pbo := packed_field_byte_offset(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
+        paes := array_elem_span(cx.src, fts.s, fts.n)
+        pmulti := paes.n != 0 or (fts.n != 0 and (str_at((cx.src + fts.s), fts.n) == "str" or struct_decl_of(cx.decls, cx.src, fts.s, fts.n) >= 0 or enum_decl_of(cx.decls, cx.src, fts.s, fts.n) >= 0))
+        if pmulti { panic("selfhost: a @packed local aggregate field write needs its byte-aware aggregate value path; use a supported scalar field") }
+        if pbo >= 0 {
+          emit_gas(fv, sb, cx, a, nl)
+          push_str(sb, "  popq %rax\n")
+          psz := scalar_byte_size(cx.src, fts.s, fts.n)
+          peb := packed_field_endian(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl) == 1
+          if peb and psz == 2 { push_str(sb, "  rolw $8, %ax\n") }
+          else if peb and psz == 4 { push_str(sb, "  bswap %eax\n") }
+          else if peb and psz == 8 { push_str(sb, "  bswap %rax\n") }
+          if psz == 1 { push_str(sb, "  movb %al, -") }
+          else if psz == 2 { push_str(sb, "  movw %ax, -") }
+          else if psz == 4 { push_str(sb, "  movl %eax, -") }
+          else { push_str(sb, "  movq %rax, -") }
+          push_int(sb, (bent.off + 1) * 8 - pbo)
+          push_str(sb, "(%rbp)\n")
+          fw_handled = true
+        }
+      } else if std_struct_has_direct_byte_layout(cx.decls, cx.src, bent.sns, bent.snl, deref(cx.mar)) {
         sbo := standard_field_byte_offset(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
         saes := array_elem_span(cx.src, fts.s, fts.n)
         smulti := saes.n != 0 or (fts.n != 0 and (str_at((cx.src + fts.s), fts.n) == "str" or struct_decl_of(cx.decls, cx.src, fts.s, fts.n) >= 0 or enum_decl_of(cx.decls, cx.src, fts.s, fts.n) >= 0))
