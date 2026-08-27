@@ -57,6 +57,16 @@ pub param_find := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl
   return -1
 }
 
+## Number of effective runtime-parameter slots in the supplied list. Native backends pass either the
+## complete parameter list or the value-only tail after their existing generic handling; that handling
+## already removes leading comptime type parameters before this shared count is requested.
+pub effective_param_count := fn(params_head : ptr(mut Param), a : rt::Arena) -> i64 {
+  mut p := params_head
+  mut k := 0
+  while p != 0 { pm := deref(param_p(p)) ; k = k + 1 ; p = pm.next }
+  i64(k)
+}
+
 ## True when the first declaration assignment for `[ns, ns+nl)` in a statement list initializes an
 ## `Expr::Slice`; false when the name is absent or has another initializer. This shape-only detector is
 ## shared by the native and WAT backends; slice typing and emission remain backend-specific.

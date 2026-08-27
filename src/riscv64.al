@@ -43,7 +43,7 @@ field_type_is_float := lower_layout::field_type_is_float
 variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, effective_param_count, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
@@ -75,13 +75,6 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## rv64 emit is dormant in the x86 self-build, so this global never advances there (x86 fixpoint neutral).
 mut RV_NL := 0
 rv_next_label := fn() -> i64 { r := RV_NL ; RV_NL = RV_NL + 1 ; r }
-
-rv_count_params := fn(params_head : ptr(mut Param), a : rt::Arena) -> i64 {
-  mut p := params_head
-  mut k := 0
-  while p != 0 { pm := deref(param_p(p)) ; k = k + 1 ; p = pm.next }
-  i64(k)
-}
 
 ## --- struct support (shared StructLit accessors are imported from lower_ctx) ---
 
@@ -6574,7 +6567,7 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
       rv_tp_skip = decl_tparam_pos(d, src)
     }
   }
-  pcount := rv_count_params(ephead, a)
+  pcount := effective_param_count(ephead, a)
   ## stash params + decls so the frame scanners recognize a slice PARAM base (set BEFORE rv_count_locals).
   RV_PARAMS = unchecked bitcast(usize, ephead)
   RV_DECLS = unchecked bitcast(usize, decls)
