@@ -4550,6 +4550,7 @@ run str_field_struct 42
 ## the same with a BY-REFERENCE base read the pointer slot as the struct (compiler SIGILL); and the field as a
 ## str VALUE pushed `$0,$0` (empty string). Pre-fix: 21 / 26 / SIGILL. a64/rv64/wasm trap.
 run str_field_value 35
+run str_field_eq 42
 run gen_str_field 31
 run slice_field_struct 30
 ## nested wide-SRET call arg `sumf(bump(mk(1)))`: the agg-value pool took a flat max instead of summing the
