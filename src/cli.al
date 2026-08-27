@@ -420,6 +420,40 @@ pub exec6 := fn(in out a : rt::Arena, prog_c : usize, a1 : usize, a2 : usize, a3
   return rt::run(a, prog_c, av, envp)
 }
 
+## Run the current compiler again with the original argv, replacing the reserved `--target all`
+## selector by one concrete target name. Reusing the complete argv preserves profile, target-dir,
+## manifest and option-order behavior; each child then enters the already-tested single-target build
+## pipeline with its own target selection globals and output path. `drop_selector` handles a one-target
+## manifest whose Target.name is optional: `--target all` still means the sole default target.
+run_target_command := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usize, target : str, drop_selector : bool, envp : usize) -> rt::Spawned {
+  av := rt::bump(a, (n + 1) * 8)
+  mut i := 0
+  mut k := 0
+  while i < n {
+    x := arg_at(cmd, i)
+    mut selector := false
+    if x == "--target" and i + 1 < n and arg_at(cmd, i + 1) == "all" { selector = true }
+    if selector {
+      if drop_selector {
+        i += 2
+      } else {
+        wword(av + k * 8, cstr(a, x))
+        k += 1
+        wword(av + k * 8, cstr(a, target))
+        k += 1
+        i += 2
+      }
+    } else {
+      if i == 0 { wword(av + k * 8, exe_c) }
+      else { wword(av + k * 8, cstr(a, x)) }
+      k += 1
+      i += 1
+    }
+  }
+  wword(av + k * 8, 0)
+  return rt::run(a, exe_c, av, envp)
+}
+
 ## Report a toolchain failure on stderr. Every `link_exe` failure path used to return a BARE numeric
 ## code with no message at all — so `alatyr build` in a shell without binutils exited 11 in total
 ## silence, and a link error exited 14 with only `ld`'s own line and nothing saying which alatyr step
@@ -2529,6 +2563,54 @@ manifest_target_count := fn(in out a : rt::Arena, pkg_al : str) -> usize {
   n
 }
 
+## Return the manifest Target.name values in declaration order, one per line. `--target all` uses
+## this small data-only view to dispatch the existing named-target path; the manifest checker remains
+## authoritative for the full Target schema and for the multi-target name requirements.
+manifest_target_names := fn(in out a : rt::Arena, pkg_al : str) -> str {
+  blk := manifest_list_field(a, pkg_al, "targets")
+  bb := unchecked bitcast(usize, blk.ptr)
+  mut out := rt::strbuf(a, blk.len + 64)
+  mut i := 0
+  while i + 7 <= blk.len {
+    mut is_target := true
+    if bytes(blk)[i] != 84 { is_target = false }
+    if bytes(blk)[i + 1] != 97 { is_target = false }
+    if bytes(blk)[i + 2] != 114 { is_target = false }
+    if bytes(blk)[i + 3] != 103 { is_target = false }
+    if bytes(blk)[i + 4] != 101 { is_target = false }
+    if bytes(blk)[i + 5] != 116 { is_target = false }
+    if bytes(blk)[i + 6] != 40 { is_target = false }
+    if is_target {
+      mut e := i + 7
+      mut depth := 1
+      mut in_str := false
+      while e < blk.len and depth > 0 {
+        c := bytes(blk)[e]
+        if c == 34 {
+          mut esc := false
+          if e > 0 and bytes(blk)[e - 1] == 92 { esc = true }
+          if not esc { in_str = not in_str }
+        } else if not in_str {
+          if c == 40 { depth += 1 }
+          if c == 41 { depth -= 1 }
+        }
+        e += 1
+      }
+      rec := str_at(bb + i, e - i)
+      nwi := mf_find_word(rec, 0, "name")
+      if nwi >= 0 {
+        nm := mf_quoted(rec, usize(nwi), 4)
+        k0 := rt::push_str(out, nm)
+        k1 := rt::push_byte(out, 10)
+      }
+      i = e
+    } else {
+      i += 1
+    }
+  }
+  str_at(out.data, out.len)
+}
+
 ## The default target is the first manifest Target. TOOL-13 only needs its name to keep the
 ## multi-target directory stable; selecting a different target remains a later resolver increment.
 manifest_default_target_name := fn(in out a : rt::Arena, pkg_al : str) -> str {
@@ -2897,6 +2979,77 @@ build_and_run_cross := fn(in out a : rt::Arena, outp : str, keep_artifacts : boo
   result
 }
 
+## TOOL-13/Tooling §4 — build every Target for the reserved `--target all` selection. The normal
+## single-target path already owns target validation, target.* publication, compilation and linking;
+## dispatching one named invocation per manifest record keeps those contracts identical and gives each
+## child its own target-specific artifact/intermediate namespace. The argv rewrite is data-only: target
+## names are passed as argv elements, never interpolated into a shell command.
+build_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, n : usize) -> usize {
+  count := manifest_target_count(a, pkg_al)
+  names := manifest_target_names(a, pkg_al)
+  mut name_count := 0
+  mut ni := 0
+  while ni < names.len {
+    if bytes(names)[ni] == 10 { name_count += 1 }
+    ni += 1
+  }
+  if count > 1 and name_count != count {
+    manifest_located_error(a, "config: every target in a multi-target manifest needs a name", pkg_al, "targets")
+    return 1
+  }
+  if count == 1 and name_count > 1 {
+    manifest_located_error(a, "config: the manifest target list could not be resolved", pkg_al, "targets")
+    return 1
+  }
+  exe := self_executable(a)
+  if exe.len == 0 {
+    tool_error("alatyr: could not locate the running compiler for --target all")
+    return 19
+  }
+  exe_c := cstr(a, exe)
+  mut etr := 0
+  environ := read_environ(a, etr)
+  if etr != 0 { env_truncation_error(); return 21 }
+  envp := build_envp(a, environ)
+  if count == 1 {
+    mut target := ""
+    mut drop_selector := true
+    if name_count == 1 {
+      nb := unchecked bitcast(usize, names.ptr)
+      mut end := 0
+      while end < names.len and bytes(names)[end] != 10 { end += 1 }
+      target = str_at(nb, end)
+      if target == "all" {
+        manifest_located_error(a, "config: Target.name `all` is reserved for --target selection", pkg_al, "targets")
+        return 1
+      }
+      drop_selector = false
+    }
+    sp := run_target_command(a, exe_c, cmd, n, target, drop_selector, envp)
+    if sp.kind != 0 { spawn_error(a, "target build", "alatyr", sp); return 19 }
+    return wexit(unchecked bitcast(usize, sp.code))
+  }
+  nb := unchecked bitcast(usize, names.ptr)
+  mut start := 0
+  mut idx := 0
+  while idx < count {
+    mut end := start
+    while end < names.len and bytes(names)[end] != 10 { end += 1 }
+    target := str_at(nb + start, end - start)
+    if target.len == 0 or target == "all" {
+      manifest_located_error(a, "config: Target.name is invalid for --target all", pkg_al, "targets")
+      return 1
+    }
+    sp := run_target_command(a, exe_c, cmd, n, target, false, envp)
+    if sp.kind != 0 { spawn_error(a, "target build", "alatyr", sp); return 19 }
+    rc := wexit(unchecked bitcast(usize, sp.code))
+    if rc != 0 { return rc }
+    start = end + 1
+    idx += 1
+  }
+  return 0
+}
+
 ## `new <name>`: scaffold a package directory `<name>/` containing a manifest `package.al` and the
 ## default-source directory `<name>/src/` with a runnable `main.al` that prints a deterministic success
 ## message through the ambient stdlib, so `<prog> build <name>/package.al` / `<prog> run <name>/package.al`
@@ -3012,6 +3165,17 @@ pub lib_dir := fn(in out a : rt::Arena) -> str {
   dirbase := str_at(eb + prev, cut - prev)
   if dirbase == "debug" or dirbase == "release" { return cat2(a, str_at(eb, cut), "/../../lib") }
   return cat2(a, str_at(eb, cut), "/../lib")
+}
+
+## Return the absolute path of this compiler. `--target all` re-enters the existing single-target
+## build path once per manifest Target, so the child uses the same self-built compiler and adjacent
+## `lib/` tree rather than a PATH-selected or caller-controlled executable.
+self_executable := fn(in out a : rt::Arena) -> str {
+  exe_c := cstr(a, "/proc/self/exe")
+  mut buf := rt::strbuf(a, 8192)
+  r := rt::sys_readlink(89, exe_c, buf.data, 8000)
+  if r <= 0 { return str_at(buf.data, 0) }
+  return str_at(buf.data, unchecked bitcast(usize, r))
 }
 
 ## Does the file at `path` exist + open read-only?
@@ -3523,6 +3687,7 @@ mut CLI_TARGET_DIR_N := 0
 mut CLI_TARGET_SELECT_COUNT := 0
 mut CLI_TARGET_SELECT_P := 0
 mut CLI_TARGET_SELECT_N := 0
+mut CLI_TARGET_SELECT_ALL := false
 mut CLI_VENDOR_DIR_COUNT := 0
 mut CLI_OPTION_BAD := false
 
@@ -3541,6 +3706,7 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
   CLI_TARGET_SELECT_COUNT = 0
   CLI_TARGET_SELECT_P = 0
   CLI_TARGET_SELECT_N = 0
+  CLI_TARGET_SELECT_ALL = false
   CLI_VENDOR_DIR_COUNT = 0
   CLI_OPTION_BAD = false
   mut i := fi
@@ -3570,10 +3736,12 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
       }
     } else if x == "--target" {
       CLI_TARGET_SELECT_COUNT += 1
+      CLI_TARGET_SELECT_ALL = false
       if i + 1 < n {
         ts := arg_at(cmd, i + 1)
         CLI_TARGET_SELECT_P = unchecked bitcast(usize, ts.ptr)
         CLI_TARGET_SELECT_N = ts.len
+        if ts == "all" { CLI_TARGET_SELECT_ALL = true }
         i += 2
       } else {
         CLI_OPTION_BAD = true
@@ -3994,15 +4162,27 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if is_pkg {
     manifest_vendor_reject(a, pkg_arg)
     manifest_path_reject(a, pkg_arg)
-    if manifest_target_selection_resolve(a, pkg_arg) != 0 { MANIFEST_CONFIG_BAD = true }
-    if MANIFEST_CONFIG_BAD == false { manifest_output_reject(a, pkg_arg) }
-    if MANIFEST_CONFIG_BAD == false {
-      backend := manifest_target_backend(a, pkg_arg)
-      if manifest_target_arch_reject(a, pkg_arg, backend) != 0 { MANIFEST_CONFIG_BAD = true }
-      if MANIFEST_CONFIG_BAD == false and manifest_target_command_reject(a, pkg_arg, backend, mode) != 0 { MANIFEST_CONFIG_BAD = true }
-      if MANIFEST_CONFIG_BAD == false { target_backend = backend }
+    ## `--target all` is a build-only multi-artifact selection. Defer target-specific validation to
+    ## the per-target child invocations below; the ordinary resolver must not interpret the reserved
+    ## word as a Target.name and must not publish the first target's machine model for every build.
+    if mode == 1 and CLI_TARGET_SELECT_ALL and manifest_target_count(a, pkg_arg) > 1 {
+      return cli_config_diag(a, "--target all cannot be combined with -o")
+    }
+    if mode == 6 and CLI_TARGET_SELECT_ALL {
+    } else {
+      if manifest_target_selection_resolve(a, pkg_arg) != 0 { MANIFEST_CONFIG_BAD = true }
+      if MANIFEST_CONFIG_BAD == false { manifest_output_reject(a, pkg_arg) }
+      if MANIFEST_CONFIG_BAD == false {
+        backend := manifest_target_backend(a, pkg_arg)
+        if manifest_target_arch_reject(a, pkg_arg, backend) != 0 { MANIFEST_CONFIG_BAD = true }
+        if MANIFEST_CONFIG_BAD == false and manifest_target_command_reject(a, pkg_arg, backend, mode) != 0 { MANIFEST_CONFIG_BAD = true }
+        if MANIFEST_CONFIG_BAD == false { target_backend = backend }
+      }
     }
     if MANIFEST_CONFIG_BAD { return 1 }
+  }
+  if is_pkg and mode == 6 and CLI_TARGET_SELECT_ALL {
+    return build_all_manifest_targets(a, pkg_arg, cmd, n)
   }
   ## TOOL-17 — publish the selected Target.code_size before package parsing/lowering. The default
   ## is x86_64's CodeSize.b64; an explicit unsupported spelling is a located Config error.

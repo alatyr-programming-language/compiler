@@ -1775,6 +1775,35 @@ multi_target_layout_test() {
     echo "FAIL multi_target_layout: release artifact path"; fail=1
   fi
   rm -rf "$p/target"
+  ( cd "$p" && "$CC" build --target all package.al ) >"$T/multi_target_layout.all.out" 2>"$T/multi_target_layout.all.err"
+  rc=$?
+  host="$p/target/host/debug/multi-host"
+  alternate="$p/target/alternate/debug/multi-alternate"
+  host_rc=127
+  alternate_rc=127
+  if [ -x "$host" ]; then _e2e_exec "$host" >/dev/null 2>&1; host_rc=$?; fi
+  if [ -x "$alternate" ]; then _e2e_exec "$alternate" >/dev/null 2>&1; alternate_rc=$?; fi
+  if _e2e_runtime_failure "multi_target_layout(all host)" "$host_rc"; then return; fi
+  if _e2e_runtime_failure "multi_target_layout(all alternate)" "$alternate_rc"; then return; fi
+  if [ "$rc" = 0 ] && [ "$host_rc" = 42 ] && [ "$alternate_rc" = 42 ] \
+    && [ -s "$host.s" ] && [ -s "$host.o" ] \
+    && [ -s "$alternate.s" ] && [ -s "$alternate.o" ] \
+    && [ ! -e "$p/target/debug/multi-host" ] && [ ! -e "$p/target/debug/multi-alternate" ] \
+    && [ ! -s "$T/multi_target_layout.all.err" ]; then
+    echo "ok   multi_target_layout: --target all builds host and alternate without intermediate collisions"
+  else
+    echo "FAIL multi_target_layout: --target all rc=$rc host=$host_rc alternate=$alternate_rc or target-qualified artifacts missing"; fail=1
+  fi
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" -o "$p/custom/multi" --target all package.al ) >"$T/multi_target_layout.o_all.out" 2>"$T/multi_target_layout.o_all.err"
+  rc=$?
+  if [ "$rc" != 0 ] && grep -qF 'config:' "$T/multi_target_layout.o_all.err" \
+    && [ ! -e "$p/custom/multi" ] && [ ! -e "$p/target" ]; then
+    echo "ok   multi_target_layout: -o with --target all rejects before artifact creation"
+  else
+    echo "FAIL multi_target_layout: -o with --target all rc=$rc artifact=$(test -e "$p/custom/multi" && echo yes || echo no) target=$(test -e "$p/target" && echo yes || echo no)"; fail=1
+  fi
+  rm -rf "$p/target" "$p/custom"
   _e2e_exec_capture_in "$T/multi_target_layout.test.out" "$p" "$CC" test package.al \
     2>"$T/multi_target_layout.test.err"
   rc=$?
