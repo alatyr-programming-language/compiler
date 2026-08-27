@@ -1534,6 +1534,149 @@ exe="$p/target/debug/qualified-generic-arg"
   rm -rf "$p/target"
 }
 
+## Issue #11, first bounded slice / Modules §3 + Types §6.4 — an undeclared direct type name in a
+## package-owned nested module must be refused before either `check` or `build` emits an artifact.
+## The same package shape with an ancestor-declared type stays green; the existing single-file type
+## builtin fixture is also exercised here so this package-only boundary cannot regress it.
+issue11_package_type_name_test() {
+  bad="$T/issue11_undeclared_type"
+  good="$T/issue11_declared_type"
+  rm -rf "$bad" "$good"
+  mkdir -p "$bad/src/geo" "$good/src/geo"
+  cat > "$bad/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      arch = Arch.x86_64,
+      os = Os.linux,
+      env = Env.gnu,
+      container = Container.elf,
+      output = "issue11-undeclared-type",
+    ),
+  ],
+)
+EOF
+  cat > "$bad/src/main.al" <<'EOF'
+main := fn() -> u64 {
+  return geo::child::probe()
+}
+EOF
+  cat > "$bad/src/geo/child.al" <<'EOF'
+pub probe := fn() -> u64 {
+  return size(Nope)
+}
+EOF
+  cat > "$good/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      arch = Arch.x86_64,
+      os = Os.linux,
+      env = Env.gnu,
+      container = Container.elf,
+      output = "issue11-declared-type",
+    ),
+  ],
+)
+EOF
+  cat > "$good/src/main.al" <<'EOF'
+main := fn() -> u64 {
+  return geo::child::probe()
+}
+EOF
+  cat > "$good/src/geo.al" <<'EOF'
+Box := struct { a : u64, b : u64 }
+EOF
+  cat > "$good/src/geo/child.al" <<'EOF'
+pub probe := fn() -> u64 {
+  return size(Box) + 26
+}
+EOF
+  for p in "$bad" "$good"; do
+    [ -f "$p/package.al" ] || { echo "MISS issue11_package_type_name: $p/package.al"; fail=1; return; }
+  done
+
+  rm -rf "$bad/target"
+  err="$T/issue11-package.check.err"
+  ( cd "$bad" && "$CC" check package.al ) >/dev/null 2>"$err"
+  rc=$?
+  if [ "$rc" = 1 ] && [ ! -e "$bad/target/debug/issue11-undeclared-type" ] \
+      && grep -qF "invalid at line 2 in geo__child" "$err"; then
+    echo "ok   issue11_package_type_name: check rejects undeclared package type with location"
+  else
+    echo "FAIL issue11_package_type_name: check rc=$rc artifact=$(test -e "$bad/target/debug/issue11-undeclared-type" && echo yes || echo no) diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+
+  rm -rf "$bad/target"
+  err="$T/issue11-package.build.err"
+  ( cd "$bad" && "$CC" build package.al ) >/dev/null 2>"$err"
+  rc=$?
+  if [ "$rc" = 1 ] && [ ! -e "$bad/target/debug/issue11-undeclared-type" ] \
+      && grep -qF "invalid at line 2 in geo__child" "$err"; then
+    echo "ok   issue11_package_type_name: build rejects undeclared package type without artifact"
+  else
+    echo "FAIL issue11_package_type_name: build rc=$rc artifact=$(test -e "$bad/target/debug/issue11-undeclared-type" && echo yes || echo no) diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+
+  rm -rf "$good/target"
+  err="$T/issue11-package-control.check.err"
+  ( cd "$good" && "$CC" check package.al ) >/dev/null 2>"$err"
+  rc=$?
+  if [ "$rc" = 0 ] && [ ! -s "$err" ]; then
+    echo "ok   issue11_package_type_name: declared package control passes check"
+  else
+    echo "FAIL issue11_package_type_name: declared package check rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+
+  rm -rf "$good/target"
+  err="$T/issue11-package-control.build.err"
+  ( cd "$good" && "$CC" build package.al ) >/dev/null 2>"$err"
+  build_rc=$?
+  exe="$good/target/debug/issue11-declared-type"
+  if [ "$build_rc" = 0 ] && [ -x "$exe" ] && [ ! -s "$err" ]; then
+    _e2e_exec "$exe" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "issue11_package_type_name/control" "$got"; then return; fi
+    if [ "$got" = 42 ]; then echo "ok   issue11_package_type_name: declared package control artifact runs 42"; else echo "FAIL issue11_package_type_name: declared package artifact=$got want 42"; fail=1; fi
+  else
+    echo "FAIL issue11_package_type_name: declared package build rc=$build_rc artifact=$(test -x "$exe" && echo yes || echo no) diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -rf "$good/target" "$bad/target"
+
+  single="$E2E_TEST/size_type_arg.al"
+  err="$T/issue11-single.check.err"
+  "$CC" check "$single" >/dev/null 2>"$err"
+  rc=$?
+  if [ "$rc" = 0 ] && [ ! -s "$err" ]; then
+    echo "ok   issue11_package_type_name: existing single-file type-builtin control passes check"
+  else
+    echo "FAIL issue11_package_type_name: single-file check rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+  out="$T/issue11-single.out"
+  rm -f "$out"
+  err="$T/issue11-single.build.err"
+  "$CC" -o "$out" "$single" >/dev/null 2>"$err"
+  rc=$?
+  if [ "$rc" = 0 ] && [ -x "$out" ] && [ ! -s "$err" ]; then
+    _e2e_exec "$out" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "issue11_package_type_name/single-file" "$got"; then return; fi
+    if [ "$got" = 42 ]; then echo "ok   issue11_package_type_name: existing single-file artifact runs 42"; else echo "FAIL issue11_package_type_name: single-file artifact=$got want 42"; fail=1; fi
+  else
+    echo "FAIL issue11_package_type_name: single-file build rc=$rc artifact=$(test -x "$out" && echo yes || echo no) diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+  fi
+}
+
 ## Types §6.1 / Modules §3 — the standard-byte tuple global fence must inspect the CURRENT declaration,
 ## not a same-named global from another module. Generate two disposable packages with opposite source
 ## orders so a bare-name recovery either misses the byte global or reports the ordinary one. The fixture
@@ -3728,6 +3871,7 @@ root_package_test fn_value_qualified "T _start" "T main__main" "T main__apply" "
 ## `h := lower::a::a_helper; h()` must call `lower__a__a_helper`, not an undefined alias symbol in
 ## `lower__b` (or a caller-module fallback). The row also proves reachability retains the resolved fn.
 root_package_test qualified_fn_alias "T _start" "T main__main" "T lower__b__run" "T lower__a__a_helper"
+issue11_package_type_name_test
 ## Modules §§4.1/4.1.1 — a one-element listed projection after a bare module alias must remain a
 ## declaration: `strbuf := rt` followed by `(Expr) := ast` must not be parsed as a call `rt(Expr)`.
 root_package_test one_element_projection "T _start" "T main__main"
