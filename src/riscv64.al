@@ -27,7 +27,7 @@ arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 (push_str, push_int) := rt
-(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
+(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
 (ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv) := lower_layout
@@ -718,6 +718,21 @@ rv_struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
     f = fd.next
   }
   ok
+}
+## A standard-byte struct whose historical word carrier is not ABI-safe on this backend. Direct
+## byte-array structs are already handled by their dedicated bounded-byte paths, and a word-granular
+## shape has identical §6.1 and word positions. The remaining multi-word shapes are the narrow
+## scalar/nested structs from #169: letting them cross a by-value boundary would expose a valid but
+## differently laid-out value to the caller or callee, so emit a target trap instead of a wrong value.
+rv_standard_byte_abi_fence := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
+  if struct_decl_of(decls, src, s, n) < 0 { return false }
+  if not layout_kind_is_byte(layout_kind(decls, src, s, n, a)) { return false }
+  if std_struct_has_byte_layout(decls, src, s, n, a) { return false }
+  if std_struct_is_word_granular(decls, src, s, n, a) { return false }
+  ## `struct_words` is ceil(byte_size / 8) in the BYTE tier, so a two-byte `{u8,u8}` value
+  ## still reserves one historical word even though its second field is at byte 1, not byte 8.
+  ## The ABI fence is about field-image agreement, not the rounded storage count.
+  true
 }
 ## Is field `[fs,fl]` of struct `[s,n]` SCALAR (one word, via the field's CACHED wsize)? Lets a scalar
 ## field of a struct that ALSO has an aggregate field (`s.n` where `S = { c : Col, n : u64 }`) read/write
@@ -6565,6 +6580,28 @@ rv_fn_is_naked := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
   str_at((src + p), 11) == "@abi(naked)"
 }
 
+## Check the EFFECTIVE value parameters of the current function. Generic instances substitute the
+## active type-parameter spans before asking the shared ABI-fence predicate; comptime `type` params
+## have no runtime boundary and are skipped.
+rv_params_need_standard_byte_abi_fence := fn(params_head : ptr(mut Param), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena) -> bool {
+  mut p := params_head
+  mut found := false
+  while p != 0 {
+    pm := deref(param_p(p))
+    if str_at((src + pm.ts), pm.tl) != "type" {
+      mut pts := pm.ts
+      mut ptl := pm.tl
+      if RV_SUB_GPL != 0 and streq(src, pm.ts, pm.tl, RV_SUB_GPS, RV_SUB_GPL) { pts = RV_SUB_ITS ; ptl = RV_SUB_ITL }
+      if RV_SUB_GPL2 != 0 and streq(src, pm.ts, pm.tl, RV_SUB_GPS2, RV_SUB_GPL2) { pts = RV_SUB_ITS2 ; ptl = RV_SUB_ITL2 }
+      if RV_SUB_GPL3 != 0 and streq(src, pm.ts, pm.tl, RV_SUB_GPS3, RV_SUB_GPL3) { pts = RV_SUB_ITS3 ; ptl = RV_SUB_ITL3 }
+      pbn := base_type_name(src, pts, ptl)
+      if pbn.n != 0 and rv_standard_byte_abi_fence(decls, src, pbn.s, pbn.n, a) { found = true }
+    }
+    p = pm.next
+  }
+  found
+}
+
 ## Emit one function: label, prologue (save ra/s0, allocate frame, spill params), body, tail expr,
 ## fall-through epilogue. A GENERIC fn (a `type` param) is a fail-loud `ebreak` (no monomorphization).
 ## Emit the `@export("sym")` alias for a fn (Modules §6.3): `.global sym` + a `sym:` label at its entry.
@@ -6759,6 +6796,9 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
     rew := 1 + i64(enum_max_arity(decls, src, rsbn.s, rsbn.n, a))
     if rew >= 1 and rew <= 8 { RV_RET_ENUM_NS = rsbn.s ; RV_RET_ENUM_NL = rsbn.n }
   }
+  mut standard_byte_abi_fence := false
+  if rsbn.n != 0 and rv_standard_byte_abi_fence(decls, src, rsbn.s, rsbn.n, a) { standard_byte_abi_fence = true }
+  if rv_params_need_standard_byte_abi_fence(ephead, src, decls, a) { standard_byte_abi_fence = true }
   ## WIDE-STRUCT SRET (LP64 indirect result): Return / trailing-value write THROUGH the caller's pointer
   ## (emit_rv_sret_store). `hassret` was decided above, so the reserved slot always exists when this fires;
   ## the > 8-word split makes it mutually exclusive with the register struct-return above.
@@ -6836,6 +6876,7 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
     emit_rv_export(sb, src, d.name_start, d.name_len)
     if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(RV_TEST_DECL_INDEX)) } else if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
   }
+  if standard_byte_abi_fence { push_str(sb, "  ebreak # unsupported standard-byte by-value ABI boundary (#169)\n") }
   push_str(sb, "  addi sp, sp, -") ; push_int(sb, frame) ; push_str(sb, "\n")
   push_str(sb, "  sd ra, 8(sp)\n  sd s0, 0(sp)\n  mv s0, sp\n")
   ## >8 args of a class OVERFLOW to the caller's outgoing stack block; at entry those bytes were at
