@@ -3576,7 +3576,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       useframe := (bidx < 0) and (not isagg) and (not outscalar) and ((pidx >= 0) or (voff >= 0 and (not isglob)))
       gname := str_at((src + ns), nl)
       if bidx >= 0 { push_str(sb, "  ld a0, ") ; push_int(sb, bbase + (bidx + 1) * 8) ; push_str(sb, "(s0)\n") }
-      if outscalar { push_str(sb, "  ld t1, ") ; push_int(sb, voff) ; push_str(sb, "(s0)\n  ld a0, 0(t1)\n") }
+      if (bidx < 0) and outscalar { push_str(sb, "  ld t1, ") ; push_int(sb, voff) ; push_str(sb, "(s0)\n  ld a0, 0(t1)\n") }
       if useframe { push_str(sb, "  ld a0, ") ; push_int(sb, voff) ; push_str(sb, "(s0)\n") }
       if (bidx < 0) and (not isagg) and (not outscalar) and (not useframe) and isglob {
         push_str(sb, "  la a0, ") ; push_str(sb, gname) ; push_str(sb, "\n  ld a0, 0(a0)\n")

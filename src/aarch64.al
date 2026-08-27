@@ -4158,7 +4158,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       useframe := (bidx < 0) and (not isagg) and (not isout) and ((pidx >= 0) or (voff >= 0 and (not isglob)))
       gname := str_at((src + ns), nl)
       if bidx >= 0 { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, bbase + (bidx + 1) * 8) ; push_str(sb, "]\n") }
-      if isout { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, voff) ; push_str(sb, "]\n  ldr x0, [x0]\n") }
+      if (bidx < 0) and isout { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, voff) ; push_str(sb, "]\n  ldr x0, [x0]\n") }
       if useframe { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, voff) ; push_str(sb, "]\n") }
       if (bidx < 0) and (not isagg) and (not isout) and (not useframe) and isglob {
         push_str(sb, "  adrp x0, ") ; push_str(sb, gname) ; push_str(sb, "\n  add x0, x0, :lo12:") ; push_str(sb, gname) ; push_str(sb, "\n  ldr x0, [x0]\n")
