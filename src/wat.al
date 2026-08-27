@@ -1934,6 +1934,29 @@ mut WAT_ARM_BINDS := 0
 mut WAT_CFVAR_S := 0
 mut WAT_CFVAR_L := 0
 
+## The active arm-binding stack. Recursive arm emission passes only the innermost Bind list to the
+## expression/statement emitters, while a nested payload body can still refer to an outer scalar
+## binding. Direct inner bindings retain shadowing precedence; saved outer lists provide lexical
+## visibility after the inner lookup misses. The bounded depth is an explicit fail-loud boundary.
+mut WAT_BIND_DEPTH : i64 = 0
+mut WAT_BIND_HEADS : [usize; 32] = [0; 32]
+mut WAT_BIND_BASES : [i64; 32] = [0; 32]
+mut WAT_BIND_UNSUPPORTED : [bool; 32] = [false; 32]
+
+wat_bind_push := fn(head : ptr(mut Bind), base : i64, unsupported : bool) {
+  if unchecked bitcast(usize, head) != 0 {
+    if WAT_BIND_DEPTH >= 32 { panic("wasm: match binding nesting exceeds 32 levels") }
+    WAT_BIND_HEADS[WAT_BIND_DEPTH] = unchecked bitcast(usize, head)
+    WAT_BIND_BASES[WAT_BIND_DEPTH] = base
+    WAT_BIND_UNSUPPORTED[WAT_BIND_DEPTH] = unsupported
+    WAT_BIND_DEPTH = WAT_BIND_DEPTH + 1
+  }
+}
+
+wat_bind_pop := fn(head : ptr(mut Bind)) {
+  if unchecked bitcast(usize, head) != 0 { WAT_BIND_DEPTH = WAT_BIND_DEPTH - 1 }
+}
+
 ## Does the fn (its param list) have a `T : type` comptime type-param?
 wat_fn_is_generic := fn(params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena) -> bool {
   mut p := params_head
@@ -2425,6 +2448,25 @@ wat_ty_word_scalar := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, d
   if not ty_is_scalar(ts, tl, decls, src) { return r }
   if wat_tyname_words(src, ts, tl, a, decls) == 1 { r = true }
   r
+}
+
+## Whether a single match binding names a payload shape this backend cannot expose as one scalar word.
+## WAT supports one-word payload bindings, but a struct/enum/str/array payload must stay fail-loud: the
+## binding's first word is an address or only a prefix of the value, never the value itself. Multi-bind
+## scalar variants retain the established word-per-binding path; their aggregate cases already remain
+## behind the backend's existing fail-loud aggregate fences.
+wat_match_bind_unsupported := fn(bind_head : ptr(mut Bind), es : usize, en : usize, vs : usize, vn : usize, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+  mut count := 0
+  mut b := bind_head
+  while unchecked bitcast(usize, b) != 0 {
+    count = count + 1
+    b = bnd_next(b)
+  }
+  if count == 0 { return false }
+  if count != 1 { return false }
+  pty := variant_payload_type(decls, src, es, en, vs, vn, a)
+  if pty.n == 0 { return true }
+  not wat_ty_word_scalar(src, pty.s, pty.n, a, decls)
 }
 
 ## The static element COUNT of a declaration `name : [E; N]` whose value is NOT an array literal (the
@@ -3552,8 +3594,8 @@ emit_wat_tmp_addr := fn(in out sb : rt::StrBuf, byte_off : i64) {
 
 ## Emit a value-position match's arms as a nested-if chain on the scrutinee's discriminant (word 0 of
 ## its linear-memory image at local `sidx`). A wildcard arm `_` emits its body unconditionally; a
-## variant arm `E.V => body` tests `disc == variant_index(V)`. NO payload binding yet — an arm body
-## that references a payload var resolves to `(unreachable)` (fail-loud), never a wrong value. An
+## variant arm `E.V => body` tests `disc == variant_index(V)`. The active arm's payload bindings are
+## pushed while its body is emitted, so a nested match can still see an outer scalar binding. An
 ## exhausted chain (no arm matched) traps.
 emit_wat_match_arms := fn(arm : usize, es : usize, en : usize, sidx : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec)) {
   if arm == 0 {
@@ -3565,7 +3607,9 @@ emit_wat_match_arms := fn(arm : usize, es : usize, en : usize, sidx : i64, in ou
       ## never a silent miscompile: the wasm sweep requires a trap or reject, not a wrong value.
       push_str(sb, "(unreachable) (; range-pattern match arm not supported on wasm (x86_64 only) ;)")
     } else if am.wild == 1 {
+      wat_bind_push(am.binds_head, sidx, false)
       emit_wat_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, sidx)
+      wat_bind_pop(am.binds_head)
     } else {
       vidx := variant_index(decls, src, es, en, am.vs, am.vl, a)
       if vidx < 0 {
@@ -3579,7 +3623,9 @@ emit_wat_match_arms := fn(arm : usize, es : usize, en : usize, sidx : i64, in ou
         push_str(sb, ") (i64.const ")
         push_int(sb, vidx)
         push_str(sb, ")) (then ")
+        wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, am.vs, am.vl, src, a, decls))
         emit_wat_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, sidx)
+        wat_bind_pop(am.binds_head)
         push_str(sb, ") (else ")
         emit_wat_match_arms(am.next, es, en, sidx, sb, a, src, params_head, pcount, body_head, decls)
         push_str(sb, "))")
@@ -3997,14 +4043,44 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
     }
     Expr::BoolLit(v) => { push_str(sb, "(i64.const "); push_int(sb, i64(v)); push_str(sb, ")") }
     Expr::Var(ns, nl) => {
-      bidx := bind_list_index(bind_head, src, ns, nl, a)
+      mut bidx := bind_list_index(bind_head, src, ns, nl, a)
+      mut bbase := bind_base
+      mut bind_blocked := false
+      ## An unsupported aggregate binding still shadows an outer name, but it must not be exposed as
+      ## the binding's first word and must not fall through to a parameter/local with the same name.
+      if bidx >= 0 and WAT_BIND_DEPTH > 0 {
+        top := WAT_BIND_DEPTH - 1
+        if WAT_BIND_HEADS[top] == unchecked bitcast(usize, bind_head) and WAT_BIND_UNSUPPORTED[top] {
+          bidx = 0 - 1
+          bind_blocked = true
+        }
+      }
+      ## Recursive arm emission replaces bind_head with the inner arm's list. If the name is not in
+      ## that list, walk the saved outer lists so an outer scalar binding remains visible inside a
+      ## nested match. An unsupported aggregate binding stops the walk at its lexical scope.
+      if bidx < 0 and (not bind_blocked) and WAT_BIND_DEPTH > 0 {
+        mut bi := WAT_BIND_DEPTH
+        while bi > 0 and bidx < 0 and (not bind_blocked) {
+          bi = bi - 1
+          bh := unchecked bitcast(ptr(mut Bind), WAT_BIND_HEADS[bi])
+          if unchecked bitcast(usize, bh) != 0 {
+            bx := bind_list_index(bh, src, ns, nl, a)
+            if bx >= 0 {
+              if WAT_BIND_UNSUPPORTED[bi] { bind_blocked = true }
+              else { bidx = bx ; bbase = WAT_BIND_BASES[bi] }
+            }
+          }
+        }
+      }
       pidx := param_find(params_head, src, ns, nl, a)
-      if wat_bound_lambda(body_head, src, ns, nl, decls) >= 0 {
+      if bind_blocked {
+        push_str(sb, "(unreachable) (; aggregate match binding unsupported on WAT ;)\n")
+      } else if wat_bound_lambda(body_head, src, ns, nl, decls) >= 0 {
         push_str(sb, "(unreachable) (; bare local lambda value unsupported on WAT ;)")
       } else if bidx >= 0 {
         ## an active match-arm payload binding: load the scrutinee's payload word (bidx+1)
         push_str(sb, "(i64.load ")
-        emit_wat_addr(sb, bind_base, (bidx + 1) * 8)
+        emit_wat_addr(sb, bbase, (bidx + 1) * 8)
         push_str(sb, ")")
       } else if pidx >= 0 {
         push_str(sb, "(local.get ")
@@ -4618,8 +4694,8 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
     }
     Expr::Match(scrut, arms_head) => {
       ## `match e { … }` in value position: dispatch on e's discriminant. e must be a top-level enum
-      ## LOCAL (its type recovered from its EnumLit init); payload binds are not modelled (arms that
-      ## use them trap in the Var arm).
+      ## LOCAL (its type recovered from its EnumLit init); scalar payload bindings are active while an
+      ## arm is emitted, including through a nested match. Unsupported aggregate bindings stay loud.
       sn := expr_var_name(scrut)
       agg := agg_global_base(decls, src, sn.s, sn.n, a)
       etype := base_enum_type(params_head, body_head, src, sn.s, sn.n, a, decls)
@@ -5228,7 +5304,9 @@ emit_wat_stmt_match := fn(arm : usize, es : usize, en : usize, sidx : i64, fn_he
       ## never a silent miscompile: the wasm sweep requires a trap or reject, not a wrong exit.
       push_str(sb, "    (unreachable) (; range-pattern match arm not supported on wasm (x86_64 only) ;)\n")
     } else if am.wild == 1 {
+      wat_bind_push(am.binds_head, sidx, false)
       emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
+      wat_bind_pop(am.binds_head)
     } else if am.wild == 2 {
       ## COMPTIME-VARIANT TEMPLATE (`comptime for var in typeinfo(T).variants { T.(var)(p) => body }`):
       ## UNROLL into one dispatch per variant of the scrutinee enum `es/en` (concrete in a mono instance).
@@ -5254,7 +5332,9 @@ emit_wat_stmt_match := fn(arm : usize, es : usize, en : usize, sidx : i64, fn_he
           obinds := WAT_ARM_BINDS ; ocvs := WAT_CFVAR_S ; ocvl := WAT_CFVAR_L
           WAT_ARM_ENS = es ; WAT_ARM_ENL = en ; WAT_ARM_VS = vfm.ns ; WAT_ARM_VL = vfm.nl
           WAT_ARM_BINDS = unchecked bitcast(usize, am.binds_head) ; WAT_CFVAR_S = vfm.ns ; WAT_CFVAR_L = vfm.nl
+          wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, vfm.ns, vfm.nl, src, a, decls))
           emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
+          wat_bind_pop(am.binds_head)
           WAT_ARM_ENS = oens ; WAT_ARM_ENL = oenl ; WAT_ARM_VS = ovs ; WAT_ARM_VL = ovl
           WAT_ARM_BINDS = obinds ; WAT_CFVAR_S = ocvs ; WAT_CFVAR_L = ocvl
           push_str(sb, "    ))\n")
@@ -5275,7 +5355,9 @@ emit_wat_stmt_match := fn(arm : usize, es : usize, en : usize, sidx : i64, fn_he
         push_str(sb, ") (i64.const ")
         push_int(sb, vidx)
         push_str(sb, ")) (then\n")
+        wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, am.vs, am.vl, src, a, decls))
         emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
+        wat_bind_pop(am.binds_head)
         push_str(sb, "    ) (else\n")
         emit_wat_stmt_match(am.next, es, en, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
         push_str(sb, "    ))\n")
@@ -6527,6 +6609,7 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   WAT_LOOP_SP = 0
   WAT_LOOP_OVF = false
   WAT_DEF_STOP = 0
+  WAT_BIND_DEPTH = 0
   ## pass 1: declare one (local i64) per distinct non-global local name in the WHOLE fn tree
   ## (top-level + nested scopes). count_locals and name_local_index share local_slot_scan, so the
   ## slot each Var resolves to is exactly its pre-order declaration index.

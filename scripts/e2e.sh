@@ -3058,6 +3058,11 @@ run p0_void_tail_call_side_effect 42
 run_wat p0_void_tail_call_side_effect 134
 run_a64 p0_void_tail_call_side_effect 42
 run_rv64 p0_void_tail_call_side_effect 42
+## #175: a nested WAT enum match must retain the outer payload binding while an inner same-name
+## binding shadows it only inside the inner arm. The fixture separately checks that the in-out caller
+## value remains 7; plain `run` puts it in all cross-target sweeps, and `run_wat` executes WAT directly.
+run issue175_wat_nested_enum_match 42
+run_wat issue175_wat_nested_enum_match 42
 ## writing a whole element of a GLOBAL struct array from a struct VAR was a SILENT NO-OP: the mutable-global
 ## IndexAssign arm required BOTH the element and the RHS to be literals, and the generic tail then resolved the
 ## global's name through entry_of — which returns SLOT 0 for an absent name — and stored to a bogus %rbp offset,
