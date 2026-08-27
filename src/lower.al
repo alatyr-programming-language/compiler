@@ -12875,7 +12875,7 @@ tuple_first_start := fn(e : ptr(Expr)) -> usize {
 ## opening `(`, then forward at paren depth to the matching `)`. Returns `[open, close]`; 0/0 if `e`
 ## is not an `ArrayLit`. `typearg_at(src, span.s, 0, j)` then reads the j-th component off this span
 ## (the `(` sits at position 0), and `emit_type_arg_tag` mangles it to a paren-free `Tuple_…` symbol.
-tuple_typearg_span := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> CSpan {
+pub tuple_typearg_span := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> CSpan {
   ## Defensive: a nullary call whose resolved generic index has a type-param position beyond the (empty)
   ## argument list hands us a NULL Expr here — never deref it (a compiler-crash guard; the real fix keeps
   ## such calls non-generic in `nongen_type_match`, so this is belt-and-suspenders and never fires on `src/`).
