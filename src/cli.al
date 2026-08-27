@@ -454,6 +454,45 @@ run_target_command := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usi
   return rt::run(a, exe_c, av, envp)
 }
 
+## Run a config-only check for one concrete target. `--target all` is a multi-artifact selection, so
+## every selected target must pass the ordinary check path before the first build child can create an
+## artifact. Replacing `build` with `check` keeps the manifest parser, selected target publication,
+## profile validation, and source/type checks in one authoritative path; no shell is involved.
+run_target_check := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usize, target : str, drop_selector : bool, envp : usize) -> rt::Spawned {
+  av := rt::bump(a, (n + 1) * 8)
+  mut i := 0
+  mut k := 0
+  while i < n {
+    x := arg_at(cmd, i)
+    if i == 1 {
+      wword(av + k * 8, cstr(a, "check"))
+      k += 1
+      i += 1
+    } else {
+      mut selector := false
+      if x == "--target" and i + 1 < n and arg_at(cmd, i + 1) == "all" { selector = true }
+      if selector {
+        if drop_selector {
+          i += 2
+        } else {
+          wword(av + k * 8, cstr(a, x))
+          k += 1
+          wword(av + k * 8, cstr(a, target))
+          k += 1
+          i += 2
+        }
+      } else {
+        if i == 0 { wword(av + k * 8, exe_c) }
+        else { wword(av + k * 8, cstr(a, x)) }
+        k += 1
+        i += 1
+      }
+    }
+  }
+  wword(av + k * 8, 0)
+  return rt::run(a, exe_c, av, envp)
+}
+
 ## Report a toolchain failure on stderr. Every `link_exe` failure path used to return a BARE numeric
 ## code with no message at all — so `alatyr build` in a shell without binutils exited 11 in total
 ## silence, and a link error exited 14 with only `ld`'s own line and nothing saying which alatyr step
@@ -3011,6 +3050,29 @@ build_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, 
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
+  ## A check child is deliberately run for every target before any build child. This closes the
+  ## partial-output hole where a later target's Config/source error was discovered only after earlier
+  ## targets had already produced artifacts.
+  nb := unchecked bitcast(usize, names.ptr)
+  mut pre_start := 0
+  mut pre_idx := 0
+  while pre_idx < count {
+    mut pre_end := pre_start
+    while pre_end < names.len and bytes(names)[pre_end] != 10 { pre_end += 1 }
+    mut pre_target := str_at(nb + pre_start, pre_end - pre_start)
+    mut pre_drop := false
+    if count == 1 and name_count == 0 { pre_target = "" ; pre_drop = true }
+    if (pre_target.len == 0 and not pre_drop) or pre_target == "all" {
+      manifest_located_error(a, "config: Target.name is invalid for --target all", pkg_al, "name")
+      return 1
+    }
+    spc := run_target_check(a, exe_c, cmd, n, pre_target, pre_drop, envp)
+    if spc.kind != 0 { spawn_error(a, "target check", "alatyr", spc); return 19 }
+    crc := wexit(unchecked bitcast(usize, spc.code))
+    if crc != 0 { return crc }
+    pre_start = pre_end + 1
+    pre_idx += 1
+  }
   if count == 1 {
     mut target := ""
     mut drop_selector := true
@@ -3029,7 +3091,6 @@ build_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, 
     if sp.kind != 0 { spawn_error(a, "target build", "alatyr", sp); return 19 }
     return wexit(unchecked bitcast(usize, sp.code))
   }
-  nb := unchecked bitcast(usize, names.ptr)
   mut start := 0
   mut idx := 0
   while idx < count {

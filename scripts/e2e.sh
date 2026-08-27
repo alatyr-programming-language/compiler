@@ -1795,6 +1795,18 @@ multi_target_layout_test() {
     echo "FAIL multi_target_layout: --target all rc=$rc host=$host_rc alternate=$alternate_rc or target-qualified artifacts missing"; fail=1
   fi
   rm -rf "$p/target"
+  bad="$T/multi_target_layout_bad_output"
+  cp -r "$p" "$bad"
+  sed -i 's/output = "multi-alternate"/output = "bad\/name"/' "$bad/package.al"
+  ( cd "$bad" && "$CC" build --target all package.al ) >"$T/multi_target_layout.bad_output.out" 2>"$T/multi_target_layout.bad_output.err"
+  rc=$?
+  if [ "$rc" != 0 ] && grep -qF 'config: Target.output must be a non-empty file name without path separators' "$T/multi_target_layout.bad_output.err" \
+    && [ ! -e "$bad/target" ]; then
+    echo "ok   multi_target_layout: --target all validates every target before dispatch"
+  else
+    echo "FAIL multi_target_layout: invalid later target rc=$rc partial=$(test -e "$bad/target" && find "$bad/target" -type f | head -1 || echo no)"; fail=1
+  fi
+  rm -rf "$bad"
   ( cd "$p" && "$CC" -o "$p/custom/multi" --target all package.al ) >"$T/multi_target_layout.o_all.out" 2>"$T/multi_target_layout.o_all.err"
   rc=$?
   if [ "$rc" != 0 ] && grep -qF 'config:' "$T/multi_target_layout.o_all.err" \
