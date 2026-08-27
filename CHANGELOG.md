@@ -29,6 +29,8 @@ how this repository proves itself, not part of what it ships.
   `bits8`/`bits16`/`bits32` pointer casts preserve their intended width and format safely.
 - Fixed ordinary scalar-field structs to use natural byte alignment, padding, and field offsets instead of one machine word per field.
 - Fixed x86_64 silent wrong values when indexing arrays of narrow scalar structs by sharing the byte stride between literal initialization and indexed places.
+- Fixed public `Option` helpers for niche-folded `Option(ptr(T))` values so they inspect the
+  pointer-width representation instead of a two-word discriminant/payload layout.
 - Fixed `run` so profile-looking program arguments after `--` cannot change the selected build profile.
 - Fixed silent wrong values when indexing an ordinary byte array through a pointer-derived struct
   field on x86_64.
