@@ -73,7 +73,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, param_find, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, effective_param_count, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
@@ -89,13 +89,6 @@ handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
 ## A64 emit is dormant in the x86 self-build, so this global never advances there (x86 fixpoint neutral).
 mut A64_NL := 0
 a64_next_label := fn() -> i64 { r := A64_NL ; A64_NL = A64_NL + 1 ; r }
-
-count_params := fn(params_head : ptr(mut Param), a : rt::Arena) -> i64 {
-  mut p := params_head
-  mut k := 0
-  while p != 0 { pm := deref(param_p(p)) ; k = k + 1 ; p = pm.next }
-  i64(k)
-}
 
 ## Single-match `If` accessors — `is` + the then-branch expr. A struct-valued if-EXPRESSION
 ## (`x := if c {f()} else {g()}`) delivers its value through the branch tails; when each tail is a
@@ -7350,7 +7343,7 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
       a64_tp_skip = decl_tparam_pos(d, src)
     }
   }
-  pcount := count_params(ephead, a)
+  pcount := effective_param_count(ephead, a)
   ## stash this fn's params so the frame scanners can recognize a slice PARAM base (set BEFORE
   ## a64_count_locals, which sizes an aggregate slice-param loop var via a64_iter_stride).
   A64_PARAMS = unchecked bitcast(usize, ephead)
