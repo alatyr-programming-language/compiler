@@ -4,8 +4,10 @@
 ## attribute` — no newline restriction). `fmt_decl_lead_attr` only ever looked at the decl's OWN line,
 ## so this spelling was ERASED: `@packed` newline `Pk := struct { … }` came back a naturally-aligned
 ## struct (24 bytes instead of 7) and `@align(16)` came back 8-aligned. That was invisible while the
-## compiler still ignored the prefix spelling; the moment the layout lane started honouring it, fmt
-## became a silent layout corrupter. This fixture locks the render, so it cannot regress silently.
+## compiler still ignored the prefix spelling; once the layout lane honoured it, fmt had to preserve
+## the prefix or became a silent layout corrupter. CLAYOUT S4 now makes the un-attributed direct-scalar control Pfx
+## naturally byte-laid out at 8 bytes; the packed declaration remains 7 bytes. This fixture locks the
+## render, so it cannot regress silently.
 Pfx := struct { a : u8, b : u16, c : u32 }
 
 ## a doc block sitting ABOVE the attribute line must still attach to the declaration — the attribute
@@ -30,7 +32,7 @@ Both := struct { a : u8, b : u16, c : u32 }
 pub Pb := struct { a : u8, b : u16, c : u32 }
 
 main := fn() -> u64 {
-  if Pfx.size() != 24 { return 1 }
+  if Pfx.size() != 8 { return 1 }
   if Doc.size() != 7 { return 2 }
   if Same.size() != 7 { return 3 }
   if Rhs.size() != 7 { return 4 }

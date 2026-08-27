@@ -2627,6 +2627,10 @@ run_x86 packed_byte_array_field 42
 ## BYTES: ordinary standard-layout structs with direct byte-array fields use exact byte offsets
 ## for construction, copy, indexed read/write, address-of, by-ref aggregate passing, size and align.
 run_x86 standard_byte_array_field 42
+## CLAYOUT S4: flat narrow-scalar structs use the Types §6.1 byte layout — natural field alignment,
+## declaration order, and tail padding. The mixed u8/u64 row is a word-layout control whose values
+## already coincide with the standard result; the all-narrow rows are the selected switch surface.
+run clayout_scalar_fields 42
 ## CLAYOUT S3(d): the same byte offset must survive a pointer-derived struct root. The non-x86
 ## emitters keep their existing fail-loud pointer-to-aggregate boundary, so this focused x86 row does
 ## not widen their claimed surface.
@@ -3502,7 +3506,8 @@ check_reject reject_int_lit_overflow_hex
 ## Declarations §2.3 / Grammar §3.2 -- a LAYOUT attribute in declaration-PREFIX position was silently
 ## dropped: `@packed` before `P := struct{...}` gave size 24 (the word model) while the RHS spelling gave 7.
 ## The parser consumed and discarded it, and all three lowering lookups recovered their attribute by
-## scanning FORWARD from the decl name, so nothing before the name was ever read. The drop is
+## scanning FORWARD from the decl name, so nothing before the name was ever read. The fix also makes the
+## un-attributed direct-scalar control use the CLAYOUT S4 natural size (8 here). The drop is
 ## BIDIRECTIONAL -- linkage/codegen/storage attributes (@export/@inline/@section) are honoured ONLY as a
 ## decl prefix and silently dropped in value position; that half is still open.
 ## NOT registered as fmt_test ON PURPOSE: `alatyr fmt` still drops the prefix spelling (verified here:
@@ -3684,7 +3689,8 @@ fmt_test_has fmt_comptime_param 42 "fn(comptime N : u64, a : w(N)"
 fmt_test_has fmt_compfor_typeinfo_arg 42 "comptime for f in typeinfo(B).fields"
 fmt_test_has fmt_comptime_arm_template 42 "comptime for v in typeinfo(T).variants { T.(v)(pa) =>"
 ## the OWN-LINE prefix attribute -- the form that became MEANINGFUL the same day fmt was last swept, and
-## so was silently erased by it (size 7 -> 24). Lockable now only because the fixture's two in-body notes
+## so was silently erased by it (the packed declaration changed from size 7 to the natural size 24).
+## Lockable now only because the fixture's two in-body notes
 ## were hoisted into its header: fmt cannot retain an in-body comment, and fmt_test asserts fidelity.
 fmt_test attr_prefix_layout 42
 ## §5 fmt has NO fail-loud channel, so a WRONG RENDER IS A SILENT MISCOMPILE. The corpus check

@@ -5553,7 +5553,14 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       if cur(pc).kind == 7 and tok_at(pc, pc.idx + 1).kind == 1 {
         pc.idx = pc.idx + 1                   ## '::'
         tt := cur(pc)                         ## tail type ident
-        rt = Token(kind = rt.kind, start = rt.start, len = tt.start + tt.len - rt.start)
+        ## Snapshot the old span before rebuilding the byte-layout Token. The self-host lower clears
+        ## an aggregate assignment's destination before evaluating its fields; reading `rt.start`
+        ## from the RHS after that clear turns it into zero and makes the length an absolute source
+        ## offset. Keep the source values in scalars first (the same rule used for other aggregate
+        ## copies in this parser).
+        rts := rt.start
+        rtk := rt.kind
+        rt = Token(kind = rtk, start = rts, len = tt.start + tt.len - rts)
         pc.idx = pc.idx + 1
       }
       ## A TUPLE return type `(T0, T1, …)` — the head token is `(` (kind 10). Extend the captured
@@ -5570,7 +5577,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
           tendpos = ck.start + ck.len
           pc.idx = pc.idx + 1
         }
-        rt = Token(kind = 10, start = rt.start, len = tendpos - rt.start)
+        rts := rt.start
+        rt = Token(kind = 10, start = rts, len = tendpos - rts)
       }
     }
     ## A `comptime` VALUE parameter on a NON-type-function is in scope only for a glyph-named
