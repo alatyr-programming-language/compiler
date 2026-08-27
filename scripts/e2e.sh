@@ -759,8 +759,9 @@ emit_reject_has() { # backend, name, needle
 build_reject_has() { # name, needle
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
-  out="$T/e2e_$1.out"
-  err="$T/e2e_$1.err"
+  key="${1//\//_}"
+  out="$T/e2e_$key.out"
+  err="$T/e2e_$key.err"
   "$CC" -o "$out" "$src" >/dev/null 2>"$err"; got=$?
   if [ "$got" = 0 ]; then echo "FAIL $1: build succeeded, want a located reject"; fail=1; return; fi
   if [ -e "$out" ]; then echo "FAIL $1: rejected but left an output artifact"; fail=1; return; fi
@@ -4066,6 +4067,12 @@ run_ffi struct_arg 42
 ## Bounded sub-word aggregate seam: SysV packs two consecutive `u8` fields into one INTEGER eightbyte.
 ## The process exits with 51 because the fixture's mathematical answer is 307 (`307 mod 256`).
 run_ffi struct_u8_arg 51
+## Issue #168: the exact two-u8 packed shape must cross both aggregate directions. Each echo fixture
+## exercises its direction's argument and return path, and both language sides read both fields.
+run_ffi issue168_u8_pair_to_c 68
+run_ffi issue168_u8_pair_from_c 68
+## The bounded slice must not widen the old located refusal: two u16 fields remain unsupported.
+build_reject_has ffi/issue168_u8_pair_unsupported "selfhost: @abi(c) aggregate with a non-eightbyte-aligned field"
 ## Increment 2 — FLOAT/SSE class. `float_call`: f64 scalar args in %xmm0/%xmm1 + an f64 RETURN read
 ## from %xmm0 (subd = a - b, ORDER-SENSITIVE). `float_mix`: MIXED i64+f64 scalar args on INDEPENDENT
 ## SysV counters (i,j->rdi,rsi ; x,y->xmm0,xmm1). `struct_float_arg`: an all-double struct D{f64,f64}
