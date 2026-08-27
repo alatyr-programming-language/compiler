@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- Unified sub-word scalar-width classification across parsing, formatting, lower layout, and WAT so
+  `bits8`/`bits16`/`bits32` pointer casts preserve their intended width and format safely.
 - Fixed `run` so profile-looking program arguments after `--` cannot change the selected build profile.
 - Fixed silent wrong values when indexing an ordinary byte array through a pointer-derived struct
   field on x86_64.
