@@ -1169,6 +1169,26 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
   } else if wgp.found {
     fpa_done = emit_global_agg_store(v, wgp.gs, wgp.gn, wgp.off, wgp.ts, wgp.tl, sb, cx, a, nl)
   }
+  ## CLAYOUT P0 — the byte-layout WRITE dual of `bitcast_deref_path`'s pointer-root READ.
+  ## Standard structs are packed by declaration order, so `field_word_offset * 8` is not a
+  ## valid address for a pointer to one: a later `u8`/`u16` field can sit at byte 1/2, and a
+  ## word store would also destroy its neighbours. Evaluate the RHS before the pointer, then
+  ## use the same cumulative byte offset and exact scalar width as the reader. Aggregate leaves
+  ## stay fail-loud; this arm is limited to scalar leaves and leaves word-tier / packed roots to
+  ## the established resolvers below.
+  if fpa_done == false {
+    bdp := bitcast_deref_path(pl, cx)
+    if bdp.ok {
+      if std_idx_leaf_is_agg(cx.decls, cx.src, bdp.ts, bdp.tl) {
+        panic("selfhost: writing a whole AGGREGATE field through a pointer to a standard-layout struct has no byte-precise store in this slice — write a scalar leaf or build the whole pointee")
+      }
+      emit_gas(v, sb, cx, a, nl)
+      emit_gas(bdp.p, sb, cx, a, nl)
+      push_str(sb, "  popq %rax\n")
+      emit_packed_store_rax(sb, scalar_byte_size(cx.src, bdp.ts, bdp.tl), bdp.bo, false)
+      fpa_done = true
+    }
+  }
   ## `deref(p).field = v` / `deref(node.next).field = v` — a scalar-field WRITE THROUGH a pointer (the
   ## store dual of the `deref(p).f` READ at the `dsb`/`dcf`/`dfps` arms). The default `field_slot`
   ## fallback returns -1 for a `Deref` base, so it stored to `-0(%rbp)` — corrupting the saved frame

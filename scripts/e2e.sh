@@ -4397,6 +4397,12 @@ run_x86 deref_assign_struct_lit 42
 ## `field_slot` returned -1 for a Deref base → a store to `-0(%rbp)`. Writes word 0 + word 1 through the
 ## pointer param, reads back 40 + 2 = 42. x86-only (a64/rv64/wasm trap on the FieldPathAssign fallback).
 run_x86 deref_field_write 42
+run deref_subword_field_write 42
+run_a64 deref_subword_field_write 133
+run_rv64 deref_subword_field_write 133
+run_wat deref_subword_field_write 134
+run_x86 deref_subword_field_write_raw 42
+run_ffi deref_subword_field_write 42
 ## MULTI-WORD struct FIELD write THROUGH a pointer from a struct-RETURNING CALL (`deref(p).i = mk()`) and
 ## an if-EXPRESSION with a CALL branch: the RHS aggregate materializes in the agg-temp, then all the
 ## field's words copy ASCENDING into (wfi+j)*8(ptr); both words land + the neighbour field is untouched.
