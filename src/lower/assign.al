@@ -415,6 +415,87 @@ pub emit_standard_value := fn(v : ptr(Expr), base : i64, bias : i64, in out sb :
   }
 }
 
+## The pointer-target dual of `emit_standard_assign`, for the bounded direct-scalar S4 slice. A
+## `deref(p) = S(...)` has no frame base to hand to the ordinary writer: the destination is an
+## address on the stack and every RHS field may emit a call. Keep that address under the field value,
+## then use the SAME §6.1 byte offset and sized store as the standard local/pointer readers. Returning
+## false leaves the older word-granular paths in charge for aggregate fields whose pointer-target
+## consumer is not part of this slice.
+emit_standard_scalar_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) -> bool {
+  si := struct_lit_info(val)
+  if si.is_s == false { return false }
+  dts := deref_dest_pointee_span(dptr, cx)
+  if dts.n == 0 or not std_struct_has_direct_byte_layout(cx.decls, cx.src, dts.s, dts.n, deref(cx.mar)) { return false }
+  di := struct_decl_of(cx.decls, cx.src, dts.s, dts.n)
+  if di < 0 { return false }
+  ddh := rt::vec_get(deref(cx.decls), usize(di))
+  ddd := deref(decl_at(Decl, ddh))
+  ## Keep this first consumer deliberately scalar-only. The predicate above also admits recursively
+  ## byte-writable children and byte arrays; those need a pointer-relative recursive writer, whereas
+  ## this path is only repairing the direct `Decl`/`Param`/`SlotEntry`-shaped aggregate store.
+  mut fdcheck := ddd.fields_head
+  mut scalar_only := true
+  while fdcheck != 0 {
+    fdc := deref(fld_p(fdcheck))
+    effc := subst_field_ty(cx.decls, cx.src, dts.s, dts.n, fdc.ts, fdc.tl, deref(cx.mar))
+    aes := array_elem_span(cx.src, effc.s, effc.n)
+    sbn := base_type_name(cx.src, effc.s, effc.n)
+    if aes.n != 0 or str_at((cx.src + effc.s), effc.n) == "str" or struct_decl_of(cx.decls, cx.src, sbn.s, sbn.n) >= 0 or enum_decl_of(cx.decls, cx.src, sbn.s, sbn.n) >= 0 or str_at((cx.src + effc.s), 1) == "(" {
+      scalar_only = false
+    }
+    fdcheck = fdc.next
+  }
+  if scalar_only == false { return false }
+  ## Clear the exact rounded standard image, not `struct_words * 8`: a small byte-layout struct can
+  ## sit densely in an array with a stride of two or four bytes, and a qword clear would clobber its
+  ## neighbour. Field stores below then replace every non-padding byte.
+  emit_gas(dptr, sb, cx, a, nl)
+  mut zoff := 0
+  zbytes := standard_struct_bytes(cx.decls, cx.src, dts.s, dts.n, deref(cx.mar))
+  while zoff + 8 <= zbytes {
+    push_str(sb, "  movq (%rsp), %rax\n  movq $0, ")
+    push_int(sb, i64(zoff))
+    push_str(sb, "(%rax)\n")
+    zoff += 8
+  }
+  if zoff + 4 <= zbytes {
+    push_str(sb, "  movq (%rsp), %rax\n  movl $0, ")
+    push_int(sb, i64(zoff))
+    push_str(sb, "(%rax)\n")
+    zoff += 4
+  }
+  if zoff + 2 <= zbytes {
+    push_str(sb, "  movq (%rsp), %rax\n  movw $0, ")
+    push_int(sb, i64(zoff))
+    push_str(sb, "(%rax)\n")
+    zoff += 2
+  }
+  if zoff < zbytes {
+    push_str(sb, "  movq (%rsp), %rax\n  movb $0, ")
+    push_int(sb, i64(zoff))
+    push_str(sb, "(%rax)\n")
+  }
+  mut fd := ddd.fields_head
+  mut g := struct_lit_fields(val)
+  while g != 0 {
+    if fd == 0 { panic("selfhost: standard-layout pointer struct construction has more values than fields") }
+    ga := deref(arg_p(g))
+    fdn := deref(fld_p(fd))
+    eff := subst_field_ty(cx.decls, cx.src, dts.s, dts.n, fdn.ts, fdn.tl, deref(cx.mar))
+    bo := standard_field_byte_offset(cx.decls, cx.src, dts.s, dts.n, fdn.ns, fdn.nl, deref(cx.mar))
+    if bo < 0 { panic("selfhost: standard-layout pointer struct field has no byte offset") }
+    emit_gas(ga.e, sb, cx, a, nl)
+    ## The field value is now on top of the saved destination pointer, so the pointer is one word
+    ## below it. Load it before `emit_packed_store_rax` pops the value.
+    push_str(sb, "  movq 8(%rsp), %rax\n")
+    emit_packed_store_rax(sb, scalar_byte_size(cx.src, eff.s, eff.n), bo, false)
+    fd = fdn.next
+    g = ga.next
+  }
+  push_str(sb, "  popq %rax\n")
+  true
+}
+
 ## CLAYOUT S3(c) — THE ONE BYTE-PRECISE WHOLE-VALUE COPIER on x86_64, the mirror of the writer
 ## above. It moves a nested child OUT of a standard byte-layout root into a standalone local:
 ## `copy := o.inner`. `root` is the ROOT local's first slot and `sbo` the child's accumulated §6.1 byte
@@ -874,6 +955,9 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
     emit_str_pair(val, sb, cx, a, nl)
     emit_gas(dptr, sb, cx, a, nl)
     push_str(sb, "  popq %rax\n  popq %rcx\n  popq %rbx\n  movq %rbx, (%rax)\n  movq %rcx, 8(%rax)\n")
+  } else if emit_standard_scalar_deref_assign(dptr, val, sb, cx, a, nl) {
+    ## The standard byte-layout pointer-target writer above owns direct scalar struct literals. It
+    ## returns false for unsupported aggregate fields, preserving the established word paths below.
   } else if slit_scalar_fields(val, cx) {
     ## storing a STRUCT LITERAL through the pointer (`deref(p) = Pt(x, y)`): evaluate each field
     ## and store to `-(k*8)(%rax)` — the down-growing pointee layout matching the field read. Was

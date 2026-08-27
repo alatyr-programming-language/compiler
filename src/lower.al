@@ -17204,6 +17204,26 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## read and the deref-COPY in `collect_slots`). Removes the "bind the deref to a local first"
         ## discipline for the node_ptr/decl_at accessors (the per-module typed AST readers).
         dcall := deref_inner_expr(base)
+        ## A standard-layout pointee may pack adjacent narrow fields before the next word-sized
+        ## field (`Decl.is_fn` + `Decl.kind` before `Decl.arity`).  The pointer-returning CALL
+        ## shape bypasses the by-ref/local standard-layout readers above, so the old word-index
+        ## load would read `Decl.arity` at byte 40 instead of byte 32 and silently break parser
+        ## declaration queries after S4.  Reuse the same byte-offset oracle and sized load used by
+        ## the direct pointer-param path; unsupported aggregate fields stay loud.
+        dstd := std_struct_has_direct_byte_layout(cx.decls, cx.src, dcf.s, dcf.n, deref(cx.mar))
+        if dstd {
+          dbo := standard_field_byte_offset(cx.decls, cx.src, dcf.s, dcf.n, fs, fl, deref(cx.mar))
+          dfty := field_type_span(cx.decls, cx.src, dcf.s, dcf.n, fs, fl, deref(cx.mar))
+          daes := array_elem_span(cx.src, dfty.s, dfty.n)
+          d_agg := daes.n != 0 or (dfty.n != 0 and (str_at((cx.src + dfty.s), dfty.n) == "str" or struct_decl_of(cx.decls, cx.src, dfty.s, dfty.n) >= 0 or enum_decl_of(cx.decls, cx.src, dfty.s, dfty.n) >= 0))
+          if dbo >= 0 and not d_agg {
+            emit_gas(dcall, sb, cx, a, nl)
+            push_str(sb, "  popq %rax\n")
+            emit_packed_load_rax(sb, scalar_byte_size(cx.src, dfty.s, dfty.n), dfty.n != 0 and str_at((cx.src + dfty.s), 1) == "i", dbo, false)
+            return
+          }
+          panic("selfhost: a standard-layout aggregate field read through a pointer-returning call needs a byte-aware aggregate value path")
+        }
         fi := field_word_offset(cx.decls, cx.src, dcf.s, dcf.n, fs, fl, deref(cx.mar))
         emit_gas(dcall, sb, cx, a, nl)
         push_str(sb, "  popq %rax\n  movq ")
