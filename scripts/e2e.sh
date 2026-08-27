@@ -2638,6 +2638,14 @@ run_x86 deref_ptr_standard_byte_array_field 42
 ## CLAYOUT S3(e): a standard byte-tier struct crosses an ordinary by-value parameter and return;
 ## all four emitters must load its byte fields through the parameter's caller-owned address.
 run standard_byte_abi 42
+## #169: the first two narrow fields share one eightbyte; the non-x86 backends must not return 70.
+run issue169_standard_byte_return 75
+## #169: second-field-only by-value parameter probe; a first-field-only result is insufficient.
+run issue169_standard_byte_param 5
+## #169: the WASM whole-element write must not retain its old partial word copy.
+run issue169_wasm_array_write 42
+## #169: the WASM nested standard-byte return must not regress from its former trap to a wrong value.
+run issue169_wasm_nested_return 23
 ## BYTES: a direct byte-array component in a typed tuple local uses standard byte offsets.
 run_x86 standard_tuple_byte_component 42
 build_reject_has reject_standard_tuple_byte_param "a standard-layout byte tuple parameter is not supported yet"

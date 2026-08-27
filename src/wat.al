@@ -46,7 +46,7 @@ arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 stmt_label_span := ast::stmt_label_span
 (push_str, push_int) := rt
-(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
+(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 variant_payload_type := lower_layout::variant_payload_type
 (typearg_at, base_type_name) := lower_layout
@@ -1769,6 +1769,27 @@ mut WAT_SUB_GPS3 := 0
 mut WAT_SUB_GPL3 := 0
 mut WAT_SUB_ITS3 := 0
 mut WAT_SUB_ITL3 := 0
+## Check the EFFECTIVE value parameters of the current function. Generic instances substitute the
+## active type-parameter spans before asking the shared ABI-fence predicate; comptime `type` params
+## have no runtime boundary and are skipped.
+wat_params_need_standard_byte_abi_fence := fn(params_head : ptr(mut Param), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena) -> bool {
+  mut p := params_head
+  mut found := false
+  while p != 0 {
+    pm := deref(param_p(p))
+    if str_at((src + pm.ts), pm.tl) != "type" {
+      mut pts := pm.ts
+      mut ptl := pm.tl
+      if WAT_SUB_GPL != 0 and streq(src, pm.ts, pm.tl, WAT_SUB_GPS, WAT_SUB_GPL) { pts = WAT_SUB_ITS ; ptl = WAT_SUB_ITL }
+      if WAT_SUB_GPL2 != 0 and streq(src, pm.ts, pm.tl, WAT_SUB_GPS2, WAT_SUB_GPL2) { pts = WAT_SUB_ITS2 ; ptl = WAT_SUB_ITL2 }
+      if WAT_SUB_GPL3 != 0 and streq(src, pm.ts, pm.tl, WAT_SUB_GPS3, WAT_SUB_GPL3) { pts = WAT_SUB_ITS3 ; ptl = WAT_SUB_ITL3 }
+      pbn := base_type_name(src, pts, ptl)
+      if pbn.n != 0 and wat_standard_byte_abi_fence(decls, src, pbn.s, pbn.n, a) { found = true }
+    }
+    p = pm.next
+  }
+  found
+}
 ## The collected instance set: parallel FIXED module arrays (generic-decl index / type-arg span
 ## start / length; plus the 2nd/3rd type-arg spans for a multi-type-param generic), WAT_INST_N live
 ## entries. Fixed BSS (not arena-bump — the storage must not ride a by-value arena copy). Instances are
@@ -3348,6 +3369,21 @@ struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
     f = fd.next
   }
   ok
+}
+
+## A standard-byte struct whose historical word carrier is not ABI-safe on WASM. Direct byte-array
+## structs already have their dedicated byte-aware parameter/return paths, and a word-granular shape
+## has identical §6.1 and word positions. The remaining multi-word narrow scalar/nested structs from
+## #169 must trap at the function boundary instead of exposing a differently-laid-out value.
+wat_standard_byte_abi_fence := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
+  if struct_decl_of(decls, src, s, n) < 0 { return false }
+  if not layout_kind_is_byte(layout_kind(decls, src, s, n, a)) { return false }
+  if std_struct_has_byte_layout(decls, src, s, n, a) { return false }
+  if std_struct_is_word_granular(decls, src, s, n, a) { return false }
+  ## `struct_words` is ceil(byte_size / 8) in the BYTE tier, so a two-byte `{u8,u8}` value
+  ## still reserves one historical word even though its second field is at byte 1, not byte 8.
+  ## The ABI fence is about field-image agreement, not the rounded storage count.
+  true
 }
 
 ## Is the ACTIVE field of struct `[s,n)` a scalar value rather than merely a one-word field? A nested
@@ -5727,7 +5763,18 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         ## multi-word NON-struct element — traps rather than storing a partial/aliased element.
         aggel := wat_arr_elem_struct(fn_head, src, bn.s, bn.n, a, decls)
         aggstride := if aggel.n == 0 { wat_arr_elem_stride(fn_head, src, bn.s, bn.n, a, decls) } else { 1 }
-        if aggel.n != 0 {
+        ## #169: the all-scalar standard-byte element path below still materializes a value as one
+        ## word per field and then copies word-sized cells, while its array stride is the real §6.1
+        ## byte stride. That turns `T { a:u8, b:u8 }` into a silent partial write (the second field
+        ## is lost). The dedicated byte-array/nested writer has its own correct path, so fence only
+        ## this exact word-copy shape until array-element ABI storage is widened consistently.
+        mut byte_word_copy := false
+        if aggel.n != 0 and struct_all_scalar(decls, src, aggel.s, aggel.n, a) {
+          if wat_standard_byte_abi_fence(decls, src, aggel.s, aggel.n, a) { byte_word_copy = true }
+        }
+        if byte_word_copy {
+          push_str(sb, "    (unreachable) (; unsupported standard-byte aggregate element write (#169) ;)\n")
+        } else if aggel.n != 0 {
           rhsp := wat_rhs_agg_span(ival, params_head, fn_head, src, a, decls)
           sc2 := sc + 1
           sc3 := sc + 2
@@ -6705,6 +6752,17 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
       ephead = pp
     }
   }
+  mut rts := d.ret_ts
+  mut rtl := d.ret_tl
+  if isgen {
+    if WAT_SUB_GPL != 0 and d.ret_tl == WAT_SUB_GPL and streq(src, d.ret_ts, d.ret_tl, WAT_SUB_GPS, WAT_SUB_GPL) { rts = WAT_SUB_ITS ; rtl = WAT_SUB_ITL }
+    if WAT_SUB_GPL2 != 0 and d.ret_tl == WAT_SUB_GPL2 and streq(src, d.ret_ts, d.ret_tl, WAT_SUB_GPS2, WAT_SUB_GPL2) { rts = WAT_SUB_ITS2 ; rtl = WAT_SUB_ITL2 }
+    if WAT_SUB_GPL3 != 0 and d.ret_tl == WAT_SUB_GPL3 and streq(src, d.ret_ts, d.ret_tl, WAT_SUB_GPS3, WAT_SUB_GPL3) { rts = WAT_SUB_ITS3 ; rtl = WAT_SUB_ITL3 }
+  }
+  wrbn := base_type_name(src, rts, rtl)
+  mut standard_byte_abi_fence := false
+  if wrbn.n != 0 and wat_standard_byte_abi_fence(decls, src, wrbn.s, wrbn.n, a) { standard_byte_abi_fence = true }
+  if wat_params_need_standard_byte_abi_fence(ephead, src, decls, a) { standard_byte_abi_fence = true }
   push_str(sb, "  (func $")
   fname := str_at((src + d.name_start), d.name_len)
   if d.name_len == 0 { wat_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) }
@@ -6777,13 +6835,20 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   void := d.ret_tl == 0
   if not void { push_str(sb, " (result i64)") }
   push_str(sb, "\n")
-  pc := count_params(ephead, src, a)
-  WAT_RET_TUPLE = 0
-  if wat_fn_returns_tuple(d, src) {
-    tw := wat_tuple_words(src, d.ret_ts, d.ret_tl)
-    if tw >= 1 and tw <= 7 { WAT_RET_TUPLE = tw }
+  if standard_byte_abi_fence {
+    ## A fenced function has no local declarations or body: `(unreachable)` is polymorphic and
+    ## therefore satisfies a value result while remaining valid WAT. Emitting it before
+    ## `emit_wat_body`'s locals would make wat2wasm reject the module (locals must precede code).
+    push_str(sb, "    (unreachable) (; unsupported standard-byte by-value ABI boundary (#169) ;)\n")
+  } else {
+    pc := count_params(ephead, src, a)
+    WAT_RET_TUPLE = 0
+    if wat_fn_returns_tuple(d, src) {
+      tw := wat_tuple_words(src, d.ret_ts, d.ret_tl)
+      if tw >= 1 and tw <= 7 { WAT_RET_TUPLE = tw }
+    }
+    emit_wat_body(d.body_stmts, d.value, void, sb, a, src, ephead, pc, decls)
   }
-  emit_wat_body(d.body_stmts, d.value, void, sb, a, src, ephead, pc, decls)
   WAT_RET_TUPLE = 0
   push_str(sb, "  )\n")
   ## `@export("name")` — a generic base fn is never emitted standalone, so only a concrete fn exports.
