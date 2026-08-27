@@ -4970,6 +4970,17 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       }
       if not ok { push_str(sb, "(unreachable) (; unsupported slice value ;)\n") }
     }
+    ## A parser-preserved sub-word pointer bitcast carries only its scalar pointee span (`u8`, `bits16`,
+    ## …); WAT's scalar representation is already word-sized, so emit the source expression directly.
+    ## Other preserved bitcasts (aggregate or pointer-to-user-type targets) remain fail-loud exactly as
+    ## before: making those transparent would silently widen WAT's unsupported surface.
+    Expr::Bitcast(inner, ts, tl) => {
+      if scalar_width::subword_bytes(src, ts, tl) != 0 {
+        emit_wat_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      } else {
+        push_str(sb, "(unreachable) (; unsupported bitcast ;)\n")
+      }
+    }
     ## Anything else the scalar kernel does not model (Deref/StrLit/…) traps rather than
     ## silently miscomputing. `unreachable` is stack-polymorphic, so it satisfies the expected i64.
     Expr::Unchecked(inner) => {

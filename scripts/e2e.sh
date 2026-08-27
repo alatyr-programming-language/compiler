@@ -2663,6 +2663,10 @@ run_x86 packed_agg_nested_read 42
 ## whole-word copy stays in-slot and never clobbers the neighbour (fields round-trip, sentinel intact);
 ## x86_64-only byte-precise layout, so run_x86 (sweep-excluded).
 run_x86 packed_subword 42
+## Issue #163: one focused matrix keeps the canonical scalar-width decision visible to the runtime
+## pointer-preservation path and the packed-layout path; the paired fmt row checks round-trip fidelity.
+run scalar_width_matrix 42
+fmt_test scalar_width_matrix 42
 ## §8 @packed struct passed BY VALUE as a PARAMETER: an aggregate arg travels by REFERENCE, so the
 ## callee's slot is `is_ref` and failed the packed-LOCAL gate — every field fell to the word-sized
 ## `movq 8*index(%rax)` read of a BYTE-precise block (p.b/p.c read 0, p.a read all fields OR-ed into

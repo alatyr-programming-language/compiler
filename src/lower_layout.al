@@ -1913,15 +1913,12 @@ pub require_pred := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
 }
 
 ## The BYTE size of a SCALAR field type `[ts, ts+tl)` for the packed layout (spec §8 / the machine
-## model): `u8`/`i8`/`bits8`/`bool` = 1, `u16`/`i16`/`bits16` = 2, `u32`/`i32`/`bits32`/`char`/`f32` = 4, everything else
-## (`u64`/`i64`/`usize`/`f64`/`ptr` and any unresolved name) = 8 (one word). A `@packed` struct in this
-## increment carries SCALAR fields only; a non-scalar field would size as 8 here (the word default).
+## model). The canonical sub-word rows live in `scalar_width`; this wrapper retains the public query's
+## established 8-byte answer for word-sized, aggregate, and unresolved names. A `@packed` struct in
+## this increment carries SCALAR fields only; a non-scalar field would size as 8 here (the word default).
 pub scalar_byte_size := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
-  if tl == 0 { return 8 }
-  t := str_at((src + ts), tl)
-  if t == "u8" or t == "i8" or t == "bits8" or t == "bool" { return 1 }
-  if t == "u16" or t == "i16" or t == "bits16" { return 2 }
-  if t == "u32" or t == "i32" or t == "bits32" or t == "char" or t == "f32" { return 4 }
+  w := scalar_width::subword_bytes(src, ts, tl)
+  if w != 0 { return w }
   8
 }
 

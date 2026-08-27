@@ -969,17 +969,6 @@ fmt_bitcast_is_unchecked := fn(src : ptr(u8), pts : usize) -> bool {
   return fmt_is_ident_byte(bytes(str_at((src + q - 10), 1))[0]) == false
 }
 
-## Is the span a SUB-WORD SCALAR type name — the exact set `parser::subword_scalar_bytes` accepts?
-## That predicate is what decides whether the parser preserved a bitcast's POINTEE (span `u8`, surface
-## `ptr(u8)`) rather than its whole target type (span `B` / `ptr(mut Pt)`, surface as written), so it
-## is also what decides whether fmt has to put the `ptr(…)` back. Kept as a mirror on purpose: a new
-## sub-word width added there needs the same line here, or its render silently loses the pointer.
-fmt_span_is_subword_scalar := fn(src : ptr(u8), s : usize, n : usize) -> bool {
-  if n == 0 { return false }
-  t := str_at((src + s), n)
-  return t == "u8" or t == "i8" or t == "bool" or t == "u16" or t == "i16" or t == "u32" or t == "i32" or t == "char" or t == "f32"
-}
-
 ## Is `e` the literal `Num(0)`? (Single-level match — the self-host lower mis-compiles a `match` nested
 ## directly inside another `match` arm, so the unary-minus recognizer factors its two levels into two
 ## single-match helpers rather than one nested match.)
@@ -1752,7 +1741,7 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
       ## is the marker itself. `ptr(u8)` sees `tr(` before the span, so nothing is invented.
       if fmt_bitcast_is_unchecked(src, pts) { push_str(sb, "unchecked ") }
       push_str(sb, "bitcast(")
-      if fmt_span_is_subword_scalar(src, pts, ptl) {
+      if scalar_width::subword_bytes(src, pts, ptl) != 0 {
         push_str(sb, "ptr(")
         if local_is_mut(src, pts) { push_str(sb, "mut ") }
         push_str(sb, str_at((src + pts), ptl))
