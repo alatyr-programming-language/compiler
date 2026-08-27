@@ -28,7 +28,7 @@ param_p := ast::param_p
 (push_str, push_int) := strbuf
 (CSpan, LCtx, arg_expr_at) := lower_ctx
 (decl_is_variadic, type_is_variadic_rest) := lower_attrs
-(enum_decl_of, enum_inst_words, struct_decl_of, struct_words) := lower_layout
+(enum_decl_of, enum_inst_words, std_struct_is_u8_pair, struct_decl_of, struct_words) := lower_layout
 
 ## ============================================================================================
 ## C-ABI FOREIGN CALLS (x86_64 System V AMD64 — spec 150 §FN-9). FIRST FFI increment: the
@@ -80,19 +80,7 @@ pub callee_decl_is_abi_c := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64) 
 ## offsets 0 and 1, while SysV C carries that two-byte image in one INTEGER eightbyte. This helper is
 ## deliberately exact; all other sub-word and multi-word field shapes remain behind the located reject.
 abi_c_is_u8_pair := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
-  di := struct_decl_of(decls, src, s, n)
-  if di < 0 { return false }
-  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
-  mut f := d.fields_head
-  mut nf := 0
-  mut ok := true
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if str_at((src + fd.ts), fd.tl) != "u8" { ok = false }
-    nf += 1
-    f = fd.next
-  }
-  ok and nf == 2
+  std_struct_is_u8_pair(decls, src, s, n)
 }
 
 ## The TOTAL number of SysV register eightbytes (INTEGER + SSE) consumed by the `pidx`-th param (full

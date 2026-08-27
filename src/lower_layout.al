@@ -1001,6 +1001,26 @@ pub std_struct_has_direct_byte_layout := fn(decls : ptr(rt::Vec), src : ptr(u8),
   scalar_only and found_subword
 }
 
+## Exact two-byte scalar shape shared by the C and native ABI classifiers. This is only the field
+## shape; callers still decide whether the surrounding layout is the standard byte tier and whether
+## a plain (non-generic) declaration is required. Keeping the shape here prevents the three native
+## emitters from drifting away from the already-landed C ABI seam.
+pub std_struct_is_u8_pair := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  di := struct_decl_of(decls, src, s, n)
+  if di < 0 { return false }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  mut f := d.fields_head
+  mut nf := 0
+  mut ok := true
+  while f != 0 {
+    fd := deref(fld_p(f))
+    if str_at((src + fd.ts), fd.tl) != "u8" { ok = false }
+    nf += 1
+    f = fd.next
+  }
+  ok and nf == 2
+}
+
 std_type_has_byte_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, wsize : usize, a : rt::Arena) -> bool {
   es := arr_field_elem_span(src, ts, tl)
   if es.n != 0 and layout_byte_type_eek(src, es.s, es.n) != 0 { return true }
@@ -2245,6 +2265,15 @@ pub struct_plain := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   if di < 0 { return false }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   unchecked bitcast(usize, d.params_head) == 0
+}
+
+## The bounded native-ABI shape admitted by #169: a plain standard-byte struct with exactly two direct
+## `u8` fields. Wider, nested, generic, packed, and otherwise unsupported byte layouts stay outside this
+## predicate so their existing fail-loud boundary remains intact on every native backend.
+pub std_struct_is_native_u8_pair := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
+  if not struct_plain(decls, src, s, n) { return false }
+  if not layout_kind_is_byte(layout_kind(decls, src, s, n, a)) { return false }
+  std_struct_is_u8_pair(decls, src, s, n)
 }
 
 ## Is `[ts, ts+tl)` a SCALAR type — i.e. NOT a declared enum, NOT a declared struct, and not `str`?

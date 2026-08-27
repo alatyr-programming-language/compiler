@@ -46,7 +46,7 @@ arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 stmt_label_span := ast::stmt_label_span
 (push_str, push_int) := rt
-(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
+(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 variant_payload_type := lower_layout::variant_payload_type
 (typearg_at, base_type_name) := lower_layout
@@ -1784,7 +1784,7 @@ wat_params_need_standard_byte_abi_fence := fn(params_head : ptr(mut Param), src 
       if WAT_SUB_GPL2 != 0 and streq(src, pm.ts, pm.tl, WAT_SUB_GPS2, WAT_SUB_GPL2) { pts = WAT_SUB_ITS2 ; ptl = WAT_SUB_ITL2 }
       if WAT_SUB_GPL3 != 0 and streq(src, pm.ts, pm.tl, WAT_SUB_GPS3, WAT_SUB_GPL3) { pts = WAT_SUB_ITS3 ; ptl = WAT_SUB_ITL3 }
       pbn := base_type_name(src, pts, ptl)
-      if pbn.n != 0 and wat_standard_byte_abi_fence(decls, src, pbn.s, pbn.n, a) { found = true }
+      if pbn.n != 0 and wat_standard_byte_abi_fence(decls, src, pbn.s, pbn.n, a, true) { found = true }
     }
     p = pm.next
   }
@@ -3417,9 +3417,10 @@ struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
 ## structs already have their dedicated byte-aware parameter/return paths, and a word-granular shape
 ## has identical §6.1 and word positions. The remaining multi-word narrow scalar/nested structs from
 ## #169 must trap at the function boundary instead of exposing a differently-laid-out value.
-wat_standard_byte_abi_fence := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
+wat_standard_byte_abi_fence := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena, allow_native_pair : bool) -> bool {
   if struct_decl_of(decls, src, s, n) < 0 { return false }
   if not layout_kind_is_byte(layout_kind(decls, src, s, n, a)) { return false }
+  if allow_native_pair and std_struct_is_native_u8_pair(decls, src, s, n, a) { return false }
   if std_struct_has_byte_layout(decls, src, s, n, a) { return false }
   if std_struct_is_word_granular(decls, src, s, n, a) { return false }
   ## `struct_words` is ceil(byte_size / 8) in the BYTE tier, so a two-byte `{u8,u8}` value
@@ -3439,7 +3440,7 @@ wat_array_lit_standard_byte_fence := fn(v : ptr(Expr), decls : ptr(rt::Vec), src
   sp := expr_struct_name(ga.e)
   if sp.n == 0 { return false }
   if not std_array_elem_byte_tier(decls, src, sp.s, sp.n, a) { return false }
-  wat_standard_byte_abi_fence(decls, src, sp.s, sp.n, a)
+  wat_standard_byte_abi_fence(decls, src, sp.s, sp.n, a, false)
 }
 
 ## Is the ACTIVE field of struct `[s,n)` a scalar value rather than merely a one-word field? A nested
@@ -3604,6 +3605,34 @@ emit_wat_tmp_addr := fn(in out sb : rt::StrBuf, byte_off : i64) {
   push_str(sb, "(i32.wrap_i64 (i64.add (global.get $__tmp) (i64.const ")
   push_int(sb, byte_off)
   push_str(sb, ")))")
+}
+
+## Materialize the bounded native `{u8, u8}` expression literal in `$__tmp` using its standard byte
+## image. The generic expression writer below remains word-granular for every other struct shape.
+wat_std_store_tmp_u8_pair := fn(pe : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+  sn := expr_struct_name(pe)
+  di := struct_decl_of(decls, src, sn.s, sn.n)
+  if di < 0 { push_str(sb, "(unreachable) (; unknown native u8-pair literal ;)\n") ; return 0 }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  mut f := d.fields_head
+  mut g := ex_struct_lit_args(pe)
+  while f != 0 and g != 0 {
+    fd := deref(fld_p(f))
+    ga := deref(arg_p(g))
+    bo := standard_field_byte_offset(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
+    ft := field_type_span(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
+    if bo >= 0 and ft.n != 0 and scalar_byte_size(src, ft.s, ft.n) == 1 {
+      push_str(sb, "(i64.store8 ")
+      emit_wat_tmp_addr(sb, bo)
+      push_str(sb, " ")
+      emit_wat_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      push_str(sb, ") ")
+    }
+    if bo < 0 or ft.n == 0 or scalar_byte_size(src, ft.s, ft.n) != 1 { push_str(sb, "(unreachable) (; unresolved native u8-pair field ;) ") }
+    f = fd.next
+    g = ga.next
+  }
+  i64(standard_type_byte_size(decls, src, sn.s, sn.n, 1, a))
 }
 
 ## Emit a value-position match's arms as a nested-if chain on the scrutinee's discriminant (word 0 of
@@ -4732,7 +4761,17 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
     Expr::StructLit(ss, sn, nf, ah) => {
       ## a struct literal in expression position (e.g. passed directly as a fn arg): construct in
       ## linear memory via $__tmp and YIELD its base address (a block-with-result).
-      if struct_all_scalar(decls, src, ss, sn, a) {
+      mut native_pair := false
+      if std_struct_is_native_u8_pair(decls, src, ss, sn, a) { native_pair = true }
+      if native_pair {
+        szb := standard_type_byte_size(decls, src, ss, sn, 1, a)
+        push_str(sb, "(block (result i64) (global.set $__tmp (global.get $__sp)) (global.set $__sp (i64.add (global.get $__sp) (i64.const ")
+        push_int(sb, i64(szb))
+        push_str(sb, "))) ")
+        _pairw := wat_std_store_tmp_u8_pair(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        push_str(sb, "(global.get $__tmp))")
+      }
+      if (not native_pair) and struct_all_scalar(decls, src, ss, sn, a) {
         sz := struct_words(decls, src, ss, sn, a)
         push_str(sb, "(block (result i64) (global.set $__tmp (global.get $__sp)) (global.set $__sp (i64.add (global.get $__sp) (i64.const ")
         push_int(sb, i64(sz) * 8)
@@ -4750,7 +4789,8 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           g = ga.next
         }
         push_str(sb, "(global.get $__tmp))")
-      } else {
+      }
+      if (not native_pair) and (not struct_all_scalar(decls, src, ss, sn, a)) {
         push_str(sb, "(unreachable) (; non-scalar struct literal ;)\n")
       }
     }
@@ -5871,7 +5911,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         ## this exact word-copy shape until array-element ABI storage is widened consistently.
         mut byte_word_copy := false
         if aggel.n != 0 and struct_all_scalar(decls, src, aggel.s, aggel.n, a) {
-          if wat_standard_byte_abi_fence(decls, src, aggel.s, aggel.n, a) { byte_word_copy = true }
+          if wat_standard_byte_abi_fence(decls, src, aggel.s, aggel.n, a, false) { byte_word_copy = true }
         }
         if byte_word_copy {
           push_str(sb, "    (unreachable) (; unsupported standard-byte aggregate element write (#169) ;)\n")
@@ -6863,7 +6903,7 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   }
   wrbn := base_type_name(src, rts, rtl)
   mut standard_byte_abi_fence := false
-  if wrbn.n != 0 and wat_standard_byte_abi_fence(decls, src, wrbn.s, wrbn.n, a) { standard_byte_abi_fence = true }
+  if wrbn.n != 0 and wat_standard_byte_abi_fence(decls, src, wrbn.s, wrbn.n, a, true) { standard_byte_abi_fence = true }
   if wat_params_need_standard_byte_abi_fence(ephead, src, decls, a) { standard_byte_abi_fence = true }
   push_str(sb, "  (func $")
   fname := str_at((src + d.name_start), d.name_len)
