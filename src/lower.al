@@ -8380,6 +8380,10 @@ is_str_operand := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   if is_sub_call(e, cx.src) { return true }
   if is_slice_expr(e) { return true }
   if str_ret_call(e, cx.decls, cx.src, deref(cx.mar)) { return true }
+  ## A `str` FIELD is the same two-word view as a str local, but its Expr is a Field rather than a Var.
+  ## Reuse the existing field-place resolver so direct `==`/`!=` reaches `emit_str_eq_core` instead of
+  ## scalar lowering; nested and nonzero-offset fields retain the resolver's established slot math.
+  if str_field_place(e, cx, deref(cx.mar)).found { return true }
   vn := var_name_span(e)
   if vn.n != 0 {
     ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
