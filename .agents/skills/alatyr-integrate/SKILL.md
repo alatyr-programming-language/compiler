@@ -418,17 +418,20 @@ one; otherwise use the same idempotent label block. Never clear someone else's a
 After claim release, leave one maintainer comment on the PR. This is the durable acceptance record; the
 final chat response is not a substitute for it. Use only facts from this integration run, not the
 contributor's pasted evidence. Replace every angle-bracket placeholder with the observed fact before
-sending:
+sending. The here-document is shell input: do not put markdown backticks, `$()`/backtick command
+substitutions, pasted PR text, or any other shell syntax in its literal body. Those are evaluated before
+`gh` receives the comment. Keep the body to the plain-text fields below; values expanded from the
+maintainer-controlled variables are not re-parsed as shell syntax.
 
 ```sh
 gh pr comment "$PR" -R "$R" --body-file - <<EOF
 Accepted and landed by the maintainer.
 
-- gated main object: \`$M\`
+- gated main object: $M
 - authoritative gate: GREEN (sweeps RAN)
 - oracle changes: <none, or the separately gated oracle commit(s)>
-- local main: \`$MAIN_REF_OUTCOME\`
-- feature branch: \`$BRANCH\` $BRANCH_OUTCOME
+- local main: $MAIN_REF_OUTCOME
+- feature branch: $BRANCH $BRANCH_OUTCOME
 - issue relation: <Closes/Fixes/Resolves #<issue>, or Refs #<issue> — bounded slice: <landed scope>; residual: <remaining scope>>
 - worker claim: <removed and verified, already absent and verified, or retained because ownership was uncertain or another named worker/PR owns the residual>
 EOF
