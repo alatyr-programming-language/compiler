@@ -3664,6 +3664,61 @@ global_struct_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   }
   VSpan(s = 0, n = 0)
 }
+## The direct-name counterpart used by statement write places, whose parser representation stores the
+## base as a name span instead of an `Expr`. Hidden tag 9 is the reliable inferred-struct recording;
+## the global fallback covers a module-level annotated or inferred struct. Other types remain unknown.
+sema_struct_owner_name_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> VSpan {
+  lt := local_ty(locals, nloc, src, s, n)
+  mut tag : u8 = lt.tag
+  if tag >= 128 and tag != 255 { tag = tag - 128 }
+  if (tag == 3 or tag == 9) and lt.nl != 0 { return VSpan(s = lt.ns, n = lt.nl) }
+  global_struct_type_span(decls, src, s, n)
+}
+## A bare/qualified assignment target may be a global owned by another package module. The complete
+## module-visibility walk runs after `check_stmts`, but this early local-name fence must not turn a valid
+## ancestor global (or the existing later visibility diagnostic for a private sibling global) into a new
+## generic `unbound name`. Existence is intentionally module-blind here; `sema_vis_stmts` remains the
+## authority for which module may address it.
+sema_global_name_anywhere := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  mut i := 0
+  cnt := rt::vec_len(deref(decls))
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if sema_is_global_decl(d, src) and streq(src, d.name_start, d.name_len, s, n) { return true }
+    i += 1
+  }
+  false
+}
+## Recover a confidently known STRUCT owner for a value expression. The local aggregate recording is
+## the primary source; a module-level aggregate and the direct literal/call shapes are included so the
+## field-name fence covers the same obvious values without inventing general type flow. Unknown,
+## scalar, string, enum, pointer-root, and unresolved expressions stay open (poison-tolerant).
+sema_struct_owner_span := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+  mut r := s3a_struct_span(base, decls, upto, src, locals, nloc, a)
+  if r.n == 0 {
+    bv := expr_var_span(base)
+    if bv.n != 0 { r = global_struct_type_span(decls, src, bv.s, bv.n) }
+  }
+  if r.n == 0 {
+    lit := expr_agg_lit(base)
+    if lit.is_agg and struct_decl_of(decls, src, lit.s, lit.n) >= 0 { r = VSpan(s = lit.s, n = lit.n) }
+  }
+  if r.n == 0 {
+    ct := expr_call_result_ty(base, decls, upto, src)
+    if ct.tag == 3 and ct.nl != 0 { r = VSpan(s = ct.ns, n = ct.nl) }
+  }
+  r
+}
+## The direct/local/global field-name fence. A known struct must contain the selected field; otherwise
+## the old `field_ty` returned unknown and the lower read/stored word zero. Keep prelude namespace and
+## unknown-owner accesses tolerant, because their associated/pointer layouts are outside this bounded
+## sema slice and existing lowering remains authoritative there.
+sema_field_name_missing := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
+  if is_prelude_ns_var(base, src) { return false }
+  owner := sema_struct_owner_span(base, decls, upto, src, locals, nloc, a)
+  if owner.n == 0 { return false }
+  sema_field_ann_span(decls, upto, src, owner.s, owner.n, fs, fl, a).n == 0
+}
 ## The x86 lower has a fail-loud fence for exactly this shape: a compatible, non-literal struct value
 ## entering a bare mutable struct global. Mirror only that proven boundary in sema so WAT/AArch64/RISC-V
 ## cannot emit a word-0-only store. Struct literals remain supported; unknown/scalar values stay open for
@@ -4379,6 +4434,90 @@ bitcast_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   r
 }
 
+## Name-only resolution walk for an expression that is used for its effect or as a control condition.
+## This is intentionally separate from `expr_has_unbound`: that older prepass also performs call-arity and
+## argument-type checks, which are valid on ordinary value/RHS paths but would misclassify type-builtin
+## operands (`size(T)`) and compiler-synthesized defer markers when applied to every discarded expression.
+## Keep this walk limited to binding/field existence; the ordinary checker remains responsible for types,
+## arity, and all deferred/target-specific rules.
+expr_statement_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> bool {
+  if unchecked bitcast(usize, e) == 0 { return false }
+  ubci := bitcast_inner(e)
+  if unchecked bitcast(usize, ubci) != 0 { return expr_statement_has_unbound(ubci, decls, upto, src, a, locals, nloc) }
+  match deref(e) {
+    Expr::Num(v, s, n) => { false }
+    Expr::BoolLit(v) => { false }
+    Expr::FloatLit(s, n) => { false }
+    Expr::StrLit(s, n, lbl) => { false }
+    Expr::Var(s, n) => {
+      mut found := false
+      if nloc != 0 { found = local_in(locals, nloc, src, s, n) }
+      if not found { found = declared(decls, rt::vec_len(deref(decls)), src, s, n) }
+      if not found { found = is_register_name(src, s, n) }
+      if not found { found = remembered(locals, src, s, n) }
+      not found
+    }
+    ## Compound expressions are left to the established value checker here. Its payload-heavy
+    ## dispatch is intentionally not duplicated in this statement-only fence; direct Var/Call/Field
+    ## roots cover this issue's dropped statement values without changing existing arithmetic, match,
+    ## layout, or control-flow expression paths.
+    Expr::Bin(op, l, r) => { false }
+    Expr::If(c, t, f) => { false }
+    Expr::Match(scrut, head) => { false }
+    Expr::Call(cs, cl, na, ah) => {
+      nm := str_at((src + cs), cl)
+      ## These names are parser-only defer markers, not user calls. Their action/body is checked by the
+      ## established defer-aware paths; treating the marker as an ordinary unresolved call would reject
+      ## every valid `defer` before lower can register it.
+      if nm == "__defer" or nm == "__deferblk" or nm == "__deferblkend" { return false }
+      mut bad := false
+      mut callee_ok := callee_declared_anywhere(decls, src, cs, cl) or is_builtin_callee(src, cs, cl)
+      if not callee_ok and nloc != 0 and local_in(locals, nloc, src, cs, cl) { callee_ok = true }
+      if not callee_ok and na >= 1 and callee_is_fn_valued_field(decls, src, cs, cl) { callee_ok = true }
+      if not callee_ok { bad = true }
+      ## `size`/`align`/`typeinfo` arguments are type expressions, not runtime name uses. Generic type
+      ## parameters are likewise skipped at their declared type-argument positions.
+      tb := callee_is_type_builtin(src, cs, cl)
+      gen := callee_is_generic(decls, upto, src, cs, cl)
+      mut ai := 0
+      mut g := ah
+      while g != 0 {
+        ga := deref(arg_p(g))
+        if not tb and not (gen and callee_param_is_type(decls, upto, src, cs, cl, ai, a)) {
+          if expr_statement_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
+        }
+        ai += 1
+        g = ga.next
+      }
+      bad
+    }
+    Expr::StructLit(ss, sl, nf, fh) => { false }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { false }
+    Expr::Field(base, fs, fl) => {
+      mut bad := false
+      ## A type/namespace field (`str.size()`, `Ordering.acquire`, `typeinfo(T).fields`) is not a
+      ## runtime read of the base name. Known user-struct fields still go through the field-name fence.
+      bv := expr_var_span(base)
+      if not is_prelude_ns_var(base, src) and not (bv.n != 0 and type_name_known(decls, src, bv.s, bv.n)) {
+        bad = expr_statement_has_unbound(base, decls, upto, src, a, locals, nloc)
+      }
+      if not bad and sema_field_name_missing(base, fs, fl, decls, upto, src, locals, nloc, a) { bad = true }
+      bad
+    }
+    Expr::AddrOf(p) => { false }
+    Expr::Deref(p) => { false }
+    Expr::ArrayLit(ne, eh) => { false }
+    Expr::Index(base, idx) => { false }
+    Expr::Try(inner) => { false }
+    Expr::Slice(base, lo, hi) => { false }
+    Expr::CompField(base, idx) => { false }
+    Expr::Unchecked(inner) => { expr_statement_has_unbound(inner, decls, upto, src, a, locals, nloc) }
+    Expr::FnRef(fnpos, fms, fml) => { false }
+    Expr::Lambda(fnpos, ph, rts, rtl, bh, val) => { false }
+    Expr::Loop(b) => { false }
+  }
+}
+
 expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> bool {
   ## `bitcast(ptr(<sub-word>), v)` PRESERVED node — transparent: its bound-ness is the inner's.
   ## Handled pre-match (this match has NO wildcard, so an unmatched Bitcast would fall through and
@@ -4516,7 +4655,10 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       bad
     }
     Expr::Field(base, fs, fl) => {
-      if is_prelude_ns_var(base, src) { false } else { expr_has_unbound(base, decls, upto, src, a, locals, nloc) }
+      mut bad := false
+      if not is_prelude_ns_var(base, src) { bad = expr_has_unbound(base, decls, upto, src, a, locals, nloc) }
+      if not bad and sema_field_name_missing(base, fs, fl, decls, upto, src, locals, nloc, a) { bad = true }
+      bad
     }
     Expr::AddrOf(p) => { expr_has_unbound(p, decls, upto, src, a, locals, nloc) }
     Expr::Deref(p) => { expr_has_unbound(p, decls, upto, src, a, locals, nloc) }
@@ -6589,6 +6731,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
     s := deref(stmt_p(Stmt, cur))
     match s {
       Stmt::Assign(ns, nl, v, nx) => {
+        ## Declarations §1.2 / §10 — a plain re-assignment writes an existing place. The old branch
+        ## treated an unknown `name = value` as a fresh local, so a misspelled target disappeared and
+        ## the program could return a clean wrong value. Keep module mut-globals and known top-level
+        ## bindings on their existing paths; reject only a name proven absent from both scopes.
+        if assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) and not is_mod_mut_global(decls, src, ns, nl) and not declared(decls, upto, src, ns, nl) and not sema_global_name_anywhere(decls, src, ns, nl) {
+          return Result(usize, CheckErr).Err(unbound_err(ns, nl))
+        }
         ## Types §8 — reject the initialized local array literal before any lower/backend can apply
         ## the word-granular array stride to a byte-precise @packed element. Reassignments stay on
         ## their ordinary path; this is intentionally the exact local-initializer slice only.
@@ -6804,6 +6953,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if declared(decls, upto, src, bns, bnl) {
         } else if local_in(locals, cnt, src, bns, bnl) {
         } else { return Result(usize, CheckErr).Err(unbound_err(bns, bnl)) }
+        ## A known struct write must name one of that struct's declared fields. The parser stores this
+        ## write as separate base/field spans, so the expression walker cannot validate it for us.
+        bowner := sema_struct_owner_name_span(decls, upto, src, locals, cnt, bns, bnl)
+        if bowner.n != 0 and sema_field_ann_span(decls, upto, src, bowner.s, bowner.n, fns, fnl, a).n == 0 {
+          return Result(usize, CheckErr).Err(unbound_err(fns, fnl))
+        }
         cv := check_expr_da(fv, decls, upto, src, a, locals, cnt, da)?
         ## FIELD-ASSIGN conformance (TYP-6): `t.field = <aggregate>` into a scalar field (or the
         ## REVERSE, a scalar literal into an aggregate field) — the retired `Stmt::FieldAssign` emit net.
@@ -6886,6 +7041,9 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cur = nx
       }
       Stmt::If(c, th, el, nx) => {
+        if expr_statement_has_unbound(c, decls, upto, src, a, locals, cnt) {
+          return Result(usize, CheckErr).Err(unbound_err(s_of(c, a), 0))
+        }
         cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
         ## the condition must be bool (a known non-bool is a `Mismatch`).
         if cc.tag != 0 and cc.tag != 2 { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
@@ -7150,6 +7308,9 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## a bare atomic/fence call in statement position — check ordering legality here (it reaches
         ## only `check_expr`, and the wrapper is the reliable hook, §1/§4 / spec ch.110).
         if call_atomic_ordering_bad(e, src, a) { er := Result(usize, CheckErr).Err(mismatch_err(0, 0)); return er }
+        if expr_statement_has_unbound(e, decls, upto, src, a, locals, cnt) {
+          return Result(usize, CheckErr).Err(unbound_err(s_of(e, a), 0))
+        }
         ce := check_expr_da(e, decls, upto, src, a, locals, cnt, da)?
         cur = nx
       }

@@ -768,6 +768,115 @@ build_reject_has() { # name, needle
   else echo "FAIL $1: rc=$got but the diagnostic is missing [$2]"; fail=1; fi
 }
 
+# Issue #174 / Declarations §1.2 + Grammar §3.1 — every value expression is name-checked even when
+# its result is discarded, and a known struct's field name is checked on both reads and writes. The
+# sources are generated in this row's private scratch directory so the regression does not add rows to
+# the four-backend corpus oracle. Each negative case proves check/build parity, a located diagnostic, and
+# no output artifact; the positive cases preserve valid pointless expressions and the corresponding good
+# names. This is intentionally stronger than a bare non-zero assertion: a crash or a partial build is not
+# a semantic refusal.
+issue174_name_resolution_test() {
+  d="$T/issue174_name_resolution"
+  mkdir -p "$d"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  mut count : u64 = 0' \
+    '  cout = 5' \
+    '  return count' \
+    '}' > "$d/assignment.al"
+  printf '%s\n' \
+    'S := struct {' \
+    '  a : u64' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  s := S(a = 7)' \
+    '  return s.nope' \
+    '}' > "$d/field_read.al"
+  printf '%s\n' \
+    'S := struct {' \
+    '  a : u64' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  mut s := S(a = 0)' \
+    '  s.nope = 5' \
+    '  return s.a' \
+    '}' > "$d/field_write.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  if missing_condition { return 1 }' \
+    '  return 42' \
+    '}' > "$d/condition.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  foo()' \
+    '  return 42' \
+    '}' > "$d/call.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  missing_name' \
+    '  return 42' \
+    '}' > "$d/bare.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  mut count : u64 = 0' \
+    '  count = 5' \
+    '  return count' \
+    '}' > "$d/assignment_ok.al"
+  printf '%s\n' \
+    'S := struct { a : u64 }' \
+    'main := fn() -> u64 {' \
+    '  mut s := S(a = 0)' \
+    '  s.a = 5' \
+    '  return s.a' \
+    '}' > "$d/field_ok.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  present := true' \
+    '  if present { return 42 }' \
+    '  return 0' \
+    '}' > "$d/condition_ok.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  value := 7' \
+    '  5' \
+    '  value' \
+    '  return 42' \
+    '}' > "$d/pointless_ok.al"
+
+  issue174_reject() { # name, source line
+    n="$1"; want_line="$2"; src="$d/$n.al"
+    co="$d/$n.check.out"; ce="$d/$n.check.err"
+    "$CC" check "$src" >"$co" 2>"$ce"; crc=$?
+    if [ "$crc" != 1 ] || [ -s "$co" ] || ! grep -qF "unbound name" "$ce" || ! grep -qF "at line $want_line" "$ce"; then
+      echo "FAIL issue174/$n(check): rc=$crc or output/diagnostic mismatch [$(<"$ce")]"; fail=1; return
+    fi
+    bo="$d/$n.bin"; be="$d/$n.build.err"
+    "$CC" -o "$bo" "$src" >"$d/$n.build.out" 2>"$be"; brc=$?
+    if [ "$brc" != 1 ] || [ -e "$bo" ] || ! grep -qF "unbound name" "$be" || ! grep -qF "at line $want_line" "$be"; then
+      echo "FAIL issue174/$n(build): rc=$brc or artifact/diagnostic mismatch [$(<"$be")]"; fail=1; return
+    fi
+    echo "ok   issue174/$n: check/build rejected with located unbound-name diagnostic"
+  }
+  issue174_run() { # name, expected exit
+    n="$1"; want="$2"; src="$d/$n.al"; out="$d/$n.bin"
+    "$CC" -o "$out" "$src" >"$d/$n.run.out" 2>"$d/$n.run.err" || { echo "FAIL issue174/$n: compile/link"; fail=1; return; }
+    _e2e_exec "$out" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "issue174/$n" "$got"; then return; fi
+    if [ "$got" = "$want" ]; then echo "ok   issue174/$n: $got"; else echo "FAIL issue174/$n: got $got want $want"; fail=1; fi
+  }
+
+  issue174_reject assignment 3
+  issue174_reject field_read 6
+  issue174_reject field_write 6
+  issue174_reject condition 2
+  issue174_reject call 2
+  issue174_reject bare 2
+  issue174_run assignment_ok 5
+  issue174_run field_ok 5
+  issue174_run condition_ok 42
+  issue174_run pointless_ok 42
+}
+
 # `alatyr fmt`: re-emit a source file in canonical form. Checks (1) IDEMPOTENCE
 # (fmt(fmt(x)) == fmt(x), the acceptance property), and (2) the formatted output still BUILDS+RUNS to
 # the expected exit — a faithful reformat must preserve behaviour.
@@ -3022,6 +3131,7 @@ check_reject reject_call_paren_callee
 ## an invalid generic-struct spelling `Box := struct(T : type) {…}` used to SIGILL the compiler with no
 ## diagnostic; now a located parse reject. (The valid form is `Box := fn(T : type) -> type { return struct {…} }`.)
 check_located reject_struct_type_params 7
+issue174_name_resolution_test
 check_reject reject_lambda_aggregate_return
 check_reject reject_lambda_capture_escape
 check_accept accept_param_default
