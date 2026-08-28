@@ -936,22 +936,6 @@ array_type_has_array_element := fn(src : ptr(u8), ts : usize, tl : usize) -> boo
   p < end and str_at((src + p), 1) == "["
 }
 
-## Write the source line containing a layout-rejected field to stderr. `lower_layout` is a sibling
-## child, so it cannot borrow `lower::ctfold`'s diagnostic helper without creating a cycle; keep this
-## tiny syscall wrapper local. The following panic remains the actual fail-loud reason.
-layout_show_src_line := fn(src : ptr(u8), off : usize) {
-  mut lo : usize = 0
-  if off > 4096 { lo = off - 4096 }
-  mut s := off
-  while s > lo and bytes(str_at((src + (s - 1)), 1))[0] != 10 { s -= 1 }
-  hi := off + 4096
-  mut e := off
-  while e < hi and bytes(str_at((src + e), 1))[0] != 10 { e += 1 }
-  mut n := e - s
-  if e < hi { n += 1 }
-  w := rt::sys_write(1, 2, unchecked bitcast(usize, rt::addr(src, s)), n)
-}
-
 ## The explicitly byte-sized scalar element types accepted by the packed-field byte layout.
 ## Keep this local to the layout module: the ordinary word-model layout still treats byte arrays
 ## as word arrays until its own slice is proven.
@@ -1816,7 +1800,7 @@ pub struct_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     ## the parser before lowering. Reject the whole containing struct here, before any backend reserves
     ## or materializes its image, so x86_64 and all cross backends share the same safe boundary.
     if array_type_has_array_element(src, eff.s, eff.n) {
-      layout_show_src_line(src, fd.ts)
+      ll_show_src_line(src, fd.ts)
       panic("selfhost: a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled")
     }
     ## The default struct layout is still word-granular. An explicitly byte-typed array field would
