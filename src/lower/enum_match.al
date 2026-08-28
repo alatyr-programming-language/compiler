@@ -605,7 +605,18 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
       } else if folded {
         ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`si.base`) — the pointer occupies the
         ## whole slot (no separate payload word), so bind `p` there as a scalar (ek 0) pointer value.
-        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+        ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
+        ## still lowers as the two-word str view.
+        mut pview_s := 0
+        mut pview_l := 0
+        mut pview_eek : u8 = 0
+        pview := niche_str_ptr_span(cx.src, pty.s, pty.n)
+        if pview.n != 0 {
+          pview_s = pview.s
+          pview_l = pview.n
+          pview_eek = 6
+        }
+        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = pview_s, snl = pview_l, ek = 0, estride = 1, eek = pview_eek, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
       } else {
         svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
       }
