@@ -5570,6 +5570,16 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
       push_str(sb, ", %rax\n  pushq %rax\n")
     }
     Expr::Var(s, n) => {
+      ## An immutable module-level str has no frame slot: its literal is already in `.rodata`, so
+      ## resolve it before the ordinary local/parameter arm and materialize the same pair as a literal.
+      ## Guard the lookup with `slot_of` so a local that shadows a module name remains a local place.
+      if slot_of(cx.slots, cx.src, s, n) < 0 {
+        cgv := module_const_value(cx.decls, cx.src, s, n)
+        if unchecked bitcast(usize, cgv) != 0 and str_lit_info(cgv).is_s {
+          emit_str_pair(cgv, sb, cx, a, nl)
+          return
+        }
+      }
       gmv := mut_global_value(cx.decls, cx.src, s, n)
       if unchecked bitcast(usize, gmv) != 0 and str_lit_info(gmv).is_s {
         ## a str MUTABLE GLOBAL (`mut S := "hi"`) — NO frame slot; its {ptr, len} live in `.data` at
@@ -8416,6 +8426,13 @@ is_str_operand := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
     ## recovered entry's name before using its kind; otherwise any scalar global can inherit the
     ## string kind of an unrelated first local and route a numeric expression into `emit_str_pair`.
     if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 4 { return true }
+    ## An immutable module-level str is also a two-word value, although it has no SlotEntry. Keep
+    ## direct equality on the same pair path as `len`, `bytes`, and str returns; a scalar fallback
+    ## would compare the literal's address instead of its bytes.
+    if slot_of(cx.slots, cx.src, vn.s, vn.n) < 0 {
+      cgv := module_const_value(cx.decls, cx.src, vn.s, vn.n)
+      if unchecked bitcast(usize, cgv) != 0 and str_lit_info(cgv).is_s { return true }
+    }
   }
   ## Reuse the call-edge classifier for every direct str-element index: fixed `[str; N]` arrays and
   ## typed `Slice(str)` views both carry `eek == 4`, while a nominal `Slice(str)` VALUE return is
@@ -16961,6 +16978,30 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           push_int(sb, i64(ssub) * 8)
           push_str(sb, "(%rip), %rax\n  pushq %rax\n")
           return
+        }
+      }
+      ## `CONST.len` / `CONST.ptr` — the two words of an immutable module-level str initializer are
+      ## compile-time data, not a frame place. Inline the literal's length or rodata address; without
+      ## this a typed `G : str = "..."` fell through to the local-field path and read an unwritten slot.
+      cgb := var_name_span(base)
+      if cgb.n != 0 and slot_of(cx.slots, cx.src, cgb.s, cgb.n) < 0 {
+        cgmv := module_const_value(cx.decls, cx.src, cgb.s, cgb.n)
+        if unchecked bitcast(usize, cgmv) != 0 {
+          cgsi := str_lit_info(cgmv)
+          if cgsi.is_s {
+            if dslf == "len" {
+              push_str(sb, "  movq $")
+              push_int(sb, i64(cgsi.sl))
+              push_str(sb, ", %rax\n  pushq %rax\n")
+              return
+            }
+            if dslf == "ptr" {
+              push_str(sb, "  leaq ")
+              push_lstr(sb, cgsi.lbl)
+              push_str(sb, "(%rip), %rax\n  pushq %rax\n")
+              return
+            }
+          }
         }
       }
       ## `GLOBAL.f1.f2…` — a SCALAR field of a nested struct field of a mutable-global struct, at ANY
