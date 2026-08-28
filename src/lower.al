@@ -2725,15 +2725,25 @@ paren_is_struct_lit := fn(src : ptr(u8), lp : usize) -> bool {
   res
 }
 emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, tl : usize) {
+  ## Layout consumers keep the FULL type-application span (`Option(u64)`, `ptr(u64)`) so they can
+  ## inspect its arguments. The label format, however, expects the HEAD and re-reads arguments with
+  ## `typearg_at`; normalize here so a full span never leaks parentheses into a GAS symbol. Bare names
+  ## and tuple/array type spans keep their existing entry points.
+  mut tag_s := ts
+  mut tag_l := tl
+  if str_at((src + ts), 1) != "(" and str_at((src + ts), 1) != "[" {
+    tag := base_type_name(src, ts, tl)
+    if tag.n != 0 { tag_s = tag.s; tag_l = tag.n }
+  }
   ## A TUPLE type-arg `(T0, T1, …)` mangles to the paren-free tag `Tuple_<T0>_<T1>_…` (the `(` sits at
   ## position 0 of the span, so `typearg_at(src, ts, 0, j)` reads the j-th component). Def + call both
   ## route through here, so the two agree and `(u64, u64)` stays a valid GAS symbol distinct from a struct.
-  if str_at((src + ts), 1) == "(" {
+  if str_at((src + tag_s), 1) == "(" {
     push_str(sb, "Tuple")
     mut jt := 0
     mut got := true
     while got {
-      ct := typearg_at(src, ts, 0, jt)
+      ct := typearg_at(src, tag_s, 0, jt)
       if ct.n == 0 { got = false } else {
         push_str(sb, "_")
         push_str(sb, str_at((src + ct.s), ct.n))
@@ -2744,24 +2754,24 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
   }
   ## An ARRAY type-arg `[T; N]` mangles to the paren-free tag `Array_<T>_<N>` — a valid GAS symbol
   ## distinguishing `[u64; 3]` from `[u64; 4]` / `[i64; 3]`. Def + call both route here → they agree.
-  if str_at((src + ts), 1) == "[" {
-    aes := array_elem_span(src, ts, tl)
+  if str_at((src + tag_s), 1) == "[" {
+    aes := array_elem_span(src, tag_s, tag_l)
     push_str(sb, "Array_")
     push_str(sb, str_at((src + aes.s), aes.n))
     push_str(sb, "_")
-    push_int(sb, i64(parse_arr_len(src, ts, tl)))
+    push_int(sb, i64(parse_arr_len(src, tag_s, tag_l)))
     return
   }
-  push_str(sb, str_at((src + ts), tl))
+  push_str(sb, str_at((src + tag_s), tag_l))
   ## GENERIC type-arguments `Name(T, …)` → `Name_T_…`. Skip when the `(` after the name opens a
   ## struct LITERAL `(field = value, …)` — that happens when the type span's name sits at a struct-lit
   ## initializer (`p := Pt(x = 40, …)`): those are not type-args, and mangling them yielded an invalid
   ## symbol `Pt_x = 40_y = 2` that didn't match the `print_one__Pt` definition.
-  if paren_is_struct_lit(src, ts + tl) == false {
+  if paren_is_struct_lit(src, tag_s + tag_l) == false {
     mut j := 0
     mut going := true
     while going {
-      ta := typearg_at(src, ts, tl, j)
+      ta := typearg_at(src, tag_s, tag_l, j)
       if ta.n == 0 { going = false } else {
         push_str(sb, "_")
         push_str(sb, str_at((src + ta.s), ta.n))
@@ -7384,7 +7394,7 @@ call_ret_pointee_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
             if usize(ppos) < nargs {
               ## `type_arg_at` reads a bare `Var` type-arg AND a generic-instance one
               ## (`mk(Box(u64), …)` → the head span `Box`), so a well-formed call always resolves.
-              vn := type_arg_at(ah, usize(ppos), a)
+              vn := type_arg_full_at(ah, usize(ppos), decls, src, a)
               if vn.n != 0 { rn = vn ; ok = true }
             }
           }
@@ -7421,7 +7431,7 @@ call_ret_pointee_unresolved := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
           if ppos >= 0 {
             res = true
             if usize(ppos) < nargs {
-              vn := type_arg_at(ah, usize(ppos), a)
+              vn := type_arg_full_at(ah, usize(ppos), decls, src, a)
               if vn.n != 0 { res = false }
             }
           }
@@ -7788,7 +7798,7 @@ subst_gen_struct_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
                 else {
                   pp := callee_param_pos(decls, usize(ci), src, ta.s, ta.n, a)
                   if pp >= 0 and usize(pp) < nargs {
-                    cta := type_arg_at(ah, usize(pp), a)
+                    cta := type_arg_full_at(ah, usize(pp), decls, src, a)
                     if cta.n != 0 and ty_is_agg_span(decls, src, cta.s, cta.n) { anyp = true }
                   }
                   k += 1
@@ -7809,7 +7819,7 @@ subst_gen_struct_ret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
                     mut rn := ta.n
                     pp := callee_param_pos(decls, usize(ci), src, ta.s, ta.n, a)
                     if pp >= 0 and usize(pp) < nargs {
-                      cta := type_arg_at(ah, usize(pp), a)
+                      cta := type_arg_full_at(ah, usize(pp), decls, src, a)
                       if cta.n != 0 { fa := full_app_span(src, cta.s, cta.n) ; rs = fa.s ; rn = fa.n }
                     }
                     push_str(msb, str_at((src + rs), rn))
@@ -7843,16 +7853,15 @@ inst_struct_span_cx := fn(s : usize, n : usize, cx : ptr(LCtx)) -> CSpan {
 ## The PARAM dual of `subst_enum_ret_span`: given a PARAM's type span `[pts, pts+ptl)` and the 3-way
 ## instance Subst (`gps/gpl → its/itl`, `gps2 → its2`, `gps3 → its3`), synthesize the SUBSTITUTED enum
 ## instance span when the param type is a GENERIC enum `G(<typeparam>…)` at least one of whose top-level
-## type-args resolves to a MULTI-WORD struct. Written into the PERSISTENT `synth` arena (rebased to a
-## `src`-relative handle, head-length `= G`'s name so `typearg_at` lands on the synthesized `(<elem>…)`),
-## so `bind_param`'s enum branch can bind `self : Option(V)` as the concrete `Option(Rec)` — else the
-## enum-value param slot kept the raw `Option(V)` span (`typearg_at` → `V` → `agg_words("V") == 1`), so
-## `materialize_ref_enum`/`enum_inst_words` sized the payload ONE word (truncation) and the `match`
-## bound the payload as a scalar. Returns 0/0 unless the param is a generic enum AND some type-arg
-## substitutes to a `>=2`-word struct → a scalar / 1-word / non-generic param keeps its raw span
-## (byte-identical for every existing enum-value param). The seam of `subst_slice_ret_span`, keyed on a
-## type span instead of a Call, with the type-args resolved directly through the Subst (they name the
-## callee's OWN type-params, so no receiver/fn-return recovery is needed).
+## type-args resolves to a MULTI-WORD struct/`str` or to a niche-bearing `ptr(…)`. Written into the PERSISTENT
+## `synth` arena (rebased to a `src`-relative handle, head-length `= G`'s name so `typearg_at` lands on
+## the synthesized `(<elem>…)`), so `bind_param`'s enum branch can bind `self : Option(V)` as the
+## concrete `Option(Rec)` or `Option(ptr(P))`. The latter is important even though a pointer is one word:
+## the raw `Option(V)` span has the ordinary two-word enum ABI, while the resolved `Option(ptr(P))` span
+## must select the one-word niche ABI. Returns 0/0 unless a layout fact changes; scalar / 1-word /
+## non-generic params keep their raw span (byte-identical for existing enum-value params). The seam mirrors
+## `subst_slice_ret_span`, keyed on a type span instead of a Call, with type-args resolved directly through
+## the Subst (they name the callee's OWN type-params, so no receiver/fn-return recovery is needed).
 subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, synth : ptr(mut rt::Arena), gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize, gps3 : usize, gpl3 : usize, its3 : usize, itl3 : usize) -> CSpan {
   mut res := CSpan(s = 0, n = 0)
   bn := base_type_name(src, pts, ptl)
@@ -7860,8 +7869,10 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
   ## a GENERIC instance carries top-level type-args right after the head; a bare `E` has none.
   ta0 := typearg_at(src, bn.s, bn.n, 0)
   if ta0.n == 0 { return res }
-  ## PASS 1 (no allocation): does any resolved type-arg become a `>=2`-word struct?
+  ## PASS 1 (no allocation): does any resolved type-arg become a `>=2`-word struct/two-word `str`, or
+  ## does this Option instance resolve its payload to a pointer (the pointer's null niche folds the enum)?
   mut anywide := false
+  mut anyfolded := false
   mut k := 0
   mut go := true
   while go {
@@ -7874,10 +7885,15 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
       else if gpl2 != 0 and streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
       else if gpl3 != 0 and streq(src, rs, rn, gps3, gpl3) { rs = its3; rn = itl3 }
       if struct_decl_of(decls, src, rs, rn) >= 0 and struct_words(decls, src, rs, rn, a) >= 2 { anywide = true }
+      if str_at((src + rs), rn) == "str" { anywide = true }
+      if str_at((src + bn.s), bn.n) == "Option" {
+        rbn := base_type_name(src, rs, rn)
+        if rbn.n != 0 and str_at((src + rbn.s), rbn.n) == "ptr" { anyfolded = true }
+      }
       k += 1
     }
   }
-  if anywide == false { return res }
+  if anywide == false and anyfolded == false { return res }
   ## PASS 2: build `G(resolved,…)` into `synth` (bytes copied via `push_str`).
   mut msb := rt::strbuf(deref(synth), 128)
   push_str(msb, str_at((src + bn.s), bn.n))
@@ -9309,7 +9325,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : ptr(
   }
   if gi >= 0 {
     tpi := tparam_idx(cx.decls, gi, cx.src, a)
-    mut ta := type_arg_at(args_head, tpi, a)
+    mut ta := type_arg_full_at(args_head, tpi, cx.decls, cx.src, a)
     if is_fn_name(cx.decls, cx.src, ta.s, ta.n) { ta = CSpan(s = 0, n = 0) }
     ## a TUPLE type-arg `(T0, T1, …)` — recover its `(…)` source span (mono keys on it).
     if ta.n == 0 {
@@ -9335,7 +9351,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : ptr(
     mut tpi2 := -1
     if ntpc >= 2 {
       tpi2 = i64(tparam_idx2(cx.decls, gi, cx.src, a))
-      ta2 = type_arg_at(args_head, usize(tpi2), a)
+      ta2 = type_arg_full_at(args_head, usize(tpi2), cx.decls, cx.src, a)
       if is_fn_name(cx.decls, cx.src, ta2.s, ta2.n) { ta2 = CSpan(s = 0, n = 0) }
       if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp_s, cx.gp_l) { ta2 = CSpan(s = cx.it_s, n = cx.it_l) }
       else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp2_s, cx.gp2_l) { ta2 = CSpan(s = cx.it2_s, n = cx.it2_l) }
@@ -9345,7 +9361,7 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : ptr(
     mut tpi3 := -1
     if ntpc >= 3 {
       tpi3 = i64(tparam_idx3(cx.decls, gi, cx.src, a))
-      ta3 = type_arg_at(args_head, usize(tpi3), a)
+      ta3 = type_arg_full_at(args_head, usize(tpi3), cx.decls, cx.src, a)
       if is_fn_name(cx.decls, cx.src, ta3.s, ta3.n) { ta3 = CSpan(s = 0, n = 0) }
       if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp_s, cx.gp_l) { ta3 = CSpan(s = cx.it_s, n = cx.it_l) }
       else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp2_s, cx.gp2_l) { ta3 = CSpan(s = cx.it2_s, n = cx.it2_l) }
@@ -11734,10 +11750,13 @@ gen_ret_targ_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
             ## struct's tail words were dropped. `type_arg_at` returns the instance HEAD (its `(…)`
             ## follows in source); `is_fn_name` + the struct-decl gate reject a non-type argument.
             if ta.n == 0 {
-              tac := type_arg_at(ah, 0, a)
-              if tac.n != 0 and is_fn_name(decls, src, tac.s, tac.n) == false { ta = tac }
+              tac := type_arg_full_at(ah, 0, decls, src, a)
+              if tac.n != 0 { ta = tac }
             }
-            if ta.n != 0 and struct_decl_of(decls, src, ta.s, ta.n) >= 0 { res = CSpan(s = ta.s, n = ta.n) }
+            if ta.n != 0 {
+              tab := base_type_name(src, ta.s, ta.n)
+              if struct_decl_of(decls, src, tab.s, tab.n) >= 0 { res = CSpan(s = ta.s, n = ta.n) }
+            }
           }
         }
         i += 1
@@ -11898,10 +11917,13 @@ gen_ret_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
             ## source). Filtered by `is_fn_name` (a value Call in an inferred type-param slot) and by
             ## the enum-decl gate below, so a non-type argument still yields 0/0.
             if ta.n == 0 {
-              tac := type_arg_at(ah, 0, a)
-              if tac.n != 0 and is_fn_name(decls, src, tac.s, tac.n) == false { ta = tac }
+              tac := type_arg_full_at(ah, 0, decls, src, a)
+              if tac.n != 0 { ta = tac }
             }
-            if ta.n != 0 and enum_decl_of(decls, src, ta.s, ta.n) >= 0 { res = CSpan(s = ta.s, n = ta.n) }
+            if ta.n != 0 {
+              tab := base_type_name(src, ta.s, ta.n)
+              if enum_decl_of(decls, src, tab.s, tab.n) >= 0 { res = CSpan(s = ta.s, n = ta.n) }
+            }
           }
         }
         i += 1
@@ -12931,6 +12953,44 @@ type_arg_span := fn(args_head : ptr(mut Arg), a : rt::Arena) -> CSpan {
   dv := deref_var_info(e)
   if dv.is_v { return CSpan(s = dv.s, n = dv.n) }
   return CSpan(s = 0, n = 0)
+}
+
+## The FULL source span of a generic call's type argument at source index `ti`. `type_arg_at` is the
+## established AST/source seam: for a bare name it returns the name, and for a type application the
+## parser may still return only its head (`ptr` for `ptr(u64)`). Extend that head over its balanced
+## source application so layout and monomorphization see the real type. A value call in an inferred
+## type-param position is rejected before extension by the callee-name check, preserving the old
+## filter. The full span is required for niche/layout decisions and distinct generic labels
+## (`ptr(u64)` must not share an instance with `ptr(str)`).
+type_arg_full_at := fn(args_head : ptr(mut Arg), ti : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  e := arg_expr_at(args_head, ti, a)
+  if unchecked bitcast(usize, e) == 0 { return CSpan(s = 0, n = 0) }
+  ## `ptr(T)` is parsed as AddrOf(Var(T)); `deref_var_info` would expose the
+  ## inner `T` and the builtin conversion declaration for (say) `u64` would
+  ## incorrectly discard it as a value call. Recover the constructor first.
+  iv := addr_inner_var_span(e)
+  if iv.n != 0 {
+    mut scan := iv.s
+    mut steps := 0
+    mut open := 0
+    while scan > 0 and steps < 64 and open == 0 {
+      scan = scan - 1
+      if str_at(src + scan, 1) == "(" { open = scan }
+      steps = steps + 1
+    }
+    if open >= 3 and str_at(src + open - 3, 3) == "ptr" {
+      hs := open - 3
+      if not is_fn_name(decls, src, hs, 3) {
+        return full_app_span(src, hs, 3)
+      }
+    }
+  }
+  raw := type_arg_at(args_head, ti, a)
+  if raw.n != 0 {
+    if is_fn_name(decls, src, raw.s, raw.n) { return CSpan(s = 0, n = 0) }
+    return full_app_span(src, raw.s, raw.n)
+  }
+  CSpan(s = 0, n = 0)
 }
 
 ## Walk the AST post-order, emitting x86_64 GAS for a stack machine into `sb`. The result
@@ -15520,7 +15580,12 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## A by-reference enum scrutinee (a by-ref enum parameter) is materialized into the
         ## scratch temp first, then dispatched inline; an enum local dispatches directly.
         if si.is_ref {
-          sir := materialize_ref_enum(si.base, si.es, si.el, sb, cx)
+          mut sir := materialize_ref_enum(si.base, si.es, si.el, sb, cx)
+          ## Preserve the source type span from the original slot descriptor. The materializer's
+          ## scratch result only changes the storage base; retaining `si.es/el` keeps the effective
+          ## `Option(ptr(T))` niche fact available to the dispatch and payload binder.
+          sir.es = si.es
+          sir.el = si.el
           emit_enum_match(head, sir, sb, cx, a, nl)
         } else {
           emit_enum_match(head, si, sb, cx, a, nl)
@@ -16350,7 +16415,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## `tpi` locates it, `type_arg_at` reads the concrete type there, and `emit_call_args` erases
         ## exactly that arg. For the common leading `T : type` (tpi 0) this is byte-identical.
         tpi := tparam_idx(cx.decls, gi, cx.src, a)
-        mut ta := type_arg_at(args_head, tpi, a)
+        mut ta := type_arg_full_at(args_head, tpi, cx.decls, cx.src, a)
         if is_fn_name(cx.decls, cx.src, ta.s, ta.n) { ta = CSpan(s = 0, n = 0) }
         ## a TUPLE type-arg `(T0, T1, …)` — recover its `(…)` source span (mono keys on it).
         if ta.n == 0 {
@@ -16387,7 +16452,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         mut tpi2 := -1
         if ntpc >= 2 {
           tpi2 = i64(tparam_idx2(cx.decls, gi, cx.src, a))
-          ta2 = type_arg_at(args_head, usize(tpi2), a)
+          ta2 = type_arg_full_at(args_head, usize(tpi2), cx.decls, cx.src, a)
           if is_fn_name(cx.decls, cx.src, ta2.s, ta2.n) { ta2 = CSpan(s = 0, n = 0) }
           if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp_s, cx.gp_l) { ta2 = CSpan(s = cx.it_s, n = cx.it_l) }
           else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta2.s, ta2.n, cx.gp2_s, cx.gp2_l) { ta2 = CSpan(s = cx.it2_s, n = cx.it2_l) }
@@ -16398,7 +16463,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         mut tpi3 := -1
         if ntpc >= 3 {
           tpi3 = i64(tparam_idx3(cx.decls, gi, cx.src, a))
-          ta3 = type_arg_at(args_head, usize(tpi3), a)
+          ta3 = type_arg_full_at(args_head, usize(tpi3), cx.decls, cx.src, a)
           if is_fn_name(cx.decls, cx.src, ta3.s, ta3.n) { ta3 = CSpan(s = 0, n = 0) }
           if cx.gp_l != 0 and cx.it_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp_s, cx.gp_l) { ta3 = CSpan(s = cx.it_s, n = cx.it_l) }
           else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, ta3.s, ta3.n, cx.gp2_s, cx.gp2_l) { ta3 = CSpan(s = cx.it2_s, n = cx.it2_l) }
@@ -19787,10 +19852,17 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
       } else if si.is_ref {
         mref := materialize_ref_enum(si.base, si.es, si.el, sb, cx)
         sbase = mref.base
-        ses = mref.es
-        sel = mref.el
+        ## The materializer returns the scratch base; the original `si` retains the effective
+        ## enum type span used to classify a niche-folded `Option(ptr(T))`.
+        ses = si.es
+        sel = si.el
       }
       head := expand_variant_arms(mi.head, ses, sel, cx, a)
+      ## §8 `@niche`: `Option(ptr(T))` has no separate discriminant or payload word. The staged
+      ## scratch word is the pointer itself: null selects `None`, non-null selects `Some`, and the
+      ## single `Some` binding aliases that same word. Keep the ordinary tagged-enum path below
+      ## byte-identical for every non-folded enum.
+      folded := is_niche_folded(cx.src, ses, sel)
       base := nl
       nl += arm_count(head, a)
       ## disc load at the `@repr(T)` tag WIDTH (spec §8) if pinned, else word-sized (byte-identical).
@@ -19808,6 +19880,14 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
           emit_label(sb, lbody)
           push_str(sb, "\n")
           hadwild = true
+        } else if folded {
+          mut fnb := 0
+          mut fcb := am.binds_head
+          while unchecked bitcast(usize, fcb) != 0 { fnb = fnb + 1; fcb = bnd_next(fcb) }
+          if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }
+          else { push_str(sb, "  cmpq $0, %r12\n  jne ") }
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
         } else {
           disc := variant_index(cx.decls, cx.src, ses, sel, am.vs, am.vl, deref(cx.mar))
           push_str(sb, "  movq $")
@@ -19871,6 +19951,10 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
             svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = array_ess, snl = array_esl, ek = 5, estride = array_estride, eek = 2, is_ref = false))
           } else if agg_ek != 0 {
             svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = tail_enum_owner_s, tmod_l = tail_enum_owner_l))
+          } else if folded {
+            ## The folded `Some` payload is the staged pointer word itself, not the ordinary
+            ## payload slot at `sbase-1`.
+            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
           } else {
             svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
           }
@@ -22570,6 +22654,13 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
   if gpl != 0 and streq(src, pm.pps, pm.ppl, gps, gpl) { ppn_s = its; ppn_l = itl }
   else if gpl2 != 0 and streq(src, pm.pps, pm.ppl, gps2, gpl2) { ppn_s = its2; ppn_l = itl2 }
   else if gpl3 != 0 and streq(src, pm.pps, pm.ppl, gps3, gpl3) { ppn_s = its3; ppn_l = itl3 }
+  ## A pointer-to-generic-enum parameter (`ptr(mut Option(T))`) carries the pointee span separately
+  ## from `pm.ts`. Resolve that enum instance too, so `match deref(self)` sees the one-word niche
+  ## representation for `Option(ptr(P))` instead of materializing the raw two-word `Option(T)`.
+  if ppn_l != 0 {
+    ppsub := subst_param_enum_span(ppn_s, ppn_l, decls, src, a, synth, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
+    if ppsub.n != 0 { ppn_s = ppsub.s; ppn_l = ppsub.n }
+  }
   ## §7.2 SLICE-VARIADIC param `name : ...T` (`pmode == 3`; `ts`/`tl` = the element type `T`). The call
   ## site gathers the trailing args into a contiguous block + passes a `{ptr, len}` block ADDRESS, so
   ## the callee binds the param EXACTLY like a scalar-element `Slice(T)` PARAM: a by-reference slice
@@ -22766,10 +22857,10 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
       ## materializes the pointee's discriminant + payload words into the scratch temp,
       ## then dispatches inline (`scrut_enum_info` reports `is_ref`).
       ## GENERIC enum-value param `self : Option(V)` (`unwrap`/`expect`/`ok`): override the recorded
-      ## type span with the SUBSTITUTED instance (`Option(Rec)`) when a type-arg resolves to a multi-word
-      ## struct, so `materialize_ref_enum`/`enum_inst_words` size the payload correctly and the `match`
-      ## binds it as a struct (else the raw `Option(V)` span sized the payload ONE word → truncation).
-      ## 0/0 for scalar / 1-word / non-generic → keep the base span (byte-identical).
+      ## type span with the SUBSTITUTED instance (`Option(Rec)` / `Option(ptr(Rec))`) when a type-arg
+      ## changes payload width or selects the pointer niche, so `materialize_ref_enum` sizes and copies
+      ## the representation correctly and the `match` binds the payload with the right kind. 0/0 for
+      ## scalar / unchanged / non-generic → keep the base span (byte-identical).
       mut esns := bs
       mut esnl := bl
       psub := subst_param_enum_span(pts, ptl, decls, src, a, synth, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
@@ -23970,6 +24061,13 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   mut ers := d.ret_ts
   mut erl := d.ret_tl
   if gpl != 0 and erl != 0 and streq(p.src, d.ret_ts, d.ret_tl, gps, gpl) { ers = its; erl = itl }
+  ## GENERIC enum return with a type-argument payload (`get -> Option(ptr(T))`, `and_then ->
+  ## Option(U)`) needs the same effective instance span as a generic enum parameter. In particular,
+  ## the raw `Option(T)` return would select the ordinary two-word ABI even when this instance is
+  ## `Option(ptr(P))`, so the callee would return one pointer while callers staged two words. The
+  ## helper is neutral for a scalar/non-generic layout and therefore leaves existing returns intact.
+  rpsub := subst_param_enum_span(d.ret_ts, d.ret_tl, p.decls, p.src, deref(p.mar), p.mar, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
+  if rpsub.n != 0 { ers = rpsub.s; erl = rpsub.n }
   renum := erl != 0 and enum_decl_of(p.decls, p.src, ers, erl) >= 0
   mut rstruct := false
   if erl != 0 and struct_decl_of(p.decls, p.src, ers, erl) >= 0 {

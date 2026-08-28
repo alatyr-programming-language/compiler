@@ -354,7 +354,7 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
       }
       if gi >= 0 {
         ntpc := tparam_count(decls, gi, src, a)
-        mut ta := type_arg_at(args_head, tparam_idx(decls, gi, src, a), a)
+        mut ta := type_arg_full_at(args_head, tparam_idx(decls, gi, src, a), decls, src, a)
         if is_fn_name(decls, src, ta.s, ta.n) { ta = CSpan(s = 0, n = 0) }
         ## a TUPLE type-arg `(T0, T1, …)` — recover its `(…)` source span (mono keys on it).
         if ta.n == 0 {
@@ -362,9 +362,9 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
           if tt.n != 0 { ta = tt }
         }
         mut ta2 := CSpan(s = 0, n = 0)
-        if ntpc >= 2 { ta2 = type_arg_at(args_head, tparam_idx2(decls, gi, src, a), a) ; if is_fn_name(decls, src, ta2.s, ta2.n) { ta2 = CSpan(s = 0, n = 0) } }
+        if ntpc >= 2 { ta2 = type_arg_full_at(args_head, tparam_idx2(decls, gi, src, a), decls, src, a) ; if is_fn_name(decls, src, ta2.s, ta2.n) { ta2 = CSpan(s = 0, n = 0) } }
         mut ta3 := CSpan(s = 0, n = 0)
-        if ntpc >= 3 { ta3 = type_arg_at(args_head, tparam_idx3(decls, gi, src, a), a) ; if is_fn_name(decls, src, ta3.s, ta3.n) { ta3 = CSpan(s = 0, n = 0) } }
+        if ntpc >= 3 { ta3 = type_arg_full_at(args_head, tparam_idx3(decls, gi, src, a), decls, src, a) ; if is_fn_name(decls, src, ta3.s, ta3.n) { ta3 = CSpan(s = 0, n = 0) } }
         ## IMPLICIT type-arg (`hash(key)` — T omitted): the call passes only value args. Infer T from
         ## the value arg's declared type in the enclosing params; the worklist substitutes K→concrete.
         gdc := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))

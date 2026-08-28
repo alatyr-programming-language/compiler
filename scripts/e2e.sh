@@ -5964,6 +5964,7 @@ build_reject_has defer_blk_reject "defer — a"
 # §8 @niche: Option(ptr(T)) is a niche-folded enum (pointer-width, None=null, Some(p)=p). Folds the
 # discriminant word — x86_64-only lower path, so run_x86 (excluded from the arch sweeps' `^run ` grep).
 run_x86 niche_option_ptr 42
+run_x86 option_ptr_helpers 42
 run_x86 niche_option_return 42
 run_x86 niche_option_field 42
 run alloc_with_elision 42

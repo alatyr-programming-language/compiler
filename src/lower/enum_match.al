@@ -83,6 +83,19 @@ pub scrut_enum_info := fn(scrut : ptr(Expr), cx : ptr(LCtx)) -> ScrutInfo {
 ## Returns a `ScrutInfo` over the scratch (`is_ref = false`), so the caller proceeds exactly as
 ## for an enum local.
 pub materialize_ref_enum := fn(base : usize, es : usize, el : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx)) -> ScrutInfo {
+  ## §8 `Option(ptr(T))` is a one-word niche value even when it arrives through the ordinary
+  ## by-reference aggregate-parameter ABI. The raw generic `Option(T)` span would make the old loop
+  ## copy a discriminant plus a second word from a one-word caller value. Materialize only word 0;
+  ## the folded matcher then tests that word for null and aliases a `Some` payload to the same slot.
+  if is_niche_folded(cx.src, es, el) {
+    tbase := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
+    push_str(sb, "  movq -")
+    push_int(sb, i64((base + 1) * 8))
+    push_str(sb, "(%rbp), %rax\n  movq (%rax), %rcx\n  movq %rcx, -")
+    push_int(sb, i64((tbase + 1) * 8))
+    push_str(sb, "(%rbp)\n")
+    return ScrutInfo(is_e = true, base = tbase, es = es, el = el, is_ref = false, tmod_s = 0, tmod_l = 0)
+  }
   nw := 1 + enum_inst_words(cx.decls, cx.src, es, el, deref(cx.mar))
   ## scratch level for THIS match's nesting depth (see LCtx.mdepth) — a nested match uses a higher level.
   tbase := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1

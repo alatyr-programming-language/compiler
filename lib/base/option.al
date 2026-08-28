@@ -36,12 +36,22 @@ pub is_none := fn(T : type, self : Option(T)) -> bool {
 
 ## A non-consuming pointer to the payload of `Some`, or `None` for an absent value
 ## (§160). The pointer is borrowed from the option place and must not outlive it.
-## The current enum representation is a discriminant word followed by the payload word.
+## Pointer payloads use the §8 null niche, so `Option(ptr(T))` is one word; other payloads retain the
+## ordinary discriminant-plus-payload representation.
 pub get := fn(T : type, self : ptr(mut Option(T))) -> Option(ptr(T)) {
-  tag := deref(unchecked bitcast(ptr(usize), unchecked bitcast(usize, self)))
-  if tag != 1 { return Option(ptr(T)).None }
-  payload := unchecked bitcast(ptr(T), unchecked bitcast(usize, self) + 8)
-  Option(ptr(T)).Some(payload)
+  comptime if (match typeinfo(T) { Pointer(_) => true; _ => false }) {
+    ## `get` returns a pointer to the payload's storage. In the niche representation the option word
+    ## is that storage, so test its contents and return `self` reinterpreted as `ptr(T)`.
+    word := deref(unchecked bitcast(ptr(usize), unchecked bitcast(usize, self)))
+    if word == 0 { return Option(ptr(T)).None }
+    payload := unchecked bitcast(ptr(T), unchecked bitcast(usize, self))
+    Option(ptr(T)).Some(payload)
+  } else {
+    tag := deref(unchecked bitcast(ptr(usize), unchecked bitcast(usize, self)))
+    if tag != 1 { return Option(ptr(T)).None }
+    payload := unchecked bitcast(ptr(T), unchecked bitcast(usize, self) + 8)
+    Option(ptr(T)).Some(payload)
+  }
 }
 
 ## Chain a fallible step: `Some(v)` → `f(v)` (itself an `Option(U)`), `None` → `None`
