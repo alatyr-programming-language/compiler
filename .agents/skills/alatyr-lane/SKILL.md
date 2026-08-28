@@ -311,7 +311,14 @@ nix develop -c bash scripts/full.sh --force-sweeps    # ~6 min; must print GREEN
 git diff --exit-code && git diff --cached --exit-code # the manifest ran --check, not --write
 ```
 
-Run the **full** table, not just your fixtures. A red branch must never reach a pull request.
+Run the **full** table, not just your fixtures. For an ordinary change, the command must print GREEN;
+a red branch must not reach a pull request. There is one maintainer-controlled exception for an
+intentional behavior change that is expected to update an oracle: the lane still changes no oracle
+file, runs the full command, and may open a feature-only PR only when the sole failure is the expected
+affected-oracle mismatch. Every other stage, including the forced sweeps, must pass. Record the joined
+oracle transitions or reviewed baseline findings and state that the maintainer must regenerate the
+oracle in a separate one-file commit after the local merge. This first run is pre-landing evidence, not
+a green or publishable gate; the lane never regenerates the oracle and never pushes `main`.
 
 Emission changed? Measure the GAS delta with the **input tree held fixed, in both directions**, with
 the `.L<N>` and `.Lra<N>_<k>` label families normalized. Comparing your tree against the old one
@@ -326,11 +333,12 @@ compares a longer source with a shorter one and proves nothing.
 - **`seed/VERSION`** — append-only. Never rewrite entries to make old hashes resolve.
 - **`scripts/corpus.manifest`, `scripts/idiom.baseline`, `scripts/needle.baseline`** — the THREE
   oracles, all three marked `-merge` in `.gitattributes` and all three enforced by `scripts/land.sh`.
-  Regenerated only by someone who read the diff, in their **own commit that touches nothing else**,
-  with every row transition accounted for by joining on `(backend, path)`
-  (`scripts/corpus_manifest.sh --explain` prints exactly that). At most one such PR is open at a time;
-  check §1 before you start, and **label that PR `oracle`** — §1's count is what enforces the rule, and
-  an unlabelled oracle PR is invisible to it.
+  A lane never changes them and never opens an oracle PR. The maintainer regenerates an affected oracle
+  only after the feature-only PR is merged locally, in an **own commit that touches that oracle alone**;
+  corpus transitions are accounted for by joining on `(backend, path)`
+  (`scripts/corpus_manifest.sh --explain` prints exactly that). If the maintainer deliberately
+  publishes an oracle-only PR instead, it is a separate maintainer operation and carries the `oracle`
+  label so §1's exclusivity count can see it.
 - **Before creating any file**, `git log -- <path>`. A lane once overwrote a stronger existing
   fixture that way.
 
@@ -342,12 +350,8 @@ $(cat .github/PULL_REQUEST_TEMPLATE.md)
 EOF
 ```
 
-If this PR touches one of the three oracle files, label it so §1's count can see it — the rule is
-enforced by that count, not by memory:
-
-```sh
-gh pr edit <N> -R $R --add-label oracle
-```
+The lane PR must not touch an oracle. Oracle labeling belongs only to a separate maintainer-owned,
+oracle-only PR, if the maintainer chooses that publication form after reviewing the transition.
 
 Fill the template's Evidence section with numbers that say **how they were obtained**. Your numbers
 are a claim: the integrator re-derives every one of them on the merged result, which is why an

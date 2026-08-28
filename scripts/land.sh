@@ -28,6 +28,13 @@
 #   scripts/land.sh <pr-number>          prepare + gate the merge, print the push command, stop
 #   scripts/land.sh <pr-number> --push   the same, then publish it if the gate was green
 #
+# An intentional behavior change that updates an oracle uses the first form as a pre-oracle
+# inspection step. The feature PR must contain no oracle file. If the first full gate fails only on
+# the expected oracle mismatch, this script leaves the exact merged tree detached and refuses to
+# publish it; the maintainer reviews the joined transition, creates a separate one-file oracle commit,
+# reruns the complete gate, and publishes that final object with the saved lease. Never pass
+# `--push` on that first pre-oracle run. An unexplained non-oracle failure remains a refusal.
+#
 # Run it from the integration checkout, inside `nix develop` (or it re-enters via `nix develop -c`).
 set -u
 
@@ -92,6 +99,17 @@ echo "  head=$HEAD_SHA"
 say "PHASE 2 — PR shape"
 shape_fail=0
 CHANGED="$(git diff --name-only "$BASE...$HEAD_SHA")"
+# A feature PR and an oracle regeneration are separate review objects. Checking each oracle commit in
+# isolation is not enough: a PR can otherwise hide a feature change beside an oracle-only commit, and
+# the resulting combined review would violate the worker/maintainer boundary even when both commits
+# are individually one-file-shaped.
+ORACLE_CHANGED="$(printf '%s\n' "$CHANGED" | grep -E '^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline)$' || true)"
+NON_ORACLE_CHANGED="$(printf '%s\n' "$CHANGED" | grep -Ev '^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline)$' | grep -v '^$' || true)"
+if [ -n "$ORACLE_CHANGED" ] && [ -n "$NON_ORACLE_CHANGED" ]; then
+  echo "  REFUSE: this PR mixes an oracle path with non-oracle paths. The feature PR must be oracle-free;"
+  echo "          the maintainer regenerates each affected oracle after the local merge in its own commit."
+  shape_fail=1
+fi
 if printf '%s\n' "$CHANGED" | grep -qx 'seed/alatyr'; then
   echo "  REFUSE: the PR contains seed/alatyr. A reseed is the maintainer's act and its three-stage"
   echo "          evidence is not a property of a diff — GitHub renders it as 'Binary file not shown'."
