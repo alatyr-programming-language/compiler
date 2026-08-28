@@ -30,6 +30,7 @@
             # measures the wrong thing is the failure this project spends the most effort avoiding.
             # `sed`, `xargs`, `timeout` and `sha256sum` come from stdenv.
             gawk
+            (python3.withPackages (ps: [ ps.pyyaml ]))     # validate project-local agent skills
             bc                                           # scripts/incr_probe.sh's timing arithmetic
             hyperfine                                    # reproducible timing when probing by hand
             perf valgrind                                # profilers (perf sampling / callgrind)
