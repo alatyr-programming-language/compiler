@@ -16986,19 +16986,21 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       cgb := var_name_span(base)
       if cgb.n != 0 and slot_of(cx.slots, cx.src, cgb.s, cgb.n) < 0 {
         cgmv := module_const_value(cx.decls, cx.src, cgb.s, cgb.n)
-        cgsi := str_lit_info(cgmv)
-        if cgsi.is_s {
-          if dslf == "len" {
-            push_str(sb, "  movq $")
-            push_int(sb, i64(cgsi.sl))
-            push_str(sb, ", %rax\n  pushq %rax\n")
-            return
-          }
-          if dslf == "ptr" {
-            push_str(sb, "  leaq ")
-            push_lstr(sb, cgsi.lbl)
-            push_str(sb, "(%rip), %rax\n  pushq %rax\n")
-            return
+        if unchecked bitcast(usize, cgmv) != 0 {
+          cgsi := str_lit_info(cgmv)
+          if cgsi.is_s {
+            if dslf == "len" {
+              push_str(sb, "  movq $")
+              push_int(sb, i64(cgsi.sl))
+              push_str(sb, ", %rax\n  pushq %rax\n")
+              return
+            }
+            if dslf == "ptr" {
+              push_str(sb, "  leaq ")
+              push_lstr(sb, cgsi.lbl)
+              push_str(sb, "(%rip), %rax\n  pushq %rax\n")
+              return
+            }
           }
         }
       }
