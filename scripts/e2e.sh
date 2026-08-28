@@ -4213,6 +4213,17 @@ fmt_package_test
 flush_status_test
 fmt_large_input_test 1200000 42
 check_located reject_located_unbound 8
+## Issue #194 / Tooling §5: a semantic diagnostic must name the line of the offending expression,
+## not the enclosing function declaration. The line-7 fixture has two complete declarations before
+## main, so reporting the last declaration is not an accidental pass.
+build_reject_has reject_sema_line_1 "check: unbound name at line 1 in reject_sema_line_1"
+check_reject_has reject_sema_line_1 "check: unbound name at line 1 in reject_sema_line_1"
+build_reject_has reject_sema_line_3 "check: invalid at line 3 in reject_sema_line_3"
+check_reject_has reject_sema_line_3 "check: invalid at line 3 in reject_sema_line_3"
+build_reject_has reject_sema_line_4 "check: invalid at line 4 in reject_sema_line_4"
+check_reject_has reject_sema_line_4 "check: invalid at line 4 in reject_sema_line_4"
+build_reject_has reject_sema_line_7 "check: invalid at line 7 in reject_sema_line_7"
+check_reject_has reject_sema_line_7 "check: invalid at line 7 in reject_sema_line_7"
 ## structural rejections now carry the fn's location (was "location not tracked"): a missing result
 ## and a mismatched `return <literal>` (whose Num node has no span → the fn-name catch-all locates it).
 check_located reject_missing_result 1
