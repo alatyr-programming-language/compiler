@@ -18,6 +18,10 @@ description: >-
 `AGENTS.md` holds what is true whatever you are doing — the gate blind spots, the measurement traps,
 the reseed rule, and the commit-message convention. Read it. This file is only the procedure.
 
+`needs-info` is an implementation hold, not an implementation target. Use
+`alatyr-research` to investigate it and accept only an objective specification-backed
+brief before entering this lane.
+
 **One unit of work at a time.** Not "while I'm here". A slice that grows while being implemented
 produces a measurement nobody can attribute, and that is the expensive failure here, not the merge.
 
@@ -68,8 +72,8 @@ number from issue text or comments. The fallback selects one issue only; it neve
 
 The fallback's priority order is deliberately narrow and mechanical:
 
-1. Exclude `needs-triage` and `needs-info` (maintainer holds) and `in-progress` (an active worker
-   claim).
+1. Exclude `needs-triage` and `needs-info` (implementation holds) and `in-progress` (an active
+   research or implementation claim).
 2. An exact `priority-N` label is an explicit maintainer routing value; lower `N` wins, so
    `priority-0` is highest. No `priority-N` label is below every numbered priority.
 3. Among equal priorities, the oldest `createdAt` wins; an equal timestamp is resolved by the
@@ -82,10 +86,10 @@ authorization or safety signal. Do not infer it from the title, defect label (`w
 
 The fallback selects a candidate, not a claimed task. Perform the preflight review below before
 claiming it. If a candidate is missing ordinary factual information, ask the questions on the issue,
-add the existing `needs-info` hold, and run the fallback again to consider the next ranked candidate.
-Do not bypass a candidate because it needs a semantic, design, security, or external-authorization
-decision: stop and ask the owner. An explicit target always stops on missing information rather than
-silently switching to another issue.
+add the existing `needs-info` hold, and run the fallback again to consider the next ranked
+candidate; `alatyr-research` can investigate that hold. Do not bypass a candidate because it
+needs a semantic, design, security, or external-authorization decision: stop and ask the owner. An
+explicit target always stops on missing information rather than silently switching to another issue.
 
 In this repository the owner may run the worker under the same GitHub account. In that mode, the
 assignee and GitHub assignment event are bookkeeping only: they cannot distinguish the owner from an
@@ -119,14 +123,16 @@ The target and preflight check is:
    report the claim and stop; for a fallback candidate, leave the issue untouched and rerun selection.
 
 If an ordinary factual field is missing, do not invent it. Post a short numbered list of questions on
-the issue, add only the existing `needs-info` label, and do not claim the issue. When the answers are
-available, re-read the issue and remove `needs-info` only if the preflight is now complete. Do not add,
-remove, or rewrite any other label or triage state. For an explicit target, report the questions to the
-owner and stop; for a fallback candidate, rerun the documented selection after recording the hold.
+the issue, add only the existing `needs-info` label, and do not claim the issue. Use
+`alatyr-research` to investigate the hold when the answer can be established from the pinned
+specification or safe evidence. Do not add, remove, or rewrite any other label or triage state during
+this preflight. For an explicit target, report the questions to the owner and stop; for a fallback
+candidate, rerun the documented selection after recording the hold.
 
 If a spec, design, security, or external-authorization decision is missing, stop and ask the owner;
-`needs-info` is a record of missing facts, not permission to guess. The owner may assign the issue for
-visibility, but the worker must not assign it to itself:
+`needs-info` is a research hold, not permission to guess. Research may remove it only after
+the pinned specification and safe evidence establish a complete brief with no such decision left. The
+owner may assign the issue for visibility, but the worker must not assign it to itself:
 
 ```sh
 gh issue edit <N> -R "$R" --add-assignee <agent-login>
@@ -174,10 +180,11 @@ inherits the context. During review, the worker may add only the existing `needs
 are missing; after a successful review it may add `in-progress` exactly through the claim protocol
 above. It must not change any other label or triage state.
 
-Do not claim issues in `needs-triage` or `needs-info`; those are maintainer holds. If a task needs
-security, design, or external-authorization judgment, stop and ask the owner. Do not use
-`needs-info` to turn such a decision into permission to proceed, and do not create or change any
-other label to resolve that hold.
+Do not claim issues in `needs-triage` or `needs-info` for implementation. The latter
+is the research queue; use `alatyr-research` for evidence gathering. If research finds that
+security, design, or external-authorization judgment is needed, it keeps `needs-info` and
+stops. It must not turn that decision into permission to proceed or create another label to resolve
+the hold.
 
 The owner's explicit issue number, or the owner's deliberate invocation with the documented
 same-account fallback, authorizes routing to one candidate; it does not waive the preflight or safety

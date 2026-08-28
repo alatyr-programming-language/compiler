@@ -44,6 +44,15 @@ when the PR completes it. A bounded slice uses an explicit `Refs #N` relation, r
 scope, and leaves the issue open for a later owner-selected unit. The GitHub merge button is not used;
 an approval is not a landing.
 
+`needs-info` is both an implementation hold and a research queue. The separate
+`alatyr-research` operation may read the pinned specification, inspect the repository,
+and make safe observations. If it proves a complete, safe brief from the specification and evidence,
+with no semantic, design, security, or external-authorization decision left, it may post the report
+and remove `needs-info`. That transition only makes the issue eligible for the normal
+lane; the lane repeats its own preflight and safety review. If a decision or specification change is
+needed, research keeps the hold and asks precise questions. No `ready-for-agent` or
+`ready-for-human` label is part of this workflow.
+
 An intentional behavior change that updates an oracle has one explicit exception to the worker-branch
 green rule: the feature PR remains oracle-free, and its first gate is pre-landing evidence rather than a
 publishable verdict. Its only allowed failure is the expected affected-oracle mismatch; every other gate
@@ -60,14 +69,16 @@ target selection, and independent safety checks are the operational boundary.
   authored by the current account, excluding `needs-triage`, `needs-info`, and `in-progress`. It ranks explicit
   `priority-N` labels by lower `N`, then oldest creation time, then issue number; no priority is lowest.
   Multiple or malformed priority labels stop automatic selection. It selects one issue and never drains
-  the queue.
-- `in-progress` is the visible worker-claim marker. The lane adds it only after the preflight and a
-  final re-read immediately before starting work; an issue carrying it is already claimed and must not
-  be selected or duplicated. Keep it while the worker or its PR is active. After a bounded slice lands,
-  the maintainer records the residual scope and clears the old claim when no worker still owns that
-  residual; a new worker claims the next slice. Clear it when the issue is completed or the work is
-  explicitly abandoned. It is coordination state, not authorization, and it is not an atomic lock for
-  workers that race before either one has written the label.
+  the queue. The `needs-info` exclusion is for implementation; the research skill has its own
+  narrowly scoped fallback for that queue.
+- `in-progress` is the visible operation-claim marker for research or implementation. The
+  operation adds it only after its preflight and a final re-read immediately before starting; an issue
+  carrying it is already claimed and must not be selected or duplicated. Research releases it after
+  its report; implementation keeps it while the worker or its PR is active. After a bounded slice
+  lands, the maintainer records residual scope and clears the old claim when no worker still owns that
+  residual; a new worker claims the next slice. Clear it when the issue is completed or the operation
+  is explicitly abandoned. It is coordination state, not authorization, and it is not an atomic lock
+  for workers that race before either one has written the label.
 - An integrator with a PR number uses exactly that PR. Without one, it may proceed only when there is
   exactly one non-draft open PR authored by the current account against `main`; zero or multiple
   candidates require an explicit number. A foreign PR is handled only by explicit number.
