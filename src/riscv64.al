@@ -44,7 +44,7 @@ variant_payload_type := lower_layout::variant_payload_type
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower (see aarch64.al): the
 ## `@export("sym")` alias + `@extern("sym")` external symbol, reused so the symbol rules stay identical.
 (CSpan, decl_at, decl_get, node_ptr, streq, param_find, effective_param_count, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
-(export_name, extern_symbol, field_type_span, compfor_iter_arg) := lower
+(export_name, extern_symbol, field_type_span, compfor_iter_arg, fn_returns_tuple, tuple_words) := lower
 
 ## TOOL-5 cross-target mode. See the AArch64 twin for the boundary rationale; only scalar facts cross
 ## from the driver so the frozen self-host lower does not copy a selection aggregate.
@@ -1264,25 +1264,6 @@ rv_alit_nel := fn(v : ptr(Expr)) -> i64 {
   match deref(v) { Expr::ArrayLit(al_n, al_e) => { r = i64(al_n) } _ => {} }
   r
 }
-## Tuple return types are balanced `(T0, …)` spans, not named structs.  The x86 lower owns the
-## canonical tuple machinery; RV64 only needs the component count to select its register ABI.
-rv_fn_returns_tuple := fn(d : Decl, src : ptr(u8)) -> bool {
-  if d.ret_tl == 0 { return false }
-  str_at((src + d.ret_ts), 1) == "("
-}
-rv_tuple_words := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
-  mut depth := 0
-  mut commas := 0
-  mut i := 0
-  while i < tl {
-    c := str_at((src + ts + i), 1)
-    if c == "(" { depth = depth + 1 }
-    else if c == ")" { depth = depth - 1 }
-    else if c == "," and depth == 1 { commas = commas + 1 }
-    i = i + 1
-  }
-  i64(commas + 1)
-}
 rv_is_array_local := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   d := lower_layout::local_decl_assign(head, src, ns, nl)
   mut r := false
@@ -1316,7 +1297,7 @@ rv_array_nel := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, 
         if streq(src, ans, anl, ns, nl) and ex_is_array_lit(v) { r = rv_alit_nel(v) ; done = true }
         if streq(src, ans, anl, ns, nl) and (not done) {
           cr := rv_call_ret_struct_span(v, rv_decls(), src, a)
-          if cr.n != 0 and str_at((src + cr.s), 1) == "(" { r = rv_tuple_words(src, cr.s, cr.n) ; done = true }
+          if cr.n != 0 and str_at((src + cr.s), 1) == "(" { r = i64(tuple_words(src, cr.s, cr.n)) ; done = true }
         }
         ## `mut xs : [E; N]` — the UNINITIALIZED form: the static bound comes from the annotation.
         if streq(src, ans, anl, ns, nl) and (not done) {
@@ -1579,7 +1560,7 @@ rv_val_words := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt::
   ## a local bound to a struct-RETURNING CALL (`p := mk()`) is sized as the returned struct's words
   ## (§8 piece 2 register struct-return convention) so its `.field` reads resolve.
   crsw := rv_call_ret_struct_span(v, decls, src, a)
-  if crsw.n != 0 { w = i64(struct_words(decls, src, crsw.s, crsw.n, a)) ; if str_at((src + crsw.s), 1) == "(" { w = rv_tuple_words(src, crsw.s, crsw.n) } }
+  if crsw.n != 0 { w = i64(struct_words(decls, src, crsw.s, crsw.n, a)) ; if str_at((src + crsw.s), 1) == "(" { w = i64(tuple_words(src, crsw.s, crsw.n)) } }
   ## a local bound to an enum-RETURNING CALL (`m := id(…)`) is sized as the enum's full width (§8 piece 3).
   crew := rv_call_ret_enum_span(v, decls, src, a)
   if crew.n != 0 { w = 1 + i64(enum_max_arity(decls, src, crew.s, crew.n, a)) }
@@ -3098,8 +3079,8 @@ rv_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
         ## type-agnostic word copy, so a struct with an ENUM / str field (not all-scalar) works too. The
         ## arity-0 guard in rv_ret_struct_words keeps a comptime-value-param type-fn (`uint(N)`) out.
         if ebn != 0 and rv_ret_struct_words(decls, src, ebs, ebn, a) >= 1 { rs = ebs ; rn = ebn }
-        if rv_fn_returns_tuple(d, src) {
-          tw := rv_tuple_words(src, d.ret_ts, d.ret_tl)
+        if fn_returns_tuple(d, src) {
+          tw := i64(tuple_words(src, d.ret_ts, d.ret_tl))
           if tw >= 1 and tw <= 7 { rs = d.ret_ts ; rn = d.ret_tl }
         }
       }
@@ -5656,7 +5637,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         ## struct-returning-call bind: emit the call (delivers a0..a_(w-1)), store each word to p's slot.
         if iscr {
           mut crw := i64(struct_words(decls, src, crs.s, crs.n, a))
-          if str_at((src + crs.s), 1) == "(" { crw = rv_tuple_words(src, crs.s, crs.n) }
+          if str_at((src + crs.s), 1) == "(" { crw = i64(tuple_words(src, crs.s, crs.n)) }
           if poff >= 0 {
             emit_rv_expr(v, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
             mut ck := 0
@@ -6816,8 +6797,8 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   RV_RET_STRUCT_NL = 0
   rsbn := base_type_name(src, rts, rtl)
   if rsbn.n != 0 and rv_ret_struct_words(decls, src, rsbn.s, rsbn.n, a) >= 1 { RV_RET_STRUCT_NS = rsbn.s ; RV_RET_STRUCT_NL = rsbn.n }
-  if rv_fn_returns_tuple(d, src) {
-    tw := rv_tuple_words(src, rts, rtl)
+  if fn_returns_tuple(d, src) {
+    tw := i64(tuple_words(src, rts, rtl))
     if tw >= 1 and tw <= 7 { RV_RET_STRUCT_NS = rts ; RV_RET_STRUCT_NL = rtl }
   }
   ## ENUM-RETURN convention (§8 piece 3): a fn returning an enum of 1..8 words delivers disc+payload → a_k.

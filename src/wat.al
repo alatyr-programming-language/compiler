@@ -62,6 +62,8 @@ variant_payload_type := lower_layout::variant_payload_type
 field_type_is_float := lower_layout::field_type_is_float
 field_type_span := lower::field_type_span
 compfor_iter_arg := lower::compfor_iter_arg
+fn_returns_tuple := lower::fn_returns_tuple
+tuple_words := lower::tuple_words
 (CSpan, decl_at, decl_get, node_ptr, streq, is_slice_local, arrty_nel, sub_arr_len) := lower_ctx
 
 ## The EXACT linker symbol of a `@export("name")` attribute attached to `[name_s, name_s+name_l)`
@@ -1659,25 +1661,6 @@ array_lit_nel := fn(v : ptr(Expr)) -> usize {
   }
   r
 }
-## Tuple return types are balanced `(T0, …)` spans. WASM represents a small tuple as a linear-memory
-## word block and returns its base address, matching the existing aggregate-local representation.
-wat_fn_returns_tuple := fn(d : Decl, src : ptr(u8)) -> bool {
-  if d.ret_tl == 0 { return false }
-  str_at((src + d.ret_ts), 1) == "("
-}
-wat_tuple_words := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
-  mut depth := 0
-  mut commas := 0
-  mut i := 0
-  while i < tl {
-    c := str_at((src + ts + i), 1)
-    if c == "(" { depth = depth + 1 }
-    else if c == ")" { depth = depth - 1 }
-    else if c == "," and depth == 1 { commas = commas + 1 }
-    i = i + 1
-  }
-  i64(commas + 1)
-}
 wat_call_ret_tuple_words := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
   cn := expr_call_name(v)
   mut r := 0
@@ -1687,8 +1670,8 @@ wat_call_ret_tuple_words := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
     while i < cnt {
       d := deref(decl_get(decls, i))
       if d.is_fn and d.name_len != 0 and streq(src, d.name_start, d.name_len, cn.s, cn.n) {
-        if wat_fn_returns_tuple(d, src) {
-          tw := wat_tuple_words(src, d.ret_ts, d.ret_tl)
+        if fn_returns_tuple(d, src) {
+          tw := i64(tuple_words(src, d.ret_ts, d.ret_tl))
           if tw >= 1 and tw <= 7 { r = tw }
         }
       }
@@ -6985,8 +6968,8 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   } else {
     pc := count_params(ephead, src, a)
     WAT_RET_TUPLE = 0
-    if wat_fn_returns_tuple(d, src) {
-      tw := wat_tuple_words(src, d.ret_ts, d.ret_tl)
+    if fn_returns_tuple(d, src) {
+      tw := i64(tuple_words(src, d.ret_ts, d.ret_tl))
       if tw >= 1 and tw <= 7 { WAT_RET_TUPLE = tw }
     }
     emit_wat_body(d.body_stmts, d.value, void, sb, a, src, ephead, pc, decls)

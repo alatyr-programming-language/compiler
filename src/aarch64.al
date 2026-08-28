@@ -74,7 +74,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
 (CSpan, decl_at, decl_get, node_ptr, streq, param_find, effective_param_count, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
-(export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span) := lower
+(export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span, fn_returns_tuple, tuple_words) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
 
@@ -1279,26 +1279,6 @@ a64_alit_nel := fn(v : ptr(Expr)) -> i64 {
   match deref(v) { Expr::ArrayLit(al_n, al_e) => { r = i64(al_n) } _ => {} }
   r
 }
-## A tuple return type is captured by the parser as the balanced `(T0, …)` span, not as a named
-## struct.  Keep this classifier local to the backend: the x86 lower already owns the canonical
-## tuple-return machinery, while a64 only needs the ABI fact (component count).
-a64_fn_returns_tuple := fn(d : Decl, src : ptr(u8)) -> bool {
-  if d.ret_tl == 0 { return false }
-  str_at((src + d.ret_ts), 1) == "("
-}
-a64_tuple_words := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
-  mut depth := 0
-  mut commas := 0
-  mut i := 0
-  while i < tl {
-    c := str_at((src + ts + i), 1)
-    if c == "(" { depth = depth + 1 }
-    else if c == ")" { depth = depth - 1 }
-    else if c == "," and depth == 1 { commas = commas + 1 }
-    i = i + 1
-  }
-  i64(commas + 1)
-}
 ## Is the LOCAL `[ns,nl]` a range-SLICE view (its first `:=` value is an `Expr::Slice`)?
 ## Is the LOCAL `[ns,nl]` an ARRAY (its first `:=` value is an ArrayLit)?
 a64_is_array_local := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
@@ -1458,7 +1438,7 @@ a64_array_nel := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize,
         if streq(src, ans, anl, ns, nl) and ex_is_array_lit(v) { r = a64_alit_nel(v) ; done = true }
         if streq(src, ans, anl, ns, nl) and (not done) {
           cr := a64_call_ret_struct_span(v, a64_decls(), src, a)
-          if cr.n != 0 and str_at((src + cr.s), 1) == "(" { r = a64_tuple_words(src, cr.s, cr.n) ; done = true }
+          if cr.n != 0 and str_at((src + cr.s), 1) == "(" { r = i64(tuple_words(src, cr.s, cr.n)) ; done = true }
         }
         ## `mut xs : [E; N]` — the UNINITIALIZED form: the static bound comes from the annotation.
         if streq(src, ans, anl, ns, nl) and (not done) {
@@ -1793,7 +1773,7 @@ a64_val_words := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt:
   ## a local bound to a struct-RETURNING CALL (`p := mk()`) is sized as the returned struct's words
   ## (§8 piece 2 register struct-return convention) so its `.field` reads resolve at their word offset.
   crsw := a64_binding_ret_struct_span(v, decls, src, a)
-  if crsw.n != 0 { w = i64(struct_words(decls, src, crsw.s, crsw.n, a)) ; if str_at((src + crsw.s), 1) == "(" { w = a64_tuple_words(src, crsw.s, crsw.n) } }
+  if crsw.n != 0 { w = i64(struct_words(decls, src, crsw.s, crsw.n, a)) ; if str_at((src + crsw.s), 1) == "(" { w = i64(tuple_words(src, crsw.s, crsw.n)) } }
   ## a local bound to a WIDE-struct-returning CALL (`s := mk()`, SRET) is sized as the returned struct's
   ## full words so the callee's write through x8 (and later `.field` reads) land inside the frame.
   srsw := a64_call_ret_sret_span(v, decls, src, a)
@@ -3657,8 +3637,8 @@ a64_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
         if ebn != 0 and a64_ret_struct_words(decls, src, ebs, ebn, a) >= 1 { rs = ebs ; rn = ebn }
         ## Tuple returns use the same register delivery as small structs, but have no Decl-backed
         ## layout.  Preserve the full return span so the binding path can count/store components.
-        if a64_fn_returns_tuple(d, src) {
-          tw := a64_tuple_words(src, d.ret_ts, d.ret_tl)
+        if fn_returns_tuple(d, src) {
+          tw := i64(tuple_words(src, d.ret_ts, d.ret_tl))
           if tw >= 1 and tw <= 7 { rs = d.ret_ts ; rn = d.ret_tl }
         }
       }
@@ -6362,7 +6342,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         ## for the call case and additionally handles the if/match delivery.
         if iscr {
           mut crw := i64(struct_words(decls, src, crs.s, crs.n, a))
-          if str_at((src + crs.s), 1) == "(" { crw = a64_tuple_words(src, crs.s, crs.n) }
+          if str_at((src + crs.s), 1) == "(" { crw = i64(tuple_words(src, crs.s, crs.n)) }
           if poff >= 0 {
             emit_a64_struct_value(v, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
             mut k := 0
@@ -7595,8 +7575,8 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   A64_RET_STRUCT_NL = 0
   rsbn := base_type_name(src, rts, rtl)
   if rsbn.n != 0 and a64_ret_struct_words(decls, src, rsbn.s, rsbn.n, a) >= 1 { A64_RET_STRUCT_NS = rsbn.s ; A64_RET_STRUCT_NL = rsbn.n }
-  if a64_fn_returns_tuple(d, src) {
-    tw := a64_tuple_words(src, rts, rtl)
+  if fn_returns_tuple(d, src) {
+    tw := i64(tuple_words(src, rts, rtl))
     if tw >= 1 and tw <= 7 { A64_RET_STRUCT_NS = rts ; A64_RET_STRUCT_NL = rtl }
   }
   ## WIDE-STRUCT SRET convention (§8 piece 2b): a fn returning a PLAIN struct of > 8 words delivers via the
