@@ -8999,13 +8999,13 @@ fn_returns_enum_sret := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), a : rt
 ## SAME register-return convention as a small struct (word k → %rax/%rdx/%rcx/…). Disjoint from
 ## `fn_returns_struct` (a named struct never starts with `(`), so all existing returns are unchanged;
 ## `src/` returns no tuples → fixpoint-neutral.
-fn_returns_tuple := fn(d : Decl, src : ptr(u8)) -> bool {
+pub fn_returns_tuple := fn(d : Decl, src : ptr(u8)) -> bool {
   if d.ret_tl == 0 { return false }
   str_at((src + d.ret_ts), 1) == "("
 }
 ## The COMPONENT count (= word count, scalar components) of a tuple return-type span `(T0, …, TN)`:
 ## count the top-level (paren-depth 1) commas + 1. A single-component `(T)` has 0 commas → 1 word.
-tuple_words := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
+pub tuple_words := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   mut depth := 0
   mut commas := 0
   mut i := 0
