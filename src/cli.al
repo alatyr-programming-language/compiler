@@ -1498,11 +1498,252 @@ graph_cycle_chain := fn(in out a : rt::Arena, nodes : str, in out edges : rt::St
 ## command aborts on it: a manifest whose dependency graph could not be honoured must never produce an
 ## artifact built from a SILENTLY different graph (the git source ignored, a missing package skipped).
 mut DEP_CONFIG_BAD := false
+mut MANIFEST_CONFIG_BAD := false
+
+## MANIFEST LEXER PRIMITIVES — the package manifest is ordinary Alatyr syntax, so searching for a raw
+## byte spelling is not enough: trivia may occur between tokens, and comments/strings may contain every
+## constructor name. These helpers deliberately do not evaluate manifest expressions. They only walk
+## identifiers, calls and named fields, which is the safe boundary needed by the CLI's path resolver.
+manifest_space := fn(c : usize) -> bool {
+  return c == 32 or c == 9 or c == 10 or c == 13
+}
+
+manifest_skip_string := fn(s : str, start : usize, limit : usize) -> usize {
+  mut p := start
+  if p < limit and bytes(s)[p] == 34 { p = p + 1 }
+  while p < limit {
+    c := bytes(s)[p]
+    if c == 92 {
+      p = p + 1
+      if p < limit { p = p + 1 }
+    } else if c == 34 {
+      return p + 1
+    } else {
+      p = p + 1
+    }
+  }
+  return limit
+}
+
+manifest_skip_trivia := fn(s : str, start : usize, limit : usize) -> usize {
+  mut p := start
+  mut done := false
+  while p < limit and done == false {
+    if manifest_space(bytes(s)[p]) {
+      p = p + 1
+    } else if bytes(s)[p] == 35 {
+      p = p + 1
+      while p < limit and bytes(s)[p] != 10 { p = p + 1 }
+    } else {
+      done = true
+    }
+  }
+  return p
+}
+
+manifest_ident_end := fn(s : str, start : usize, limit : usize) -> usize {
+  mut p := start
+  while p < limit and amb_idc(bytes(s)[p]) { p = p + 1 }
+  return p
+}
+
+manifest_call_end := fn(s : str, open : usize, limit : usize) -> usize {
+  mut p := open + 1
+  mut depth := 1
+  while p < limit and depth > 0 {
+    c := bytes(s)[p]
+    if c == 35 {
+      p = manifest_skip_trivia(s, p, limit)
+    } else if c == 34 {
+      p = manifest_skip_string(s, p, limit)
+    } else {
+      if c == 40 { depth = depth + 1 }
+      else if c == 41 { depth = depth - 1 }
+      p = p + 1
+    }
+  }
+  return p
+}
+
+mut MANIFEST_PACKAGE_OPEN : usize = 0
+mut MANIFEST_PACKAGE_END : usize = 0
+
+## Locate the Package constructor outside comments/strings and publish its argument span. A package
+## command may still compile an ordinary source-only package.al when no Package value exists; such a
+## file has no manifest fields or dependency declarations for this scanner to interpret.
+manifest_package_bounds := fn(mtext : str) -> bool {
+  MANIFEST_PACKAGE_OPEN = 0
+  MANIFEST_PACKAGE_END = 0
+  mut i := 0
+  base := unchecked bitcast(usize, mtext.ptr)
+  while i < mtext.len {
+    c := bytes(mtext)[i]
+    if c == 35 {
+      i = manifest_skip_trivia(mtext, i, mtext.len)
+    } else if c == 34 {
+      i = manifest_skip_string(mtext, i, mtext.len)
+    } else if amb_idc(c) {
+      s := i
+      e := manifest_ident_end(mtext, i, mtext.len)
+      word := str_at(base + s, e - s)
+      p := manifest_skip_trivia(mtext, e, mtext.len)
+      if word == "Package" and p < mtext.len and bytes(mtext)[p] == 40 {
+        MANIFEST_PACKAGE_OPEN = p
+        MANIFEST_PACKAGE_END = manifest_call_end(mtext, p, mtext.len)
+        return true
+      }
+      i = e
+    } else {
+      i = i + 1
+    }
+  }
+  return false
+}
+
+manifest_package_field_known := fn(field : str) -> bool {
+  return field == "version" or field == "targets" or field == "default_target" or field == "license"
+    or field == "authors" or field == "repository" or field == "description"
+    or field == "feature_aliases" or field == "limits" or field == "comptime_budget"
+    or field == "dependencies" or field == "libs" or field == "linker_script"
+    or field == "linker_flags" or field == "as_flags" or field == "profiles"
+    or field == "profile_flags" or field == "default_profile" or field == "source_dir"
+    or field == "target_dir"
+}
+
+## `alias` is retained as an implementation-level dependency namespace override used by the existing
+## Modules §8 path-dependency surface; `name` remains the required local dependency name.
+manifest_dependency_field_known := fn(field : str) -> bool {
+  return field == "name" or field == "alias" or field == "source"
+}
+
+manifest_unknown_field_error := fn(in out a : rt::Arena, pkg_al : str, owner : str, field : str, off : usize) {
+  MANIFEST_CONFIG_BAD = true
+  mut b := rt::strbuf(a, owner.len + field.len + 96)
+  rt::push_str(b, "config: ")
+  rt::push_str(b, owner)
+  if field == "vendor_dir" and owner == "Package" {
+    rt::push_str(b, " field vendor_dir is not supported in v1")
+  } else {
+    rt::push_str(b, " field ")
+    rt::push_str(b, field)
+  }
+  msg := str_at(b.data, b.len)
+  manifest_located_error_at(a, msg, pkg_al, off)
+}
+
+## Validate only named arguments at the immediate call depth. Nested Target/Lib/Profile/etc. calls are
+## opaque here; their own schema belongs to the manifest checker. This pass is specifically the closed
+## Package and Dependency field boundary that the CLI's raw scanner used to ignore.
+manifest_validate_call_fields := fn(in out a : rt::Arena, mtext : str, open : usize, end : usize, is_package : bool, pkg_al : str) {
+  base := unchecked bitcast(usize, mtext.ptr)
+  mut p := open + 1
+  mut depth := 0
+  while p < end {
+    c := bytes(mtext)[p]
+    if c == 35 {
+      p = manifest_skip_trivia(mtext, p, end)
+    } else if c == 34 {
+      p = manifest_skip_string(mtext, p, end)
+    } else if c == 40 {
+      depth = depth + 1
+      p = p + 1
+    } else if c == 41 {
+      if depth > 0 { depth = depth - 1 }
+      p = p + 1
+    } else if depth == 0 and amb_idc(c) {
+      fs := p
+      fe := manifest_ident_end(mtext, p, end)
+      q := manifest_skip_trivia(mtext, fe, end)
+      if q < end and bytes(mtext)[q] == 61 and (q + 1 >= end or bytes(mtext)[q + 1] != 61) {
+        field := str_at(base + fs, fe - fs)
+        mut known := false
+        if is_package { known = manifest_package_field_known(field) }
+        else { known = manifest_dependency_field_known(field) }
+        if known == false {
+          if is_package { manifest_unknown_field_error(a, pkg_al, "Package", field, fs) }
+          else { manifest_unknown_field_error(a, pkg_al, "Dependency", field, fs) }
+        }
+      }
+      p = fe
+    } else {
+      p = p + 1
+    }
+  }
+}
+
+## Read one direct string field from a structurally bounded call. Used for dependency aliases; unlike
+## `mf_find_word`, this cannot take an `alias = …` written in a comment or nested constructor.
+manifest_call_string_field := fn(s : str, open : usize, end : usize, wanted : str) -> str {
+  base := unchecked bitcast(usize, s.ptr)
+  mut p := open + 1
+  mut depth := 0
+  while p < end {
+    c := bytes(s)[p]
+    if c == 35 { p = manifest_skip_trivia(s, p, end) }
+    else if c == 34 { p = manifest_skip_string(s, p, end) }
+    else if c == 40 { depth = depth + 1 ; p = p + 1 }
+    else if c == 41 { if depth > 0 { depth = depth - 1 } ; p = p + 1 }
+    else if depth == 0 and amb_idc(c) {
+      fs := p
+      fe := manifest_ident_end(s, p, end)
+      q := manifest_skip_trivia(s, fe, end)
+      if q < end and bytes(s)[q] == 61 {
+        field := str_at(base + fs, fe - fs)
+        if field == wanted {
+          v := manifest_skip_trivia(s, q + 1, end)
+          if v < end and bytes(s)[v] == 34 {
+            ve := manifest_skip_string(s, v, end)
+            if ve > v + 1 and bytes(s)[ve - 1] == 34 {
+              return str_at(base + v + 1, ve - v - 2)
+            }
+          }
+          return str_at(base, 0)
+        }
+      }
+      p = fe
+    } else { p = p + 1 }
+  }
+  return str_at(base, 0)
+}
+
+manifest_validate_dependency_calls := fn(in out a : rt::Arena, mtext : str, open : usize, end : usize, pkg_al : str) {
+  base := unchecked bitcast(usize, mtext.ptr)
+  mut p := open + 1
+  while p < end {
+    c := bytes(mtext)[p]
+    if c == 35 { p = manifest_skip_trivia(mtext, p, end) }
+    else if c == 34 { p = manifest_skip_string(mtext, p, end) }
+    else if amb_idc(c) {
+      s := p
+      e := manifest_ident_end(mtext, p, end)
+      word := str_at(base + s, e - s)
+      q := manifest_skip_trivia(mtext, e, end)
+      if word == "Dependency" and q < end and bytes(mtext)[q] == 40 {
+        de := manifest_call_end(mtext, q, end)
+        manifest_validate_call_fields(a, mtext, q, de, false, pkg_al)
+        p = de
+      } else { p = e }
+    } else { p = p + 1 }
+  }
+}
+
+## The structural Package/Dependency preflight runs before module discovery. It is intentionally a
+## validation-only pass; dependency resolution remains in `scan_deps_into_queue` so there is one owner
+## for the path/Git decision and no second, divergent dependency table.
+manifest_config_reject := fn(in out a : rt::Arena, pkg_al : str) {
+  mc := cstr(a, pkg_al)
+  mtext := read_proc(a, mc, 262144)
+  if manifest_package_bounds(mtext) {
+    mut package_open := MANIFEST_PACKAGE_OPEN
+    mut package_end := MANIFEST_PACKAGE_END
+    manifest_validate_call_fields(a, mtext, package_open, package_end, true, pkg_al)
+    manifest_validate_dependency_calls(a, mtext, package_open, package_end, pkg_al)
+  }
+}
 
 ## Report an unsupported/unresolvable dependency declaration as a LOCATED manifest diagnostic and mark
-## the configuration bad. The dependency scanner is a byte scan (the manifest schema is not evaluated
-## yet), so the reported anchor is the manifest's `dependencies` field — a file-relative line the user
-## can act on — and `detail` names the offending source.
+## the configuration bad. The resolver anchors the result at the manifest's `dependencies` field — a
+## file-relative line the user can act on — and `detail` names the offending source.
 dep_config_error := fn(in out a : rt::Arena, msg : str, pkg_al : str, detail : str) {
   DEP_CONFIG_BAD = true
   mc := cstr(a, pkg_al)
@@ -1530,31 +1771,41 @@ dep_config_error := fn(in out a : rt::Arena, msg : str, pkg_al : str, detail : s
 
 ## MOD-7 / Modules §8 — the EFFECTIVE ALIAS of the `Dependency(…)` record whose source expression sits
 ## at byte `hit`: the record's `alias = "…"` when non-empty, else its `name = "…"` (an empty alias means
-## the dependency is reached under its own name). The scan walks BACK to the record's opening
-## `Dependency(` so a LIST of dependencies attributes each source to its own record, then reads the
-## fields lying between that opening and the source expression. Empty when the record names neither.
+## the dependency is reached under its own name). Locate the enclosing call structurally, so
+## `Dependency ( … )` and comments/strings have the same meaning as the parser.
 dep_alias_at := fn(mtext : str, hit : usize) -> str {
   mbase := unchecked bitcast(usize, mtext.ptr)
-  mut rs := 0
+  mut dep_open := 0
+  mut dep_end := 0
   mut k := 0
-  while k + 11 <= hit {
-    if amb_lit_at(mtext, k, mtext.len, "Dependency(") { rs = k + 11 }
-    k = k + 1
+  while k < hit {
+    c := bytes(mtext)[k]
+    if c == 35 { k = manifest_skip_trivia(mtext, k, hit) }
+    else if c == 34 { k = manifest_skip_string(mtext, k, hit) }
+    else if amb_idc(c) {
+      s := k
+      e := manifest_ident_end(mtext, k, hit)
+      word := str_at(mbase + s, e - s)
+      q := manifest_skip_trivia(mtext, e, hit)
+      if word == "Dependency" and q < hit and bytes(mtext)[q] == 40 {
+        dep_open = q
+        dep_end = manifest_call_end(mtext, q, mtext.len)
+        k = q + 1
+      } else { k = e }
+    } else { k = k + 1 }
   }
-  seg := str_at(mbase + rs, hit - rs)
-  ai := mf_find_word(seg, 0, "alias")
-  if ai >= 0 {
-    av := mf_quoted(seg, usize(ai), 5)
+  if dep_end != 0 {
+    av := manifest_call_string_field(mtext, dep_open, dep_end, "alias")
     if av.len != 0 { return av }
+    nv := manifest_call_string_field(mtext, dep_open, dep_end, "name")
+    if nv.len != 0 { return nv }
   }
-  ni := mf_find_word(seg, 0, "name")
-  if ni >= 0 { return mf_quoted(seg, usize(ni), 4) }
   return str_at(mbase, 0)
 }
 
-## Read the manifest at `pkg_al`, scan it for `DepSource.Path("relpath")` dependencies (a byte scan for
-## the literal `DepSource.Path(` + the following string — the FULLY-QUALIFIED spelling, so a bare
-## `Path(` inside a comment / a `linker_flags` string is not mistaken for a dependency), resolve each
+## Read the manifest at `pkg_al`, structurally scan its Package value for `DepSource.Path("relpath")`
+## dependencies (the FULLY-QUALIFIED spelling, so a bare `Path(` inside a comment / a `linker_flags`
+## string is not mistaken for a dependency), resolve each
 ## relative to the package dir `pkgdir`, and enqueue `<normalized dep dir>/package.al` TAB the
 ## dependency's effective ALIAS onto `queue` (one newline-terminated row per dependency). A missing /
 ## dep-less manifest enqueues nothing. The lean dual of the Rust seed's manifest dep walk.
@@ -1578,62 +1829,114 @@ scan_deps_into_queue := fn(in out a : rt::Arena, pkg_al : str, pkgdir : str, in 
   ## this package's own graph IDENTITY (MOD-10) — the same key the BFS records in its seen-set, so an
   ## edge's two endpoints and the node set agree.
   from_key := abs_norm_path(a, base_dir)
-  mut i := 0
-  while i < mtext.len {
-    if amb_lit_at(mtext, i, mtext.len, "DepSource.Git(") {
-      dep_config_error(a, "config: a git dependency source is not supported yet — v1 resolves DepSource.Path only", pkg_al, "")
-      i = i + 14
-    } else if amb_lit_at(mtext, i, mtext.len, "DepSource.Path(") {
-      mut j := i + 15
-      while j < mtext.len and bytes(mtext)[j] != 34 { j = j + 1 }   ## to the opening quote (34)
-      mut e := j + 1
-      while e < mtext.len and bytes(mtext)[e] != 34 { e = e + 1 }   ## to the closing quote
-      relp := str_at(mbase + j + 1, e - (j + 1))
-      dalias := dep_alias_at(mtext, i)
-      ## resolve + NORMALIZE `<pkgdir>/<relp>` to a canonical dir (collapsing `..`), so the seen-set
-      ## dedup is exact (a diamond dep is compiled once; a dep cycle terminates). Bind every cat2 step
-      ## to a local (the str-call-as-str-arg trap). The package manifest is `<normdir>/package.al`.
-      ## A BARE manifest path (`package.al`) has an EMPTY `pkgdir`: the dep is then resolved against
-      ## the CURRENT directory (`.`), never against `/` — which would make it absolute.
-      d1 := cat2(a, base_dir, "/")
-      rawdir := cat2(a, d1, relp)
-      normdir := normalize_path(a, rawdir)
-      deppkg := cat2(a, normdir, "/package.al")
-      if dalias.len == 0 {
-        dep_config_error(a, "config: a dependency declares neither a name nor an alias", pkg_al, relp)
-      }
-      dc := cstr(a, deppkg)
-      dtext := read_proc(a, dc, 4096)
-      if dtext.len == 0 {
-        dep_config_error(a, "config: a path dependency has no package manifest", pkg_al, deppkg)
-      }
-      depkey := abs_norm_path(a, normdir)
-      ke1 := rt::push_str(edges, from_key)
-      ke2 := rt::push_byte(edges, 9)
-      ke3 := rt::push_str(edges, depkey)
-      ke4 := rt::push_byte(edges, 10)
-      kq := rt::push_str(queue, deppkg)
-      kt := rt::push_byte(queue, 9)
-      ka := rt::push_str(queue, dalias)
-      kn := rt::push_byte(queue, 10)
-      i = e + 1
-    } else if bytes(mtext)[i] == 35 {
+  mut scan_start := 0
+  mut scan_end := mtext.len
+  if manifest_package_bounds(mtext) {
+    mut package_open := MANIFEST_PACKAGE_OPEN
+    mut package_end := MANIFEST_PACKAGE_END
+    scan_start = package_open + 1
+    scan_end = package_end
+  } else {
+    ## A source-only package.al has no configuration value; never interpret ordinary source code as a
+    ## dependency declaration merely because it mentions the config prelude's names.
+    return
+  }
+  mut i := scan_start
+  while i < scan_end {
+    c := bytes(mtext)[i]
+    if c == 35 {
       ## a `#`/`##` COMMENT runs to end of line — a manifest whose doc comment SPELLS a dependency
       ## (`## … DepSource.Path("../dep_lib") …`) must not thereby acquire one.
-      while i < mtext.len and bytes(mtext)[i] != 10 { i = i + 1 }
-    } else if bytes(mtext)[i] == 34 {
+      i = manifest_skip_trivia(mtext, i, scan_end)
+    } else if c == 34 {
       ## a STRING literal — skip it whole, so a `#` inside one starts no comment and a `DepSource.…`
-      ## spelled inside one declares no dependency.
-      i = i + 1
-      while i < mtext.len and bytes(mtext)[i] != 34 { i = i + 1 }
-      i = i + 1
+      ## spelled inside one declares no dependency. Escaped quotes are consumed as part of the string.
+      i = manifest_skip_string(mtext, i, scan_end)
+    } else if amb_idc(c) {
+      hs := i
+      he := manifest_ident_end(mtext, i, scan_end)
+      head := str_at(mbase + hs, he - hs)
+      if head == "DepSource" {
+        mut p := manifest_skip_trivia(mtext, he, scan_end)
+        if p < scan_end and bytes(mtext)[p] == 46 {   ## '.' (46)
+          p = manifest_skip_trivia(mtext, p + 1, scan_end)
+          vs := p
+          ve := manifest_ident_end(mtext, p, scan_end)
+          q := manifest_skip_trivia(mtext, ve, scan_end)
+          if ve > vs and q < scan_end and bytes(mtext)[q] == 40 {   ## '(' (40)
+            variant := str_at(mbase + vs, ve - vs)
+            call_end := manifest_call_end(mtext, q, scan_end)
+            if variant == "Git" {
+              dep_config_error(a, "config: a git dependency source is not supported yet — v1 resolves DepSource.Path only", pkg_al, "")
+              i = call_end
+            } else if variant == "Path" {
+              arg := manifest_skip_trivia(mtext, q + 1, call_end)
+              if arg < call_end and bytes(mtext)[arg] == 34 {
+                arg_end := manifest_skip_string(mtext, arg, call_end)
+                if arg_end > arg + 1 and bytes(mtext)[arg_end - 1] == 34 {
+                  relp := str_at(mbase + arg + 1, arg_end - arg - 2)
+                  dalias := dep_alias_at(mtext, hs)
+                  ## resolve + NORMALIZE `<pkgdir>/<relp>` to a canonical dir (collapsing `..`), so the seen-set
+                  ## dedup is exact (a diamond dep is compiled once; a dep cycle terminates). Bind every cat2 step
+                  ## to a local (the str-call-as-str-arg trap). The package manifest is `<normdir>/package.al`.
+                  ## A BARE manifest path (`package.al`) has an EMPTY `pkgdir`: the dep is then resolved against
+                  ## the CURRENT directory (`.`), never against `/` — which would make it absolute.
+                  d1 := cat2(a, base_dir, "/")
+                  rawdir := cat2(a, d1, relp)
+                  normdir := normalize_path(a, rawdir)
+                  deppkg := cat2(a, normdir, "/package.al")
+                  if dalias.len == 0 {
+                    dep_config_error(a, "config: a dependency declares neither a name nor an alias", pkg_al, relp)
+                  }
+                  dc := cstr(a, deppkg)
+                  dtext := read_proc(a, dc, 4096)
+                  if dtext.len == 0 {
+                    dep_config_error(a, "config: a path dependency has no package manifest", pkg_al, deppkg)
+                  }
+                  depkey := abs_norm_path(a, normdir)
+                  ke1 := rt::push_str(edges, from_key)
+                  ke2 := rt::push_byte(edges, 9)
+                  ke3 := rt::push_str(edges, depkey)
+                  ke4 := rt::push_byte(edges, 10)
+                  kq := rt::push_str(queue, deppkg)
+                  kt := rt::push_byte(queue, 9)
+                  ka := rt::push_str(queue, dalias)
+                  kn := rt::push_byte(queue, 10)
+                  i = call_end
+                } else {
+                  dep_config_error(a, "config: a path dependency source must be a string literal", pkg_al, "")
+                  i = call_end
+                }
+              } else {
+                dep_config_error(a, "config: a path dependency source must be a string literal", pkg_al, "")
+                i = call_end
+              }
+            } else {
+              DEP_CONFIG_BAD = true
+              mut vb := rt::strbuf(a, variant.len + 64)
+              rt::push_str(vb, "config: unknown DepSource variant ")
+              rt::push_str(vb, variant)
+              vmsg := str_at(vb.data, vb.len)
+              manifest_located_error_at(a, vmsg, pkg_al, vs)
+              i = call_end
+            }
+          } else {
+            i = he
+          }
+        } else {
+          i = he
+        }
+      } else {
+        i = he
+      }
     } else {
-      i += 1
+      i = i + 1
     }
   }
 }
 
-## Read the manifest at `pkg_al` and return the string value of field `field` — the byte scan finds
+## Read the manifest at `pkg_al` and return the string value of field `field` — this legacy scalar scan
+## finds
 ## the literal field name then its following `"…"` string. Returns an EMPTY str when the field is
 ## absent (the caller applies the field's default). The lean dual of reading `‹name›.<field>` off
 ## the manifest comptime constant; a plain byte scan since the lean parser does not evaluate the
@@ -2090,16 +2393,12 @@ manifest_code_size_reject := fn(in out a : rt::Arena, pkg_al : str, code_size : 
   return 1
 }
 
-## Print a manifest-configuration diagnostic LOCATED at the line holding field `anchor` (Tooling
-## §2.2/§5): `<msg> at line <n> in <manifest>`, on stderr. The `dep_config_error` shape without the
-## dependency-specific detail and without the DEP_CONFIG_BAD latch, for a rejection whose caller
-## returns its own exit code. An absent anchor falls back to line 1 — the file is still named.
-manifest_located_error := fn(in out a : rt::Arena, msg : str, pkg_al : str, anchor : str) {
+## Print a manifest-configuration diagnostic LOCATED at byte `off` (Tooling §2.2/§5):
+## `<msg> at line <n> in <manifest>`, on stderr. Structural validation uses the byte offset so a
+## repeated field, a comment and a string cannot move the diagnostic to an unrelated line.
+manifest_located_error_at := fn(in out a : rt::Arena, msg : str, pkg_al : str, off : usize) {
   mc := cstr(a, pkg_al)
   mtext := read_proc(a, mc, 262144)
-  mut off := 0
-  fi := mf_find_word(mtext, 0, anchor)
-  if fi >= 0 { off = usize(fi) }
   mut line := 1
   mut i := 0
   while i < off and i < mtext.len { if bytes(mtext)[i] == 10 { line = line + 1 } ; i = i + 1 }
@@ -2113,17 +2412,20 @@ manifest_located_error := fn(in out a : rt::Arena, msg : str, pkg_al : str, anch
   w := rt::sys_write(1, 2, unchecked bitcast(usize, db.data), db.len)
 }
 
-## TOOL-16 — vendoring is post-v1. Keep this check at the manifest configuration boundary: an
-## unknown Package field must not be silently ignored and must not reach source parsing/linking.
-mut MANIFEST_CONFIG_BAD := false
-manifest_vendor_reject := fn(in out a : rt::Arena, pkg_al : str) {
+## Print a manifest-configuration diagnostic located at the first structurally recognized `field`.
+## Legacy callers use this form for scanners whose data is already bounded to one manifest record.
+manifest_located_error := fn(in out a : rt::Arena, msg : str, pkg_al : str, anchor : str) {
   mc := cstr(a, pkg_al)
   mtext := read_proc(a, mc, 262144)
-  if mf_find_word(mtext, 0, "vendor_dir") >= 0 {
-    MANIFEST_CONFIG_BAD = true
-    manifest_located_error(a, "config: Package field vendor_dir is not supported in v1", pkg_al, "vendor_dir")
-  }
+  mut off := 0
+  fi := mf_find_word(mtext, 0, anchor)
+  if fi >= 0 { off = usize(fi) }
+  manifest_located_error_at(a, msg, pkg_al, off)
 }
+
+## TOOL-16 — vendoring is post-v1. Keep this check at the manifest configuration boundary: an
+## unknown Package or Dependency field must not be silently ignored and must not reach source
+## parsing/linking. The structural implementation is defined with the manifest lexer above.
 
 ## TOOL-11 — Target.output is an artifact FILE NAME, not a path. An omitted field keeps the
 ## deterministic default; an explicit empty value or path separator is a Config error before source
@@ -2560,12 +2862,7 @@ manifest_target_dir := fn(in out a : rt::Arena, pkg_al : str) -> str {
 manifest_has_package := fn(in out a : rt::Arena, pkg_al : str) -> bool {
   mc := cstr(a, pkg_al)
   mt := read_proc(a, mc, 262144)
-  mut q := 0
-  while q + 8 <= mt.len {
-    if amb_lit_at(mt, q, mt.len, "Package(") { return true }
-    q += 1
-  }
-  return false
+  return manifest_package_bounds(mt)
 }
 
 ## The selected target's `output` artifact file name (Manifest appendix §3.1), or "a.out" when
@@ -4213,6 +4510,13 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if is_pkg and (mode == 2 or mode == 3 or mode == 5 or mode == 6) {
     lim_ceiling = manifest_limits(a, pkg_arg)
   }
+  ## Validate the closed Package/Dependency field sets before module discovery. A rejected manifest
+  ## must not cause the resolver to read a path dependency or compile any source on its way to the
+  ## same Config verdict.
+  if is_pkg {
+    manifest_config_reject(a, pkg_arg)
+    if MANIFEST_CONFIG_BAD { return 1 }
+  }
   mut paths := build_paths(a, cmd, fi, path_n, pkg_arg)
   mut target_backend := 0
   ## Modules §8 / Tooling §2.4 — a dependency DECLARATION the resolver cannot honour (a git source, a
@@ -4221,7 +4525,6 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## than build/check a program whose dependency graph differs from the one the manifest declares.
   if DEP_CONFIG_BAD { return 1 }
   if is_pkg {
-    manifest_vendor_reject(a, pkg_arg)
     manifest_path_reject(a, pkg_arg)
     ## `--target all` is a build-only multi-artifact selection. Defer target-specific validation to
     ## the per-target child invocations below; the ordinary resolver must not interpret the reserved

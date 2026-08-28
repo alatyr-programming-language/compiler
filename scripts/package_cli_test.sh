@@ -304,6 +304,93 @@ EOF
   rm -rf "$tmp"
 }
 
+# Tooling §2.4 / Manifest appendix §3 — the manifest scanner must follow the STRUCTURE of the
+# Package/Dependency values, not spellings in a raw byte search. A qualified DepSource variant may
+# contain trivia before its call, a misspelled variant is an explicit configuration error, and an
+# unknown field must not disappear merely because the manifest checker has not evaluated that value.
+run_manifest_structural_config() {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp"/{lower,spaced_git,spaced_path,unknown_package,unknown_dependency,comments_strings,spaced_alias}/src
+  for case in lower spaced_git spaced_path unknown_package unknown_dependency comments_strings; do
+    printf 'main := fn() -> u64 { return 42 }\n' > "$tmp/$case/src/main.al"
+  done
+  cat > "$tmp/lower/package.al" <<'EOF'
+app := Package(version = "0.1.0", source_dir = "src", target_dir = "target",
+  dependencies = [Dependency(name = "g", source = DepSource.git("https://example.invalid/g.git", GitRef.Branch("main")))],
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "lower")])
+EOF
+  cat > "$tmp/spaced_git/package.al" <<'EOF'
+app := Package(version = "0.1.0", source_dir = "src", target_dir = "target",
+  dependencies = [Dependency(name = "g", source = DepSource.Git ("https://example.invalid/g.git", GitRef.Branch("main")))],
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "spaced-git")])
+EOF
+  cat > "$tmp/spaced_path/package.al" <<'EOF'
+app := Package(version = "0.1.0", source_dir = "src", target_dir = "target",
+  dependencies = [Dependency(name = "absent", source = DepSource.Path ("../absent"))],
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "spaced-path")])
+EOF
+  cat > "$tmp/unknown_package/package.al" <<'EOF'
+app := Package(version = "0.1.0", mystery = "ignored", source_dir = "src", target_dir = "target",
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "unknown-package")])
+EOF
+  cat > "$tmp/unknown_dependency/package.al" <<'EOF'
+app := Package(version = "0.1.0", source_dir = "src", target_dir = "target",
+  dependencies = [Dependency(name = "absent", mystery = "ignored", source = DepSource.Path ("../absent"))],
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "unknown-dependency")])
+EOF
+  cat > "$tmp/comments_strings/package.al" <<'EOF'
+# DepSource.Path ("../missing") and Dependency (mystery = "ignored") are comments, not declarations.
+app := Package(version = "0.1.0", description = "DepSource.Git (https://example.invalid/ghost.git) # literal",
+  source_dir = "src", target_dir = "target",
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "comments-strings")])
+EOF
+  for case in lower spaced_git spaced_path unknown_package unknown_dependency; do
+    out=$(cd "$tmp/$case" && "$CC" check package.al 2>&1); got=$?
+    case "$case" in
+      lower)           want='unknown DepSource variant git' ;;
+      spaced_git)     want='a git dependency source is not supported yet' ;;
+      spaced_path)    want='a path dependency has no package manifest' ;;
+      unknown_package) want='Package field mystery' ;;
+      unknown_dependency) want='Dependency field mystery' ;;
+    esac
+    if [ "$got" = 1 ] && printf '%s' "$out" | grep -qF "$want" && printf '%s' "$out" | grep -qE 'at line [0-9]+ in '; then
+      echo "ok   manifest_structural_config($case): rc 1 + located diagnostic"
+    else
+      echo "FAIL manifest_structural_config($case): rc=$got out=$out (want $want)"; fail=1
+    fi
+  done
+  out=$(cd "$tmp/comments_strings" && "$CC" check package.al 2>&1); got=$?
+  if [ "$got" = 0 ] && [ -z "$out" ]; then
+    echo "ok   manifest_structural_config(comments_strings): comments and string contents ignored"
+  else
+    echo "FAIL manifest_structural_config(comments_strings): rc=$got out=$out"; fail=1
+  fi
+
+  # `Dependency (` plus a source field before a later alias exercises the association boundary: the
+  # alias must come from the same complete record, not from bytes before the source expression.
+  mkdir -p "$tmp/spaced_alias/dep/src"
+  printf 'main := fn() -> u64 { return d::math::answer() }\n' > "$tmp/spaced_alias/src/main.al"
+  printf 'pub answer := fn() -> u64 { return 42 }\n' > "$tmp/spaced_alias/dep/src/math.al"
+  cat > "$tmp/spaced_alias/dep/package.al" <<'EOF'
+depapp := Package(version = "0.1.0", source_dir = "src", target_dir = "target",
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "dep")])
+EOF
+  cat > "$tmp/spaced_alias/package.al" <<'EOF'
+app := Package(version = "0.1.0", source_dir = "src", target_dir = "target",
+  dependencies = [Dependency (
+    source = DepSource.Path ("dep"), alias = "d", name = "dep"
+  )],
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf, entry = "_start", output = "spaced-alias")])
+EOF
+  out=$(cd "$tmp/spaced_alias" && "$CC" check package.al 2>&1); got=$?
+  if [ "$got" = 0 ] && [ -z "$out" ]; then
+    echo "ok   manifest_structural_config(spaced_alias): trivia and post-source alias preserved"
+  else
+    echo "FAIL manifest_structural_config(spaced_alias): rc=$got out=$out"; fail=1
+  fi
+  rm -rf "$tmp"
+}
+
 # MOD-11 (Modules §8, Tooling §2.4) — THE DEPENDENCY GRAPH IS ACYCLIC. A chain that returns to a
 # package already on it is a Config diagnostic PRINTING THE CLOSING CHAIN of sources, never a silently
 # deduplicated edge: a package is compiled against its dependencies' finished interfaces, so a cycle
@@ -1002,6 +1089,7 @@ run_expect profile_test_parallel 0 test -j2 --profile release package.al
 run_path_dep dep_declared main__main
 run_path_dep dep_alias_use d__math__answer
 run_dep_config_diag
+run_manifest_structural_config
 run_dep_cycle_diag
 run_dep_spelling_identity
 run_check_build_parity
