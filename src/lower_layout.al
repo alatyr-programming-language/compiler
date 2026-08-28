@@ -912,6 +912,30 @@ arr_field_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
   LSpan(s = es, n = et - es)
 }
 
+## A direct nested fixed-array type (`[[T; N]; M]`) starts with an opening bracket for its element
+## type after the outer bracket's whitespace. The ordinary `arr_field_elem_span` helper intentionally
+## stops at the first semicolon and therefore cannot distinguish this shape: on a nested type that
+## semicolon belongs to the inner array. Keep this predicate narrow and source-only; it is the common
+## correct-or-trap boundary for every backend until nested array-field addressing has one layout model.
+array_type_has_array_element := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  if tl < 3 { return false }
+  mut p := ts
+  end := ts + tl
+  while p < end {
+    c := bytes(str_at((src + p), 1))[0]
+    if c != 32 and c != 10 and c != 9 and c != 13 { break }
+    p += 1
+  }
+  if p >= end or str_at((src + p), 1) != "[" { return false }
+  p += 1
+  while p < end {
+    c := bytes(str_at((src + p), 1))[0]
+    if c != 32 and c != 10 and c != 9 and c != 13 { break }
+    p += 1
+  }
+  p < end and str_at((src + p), 1) == "["
+}
+
 ## The explicitly byte-sized scalar element types accepted by the packed-field byte layout.
 ## Keep this local to the layout module: the ordinary word-model layout still treats byte arrays
 ## as word arrays until its own slice is proven.
@@ -1769,6 +1793,16 @@ pub struct_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
     ## COMPTIME-VALUE-GENERIC: a `[T; <expr>]` field (parser `wsize` 0) folds its length against the
     ## instance's comptime-value bindings (`uint(192)` → `[u64; 3]` = 3 words).
     eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+    ## SOUNDNESS (I11 / Types §9.4): the current field/index consumers have one word-model stride for
+    ## an inline array field, but an element that is itself an array needs a second independent index
+    ## and its own nested stride. Before this fence `s.data[i][j]` compiled and the second index fell
+    ## through to slot 0, yielding a clean wrong value; the assignment spelling could also disappear in
+    ## the parser before lowering. Reject the whole containing struct here, before any backend reserves
+    ## or materializes its image, so x86_64 and all cross backends share the same safe boundary.
+    if array_type_has_array_element(src, eff.s, eff.n) {
+      ll_show_src_line(src, fd.ts)
+      panic("selfhost: a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled")
+    }
     ## The default struct layout is still word-granular. An explicitly byte-typed array field would
     ## therefore be accepted but laid out at an element stride of 8, while Types §6.4 requires stride
     ## 1 for `[u8|i8|bits8; N]`. Keep the correct-or-trap invariant until the shared byte-layout path

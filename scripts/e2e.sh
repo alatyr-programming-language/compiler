@@ -4922,6 +4922,11 @@ check_accept str_field_struct
 ## after it (word-offset shift), with the array field laid out in .data as its element cells.
 run global_struct_array_field 42
 check_accept global_struct_array_field
+## I11 / Types §9.4: a direct multi-dimensional fixed-array field currently has no composed nested
+## address model. It must stop loudly for both a word-width and byte-width element, rather than let the
+## second index fall through to slot 0 and return a clean wrong value.
+build_reject_has reject_multidim_array_field_u64 "fixed-array field whose element is another fixed array"
+build_reject_has reject_multidim_array_field_u8 "fixed-array field whose element is another fixed array"
 ## §4 layout: a str payload of an enum variant (2-word {ptr,len}) — construction, match binding
 ## (statement + expression), and s.len read; plus a sibling scalar-payload variant.
 run enum_str_payload 42

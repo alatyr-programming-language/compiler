@@ -93,6 +93,12 @@ ALLOW=(
   ## `bitcast(T, v)` is IDENTITY-ERASED at parse time for a scalar/`ptr(scalar)` target, so the
   ## written type is simply absent from the AST. Needs the parser to keep the span; see the issues.
   "BEHAVIOUR-EXIT byte_precise"
+  ## The current formatter's struct-field parser does not retain the inner semicolon of a direct
+  ## nested fixed-array type (`[[T; N]; M]`), so it expands the remainder as bogus fields and is
+  ## non-idempotent. These are deliberate fail-loud safety fixtures for the lowering boundary in
+  ## issue #172; keep the formatter residual explicit until that parser/formatter shape is supported.
+  "NONIDEMPOTENT reject_multidim_array_field_u64"
+  "NONIDEMPOTENT reject_multidim_array_field_u8"
 )
 allowed() { # class rel -> 0 if this exact (class, fixture) pair is a known, reasoned residual
   local k="$1 $2" e
