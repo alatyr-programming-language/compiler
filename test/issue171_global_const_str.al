@@ -28,13 +28,16 @@ main := fn() -> u64 {
   if bytes(r)[0] != 103 { return 7 }
   if bytes(r)[4] != 97 { return 8 }
 
-  ## Existing working controls: copy into a local, pass as a str parameter,
-  ## and use a local literal. Keep a scalar global beside them.
+  ## Existing working controls: copy into a local, pass that local as a str
+  ## parameter, and use a local literal. Keep a scalar global beside them.
   s := G
   if s.len != 5 { return 9 }
-  if param_len(G) != 5 { return 10 }
+  if param_len(s) != 5 { return 10 }
+  ## The direct global-to-parameter path is covered separately from the local
+  ## control above.
+  if param_len(G) != 5 { return 11 }
   local := "gamma"
-  if local.len != 5 { return 11 }
-  if N != 7 { return 12 }
+  if local.len != 5 { return 12 }
+  if N != 7 { return 13 }
   return 42
 }
