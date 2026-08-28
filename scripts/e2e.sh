@@ -2895,6 +2895,10 @@ run standard_byte_abi 42
 run issue169_standard_byte_return 75
 ## #169: second-field-only by-value parameter probe; a first-field-only result is insufficient.
 run issue169_standard_byte_param 5
+## #169 control: pair return → pair parameter preserves both fields; a wider mixed struct stays word-tier.
+run issue169_native_byte_abi_control 42
+## #169 negative control: a wider byte-layout struct remains fail-loud outside the bounded slice.
+run issue169_native_byte_abi_unsupported 42
 ## #169: the WASM whole-element write must not retain its old partial word copy.
 run issue169_wasm_array_write 42
 ## #169: the WASM nested standard-byte return must not regress from its former trap to a wrong value.

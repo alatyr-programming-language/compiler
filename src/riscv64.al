@@ -27,7 +27,7 @@ arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 (push_str, push_int) := rt
-(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
+(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
 (ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv) := lower_layout
@@ -727,6 +727,7 @@ rv_struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
 rv_standard_byte_abi_fence := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
   if struct_decl_of(decls, src, s, n) < 0 { return false }
   if not layout_kind_is_byte(layout_kind(decls, src, s, n, a)) { return false }
+  if std_struct_is_native_u8_pair(decls, src, s, n, a) { return false }
   if std_struct_has_byte_layout(decls, src, s, n, a) { return false }
   if std_struct_is_word_granular(decls, src, s, n, a) { return false }
   ## `struct_words` is ceil(byte_size / 8) in the BYTE tier, so a two-byte `{u8,u8}` value
@@ -4839,6 +4840,27 @@ emit_rv_slice_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, sr
 ## callee's by-reference field READ reads identical layout). Scalar-field structs only (rv_struct_all_scalar);
 ## str/float-field literals stay a LOUD `ebreak`. Bumps RV_AGG by the struct's words; an overflow past
 ## RV_AGG_LIM (an under-reservation) is a loud `ebreak`. Distinct blocks (monotonic bump) → no aliasing.
+emit_rv_u8_pair_return := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+  ## The RV64 LP64 ABI carries this two-byte aggregate in the low two bytes of a0. Preserve the first
+  ## field across evaluation of the second, then combine the byte lanes in their memory order.
+  mut g := ex_struct_lit_args(e)
+  mut k := 0
+  while g != 0 {
+    ga := deref(arg_p(g))
+    if k == 0 {
+      emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      push_str(sb, "  andi a0, a0, 255\n  addi sp, sp, -16\n  sd a0, 0(sp)\n")
+    }
+    if k == 1 {
+      emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      push_str(sb, "  andi a0, a0, 255\n  slli a0, a0, 8\n  ld t0, 0(sp)\n  addi sp, sp, 16\n  or a0, t0, a0\n")
+    }
+    k += 1
+    g = ga.next
+  }
+  if k != 2 { push_str(sb, "  ebreak // malformed native u8-pair return\n") }
+}
+
 emit_rv_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
   ns := expr_struct_lit_ns(e)
   nl := expr_struct_lit_nl(e)
@@ -4850,13 +4872,18 @@ emit_rv_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
     ## returns the words it occupied — so a field that is itself an ENUM (`S(c = Col.G(9), n = 2)`) or a
     ## nested struct/str lands in full and following fields stay aligned. An all-scalar struct is byte-
     ## identical to the old positional store. The block reserves the struct's FULL width; addr rides a0.
-    mut off := blk
-    mut g := ex_struct_lit_args(e)
-    while g != 0 {
-      ga := deref(arg_p(g))
-      w := emit_rv_store_payload_at(ga.e, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      off = off + w * 8
-      g = ga.next
+    if std_struct_is_native_u8_pair(decls, src, ns, nl, a) {
+      _pairw := rv_std_store_struct(e, blk, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+    }
+    if not std_struct_is_native_u8_pair(decls, src, ns, nl, a) {
+      mut off := blk
+      mut g := ex_struct_lit_args(e)
+      while g != 0 {
+        ga := deref(arg_p(g))
+        w := emit_rv_store_payload_at(ga.e, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        off = off + w * 8
+        g = ga.next
+      }
     }
     push_str(sb, "  addi a0, s0, ") ; push_int(sb, blk) ; push_str(sb, "\n")
     RV_AGG = RV_AGG + words * 8
@@ -5043,6 +5070,10 @@ emit_rv_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
   if expr_is_struct_lit(e) {
     slns := expr_struct_lit_ns(e)
     slnl := expr_struct_lit_nl(e)
+    if std_struct_is_native_u8_pair(decls, src, slns, slnl, a) {
+      emit_rv_u8_pair_return(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      return
+    }
     ## an ALL-SCALAR struct literal: push each 1-word field, pop in REVERSE so word k → a_k (unchanged).
     if rv_struct_all_scalar(decls, src, slns, slnl, a) {
       mut g := ex_struct_lit_args(e)

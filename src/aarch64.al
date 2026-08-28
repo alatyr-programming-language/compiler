@@ -34,7 +34,7 @@ arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 (push_str, push_int) := rt
-(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
+(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
 (ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv) := lower_layout
@@ -712,6 +712,7 @@ a64_struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
 a64_standard_byte_abi_fence := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
   if struct_decl_of(decls, src, s, n) < 0 { return false }
   if not layout_kind_is_byte(layout_kind(decls, src, s, n, a)) { return false }
+  if std_struct_is_native_u8_pair(decls, src, s, n, a) { return false }
   if std_struct_has_byte_layout(decls, src, s, n, a) { return false }
   if std_struct_is_word_granular(decls, src, s, n, a) { return false }
   ## `struct_words` is ceil(byte_size / 8) in the BYTE tier, so a two-byte `{u8,u8}` value
@@ -4246,7 +4247,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       pidx := param_find(params_head, src, bns, bnl, a)
       pstys := a64_param_struct_ns(params_head, src, bns, bnl, a, decls)
       pstyn := a64_param_struct_nl(params_head, src, bns, bnl, a, decls)
-      paramok := (not localok) and pidx >= 0 and pstyn != 0 and a64_struct_all_scalar(decls, src, pstys, pstyn, a)
+      paramok := (not stdhandled) and (not localok) and pidx >= 0 and pstyn != 0 and a64_struct_all_scalar(decls, src, pstys, pstyn, a)
       if localok {
         woff := field_word_offset(decls, src, stys, styn, fs, fl, a)
         push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, poff + woff * 8) ; push_str(sb, "]\n")
@@ -5436,6 +5437,27 @@ emit_a64_slice_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
 ## a LOUD `brk`. Bumps A64_AGG by the struct's words; an overflow past A64_AGG_LIM (an under-reservation)
 ## is a loud `brk`, never silent frame corruption. Distinct blocks (monotonic bump) → multiple / nested
 ## aggregate-value args in one call never alias.
+emit_a64_u8_pair_return := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+  ## AAPCS64 carries this two-byte aggregate in the low two bytes of x0. Stage the first field because
+  ## evaluating the second may clobber every scratch register, then combine the two narrow values.
+  mut g := ex_struct_lit_args(e)
+  mut k := 0
+  while g != 0 {
+    ga := deref(arg_p(g))
+    if k == 0 {
+      emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      push_str(sb, "  and x0, x0, #255\n  str x0, [sp, #-16]!\n")
+    }
+    if k == 1 {
+      emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      push_str(sb, "  and x0, x0, #255\n  lsl x0, x0, #8\n  ldr x1, [sp], #16\n  orr x0, x0, x1\n")
+    }
+    k += 1
+    g = ga.next
+  }
+  if k != 2 { push_str(sb, "  brk #0 // malformed native u8-pair return\n") }
+}
+
 emit_a64_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
   ns := expr_struct_lit_ns(e)
   nl := expr_struct_lit_nl(e)
@@ -5448,13 +5470,18 @@ emit_a64_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
     ## nested struct/str lands in full and the following fields stay aligned (fields in declaration order).
     ## An all-scalar struct is byte-identical to the old positional store (each field falls to the scalar
     ## fallback = one word). The block reserves the struct's FULL width; its address rides x0 (by-ref arg).
-    mut off := blk
-    mut g := ex_struct_lit_args(e)
-    while g != 0 {
-      ga := deref(arg_p(g))
-      w := emit_a64_store_payload_at(ga.e, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      off = off + w * 8
-      g = ga.next
+    if std_struct_is_native_u8_pair(decls, src, ns, nl, a) {
+      _pairw := a64_std_store_struct(e, blk, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+    }
+    if not std_struct_is_native_u8_pair(decls, src, ns, nl, a) {
+      mut off := blk
+      mut g := ex_struct_lit_args(e)
+      while g != 0 {
+        ga := deref(arg_p(g))
+        w := emit_a64_store_payload_at(ga.e, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        off = off + w * 8
+        g = ga.next
+      }
     }
     push_str(sb, "  add x0, x29, #") ; push_int(sb, blk) ; push_str(sb, "\n")
     A64_AGG = A64_AGG + words * 8
@@ -5654,6 +5681,10 @@ emit_a64_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
   if expr_is_struct_lit(e) {
     slns := expr_struct_lit_ns(e)
     slnl := expr_struct_lit_nl(e)
+    if std_struct_is_native_u8_pair(decls, src, slns, slnl, a) {
+      emit_a64_u8_pair_return(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      return
+    }
     ## an ALL-SCALAR struct literal: push each 1-word field, pop in REVERSE so word k → x_k (unchanged).
     if a64_struct_all_scalar(decls, src, slns, slnl, a) {
       mut g := ex_struct_lit_args(e)
