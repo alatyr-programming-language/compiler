@@ -3561,8 +3561,10 @@ run accept_ann_call_overloaded 9
 check_accept accept_ann_brand_and_generic
 run accept_ann_str_binding 9
 run accept_ann_conforming 7
-run accept_ann_global_conforming 7
+run accept_ann_global_conforming 9
 run accept_ann_brand_and_generic 12
+check_accept issue171_global_const_str
+run_x86 issue171_global_const_str 42
 ## Types §4.2/§4.3 + Functions §2.3 -- a call ARGUMENT was not judged against its PARAMETER: 16 shapes
 ## passed `check` with rc 0 and no diagnostic, 12 producing a silent WRONG VALUE and 4 a silent SIGSEGV.
 ## The Call arm DOES compare via ty_compat -- what was dropped is the argument's LITERAL FORM: check_expr's
