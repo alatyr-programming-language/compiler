@@ -44,6 +44,14 @@ when the PR completes it. A bounded slice uses an explicit `Refs #N` relation, r
 scope, and leaves the issue open for a later owner-selected unit. The GitHub merge button is not used;
 an approval is not a landing.
 
+An intentional behavior change that updates an oracle has one explicit exception to the worker-branch
+green rule: the feature PR remains oracle-free, and its first gate is pre-landing evidence rather than a
+publishable verdict. Its only allowed failure is the expected affected-oracle mismatch; every other gate
+stage must pass, and the PR must record the joined transitions or reviewed findings. The maintainer
+merges that feature locally, reviews the transitions, creates a separate one-file commit for each
+affected oracle, reruns the complete gate, and publishes only the final green object. The first
+pre-oracle mismatch is never published and is never hidden by regenerating an oracle in the feature PR.
+
 The owner may run workers and the integrator through the same GitHub account. Therefore author,
 assignee, and assignment events are bookkeeping, not an actor boundary or an ACL. The owner brief,
 target selection, and independent safety checks are the operational boundary.
@@ -97,6 +105,10 @@ their PR evidence and acceptance record still provide the full description.
   `scripts/needle.baseline`. At most one open PR may touch an oracle, and such a PR touches no other
   file. The repository marks them `-merge`; `scripts/land.sh` enforces the same rule. An intentional
   oracle change is reviewed and committed separately.
+- A worker never changes an oracle. For an intentional oracle transition, the worker PR is feature-only
+  and may carry only the reviewed pre-oracle mismatch as evidence; the maintainer owns the oracle
+  regeneration after the local merge. Each regeneration is one commit touching that oracle alone,
+  followed by a complete green gate on the resulting object.
 - The gate runs on the locally merged result, not the contributor branch. Re-derive the evidence, gate
   that merge, and push exactly the object that passed. Never re-merge or modify it between gate and push.
 - Hosted CI or pull-request status is not authoritative; the local full gate is the only landing verdict.
@@ -136,7 +148,9 @@ No single check is sufficient:
 ## Gates
 
 - `nix develop -c bash scripts/dev.sh` is the fast loop. `nix develop -c bash scripts/full.sh` is the
-  authoritative gate and must be green before merge.
+  authoritative gate and must be green before publish. A feature-only PR with an intentional oracle
+  transition may use the first non-green run only to document the expected oracle mismatch; the final
+  merge plus maintainer oracle commit must pass the complete gate before publish.
 - The full gate covers fixpoint, e2e, corpus, formatter, duplicate-decision, invariant, and cross-target
   checks; an individual green check is never sufficient.
 - A non-x86 emission change runs the cross-target sweeps; `--force-sweeps` overrides the change filter.

@@ -178,13 +178,13 @@ Then, as separate statements — **never chained to the push**:
 ```sh
 git diff --exit-code
 git diff --cached --exit-code
-git diff --exit-code -- scripts/corpus.manifest scripts/idiom.baseline
+git diff --exit-code -- scripts/corpus.manifest scripts/idiom.baseline scripts/needle.baseline
 ```
 
-A clean `git status` does **not** prove the manifest ran in `--check` rather than `--write`: if the
-author ran `--write` and committed the result, the status is clean too. What proves it is that the
-tree the gate just ran on did not move, plus the commit shape — an oracle regeneration is its own
-commit touching nothing else.
+A clean `git status` does **not** prove an oracle ran in `--check` rather than `--write`: if the author
+ran `--write` and committed the result, the status is clean too. What proves it is that the tree the
+gate just ran on did not move, plus the commit shape — an oracle regeneration is its own commit touching
+nothing else.
 
 If the manifest mismatches, read it with `scripts/corpus_manifest.sh --explain`, which joins on
 `(backend, path)` and separates severity classes. Do not read the raw diff top to bottom: added and
@@ -192,12 +192,22 @@ removed rows do not pair up, so a positional read invents transitions that are n
 `run → assemble/*` transition is a **regression** even when it arrives among two dozen wins — that
 exact shape, 8 among 23, once nearly landed.
 
-If the mismatch is intentional new coverage, regenerate the affected oracle only after reviewing the
-joined transitions, commit that one oracle file separately, and rerun the complete §4 gate on the new
-HEAD. The first gate that reports the mismatch is not green and is not publishable. The same rule
-applies to an intentional `idiom.baseline` or `needle.baseline` regeneration.
+There are two landing paths. For an ordinary PR, the first merged-tree gate must be green. For an
+intentional behavior change whose feature-only PR explicitly records an oracle transition, run
+`scripts/land.sh <pr>` **without `--push`**. Its first gate may report the expected oracle mismatch and
+leave the exact merge commit detached; that result is an inspection stop, not a landing failure to
+wave through. Confirm that no non-oracle gate failed, inspect the joined transitions with
+`scripts/corpus_manifest.sh --explain` (or the corresponding reviewed baseline finding), and reject
+anything not explained by the PR's intended behavior. Then, still on that detached merged tree, have
+the maintainer regenerate the affected oracle, inspect the result, and commit that one oracle alone.
+Rerun the complete gate on the merge plus oracle commit. Only that final green HEAD may be pushed;
+never use `--push` on the first pre-oracle run, and never put the oracle change into the feature PR.
+The same rule applies to an intentional `idiom.baseline` or `needle.baseline` regeneration.
 
-`scripts/land.sh <pr>` performs §3 and §4 with the verdict printed between phases. Prefer it.
+`scripts/land.sh <pr>` performs the local merge and first gate with the verdict printed between phases.
+For a normal PR, `--push` is available after its green verdict. For an intentional oracle transition,
+use the detached result as the documented pre-oracle inspection point, complete the separate maintainer
+oracle commit and final gate manually, then publish that final exact object with the saved lease.
 
 If any reseed or oracle commit was added after the initial merge, refresh the object to publish only
 after the final green gate:

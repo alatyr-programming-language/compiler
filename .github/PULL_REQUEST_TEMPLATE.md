@@ -38,11 +38,19 @@ intervening command substitution, and because a file had moved between the two t
 paste the fixpoint line, the e2e proof-of-work line, the manifest verdict and the three sweep triples
 ```
 
+For an intentional behavior change whose expected result updates an oracle, this feature-only PR must
+not contain an oracle file. Instead, state the joined expected transitions or reviewed baseline
+findings here and say that the maintainer will create the separate one-file oracle commit after the
+local merge; the final complete gate is run on that merge plus oracle commit.
+
 ## Checklist
 
-- [ ] The gate is green, and `git diff --exit-code` is clean **after** it — the tree the gate ran on
-      did not move. (A clean `git status` alone does not prove `--check` rather than `--write`: a
-      committed `--write` regeneration leaves the status clean too.)
+- [ ] For an ordinary change, the gate is green, and `git diff --exit-code` is clean **after** it — the
+      tree the gate ran on did not move. For an intentional oracle transition, this feature-only PR
+      contains no oracle file, the only expected pre-landing failure is the reviewed oracle mismatch,
+      and the maintainer will make the separate oracle commit and run the final green gate after merge.
+      (A clean `git status` alone does not prove `--check` rather than `--write`: a committed `--write`
+      regeneration leaves the status clean too.)
 - [ ] A fixture registered in `scripts/e2e.sh` that **fails on the parent commit**. Not a fixture
       that merely passes now.
 - [ ] `scripts/e2e.sh`'s vacuous-needle banner did not grow. (The check is mechanical now — this
@@ -52,12 +60,13 @@ paste the fixpoint line, the e2e proof-of-work line, the manifest verdict and th
       one compares a longer source with a shorter one and proves nothing.
 - [ ] Fixpoint green. A reseed, if one is owed, is the maintainer's act and needs three-stage
       evidence — say so rather than doing it.
-- [ ] The corpus manifest matches, **or** its regeneration is a separate commit that touches
-      nothing else, whose message carries the `scripts/corpus_manifest.sh --explain` output verbatim
-      (it joins on `(backend, path)` and separates severity classes; reading the raw diff positionally
-      invents transitions that are not there). The same rule covers `scripts/idiom.baseline` and
-      `scripts/needle.baseline` — three oracle files, all `-merge`. At most one such PR is open at a
-      time, and it carries the `oracle` label so that count can see it.
+- [ ] The corpus manifest matches for an ordinary PR, or the expected transition is explained here and
+      the maintainer will regenerate it in a separate one-file commit after the local merge. The
+      message for that commit carries the `scripts/corpus_manifest.sh --explain` output verbatim (it
+      joins on `(backend, path)` and separates severity classes; reading the raw diff positionally
+      invents transitions that are not there). The same separate-commit rule covers
+      `scripts/idiom.baseline` and `scripts/needle.baseline` — three oracle files, all `-merge`; no
+      feature PR mixes an oracle.
 - [ ] A spec question was answered in the specification first, not inferred from current behaviour.
 
 ## Related issue
