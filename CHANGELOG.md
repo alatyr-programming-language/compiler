@@ -65,6 +65,8 @@ how this repository proves itself, not part of what it ships.
   diagnostic before backend emission instead of silently producing a wrong layout-dependent value.
 - Unknown bare nominal types in function signatures now reject with a located diagnostic before
   body checking or backend emission instead of silently taking scalar layout and ABI.
+- Sema diagnostics for unbound names in compound expressions now report the offending expression's
+  line instead of the enclosing declaration's line.
 
 First public release in preparation. Nothing is tagged yet; the entries below start once it is.
 

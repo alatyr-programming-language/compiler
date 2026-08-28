@@ -1761,7 +1761,7 @@ check_expr_da_mode := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
   if egab != 0 { return Result(Ty, CheckErr).Err(enum_global_array_err(egab)) }
   s3abad := s3a_expr_bad(e, decls, upto, src, a, locals, nloc)
   if s3abad != 0 { return Result(Ty, CheckErr).Err(located_err(s3abad)) }
-  if da_bad_expr(e, da, src) { return Result(Ty, CheckErr).Err(unbound_err(s_of(e, a), 0)) }
+  if da_bad_expr(e, da, src) { return Result(Ty, CheckErr).Err(unbound_code(e, decls, upto, src, a, locals, nloc)) }
   bad_capture := sema_plain_fn_capture_struct(e, decls, upto, src, locals, nloc, a)
   if bad_capture != 0 { return Result(Ty, CheckErr).Err(mismatch_err(bad_capture, 0)) }
   check_expr(e, decls, upto, src, a, locals, nloc)
@@ -6309,17 +6309,174 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
 }
 
 ## The source-span start of an expression (for a `Mismatch`'s offending span): a `Var`'s /
-## `Call`'s / `StructLit`'s / `EnumLit`'s name span start, else 0. The deref-match on the
-## expr pointer stays in this helper — `e` is a direct param (the lowerable shape).
+## `Call`'s / `StructLit`'s / `EnumLit`'s name span start, else 0. Keep this legacy shape for
+## callers whose diagnostic KIND depends on whether the original expression carried a direct span.
 s_of := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> usize {
   match deref(e) {
     Expr::Var(vs0, vn0) => { vs0 }
-    Expr::Call( qs, ql, qn, qh) => { qs }
+    Expr::Call(qs, ql, qn, qh) => { qs }
     Expr::StructLit(ss, sl, sn, sh) => { ss }
     Expr::EnumLit(es0, el0, evs, evl, enp, eph) => { es0 }
     Expr::Field(fb, ffs, ffl) => { ffs }
     _ => { 0 }
   }
+}
+
+## Find the first actually unbound variable in a compound expression without invoking `check_expr`
+## again. Re-running the value checker here could mutate the sticky failure state (and a `compiles` query
+## is transactional), so this walk mirrors only its name-resolution decisions. If the original boolean
+## fence failed for a non-name reason, this helper returns 0 and the legacy span/kind remains in force.
+expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> usize {
+  ubci := bitcast_inner(e)
+  if unchecked bitcast(usize, ubci) != 0 { return expr_unbound_span(ubci, decls, upto, src, a, locals, nloc) }
+  match deref(e) {
+    Expr::Num(v, ns0, nn0) => { 0 }
+    Expr::BoolLit(b0) => { 0 }
+    Expr::FloatLit(fs0, fn0) => { 0 }
+    Expr::StrLit(ss0, sn0, lbl0) => { 0 }
+    Expr::Var(vs0, vn0) => {
+      mut found := false
+      if nloc != 0 { found = local_in(locals, nloc, src, vs0, vn0) }
+      if not found { found = declared(decls, rt::vec_len(deref(decls)), src, vs0, vn0) }
+      if not found { found = is_register_name(src, vs0, vn0) }
+      if not found { found = remembered(locals, src, vs0, vn0) }
+      if not found { vs0 } else { 0 }
+    }
+    Expr::Bin(op0, left0, right0) => {
+      mut r0 := expr_unbound_span(left0, decls, upto, src, a, locals, nloc)
+      if r0 == 0 { r0 = expr_unbound_span(right0, decls, upto, src, a, locals, nloc) }
+      r0
+    }
+    Expr::If(c0, t0, f0) => {
+      mut r1 := expr_unbound_span(c0, decls, upto, src, a, locals, nloc)
+      if r1 == 0 { r1 = expr_unbound_span(t0, decls, upto, src, a, locals, nloc) }
+      if r1 == 0 { r1 = expr_unbound_span(f0, decls, upto, src, a, locals, nloc) }
+      r1
+    }
+    ## The existing boolean fence pushes match-arm payload names into a temporary local window. Mirror
+    ## that window here so an unbound name in an arm is located without treating its payload binding as
+    ## an error or leaking it into the next arm.
+    Expr::Match(scrut0, ah0) => {
+      mut r1m := expr_unbound_span(scrut0, decls, upto, src, a, locals, nloc)
+      mut arm0 := ah0
+      mut nl2m := nloc
+      while arm0 != 0 {
+        am0 := deref(arm_p(arm0))
+        base0 := nl2m
+        mut bd0 := am0.binds_head
+        while unchecked bitcast(usize, bd0) != 0 {
+          bnns0 := bnd_ns(bd0)
+          bnnl0 := bnd_nl(bd0)
+          if not local_in(locals, nl2m, src, bnns0, bnnl0) {
+            lvec_push(deref(locals), Local(ns = bnns0, nl = bnnl0, tag = 0, prov = 0, tns = 0, tnl = 0))
+            nl2m += 1
+          }
+          bd0 = bnd_next(bd0)
+        }
+        if r1m == 0 { r1m = expr_unbound_span(am0.body, decls, upto, src, a, locals, nl2m) }
+        lvec_truncate(deref(locals), base0)
+        nl2m = base0
+        arm0 = am0.next
+      }
+      r1m
+    }
+    Expr::Call(cs0, cl0, na0, ah1) => {
+      qnm0 := str_at((src + cs0), cl0)
+      if qnm0 == "resolves" or qnm0 == "compiles" { return 0 }
+      mut callee_ok0 := callee_declared_anywhere(decls, src, cs0, cl0) or is_builtin_callee(src, cs0, cl0)
+      if not callee_ok0 and nloc != 0 and local_in(locals, nloc, src, cs0, cl0) { callee_ok0 = true }
+      if not callee_ok0 and na0 >= 1 and callee_is_fn_valued_field(decls, src, cs0, cl0) { callee_ok0 = true }
+      if not callee_ok0 { return cs0 }
+      gen0 := callee_is_generic(decls, upto, src, cs0, cl0)
+      if not gen0 and call_arity_match(decls, upto, src, cs0, cl0, na0, a) == 0 { return cs0 }
+      tb0 := callee_is_type_builtin(src, cs0, cl0)
+      mut ai0 := 0
+      mut g0 := ah1
+      while g0 != 0 {
+        ga0 := deref(arg_p(g0))
+        if not (gen0 and callee_param_is_type(decls, upto, src, cs0, cl0, ai0, a)) {
+          if tb0 and sema_type_arg_ok(ga0.e, decls, src) { }
+          else {
+            r2 := expr_unbound_span(ga0.e, decls, upto, src, a, locals, nloc)
+            if r2 != 0 { return r2 }
+          }
+        }
+        ai0 += 1
+        g0 = ga0.next
+      }
+      0
+    }
+    Expr::StructLit(ss1, sl1, nf1, fh1) => {
+      mut r3 := 0
+      mut g1 := fh1
+      while g1 != 0 and r3 == 0 {
+        ga1 := deref(arg_p(g1))
+        r3 = expr_unbound_span(ga1.e, decls, upto, src, a, locals, nloc)
+        g1 = ga1.next
+      }
+      r3
+    }
+    Expr::EnumLit(es1, el1, vs1, vl1, np1, ph1) => {
+      mut r4 := 0
+      mut g2 := ph1
+      while g2 != 0 and r4 == 0 {
+        ga2 := deref(arg_p(g2))
+        r4 = expr_unbound_span(ga2.e, decls, upto, src, a, locals, nloc)
+        g2 = ga2.next
+      }
+      r4
+    }
+    Expr::Field(base3, fs3, fl3) => {
+      if is_prelude_ns_var(base3, src) { 0 } else { expr_unbound_span(base3, decls, upto, src, a, locals, nloc) }
+    }
+    Expr::AddrOf(p0) => { expr_unbound_span(p0, decls, upto, src, a, locals, nloc) }
+    Expr::Deref(p1) => { expr_unbound_span(p1, decls, upto, src, a, locals, nloc) }
+    Expr::ArrayLit(ne1, eh1) => {
+      mut r5 := 0
+      mut g3 := eh1
+      while g3 != 0 and r5 == 0 {
+        ga3 := deref(arg_p(g3))
+        r5 = expr_unbound_span(ga3.e, decls, upto, src, a, locals, nloc)
+        g3 = ga3.next
+      }
+      r5
+    }
+    Expr::Index(base4, idx4) => {
+      mut r6 := expr_unbound_span(base4, decls, upto, src, a, locals, nloc)
+      if r6 == 0 { r6 = expr_unbound_span(idx4, decls, upto, src, a, locals, nloc) }
+      r6
+    }
+    Expr::Try(inner3) => { expr_unbound_span(inner3, decls, upto, src, a, locals, nloc) }
+    Expr::Slice(base5, lo5, hi5) => {
+      mut r7 := expr_unbound_span(base5, decls, upto, src, a, locals, nloc)
+      if r7 == 0 { r7 = expr_unbound_span(lo5, decls, upto, src, a, locals, nloc) }
+      if r7 == 0 { r7 = expr_unbound_span(hi5, decls, upto, src, a, locals, nloc) }
+      r7
+    }
+    Expr::CompField(base6, idx6) => {
+      mut r8 := expr_unbound_span(base6, decls, upto, src, a, locals, nloc)
+      if r8 == 0 { r8 = expr_unbound_span(idx6, decls, upto, src, a, locals, nloc) }
+      r8
+    }
+    Expr::Unchecked(inner4) => { expr_unbound_span(inner4, decls, upto, src, a, locals, nloc) }
+    Expr::FnRef(fnpos2, fms2, fml2) => { 0 }
+    Expr::Lambda(fnpos3, ph2, rts2, rtl2, bh2, val2) => { 0 }
+    Expr::Loop(body1) => { 0 }
+  }
+}
+
+## Keep the old message class for direct Var/Call/aggregate/Field errors. A compound poison-only
+## error used to fall back to `invalid` at the declaration; it now keeps that same `invalid` class while
+## carrying the actual unbound child's source line.
+unbound_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  legacy := s_of(e, a)
+  nested := expr_unbound_span(e, decls, upto, src, a, locals, nloc)
+  if nested != 0 {
+    if legacy != 0 { return unbound_err(nested, 0) }
+    return located_err(nested)
+  }
+  if legacy != 0 { return unbound_err(legacy, 0) }
+  unbound_err(0, 0)
 }
 
 ## Is `e` an integer LITERAL (`Num`)? (single-level match — seed-safe)
@@ -6781,7 +6938,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## a bound atomic call (`r := atomic::cas_*(…)`) with an illegal ordering (spec ch.110 §2) —
         ## poison via `mark_failed` (an early `return` mid-arm mis-lowers the arm's later logic).
         if call_atomic_ordering_bad(v, src, a) { mark_failed(locals, mismatch_err(s_of(v, a), 0)) }
-        if expr_has_unbound(v, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_err(s_of(v, a), 0)) }
+        if expr_has_unbound(v, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(v, decls, upto, src, a, locals, cnt)) }
         ann := local_type_span(src, ns, nl)
         ## The lower has one deliberate whole-element consumer for this shape: an inferred local
         ## binding (`e := GE[i]`). An annotation or a reassignment may select a narrower/existing
@@ -7027,8 +7184,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## conservative for ordinary expressions but can descend into an aggregate field return after
         ## a nested-path write; fail here with the located DA diagnostic instead of reaching that crashy
         ## aggregate path.
-        if da_bad_expr(rv, da, src) { return Result(usize, CheckErr).Err(unbound_err(s_of(rv, a), 0)) }
-        if expr_has_unbound(rv, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_err(s_of(rv, a), 0)) }
+        if da_bad_expr(rv, da, src) { return Result(usize, CheckErr).Err(unbound_code(rv, decls, upto, src, a, locals, cnt)) }
+        if expr_has_unbound(rv, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(rv, decls, upto, src, a, locals, cnt)) }
         ## RETURN-PATH CHECK: an early `return <e>` must match the fn's declared return type
         ## (`ret_tag`, 0 = unknown → no check). Poison-tolerant: only when BOTH the returned
         ## type and the declared return type are KNOWN and differ is it a `Mismatch`. This
@@ -7058,7 +7215,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
       }
       Stmt::If(c, th, el, nx) => {
         if expr_statement_has_unbound(c, decls, upto, src, a, locals, cnt) {
-          return Result(usize, CheckErr).Err(unbound_err(s_of(c, a), 0))
+          return Result(usize, CheckErr).Err(unbound_code(c, decls, upto, src, a, locals, cnt))
         }
         cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
         ## the condition must be bool (a known non-bool is a `Mismatch`).
@@ -7325,7 +7482,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## only `check_expr`, and the wrapper is the reliable hook, §1/§4 / spec ch.110).
         if call_atomic_ordering_bad(e, src, a) { er := Result(usize, CheckErr).Err(mismatch_err(0, 0)); return er }
         if expr_statement_has_unbound(e, decls, upto, src, a, locals, cnt) {
-          return Result(usize, CheckErr).Err(unbound_err(s_of(e, a), 0))
+          return Result(usize, CheckErr).Err(unbound_code(e, decls, upto, src, a, locals, cnt))
         }
         ce := check_expr_da(e, decls, upto, src, a, locals, cnt, da)?
         cur = nx
@@ -8139,7 +8296,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     if s3at != 0 { failed = true; err = located_err(s3at) }
   }
   if failed == false and no_tail == false {
-    if expr_has_unbound(d.value, decls, upto, src, a, ptr(locals), nloc) and not da_bad_expr(d.value, ptr(da), src) { mark_failed(ptr(locals), unbound_err(s_of(d.value, a), 0)) }
+    if expr_has_unbound(d.value, decls, upto, src, a, ptr(locals), nloc) and not da_bad_expr(d.value, ptr(da), src) { mark_failed(ptr(locals), unbound_code(d.value, decls, upto, src, a, ptr(locals), nloc)) }
     rv := check_expr_da(d.value, decls, upto, src, a, ptr(locals), nloc, ptr(da))
     match rv {
       Result::Ok(bt) => {
