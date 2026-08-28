@@ -59,6 +59,8 @@ how this repository proves itself, not part of what it ships.
   with a located diagnostic instead of silently becoming zero-initialized static storage.
 - Undeclared bare type names used by package nested-module type builtins now reject with a located
   diagnostic before backend emission instead of silently producing a wrong layout-dependent value.
+- Unknown bare nominal types in function signatures now reject with a located diagnostic before
+  body checking or backend emission instead of silently taking scalar layout and ABI.
 
 First public release in preparation. Nothing is tagged yet; the entries below start once it is.
 

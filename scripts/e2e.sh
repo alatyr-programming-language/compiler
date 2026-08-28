@@ -1534,6 +1534,68 @@ exe="$p/target/debug/qualified-generic-arg"
   rm -rf "$p/target"
 }
 
+## Issue #11, bounded Slice 3a — an unknown bare nominal type in a function parameter or return
+## annotation must be refused before body checking or backend emission. The positive controls keep
+## ordinary scalar signatures and abstract generic type parameters admissible; all cases are generated
+## in the row-private scratch tree so this front-end boundary does not enter the four-backend oracle.
+issue11_signature_type_name_test() {
+  d="$T/issue11_signature_type"
+  rm -rf "$d"
+  mkdir -p "$d"
+  printf '%s\n' 'take := fn(t : Nope) -> u64 { return 1 }' 'main := fn() -> u64 { return 42 }' > "$d/bad_param.al"
+  printf '%s\n' 'give := fn() -> Nope { return 0 }' 'main := fn() -> u64 { return 42 }' > "$d/bad_return.al"
+  printf '%s\n' 'take := fn(t : u64) -> u64 { return t }' 'main := fn() -> u64 { return take(42) }' > "$d/control.al"
+  printf '%s\n' 'id := fn(T : type, x : T) -> T { return x }' 'main := fn() -> u64 { return id(u64, 42) }' > "$d/generic.al"
+
+  for name in bad_param bad_return; do
+    src="$d/$name.al"
+    out="$d/$name.bin"
+    err="$d/$name.check.err"
+    "$CC" check "$src" >"$d/$name.check.out" 2>"$err"
+    rc=$?
+    if [ "$rc" = 1 ] && [ ! -s "$d/$name.check.out" ] && grep -qF "invalid at line 1 in $name" "$err"; then
+      echo "ok   issue11_signature_type_name/$name: check rejects unknown signature type"
+    else
+      echo "FAIL issue11_signature_type_name/$name: check rc=$rc diagnostic=$(cat "$err" 2>/dev/null)"
+      fail=1
+    fi
+    rm -f "$out"
+    "$CC" -o "$out" "$src" >"$d/$name.build.out" 2>"$d/$name.build.err"
+    rc=$?
+    if [ "$rc" = 1 ] && [ ! -e "$out" ] && grep -qF "invalid at line 1 in $name" "$d/$name.build.err"; then
+      echo "ok   issue11_signature_type_name/$name: build rejects without artifact"
+    else
+      echo "FAIL issue11_signature_type_name/$name: build rc=$rc artifact=$(test -e "$out" && echo yes || echo no) diagnostic=$(cat "$d/$name.build.err" 2>/dev/null)"
+      fail=1
+    fi
+  done
+
+  for name in control generic; do
+    src="$d/$name.al"
+    out="$d/$name.bin"
+    "$CC" check "$src" >"$d/$name.check.out" 2>"$d/$name.check.err"
+    rc=$?
+    if [ "$rc" = 0 ] && [ ! -s "$d/$name.check.err" ]; then
+      echo "ok   issue11_signature_type_name/$name: check accepts control"
+    else
+      echo "FAIL issue11_signature_type_name/$name: check rc=$rc diagnostic=$(cat "$d/$name.check.err" 2>/dev/null)"
+      fail=1
+    fi
+    rm -f "$out"
+    "$CC" -o "$out" "$src" >"$d/$name.build.out" 2>"$d/$name.build.err"
+    rc=$?
+    if [ "$rc" = 0 ] && [ -x "$out" ] && [ ! -s "$d/$name.build.err" ]; then
+      _e2e_exec "$out" >/dev/null 2>&1; got=$?
+      if _e2e_runtime_failure "issue11_signature_type_name/$name" "$got"; then return; fi
+      if [ "$got" = 42 ]; then echo "ok   issue11_signature_type_name/$name: artifact runs 42"; else echo "FAIL issue11_signature_type_name/$name: artifact=$got want 42"; fail=1; fi
+    else
+      echo "FAIL issue11_signature_type_name/$name: build rc=$rc artifact=$(test -x "$out" && echo yes || echo no) diagnostic=$(cat "$d/$name.build.err" 2>/dev/null)"
+      fail=1
+    fi
+  done
+  rm -rf "$d"
+}
+
 ## Issue #11, first bounded slice / Modules §3 + Types §6.4 — an undeclared direct type name in a
 ## package-owned nested module must be refused before either `check` or `build` emits an artifact.
 ## The same package shape with an ancestor-declared type stays green; the existing single-file type
@@ -3875,6 +3937,7 @@ root_package_test fn_value_qualified "T _start" "T main__main" "T main__apply" "
 ## `h := lower::a::a_helper; h()` must call `lower__a__a_helper`, not an undefined alias symbol in
 ## `lower__b` (or a caller-module fallback). The row also proves reachability retains the resolved fn.
 root_package_test qualified_fn_alias "T _start" "T main__main" "T lower__b__run" "T lower__a__a_helper"
+issue11_signature_type_name_test
 issue11_package_type_name_test
 ## Modules §§4.1/4.1.1 — a one-element listed projection after a bare module alias must remain a
 ## declaration: `strbuf := rt` followed by `(Expr) := ast` must not be parsed as a call `rt(Expr)`.

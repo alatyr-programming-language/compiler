@@ -9779,6 +9779,90 @@ sema_slice_sugar_reject := fn(d : Decl, src : ptr(u8)) -> usize {
   0
 }
 
+## Issue #11, bounded Slice 3a — the ordinary type checker is poison-tolerant for an unresolved
+## annotation, which is correct inside expressions but unsafe at a function boundary: lower then
+## treats an unknown nominal type as a scalar and may emit an ABI/layout that never existed. The
+## parser stores only the HEAD of multi-token annotations (`ptr`, `fn`, `Box`, …), so this validator
+## deliberately handles ONLY a single bare identifier. Generic/qualified/pointer/function forms keep
+## their existing validators; a `T : type` parameter is an abstract type, not an unknown name.
+sema_fn_type_param_name := fn(d : Decl, src : ptr(u8), s : usize, n : usize) -> bool {
+  mut pp := d.params_head
+  while pp != 0 {
+    pm := deref(param_p(pp))
+    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, s, n) { return true }
+    pp = pm.next
+  }
+  false
+}
+
+## A plain type alias such as CheckErr := usize is recorded as a kind-0 decl with alias_ts/alias_tl,
+## but lower_layout::type_name_known intentionally answers only built-ins and aggregate aliases. Keep
+## this signature fence from mistaking a declared scalar/qualified alias for an unresolved nominal name,
+## while still refusing an ordinary value binding whose RHS merely happens to be an identifier.
+sema_type_alias_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, s, n) {
+      rhs := base_type_name(src, d.alias_ts, d.alias_tl)
+      if type_name_known(decls, src, rhs.s, rhs.n) { return true }
+      if qualified_type_name_known(decls, src, rhs.s, rhs.n) { return true }
+      w := str_at((src + rhs.s), rhs.n)
+      if w == "ptr" or w == "fn" or w == "bits8" or w == "bits16" or w == "bits32" or w == "bits64" { return true }
+      if brand_underlying(decls, src, rhs.s, rhs.n).n != 0 { return true }
+    }
+    i += 1
+  }
+  false
+}
+
+sema_signature_type_head_unknown := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
+  if n == 0 or not _sident1(src, s) { return 0 }
+  mut i := 1
+  while i < n {
+    if not _sident1(src, s + i) { return 0 }
+    i += 1
+  }
+  ## `type` is the meta-type annotation of a generic function's compile-time parameter and type
+  ## functions' result annotation; it is intentionally not a nominal type name.
+  if str_at((src + s), n) == "type" { return 0 }
+  ## A parser-recorded tail of `mod::Type` has the separator immediately before it; a complete
+  ## qualified return span is caught by the same splitter. Visibility/identity remains separate.
+  if sema_gref_split(src, s, n).qual { return 0 }
+  if sema_fn_type_param_name(d, src, s, n) { return 0 }
+  ## The parser keeps only the head for `ptr(T)`, `fn(...) -> R`, and generic constructors. Do not
+  ## turn those multi-token forms into a bare-name decision merely because their head is unresolved.
+  mut p := s + n
+  while _sws1(src, p) { p += 1 }
+  if str_at((src + p), 1) == "(" { return 0 }
+  if type_name_known(decls, src, s, n) { return 0 }
+  ## The layout scalar table also admits the bitsN representation family, while the generic
+  ## type-name helper intentionally predates that family. Nominal brands are likewise represented
+  ## exactly like their underlying scalar and remain an established deferred sema type.
+  w := str_at((src + s), n)
+  if w == "bits8" or w == "bits16" or w == "bits32" or w == "bits64" { return 0 }
+  if brand_underlying(decls, src, s, n).n != 0 { return 0 }
+  if sema_type_alias_known(decls, src, s, n) { return 0 }
+  located_err(s)
+}
+
+sema_signature_type_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
+  if d.is_fn == false { return 0 }
+  mut pp := d.params_head
+  while pp != 0 {
+    pm := deref(param_p(pp))
+    r0 := sema_signature_type_head_unknown(d, decls, src, pm.ts, pm.tl)
+    if r0 != 0 { return r0 }
+    pp = pm.next
+  }
+  if d.ret_tl != 0 {
+    r1 := sema_signature_type_head_unknown(d, decls, src, d.ret_ts, d.ret_tl)
+    if r1 != 0 { return r1 }
+  }
+  0
+}
+
 ## Validate only the newly supported surface: module-qualified arguments of a generic type appearing
 ## in a function parameter or result annotation. The parser stores the generic head span and leaves
 ## `(args...)` in source; `typearg_at` recovers each top-level argument without widening the AST.
@@ -11015,6 +11099,11 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
       ## `[T]` annotations are deliberately not inspected here; their existing view lowering is correct.
       ss := sema_slice_sugar_reject(d, src)
       if ss != 0 { return ss }
+      ## Issue #11 Slice 3a: an unknown bare nominal type in a function parameter/return annotation
+      ## must fail before body checking or backend emission. Composite and qualified forms remain on
+      ## their dedicated validation paths.
+      st := sema_signature_type_reject(d, decls, src)
+      if st != 0 { return st }
       ## Types §1/§4.1 + Modules §2: a qualified type argument is a concrete comptime type value whose
       ## declaration identity includes its module. Unknown/unsupported paths are located rejects.
       qg := sema_qualified_generic_reject(d, decls, src)
