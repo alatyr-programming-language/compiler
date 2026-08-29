@@ -83,9 +83,6 @@ ulimit -c 0
 ALLOW=(
   ## `embed("path")` bakes the file BYTES into a StrLit at parse time; the PATH is gone, so
   ## there is nothing to render. Refusing is the spec posture (`fmt_refuses` in e2e locks it).
-  ## A bare comptime-match arm has no canonical braced spelling in the current AST. Refuse rather
-  ## than invent a block; the existing comptime_match_bare fixture and e2e row lock this boundary.
-  "FMT-REFUSE comptime_match_bare"
   "FMT-REFUSE embed_bytes"
   "FMT-REFUSE embed_byte_storage"
   "FMT-REFUSE embed_typed_bytes"

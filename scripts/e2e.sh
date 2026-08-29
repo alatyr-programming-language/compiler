@@ -4087,7 +4087,7 @@ fmt_test fmt_comments 42
 fmt_test fmt_comptime 42
 fmt_test comptime_if 42
 fmt_test fmt_comptime_match 42
-fmt_refuses_has comptime_match_bare "non-braced comptime match arm not modelled"
+fmt_test_has comptime_match_bare 42 "Scalar => comptime match k"
 ## P2-FMT-AST: statement-match comptime variant templates survive canonical emission; the arm-local
 ## reassignment needle locks `=` versus a second `:=`, while idempotence + exit 7 lock executable behavior.
 fmt_test_has fmt_comptime_match_template 7 "local = local + 1"

@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- `alatyr fmt` now preserves bare `comptime match` expression arms and keeps the formatted source
+  idempotent.
 - Direct multidimensional fixed-array fields now fail loudly with a located diagnostic instead of
   compiling to a wrong value on nested indexing.
 - Unified sub-word scalar-width classification across parsing, formatting, lower layout, and WAT so
