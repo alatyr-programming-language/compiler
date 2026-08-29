@@ -190,14 +190,26 @@ verifying its absence. Do not assign the issue or add another label.
 
 For `spec-answered`:
 
-1. Post the report while `needs-info` is still present.
-2. Re-read the issue and confirm that the claim is still this run's active claim and no conflicting PR
+1. If the issue's evidence or acceptance depends on oracle-backed residuals, locate every relevant
+   `ALLOW`, baseline, waiver, and expected-transition row. Run the focused fixture or filter for
+   each relevant row and inspect its reason and result; if a row has no named focused check, run the
+   narrowest safe repository-controlled check that exercises it and record that mapping. An aggregate
+   green result is insufficient when a reviewed residual can hide a failure. Completion requires that
+   every relevant residual is absent, or that a current pinned-specification anchor justifies the
+   refusal as intentional and out of scope. Report stale `ALLOW` and baseline rows separately; they
+   are not completion evidence. Record all row-level results in the report, and keep the audit scoped
+   to rows relevant to the issue rather than unrelated oracle-backed checks. If a relevant row is
+   stale, unjustified, masks a failure, or hides a valid source form behind an intentional refusal
+   without a normative specification basis, do not transition to `spec-answered`: keep the issue on
+   hold or split the hidden valid form into a separate issue.
+2. Post the report while `needs-info` is still present.
+3. Re-read the issue and confirm that the claim is still this run's active claim and no conflicting PR
    appeared.
-3. Remove `needs-info` and verify that it is absent. This is the only hold transition
+4. Remove `needs-info` and verify that it is absent. This is the only hold transition
    research may make.
-4. Release `in-progress` and verify its absence. If a release cannot be verified, stop
+5. Release `in-progress` and verify its absence. If a release cannot be verified, stop
    and report the unresolved claim.
-5. Stop. The implementation operation must invoke `alatyr-lane` with the exact issue
+6. Stop. The implementation operation must invoke `alatyr-lane` with the exact issue
    number; it repeats all safety checks and must not treat this report as authorization by itself.
 
 If the run aborts after claiming, release only its own claim in the cleanup path. Never remove
