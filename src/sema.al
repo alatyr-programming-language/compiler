@@ -5789,9 +5789,10 @@ ct_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), name_st
 ## CT-12 CALL-ARG sink: recover a parameter type only for one unqualified, direct, non-generic,
 ## non-variadic function. An aggregate/`out`/`in out` parameter is deliberately refused because its
 ## parameter span is not a scalar value context; an unknown or non-integer type is refused as well.
-## The caller supplies the exact argument expression, so `ct_guard_err` retains the arithmetic site and
-## its existing `unchecked` / runtime-dependent behavior. This is a judgement helper, never an arity or
-## overload resolver.
+## The declaration scan covers the whole program because use-before-declaration is legal; uniqueness
+## remains the guard against consulting an unresolved overload set. The caller supplies the exact
+## argument expression, so `ct_guard_err` retains the arithmetic site and its existing `unchecked` /
+## runtime-dependent behavior. This is a judgement helper, never an arity or overload resolver.
 call_arg_ct_param_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, pidx : usize) -> VSpan {
   mut out := VSpan(s = 0, n = 0)
   mut hits : usize = 0
@@ -5804,7 +5805,7 @@ call_arg_ct_param_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), 
   while jc < jce {
     i = sni_at(cnt, jc)
     jc += 1
-    if i < upto and (SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th) {
+    if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
       d := deref(decl_get(decls, i))
       if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) {
         hits += 1
