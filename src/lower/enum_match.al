@@ -606,7 +606,8 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
         ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`si.base`) — the pointer occupies the
         ## whole slot (no separate payload word), so bind `p` there as a scalar (ek 0) pointer value.
         ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
-        ## still lowers as the two-word str view.
+        ## still lowers as the two-word str view. eek 13 identifies this niche provenance; eek 6 is
+        ## reserved for the pre-existing call-derived pointer-to-view binding.
         mut pview_s := 0
         mut pview_l := 0
         mut pview_eek : u8 = 0
@@ -614,7 +615,7 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
         if pview.n != 0 {
           pview_s = pview.s
           pview_l = pview.n
-          pview_eek = 6
+          pview_eek = 13
         }
         svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = pview_s, snl = pview_l, ek = 0, estride = 1, eek = pview_eek, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
       } else {

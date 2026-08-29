@@ -2,6 +2,8 @@
 ## `Some(p)` is one pointer word, but `deref(p)` is still the two-word `str` view: check its `.len`
 ## and content, not only the selected arm. Direct Some/None, payload wildcard, a scalar-pointer payload,
 ## and an ordinary aggregate Option control the niche-specific binding path.
+## Failure-first on current parent f98c62f: `seed/alatyr build` succeeds, but the produced program
+## returns 11 (the first `deref(p).len` assertion fails) instead of the expected 42.
 Pair := struct { len : u64, data : u64 }
 
 main := fn() -> u64 {
