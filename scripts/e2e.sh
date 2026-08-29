@@ -6079,6 +6079,7 @@ run_x86 niche_option_ptr 42
 run_x86 option_ptr_helpers 42
 run_x86 niche_option_return 42
 run_x86 niche_option_field 42
+run_x86 niche_option_str_match 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.

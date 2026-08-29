@@ -39,6 +39,8 @@ how this repository proves itself, not part of what it ships.
 - Fixed x86_64 silent wrong values when indexing arrays of narrow scalar structs by sharing the byte stride between literal initialization and indexed places.
 - Fixed public `Option` helpers for niche-folded `Option(ptr(T))` values so they inspect the
   pointer-width representation instead of a two-word discriminant/payload layout.
+- Fixed niche-folded `Option(ptr(str))` matches so payload bindings retain the pointee's two-word
+  `str` view metadata.
 - Fixed `run` so profile-looking program arguments after `--` cannot change the selected build profile.
 - Fixed silent wrong values when indexing an ordinary byte array through a pointer-derived struct
   field on x86_64.

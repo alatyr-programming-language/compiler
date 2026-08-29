@@ -132,6 +132,11 @@ ecallee_is := ast::ecallee_is
 ## and `off` is the base slot — word 0 (discriminant) at `off`, payload word `i` at `off+1+i`.
 ## `ek`: 0 a scalar local, 2 a struct local, 3 an enum local, 4 a str local, 5 an array local.
 ##
+## For scalar pointer locals (`ek == 0`), eek 6 marks a call-derived pointer to a §7 view and eek
+## 13 marks only a folded niche `Option(ptr(str))` match binding. Both carry the resolved pointee
+## view span in `sns`/`snl`; the distinct markers keep niche-only field lowering from widening to
+## every call-derived view pointer.
+##
 ## ARRAY-OF-AGGREGATE (multi-word-element tier): an array local (`ek == 5`) records
 ## its ELEMENT STRIDE in words (`estride`) and the element kind (`eek`: 0 a word-sized scalar
 ## element, 2 a struct element, 3 an enum element). Byte-packed local arrays use eek 8 (`u8`),
@@ -7264,6 +7269,20 @@ ptr_pointee_name := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   CSpan(s = ps, n = pl)
 }
 
+## The exact aggregate-string pointer shape needed by a niche `Some(p)` alias. Keep this narrower
+## than `ptr_pointee_name`: only the complete `ptr(str)` spelling gets the eek-13 niche view marker.
+## In particular, `ptr(u64)`, `ptr(mut str)`, and unresolved/short spans remain ordinary scalar slots.
+## The length guard precedes the four-byte prefix read because a failed type recovery is allowed to
+## return a short/empty span, never to inspect beyond it.
+niche_str_ptr_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
+  if tl < 4 { return CSpan(s = 0, n = 0) }
+  if str_at((src + ts), 4) != "ptr(" { return CSpan(s = 0, n = 0) }
+  if tl < 6 { return CSpan(s = 0, n = 0) }
+  pl := tl - 5
+  if str_at((src + ts + 4), pl) != "str" { return CSpan(s = 0, n = 0) }
+  CSpan(s = ts + 4, n = pl)
+}
+
 ## Resolve `deref(<call>)` to a STRUCT span by the CALLEE's declared RETURN type (`ptr(mut P)`),
 ## mapping the pointee `P` through the callee's own type-parameters to the call's type-ARGUMENT at
 ## that position, then substituting the ENCLOSING instance's type-param (`gps`→`its`). Distinguishes
@@ -10547,15 +10566,15 @@ deref_store_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
 ## `byte_ptr_local` and does not change any ordinary scalar slot layout.
 ## CLAYOUT S3(b): a local bound from a CALL returning `ptr(mut T)` carries no `bitcast` in its
 ## source and no annotation, so the scan below finds nothing. `bind_ptrview_slot` records the
-## ALREADY-RESOLVED §7 view pointee on such a slot (the eek-6 marker); read it first — it is the
-## concrete type, so no further substitution applies.
+## ALREADY-RESOLVED §7 view pointee on such a slot (the eek-6/eek-13 marker); read it first — it is
+## the concrete type, so no further substitution applies.
 local_ptr_pointee_span := fn(cx : ptr(LCtx), s : usize, n : usize) -> CSpan {
   return slot_ptr_pointee_span(cx.slots, cx.src, s, n)
 }
 slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> CSpan {
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
   if streq(src, ent.ns, ent.nl, s, n) == false { return CSpan(s = 0, n = 0) }
-  if ent.ek == 0 and ent.eek == 6 and ent.snl != 0 { return CSpan(s = ent.sns, n = ent.snl) }
+  if ent.ek == 0 and (ent.eek == 6 or ent.eek == 13) and ent.snl != 0 { return CSpan(s = ent.sns, n = ent.snl) }
   lts := local_type_span(src, ent.ns, ent.nl)
   if lts.n != 0 {
     if str_at((src + lts.s), 4) == "ptr(" {
@@ -10645,8 +10664,8 @@ deref_dest_pointee_span := fn(p : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
 
 ## `deref(<pointer>)` used as a VALUE whose pointee is a §7 VIEW — the view TYPE span, or {0,0}. The
 ## emit-side dual of `deref_view_pointee_span` (which runs at slot-collection time). One resolver,
-## every pointer shape: a bitcast/annotated local, an eek-6 call-derived pointer local, or the call
-## itself, with the pointee mapped by TYPE-PARAMETER POSITION.
+## every pointer shape: a bitcast/annotated local, an eek-6/eek-13 resolved pointer local, or the
+## call itself, with the pointee mapped by TYPE-PARAMETER POSITION.
 deref_view_span_cx := fn(v : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   inner := deref_inner_expr(v)
   if unchecked bitcast(usize, inner) == 0 { return CSpan(s = 0, n = 0) }
@@ -11014,9 +11033,9 @@ bind_ptrview_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize
 
 ## The pointee TYPE span of an arbitrary POINTER EXPRESSION, at slot-collection time (the `collect_slots`
 ## dual of `deref_dest_pointee_span`, which needs a full `LCtx`). A `Var` resolves through its slot (the
-## eek-6 view marker, an annotation, or the preserved `bitcast(ptr(T), …)` source) and is then carried
-## through the enclosing instance substitution; anything else is tried as a CALL whose declared return
-## type is `ptr(<callee type-parameter>)`, resolved by POSITION. {0,0} when unresolvable.
+## eek-6/eek-13 view marker, an annotation, or the preserved `bitcast(ptr(T), …)` source) and is then
+## carried through the enclosing instance substitution; anything else is tried as a CALL whose declared
+## return type is `ptr(<callee type-parameter>)`, resolved by POSITION. {0,0} when unresolvable.
 ptr_expr_pointee_span := fn(pe : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, sub : ptr(Subst)) -> CSpan {
   vn := var_name_span(pe)
   if vn.n == 0 {
@@ -11059,7 +11078,7 @@ reject_deref_call_pointee := fn(v : ptr(Expr), src : ptr(u8)) {
 }
 
 ## `p := <call returning `ptr(<opt mut> <§7 view>)`>` — the view TYPE span the pointer points at, or
-## {0,0}. Gates the eek-6 pointer-to-view binding (`bind_ptrview_slot`).
+## {0,0}. Gates the eek-6 call-derived pointer-to-view binding (`bind_ptrview_slot`).
 call_view_pointee_bind := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, sub : ptr(Subst)) -> CSpan {
   pt := call_ret_pointee_span(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2, sub.gps3, sub.gpl3, sub.its3, sub.itl3)
   if pt.n == 0 { return CSpan(s = 0, n = 0) }
@@ -16715,6 +16734,24 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if dslf == "len" { push_str(sb, "  pushq %rdx\n") } else { push_str(sb, "  pushq %rax\n") }
         return
       }
+      ## CLAYOUT S3(d) — `deref(p).len` / `deref(p).ptr` for a folded `Some(p)` binding whose
+      ## pointee view span is carried by the eek-13 niche scalar slot marker. The ordinary str-field arm
+      ## below only recognizes an ek-4 str local and would otherwise read the neighbouring frame
+      ## slot as if `p` itself were a two-word view. Load the pointer value first, then select the
+      ## actual pointee pair word; this is deliberately gated to the niche enum-match marker, not the
+      ## pre-existing eek-6 call-derived view-pointer marker.
+      dviewv := deref_var_span(base)
+      if dviewv.n != 0 {
+        dviewent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, dviewv.s, dviewv.n)))
+        if streq(cx.src, dviewent.ns, dviewent.nl, dviewv.s, dviewv.n) and dviewent.ek == 0 and dviewent.eek == 13 and dviewent.snl != 0 and (dslf == "len" or dslf == "ptr") {
+          emit_gas(deref_inner_expr(base), sb, cx, a, nl)
+          push_str(sb, "  popq %rax\n")
+          if dslf == "ptr" { push_str(sb, "  movq (%rax), %rax\n") }
+          else { push_str(sb, "  movq 8(%rax), %rax\n") }
+          push_str(sb, "  pushq %rax\n")
+          return
+        }
+      }
       ## Types §7 — `.len`/`.ptr` read off a two-word VIEW VALUE with NO frame home: a str LITERAL
       ## (`"hi\n".ptr`), a `sub(…)` / `str_at(…)` / `bytes(…)` view, or a range sub-view
       ## (`s[lo..hi]`, `xs[lo..hi]`). Every one of them matched no arm and fell through to the slot
@@ -20700,7 +20737,18 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
         } else if folded {
           ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`sbase`) — bind `p` there as a scalar
           ## (ek 0) pointer, not the `sbase-1` payload word an ordinary `[disc, payload]` enum uses.
-          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+          ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
+          ## still lowers as the two-word str view; eek 13 records this niche provenance.
+          pview2 := niche_str_ptr_span(cx.src, ptys2, ptyn2)
+          mut pview_s2 := 0
+          mut pview_l2 := 0
+          mut pview_eek2 : u8 = 0
+          if pview2.n != 0 {
+            pview_s2 = pview2.s
+            pview_l2 = pview2.n
+            pview_eek2 = 13
+          }
+          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = pview_s2, snl = pview_l2, ek = 0, estride = 1, eek = pview_eek2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
         } else {
           svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
         }
