@@ -1183,6 +1183,37 @@ flush_status_test() {
   flush_reject_short fmt fmt "$fd/big.al"
 }
 
+# Issue #226 / runtime robustness: the compiler's internal `rt::Arena` constructor must turn a
+# failed `mmap` into its defined panic (stderr + exit 1) before publishing a pointer. The source is
+# generated in the row-private directory so this harness does not add an oracle row. Parent evidence
+# on origin/main before the fix: with `ulimit -v 32768`, this valid input made `check` die with rc=139
+# (SIGSEGV) and no diagnostic; without the limit it returned 0.
+arena_init_mmap_failure_test() {
+  fd="$T/e2e_arena_init_failure"; rm -rf "$fd"; mkdir -p "$fd"
+  src="$fd/arena_init_mmap_failure.al"
+  printf '%s\n' \
+    '## Valid input used to exercise the compiler startup arena under a deterministic address-space limit.' \
+    '## On the parent compiler, `ulimit -v 32768` produced rc=139 (SIGSEGV) before this fix.' \
+    'main := fn() -> u64 { return 42 }' > "$src"
+  "$CC" check "$src" >/dev/null 2>&1 || { echo "FAIL arena_init_mmap_failure: unrestricted startup"; fail=1; return; }
+  out="$fd/stdout"; err="$fd/stderr"
+  ( ulimit -c 0; ulimit -v 32768 || exit 125; "$CC" check "$src" >"$out" 2>"$err" ); got=$?
+  if [ "$got" != 1 ]; then
+    echo "FAIL arena_init_mmap_failure: constrained check rc=$got want 1 (mmap failure must panic)"
+    fail=1; return
+  fi
+  if [ -s "$out" ]; then
+    echo "FAIL arena_init_mmap_failure: constrained check wrote $(wc -c < "$out") bytes to stdout"
+    fail=1; return
+  fi
+  if grep -qF 'rt: arena initialization failed (mmap)' "$err"; then
+    echo "ok   arena_init_mmap_failure: startup survives mmap failure with controlled rc=1"
+  else
+    echo "FAIL arena_init_mmap_failure: diagnostic missing [rt: arena initialization failed (mmap)]"
+    fail=1
+  fi
+}
+
 fmt_package_test() {
   pd="$T/e2e_fmtpkg"
   rm -rf "$pd"; mkdir -p "$pd/src/nested"
@@ -4415,6 +4446,7 @@ fmt_test_has_all comptime_typeinfo_n 34 "cnt((u64, u64, u64, u64))"
 fmt_crossmod_test
 fmt_package_test
 flush_status_test
+arena_init_mmap_failure_test
 fmt_large_input_test 1200000 42
 check_located reject_located_unbound 8
 ## Issue #194 / Tooling §5: a semantic diagnostic must name the line of the offending expression,
