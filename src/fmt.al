@@ -9,7 +9,8 @@
 ## into a bare `Assign`) by `ast::assign_is_reassign` — the FIRST
 ## binding of a name in a fn body prints `:=`, a later one prints `=`; this canonical rule makes the
 ## output IDEMPOTENT (`fmt(fmt(x)) == fmt(x)`). Anything outside the core (struct/enum decls, `match`,
-## aggregate literals, comptime forms) is FAIL-LOUD (`panic`) — never a silently-wrong reformat.
+## aggregate literals, unsupported comptime forms) is FAIL-LOUD (`panic`) — never a silently-wrong
+## reformat.
 ##
 ## ADDITIVE: nothing in the self-build invokes `emit_fmt_program` (the self-build uses `build`, not
 ## `fmt`), so the x86_64 GAS the tree emits for itself is byte-identical and the TOOL-1 fixpoint
@@ -2027,17 +2028,90 @@ emit_fmt_arms_multi := fn(arms_head : usize, indent : usize, in out sb : rt::Str
   }
 }
 
+## Does source at `p` begin the exact `comptime match` keyword pair? A bare comptime-match arm is
+## the one statement form this formatter can recover without a brace: the parser keeps the nested
+## `Stmt.CompMatch`, including its scrutinee and arms, so the canonical emitter can recurse instead
+## of inventing a braced block. Identifier boundaries are checked so a longer name cannot be mistaken
+## for the keyword pair.
+fmt_is_comptime_match_at := fn(src : ptr(u8), p : usize) -> bool {
+  if str_at((src + p), 8) != "comptime" { return false }
+  if fmt_is_ident_byte(bytes(str_at((src + p + 8), 1))[0]) { return false }
+  mut q := p + 8
+  mut c := bytes(str_at((src + q), 1))[0]
+  while fmt_is_blank_byte(c) { q += 1 ; c = bytes(str_at((src + q), 1))[0] }
+  if str_at((src + q), 5) != "match" { return false }
+  if fmt_is_ident_byte(bytes(str_at((src + q + 5), 1))[0]) { return false }
+  true
+}
+
+## Read the scrutinee and arm-list fields of a `Stmt.CompMatch` without placing a nested match
+## directly in a formatter arm. Keeping these probes separate follows the seed-safe AST access
+## pattern used elsewhere in this module.
+fmt_stmt_is_compmatch := fn(s : ptr(mut Stmt)) -> bool {
+  mut r := false
+  st := deref(stmt_p(Stmt, s))
+  match st {
+    Stmt::CompMatch(sc, ah, nx) => { r = true }
+    _ => {}
+  }
+  r
+}
+
+fmt_stmt_compmatch_scrut := fn(s : ptr(mut Stmt)) -> ptr(Expr) {
+  mut r := unchecked bitcast(ptr(Expr), 0)
+  st := deref(stmt_p(Stmt, s))
+  match st {
+    Stmt::CompMatch(sc, ah, nx) => { r = sc }
+    _ => {}
+  }
+  r
+}
+
+fmt_stmt_compmatch_arms := fn(s : ptr(mut Stmt)) -> usize {
+  mut r : usize = 0
+  st := deref(stmt_p(Stmt, s))
+  match st {
+    Stmt::CompMatch(sc, ah, nx) => { r = unchecked bitcast(usize, ah) }
+    _ => {}
+  }
+  r
+}
+
+## Is this `Stmt.CompMatch` the BARE body immediately following an outer `=>`, rather than the
+## first statement inside `=> { … }`? The AST stores both forms in `Arm.body_stmts`, so recover the
+## distinction from the source around the nested scrutinee. If the source shape is not provable,
+## answer false and let the existing braced path remain the fail-loud choice.
+fmt_compmatch_stmt_is_bare := fn(s : ptr(mut Stmt), src : ptr(u8)) -> bool {
+  if not fmt_stmt_is_compmatch(s) { return false }
+  scrut := fmt_stmt_compmatch_scrut(s)
+  start := fmt_expr_left_off(scrut, src)
+  if start == 0 { return false }
+  mut p := start
+  while p > 0 and fmt_is_blank_byte(bytes(str_at((src + p - 1), 1))[0]) { p -= 1 }
+  mut q := p
+  while q > 0 and fmt_is_ident_byte(bytes(str_at((src + q - 1), 1))[0]) { q -= 1 }
+  if p - q != 5 or str_at((src + q), 5) != "match" { return false }
+  p = q
+  while p > 0 and fmt_is_blank_byte(bytes(str_at((src + p - 1), 1))[0]) { p -= 1 }
+  q = p
+  while q > 0 and fmt_is_ident_byte(bytes(str_at((src + q - 1), 1))[0]) { q -= 1 }
+  if p - q != 8 or str_at((src + q), 8) != "comptime" { return false }
+  p = q
+  while p > 0 and fmt_is_blank_byte(bytes(str_at((src + p - 1), 1))[0]) { p -= 1 }
+  if p < 2 { return false }
+  bytes(str_at((src + p - 2), 1))[0] == 61 and bytes(str_at((src + p - 1), 1))[0] == 62
+}
+
 ## Pretty-print `comptime match` arms — one per line, `<KindPattern> => {\n <stmts> \n}`. Kind patterns
-## are `Struct(_)` / `Scalar(b, k)` / … (the kind name + binds) or `_`. Each arm's body is a BRACED
-## statement block (unlike value-match's expr arms). Comptime template/var arms (wild 2/3) and a
-## non-braced arm body (e.g. a nested `comptime match` directly as the arm value) are fail-loud —
-## faithful formatting of those needs deeper comptime-shape handling.
+## are `Struct(_)` / `Scalar(b, k)` / … (the kind name + binds) or `_`. Ordinary arms retain their
+## braced statement block. A bare nested `comptime match` is emitted on the arm's `=>` line and
+## recurses through this same canonical arm renderer; other non-braced forms remain fail-loud.
 ## Verify the SOURCE shape of this one `comptime match`: the parser stores both `{ stmts }` and a
 ## bare one-statement arm body in `Arm.body_stmts`, so the nonzero pointer alone cannot distinguish
 ## them. Start at the AST scrutinee, find this match's opening brace, then inspect only `=>` tokens at
 ## the outer brace depth. A nested match is deeper and is ignored; braces in strings/chars/comments are
-## skipped. Refuse if any arm is bare — emitting a brace around it would be a silent source rewrite.
-fmt_comptime_match_arms_braced := fn(scrut : ptr(Expr), src : ptr(u8)) -> bool {
+## skipped. Accept only a braced body or the exact bare `comptime match` form.
+fmt_comptime_match_arms_supported := fn(scrut : ptr(Expr), src : ptr(u8)) -> bool {
   start := fmt_expr_left_off(scrut, src)
   if start == 0 { return false }
   mut p := start
@@ -2092,15 +2166,30 @@ fmt_comptime_match_arms_braced := fn(scrut : ptr(Expr), src : ptr(u8)) -> bool {
         c := bytes(str_at((src + q), 1))[0]
         if c == 32 or c == 9 or c == 10 or c == 13 { q += 1 } else { ws = false }
       }
-      if bytes(str_at((src + q), 1))[0] != 123 { return false }
+      if bytes(str_at((src + q), 1))[0] != 123 and not fmt_is_comptime_match_at(src, q) { return false }
       p += 2
     } else { p += 1 }
   }
   found
 }
 
+## Emit a bare nested `comptime match` body. `indent` is the indentation of the enclosing arm's
+## `pattern =>` line: the nested arms are one level deeper and its closing brace returns to that line.
+emit_fmt_bare_comptime_match := fn(s : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), indent : usize, tparam : str) {
+  if not fmt_stmt_is_compmatch(s) { panic("selfhost: fmt — non-braced comptime match arm not modelled") }
+  scrut := fmt_stmt_compmatch_scrut(s)
+  arms := fmt_stmt_compmatch_arms(s)
+  if not fmt_comptime_match_arms_supported(scrut, src) { panic("selfhost: fmt — non-braced comptime match arm not modelled") }
+  push_str(sb, "comptime match ")
+  emit_fmt_expr(scrut, sb, src, a, decls)
+  push_str(sb, " {\n")
+  emit_fmt_comptime_arms(arms, scrut, sb, src, a, decls, indent + 1, tparam)
+  emit_indent(sb, indent)
+  push_str(sb, "}\n")
+}
+
 emit_fmt_comptime_arms := fn(arms_head : usize, scrut : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), indent : usize, tparam : str) {
-  if not fmt_comptime_match_arms_braced(scrut, src) { panic("selfhost: fmt — non-braced comptime match arm not modelled") }
+  if not fmt_comptime_match_arms_supported(scrut, src) { panic("selfhost: fmt — non-braced comptime match arm not modelled") }
   mut arm := arms_head
   while arm != 0 {
     am := deref(arm_p(arm))
@@ -2123,10 +2212,15 @@ emit_fmt_comptime_arms := fn(arms_head : usize, scrut : ptr(Expr), in out sb : r
       }
     }
     if am.body_stmts == 0 { panic("selfhost: fmt — non-braced comptime match arm not modelled") }
-    push_str(sb, " => {\n")
-    emit_fmt_stmts(am.body_stmts, am.body_stmts, sb, src, a, indent + 1, decls, tparam)
-    emit_indent(sb, indent)
-    push_str(sb, "}\n")
+    if fmt_compmatch_stmt_is_bare(am.body_stmts, src) {
+      push_str(sb, " => ")
+      emit_fmt_bare_comptime_match(am.body_stmts, sb, src, a, decls, indent, tparam)
+    } else {
+      push_str(sb, " => {\n")
+      emit_fmt_stmts(am.body_stmts, am.body_stmts, sb, src, a, indent + 1, decls, tparam)
+      emit_indent(sb, indent)
+      push_str(sb, "}\n")
+    }
     arm = am.next
   }
 }
