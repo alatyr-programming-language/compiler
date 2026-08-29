@@ -227,9 +227,11 @@ pub newnode := fn(a : ptr(mut rt::Arena), val : Expr) -> ptr(mut Expr) {
 ## RELATIVE path resolves against the compiler's current working directory and an ABSOLUTE path is
 ## used as-is. This is deterministic for a fixed invocation.
 ##
-## REPRESENTATION: the value reuses the `str` machinery — it becomes a `StrLit(ss, N, lbl)` whose
-## `ss` is the ABSOLUTE arena address of the baked bytes (NOT a source offset) and whose `lbl` carries
-## the EMBED marker in its LOW residue (`lbl % 1000000 >= embed_label_base`), which `lower`'s rodata
+## REPRESENTATION: the value reuses the `str` machinery — it becomes a
+## `StrLit(ss, N, lbl, path_s, path_n)` whose `ss` is the ABSOLUTE arena address of the baked bytes
+## (NOT a source offset), whose `lbl` carries the EMBED marker in its LOW residue
+## (`lbl % 1000000 >= embed_label_base`), and whose final two fields retain the raw source span of
+## the path literal. `lower`'s rodata
 ## pass keys on to emit the bytes as a `.byte` list read from `ss` (any binary byte — NUL / high /
 ## newline). The residue marker is invariant under the closure-hoist label RENUMBER (`driver` adds a
 ## multiple of 1000000 to a cloned literal's label), so an embed inside a hoisted closure is still
@@ -278,7 +280,7 @@ embed_strlit := fn(in out pc : PC, ps : usize, pn : usize) -> ptr(mut Expr) {
   cc := rt::sys_close(3, ufd)
   lbl := embed_label_base + pc.nstr
   pc.nstr = pc.nstr + 1
-  return newnode(pc.arena, Expr.StrLit(addr, total, lbl))
+  return newnode(pc.arena, Expr.StrLit(addr, total, lbl, ps, pn))
 }
 
 ## Allocate a `Stmt` in the arena and return its **handle index** (so `next`/body links
@@ -619,7 +621,7 @@ pub clone_expr := fn(a : ptr(mut rt::Arena), e : ptr(Expr), ok : ptr(mut bool)) 
     Expr::Num(v, s, n) => { r = newnode(a, Expr.Num(v, s, n)) }
     Expr::BoolLit(v) => { r = newnode(a, Expr.BoolLit(v)) }
     Expr::Var(s, n) => { r = newnode(a, Expr.Var(s, n)) }
-    Expr::StrLit(s, n, ix) => { r = newnode(a, Expr.StrLit(s, n, ix)) }
+    Expr::StrLit(s, n, ix, ps, pn) => { r = newnode(a, Expr.StrLit(s, n, ix, ps, pn)) }
     Expr::FloatLit(s, n) => { r = newnode(a, Expr.FloatLit(s, n)) }
     Expr::FnRef(fp, ms, ml) => { r = newnode(a, Expr.FnRef(fp, ms, ml)) }
     Expr::Bin(op, l, rr) => { cl := clone_expr(a, l, ok); cr := clone_expr(a, rr, ok); r = newnode(a, Expr.Bin(op, cl, cr)) }
@@ -700,7 +702,7 @@ pub clone_params := fn(a : ptr(mut rt::Arena), ph : ptr(mut Param), ok : ptr(mut
 }
 
 ## RENUMBER the string-literal labels in a CLONED expression tree: rewrite each `StrLit`'s label
-## index `ix` to `base + ix`. A deep clone copies each `StrLit(ss, sl, ix)` VERBATIM (same `ix`), so
+## index `ix` to `base + ix`. A deep clone copies each `StrLit(ss, sl, ix, path_s, path_n)` VERBATIM (same `ix`), so
 ## the original decl AND the clone would both emit `.Lstr<ix>: .ascii …` → a DUPLICATE-symbol
 ## assembler error. Shifting the clone's labels by a large per-clone `base` (unique, far above any
 ## real label) makes the clone reference a fresh `.Lstr<base+ix>` that the rodata walk emits once for
@@ -711,7 +713,7 @@ pub clone_params := fn(a : ptr(mut rt::Arena), ph : ptr(mut Param), ok : ptr(mut
 pub renum_str_expr := fn(a : ptr(mut rt::Arena), e : ptr(Expr), base : usize) {
   if unchecked bitcast(usize, e) == 0 { return }
   match deref(e) {
-    Expr::StrLit(s, n, ix) => { deref(unchecked bitcast(ptr(mut Expr), e)) = Expr.StrLit(s, n, base + ix) }
+    Expr::StrLit(s, n, ix, ps, pn) => { deref(unchecked bitcast(ptr(mut Expr), e)) = Expr.StrLit(s, n, base + ix, ps, pn) }
     Expr::Bin(op, l, rr) => { renum_str_expr(a, l, base); renum_str_expr(a, rr, base) }
     Expr::Unchecked(inner) => { renum_str_expr(a, inner, base) }
     Expr::Bitcast(inner, bps, bpl) => { renum_str_expr(a, inner, base) }
@@ -995,7 +997,7 @@ parse_pat_alt := fn(in out pc : PC) -> ptr(mut Arm) {
     sspan := wt.len - 2
     sinfo := scan_string(pc.src + wt.start + 1, sspan)
     if not sinfo.ok { reject_at(pc, "selfhost: string literal is not valid UTF-8 (including its escapes) — Grammar §2.4", wt.start) }
-    slnode := newnode(pc.arena, Expr.StrLit(wt.start + 1, sinfo.len, slbl))
+    slnode := newnode(pc.arena, Expr.StrLit(wt.start + 1, sinfo.len, slbl, 0, 0))
     lit = i64(slnode)
     w = 4
     pc.idx = pc.idx + 1
@@ -1696,7 +1698,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     }
     ## A STRING literal (lexer kind 4) — its token span covers the surrounding quotes, so the
     ## INNER bytes are `[start+1, start+len-1)` (len-2 source chars). Assign it a fresh label
-    ## index (`pc.nstr`) and produce a `StrLit(inner_start, decoded_len, label_idx)`. The scanner
+    ## index (`pc.nstr`) and produce a `StrLit(inner_start, decoded_len, label_idx, 0, 0)`. The scanner
     ## validates UTF-8 and counts each decoded byte, including the one-byte result of `\xHH`; the
     ## raw span remains in the AST so each backend can emit/decode the source escape itself.
     if k == 4 {
@@ -1707,7 +1709,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       span := st.len - 2
       sinfo := scan_string(pc.src + st.start + 1, span)
       if not sinfo.ok { reject_at(pc, "selfhost: string literal is not valid UTF-8 (including its escapes) — Grammar §2.4", st.start) }
-      return newnode(pc.arena, Expr.StrLit(st.start + 1, sinfo.len, lbl))
+      return newnode(pc.arena, Expr.StrLit(st.start + 1, sinfo.len, lbl, 0, 0))
     }
     ## `in` / `out` are CONTEXTUAL keywords — modifiers only in a parameter list (`in out a`) or a
     ## `for … in` head. Used as a VALUE (a parameter named `out` passed as a call argument, e.g.

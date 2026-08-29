@@ -225,15 +225,16 @@ pub Expr := enum {
   ## A `deref(p) = v` STORE is `Stmt::DerefAssign`. Pointer values are word-sized scalars.
   AddrOf(ptr(Expr)),
   Deref(ptr(Expr)),
-  ## STRING tier: a string literal `"…"`. The first two fields are the INNER-bytes source
-  ## span `[s, s+n)` — the bytes BETWEEN the surrounding quotes (the lexer's kind-4 token
-  ## span covers the quotes, so the parser strips them: inner start = tok.start+1, inner len
-  ## = tok.len-2). The third field is a unique LABEL INDEX assigned at parse time (a counter
-  ## in `PC`) — lower emits the bytes once into a `.rodata` section as `.Lstr<idx>: .ascii
-  ## "…"` and materializes the literal value as a 2-word {ptr, len} (ptr = the label address
-  ## via `leaq .Lstr<idx>(%rip)`, len = the byte count). ESCAPES ARE DEFERRED: the toy test
-  ## strings are plain ASCII with no `\n`/`\"` etc., so the inner bytes are emitted verbatim.
-  StrLit(usize, usize, usize),
+  ## STRING tier: a string literal `"…"`, or the byte payload of `embed("path")`. The first
+  ## two fields are the semantic payload location and length: an ordinary literal uses the
+  ## INNER source span `[s, s+n)` and an embed uses the ABSOLUTE arena address of its baked
+  ## bytes. The third field is the unique LABEL INDEX assigned at parse time (a counter in
+  ## `PC`) — lower emits the bytes once into `.rodata` as `.Lstr<idx>` and materializes the
+  ## value as a 2-word `{ptr, len}` pair. The final two fields are optional raw source metadata
+  ## `[path_s, path_s+path_n)` for the string-literal argument of `embed`; they are zero for
+  ## ordinary string literals. Keeping this span alongside the baked payload lets `fmt` emit
+  ## the canonical path without changing the bytes consumed by lower/rodata.
+  StrLit(usize, usize, usize, usize, usize),
   ## ARRAY tier: a fixed-size array literal `[e0, e1, …, eN]` (`ArrayLit` — an element
   ## COUNT + the arena-linked element list head `elems_head` (an `Arg` list, 0 = empty),
   ## mirroring `Call`'s argument list), and an element read `a[i]` (`Index` — the base

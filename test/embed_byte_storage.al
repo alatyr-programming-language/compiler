@@ -1,5 +1,8 @@
 ## BYTES — an explicitly typed byte fixed-array backed by embed storage.
 ## Direct local/global indexing, byte addresses, mutation, and .len must all use [T; N].
+## Failure-first formatter evidence: on parent `f98c62f`, `seed/alatyr fmt test/embed_byte_storage.al`
+## returned rc=1, wrote 0 stdout bytes and 91 stderr bytes, with `selfhost: fmt — embed("…") is not
+## modelled: the node keeps the file BYTES, not the path`.
 mut EMBED_GLOBAL : [u8; 4] = embed("test/embed_fixture.bin")
 EMBED_CONST : [u8; 4] = embed("test/embed_fixture.bin")
 

@@ -1389,14 +1389,20 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
       vstart := fmt_var_path_start(src, s, n)
       push_str(sb, str_at((src + vstart), s + n - vstart))
     }
-    Expr::StrLit(s, n, lbl) => {
+    Expr::StrLit(s, n, lbl, path_s, path_n) => {
       ## `embed("path")` (Comptime §2.4) rides the `StrLit` node, but its payload is the FILE'S BYTES
       ## at an ABSOLUTE arena address — not an offset into `src` — and it carries the embed marker in
       ## its label's low residue (parser `embed_label_base`). Rendering it as an ordinary literal took
       ## `src + <absolute address>` and walked off the end of memory: `alatyr fmt` SEGFAULTED on any
-      ## file containing an `embed`. The node keeps no path span, so the written form cannot be
-      ## reconstructed — refuse, loudly. (Retaining the path span is a parser-side follow-up.)
-      if lbl % 1000000 >= 500000 { panic("selfhost: fmt — embed(\"…\") is not modelled: the node keeps the file BYTES, not the path") }
+      ## file containing an `embed`. The parser now retains the raw path span only for this marked
+      ## form, so fmt can reproduce the source literal without touching the baked bytes.
+      if lbl % 1000000 >= 500000 {
+        if path_n == 0 { panic("selfhost: fmt — embed(\"…\") has no retained path span") }
+        push_str(sb, "embed(\"")
+        push_str(sb, str_at((src + path_s), path_n))
+        push_str(sb, "\")")
+        return
+      }
       ## `n` is the DECODED byte length (the parser stores `raw_span - escape_count`, anticipating each
       ## `\x` folds to one byte — Types §3, "escapes deferred"), so it UNDERCOUNTS the source bytes for
       ## a literal with escapes (`"\n"` → n=1, pointing at just `\`). fmt must reproduce the source

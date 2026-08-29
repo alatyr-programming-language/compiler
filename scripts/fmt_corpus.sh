@@ -23,8 +23,8 @@
 #   OK              round-trips
 #
 # A `FMT-REFUSE` is DELIBERATE where the written form cannot be recovered from the AST at all
-# (`embed("path")` keeps the file BYTES, not the path): refusing is the spec's posture, since a
-# canonical form is normative and a guess would diverge between implementations. Those live in
+# refusing is the spec's posture, since a canonical form is normative and a guess would diverge
+# between implementations. Those live in
 # the ALLOW table below with a reason, so the gate stays green on them and turns RED on anything new.
 #
 # TWO WALKS, and they check different halves of the norm:
@@ -81,12 +81,9 @@ ulimit -c 0
 # enumerable it immediately named three stale entries that the `case` had hidden: `FMT-REFUSE
 # embed_missing` and both `while_labels` rows.)
 ALLOW=(
-  ## `embed("path")` bakes the file BYTES into a StrLit at parse time; the PATH is gone, so
-  ## there is nothing to render. Refusing is the spec posture (`fmt_refuses` in e2e locks it).
-  "FMT-REFUSE embed_bytes"
-  "FMT-REFUSE embed_byte_storage"
-  "FMT-REFUSE embed_typed_bytes"
-  "FMT-REFUSE accept_call_arg_conform_wide"
+  ## A bare comptime-match arm has no canonical braced spelling in the current AST. Refuse rather
+  ## than invent a block; the existing comptime_match_bare fixture and e2e row lock this boundary.
+  "FMT-REFUSE comptime_match_bare"
   ## `bitcast(T, v)` is IDENTITY-ERASED at parse time for a scalar/`ptr(scalar)` target, so the
   ## written type is simply absent from the AST. Needs the parser to keep the span; see the issues.
   "BEHAVIOUR-EXIT byte_precise"

@@ -4578,7 +4578,7 @@ expr_statement_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usi
     Expr::Num(v, s, n) => { false }
     Expr::BoolLit(v) => { false }
     Expr::FloatLit(s, n) => { false }
-    Expr::StrLit(s, n, lbl) => { false }
+    Expr::StrLit(s, n, lbl, _ps, _pn) => { false }
     Expr::Var(s, n) => {
       mut found := false
       if nloc != 0 { found = local_in(locals, nloc, src, s, n) }
@@ -4658,7 +4658,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
     Expr::Num(v, s, n) => { false }
     Expr::BoolLit(v) => { false }
     Expr::FloatLit(s, n) => { false }
-    Expr::StrLit(s, n, lbl) => { false }
+    Expr::StrLit(s, n, lbl, _ps, _pn) => { false }
     Expr::Var(s, n) => {
       mut found := false
       if nloc != 0 { found = local_in(locals, nloc, src, s, n) }
@@ -5316,7 +5316,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
     }
     ## A string literal `"…"` has the `str` type (tag 6). No sub-expression to check.
-    Expr::StrLit(s, n, lbl) => { Result(Ty, CheckErr).Ok(Ty(tag = 6, ns = 0, nl = 0)) }
+    Expr::StrLit(s, n, lbl, _ps, _pn) => { Result(Ty, CheckErr).Ok(Ty(tag = 6, ns = 0, nl = 0)) }
     ## `[e0, …, eN]` — an array literal: each element expression is checked; the value's type
     ## is array (tag 7). Per-element type agreement is DEFERRED (the toy arrays hold word-sized
     ## ints; element-type tracking is not load-bearing for the supported grammar).
@@ -5425,7 +5425,7 @@ lbv_lit_tag := fn(e : ptr(Expr)) -> u8 {
     Expr::EnumLit(_es, _el, _vs, _vl, _np, _ph) => { 4 }
     Expr::AddrOf(_p) => { 0 }
     Expr::Deref(_p) => { 0 }
-    Expr::StrLit(_s, _n, _lbl) => { 6 }
+    Expr::StrLit(_s, _n, _lbl, _ps, _pn) => { 6 }
     Expr::ArrayLit(_anel, _aehead) => { 7 }
     Expr::Index(_ib, _ii) => { 0 }
     Expr::Try(_inner) => { 0 }
@@ -6203,7 +6203,7 @@ lbv_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
     }
     Expr::AddrOf(p) => { lbv_expr(p, decls, upto, src, a, locals, nloc) }
     Expr::Deref(p) => { lbv_expr(p, decls, upto, src, a, locals, nloc) }
-    Expr::StrLit(_s, _n, _lbl) => { false }
+    Expr::StrLit(_s, _n, _lbl, _ps, _pn) => { false }
     Expr::ArrayLit(_anel, aehead) => {
       mut bad := false
       mut g := aehead
@@ -6296,7 +6296,7 @@ lbv_expr_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
     }
     Expr::AddrOf(p) => { lbv_expr_code(p, decls, upto, src, a, locals, nloc) }
     Expr::Deref(p) => { lbv_expr_code(p, decls, upto, src, a, locals, nloc) }
-    Expr::StrLit(_s, _n, _lbl) => { 0 }
+    Expr::StrLit(_s, _n, _lbl, _ps, _pn) => { 0 }
     Expr::ArrayLit(_anel, aehead) => {
       mut bad : usize = 0
       mut g := aehead
@@ -6517,7 +6517,7 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
     Expr::Num(v, ns0, nn0) => { 0 }
     Expr::BoolLit(b0) => { 0 }
     Expr::FloatLit(fs0, fn0) => { 0 }
-    Expr::StrLit(ss0, sn0, lbl0) => { 0 }
+    Expr::StrLit(ss0, sn0, lbl0, _ps0, _pn0) => { 0 }
     Expr::Var(vs0, vn0) => {
       mut found := false
       if nloc != 0 { found = local_in(locals, nloc, src, vs0, vn0) }
@@ -8115,7 +8115,7 @@ expr_uses_var_cons := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a
   match deref(e) {
     Expr::Num(v, s, n) => { false }
     Expr::BoolLit(v) => { false }
-    Expr::StrLit(s, n, lbl) => { false }
+    Expr::StrLit(s, n, lbl, _ps, _pn) => { false }
     Expr::FloatLit(s, n) => { false }
     Expr::Var(s, n) => { streq(src, s, n, xs, xl) }
     Expr::Bin(op, l, r) => { expr_uses_var_cons(l, src, xs, xl, a) or expr_uses_var_cons(r, src, xs, xl, a) }

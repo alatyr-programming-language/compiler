@@ -221,7 +221,7 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
     }
     ## A string literal is not constant-folded (its value is a runtime {ptr, len}); rebuild it
     ## structurally, preserving the inner-bytes span + label index.
-    Expr::StrLit(ss, sn, slbl) => { newnode(Expr.StrLit(ss, sn, slbl)) }
+    Expr::StrLit(ss, sn, slbl, sps, spn) => { newnode(Expr.StrLit(ss, sn, slbl, sps, spn)) }
     ## `[e0, …, eN]` — an array literal: structural rebuild over the folded element
     ## expressions into a fresh arena-linked `Arg` list, preserving the element count.
     Expr::ArrayLit(anel, aehead) => {

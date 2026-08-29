@@ -447,7 +447,7 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
       collect_insts_expr(lo, insts, decls, src, a, penv)
       collect_insts_expr(hi, insts, decls, src, a, penv)
     }
-    Expr::StrLit(ss, sl, lbl) => {}
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => {}
   }
 }
 
