@@ -187,23 +187,28 @@ app := Package(
 EOF
   cat >"$tmp/src/main.al" <<'EOF'
 main := fn() -> u64 {
-  own := std::os::arena(131072)
-  mut ar := std::os::region(ptr(own))
-  av := std::os::args(ptr(mut ar))
+  arena_result := std::os::arena(131072)
   mut ok : u64 = 0
-  if av.len == 2 {
-    arg := av[1]
-    if arg == "--release" {
-      comptime if build.release_path { ok = 42 } else { ok = 7 }
-    } else if arg == "neutral-arg" {
-      comptime if build.release_path { ok = 43 } else { ok = 41 }
+  match arena_result {
+    Result::Ok(own) => {
+      mut ar := std::os::region(ptr(own))
+      av := std::os::args(ptr(mut ar))
+      if av.len == 2 {
+        arg := av[1]
+        if arg == "--release" {
+          comptime if build.release_path { ok = 42 } else { ok = 7 }
+        } else if arg == "neutral-arg" {
+          comptime if build.release_path { ok = 43 } else { ok = 41 }
+        }
+      } else if av.len == 3 {
+        if av[1] == "--profile" and av[2] == "release" {
+          comptime if build.release_path { ok = 42 } else { ok = 7 }
+        }
+      }
+      std::os::free(own)
     }
-  } else if av.len == 3 {
-    if av[1] == "--profile" and av[2] == "release" {
-      comptime if build.release_path { ok = 42 } else { ok = 7 }
-    }
+    Result::Err(e) => { panic("package_cli_test: OS arena allocation failed") }
   }
-  std::os::free(own)
   return ok
 }
 EOF
