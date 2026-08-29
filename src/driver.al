@@ -2372,6 +2372,13 @@ mut EMISSION_PATHS_N : usize = 0
 pub emission_paths_ptr := fn() -> usize { return EMISSION_PATHS_P }
 pub emission_paths_len := fn() -> usize { return EMISSION_PATHS_N }
 
+## The driver resolves a package's declaration path before emission; the CLI consumes this exact
+## linker spelling after compilation and before invoking `as`/`ld`. Empty means the compatibility
+## `_start` path, which is synthesized for the compiler's own package and other default-entry builds.
+mut ENTRY_SYMBOL_P : usize = 0
+mut ENTRY_SYMBOL_N : usize = 0
+pub resolved_entry_symbol := fn() -> str { return str_at(ENTRY_SYMBOL_P, ENTRY_SYMBOL_N) }
+
 ## TOOL-15 — the CLI deliberately keeps `package.al` out of the module path list, because it is
 ## configuration input rather than an ordinary source file in the current plumbing.  The handle is
 ## nevertheless an ordinary private value to the package.  Keep the bridge here, at the file-driver
@@ -2917,6 +2924,134 @@ d_manifest_owned_module := fn(src : ptr(u8), ms : usize, ml : usize, pv : rt::Ve
     k += 1
   }
   found
+}
+
+## Tooling §4 / Modules §6.1, §6.3 — compare a package entry's module HEAD with the canonical
+## module spelling.  A source path separator `::` maps to the TWO underscores in the emitted module
+## name; ordinary underscores remain ordinary underscores.  Keeping this comparison strict prevents
+## `foo::bar` from accidentally resolving to a distinct `foo_bar` module.
+d_entry_module_eq := fn(src : ptr(u8), ms : usize, ml : usize, entry : str, head_len : usize) -> bool {
+  eb := unchecked bitcast(usize, entry.ptr)
+  mut mi := 0
+  mut ei := 0
+  mut ok := true
+  while mi < ml and ei < head_len and ok {
+    if ei + 1 < head_len and bytes(entry)[ei] == 58 and bytes(entry)[ei + 1] == 58 {
+      if mi + 1 >= ml or str_at((src + ms + mi), 2) != "__" { ok = false }
+      mi += 2
+      ei += 2
+    } else {
+      if str_at((src + ms + mi), 1) != str_at(eb + ei, 1) { ok = false }
+      mi += 1
+      ei += 1
+    }
+  }
+  if mi != ml or ei != head_len { ok = false }
+  ok
+}
+
+## Does `entry` name exactly this package-owned function declaration?  The qualified form is a
+## declaration path (`module::name`); an unqualified form is a root declaration only.  Dependencies
+## and ambient modules are filtered by the caller through `d_manifest_owned_module`, so a foreign
+## package cannot become the executable's entry merely by exporting a matching symbol.
+d_entry_matches_decl := fn(src : ptr(u8), d : Decl, entry : str) -> bool {
+  if d.kind != 1 or d.name_len == 0 { return false }
+  eb := unchecked bitcast(usize, entry.ptr)
+  mut sep := 0
+  mut qualified := false
+  mut i := 0
+  while i + 1 < entry.len {
+    if bytes(entry)[i] == 58 and bytes(entry)[i + 1] == 58 { sep = i; qualified = true }
+    i += 1
+  }
+  if qualified {
+    tail := sep + 2
+    if tail >= entry.len or entry.len - tail != d.name_len { return false }
+    if str_at((src + d.name_start), d.name_len) != str_at(eb + tail, d.name_len) { return false }
+    if lower::is_root_mod(d.mod_start, d.mod_len) { return false }
+    return d_entry_module_eq(src, d.mod_start, d.mod_len, entry, sep)
+  }
+  ex := d_export_name(src, d.name_start, d.name_len)
+  if ex.n != 0 and ex.n == entry.len and str_at((src + ex.s), ex.n) == entry { return true }
+  if entry.len != d.name_len { return false }
+  if str_at((src + d.name_start), d.name_len) != entry { return false }
+  lower::is_root_mod(d.mod_start, d.mod_len)
+}
+
+## Count package-owned declarations matching the configured path.  A target entry is a path to one
+## declaration, not a linker-symbol lookup: zero and ambiguous matches are both rejected before GAS
+## emission, which also keeps a same-named dependency from satisfying the root package's target.
+d_package_entry_count := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec) -> usize {
+  mut count := 0
+  mut i := 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d_entry_matches_decl(src, d, entry) and d_manifest_owned_module(src, d.mod_start, d.mod_len, pv, name_start, name_len) { count += 1 }
+    i += 1
+  }
+  count
+}
+
+## Return the linker symbol emitted for the one resolved declaration.  Exact `@export` wins over the
+## automatic module/name mangling; both are views into the live compile arena except the derived
+## spelling, which is copied into a small arena-backed buffer for the CLI linker call.
+d_package_entry_symbol := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec, in out tar : rt::Arena) -> str {
+  mut i := 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d_entry_matches_decl(src, d, entry) and d_manifest_owned_module(src, d.mod_start, d.mod_len, pv, name_start, name_len) {
+      ex := d_export_name(src, d.name_start, d.name_len)
+      if ex.n != 0 { return str_at((src + ex.s), ex.n) }
+      if lower::is_root_mod(d.mod_start, d.mod_len) { return str_at((src + d.name_start), d.name_len) }
+      mut out := rt::strbuf(tar, entry.len + 8)
+      mut k := 0
+      while k < entry.len {
+        if k + 1 < entry.len and bytes(entry)[k] == 58 and bytes(entry)[k + 1] == 58 {
+          rt::push_str(out, "__")
+          k += 2
+        } else {
+          rt::push_byte(out, bytes(entry)[k])
+          k += 1
+        }
+      }
+      return str_at(out.data, out.len)
+    }
+    i += 1
+  }
+  str_at(0, 0)
+}
+
+## Locate the manifest's `entry` field without trusting arbitrary text in comments or string values.
+## The returned offset is global in the driver's concatenated source buffer and is shifted by one
+## byte so the existing located-reject renderer also locates a field beginning at file offset zero.
+d_manifest_entry_span := fn(src : ptr(u8), off : usize, len : usize) -> DSpan {
+  mut i := 0
+  while i < len {
+    c := str_at((src + off + i), 1)
+    if c == "#" {
+      while i < len and str_at((src + off + i), 1) != "\n" { i += 1 }
+    } else if c == "\"" {
+      i += 1
+      while i < len {
+        if str_at((src + off + i), 1) == "\\" and i + 1 < len { i += 2 }
+        else if str_at((src + off + i), 1) == "\"" { i += 1; break }
+        else { i += 1 }
+      }
+    } else {
+      mut word := i + 5 <= len and str_at((src + off + i), 5) == "entry"
+      if word and i > 0 and d_manifest_ident(str_at((src + off + i - 1), 1)) { word = false }
+      if word and i + 5 < len and d_manifest_ident(str_at((src + off + i + 5), 1)) { word = false }
+      if word {
+        mut p := i + 5
+        while p < len and d_manifest_ws(str_at((src + off + p), 1)) { p += 1 }
+        if p < len and str_at((src + off + p), 1) == "=" {
+          return DSpan(s = off + i + 1, n = 5)
+        }
+      }
+      i += 1
+    }
+  }
+  DSpan(s = off + 1, n = 1)
 }
 
 ## Publish the package-owned module names to sema so the anonymous root's private declarations stop at
@@ -3594,6 +3729,8 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   rt::arena_init(tar, 536870912)
   EMISSION_PATHS_P = 0
   EMISSION_PATHS_N = 0
+  ENTRY_SYMBOL_P = 0
+  ENTRY_SYMBOL_N = 0
   mut na := rt::Arena(base = 0, off = 0, cap = 0)
   rt::arena_init(na, 536870912)
   ## A SEPARATE arena for the per-module TOKEN records (handles + `{kind,start,len}` records).
@@ -3804,6 +3941,20 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## symbol. Never fires without a package-root module in the compile list → dormant for the self-build.
   rsc := d_root_symbol_clash(ptr(decls), base)
   if rsc != 0 { d_limit_reject(rsc, "a root-level declaration collides with a module's mangled symbol", base, ptr(ftab), tar) }
+  ## Tooling §4 / Modules §6.1, §6.3 — a non-default package entry is a declaration PATH, not an
+  ## arbitrary string handed to the linker. Resolve it against exactly the consuming package's
+  ## parsed module/export graph now, while the manifest span table is available. This is deliberately
+  ## before `lower::emit_program`, so an unresolved entry emits no GAS and the CLI never reaches
+  ## assembler/linker invocation. `_start` retains the established synthesized-wrapper compatibility
+  ## path used by the self-host package and by default-entry programs.
+  if MANIFEST_HAS and not library_mode and entry != "_start" {
+    entry_span := d_manifest_entry_span(base, manifest_off, manifest_len)
+    entry_count := d_package_entry_count(decls, base, entry, pv, name_start, name_len)
+    if entry_count != 1 { d_limit_reject(entry_span.s * 4, "codegen: package entry does not resolve to exactly one package declaration", base, ptr(ftab), tar) }
+    resolved := d_package_entry_symbol(decls, base, entry, pv, name_start, name_len, tar)
+    ENTRY_SYMBOL_P = unchecked bitcast(usize, resolved.ptr)
+    ENTRY_SYMBOL_N = resolved.len
+  }
   ## §8 `@repr(T)` representability: reject a non-integer / too-narrow enum tag type (spec Types §8)
   ## fail-loud before emission. No `@repr` in the corpus → never fires for the self-host build.
   lower::validate_repr(ptr(decls), base)

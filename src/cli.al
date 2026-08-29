@@ -4633,9 +4633,10 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     fbs := str_at(fb.data, fb.len)
     fbp := unchecked bitcast(usize, fbs.ptr)
     ksb := driver::set_build_flags(fbp, fbs.len)
-	    if mode == 3 { return driver::check_files(paths, a, lim_ceiling) }
-	  }
-	  if mode == 3 {
+    if mode == 3 { return driver::check_files(paths, a, lim_ceiling) }
+  }
+  if is_pkg and mode == 6 { entry_sym = manifest_entry(a, pkg_arg) }
+  if mode == 3 {
     ## type-check only: lex + parse + sema over the file list; no GAS emitted, no as/ld.
     return driver::check_files(paths, a, lim_ceiling)
   }
@@ -4759,10 +4760,12 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   mut spb := 0
   if mode != 0 and osplit_on(a) { spb = rt::bump(a, 262144) }
   mut sb := driver::compile_files_target(paths, a, entry_sym, lim_ceiling, spb, artifact_kind == "object" or artifact_kind == "static_lib")
-  if mode == 6 {
-    ## Re-resolve manifest entry after compile to avoid transient corruption of `entry_sym`
-    ## in pathological self-host compiles.
-    if is_pkg { entry_sym = manifest_entry(a, pkg_arg) }
+  ## The driver has already resolved a non-default package entry against the package declaration
+  ## graph before emitting GAS. Use that linker symbol (not the manifest path) for the subsequent
+  ## assembler/linker step; empty preserves the established `_start` compatibility path.
+  if is_pkg {
+    resolved_entry := driver::resolved_entry_symbol()
+    if resolved_entry.len != 0 { entry_sym = resolved_entry }
   }
   if mode == 0 {
     ## The x86 GAS dump to stdout, and the one flush that is on the FIXPOINT path:
