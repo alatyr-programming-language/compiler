@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- The compiler now reports a controlled arena-initialization failure when an internal `mmap` fails,
+  instead of dereferencing the kernel's negative errno result.
 - `std::os::arena` now returns `Result(OsArena, IoError)` and maps zero-length and failed
   `mmap` requests before constructing an owning pointer.
 - `alatyr fmt` now preserves bare `comptime match` expression arms and keeps the formatted source

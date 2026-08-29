@@ -23,9 +23,13 @@ pub off := fn(p : ptr(u8), base : ptr(u8)) -> usize { unchecked { p - base } }
 pub Arena := struct { base : ptr(mut u8), off : usize, cap : usize }
 
 ## Map a fresh region and fill `a` as a bump arena (an in-out constructor — Arena is 3 words).
+## Linux returns a negative errno in `r` when `mmap` fails. `panic` is the runtime's defined
+## fail-loud contract (message on stderr, exit 1), so check that result before constructing a
+## pointer; no caller can safely use an arena whose mapping was not published.
 pub arena_init := fn(in out a : Arena, size : usize) {
   fdm1 := 0 - 1
   r := sys_mmap(9, 0, size, 3, 34, fdm1, 0)
+  if r < 0 { panic("rt: arena initialization failed (mmap)") }
   a.base = unchecked bitcast(ptr(mut u8), r)
   a.off = 0
   a.cap = size
