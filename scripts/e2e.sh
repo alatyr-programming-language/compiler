@@ -5189,6 +5189,13 @@ build_reject_has lower_bugB_array_of_struct_field "tuple/array element field not
 ## deeper non-local forms above remain deliberate fail-loud fences.
 run_x86 deref_array_field_place 42
 check_accept deref_array_field_place
+## Issue #220: AArch64 pointer-derived word-tier array-element field read/write at a runtime index;
+## x86, RV64 and WAT retain their existing explicit fail-loud boundaries until their own slices land.
+build_reject_has issue220_a64_deref_array_field "tuple/array element field not resolvable"
+run_a64 issue220_a64_deref_array_field 42
+run_rv64 issue220_a64_deref_array_field 133
+run_wat issue220_a64_deref_array_field 134
+check_accept issue220_a64_deref_array_field
 ## over-acceptance guard: a MULTI-WORD (struct-element) array-field leaf must fail loud, not silently read word 0.
 build_reject_has reject_arr_field_agg_elem "xs[i].arr[j]"
 ## A struct-RETURNING CALL and an if/match-EXPRESSION (incl. a CALL branch) RHS into a local aggregate-

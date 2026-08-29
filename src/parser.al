@@ -3809,6 +3809,11 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   ## `deref(p).field[index] = v` — an element WRITE through a pointer-derived struct array field.
   ## Keep this before the scalar field path below: both start with the same `deref(…).field` prefix,
   ## but this form must preserve the trailing Index node for lower's array-field address path.
+  if deref_field_index_path_assign_starts(pc) {
+    dipplace := p_field(pc)
+    dipval := p_place_val(pc, dipplace)
+    return snode(pc.arena, Stmt.FieldPathAssign(dipplace, dipval, 0))
+  }
   if deref_field_index_assign_starts(pc) {
     difplace := p_field(pc)
     difval := p_place_val(pc, difplace)
@@ -4024,6 +4029,7 @@ stmt_starts := fn(pc : PC) -> bool {
   ## RETURN expression by the `=` after the closing `)`).
   if deref_assign_starts(pc) { return true }
   ## `deref(p).field[index] = …` — an indexed array-field write through a pointer-derived root.
+  if deref_field_index_path_assign_starts(pc) { return true }
   if deref_field_index_assign_starts(pc) { return true }
   ## `deref(p).field = …` / `deref(node.next).field = …` — a FIELD write THROUGH a pointer
   ## (distinguished from a trailing `deref(p).field` READ by the `=` after the field path). Without
@@ -4361,6 +4367,47 @@ deref_field_index_assign_starts := fn(pc : PC) -> bool {
   }
   if j >= nt { return false }
   is_assign_tok(tok_at(pc, j).kind)
+}
+
+## Is the cursor a FIELD-THROUGH-POINTER write with an indexed array element followed by a scalar
+## field, `deref(p).arr[i].field = …`? Keep this separate from the immediate array-element store
+## above: the parsed place is `Field(Index(Field(Deref(p), arr), i), field)` and must remain a
+## `FieldPathAssign` so lower can compose the pointer, array stride, and leaf offset.
+deref_field_index_path_assign_starts := fn(pc : PC) -> bool {
+  if not is_mem_intrinsic(pc) { return false }
+  nt := ntoks(pc)
+  mut i := pc.idx + 1
+  mut depth := 0
+  while i < nt {
+    k := tok_at(pc, i).kind
+    if k == 10 { depth = depth + 1 }
+    else if k == 11 { depth = depth - 1; if depth == 0 { i = i + 1; break } }
+    i += 1
+  }
+  mut nf := 0
+  while i + 1 < nt and tok_at(pc, i).kind == 22 and tok_at(pc, i + 1).kind == 1 {
+    nf += 1
+    i += 2
+  }
+  if nf == 0 or i >= nt or tok_at(pc, i).kind != 14 { return false }
+  mut j := i
+  mut d2 := 0
+  while j < nt {
+    k := tok_at(pc, j).kind
+    if k == 14 { d2 = d2 + 1 }
+    else if k == 15 {
+      d2 = d2 - 1
+      if d2 == 0 { j = j + 1; break }
+    }
+    j += 1
+  }
+  if j >= nt { return false }
+  mut nf2 := 0
+  while j + 1 < nt and tok_at(pc, j).kind == 22 and tok_at(pc, j + 1).kind == 1 {
+    nf2 += 1
+    j += 2
+  }
+  nf2 > 0 and j < nt and is_assign_tok(tok_at(pc, j).kind)
 }
 
 deref_field_assign_starts := fn(pc : PC) -> bool {
