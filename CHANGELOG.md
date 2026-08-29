@@ -58,6 +58,7 @@ how this repository proves itself, not part of what it ships.
 - One-element listed projections after a bare module alias now parse as module imports.
 - AArch64 now supports scalar nested field access through inferred homogeneous struct-array locals
   with runtime indices.
+- RV64 now passes monomorphized `Slice(u64)` views to generic indexed writes without trapping.
 - AArch64 now supports whole aggregate-element writes through inferred homogeneous struct-array locals
   with runtime indices.
 - AArch64 and RV64 now compare concrete payload-less enum locals with `==` and `!=`.

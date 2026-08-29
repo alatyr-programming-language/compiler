@@ -398,6 +398,30 @@ rv_slice_param_scalar := fn(params_head : ptr(mut Param), src : ptr(u8), ns : us
   }
   r
 }
+## Is the PARAM [ns,nl] a Slice whose EFFECTIVE element type is exactly u64? This is the bounded
+## word-element write path: a generic Slice(T) instance substitutes T before this check, while every
+## other element size/shape stays on the explicit fail-loud path.
+rv_slice_param_u64 := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize) -> bool {
+  mut p := params_head
+  mut r := false
+  while p != 0 {
+    pm := deref(param_p(p))
+    if streq(src, pm.ns, pm.nl, ns, nl) {
+      es := rv_slice_elem_span(src, pm.ns, pm.nl)
+      if es.n != 0 {
+        mut ets := es.s
+        mut etn := es.n
+        if RV_SUB_GPL != 0 and streq(src, es.s, es.n, RV_SUB_GPS, RV_SUB_GPL) {
+          ets = RV_SUB_ITS
+          etn = RV_SUB_ITL
+        }
+        if str_at((src + ets), etn) == "u64" { r = true }
+      }
+    }
+    p = pm.next
+  }
+  r
+}
 ## The CURRENT fn's params + decls, stashed as module globals at the top of emit_rv_fn (the RV_CHK/RV_AGG
 ## pattern) so the per-fn FRAME SCANNERS (rv_iter_stride / rv_arr_elem_struct_span), which take no
 ## params_head, can recognize a slice PARAM base — needed to size + type a struct/enum-element loop var.
@@ -4088,7 +4112,8 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
               isenumret := (not isslit) and (not iselit) and (not iscallret) and rv_call_ret_enum_span(ga.e, decls, src, a).n != 0
               issretarg := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and rv_call_ret_sret_span(ga.e, decls, src, a).n != 0
               isesretarg := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and rv_call_ret_enum_sret_span(ga.e, decls, src, a).n != 0
-              isaggref := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and (not isesretarg) and (gisarr or gisstruct)
+              gislice := gavnl != 0 and is_slice_local(body_head, src, gavns, gavnl, a)
+              isaggref := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and (not isesretarg) and (gisarr or gisstruct or gislice)
               isplain := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and (not isesretarg) and (not isaggref)
               if isslit { emit_rv_aggval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
               if iselit { emit_rv_enumval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
@@ -5803,6 +5828,11 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         mut isslice := false
         if bnl != 0 { if is_slice_local(body_head, src, bns, bnl, a) { isslice = true } }
         isarr := bnl != 0 and rv_is_array_local(body_head, src, bns, bnl, a)
+        pidxS := param_find(params_head, src, bns, bnl, a)
+        mut isparamslice := false
+        if (not isslice) and (not isarr) and pidxS >= 0 {
+          if rv_slice_param_u64(params_head, src, bns, bnl) { isparamslice = true }
+        }
         aoff := rv_local_off(body_head, src, bns, bnl, pcount, a, decls)
         ## `xs[i] = v` — a whole-ELEMENT write into a fixed array of scalar-only STRUCTS (a LOCAL
         ## array-lit or an array GLOBAL). MUST be tested BEFORE the scalar `isarr` path: that path
@@ -5899,6 +5929,19 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           push_str(sb, "  addi sp, sp, 16\n")
         }
         else if easp.n != 0 { push_str(sb, "  ebreak\n") }
+        else if isparamslice {
+          ## Bounded Slice(u64) PARAM write: the slot points to the caller's two-word pair. Preserve the
+          ## value across index evaluation, check the runtime length, then store through the data pointer.
+          ## Unsupported element sizes and shapes do not enter this branch and remain an explicit ebreak.
+          emit_rv_expr(ival, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
+          emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          pslotS := 16 + pidxS * 8
+          if RV_CHK {
+            push_str(sb, "  ld t0, ") ; push_int(sb, pslotS) ; push_str(sb, "(s0)\n  ld t1, 8(t0)\n  bltu a0, t1, 1f\n  ebreak\n1:\n")
+          }
+          push_str(sb, "  slli a0, a0, 3\n  ld t0, ") ; push_int(sb, pslotS) ; push_str(sb, "(s0)\n  ld t1, 0(t0)\n  add t1, t1, a0\n  ld a1, 0(sp)\n  addi sp, sp, 16\n  sd a1, 0(t1)\n")
+        }
         else if isslice and aoff >= 0 {
           ## `s[i] = v` through a range-slice VIEW: store v at ptr (word0) + i*8. Bounds vs the runtime
           ## len (word1 at aoff+8) with t0 scratch (a0=index, a1=value, a2=ptr). Dropped under `unchecked`.
