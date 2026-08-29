@@ -115,6 +115,11 @@ enum_global_array_err := fn(s : usize) -> CheckErr { ENUM_GLOBAL_ARRAY_DIAG_MARK
 ## rejects the exact deferred array shape without changing any older CheckErr range.
 PACKED_ARRAY_DIAG_MARKER := 6845468423603140608
 packed_array_err := fn(s : usize) -> CheckErr { PACKED_ARRAY_DIAG_MARKER + s * 4 }
+## A distinct located diagnostic for the bounded local 2D fixed-array slice. Keep it between the packed
+## array and comptime classes so every older CheckErr range remains stable while check/build/emit surfaces
+## share one pre-emission refusal for the exact shapes whose nested lowering is not yet safe.
+LOCAL_MULTIDIM_ARRAY_DIAG_MARKER := 6880000000000000000
+local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIAG_MARKER + s * 4 }
 
 ## A distinct located diagnostic for a `comptime if` whose condition reads a runtime local. Keep it
 ## between the CT-12 guard class and immutable bindings so every older CheckErr range remains stable;
@@ -2758,6 +2763,71 @@ sema_packed_array_literal := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u
   al := expr_agg_lit(first)
   if not al.is_agg { return false }
   is_packed(decls, src, al.s, al.n)
+}
+
+## Skip the same whitespace and line-comment trivia as `lex_rt` while recovering a type from its source
+## span. The AST deliberately keeps a local's type as source metadata, so this is needed to make the
+## fence semantic across equivalent formatting/comment forms rather than dependent on raw punctuation.
+sema_local_type_trivia := fn(src : ptr(u8), start : usize, end : usize) -> usize {
+  mut p := start
+  mut again := true
+  while p < end and again {
+    again = false
+    while p < end {
+      c := str_at((src + p), 1)
+      if c == " " or c == "\n" or c == "\t" or c == "\r" { p += 1 } else { break }
+    }
+    if p < end and str_at((src + p), 1) == "#" {
+      while p < end and str_at((src + p), 1) != "\n" { p += 1 }
+      again = true
+    }
+  }
+  p
+}
+
+## True iff the resolved local annotation is exactly the bounded mutable-array element shape
+## `[[u8; 2]; 2]` or `[[u64; 2]; 2]`. `resolve_ty` retains the complete array span as tag 7 but
+## intentionally does not retain dimensions or element types, so the source span supplies only this
+## small, explicit shape check. Array type aliases are not a source form in this parser (aliases name
+## nominal/generic types), and every other local/inferred/signature/field shape remains out of scope.
+sema_local_multidim_array := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), ts : usize, tl : usize) -> bool {
+  end := ts + tl
+  p0 := sema_local_type_trivia(src, ts, end)
+  if p0 >= end { return false }
+  resolved := resolve_ty(src, p0, end - p0, decls, upto)
+  if resolved.tag != 7 { return false }
+  mut p := p0
+  if str_at((src + p), 1) != "[" { return false }
+  p += 1
+  p = sema_local_type_trivia(src, p, end)
+  if p >= end or str_at((src + p), 1) != "[" { return false }
+  p += 1
+  p = sema_local_type_trivia(src, p, end)
+  mut scalar_len := 0
+  if p + 2 <= end and str_at((src + p), 2) == "u8" { scalar_len = 2 }
+  if p + 3 <= end and str_at((src + p), 3) == "u64" { scalar_len = 3 }
+  if scalar_len == 0 { return false }
+  p += scalar_len
+  p = sema_local_type_trivia(src, p, end)
+  if p >= end or str_at((src + p), 1) != ";" { return false }
+  p += 1
+  p = sema_local_type_trivia(src, p, end)
+  if p >= end or str_at((src + p), 1) != "2" { return false }
+  p += 1
+  p = sema_local_type_trivia(src, p, end)
+  if p >= end or str_at((src + p), 1) != "]" { return false }
+  p += 1
+  p = sema_local_type_trivia(src, p, end)
+  if p >= end or str_at((src + p), 1) != ";" { return false }
+  p += 1
+  p = sema_local_type_trivia(src, p, end)
+  if p >= end or str_at((src + p), 1) != "2" { return false }
+  p += 1
+  p = sema_local_type_trivia(src, p, end)
+  if p >= end or str_at((src + p), 1) != "]" { return false }
+  p += 1
+  p = sema_local_type_trivia(src, p, end)
+  p == end
 }
 ## Is `v` a CONFIDENT numeric/boolean LITERAL (the REVERSE-direction scalar value)? Literals only — a
 ## scalar `Var` local is left tolerant (scalars are not reliably tag-recorded), so no valid program is
@@ -6950,6 +7020,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## unreadied, and do not type-check or mark the sentinel as an initializer.
         if local_is_uninit(src, ns, nl) {
           ann0 := local_type_span(src, ns, nl)
+          ## Issue #215 bounded fallback: the exact local 2D fixed-array shapes are not yet safely
+          ## lowerable, including a declaration followed by a later initialization. Reject before any
+          ## backend can treat the nested array as a word-strided scalar array.
+          if local_is_mut(src, ns) and sema_local_multidim_array(decls, upto, src, ann0.s, ann0.n) { return Result(usize, CheckErr).Err(local_multidim_array_err(ns)) }
           dt0 := resolve_ty(src, ann0.s, ann0.n, decls, upto)
           if dt0.tag == 0 { return Result(usize, CheckErr).Err(located_err(ns)) }
           mut bt0 : u8 = dt0.tag
@@ -6966,6 +7040,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if call_atomic_ordering_bad(v, src, a) { mark_failed(locals, mismatch_err(s_of(v, a), 0)) }
         if expr_has_unbound(v, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(v, decls, upto, src, a, locals, cnt)) }
         ann := local_type_span(src, ns, nl)
+        ## Issue #215 bounded fallback: reject the exact direct annotation in the shared semantic pass,
+        ## so `check`, build, and all emit-to-stdout backends cannot accept a silent wrong value/trap.
+        ## Reassignments and every non-local shape remain outside this local declaration fence.
+        if not assign_is_reassign(src, ns, nl) and local_is_mut(src, ns) and sema_local_multidim_array(decls, upto, src, ann.s, ann.n) {
+          return Result(usize, CheckErr).Err(local_multidim_array_err(ns))
+        }
         ## The lower has one deliberate whole-element consumer for this shape: an inferred local
         ## binding (`e := GE[i]`). An annotation or a reassignment may select a narrower/existing
         ## slot, so keep those in the ordinary value-position fence rather than letting the later

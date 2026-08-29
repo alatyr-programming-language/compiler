@@ -2708,8 +2708,10 @@ check_located() {
 check_build_located() {
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
+  out="$T/e2e_$1.out"
+  rm -f "$out"
   cmsg="$("$CC" check "$src" 2>&1 >/dev/null)"; crc=$?
-  bmsg="$("$CC" -o "$T/e2e_$1.out" "$src" 2>&1 >/dev/null)"; brc=$?
+  bmsg="$("$CC" -o "$out" "$src" 2>&1 >/dev/null)"; brc=$?
   if [ "$crc" = 1 ] && case "$cmsg" in *"$3"*"at line $2"*) true ;; *) false ;; esac; then
     echo "ok   $1: check [$3] at line $2"
   else
@@ -2719,6 +2721,9 @@ check_build_located() {
     echo "ok   $1: build [$3] at line $2"
   else
     echo "FAIL $1: build rc=$brc want [$3] at line $2, got: $bmsg"; fail=1
+  fi
+  if [ "$brc" = 1 ] && [ -e "$out" ]; then
+    echo "FAIL $1: build rejected but left an output artifact"; fail=1
   fi
 }
 
@@ -5809,6 +5814,21 @@ run_x86 issue170_array_stride 42
 run_a64 issue170_array_stride 42
 run_rv64 issue170_array_stride 42
 run_wat issue170_array_stride 134
+## Issue #215: the bounded local [[u8;2];2] / [[u64;2];2] shape is rejected
+## before emission because its nested lowering is not yet safe. Assert the same
+## located diagnostic on check, x86 build, and every emit-to-stdout backend.
+check_build_located issue215_local_multidim_array_u8 6 "local [[u8; 2]; 2] or [[u64; 2]; 2]"
+emit_reject_has wat issue215_local_multidim_array_u8 "local [[u8; 2]; 2] or [[u64; 2]; 2]"
+emit_reject_has aarch64 issue215_local_multidim_array_u8 "local [[u8; 2]; 2] or [[u64; 2]; 2]"
+emit_reject_has riscv64 issue215_local_multidim_array_u8 "local [[u8; 2]; 2] or [[u64; 2]; 2]"
+check_build_located issue215_local_multidim_array_u64 6 "local [[u8; 2]; 2] or [[u64; 2]; 2]"
+emit_reject_has wat issue215_local_multidim_array_u64 "local [[u8; 2]; 2] or [[u64; 2]; 2]"
+emit_reject_has aarch64 issue215_local_multidim_array_u64 "local [[u8; 2]; 2] or [[u64; 2]; 2]"
+emit_reject_has riscv64 issue215_local_multidim_array_u64 "local [[u8; 2]; 2] or [[u64; 2]; 2]"
+run issue215_local_array_1d_control 42
+run_a64 issue215_local_array_1d_control 42
+run_rv64 issue215_local_array_1d_control 42
+run_wat issue215_local_array_1d_control 42
 check_build_located reject_standard_byte_param 17 "check: invalid"
 check_build_located reject_standard_byte_field_by_value 22 "check: invalid"
 check_build_located reject_standard_byte_nested_field_addr 19 "check: invalid"
