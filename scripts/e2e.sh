@@ -878,6 +878,82 @@ issue174_name_resolution_test() {
   issue174_run pointless_ok 42
 }
 
+## Issue #213 / Types §6.4 / Functions §2.3 / ABI §3.2 / Architecture §7 — the generic call-argument
+## `gislice` path may widen local slice passing, but the RV64 write lowering is intentionally narrow:
+## only an effective `Slice(u64)` parameter is supported, and checked indices must stay in the runtime
+## view length. These generated sources stay in this row's private scratch directory, so they add no
+## corpus rows and cannot authorize an oracle change. The positive fixture row above proves the supported
+## path; these three controls prove its bounds: checked OOB, non-u64 scalar, and aggregate element.
+issue213_rv64_slice_controls_test() {
+  command -v riscv64-unknown-linux-gnu-as >/dev/null 2>&1 && command -v riscv64-unknown-linux-gnu-ld >/dev/null 2>&1 && command -v qemu-riscv64 >/dev/null 2>&1 \
+    || { echo "skip issue213_rv64_slice_controls: riscv64 toolchain absent"; return; }
+  local d="$T/issue213_rv64_slice_controls"
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue213_rv64_slice_controls: scratch"; fail=1; return; }
+  printf '%s\n' \
+    'setw := fn(T : type, s : Slice(T), i : usize, x : T) { s[i] = x }' \
+    'main := fn() -> u64 {' \
+    '  arr : [u64; 1] = [10]' \
+    '  s := arr[0..1]' \
+    '  setw(u64, s, 1, 99)' \
+    '  return 42' \
+    '}' > "$d/oob.al"
+  printf '%s\n' \
+    'setw := fn(T : type, s : Slice(T), i : usize, x : T) { s[i] = x }' \
+    'main := fn() -> u64 {' \
+    '  arr : [u32; 1] = [10]' \
+    '  s := arr[0..1]' \
+    '  setw(u32, s, 0, 99)' \
+    '  return 42' \
+    '}' > "$d/u32.al"
+  printf '%s\n' \
+    'P := struct { x : u64 }' \
+    'setw := fn(T : type, s : Slice(T), i : usize, x : T) { s[i] = x }' \
+    'main := fn() -> u64 {' \
+    '  arr : [P; 1] = [P(x = 10)]' \
+    '  s := arr[0..1]' \
+    '  setw(P, s, 0, P(x = 99))' \
+    '  return 42' \
+    '}' > "$d/aggregate.al"
+
+  issue213_rv64_case() { # name, expected qemu status
+    local n="$1" want="$2" src="$d/$1.al" gas="$d/$1.s" obj="$d/$1.o" elf="$d/$1.elf" err="$d/$1.err" rc got
+    "$CC" riscv64 "$src" >"$gas" 2>"$err"; rc=$?
+    if [ "$rc" != 0 ]; then
+      echo "FAIL issue213/$n: emit rc=$rc"
+      sed 's/^/  | /' "$err"
+      fail=1
+      return
+    fi
+    if [ "$n" = oob ] && ! grep -qF 'bltu a0, t1, 1f' "$gas"; then
+      echo "FAIL issue213/$n: missing runtime-length branch before ebreak"
+      fail=1
+      return
+    fi
+    riscv64-unknown-linux-gnu-as "$gas" -o "$obj" 2>"$err"; rc=$?
+    if [ "$rc" != 0 ]; then
+      echo "FAIL issue213/$n: assemble rc=$rc"
+      sed 's/^/  | /' "$err"
+      fail=1
+      return
+    fi
+    riscv64-unknown-linux-gnu-ld "$obj" -o "$elf" 2>"$err"; rc=$?
+    if [ "$rc" != 0 ]; then
+      echo "FAIL issue213/$n: link rc=$rc"
+      sed 's/^/  | /' "$err"
+      fail=1
+      return
+    fi
+    _e2e_exec qemu-riscv64 "$elf" >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "issue213/$n(rv64)" "$got"; then return; fi
+    if [ "$got" = "$want" ]; then echo "ok   issue213/$n(rv64): $got"; else echo "FAIL issue213/$n(rv64): got $got want $want"; fail=1; fi
+  }
+
+  issue213_rv64_case oob 133
+  issue213_rv64_case u32 133
+  issue213_rv64_case aggregate 133
+}
+
 # `alatyr fmt`: re-emit a source file in canonical form. Checks (1) IDEMPOTENCE
 # (fmt(fmt(x)) == fmt(x), the acceptance property), and (2) the formatted output still BUILDS+RUNS to
 # the expected exit — a faithful reformat must preserve behaviour.
@@ -6134,6 +6210,7 @@ run slice_toolkit 42
 ## param binds by-ref (was is_ref=false → the write overwrote the slot / a read returned the block ptr).
 run slice_generic_write 42
 run_rv64 slice_generic_write 42
+issue213_rv64_slice_controls_test
 ## The AArch64 generic Slice(T) write path is also used transitively by base::slice::sort's sift_down.
 run_a64 slice_generic_write 42
 ## §7.2: a fn RETURNING Slice(T) by value — was a silent miscompile (bound as a bare scalar → .len read 0, [i]

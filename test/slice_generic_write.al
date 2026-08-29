@@ -3,6 +3,9 @@
 ## param mis-bound as a LOCAL array (is_ref=false) — `s[i]` then used the slot ADDRESS instead of the
 ## by-ref block pointer, so the WRITE overwrote the param slot (lost) and a READ returned the block ptr.
 ## Now the element is substituted (Slice(T) -> Slice(u64)) so it binds by-ref. Returns 42 iff exact.
+## Failure-first evidence (parent f98c62f): the seed-built compiler emitted `ebreak` for `setw__u64`;
+## assembly and link succeeded, then qemu-riscv64 exited 133. The fixed tree follows the same path to
+## exit 42; x86_64 and AArch64 controls remain 42.
 setw := fn(T : type, s : Slice(T), i : usize, x : T) { s[i] = x }
 readw := fn(T : type, s : Slice(T), i : usize) -> T { v := s[i]  v }
 
