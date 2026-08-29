@@ -20,13 +20,22 @@ OsArena := @owning struct { base : ptr(mut bits8), cap : usize }
 
 ## Map `len` bytes of fresh, zero-filled, read/write anonymous memory as an owning
 ## arena. `prot = PROT_READ|PROT_WRITE = 3`; `flags = MAP_PRIVATE|MAP_ANONYMOUS =
-## 0x22 = 34`; `fd = -1`; `offset = 0`. (A failed `mmap` returns a negative
-## `-errno`; error handling rides the `Result`/`IoError` layer, a later step.)
-pub arena := fn(len : usize) -> OsArena {
+## 0x22 = 34`; `fd = -1`; `offset = 0`. This is a fallible std-tier operation:
+## `len = 0` is `Err(IoError.InvalidInput)`, and every negative Linux syscall result
+## is mapped through `io_error_result` before any pointer is constructed. An `Ok`
+## result is the only path that can publish an owning `OsArena`.
+pub arena := fn(len : usize) -> Result(OsArena, io::IoError) {
+  if len == 0 {
+    return Result(OsArena, io::IoError).Err(io::IoError.InvalidInput)
+  }
   neg1 : isize = 0 - 1
   r := unchecked sys_mmap(9, 0, len, 3, 34, bitcast(usize, neg1), 0)
+  if r < 0 {
+    e := i32(0 - r)
+    return io::io_error_result(OsArena, e)
+  }
   base := unchecked bitcast(ptr(mut bits8), bitcast(usize, r))
-  return OsArena(base = base, cap = len)
+  return Result(OsArena, io::IoError).Ok(OsArena(base = base, cap = len))
 }
 
 ## A **bump `Arena`** over the arena's pages, for allocation through the region

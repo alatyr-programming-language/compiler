@@ -5469,6 +5469,7 @@ run_cli_trap checked_add_ovf 132
 run_cli_trap checked_div_zero 132
 run_cli_trap require_trap 132
 run_cli_args cli_run_args 42
+run_x86 os_arena_result 42
 run size_type_arg 42
 ## Types §7 — a `[T]`/`str` VIEW is its two-word pointer+length pair wherever it appears, so `size(str)`,
 ## `str.size()` and `size(Slice(T))` are 16 on a 64-bit target and `size([str;2])` is 32. They used to answer

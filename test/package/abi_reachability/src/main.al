@@ -10,9 +10,16 @@ pub production_api := fn() -> u64 {
   ## here until 2026-08-20). `std::os::arena` is `pub` and is the declared owner of that private
   ## `@abi(syscall)`, so the retained-but-private trampoline this fixture is about is reached exactly
   ## as a real program reaches it. `OsArena` is `@owning`, so the region is freed once.
-  r := std::os::arena(4096)
-  _ := std::os::free(r)
-  42
+  arena_result := std::os::arena(4096)
+  mut out : u64 = 0
+  match arena_result {
+    Result::Ok(r) => {
+      _ := std::os::free(r)
+      out = 42
+    }
+    Result::Err(e) => { panic("abi_reachability: OS arena allocation failed") }
+  }
+  return out
 }
 
 @test("test-only abi remains in dedicated test artifact") fn() {

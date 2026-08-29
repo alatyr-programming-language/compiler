@@ -102,35 +102,47 @@ pub write_buf_file := fn(s : ptr(alloc::strbuf::StrBuf), path : str) -> Result(u
 ## renders as the target's native signed integer (the unconstrained-literal
 ## default). Void; called in statement position (inlined at the call site).
 pub print := fn(fmt : str, args : ...) {
-  mut osar := os::arena(4096)
-  mut ar := osar.region()
-  mut sb := alloc::strbuf::strbuf(ptr(ar), 64)
-  comptime for x in args {
-    ## Bind `display`'s `Result` to a local first: a call returning an aggregate
-    ## passed *directly* as another call's argument is a non-place aggregate arg
-    ## (not lowered); the local is a place `trap_oom` consumes.
-    rr := alloc::fmt::display(x, sb)
-    alloc::fmt::trap_oom(rr)
+  arena_result := os::arena(4096)
+  match arena_result {
+    Result::Ok(osar) => {
+      mut ar := osar.region()
+      mut sb := alloc::strbuf::strbuf(ptr(ar), 64)
+      comptime for x in args {
+        ## Bind `display`'s `Result` to a local first: a call returning an aggregate
+        ## passed *directly* as another call's argument is a non-place aggregate arg
+        ## (not lowered); the local is a place `trap_oom` consumes.
+        rr := alloc::fmt::display(x, sb)
+        alloc::fmt::trap_oom(rr)
+      }
+      d := sb.write_buf()
+      g := sb.strbuf_free()
+      fa := os::free(osar)
+    }
+    Result::Err(e) => { panic("std::fmt: OS arena allocation failed") }
   }
-  d := sb.write_buf()
-  g := sb.strbuf_free()
-  fa := os::free(osar)
 }
 
 ## Render `v` to standard output followed by a newline (a `StrBuf` built then
 ## written once). Returns the `print_buf` syscall result.
 pub println := fn(T : type, v : T) -> isize {
-  mut osar := os::arena(4096)
-  mut ar := osar.region()
-  mut sb := alloc::strbuf::strbuf(ptr(ar), 64)
-  dr := alloc::fmt::display(T, v, sb)
-  alloc::fmt::trap_oom(dr)
-  nr := alloc::strbuf::push_byte(sb, 10)
-  alloc::fmt::trap_oom(nr)
-  r := sb.write_buf()
-  f := sb.strbuf_free()
-  fa := os::free(osar)
-  r
+  arena_result := os::arena(4096)
+  mut out : isize = 0
+  match arena_result {
+    Result::Ok(osar) => {
+      mut ar := osar.region()
+      mut sb := alloc::strbuf::strbuf(ptr(ar), 64)
+      dr := alloc::fmt::display(T, v, sb)
+      alloc::fmt::trap_oom(dr)
+      nr := alloc::strbuf::push_byte(sb, 10)
+      alloc::fmt::trap_oom(nr)
+      r := sb.write_buf()
+      f := sb.strbuf_free()
+      fa := os::free(osar)
+      out = r
+    }
+    Result::Err(e) => { panic("std::fmt: OS arena allocation failed") }
+  }
+  return out
 }
 
 ## Render `v` to standard output with NO trailing newline (println minus the newline). The
@@ -138,15 +150,22 @@ pub println := fn(T : type, v : T) -> isize {
 ## expands `print("a {} b", x)` to `io::print("a ") ; print_one(x) ; io::print(" b")`, so each
 ## piece writes in order. Returns the `write_buf` syscall result.
 pub print_one := fn(T : type, v : T) -> isize {
-  mut osar := os::arena(4096)
-  mut ar := osar.region()
-  mut sb := alloc::strbuf::strbuf(ptr(ar), 64)
-  dr := alloc::fmt::display(T, v, sb)
-  alloc::fmt::trap_oom(dr)
-  r := sb.write_buf()
-  f := sb.strbuf_free()
-  fa := os::free(osar)
-  r
+  arena_result := os::arena(4096)
+  mut out : isize = 0
+  match arena_result {
+    Result::Ok(osar) => {
+      mut ar := osar.region()
+      mut sb := alloc::strbuf::strbuf(ptr(ar), 64)
+      dr := alloc::fmt::display(T, v, sb)
+      alloc::fmt::trap_oom(dr)
+      r := sb.write_buf()
+      f := sb.strbuf_free()
+      fa := os::free(osar)
+      out = r
+    }
+    Result::Err(e) => { panic("std::fmt: OS arena allocation failed") }
+  }
+  return out
 }
 
 ## Render an UNCONSTRAINED INTEGER LITERAL hole to stdout (no newline) — the target's native signed
