@@ -917,7 +917,7 @@ arr_field_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
 ## stops at the first semicolon and therefore cannot distinguish this shape: on a nested type that
 ## semicolon belongs to the inner array. Keep this predicate narrow and source-only; it is the common
 ## correct-or-trap boundary for every backend until nested array-field addressing has one layout model.
-array_type_has_array_element := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+pub array_type_has_array_element := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   if tl < 3 { return false }
   mut p := ts
   end := ts + tl
