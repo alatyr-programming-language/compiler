@@ -1125,6 +1125,79 @@ EOF
   rm -rf "$tmp"
 }
 
+# Tooling §4.2 / TOOL-20 — `plan` performs package resolution and writes only the deterministic v1
+# TSV. The parent regression is the same fixture: before the command existed, `plan package.al` was
+# parsed as a source path and failed with no plan file. Keep the expected bytes here so ordering,
+# relative artifact/install paths, repeatability and the output-only boundary are all asserted together.
+run_tool20_plan() {
+  p="$ROOT/test/package/tool20_plan"
+  rm -rf "$p/target"
+  out=$(mktemp)
+  err=$(mktemp)
+  want=$(mktemp)
+  repeat=$(mktemp)
+  cat >"$want" <<'EOF'
+meta	arch	x86_64
+meta	container	elf
+meta	env	gnu
+meta	hermetic	yes
+meta	machine	Linux
+meta	os	linux
+meta	package-version	0.1.0
+meta	plan-version	1
+meta	profile	debug
+meta	toolchain	as,ld
+artifact		debug	executable	debug/tool20-plan	bin/tool20-plan
+EOF
+  (cd "$p" && "$CC" plan package.al) >"$out" 2>"$err"
+  plan_rc=$?
+  if [ "$plan_rc" = 0 ] && [ ! -s "$out" ] && [ ! -s "$err" ] \
+    && cmp -s "$p/target/debug/plan.tsv" "$want"; then
+    echo "ok   tool20_plan: complete deterministic v1 TSV"
+  else
+    echo "FAIL tool20_plan: rc=$plan_rc stdout=$(cat "$out") stderr=$(cat "$err")"
+    fail=1
+  fi
+  cp "$p/target/debug/plan.tsv" "$repeat" 2>/dev/null
+  (cd "$p" && "$CC" plan --profile debug package.al) >"$out" 2>"$err"
+  repeat_rc=$?
+  if [ "$repeat_rc" = 0 ] && cmp -s "$p/target/debug/plan.tsv" "$repeat"; then
+    echo "ok   tool20_plan: repeated run is byte-identical"
+  else
+    echo "FAIL tool20_plan: repeat rc=$repeat_rc or bytes changed"
+    fail=1
+  fi
+  files=$(find "$p/target" -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort)
+  if [ "$files" = "debug/plan.tsv" ] && [ ! -e "$p/target/debug/tool20-plan.s" ] \
+    && [ ! -e "$p/target/debug/tool20-plan.o" ] && [ ! -e "$p/target/debug/tool20-plan" ]; then
+    echo "ok   tool20_plan: output-only, no code-generation artifacts"
+  else
+    echo "FAIL tool20_plan: unexpected target files: $files"
+    fail=1
+  fi
+  rm -rf "$p/target"
+  (cd "$p" && "$CC" plan --target missing package.al) >"$out" 2>"$err"
+  bad_rc=$?
+  if [ "$bad_rc" != 0 ] && grep -qF 'config: --target names no Target in the manifest' "$err" \
+    && grep -qF 'at line' "$err" && [ ! -e "$p/target" ]; then
+    echo "ok   tool20_plan: invalid target is a located nonzero diagnostic"
+  else
+    echo "FAIL tool20_plan: invalid target rc=$bad_rc stderr=$(cat "$err")"
+    fail=1
+  fi
+  (cd "$p" && "$CC" plan missing.al) >"$out" 2>"$err"
+  missing_rc=$?
+  if [ "$missing_rc" != 0 ] && grep -qF 'config: the input file does not exist' "$err" \
+    && [ ! -e "$p/target" ]; then
+    echo "ok   tool20_plan: missing bare input fails closed"
+  else
+    echo "FAIL tool20_plan: missing input rc=$missing_rc stderr=$(cat "$err")"
+    fail=1
+  fi
+  rm -f "$out" "$err" "$want" "$repeat"
+  rm -rf "$p/target"
+}
+
 if [ "${CROSS_TARGET_ONLY:-0}" = 1 ]; then
   run_cross_target_test
   exit "$fail"
@@ -1132,6 +1205,12 @@ fi
 
 if [ "${TOOL14_ONLY:-0}" = 1 ]; then
   run_tool14_manifest_selection
+  exit "$fail"
+fi
+
+run_tool20_plan
+
+if [ "${TOOL20_ONLY:-0}" = 1 ]; then
   exit "$fail"
 fi
 

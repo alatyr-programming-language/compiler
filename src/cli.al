@@ -2286,6 +2286,133 @@ manifest_target_record := fn(in out a : rt::Arena, pkg_al : str) -> str {
   str_at(bb, 0)
 }
 
+## Return the selected Target's raw enum token for the legacy flat manifest projection. The current
+## compiler still accepts the pre-TOOL-18 `arch`/`os`/`env`/`container` spelling; plan serializes the
+## same resolved projections, while the manifest checker remains authoritative for the newer schema.
+manifest_target_token := fn(in out a : rt::Arena, pkg_al : str, field : str) -> str {
+  rec := manifest_target_record(a, pkg_al)
+  wi := mf_find_word(rec, 0, field)
+  if wi < 0 { return "" }
+  return mf_token(rec, usize(wi), field.len)
+}
+
+## Canonical text for the four target projections used by TOOL-20's fixed meta records. Defaults are
+## the host-shaped target currently implemented by this compiler; an unknown explicit token remains
+## `invalid` so plan can fail closed instead of describing a target it did not resolve.
+manifest_target_projection := fn(in out a : rt::Arena, pkg_al : str, field : str) -> str {
+  tok := manifest_target_token(a, pkg_al, field)
+  if field == "arch" {
+    if tok.len == 0 { return "x86_64" }
+    if tok == "Arch.x86_64" { return "x86_64" }
+    if tok == "Arch.i386" { return "i386" }
+    if tok == "Arch.aarch64" { return "aarch64" }
+    if tok == "Arch.aarch32" { return "aarch32" }
+    if tok == "Arch.riscv32" { return "riscv32" }
+    if tok == "Arch.riscv64" { return "riscv64" }
+    return "invalid"
+  }
+  if field == "os" {
+    if tok.len == 0 { return "linux" }
+    if tok == "Os.linux" { return "linux" }
+    if tok == "Os.android" { return "android" }
+    if tok == "Os.windows" { return "windows" }
+    if tok == "Os.macos" { return "macos" }
+    if tok == "Os.freebsd" { return "freebsd" }
+    if tok == "Os.none" { return "none" }
+    return "invalid"
+  }
+  if field == "env" {
+    if tok.len == 0 { return "gnu" }
+    if tok == "Env.gnu" { return "gnu" }
+    if tok == "Env.musl" { return "musl" }
+    if tok == "Env.eabi" { return "eabi" }
+    if tok == "Env.eabihf" { return "eabihf" }
+    if tok == "Env.bionic" { return "bionic" }
+    if tok == "Env.none" { return "none" }
+    return "invalid"
+  }
+  if field == "container" {
+    if tok.len == 0 { return "elf" }
+    if tok == "Container.elf" { return "elf" }
+    if tok == "Container.pe" { return "pe" }
+    if tok == "Container.macho" { return "macho" }
+    if tok == "Container.com" { return "com" }
+    return "invalid"
+  }
+  "invalid"
+}
+
+## The first bounded plan slice describes only the currently emitted host target. Rejecting the other
+## projections at the configuration boundary is safer than writing a plausible plan whose `as`/`ld`
+## handoff and artifact naming do not match the compiler that will consume it.
+manifest_plan_target_reject := fn(in out a : rt::Arena, pkg_al : str) -> usize {
+  arch := manifest_target_projection(a, pkg_al, "arch")
+  if arch != "x86_64" {
+    manifest_located_error(a, "config: plan currently supports only the x86_64 target", pkg_al, "arch")
+    return 46
+  }
+  os := manifest_target_projection(a, pkg_al, "os")
+  if os != "linux" {
+    manifest_located_error(a, "config: plan currently supports only the Linux target", pkg_al, "os")
+    return 46
+  }
+  env := manifest_target_projection(a, pkg_al, "env")
+  if env != "gnu" {
+    manifest_located_error(a, "config: plan currently supports only the GNU environment", pkg_al, "env")
+    return 46
+  }
+  container := manifest_target_projection(a, pkg_al, "container")
+  if container != "elf" {
+    manifest_located_error(a, "config: plan currently supports only the ELF container", pkg_al, "container")
+    return 46
+  }
+  0
+}
+
+## Return the dynamically linked library names as a sorted, newline-terminated set. Static libraries
+## are intentionally absent: TOOL-20's `dylib` records describe runtime dependencies only. The scan
+## is structural and skips comments/strings so a quoted example cannot become a dependency record.
+manifest_dynamic_lib_names := fn(in out a : rt::Arena, pkg_al : str) -> str {
+  blk := manifest_list_field(a, pkg_al, "libs")
+  base := unchecked bitcast(usize, blk.ptr)
+  mut out := rt::strbuf(a, blk.len + 32)
+  mut i := 0
+  while i < blk.len {
+    c := bytes(blk)[i]
+    if c == 35 {
+      i = manifest_skip_trivia(blk, i, blk.len)
+    } else if c == 34 {
+      i = manifest_skip_string(blk, i, blk.len)
+    } else if amb_idc(c) {
+      s := i
+      e := manifest_ident_end(blk, i, blk.len)
+      word := str_at(base + s, e - s)
+      q := manifest_skip_trivia(blk, e, blk.len)
+      if word == "Lib" and q < blk.len and bytes(blk)[q] == 40 {
+        ce := manifest_call_end(blk, q, blk.len)
+        rec := str_at(base + s, ce - s)
+        lwi := mf_find_word(rec, 0, "link")
+        if lwi >= 0 and mf_token(rec, usize(lwi), 4) == "LinkMode.dynamic" {
+          nwi := mf_find_word(rec, 0, "name")
+          if nwi >= 0 {
+            nm := mf_quoted(rec, usize(nwi), 4)
+            if nm.len > 0 {
+              rt::push_str(out, nm)
+              rt::push_byte(out, 10)
+            }
+          }
+        }
+        i = ce
+      } else {
+        i = e
+      }
+    } else {
+      i += 1
+    }
+  }
+  return sort_path_lines(a, str_at(out.data, out.len))
+}
+
 ## Resolve the selector before any source parsing. An unknown target is a located Config error, never a
 ## silent fallback to the first record. Unnamed targets retain the stable `default` artifact component.
 manifest_target_selection_resolve := fn(in out a : rt::Arena, pkg_al : str) -> usize {
@@ -2863,6 +2990,90 @@ manifest_has_package := fn(in out a : rt::Arena, pkg_al : str) -> bool {
   mc := cstr(a, pkg_al)
   mt := read_proc(a, mc, 262144)
   return manifest_package_bounds(mt)
+}
+
+## The source binding immediately before the manifest's Package constructor is the artifact base when
+## Target.output is omitted (TOOL-11). Keep this scanner structural and local to the plan surface; the
+## existing build path retains its historical explicit-output default until its own naming slice.
+manifest_package_binding := fn(in out a : rt::Arena, pkg_al : str) -> str {
+  mc := cstr(a, pkg_al)
+  mtext := read_proc(a, mc, 262144)
+  base := unchecked bitcast(usize, mtext.ptr)
+  mut i := 0
+  while i < mtext.len {
+    c := bytes(mtext)[i]
+    if c == 35 {
+      i = manifest_skip_trivia(mtext, i, mtext.len)
+    } else if c == 34 {
+      i = manifest_skip_string(mtext, i, mtext.len)
+    } else if amb_idc(c) {
+      s := i
+      e := manifest_ident_end(mtext, i, mtext.len)
+      word := str_at(base + s, e - s)
+      q := manifest_skip_trivia(mtext, e, mtext.len)
+      if word == "Package" and q < mtext.len and bytes(mtext)[q] == 40 {
+        mut op := s
+        while op > 0 and manifest_space(bytes(mtext)[op - 1]) { op -= 1 }
+        if op > 0 and bytes(mtext)[op - 1] == 61 {
+          op -= 1
+          while op > 0 and manifest_space(bytes(mtext)[op - 1]) { op -= 1 }
+          if op > 0 and bytes(mtext)[op - 1] == 58 {
+            op -= 1
+            mut name_end := op
+            while name_end > 0 and manifest_space(bytes(mtext)[name_end - 1]) { name_end -= 1 }
+            mut name_start := name_end
+            while name_start > 0 and amb_idc(bytes(mtext)[name_start - 1]) { name_start -= 1 }
+            if name_start < name_end { return str_at(base + name_start, name_end - name_start) }
+          }
+        }
+      }
+      i = e
+    } else {
+      i += 1
+    }
+  }
+  str_at(base, 0)
+}
+
+manifest_plan_explicit_output := fn(in out a : rt::Arena, pkg_al : str) -> str {
+  rec := manifest_target_record(a, pkg_al)
+  wi := mf_find_word(rec, 0, "output")
+  if wi < 0 { return "" }
+  return mf_quoted(rec, usize(wi), 6)
+}
+
+## The v1 artifact filename derived from the manifest binding, Target.kind and the selected container.
+## Explicit output is already validated by manifest_output_reject and is therefore returned verbatim.
+manifest_plan_artifact_name := fn(in out a : rt::Arena, pkg_al : str) -> str {
+  explicit := manifest_plan_explicit_output(a, pkg_al)
+  if explicit.len > 0 { return explicit }
+  kind := manifest_target_kind(a, pkg_al)
+  if kind == "source" { return "" }
+  mut base := manifest_package_binding(a, pkg_al)
+  if base.len == 0 { base = file_stem(pkg_al) }
+  if base.len == 0 { base = "a.out" }
+  container := manifest_target_projection(a, pkg_al, "container")
+  if kind == "executable" {
+    if container == "pe" { return cat2(a, base, ".exe") }
+    if container == "com" { return cat2(a, base, ".com") }
+    return base
+  }
+  if kind == "static_lib" {
+    if container == "pe" { return cat2(a, base, ".lib") }
+    pref := cat2(a, "lib", base)
+    return cat2(a, pref, ".a")
+  }
+  if kind == "shared_lib" {
+    if container == "pe" { return cat2(a, base, ".dll") }
+    if container == "macho" { pref0 := cat2(a, "lib", base) ; return cat2(a, pref0, ".dylib") }
+    pref1 := cat2(a, "lib", base)
+    return cat2(a, pref1, ".so")
+  }
+  if kind == "object" {
+    if container == "pe" { return cat2(a, base, ".obj") }
+    return cat2(a, base, ".o")
+  }
+  base
 }
 
 ## The selected target's `output` artifact file name (Manifest appendix §3.1), or "a.out" when
@@ -4174,6 +4385,26 @@ cli_first_input := fn(cmd : str, fi : usize, n : usize) -> str {
   ""
 }
 
+## `plan` has no code-generation pass that would otherwise open bare inputs. Validate every listed
+## source before writing a plan, so a typo cannot yield a plausible artifact description for a file that
+## does not exist. This remains an invocation-level Config diagnostic because a bare file has no
+## manifest span to point at.
+plan_bare_inputs_reject := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) -> usize {
+  mut i := fi
+  while i < n {
+    x := arg_at(cmd, i)
+    if x == "--release" { i += 1 }
+    else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
+    else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
+    else if x == "--target-dir" or x == "--target" { if i + 1 < n { i += 2 } else { i += 1 } }
+    else {
+      if path_exists(a, x) == false { return cli_config_diag(a, "the input file does not exist") }
+      i += 1
+    }
+  }
+  0
+}
+
 single_path_list := fn(in out a : rt::Arena, path : str) -> str {
   mut b := rt::strbuf(a, path.len + 8)
   rt::push_str(b, path)
@@ -4207,6 +4438,124 @@ bare_target_artifact := fn(in out a : rt::Arena, root_file : str, profile : str)
   stem := file_stem(root_file)
   slash := cat2(a, profpath, "/")
   cat2(a, slash, stem)
+}
+
+plan_push_meta := fn(in out b : rt::StrBuf, key : str, value : str) {
+  rt::push_str(b, "meta")
+  rt::push_byte(b, 9)
+  rt::push_str(b, key)
+  rt::push_byte(b, 9)
+  rt::push_str(b, value)
+  rt::push_byte(b, 10)
+}
+
+plan_push_artifact := fn(in out b : rt::StrBuf, target_name : str, profile : str, kind : str, path : str, install : str) {
+  rt::push_str(b, "artifact")
+  rt::push_byte(b, 9)
+  rt::push_str(b, target_name)
+  rt::push_byte(b, 9)
+  rt::push_str(b, profile)
+  rt::push_byte(b, 9)
+  rt::push_str(b, kind)
+  rt::push_byte(b, 9)
+  rt::push_str(b, path)
+  rt::push_byte(b, 9)
+  rt::push_str(b, install)
+  rt::push_byte(b, 10)
+}
+
+plan_push_dylib := fn(in out b : rt::StrBuf, target_name : str, name : str) {
+  rt::push_str(b, "dylib")
+  rt::push_byte(b, 9)
+  rt::push_str(b, target_name)
+  rt::push_byte(b, 9)
+  rt::push_str(b, name)
+  rt::push_byte(b, 10)
+}
+
+## Emit one selected target's deterministic TOOL-20 plan. `plan` deliberately stops before the first
+## code-generation call: `build_paths` has already resolved the package graph, while this function only
+## derives records and writes plan.tsv. The target directory helper may create the destination folders,
+## but no `.s`, `.o`, executable or compiler cache is produced by this command.
+write_build_plan := fn(in out a : rt::Arena, pkg_al : str, root_file : str, is_pkg : bool, profile : str) -> usize {
+  mut target_name := ""
+  mut package_version := ""
+  mut kind := "executable"
+  mut arch := "x86_64"
+  mut os := "linux"
+  mut env := "gnu"
+  mut container := "elf"
+  mut hermetic := "yes"
+  mut artifact_name := ""
+  mut plan_path := ""
+  if is_pkg {
+    rec := manifest_target_record(a, pkg_al)
+    nwi := mf_find_word(rec, 0, "name")
+    if nwi >= 0 { target_name = mf_quoted(rec, usize(nwi), 4) }
+    package_version = manifest_field(a, pkg_al, "version")
+    kind = manifest_target_kind(a, pkg_al)
+    arch = manifest_target_projection(a, pkg_al, "arch")
+    os = manifest_target_projection(a, pkg_al, "os")
+    env = manifest_target_projection(a, pkg_al, "env")
+    container = manifest_target_projection(a, pkg_al, "container")
+    if manifest_any_dynamic(a, pkg_al) { hermetic = "no" }
+    artifact_name = manifest_plan_artifact_name(a, pkg_al)
+    probe := manifest_target_artifact(a, pkg_al, "", profile)
+    pdir := dir_of(probe)
+    ps := cat2(a, pdir, "/")
+    plan_path = cat2(a, ps, "plan.tsv")
+  } else {
+    if root_file.len == 0 { return cli_config_diag(a, "the bare file list is empty") }
+    artifact_name = file_stem(root_file)
+    probe0 := bare_target_artifact(a, root_file, profile)
+    pdir0 := dir_of(probe0)
+    ps0 := cat2(a, pdir0, "/")
+    plan_path = cat2(a, ps0, "plan.tsv")
+  }
+  mut machine := "Linux"
+  if os == "windows" { machine = "Windows" }
+  else if os == "macos" { machine = "Darwin" }
+  else if os == "freebsd" { machine = "FreeBSD" }
+  mut plan := rt::strbuf(a, 524288)
+  plan_push_meta(plan, "arch", arch)
+  plan_push_meta(plan, "container", container)
+  plan_push_meta(plan, "env", env)
+  plan_push_meta(plan, "hermetic", hermetic)
+  plan_push_meta(plan, "machine", machine)
+  plan_push_meta(plan, "os", os)
+  plan_push_meta(plan, "package-version", package_version)
+  plan_push_meta(plan, "plan-version", "1")
+  plan_push_meta(plan, "profile", profile)
+  plan_push_meta(plan, "toolchain", "as,ld")
+  if kind != "source" {
+    rel0 := cat2(a, profile, "/")
+    rel := cat2(a, rel0, artifact_name)
+    mut install := ""
+    if kind == "executable" { install = cat2(a, "bin/", artifact_name) }
+    else if kind == "static_lib" or kind == "shared_lib" { install = cat2(a, "lib/", artifact_name) }
+    plan_push_artifact(plan, target_name, profile, kind, rel, install)
+  }
+  if is_pkg and kind != "source" {
+    dyns := manifest_dynamic_lib_names(a, pkg_al)
+    mut dyn_seen := rt::strbuf(a, dyns.len + 16)
+    mut i := 0
+    while i < dyns.len {
+      mut e := i
+      while e < dyns.len and bytes(dyns)[e] != 10 { e += 1 }
+      if e > i {
+        nm := str_at(unchecked bitcast(usize, dyns.ptr) + i, e - i)
+        if line_in_set(dyn_seen, nm) == false {
+          rt::push_str(dyn_seen, nm)
+          rt::push_byte(dyn_seen, 10)
+          plan_push_dylib(plan, target_name, nm)
+        }
+      }
+      i = e + 1
+    }
+  }
+  w := rt::write_file(cstr(a, plan_path), plan.data, plan.len)
+  if w != 0 { tool_error("alatyr: cannot write plan.tsv"); return 10 }
+  0
 }
 
 ## Append `extra` to the cmdline blob `cmd` as ONE more NUL-terminated argument field, returning the
@@ -4265,7 +4614,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   mut n := arg_count(cmd)
   ## modes: 0 = emit GAS to stdout; 1 = build to `<out>` (`-o`); 2 = build to a temp exe + run it;
   ## 3 = check (type-check only); 4 = new (scaffold a pkg); 5 = test (build a @test runner + run it);
-  ## 6 = build (manifest-driven: artifact → `<target_dir>/<output>`, the spec `alatyr build`)
+  ## 6 = build (manifest-driven: artifact → `<target_dir>/<output>`, the spec `alatyr build`);
+  ## 12 = plan (manifest configuration/resolution only, deterministic plan.tsv)
   mut mode := 0
   mut oi := 0
   mut fi := 1
@@ -4279,6 +4629,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     if a1 == "new" { mode = 4; fi = 2 }
     if a1 == "test" { mode = 5; fi = 2 }
     if a1 == "build" { mode = 6; fi = 2 }
+    if a1 == "plan" { mode = 12; fi = 2 }
     if a1 == "wat" { mode = 7; fi = 2 }
     if a1 == "aarch64" { mode = 8; fi = 2 }
     if a1 == "riscv64" { mode = 9; fi = 2 }
@@ -4410,7 +4761,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       else { scanning_test_opts = false }
     }
   }
-  if mode == 2 or mode == 3 or mode == 5 or mode == 6 {
+  if mode == 2 or mode == 3 or mode == 5 or mode == 6 or mode == 12 {
     if fi < n and arg_at(cmd, fi) == "--release" { fi = fi + 1 }
     else if fi < n and arg_at(cmd, fi) == "--profile" { fi = fi + 2 }
   }
@@ -4435,7 +4786,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## TOOL-14 ARGUMENT NORMALIZATION — resolve exactly one of: an explicit `--manifest`, the first
   ## upward-discovered package.al, or a bare file list. A file list plus a manifest is ambiguous and an
   ## empty invocation is never allowed to fall through to code generation.
-  if mode == 2 or mode == 3 or mode == 5 or mode == 6 {
+  if mode == 2 or mode == 3 or mode == 5 or mode == 6 or mode == 12 {
     if fi > path_n { return no_input_diag(a, arg_at(cmd, 1)) }
   }
   ## TOOL-5: `alatyr test <paths...> [substring]` treats a final non-source argument as a test
@@ -4495,9 +4846,13 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       ## named manifest is a package selector, while two or more `.al` paths remain a manifest-less
       ## file list and never trigger discovery.
       lone := cli_first_input(cmd, fi, path_n)
-      if ends_with(lone, "package.al") and path_exists(a, lone) {
-        pkg_arg = lone
-        is_pkg = true
+      if ends_with(lone, "package.al") {
+        if path_exists(a, lone) {
+          pkg_arg = lone
+          is_pkg = true
+        } else if mode == 12 {
+          return cli_config_diag(a, "the package manifest path does not exist")
+        }
       }
     } else if CLI_INPUT_COUNT == 0 {
       pkg_arg = discover_manifest(a)
@@ -4526,6 +4881,9 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if DEP_CONFIG_BAD { return 1 }
   if is_pkg {
     manifest_path_reject(a, pkg_arg)
+    if mode == 12 and (CLI_TARGET_SELECT_ALL or manifest_target_count(a, pkg_arg) > 1) {
+      return cli_config_diag(a, "plan supports one manifest target; multi-target plans are not supported")
+    }
     ## `--target all` is a build-only multi-artifact selection. Defer target-specific validation to
     ## the per-target child invocations below; the ordinary resolver must not interpret the reserved
     ## word as a Target.name and must not publish the first target's machine model for every build.
@@ -4540,10 +4898,25 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
         backend := manifest_target_backend(a, pkg_arg)
         if manifest_target_arch_reject(a, pkg_arg, backend) != 0 { MANIFEST_CONFIG_BAD = true }
         if MANIFEST_CONFIG_BAD == false and manifest_target_command_reject(a, pkg_arg, backend, mode) != 0 { MANIFEST_CONFIG_BAD = true }
+        if MANIFEST_CONFIG_BAD == false and mode == 12 {
+          pkind := manifest_target_kind(a, pkg_arg)
+          if pkind == "invalid" {
+            manifest_located_error(a, "config: the target's kind is invalid or unsupported", pkg_arg, "kind")
+            MANIFEST_CONFIG_BAD = true
+          }
+          if MANIFEST_CONFIG_BAD == false and manifest_plan_target_reject(a, pkg_arg) != 0 { MANIFEST_CONFIG_BAD = true }
+        }
         if MANIFEST_CONFIG_BAD == false { target_backend = backend }
       }
     }
     if MANIFEST_CONFIG_BAD { return 1 }
+  }
+  if mode == 12 and not is_pkg and CLI_TARGET_SELECT_COUNT != 0 {
+    return cli_config_diag(a, "--target requires a package manifest")
+  }
+  if mode == 12 and not is_pkg {
+    pbrc := plan_bare_inputs_reject(a, cmd, fi, path_n)
+    if pbrc != 0 { return pbrc }
   }
   if is_pkg and mode == 6 and CLI_TARGET_SELECT_ALL {
     return build_all_manifest_targets(a, pkg_arg, cmd, n)
@@ -4610,7 +4983,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if mode == 3 and not is_pkg { kset0 := driver::set_target_kind(0) }
   apaths := ambient_paths(a, paths, ldir, is_pkg)
   if apaths.len > 0 { paths = cat2(a, apaths, paths) }
-  if is_pkg and (mode == 2 or mode == 3) {
+  if is_pkg and (mode == 2 or mode == 3 or mode == 12) {
     ## Package `run` and `check` select profiles by the same CLI/default rules as build/test. `run`
     ## needs the resolved facts before lowering; `check` receives the same configuration even though
     ## its current semantic-only path does not fold values. This keeps argument routing and build input
@@ -4636,6 +5009,11 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     if mode == 3 { return driver::check_files(paths, a, lim_ceiling) }
   }
   if is_pkg and mode == 6 { entry_sym = manifest_entry(a, pkg_arg) }
+  if mode == 12 {
+    mut root_plan_file := ""
+    if not is_pkg { root_plan_file = cli_first_input(cmd, fi, path_n) }
+    return write_build_plan(a, pkg_arg, root_plan_file, is_pkg, selected_profile)
+  }
   if mode == 3 {
     ## type-check only: lex + parse + sema over the file list; no GAS emitted, no as/ld.
     return driver::check_files(paths, a, lim_ceiling)
