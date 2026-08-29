@@ -439,6 +439,100 @@ a64_param_fixed_array_len := fn(params_head : ptr(mut Param), src : ptr(u8), ns 
   r
 }
 
+## The plain word-granular STRUCT PARAM reached by `deref(p)`, or {0,0}. This is deliberately a
+## separate admission from the ordinary struct-param path: `deref(p).arr[i].field` is the one
+## pointer-derived root in issue #220, while pointer locals/aliases, globals, generic/packed/byte-tier
+## structs, and non-struct pointees remain fail-loud. The caller's ownership and mutability checks stay
+## in sema; this predicate only decides whether this backend has a closed address formula.
+a64_deref_param_word_struct_span := fn(e : ptr(Expr), params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
+  if not a64_is_deref(e) { return r }
+  inner := a64_deref_inner(e)
+  if inner == 0 { return r }
+  ns := ex_var_ns(inner)
+  nl := ex_var_nl(inner)
+  if nl == 0 { return r }
+  mut p := params_head
+  while p != 0 {
+    pm := deref(param_p(p))
+    ## `pps/ppl` is exclusive to pointer pointees here: array lengths use `pps` with `ppl == 0`,
+    ## while ordinary/default value params do not carry a non-empty pointee span.
+    if streq(src, pm.ns, pm.nl, ns, nl) and pm.pps != 0 and pm.ppl != 0 {
+      bt := base_type_name(src, pm.pps, pm.ppl)
+      if struct_decl_of(decls, src, bt.s, bt.n) >= 0 and struct_plain(decls, src, bt.s, bt.n) {
+        if std_struct_is_word_granular(decls, src, bt.s, bt.n, a) { r = CSpan(s = bt.s, n = bt.n) }
+      }
+    }
+    p = pm.next
+  }
+  r
+}
+
+## Whether a plain word-granular struct has a direct fixed array field whose element is also a plain
+## word-granular struct. This is the narrow producer needed by #220's `ptr(mut b)` fixture: an address
+## of an unrelated aggregate remains unsupported, and the later pointer-place gate still admits only
+## the direct `deref(p).array[i].field` chain.
+a64_struct_has_word_array_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
+  mut r := false
+  if struct_decl_of(decls, src, s, n) >= 0 and struct_plain(decls, src, s, n) and std_struct_is_word_granular(decls, src, s, n, a) {
+    di := struct_decl_of(decls, src, s, n)
+    d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+    mut f := d.fields_head
+    while f != 0 {
+      fd := deref(fld_p(f))
+      ft := field_type_span(decls, src, s, n, fd.ns, fd.nl, a)
+      et := a64_arrty_elem(src, ft.s, ft.n)
+      if et.n != 0 and struct_decl_of(decls, src, et.s, et.n) >= 0 and struct_plain(decls, src, et.s, et.n) {
+        if std_struct_is_word_granular(decls, src, et.s, et.n, a) { r = true }
+      }
+      f = fd.next
+    }
+  }
+  r
+}
+
+## The ELEMENT type of the one admitted pointer-derived array field `deref(p).arr`, or {0,0}.
+## Keeping this fact explicit prevents the pointer root from also opening direct `deref(p).field` or
+## whole-element aggregate copies: only a plain word-granular struct element can pass this gate.
+a64_is_deref := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) { Expr::Deref(_inner) => { r = true } _ => {} }
+  r
+}
+
+a64_deref_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
+  mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
+  match deref(e) { Expr::Deref(inner) => { r = inner } _ => {} }
+  r
+}
+
+a64_deref_array_field_elem_span := fn(e : ptr(Expr), params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
+  if not ex_is_field(e) { return r }
+  root := a64_deref_param_word_struct_span(expr_field_base(e), params_head, src, a, decls)
+  if root.n == 0 { return r }
+  ft := field_type_span(decls, src, root.s, root.n, expr_field_name_s(e), expr_field_name_l(e), a)
+  et := a64_arrty_elem(src, ft.s, ft.n)
+  if et.n != 0 and struct_decl_of(decls, src, et.s, et.n) >= 0 and struct_plain(decls, src, et.s, et.n) {
+    if std_struct_is_word_granular(decls, src, et.s, et.n, a) and a64_tyname_words(src, et.s, et.n, a, decls) > 0 { r = et }
+  }
+  r
+}
+
+## The scalar field type of a direct word-granular struct-pointer place `deref(p).field`, or {0,0}.
+## This is only the neighbouring-field support needed to verify that the array-element path does not
+## overwrite the pointee's padding/tail; it does not admit aggregate fields or any other pointer root.
+a64_deref_scalar_field_span := fn(e : ptr(Expr), params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
+  if not ex_is_field(e) { return r }
+  root := a64_deref_param_word_struct_span(expr_field_base(e), params_head, src, a, decls)
+  if root.n == 0 { return r }
+  if not struct_plain(decls, src, root.s, root.n) { return r }
+  if not std_struct_is_word_granular(decls, src, root.s, root.n, a) { return r }
+  ft := field_type_span(decls, src, root.s, root.n, expr_field_name_s(e), expr_field_name_l(e), a)
+  if ft.n != 0 and ty_is_scalar(ft.s, ft.n, decls, src) { r = ft }
+  r
+}
 
 ## GENERICS (§8 mono): the element WORD-stride of param `[ns,nl]` when it is a generic array param —
 ## declared with the bare type-param name (`a : T`) and, in the active instance, T substitutes to an
@@ -2758,7 +2852,9 @@ a64_index_elem_struct_span := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, de
   ## A bounded deep aggregate read (`xs[i].arr[j]`) has a non-Var base. Resolve only a plain,
   ## word-granular struct leaf; fixed-array PARAM roots use their Param metadata, while byte/packed/
   ## heterogeneous forms stay on old paths.
-  if r.n == 0 and (not a64_ex_is_var(bx)) and A64_BODY != 0 and (not a64_place_root_inferred_local(bx, a64_body(), src, a, decls)) {
+  mut pointer_array := false
+  if not a64_ex_is_var(bx) { if a64_deref_array_field_elem_span(bx, a64_params(), src, a, decls).n != 0 { pointer_array = true } }
+  if r.n == 0 and (not pointer_array) and (not a64_ex_is_var(bx)) and A64_BODY != 0 and (not a64_place_root_inferred_local(bx, a64_body(), src, a, decls)) {
     d := a64_place_idx_ty(bx, a64_body(), src, a, decls)
     if d.n != 0 and struct_decl_of(decls, src, d.s, d.n) >= 0 and struct_plain(decls, src, d.s, d.n) {
       if std_struct_is_word_granular(decls, src, d.s, d.n, a) { r = d }
@@ -3006,6 +3102,8 @@ a64_place_ty := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : 
     }
     return r
   }
+  droot := a64_deref_param_word_struct_span(e, a64_params(), src, a, decls)
+  if droot.n != 0 { r = droot ; return r }
   vns := ex_var_ns(e)
   vnl := ex_var_nl(e)
   if vnl == 0 { return r }
@@ -3072,6 +3170,10 @@ a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
   if ex_is_field(e) {
     fbase := expr_field_base(e)
     mut fbaseok := a64_place_ok(fbase, body_head, src, params_head, pcount, a, decls)
+    ## The pointer root is admitted only when this first field is the array being indexed by the
+    ## bounded slice. A direct `deref(p).field` must retain its old fail-loud boundary.
+    directderef := a64_is_deref(fbase)
+    if directderef and a64_deref_array_field_elem_span(e, params_head, src, a, decls).n == 0 and a64_deref_scalar_field_span(e, params_head, src, a, decls).n == 0 { fbaseok = false }
     ## Admit the parameter-root slice only when this field is the intermediate array in the bounded
     ## `xs[i].arr[j]` shape. A direct `a[i].x` field must retain its existing fail-loud behavior.
     if (not fbaseok) and ex_is_index(fbase) {
@@ -3091,6 +3193,10 @@ a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
       }
     }
     if not fbaseok { return r }
+    if directderef and (a64_deref_array_field_elem_span(e, params_head, src, a, decls).n != 0 or a64_deref_scalar_field_span(e, params_head, src, a, decls).n != 0) {
+      r = true
+      return r
+    }
     bt := a64_place_ty(fbase, body_head, src, a, decls)
     if bt.n == 0 { return r }
     if struct_decl_of(decls, src, bt.s, bt.n) < 0 { return r }
@@ -3104,6 +3210,8 @@ a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
     if a64_place_idx_ok(ex_index_base(e), body_head, src, params_head, pcount, a, decls) { r = true }
     return r
   }
+  droot := a64_deref_param_word_struct_span(e, params_head, src, a, decls)
+  if droot.n != 0 { r = true ; return r }
   vns := ex_var_ns(e)
   vnl := ex_var_nl(e)
   if vnl == 0 { return r }
@@ -3179,6 +3287,7 @@ emit_a64_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt:
 emit_a64_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
   isf := ex_is_field(e)
   isi := ex_is_index(e)
+  mut isd := false
   if isf {
     fbase := expr_field_base(e)
     bt := a64_place_ty(fbase, body_head, src, a, decls)
@@ -3191,6 +3300,14 @@ emit_a64_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
     emit_a64_place_idx_addr(ex_index_base(e), ex_index_idx(e), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   }
   if (not isf) and (not isi) {
+    droot := a64_deref_param_word_struct_span(e, params_head, src, a, decls)
+    if droot.n != 0 {
+      innerD := a64_deref_inner(e)
+      pidxD := param_find(params_head, src, ex_var_ns(innerD), ex_var_nl(innerD), a)
+      if pidxD >= 0 { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, 16 + pidxD * 8) ; push_str(sb, "]\n") ; isd = true }
+    }
+  }
+  if (not isf) and (not isi) and (not isd) {
     vns := ex_var_ns(e)
     vnl := ex_var_nl(e)
     pidx := param_find(params_head, src, vns, vnl, a)
@@ -4456,10 +4573,19 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       if pidx >= 0 { voff = 16 + pidx * 8 }
       useframe := inl != 0 and (not isagg) and ((pidx >= 0) or (voff >= 0 and (not isglob)))
       useglob := inl != 0 and (not isagg) and (not useframe) and isglob
+      mut usewordagg := false
+      if isstruct and voff >= 0 {
+        lts := a64_local_struct_ns(body_head, src, ins, inl, a)
+        ltn := a64_local_struct_nl(body_head, src, ins, inl, a)
+        if a64_struct_has_word_array_field(decls, src, lts, ltn, a) {
+          push_str(sb, "  add x0, x29, #") ; push_int(sb, voff) ; push_str(sb, "\n")
+          usewordagg = true
+        }
+      }
       gname := str_at((src + ins), inl)
       if useframe { push_str(sb, "  add x0, x29, #") ; push_int(sb, voff) ; push_str(sb, "\n") }
       if useglob { push_str(sb, "  adrp x0, ") ; push_str(sb, gname) ; push_str(sb, "\n  add x0, x0, :lo12:") ; push_str(sb, gname) ; push_str(sb, "\n") }
-      if (not deepaddr) and (not useframe) and (not useglob) { push_str(sb, "  brk #0 // unsupported addr-of\n") }
+      if (not deepaddr) and (not useframe) and (not useglob) and (not usewordagg) { push_str(sb, "  brk #0 // unsupported addr-of\n") }
     }
     ## `deref(<scalar ptr>)` — LOAD one word through the pointer. The pointer value (a frame slot holding
     ## an address, or `ptr(x)` inline) → x0, then `ldr x0, [x0]`. SCALAR only: a struct-through-pointer
