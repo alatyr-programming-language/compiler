@@ -782,6 +782,64 @@ run_pkg_exit() { # package dir, artifact stem, want-exit, [want symbol ...]
   rm -rf "$p/target"
 }
 
+# Tooling §4 / Modules §6.1, §6.3 — a package entry is a declaration path, not an arbitrary linker
+# argument. The negative package must fail in the driver's Codegen pre-emission check (with no target
+# directory and therefore no assembler/linker artifacts); `check` remains semantic-only. The positive
+# package proves that the same qualified path resolves through an exact `@export` symbol and reaches
+# the intended entry in both `run` and the retained build artifact.
+run_tool12_entry_resolution() {
+  local root="$ROOT/test/package/tool12_entry_resolution"
+  local bad="$root/negative" good="$root/positive"
+  local bad_out bad_rc good_out good_rc artifact_rc syms
+  rm -rf "$bad/target" "$good/target"
+
+  bad_out=$(cd "$bad" && "$CC" check package.al 2>&1); bad_rc=$?
+  if [ "$bad_rc" = 0 ] && [ -z "$bad_out" ] && [ ! -e "$bad/target" ]; then
+    echo "ok   tool12_entry_resolution: unresolved entry check is semantic-only and leaves no artifact"
+  else
+    echo "FAIL tool12_entry_resolution: check rc=$bad_rc out=$bad_out or target/ exists"; fail=1
+  fi
+
+  bad_out=$(cd "$bad" && "$CC" build package.al 2>&1); bad_rc=$?
+  if [ "$bad_rc" = 1 ] \
+    && printf '%s' "$bad_out" | grep -qF 'alatyr: build: codegen: package entry does not resolve to exactly one package declaration at line 11 in package' \
+    && [ ! -e "$bad/target" ]; then
+    echo "ok   tool12_entry_resolution: unresolved entry fails located Codegen before tools and artifacts"
+  else
+    echo "FAIL tool12_entry_resolution: build rc=$bad_rc out=$bad_out or target/ exists"; fail=1
+  fi
+
+  good_out=$(cd "$good" && "$CC" check package.al 2>&1); good_rc=$?
+  if [ "$good_rc" = 0 ] && [ -z "$good_out" ] && [ ! -e "$good/target" ]; then
+    echo "ok   tool12_entry_resolution: exact-export control check 0 with no artifact"
+  else
+    echo "FAIL tool12_entry_resolution: control check rc=$good_rc out=$good_out"; fail=1
+  fi
+
+  good_out=$(cd "$good" && "$CC" run package.al 2>&1); good_rc=$?
+  if [ "$good_rc" = 42 ] && [ -z "$good_out" ]; then
+    echo "ok   tool12_entry_resolution: exact-export control run 42"
+  else
+    echo "FAIL tool12_entry_resolution: control run rc=$good_rc out=$good_out"; fail=1
+  fi
+
+  rm -rf "$good/target"
+  good_out=$(cd "$good" && "$CC" build package.al 2>&1); good_rc=$?
+  artifact="$good/target/debug/tool12-entry-exact"
+  if [ "$good_rc" = 0 ] && [ -x "$artifact" ]; then
+    "$artifact" >/dev/null 2>&1; artifact_rc=$?
+    syms=$(nm "$artifact" 2>/dev/null)
+    if [ "$artifact_rc" = 42 ] && printf '%s\n' "$syms" | grep -qE ' [Tt] tool12_exact_entry$'; then
+      echo "ok   tool12_entry_resolution: built exact-export control runs 42 and exports the selected symbol"
+    else
+      echo "FAIL tool12_entry_resolution: artifact rc=$artifact_rc or exact export missing"; fail=1
+    fi
+  else
+    echo "FAIL tool12_entry_resolution: control build rc=$good_rc out=$good_out or artifact missing"; fail=1
+  fi
+  rm -rf "$bad/target" "$good/target"
+}
+
 # TOOL-15 / MOD-14 — the package manifest's private Package handle is visible only to the
 # consuming package.  Keep this registration package-shaped: check, run and build all go through
 # the same manifest path, while the negative rows compare the exact Config/Semantic diagnostics on
@@ -1097,6 +1155,7 @@ run_dep_config_diag
 run_manifest_structural_config
 run_dep_cycle_diag
 run_dep_spelling_identity
+run_tool12_entry_resolution
 run_check_build_parity
 run_test_entry_file tool7_entry_start "program with its own entry"
 run_test_entry_file tool7_entry_main_reached "a test reaches main"
