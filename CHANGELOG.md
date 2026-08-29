@@ -31,6 +31,8 @@ how this repository proves itself, not part of what it ships.
   idempotent.
 - Ordinary source can no longer construct manifest-only `Package` or `Target` values; `check` and
   `build` now reject them with a located diagnostic.
+- Fully comptime-known checked overflow in a direct scalar call argument now produces a located
+  compile-time diagnostic before emission instead of compiling and trapping at runtime.
 - Direct multidimensional fixed-array fields now fail loudly with a located diagnostic instead of
   compiling to a wrong value on nested indexing.
 - Unified sub-word scalar-width classification across parsing, formatting, lower layout, and WAT so

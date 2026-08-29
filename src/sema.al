@@ -25,6 +25,7 @@
 vec := alloc::vec
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_reassign) := ast
 (bnd_ns, bnd_nl, bnd_next) := ast
+ecallee_is := ast::ecallee_is
 fld_p := ast::fld_p
 param_p := ast::param_p
 arm_p := ast::arm_p
@@ -2460,6 +2461,25 @@ expr_call_args_head := fn(e : ptr(Expr)) -> usize {
     Expr::Call(cs, cl, na, ah) => { ah }
     _ => { 0 }
   }
+}
+
+## True only for an unqualified direct-name call. UFCS puts a `.` before the method name, qualified
+## calls contain `::`, and expression-callee calls are marked separately in ast.al. CT-12's call-argument
+## slice must not infer a parameter context for any of those forms: their resolution or receiver mapping
+## is outside this deliberately narrow pre-emission judgement.
+sema_direct_call_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  mut i := 0
+  while i + 1 < n {
+    if str_at((src + s + i), 2) == "::" { return false }
+    i += 1
+  }
+  mut p := s
+  while p > 0 {
+    c := str_at((src + p - 1), 1)
+    if c == " " or c == "\n" or c == "\t" or c == "\r" { p -= 1 }
+    else { return c != "." }
+  }
+  true
 }
 
 expr_call_arity := fn(e : ptr(Expr)) -> usize {
@@ -4915,6 +4935,21 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## false reject. Stepped bools (the isolated `streq` dodges the `cmp-and-fn-call` mis-lower scar).
   ecs := expr_call_callee_span(e)
   cgen := callee_is_generic(decls, upto, src, ecs.s, ecs.n)
+  ## CT-12 / Comptime §2.6 — a fully comptime-known checked guard in a direct scalar call argument
+  ## fails before emission, just as the existing binding/return sinks do. Keep the source-shape gates
+  ## here because `Expr::Call` is also the representation for UFCS, qualified and expression-callee
+  ## calls; those forms have no unambiguous direct parameter context in this bounded slice.
+  if ecs.n != 0 and not cgen and sema_direct_call_name(src, ecs.s, ecs.n) and not ecallee_is(ecs.s) {
+    mut ctg := expr_call_args_head(e)
+    mut ctp := 0
+    while ctg != 0 {
+      cta := deref(arg_p(ctg))
+      cte := call_arg_ct_guard_err(decls, upto, src, ecs.s, ecs.n, ctp, cta.e)
+      if cte != 0 { mark_failed(locals, cte) }
+      ctp += 1
+      ctg = cta.next
+    }
+  }
   ## Types §4.6 — reject the scalar/brand constructor shape before any consumer can read arg 0.
   ## This is shared by ordinary checking and the private `compiles` transaction; the latter snapshots
   ## the sticky diagnostic and turns the same invalid expression into `false` without emitting.
@@ -5845,6 +5880,59 @@ ct_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), name_st
   mut sp := c / 8
   if sp == 0 { sp = name_start }
   comptime_err(sp, c % 8)
+}
+
+## CT-12 CALL-ARG sink: recover a parameter type only for one unqualified, direct, non-generic,
+## non-variadic function. An aggregate/`out`/`in out` parameter is deliberately refused because its
+## parameter span is not a scalar value context; an unknown or non-integer type is refused as well.
+## The declaration scan covers the whole program because use-before-declaration is legal; uniqueness
+## remains the guard against consulting an unresolved overload set. The caller supplies the exact
+## argument expression, so `ct_guard_err` retains the arithmetic site and its existing `unchecked` /
+## runtime-dependent behavior. This is a judgement helper, never an arity or overload resolver.
+call_arg_ct_param_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, pidx : usize) -> VSpan {
+  mut out := VSpan(s = 0, n = 0)
+  mut hits : usize = 0
+  mut blocked := false
+  cnt := rt::vec_len(deref(decls))
+  th := sema_name_hash(src, s, n)
+  mut jc := sni_lo(cnt, th)
+  jce := sni_hi(cnt, th)
+  mut i := 0
+  while jc < jce {
+    i = sni_at(cnt, jc)
+    jc += 1
+    if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
+      d := deref(decl_get(decls, i))
+      if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) {
+        hits += 1
+        if d.is_generic or decl_is_variadic(d, src) or decl_is_slice_variadic(d) { blocked = true }
+        mut pp := d.params_head
+        mut k : usize = 0
+        while pp != 0 {
+          pm := deref(param_p(pp))
+          if k == pidx {
+            if pm.pmode == 0 { out = VSpan(s = pm.ts, n = pm.tl) }
+            else { blocked = true }
+          }
+          k += 1
+          pp = pm.next
+        }
+      }
+    }
+  }
+  if hits != 1 or blocked { return VSpan(s = 0, n = 0) }
+  out
+}
+
+## Apply the CT-12 call-argument boundary after the caller has established that this is an ordinary
+## direct call. `resolve_ty` is used only as an integer-sink gate; `ct_guard_err` remains the single
+## checked-constant evaluator and diagnostic encoder shared by bindings and returns.
+call_arg_ct_guard_err := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, pidx : usize, e : ptr(Expr)) -> CheckErr {
+  psp := call_arg_ct_param_span(decls, upto, src, s, n, pidx)
+  if psp.n == 0 { return 0 }
+  pt := resolve_ty(src, psp.s, psp.n, decls, upto)
+  if pt.tag != 1 { return 0 }
+  ct_guard_err(src, psp.s, psp.n, e, 0, decls, upto)
 }
 
 ## TYP-6 / Declarations §3.1 — an ANNOTATED binding's initializer MUST be **assignable** to the
