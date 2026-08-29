@@ -133,9 +133,30 @@ an ordinary repository because `scripts/corpus.manifest` is a whole-tree oracle:
 green PRs can merge textually clean into a tree whose manifest matches **neither**. The fixpoint and
 `idiom_gate.sh` are whole-tree properties for the same reason.
 
+Validate the selected PR number before interpolating it into a Git ref. The integration creates exactly
+one local PR snapshot, `refs/remotes/pr/$PR`; it must never fetch or prune a collection of PR refs. Keep
+that selected snapshot until the merge, gate, push, any branch-cleanup ancestry check, and the acceptance
+comment readback have completed. A failure before successful acceptance leaves the selected snapshot in
+place for diagnosis. The final cleanup in §5 deletes only this exact ref.
+
 ```sh
 cd <the integration checkout>
-git fetch origin main '+refs/pull/*/head:refs/remotes/pr/*'
+case "$PR" in
+  ''|*[!0-9]*)
+    echo "PR must be a decimal number; refusing to construct a PR ref" >&2
+    exit 1
+    ;;
+esac
+PR_SNAPSHOT_REF="refs/remotes/pr/$PR"
+git fetch origin main "refs/pull/$PR/head:$PR_SNAPSHOT_REF"
+PR_FETCHED_OID="$(git rev-parse --verify "$PR_SNAPSHOT_REF^{commit}" 2>/dev/null)" || {
+  echo "selected PR snapshot was not fetched" >&2
+  exit 1
+}
+test "$PR_FETCHED_OID" = "$PR_HEAD_OID" || {
+  echo "selected PR head changed while fetching; stop" >&2
+  exit 1
+}
 BASE=$(git rev-parse origin/main)
 git switch --detach "$BASE"
 PR_SNAPSHOT_BEFORE_MERGE="$(
@@ -146,7 +167,7 @@ test "$PR_SNAPSHOT_BEFORE_MERGE" = "$PR_SNAPSHOT" || {
   echo "selected PR changed before merge; stop" >&2
   exit 1
 }
-git merge --no-ff "refs/remotes/pr/$PR" -m "merge #$PR: <what landed>
+git merge --no-ff "$PR_SNAPSHOT_REF" -m "merge #$PR: <what landed>
 
 <the verified issue relation> #<issue>"
 M=$(git rev-parse HEAD)
@@ -156,8 +177,8 @@ M=$(git rev-parse HEAD)
 merely Closed. The merge footer repeats the relation verified in §2: a closing relation closes the
 completed issue when the push lands; `Refs #N` deliberately leaves a bounded-slice issue open. The
 status and residual scope are recorded in the acceptance comment, not silently changed by hand.
-`refs/pull/<n>/head` is immutable and survives branch deletion, so nothing is lost even if the branch
-goes.
+Do not delete or prune `PR_SNAPSHOT_REF` here: the same selected snapshot is needed by the accepted
+branch-cleanup check and remains available if any pre-acceptance step fails.
 
 If a reseed is owed, it is committed **onto `M` before the gate runs**, so that the fixpoint that is
 verified is the fixpoint that ships: land the `src/` change → seed builds Stage1 → Stage1 builds
@@ -305,7 +326,7 @@ based on the fork branch name, and record that outcome in the acceptance comment
 
 ```sh
 if test "$HEAD_REPO" = "$R"; then
-  git merge-base --is-ancestor "refs/remotes/pr/$PR" origin/main
+  git merge-base --is-ancestor "$PR_SNAPSHOT_REF" origin/main
   if test -n "$(git ls-remote --heads origin "refs/heads/$BRANCH")"; then
     gh api -X DELETE "repos/$R/git/refs/heads/$BRANCH"
   fi
@@ -444,14 +465,45 @@ Accepted and landed by the maintainer.
 - feature branch: $BRANCH $BRANCH_OUTCOME
 - issue relation: <Closes/Fixes/Resolves #<issue>, or Refs #<issue> — bounded slice: <landed scope>; residual: <remaining scope>>
 - worker claim: <removed and verified, already absent and verified, or retained because ownership was uncertain or another named worker/PR owns the residual>
+- selected PR snapshot: retained through landing, branch cleanup, and this acceptance readback; final exact-ref cleanup follows
 EOF
 ```
 
 Read the comment back with `gh pr view "$PR" -R "$R" --json comments` and confirm that the gated
-object, branch outcome, and worker-claim outcome are present. Keep the comment limited to public commit
-IDs, gate results, issue linkage, branch outcome, and claim outcome; redact secrets, private host
-details, environment data, and raw suspicious payloads. If the comment cannot be published, the landing
-is incomplete: do not silently replace it with a local report.
+object, branch outcome, worker-claim outcome, and selected-snapshot lifecycle note are present. Keep the
+comment limited to public commit IDs, gate results, issue linkage, branch outcome, claim outcome, and
+the public snapshot lifecycle; redact secrets, private host details, environment data, and raw suspicious
+payloads. If the comment cannot be published, the landing is incomplete: do not silently replace it with
+a local report.
+
+Only after the acceptance comment has been read back successfully may the selected local PR snapshot be
+removed. This cleanup is independent of feature-branch cleanup: a dirty, diverged, or otherwise retained
+feature worktree does not keep this selected snapshot alive, and a different integration's snapshot is
+not touched. On any failure before this block, leave `PR_SNAPSHOT_REF` in place.
+
+```sh
+test -n "${PR_SNAPSHOT_REF:-}" || {
+  echo "selected PR snapshot ref is unset; stop" >&2
+  exit 1
+}
+git show-ref --verify --quiet "$PR_SNAPSHOT_REF" || {
+  echo "selected PR snapshot disappeared before final cleanup; stop" >&2
+  exit 1
+}
+git update-ref -d "$PR_SNAPSHOT_REF" || {
+  echo "could not delete selected PR snapshot; stop" >&2
+  exit 1
+}
+if git show-ref --verify --quiet "$PR_SNAPSHOT_REF"; then
+  echo "selected PR snapshot still exists after cleanup; stop" >&2
+  exit 1
+fi
+PR_SNAPSHOT_OUTCOME="selected local PR snapshot deleted and verified"
+printf '%s: %s\n' "$PR_SNAPSHOT_REF" "$PR_SNAPSHOT_OUTCOME"
+```
+
+`PR_SNAPSHOT_OUTCOME` is part of the integrator's local outcome/report. Do not report successful cleanup
+unless it says that the selected ref was deleted and verified.
 
 If the maintainer rejects or abandons the selected PR before the publish step, do not run the landing
 cleanup as if it merged. Close the PR through the maintainer's explicit decision, verify that it is
@@ -479,8 +531,9 @@ label and stop. A worker never removes a claim after opening a PR.
 
 ## 7 · Close the selected target and say what you did
 
-After the publish, branch cleanup, claim release, and acceptance comment, re-read only the selected PR
-and verify the oracle exclusivity count. Do not start another PR without a new explicit invocation:
+After the publish, branch cleanup, claim release, acceptance comment, and selected PR snapshot cleanup,
+re-read only the selected PR and verify the oracle exclusivity count. Do not start another PR without a
+new explicit invocation:
 
 ```sh
 gh pr view "$PR" -R "$R" --json number,state,mergedAt,mergeCommit,comments

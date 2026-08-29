@@ -36,6 +36,8 @@
 # `--push` on that first pre-oracle run. An unexplained non-oracle failure remains a refusal.
 #
 # Run it from the integration checkout, inside `nix develop` (or it re-enters via `nix develop -c`).
+# This helper fetches one selected PR snapshot and deliberately leaves it for alatyr-integrate §5;
+# that procedure deletes the exact snapshot only after successful acceptance.
 set -u
 
 SELF="$0"
@@ -81,17 +83,21 @@ case "$RELATION" in
   *)        RELATION=; ISSUE=; ISSUE_LINK= ;;
 esac
 HEAD_LABEL="$(gh pr view "$PR" -R "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)"
+HEAD_OID="$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
 IS_FORK="$(gh pr view "$PR" -R "$REPO" --json headRepositoryOwner \
             --jq 'if .headRepositoryOwner.login == "alatyr-programming-language" then "no" else "yes" end' 2>/dev/null || echo unknown)"
 echo "  PR #$PR  head=${HEAD_LABEL:-?}  issue=${ISSUE_LINK:-<none declared>}  fork=$IS_FORK"
 [ -n "$ISSUE_LINK" ] || echo "  NOTE: no valid issue relation in the PR — verify the issue linkage before landing."
 [ "$RELATION" = refs ] && echo "  NOTE: bounded slice — the referenced issue remains open; record landed and residual scope in acceptance."
+[ -n "$HEAD_OID" ] || die "could not resolve the selected PR head"
 
 say "PHASE 1 — fetch the PR head"
-git fetch --quiet origin main "+refs/pull/*/head:refs/remotes/pr/*" || die "fetch failed"
-git rev-parse --verify -q "refs/remotes/pr/$PR" >/dev/null || die "no refs/pull/$PR/head on origin"
+PR_REF="refs/remotes/pr/$PR"
+git fetch --quiet origin main "refs/pull/$PR/head:$PR_REF" || die "fetch failed"
+git rev-parse --verify -q "$PR_REF" >/dev/null || die "no selected PR head on origin"
 BASE="$(git rev-parse origin/main)"
-HEAD_SHA="$(git rev-parse "refs/remotes/pr/$PR")"
+HEAD_SHA="$(git rev-parse "$PR_REF")"
+[ "$HEAD_SHA" = "$HEAD_OID" ] || die "selected PR head changed while fetching"
 echo "  base=$BASE"
 echo "  head=$HEAD_SHA"
 
@@ -157,7 +163,7 @@ msg="merge #$PR: ${HEAD_LABEL:-pr-$PR}"
 [ -n "$ISSUE_LINK" ] && msg="$msg
 
 $ISSUE_LINK"
-git merge --no-ff --no-verify -m "$msg" "refs/remotes/pr/$PR" >/dev/null 2>&1 || {
+git merge --no-ff --no-verify -m "$msg" "$PR_REF" >/dev/null 2>&1 || {
   git merge --abort 2>/dev/null
   git switch --quiet - 2>/dev/null
   verdict "LAND REFUSED (the merge conflicts) — ask for a rebase onto $BASE"
@@ -203,10 +209,9 @@ after $BASE was read, and then this PR must be re-merged and re-gated.
 
     git push origin $M:refs/heads/main --force-with-lease=refs/heads/main:$BASE
 
-Afterwards, as a SEPARATE command with its own precondition — never chained to the push:
-
-    git merge-base --is-ancestor refs/remotes/pr/$PR origin/main && \\
-      gh api -X DELETE repos/$REPO/git/refs/heads/${HEAD_LABEL:-<branch>}
+Afterwards, follow alatyr-integrate §5. It re-reads the branch and performs the separately
+preconditioned remote-branch deletion, claim release, acceptance readback, selected snapshot cleanup,
+and conservative local cleanup. Do not copy a branch-deletion command assembled from PR metadata.
 EOF
 
 if [ "$DO_PUSH" = 1 ]; then
@@ -216,8 +221,8 @@ if [ "$DO_PUSH" = 1 ]; then
     exit 1
   }
   verdict "LANDED — main is now $M"
-  echo "The remote branch deletion is deliberately NOT chained to this push. Run it yourself, above."
-  echo "After remote deletion, follow alatyr-integrate §5 to inspect and clean the matching local"
-  echo "feature worktree and branch; retain dirty, diverged, or ambiguous local state."
+  echo "The selected PR snapshot $PR_REF is deliberately retained after this push."
+  echo "Follow alatyr-integrate §5 for feature-branch/local worktree cleanup, claim release,"
+  echo "acceptance readback, and exact snapshot cleanup; retain dirty, diverged, or ambiguous state."
 fi
 exit 0
