@@ -3612,6 +3612,121 @@ fmt_agg_body_is_plain := fn(src : ptr(u8), open : usize, blen : usize) -> bool {
   r
 }
 
+## Does a plain aggregate body contain a nested fixed-array type (`[[T; N]; M]`)? The parser's
+## FieldDecl recovery consumes the first `[` as the outer type, then assumes the next token is the
+## element type. On this shape that token is another `[`, so it records only `[[T; N]` and continues
+## parsing the remaining `; M]` as bogus fields. This probe is deliberately source-only and is used
+## only for a plain body: attributes, defaults, and comments still take the verbatim safety path above.
+fmt_struct_body_has_nested_array := fn(src : ptr(u8), open : usize, blen : usize) -> bool {
+  mut i := open + 1
+  end := open + blen
+  while i < end {
+    b := bytes(str_at((src + i), 1))[0]
+    if b == 91 {                                                               ## '['
+      mut j := i + 1
+      while j < end {
+        c := bytes(str_at((src + j), 1))[0]
+        if c == 32 or c == 9 or c == 10 or c == 13 { j += 1 } else { break }
+      }
+      if j < end and bytes(str_at((src + j), 1))[0] == 91 { return true }       ## nested '['
+    }
+    i += 1
+  }
+  false
+}
+
+## Emit the fields of a plain struct body by scanning source. This is the narrow recovery needed for
+## nested fixed-array fields: the parser's FieldDecl list is already corrupted before fmt sees it, so
+## walking that list would invent members (`;`, `2`, `]`). The scanner tracks all type groups and stops
+## only at a depth-zero comma or the aggregate's closing `}`, preserving the complete `[[T; N]; M]`
+## span. It intentionally handles only the same plain-body subset selected by the caller; if that
+## source cannot be proven to be a field list, return false so fmt can refuse rather than guess.
+fmt_emit_struct_nested_fields := fn(src : ptr(u8), open : usize, blen : usize, in out sb : rt::StrBuf) -> bool {
+  mut i := open + 1
+  end := open + blen
+  mut count : usize = 0
+  mut done := false
+  while not done {
+    mut b := bytes(str_at((src + i), 1))[0]
+    while i < end and (b == 32 or b == 9 or b == 10 or b == 13 or b == 44) {
+      i += 1
+      b = bytes(str_at((src + i), 1))[0]
+    }
+    if i >= end or b == 125 {                                                  ## '}'
+      done = true
+    } else {
+      mut ns := i
+      while i < end and fmt_is_ident_byte(bytes(str_at((src + i), 1))[0]) { i += 1 }
+      mut nl := i - ns
+      if nl == 0 { return false }
+
+      ## `mut` is a front-end marker erased from FieldDecl, just as on the legacy renderer path.
+      ## Recover it here before checking the field's colon; a field named `mut` is not a valid source
+      ## spelling, so this boundary is unambiguous.
+      mut is_mut := false
+      if str_at((src + ns), nl) == "mut" {
+        mut p := i
+        while p < end {
+          c := bytes(str_at((src + p), 1))[0]
+          if c == 32 or c == 9 or c == 10 or c == 13 { p += 1 } else { break }
+        }
+        ns = p
+        while p < end and fmt_is_ident_byte(bytes(str_at((src + p), 1))[0]) { p += 1 }
+        nl = p - ns
+        if nl == 0 { return false }
+        i = p
+        is_mut = true
+      }
+
+      b = bytes(str_at((src + i), 1))[0]
+      while i < end and (b == 32 or b == 9 or b == 10 or b == 13) {
+        i += 1
+        b = bytes(str_at((src + i), 1))[0]
+      }
+      if b != 58 { return false }                                                ## ':'
+      i += 1
+      b = bytes(str_at((src + i), 1))[0]
+      while i < end and (b == 32 or b == 9 or b == 10 or b == 13) {
+        i += 1
+        b = bytes(str_at((src + i), 1))[0]
+      }
+      ts := i
+      mut depth : usize = 0
+      mut scanning := true
+      while scanning {
+        if i >= end { return false }
+        b = bytes(str_at((src + i), 1))[0]
+        if b == 40 or b == 91 or b == 123 { depth += 1 ; i += 1 }                 ## '(['{
+        else if b == 41 or b == 93 {                                             ## ')' ']'
+          if depth == 0 { return false }
+          depth -= 1
+          i += 1
+        } else if b == 125 {                                                      ## '}'
+          if depth == 0 { scanning = false } else { depth -= 1 ; i += 1 }
+        } else if b == 44 and depth == 0 {                                        ## ','
+          scanning = false
+        } else { i += 1 }
+      }
+      mut te := i
+      while te > ts {
+        c := bytes(str_at((src + te - 1), 1))[0]
+        if c == 32 or c == 9 or c == 10 or c == 13 { te -= 1 } else { break }
+      }
+      if te <= ts { return false }
+      push_str(sb, "  ")
+      if is_mut { push_str(sb, "mut ") }
+      push_str(sb, str_at((src + ns), nl))
+      push_str(sb, " : ")
+      push_str(sb, str_at((src + ts), te - ts))
+      push_str(sb, ",\n")
+      count += 1
+      if b == 125 { done = true }                                                ## closing '}'
+      else { i += 1 }                                                            ## separator ','
+    }
+  }
+  count != 0
+}
+
 ## `Name := struct { f0 : T0, f1 : T1 }` — one field per line, from the FieldDecl list. A GENERIC
 ## struct `Name(T) := struct { … }` keeps its `(T)` type-parameter header (recovered by source-scan).
 ## The `:=`-to-`{` head (`struct` / `@packed struct` / …) and any body the FieldDecl list cannot
@@ -3649,18 +3764,28 @@ emit_fmt_struct := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::A
     return
   }
   push_str(sb, " {\n")
-  mut f := d.fields_head
-  while f != 0 {
-    fd := deref(fld_p(f))
-    push_str(sb, "  ")
-    ## the field's own `mut` marker — source-recovered, see `fmt_field_is_mut` (dropping it changes
-    ## what a `typeinfo(T).fields` derive computes, i.e. what the program returns).
-    if fmt_field_is_mut(src, fd.ns) { push_str(sb, "mut ") }
-    push_str(sb, str_at((src + fd.ns), fd.nl))
-    push_str(sb, " : ")
-    push_str(sb, str_at((src + fd.ts), fd.tl))
-    push_str(sb, ",\n")
-    f = fd.next
+  ## A nested fixed-array field is the one plain-body shape whose FieldDecl list cannot be trusted:
+  ## source-scan the complete member list so the formatter preserves the type and does not emit the
+  ## parser's trailing `;`, length, and `]` as fields. One-dimensional fields keep the established
+  ## AST-backed path byte-for-byte.
+  if blen != 0 and fmt_struct_body_has_nested_array(src, open, blen) {
+    if not fmt_emit_struct_nested_fields(src, open, blen, sb) {
+      panic("selfhost: fmt — nested fixed-array struct body did not round-trip as fields")
+    }
+  } else {
+    mut f := d.fields_head
+    while f != 0 {
+      fd := deref(fld_p(f))
+      push_str(sb, "  ")
+      ## the field's own `mut` marker — source-recovered, see `fmt_field_is_mut` (dropping it changes
+      ## what a `typeinfo(T).fields` derive computes, i.e. what the program returns).
+      if fmt_field_is_mut(src, fd.ns) { push_str(sb, "mut ") }
+      push_str(sb, str_at((src + fd.ns), fd.nl))
+      push_str(sb, " : ")
+      push_str(sb, str_at((src + fd.ts), fd.tl))
+      push_str(sb, ",\n")
+      f = fd.next
+    }
   }
   push_str(sb, "}")
   if wtl != 0 { push_str(sb, " ") ; push_str(sb, str_at((src + wts), wtl)) }
