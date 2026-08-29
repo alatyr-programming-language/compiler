@@ -29,6 +29,8 @@ how this repository proves itself, not part of what it ships.
   `mmap` requests before constructing an owning pointer.
 - `alatyr fmt` now preserves bare `comptime match` expression arms and keeps the formatted source
   idempotent.
+- Ordinary source can no longer construct manifest-only `Package` or `Target` values; `check` and
+  `build` now reject them with a located diagnostic.
 - Direct multidimensional fixed-array fields now fail loudly with a located diagnostic instead of
   compiling to a wrong value on nested indexing.
 - Unified sub-word scalar-width classification across parsing, formatting, lower layout, and WAT so

@@ -2310,6 +2310,91 @@ tool17_target_code_size_test() {
   rm -rf "$root"/*/target
 }
 
+## TOOL-17 / Tooling §2.7 — `Package` and `Target` are manifest-only structures, while the selected
+## target's published projections remain ordinary prelude data. Negative source modules must be
+## rejected identically by `check` and `build`, with no target artifact; the positive package must keep
+## `check` semantic-only and preserve its `Kind`/`CodeSize` result at runtime.
+tool17_prelude_visibility_test() {
+  root="$(_fixture_tree package)/tool17_prelude_visibility"
+  for d in negative_package negative_target; do
+    p="$root/$d"
+    rm -rf "$p/target"
+    ( cd "$p" && "$CC" check package.al ) >"$T/tool17_prelude_visibility.$d.check.out" 2>"$T/tool17_prelude_visibility.$d.check.err"
+    rc=$?
+    if [ "$d" = negative_package ]; then
+      needle='manifest-only structure Package cannot be constructed from ordinary source at line 3 in main'
+    else
+      needle='manifest-only structure Target cannot be constructed from ordinary source at line 3 in main'
+    fi
+    if [ "$rc" = 1 ] && [ ! -s "$T/tool17_prelude_visibility.$d.check.out" ] \
+      && [ ! -e "$p/target" ] && grep -qF "$needle" "$T/tool17_prelude_visibility.$d.check.err"; then
+      echo "ok   tool17_prelude_visibility/$d(check): located reject without artifact"
+    else
+      echo "FAIL tool17_prelude_visibility/$d(check): rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$T/tool17_prelude_visibility.$d.check.err" 2>/dev/null)"
+      fail=1
+    fi
+
+    rm -rf "$p/target"
+    ( cd "$p" && "$CC" build package.al ) >"$T/tool17_prelude_visibility.$d.build.out" 2>"$T/tool17_prelude_visibility.$d.build.err"
+    rc=$?
+    if [ "$rc" = 1 ] && [ ! -e "$p/target" ] \
+      && grep -qF "$needle" "$T/tool17_prelude_visibility.$d.build.err"; then
+      echo "ok   tool17_prelude_visibility/$d(build): same located reject without artifact"
+    else
+      echo "FAIL tool17_prelude_visibility/$d(build): rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$T/tool17_prelude_visibility.$d.build.err" 2>/dev/null)"
+      fail=1
+    fi
+  done
+
+  p="$root/negative_root"
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" check package.al ) >"$T/tool17_prelude_visibility.negative_root.check.out" 2>"$T/tool17_prelude_visibility.negative_root.check.err"
+  rc=$?
+  needle='manifest-only structure Target cannot be constructed from ordinary source at line 3 in package'
+  if [ "$rc" = 1 ] && [ ! -s "$T/tool17_prelude_visibility.negative_root.check.out" ] \
+    && [ ! -e "$p/target" ] && grep -qF "$needle" "$T/tool17_prelude_visibility.negative_root.check.err"; then
+    echo "ok   tool17_prelude_visibility/negative_root(check): source after manifest is rejected"
+  else
+    echo "FAIL tool17_prelude_visibility/negative_root(check): rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$T/tool17_prelude_visibility.negative_root.check.err" 2>/dev/null)"
+    fail=1
+  fi
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" build package.al ) >"$T/tool17_prelude_visibility.negative_root.build.out" 2>"$T/tool17_prelude_visibility.negative_root.build.err"
+  rc=$?
+  if [ "$rc" = 1 ] && [ ! -e "$p/target" ] \
+    && grep -qF "$needle" "$T/tool17_prelude_visibility.negative_root.build.err"; then
+    echo "ok   tool17_prelude_visibility/negative_root(build): same located reject without artifact"
+  else
+    echo "FAIL tool17_prelude_visibility/negative_root(build): rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$T/tool17_prelude_visibility.negative_root.build.err" 2>/dev/null)"
+    fail=1
+  fi
+
+  p="$root/positive"
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" check package.al ) >"$T/tool17_prelude_visibility.positive.check.out" 2>"$T/tool17_prelude_visibility.positive.check.err"
+  rc=$?
+  if [ "$rc" = 0 ] && [ ! -e "$p/target" ] && [ ! -s "$T/tool17_prelude_visibility.positive.check.err" ]; then
+    echo "ok   tool17_prelude_visibility/positive(check): projections accepted without artifact"
+  else
+    echo "FAIL tool17_prelude_visibility/positive(check): rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$T/tool17_prelude_visibility.positive.check.err" 2>/dev/null)"
+    fail=1
+  fi
+  ( cd "$p" && "$CC" build package.al ) >"$T/tool17_prelude_visibility.positive.build.out" 2>"$T/tool17_prelude_visibility.positive.build.err"
+  rc=$?
+  bin="$p/target/debug/tool17-prelude-positive"
+  if [ "$rc" = 0 ] && [ -x "$bin" ]; then
+    _e2e_exec "$bin" >/dev/null 2>&1
+    got=$?
+    if _e2e_runtime_failure "tool17_prelude_visibility/positive(build)" "$got"; then return; fi
+    if [ "$got" = 42 ]; then echo "ok   tool17_prelude_visibility/positive(build): projections preserved, artifact 42"; else echo "FAIL tool17_prelude_visibility/positive(build): exit=$got want 42"; fail=1; fi
+  else
+    echo "FAIL tool17_prelude_visibility/positive(build): rc=$rc artifact=$(test -x "$bin" && echo yes || echo no) diagnostic=$(cat "$T/tool17_prelude_visibility.positive.build.err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -rf "$root"/*/target
+}
+
 build_profile_flags_test() {
   # (1) fold bool flags + bare integer value
   pd="$T/e2e_pflags"; rm -rf "$pd"; mkdir -p "$pd/src"
@@ -3981,6 +4066,7 @@ multi_target_layout_test
 tool17_source_check_test
 tool17_target_kind_test
 tool17_target_code_size_test
+tool17_prelude_visibility_test
 ext_test package_cli_test
 ## The toolchain-spawn regression (scripts/env_size_test.sh). An environment too large for one read used
 ## to truncate mid-entry, after which `build_envp` wrote its terminating word 8 bytes PAST its reservation

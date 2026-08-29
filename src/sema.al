@@ -67,6 +67,11 @@ ambiguous_err := fn(s : usize) -> CheckErr { 4611686018427387904 + s * 4 }
 ## calls and scalar conversions so every older CheckErr range remains byte-identical.
 UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER := 5188146770730811392
 unknown_type_ctor_err := fn(s : usize) -> CheckErr { UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER + s * 4 }
+## TOOL-17 / Tooling §2.7 — `Package` and `Target` are manifest-only structures. Keep their ordinary
+## source-construction rejection distinct from the generic unknown-constructor class so check/build can
+## report the configuration-prelude boundary without changing older diagnostic ranges.
+MANIFEST_VALUE_DIAG_MARKER := 5476377146882523136
+manifest_value_err := fn(s : usize) -> CheckErr { MANIFEST_VALUE_DIAG_MARKER + s * 4 }
 ## A distinct located diagnostic for the Declarations §3.1 / Memory §1.6 rule that an existing
 ## binding must be declared `mut` before a write. Keep the marker above the comptime class and below
 ## 2^63 so the existing unsigned CheckErr representation remains bootstrap-safe; the driver strips it
@@ -2704,6 +2709,25 @@ sema_unknown_type_ctor_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : us
   }
   VSpan(s = lit.s, n = lit.n)
 }
+## TOOL-17 / Tooling §2.7 — `Package` and `Target` exist only in the manifest configuration
+## prelude. The parser represents both ordinary-source spellings as `StructLit`, whose generic field
+## checking intentionally tolerates an unresolved head; reject only these two exact bare heads here.
+## The driver removes the actual manifest binding before sema and gives source-visible package handles
+## a synthetic `__manifest_Package` type. Therefore every remaining exact `Package`/`Target` literal is
+## ordinary source, including declarations later in the anonymous `package.al` root, and must be fenced.
+sema_manifest_value_ctor_span := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
+  lit := expr_agg_lit(e)
+  if not lit.is_agg { return VSpan(s = 0, n = 0) }
+  mut is_struct := false
+  match deref(e) {
+    Expr::StructLit(scs, scl, snf, sfh) => { is_struct = true }
+    _ => {}
+  }
+  if not is_struct { return VSpan(s = 0, n = 0) }
+  if lit.n == 7 and str_at((src + lit.s), 7) == "Package" { return VSpan(s = lit.s, n = lit.n) }
+  if lit.n == 6 and str_at((src + lit.s), 6) == "Target" { return VSpan(s = lit.s, n = lit.n) }
+  VSpan(s = 0, n = 0)
+}
 ## The BASE-Var name span of a `Field(Var(b), f)` expression (else {0,0}) — recovers `EnumType` from a
 ## NULLARY variant access `EnumType.Variant` (parsed as a Field, not an EnumLit), so value_agg_ty can
 ## recognise it as an enum VALUE.
@@ -4713,6 +4737,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## under the bootstrap seed (scar #2); recursing on the inner reliably yields the inner's type.
   bci := bitcast_inner(e)
   if unchecked bitcast(usize, bci) != 0 { return check_expr(bci, decls, upto, src, a, locals, nloc) }
+  mvc0 := sema_manifest_value_ctor_span(e, src)
+  if mvc0.n != 0 { return Result(Ty, CheckErr).Err(manifest_value_err(mvc0.s)) }
   uct0 := sema_unknown_type_ctor_span(e, decls, upto, src)
   if uct0.n != 0 { return Result(Ty, CheckErr).Err(unknown_type_ctor_err(uct0.s)) }
   ## Value-loop type inference belongs on the pre-match path for the same bootstrap-dispatch reason as

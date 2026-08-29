@@ -3266,6 +3266,7 @@ DIAG_AMBIG_MARKER := 4611686018427387904
 DIAG_LIMIT_MARKER := 2305843009213693952
 DIAG_LINKER_SYMBOL_KIND := 7
 DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER := 5188146770730811392
+DIAG_MANIFEST_VALUE_MARKER := 5476377146882523136
 DIAG_SCALAR_CONVERSION_MARKER := 5764607523034234880
 ## Types §9.4 / Memory §§1.6, 5.9 — the pre-emission fence for a non-literal aggregate
 ## assigned to a mutable struct global. Keep it between scalar-conversion and comptime classes so
@@ -3392,7 +3393,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   packed_array := code >= DIAG_PACKED_ARRAY_MARKER and code < DIAG_CT_MARKER
   enum_global_array := code >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and code < DIAG_PACKED_ARRAY_MARKER
   tuple_global := code >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and code < DIAG_ENUM_GLOBAL_ARRAY_MARKER
-  unknown_ctor := code >= DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
+  unknown_ctor := code >= DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER and code < DIAG_MANIFEST_VALUE_MARKER
+  manifest_value := code >= DIAG_MANIFEST_VALUE_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_GLOBAL_AGG_MARKER
   ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := code
@@ -3430,6 +3432,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if unknown_ctor {
     raw = code - DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER
     span = raw / 4
+  } else if manifest_value {
+    raw = code - DIAG_MANIFEST_VALUE_MARKER
+    span = raw / 4
   } else if conv {
     raw = code - DIAG_SCALAR_CONVERSION_MARKER
     span = raw / 4
@@ -3445,7 +3450,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call or unknown_ctor {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::push_str(db, "@limits(")
       wk1 := rt::push_str(db, limit_name(kind))
@@ -3459,6 +3464,13 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if packed_array { wkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
     else if tuple_global { wktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if unknown_ctor { wku := rt::push_str(db, "unknown type constructor") }
+    else if manifest_value {
+      if str_at(base + span, 7) == "Package" {
+        wkm := rt::push_str(db, "manifest-only structure Package cannot be constructed from ordinary source")
+      } else {
+        wkm := rt::push_str(db, "manifest-only structure Target cannot be constructed from ordinary source")
+      }
+    }
     else if conv { wksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { wk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { wk := rt::push_str(db, "unbound name") }
@@ -5335,7 +5347,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   pbase := unchecked bitcast(usize, paths.ptr)
   mut pv := rt::Vec(data = rt::bump(tar, 256 * 8), len = 0, cap = 256)
   ## Keep the anonymous root first so the existing final-module entry convention is unchanged.
-  manifest := d_manifest_path(tar)
+  mut manifest := d_manifest_path(tar)
+  mut direct_root_manifest := false
   ## Keep check's front-end state isolated from an earlier build/check pass in this process.
   MANIFEST_HAS = false
   if manifest.len != 0 { mh := rt::svec_str_push(pv, tar, manifest) }
@@ -5358,6 +5371,18 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     if root_process.len != 0 and d_manifest_has_base_process(pv) == false { rp := rt::svec_str_push(pv, tar, root_process) }
   }
   n := rt::vec_len(pv)
+  ## Raw emit surfaces pass a direct `package.al` through this checker without the package-only CLI
+  ## context. Treat that root file as its own manifest candidate; d_manifest_scan still decides
+  ## whether it really starts with a valid Package binding, so an unrelated file merely named
+  ## `package.al` remains ordinary source and is fenced by sema.
+  if manifest.len == 0 {
+    mut rk := 0
+    while rk < n and manifest.len == 0 {
+      root_candidate := rt::svec_str_get(pv, rk)
+      if d_is_root_path(root_candidate) { manifest = root_candidate; direct_root_manifest = true }
+      rk += 1
+    }
+  }
   mut bld := strbuf::strbuf(tar, 16777216)
   mut name_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut name_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
@@ -5393,7 +5418,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   if manifest_len != 0 {
     d_manifest_scan(str_at(base + manifest_off, manifest_len), manifest_off)
     if MANIFEST_HAS {
-      if MANIFEST_BIND_PUB {
+      if MANIFEST_BIND_PUB and direct_root_manifest == false {
         d_manifest_pub_diag(tar, manifest)
         return 1
       }
@@ -5555,7 +5580,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   packed_array := r >= DIAG_PACKED_ARRAY_MARKER and r < DIAG_CT_MARKER
   enum_global_array := r >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and r < DIAG_PACKED_ARRAY_MARKER
   tuple_global := r >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and r < DIAG_ENUM_GLOBAL_ARRAY_MARKER
-  unknown_ctor := r >= DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
+  unknown_ctor := r >= DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER and r < DIAG_MANIFEST_VALUE_MARKER
+  manifest_value := r >= DIAG_MANIFEST_VALUE_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_GLOBAL_AGG_MARKER
   ambig := r >= DIAG_AMBIG_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := r
@@ -5593,6 +5619,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if unknown_ctor {
     raw = r - DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER
     span = raw / 4
+  } else if manifest_value {
+    raw = r - DIAG_MANIFEST_VALUE_MARKER
+    span = raw / 4
   } else if conv {
     raw = r - DIAG_SCALAR_CONVERSION_MARKER
     span = raw / 4
@@ -5609,7 +5638,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call or unknown_ctor or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
       else {
@@ -5626,6 +5655,13 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if packed_array { dwkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
     else if tuple_global { dwktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if unknown_ctor { dwku := rt::push_str(db, "unknown type constructor") }
+    else if manifest_value {
+      if str_at(base + span, 7) == "Package" {
+        dwkm := rt::push_str(db, "manifest-only structure Package cannot be constructed from ordinary source")
+      } else {
+        dwkm := rt::push_str(db, "manifest-only structure Target cannot be constructed from ordinary source")
+      }
+    }
     else if conv { dwksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { dwk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { dwk := rt::push_str(db, "unbound name") }
