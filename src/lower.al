@@ -4631,7 +4631,7 @@ emit_global_data_cells := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, decls : 
 StrInfo := struct { is_s : bool, ss : usize, sl : usize, lbl : usize }
 str_lit_info := fn(e : ptr(Expr)) -> StrInfo {
   match deref(e) {
-    Expr::StrLit(ss, sl, lbl) => { StrInfo(is_s = true, ss = ss, sl = sl, lbl = lbl) }
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => { StrInfo(is_s = true, ss = ss, sl = sl, lbl = lbl) }
     _ => { StrInfo(is_s = false, ss = 0, sl = 0, lbl = 0) }
   }
 }
@@ -5562,7 +5562,7 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
     return
   }
   match deref(e) {
-    Expr::StrLit(ss, sl, lbl) => {
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => {
       push_str(sb, "  leaq ")
       push_lstr(sb, lbl)
       push_str(sb, "(%rip), %rax\n  pushq %rax\n  movq $")
@@ -17700,7 +17700,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
     ## pushes one word; str values are consumed only by the `len`/`str_eq` builtins (which read
     ## the pair directly via `emit_str_pair`) and by a `name := "…"` binding (which stores both
     ## words via `emit_str_assign`), so the bare arm only needs the pointer.
-    Expr::StrLit(ss, sl, lbl) => {
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => {
       push_str(sb, "  leaq ")
       push_lstr(sb, lbl)
       push_str(sb, "(%rip), %rax\n  pushq %rax\n")
@@ -19325,7 +19325,7 @@ emit_pair_field_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : 
 ## stays here (a pointer PARAM) — the lowerable shape (like `emit_struct_assign`).
 emit_str_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf) {
   match deref(v) {
-    Expr::StrLit(ss, sl, lbl) => {
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => {
       ## ptr word at slot `base`
       push_str(sb, "  leaq ")
       push_lstr(sb, lbl)
@@ -25126,7 +25126,7 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
       mark_calls_expr(lo, rb, decls, src, a)
       mark_calls_expr(hi, rb, decls, src, a)
     }
-    Expr::StrLit(ss, sl, lbl) => {}
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => {}
   }
 }
 

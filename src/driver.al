@@ -2733,7 +2733,7 @@ d_manifest_module_decls := fn(pv : rt::Vec, name_start : rt::Vec, name_len : rt:
       td := Decl(name_start = MANIFEST_TYPE_S, name_len = MANIFEST_TYPE_N, value = 0, is_fn = false, kind = 2, arity = 0, is_generic = false, params_head = 0, body_stmts = 0, fields_head = fd, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = 0, alias_ts = 0, alias_tl = 0)
       th := d_manifest_decl_node(tar, td)
       rt::vec_push(decls, th)
-      lit := parser::newnode(ptr(na), Expr.StrLit(MANIFEST_VERSION_S, MANIFEST_VERSION_N, nstr))
+      lit := parser::newnode(ptr(na), Expr.StrLit(MANIFEST_VERSION_S, MANIFEST_VERSION_N, nstr, 0, 0))
       nstr += 1
       ah := parser::gnode(ptr(na), Arg(e = lit, next = 0))
       value := parser::newnode(ptr(na), Expr.StructLit(MANIFEST_TYPE_S, MANIFEST_TYPE_N, 1, ah))
@@ -2855,7 +2855,7 @@ d_manifest_rewrite_expr := fn(e : ptr(Expr), allow : bool, in out nstr : usize, 
       if hit {
         lbl := nstr
         nstr += 1
-        repl := Expr.StrLit(MANIFEST_VERSION_S, MANIFEST_VERSION_N, lbl)
+        repl := Expr.StrLit(MANIFEST_VERSION_S, MANIFEST_VERSION_N, lbl, 0, 0)
         deref(unchecked bitcast(ptr(mut Expr), e)) = repl
       }
     }

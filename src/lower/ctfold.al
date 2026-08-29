@@ -171,7 +171,7 @@ build_flag_int_eq := fn(name : str, rhs : i64) -> i64 {
 
 build_cmp_rhs_text := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> str {
   match deref(e) {
-    Expr::StrLit(rs, rn, rl) => { return str_at((src + rs), rn) }
+    Expr::StrLit(rs, rn, rl, _ps, _pn) => { return str_at((src + rs), rn) }
     Expr::Field(rb, rfs, rfl) => {
       rvn := var_name_span(rb)
       if rvn.n != 0 {
@@ -238,7 +238,7 @@ pub emit_build_flag_value := fn(name : str, in out sb : strbuf::StrBuf) {
 ## bounded literal/inferred-type compatibility checks below. Runtime evaluation is never performed.
 comptime_query_is_str_lit := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
-    Expr::StrLit(_s, _n, _l) => { true }
+    Expr::StrLit(_s, _n, _l, _ps, _pn) => { true }
     _ => { false }
   }
 }
@@ -360,7 +360,7 @@ pub comptime_query_expr_ok := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena, t
     Expr::Num(v, s, n) => { true }
     Expr::BoolLit(v) => { true }
     Expr::FloatLit(s, n) => { true }
-    Expr::StrLit(s, n, l) => { true }
+    Expr::StrLit(s, n, l, _ps, _pn) => { true }
     Expr::Var(s, n) => {
       ei := entry_of(cx.slots, cx.src, s, n)
       ent := deref(svec_at(SlotEntry, cx.slots, ei))
@@ -558,7 +558,7 @@ pub comptime_cond_src_off := fn(e : ptr(Expr)) -> usize {
     Expr::Var(vs, vn) => { vs }
     Expr::Field(fb, ffs, ffl) => { ffs }
     Expr::Call(ccs, ccl, cna, cah) => { ccs }
-    Expr::StrLit(sls, sln, sll) => { sls }
+    Expr::StrLit(sls, sln, sll, _ps, _pn) => { sls }
     Expr::Bin(bop, bl, br) => {
       mut o := comptime_cond_src_off(bl)
       if o == 0 { o = comptime_cond_src_off(br) }

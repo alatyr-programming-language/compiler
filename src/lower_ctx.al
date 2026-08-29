@@ -197,22 +197,22 @@ pub expr_enum_variant_nl := fn(v : ptr(Expr)) -> usize {
 ## returns separate for the frozen-seed-compatible shape used by the neighboring accessors.
 pub expr_is_str_lit := fn(v : ptr(Expr)) -> bool {
   mut r := false
-  match deref(v) { Expr::StrLit(ss, sl, lbl) => { r = true } _ => {} }
+  match deref(v) { Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = true } _ => {} }
   r
 }
 pub expr_str_lit_ns := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::StrLit(ss, sl, lbl) => { r = ss } _ => {} }
+  match deref(v) { Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = ss } _ => {} }
   r
 }
 pub expr_str_lit_nl := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::StrLit(ss, sl, lbl) => { r = sl } _ => {} }
+  match deref(v) { Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = sl } _ => {} }
   r
 }
 pub expr_str_lit_label := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::StrLit(ss, sl, lbl) => { r = lbl } _ => {} }
+  match deref(v) { Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = lbl } _ => {} }
   r
 }
 
@@ -303,7 +303,7 @@ pub var_name_span := fn(e : ptr(Expr)) -> CSpan {
 pub asm_str_span := fn(e : ptr(Expr)) -> CSpan {
   mut res := CSpan(s = 0, n = 0)
   match deref(e) {
-    Expr::StrLit(s, n, lbl) => { res = CSpan(s = s, n = n) }
+    Expr::StrLit(s, n, lbl, _ps, _pn) => { res = CSpan(s = s, n = n) }
     _ => {}
   }
   res

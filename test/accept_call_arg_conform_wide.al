@@ -16,6 +16,10 @@
 ##     literal rule does not make;
 ##   - `embed(path)` into a `[u8; N]` parameter: `embed` folds to a StrLit NODE while its spec surface
 ##     is `[u8; N]` (Comptime §2.4) — a StrLit node is NOT proof of a `str`-typed value.
+## Failure-first formatter evidence: on parent `f98c62f`, `seed/alatyr fmt test/accept_call_arg_conform_wide.al`
+## returned rc=1, wrote 0 stdout bytes and 91 stderr bytes, with `selfhost: fmt — embed("…") is not
+## modelled: the node keeps the file BYTES, not the path`. The check-only program remains a formatter-only
+## idempotence/acceptance control because its unrelated overload set does not link.
 Meters := brand(u64)
 
 id := fn(T : type, x : T) -> T { return x }

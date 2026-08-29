@@ -209,7 +209,7 @@ emit_rodata_expr := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, src : ptr(u8),
     Expr::Bitcast(inner, _bcs, _bcl) => { emit_rodata_expr(inner, sb, src, a, seen) }
     ## the data entry for this literal (delegated to `emit_strlit_rodata`, which handles both the
     ## `.ascii` source-literal case and the embed `.byte` case; see its EMBED DETECTION note).
-    Expr::StrLit(ss, sl, lbl) => { emit_strlit_rodata(sb, src, ss, sl, lbl) }
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => { emit_strlit_rodata(sb, src, ss, sl, lbl) }
     ## the data entry for a FLOAT literal: `.Lflt<start>: .double <verbatim source text>` — the
     ## ASSEMBLER computes the IEEE-754 bits from the decimal text (e.g. "1.5"), so the compiler needs
     ## no float arithmetic of its own. The label is keyed on the literal's source-span start,

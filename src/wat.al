@@ -3691,7 +3691,7 @@ SLSpan := struct { ok : bool, ss : usize, sl : usize, lbl : usize }
 str_lit_span := fn(e : ptr(Expr)) -> SLSpan {
   mut r := SLSpan(ok = false, ss = 0, sl = 0, lbl = 0)
   match deref(e) {
-    Expr::StrLit(ss, sl, lbl) => { r = SLSpan(ok = true, ss = ss, sl = sl, lbl = lbl) }
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = SLSpan(ok = true, ss = ss, sl = sl, lbl = lbl) }
     _ => {}
   }
   r

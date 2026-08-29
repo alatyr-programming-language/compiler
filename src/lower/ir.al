@@ -693,7 +693,7 @@ ir_rd_expr := fn(src : ptr(u8), e : ptr(Expr)) {
   match deref(e) {
     Expr::Num(v, s, n) => {}
     Expr::BoolLit(v) => {}
-    Expr::StrLit(ss, sl, si) => {}
+    Expr::StrLit(ss, sl, si, _ps, _pn) => {}
     Expr::FloatLit(fs, fl) => {}
     Expr::Var(s, n) => { ir_rd_add(src, s, n) }
     Expr::Bin(op, l, r) => { ir_rd_expr(src, l); ir_rd_expr(src, r) }

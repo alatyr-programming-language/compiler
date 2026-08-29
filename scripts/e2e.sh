@@ -893,6 +893,13 @@ fmt_test() { # name, want-exit
   # (idempotence alone would also be satisfied by dropping them, so assert preservation directly).
   sc=$(grep -c '##' "$src"); oc=$(grep -c '##' "$o1")
   [ "$sc" = "$oc" ] || { echo "FAIL $1(fmt): comments $oc want $sc"; fail=1; return; }
+  # The embed fixtures resolve their controlled path relative to the compiler's current directory.
+  # The formatted source is run from its row-private scratch directory, so stage only the checked-in
+  # binary it names; never make the helper depend on another row's or the repository's target tree.
+  if grep -qF 'embed(' "$src"; then
+    mkdir -p "$T/test"
+    cp "$E2E_TEST/embed_fixture.bin" "$T/test/embed_fixture.bin" || { echo "FAIL $1(fmt): embed fixture staging"; fail=1; return; }
+  fi
   # Run the formatted output. The basename must be a CLEAN identifier (no leading '.'/'-'): the module
   # name is derived from it and becomes a GAS symbol, so a dotfile name emits an invalid `.alatyr`
   # pseudo-op. It must also be PER ROW. This used to be the fixed `/tmp/fmtrun.al`, which is shared by
@@ -929,14 +936,36 @@ fmt_test_has_all() { # name, want-exit, needle ...
   done
 }
 
-# A construct fmt CANNOT represent faithfully must be REFUSED, not guessed at: `embed("path")` rides
-# StrLit with an ABSOLUTE arena address, so fmt walked off memory and SEGFAULTED. A zero exit here would
-# mean it started guessing again.
+# A construct fmt CANNOT represent faithfully must be REFUSED, not guessed at. Embed is intentionally
+# absent from the refusal table: its path span is now retained and the focused rows below assert the
+# emitted path, idempotence, and byte-exact execution.
 fmt_refuses() { # name -- fmt must exit non-zero
   src="$E2E_TEST/$1.al"
   [ -f "$src" ] || { echo "MISS fmt_refuses_$1: no $src"; fail=1; return; }
   ( ulimit -c 0; "$CC" fmt "$src" >/dev/null 2>&1 ); got=$?
   if [ "$got" != 0 ]; then echo "ok   fmt_refuses_$1: refused with rc $got"; else echo "FAIL fmt_refuses_$1: rendered (rc 0) a construct it cannot represent"; fail=1; fi
+}
+
+# Formatter-only companion for a source fixture whose original program is deliberately check-only
+# because its unrelated overload set does not link. It proves the embed path survives two formatter
+# passes and remains semantically accepted without turning that pre-existing linker boundary into a
+# false formatter failure.
+fmt_check() { # name
+  src="$E2E_TEST/$1.al"
+  [ -f "$src" ] || { echo "MISS $1(fmt-check): no $src"; fail=1; return; }
+  o1="$T/e2e_$1.fmt1.al"; o2="$T/e2e_$1.fmt2.al"
+  "$CC" fmt "$src" > "$o1" 2>/dev/null || { echo "FAIL $1(fmt-check): emit"; fail=1; return; }
+  [ -s "$o1" ] || { echo "FAIL $1(fmt-check): empty output"; fail=1; return; }
+  "$CC" fmt "$o1" > "$o2" 2>/dev/null || { echo "FAIL $1(fmt-check): re-emit"; fail=1; return; }
+  diff -q "$o1" "$o2" >/dev/null || { echo "FAIL $1(fmt-check): NOT idempotent"; fail=1; return; }
+  sc=$(grep -c '##' "$src"); oc=$(grep -c '##' "$o1")
+  [ "$sc" = "$oc" ] || { echo "FAIL $1(fmt-check): comments $oc want $sc"; fail=1; return; }
+  if grep -qF 'embed(' "$src"; then
+    mkdir -p "$T/test"
+    cp "$E2E_TEST/embed_fixture.bin" "$T/test/embed_fixture.bin" || { echo "FAIL $1(fmt-check): embed fixture staging"; fail=1; return; }
+  fi
+  ( cd "$T" && "$CC" check "$o1" >/dev/null 2>&1 ) || { echo "FAIL $1(fmt-check): formatted source no longer checks"; fail=1; return; }
+  echo "ok   $1(fmt-check): accepted + idempotent"
 }
 
 # The same assertion, but it also pins WHY fmt refused and that nothing reached stdout. `fmt_refuses` above
@@ -4066,10 +4095,12 @@ fmt_test_has fmt_generic_typefn 42 "Either(A, B).L(a)"
 ## the `:=`/`=` probe accepted only a literal `=`, so `x -= 50` became `x := x - 50` and SHADOWED the
 ## local; a trailing `when` guard and a `u32.require(p)` alias were both dropped.
 fmt_test_has fmt_decl_tails 42 "u32.require(is_nonzero)"
-## Comptime §2.4 -- `embed("path")` rides StrLit with an ABSOLUTE arena address, so fmt walked off memory
-## and SEGFAULTED. The path span is not kept, so fmt must REFUSE rather than guess: a non-zero exit is the
-## contract here, and a zero exit would mean it started guessing again.
-fmt_refuses_has embed_bytes "is not modelled: the node keeps the file BYTES, not the path"
+## Comptime §2.4 / Tooling §4.3 -- the formatter retains the semantic embed path while the existing
+## x86 byte fixtures prove the baked payload remains exact. The needle is source text, not a comment.
+fmt_test_has embed_bytes 42 'embed("test/embed_fixture.bin")'
+fmt_test_has embed_byte_storage 42 'embed("test/embed_fixture.bin")'
+fmt_test_has embed_typed_bytes 42 'embed("test/embed_fixture.bin")'
+fmt_check accept_call_arg_conform_wide
 ## §5 fmt: ROOT fix (driver enum-name table) — call.field + call.METHOD(args) preserve args (workaround missed .method).
 fmt_test fmt_call_method 42
 ## §5 fmt: precedence grouping (keep needed parens, drop redundant), nested match-arm body, nested aggregate lits.
