@@ -15,7 +15,7 @@
 ## ADDITIVE: nothing in the self-build invokes `emit_fmt_program` (the self-build uses `build`, not
 ## `fmt`), so the x86_64 GAS the tree emits for itself is byte-identical and the TOOL-1 fixpoint
 ## (seed==Stage1==Stage2) is unaffected — like `wat.al`/`aarch64.al`/`riscv64.al`.
-(Arg, Arm, Bind, Decl, Expr, FieldDecl, LabelSpan, Param, Stmt, local_type_span, assign_is_reassign) := ast
+(Arg, Arm, Bind, Decl, Expr, FieldDecl, LabelSpan, Param, Stmt, local_type_span, assign_is_reassign, binding_is_comptime) := ast
 local_is_mut := ast::local_is_mut
 ## Grammar §130 line 287 / OP-2 — the compound-assignment glyph the source wrote after a place's name
 ## span, or "" (see `ast.al`). The ONE table of the eight operators is shared through `ast`; fmt uses
@@ -2690,6 +2690,7 @@ emit_fmt_stmts := fn(list : ptr(mut Stmt), body_head : ptr(mut Stmt), in out sb 
         plain := sal == 0
         if sal != 0 { push_str(sb, str_at((src + sas), sal)) }
         seen := assign_is_reassign(src, ans, anl)
+        if plain and (not seen) and binding_is_comptime(src, ans) { push_str(sb, "comptime ") }
         if plain and (not seen) and local_is_mut(src, ans) { push_str(sb, "mut ") }
         if plain { push_str(sb, str_at((src + ans), anl)) }
         lts := local_type_span(src, ans, anl)
@@ -4016,7 +4017,8 @@ emit_fmt_fn := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena
 ## for a kind-0 decl) and its `: T` annotation is recovered by source-scan; the `@limits` marker
 ## (`arity == 99`) is handled elsewhere / fail-loud.
 emit_fmt_value := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
-  if ast::local_is_mut(src, d.name_start) { push_str(sb, "mut ") }
+  if binding_is_comptime(src, d.name_start) { push_str(sb, "comptime ") }
+  else if ast::local_is_mut(src, d.name_start) { push_str(sb, "mut ") }
   push_str(sb, str_at((src + d.name_start), d.name_len))
   ## Recover a `: <type>` annotation the parser erased (a kind-0 decl keeps `ret_tl == 0` even when
   ## typed), by source-scanning after the name — so `X : u64 = 40` round-trips faithfully instead of
@@ -4101,6 +4103,21 @@ fmt_decl_anchor := fn(src : ptr(u8), name_start : usize) -> usize {
   ## the gap was non-blank and a leading `## …` block above such a decl was DROPPED entirely (comment
   ## fidelity — the harness's comment-count check). Anchor at the `mut` token, exactly like `pub` below.
   mut anchor := name_start
+  ## A `comptime` declaration has the same comment-attachment gap. Walk the short declaration-prefix
+  ## chain (`pub`/`mut`/`comptime`) back to its first word so comments above the modifier remain attached.
+  if binding_is_comptime(src, anchor) {
+    mut q := anchor
+    mut steps := 0
+    mut walking := true
+    while walking and steps < 3 {
+      while q > 0 and (str_at((src + q - 1), 1) == " " or str_at((src + q - 1), 1) == "\n" or str_at((src + q - 1), 1) == "\t" or str_at((src + q - 1), 1) == "\r") { q = q - 1 }
+      if q >= 8 and str_at((src + q - 8), 8) == "comptime" { q = q - 8; steps += 1 }
+      else if q >= 3 and str_at((src + q - 3), 3) == "pub" { q = q - 3; steps += 1 }
+      else if q >= 3 and str_at((src + q - 3), 3) == "mut" { q = q - 3; steps += 1 }
+      else { walking = false }
+    }
+    anchor = q
+  }
   if local_is_mut(src, anchor) {
     mut q := anchor
     while q > 0 and (str_at((src + q - 1), 1) == " " or str_at((src + q - 1), 1) == "\n" or str_at((src + q - 1), 1) == "\t" or str_at((src + q - 1), 1) == "\r") { q = q - 1 }

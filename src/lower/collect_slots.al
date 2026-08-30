@@ -20,6 +20,7 @@ stmt_p := ast::stmt_p
 local_type_span := ast::local_type_span
 local_is_uninit := ast::local_is_uninit
 assign_is_reassign := ast::assign_is_reassign
+local_is_comptime := ast::binding_is_comptime
 (Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
 (SVec, arg_expr_at, var_name_span) := lower_ctx
 (base_type_name, enum_decl_of, enum_inst_words, is_niche_folded, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
@@ -28,12 +29,23 @@ assign_is_reassign := ast::assign_is_reassign
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
 (field_read_agg) := lower::place
 
-pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), sub : ptr(Subst)) {
+pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), sub : ptr(Subst), ctslots : ptr(SVec)) {
   mut s := head
   while s != 0 {
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
+        ## A scalar `comptime` binding is erased after semantic validation. Record its value in the
+        ## separate compile-time table and deliberately skip the ordinary frame-slot classifiers.
+        if local_is_comptime(src, ns) {
+          bind_comptime_slot(deref(ctslots), src, ns, nl, v)
+          s = nx
+          continue
+        }
+        ## A later ordinary binding shadows an earlier comptime binding. Record that event in the
+        ## side table before reserving the ordinary frame slot; lookup uses the event's source offset,
+        ## so uses in an earlier branch still see the earlier comptime value.
+        bind_comptime_shadow(deref(ctslots), ns, nl)
         ## A `name := S(…)` binding gets a struct slot (base + nfields reserved); a
         ## `name := E.V(…)` binding gets an enum slot (base + 1 discriminant + max_arity
         ## payload words reserved); any other value is a scalar single slot.
@@ -563,19 +575,19 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
         s = nx
       }
       Stmt::While(c, b, nx) => {
-        collect_slots(slots, b, src, decls, a, synth, sub)
+        collect_slots(slots, b, src, decls, a, synth, sub, ctslots)
         s = nx
       }
       Stmt::Loop(b, nx) => {
-        collect_slots(slots, b, src, decls, a, synth, sub)
+        collect_slots(slots, b, src, decls, a, synth, sub, ctslots)
         s = nx
       }
       Stmt::Unchecked(b, nx) => {
-        collect_slots(slots, b, src, decls, a, synth, sub)
+        collect_slots(slots, b, src, decls, a, synth, sub, ctslots)
         s = nx
       }
       Stmt::AllocWith(ae, b, nx) => {
-        collect_slots(slots, b, src, decls, a, synth, sub)
+        collect_slots(slots, b, src, decls, a, synth, sub, ctslots)
         s = nx
       }
       Stmt::Break(_bv, _bd, nx) => { s = nx }
@@ -614,8 +626,8 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
       ## lists so any locals THEY introduce (an `Assign` inside a branch) get a frame slot.
       ## The branches share the function frame (no per-block scoping in this slice).
       Stmt::If(c, th, el, nx) => {
-        collect_slots(slots, th, src, decls, a, synth, sub)
-        collect_slots(slots, el, src, decls, a, synth, sub)
+        collect_slots(slots, th, src, decls, a, synth, sub, ctslots)
+        collect_slots(slots, el, src, decls, a, synth, sub, ctslots)
         s = nx
       }
       Stmt::Match(sc, ah, nx) => {
@@ -650,7 +662,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
               }
             }
           }
-          collect_slots(slots, am.body_stmts, src, decls, a, synth, sub)
+          collect_slots(slots, am.body_stmts, src, decls, a, synth, sub, ctslots)
           arm = am.next
         }
         s = nx
@@ -709,16 +721,16 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
             svec_push(slots, SlotEntry(ns = 0, nl = 0, off = tlo, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
           }
         }
-        collect_slots(slots, fb, src, decls, a, synth, sub)
+        collect_slots(slots, fb, src, decls, a, synth, sub, ctslots)
         s = nx
       }
       Stmt::CompIf(ccond, cthen, celse, nx) => {
-        collect_slots(slots, cthen, src, decls, a, synth, sub)
-        collect_slots(slots, celse, src, decls, a, synth, sub)
+        collect_slots(slots, cthen, src, decls, a, synth, sub, ctslots)
+        collect_slots(slots, celse, src, decls, a, synth, sub, ctslots)
         s = nx
       }
       Stmt::CompFor(cvs, cvl, civ, cb, nx) => {
-        collect_slots(slots, cb, src, decls, a, synth, sub)
+        collect_slots(slots, cb, src, decls, a, synth, sub, ctslots)
         s = nx
       }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
@@ -726,12 +738,12 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
         ## constant during the unroll; reserve its slot, then collect the body's locals (the body is
         ## emitted once per iteration into these same slots).
         rb0 := bind_slot(slots, src, rvs, rvl)
-        collect_slots(slots, rb, src, decls, a, synth, sub)
+        collect_slots(slots, rb, src, decls, a, synth, sub, ctslots)
         s = nx
       }
       Stmt::CompMatch(cmsc, cmah, nx) => {
         mut car := cmah
-        while car != 0 { cam := deref(arm_p(car)); collect_slots(slots, cam.body_stmts, src, decls, a, synth, sub); car = cam.next }
+        while car != 0 { cam := deref(arm_p(car)); collect_slots(slots, cam.body_stmts, src, decls, a, synth, sub, ctslots); car = cam.next }
         s = nx
       }
     }

@@ -611,4 +611,8 @@ pub LCtx := struct {
   ## CODE-POINT LABELS: declaration emission index of the enclosing function, used to make named
   ## local GAS labels unique across generic instances without changing the direct x86_64 surface.
   fn_id : usize,
+  ## COMPTIME scalar locals are erased and therefore live in a side table rather than in `slots`.
+  ## Keeping the table outside the frame map is the invariant that prevents a compile-time binding from
+  ## acquiring a normal runtime slot by accident.
+  ctslots : ptr(SVec),
 }

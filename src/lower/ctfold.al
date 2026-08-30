@@ -680,6 +680,7 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
   tp := ptr(cetp)
   match deref(cond) {
     Expr::BoolLit(v) => { if v != 0 { return 1 } return 0 }
+    Expr::Unchecked(inner) => { return comptime_cond_eval(inner, cx, a) }
     Expr::Call(cs, cl, na, ah) => {
       nm := str_at((src + cs), cl)
       if (nm == "resolves" or nm == "compiles") and na == 1 {
@@ -704,6 +705,16 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
       return -1
     }
     Expr::Var(cvs, cvl) => {
+      ## A local `comptime` binding has no frame slot; fold its recorded scalar expression exactly like
+      ## a module constant, with the same recursion bound.
+      cvlocal := comptime_slot_expr(cx.ctslots, cx.src, cvs, cvl, cvs)
+      if unchecked bitcast(usize, cvlocal) != 0 {
+        if COMPTIME_CONST_DEPTH >= 8 { return -1 }
+        COMPTIME_CONST_DEPTH = COMPTIME_CONST_DEPTH + 1
+        lcr := comptime_cond_eval(cvlocal, cx, a)
+        COMPTIME_CONST_DEPTH = COMPTIME_CONST_DEPTH - 1
+        return lcr
+      }
       ## `comptime if <CONST>` — a module-level comptime constant used AS the whole condition
       ## (Comptime §9.1: any comptime-KNOWN controlling expression). Re-enter the evaluator on the
       ## constant's own value (`K := true`, `K := 1 < 2`, `K := target.os == Os.linux`), bounded by a

@@ -27,6 +27,8 @@ how this repository proves itself, not part of what it ships.
 
 - Successful manifest-driven builds now print a deterministic profile, target and artifact summary to
   stderr while leaving stdout available for machine-readable output.
+- The bounded scalar `comptime` binding slice now supports closed integer, boolean, and nullary
+  user-enum values, while runtime-dependent initializers and unsafe rebinding cases fail loudly.
 - Unrecognised CLI commands and flags now produce invocation-level Config diagnostics naming the
   offending argument instead of a missing-source-file failure.
 - x86_64/Linux now supports direct code-point `jmp(label)` transfers to named `@label(name)` instructions inside `unchecked` scopes.
