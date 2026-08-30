@@ -23,7 +23,7 @@
 ## checking (only the first payload type span is captured), generic type expressions (`Vec(T)`),
 ## and unifying a `Var` that resolves to a top-level value binding (treated as unknown).
 vec := alloc::vec
-(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_reassign) := ast
+(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_reassign, binding_is_comptime) := ast
 (bnd_ns, bnd_nl, bnd_next) := ast
 ecallee_is := ast::ecallee_is
 fld_p := ast::fld_p
@@ -2329,6 +2329,7 @@ local_in := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : u
 ## condition and must not be mistaken for runtime locals; ordinary body bindings remain runtime values.
 sema_local_is_comptime := fn(src : ptr(u8), l : Local) -> bool {
   if param_is_comptime(src, l.ns) { return true }
+  if binding_is_comptime(src, l.ns) { return true }
   mut p := l.ns + l.nl
   while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p += 1 }
   if str_at((src + p), 1) != ":" { return false }
@@ -2337,6 +2338,19 @@ sema_local_is_comptime := fn(src : ptr(u8), l : Local) -> bool {
   if str_at((src + p), 4) != "type" { return false }
   c := str_at((src + p + 4), 1)
   c == " " or c == "\n" or c == "\t" or c == "\r" or c == ")" or c == ","
+}
+
+## Whether the named local was declared with the comptime modifier. Reassignments carry the later
+## target span, so inspecting that occurrence's source prefix is insufficient; recover the original
+## declaration from the local table instead.
+sema_local_name_is_comptime := fn(src : ptr(u8), locals : ptr(LVec), upto : usize, s : usize, n : usize) -> bool {
+  mut i := 0
+  while i < upto {
+    l := lvec_at(locals, i)
+    if streq(src, l.ns, l.nl, s, n) { return sema_local_is_comptime(src, l) }
+    i += 1
+  }
+  false
 }
 
 ## The [s, s+n) name span of a `Var` expression (0/0 otherwise). A SMALL inline `match deref(e)`: the
@@ -4113,6 +4127,121 @@ sema_enum_variant_known := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
   }
   if not matched { return true }
   found
+}
+
+## The bounded scalar `comptime` slice (Comptime §2.2 / §9.1) accepts only a NULLARY user-enum
+## value here.  A known enum variant with payload is deliberately not treated as a scalar constant:
+## the lower's enum representation is an aggregate and the public brief keeps that design out of this
+## lane.  Unknown enum heads stay fail-closed for this helper; ordinary sema remains responsible for
+## its existing poison-tolerant behavior.
+comptime_enum_variant_zero := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), es : usize, el : usize, vs : usize, vl : usize) -> bool {
+  di := enum_decl_of(decls, src, es, el)
+  if di < 0 or usize(di) >= upto { return false }
+  d := deref(decl_get(decls, usize(di)))
+  mut f := d.fields_head
+  mut found := false
+  mut zero := false
+  while f != 0 {
+    fd := deref(fld_p(f))
+    if streq(src, fd.ns, fd.nl, vs, vl) {
+      found = true
+      if fd.arity == 0 { zero = true }
+    }
+    f = fd.next
+  }
+  found and zero
+}
+
+## The integer annotation names admitted by the scalar comptime slice.  Keep this textual because the
+## existing compact `Ty` resolver intentionally covers only the native subset; a comptime binding still
+## has to reject a typed `i8`/`u128` mismatch even though those names are not otherwise needed by sema.
+comptime_integer_type_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  w := str_at((src + s), n)
+  w == "u8" or w == "u16" or w == "u32" or w == "u64" or w == "usize" or w == "u128" or
+  w == "i8" or w == "i16" or w == "i32" or w == "i64" or w == "isize" or w == "i128"
+}
+
+## Classify one expression in the bounded scalar comptime language:
+## 1 = integer, 2 = bool, 4 = nullary user enum, 0 = not a closed scalar expression.  The walk is
+## intentionally conservative.  A local must itself be a comptime binding; a runtime local containing
+## a literal is not promoted after the fact.  Earlier immutable module values are admitted only when
+## their own initializer recursively belongs to this same closed language, so a runtime call cannot
+## smuggle a value into `comptime` through a module name.  `depth` bounds malformed/cyclic inputs.
+comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, depth : usize) -> u8 {
+  if unchecked bitcast(usize, v) == 0 or depth >= 16 { return 0 }
+  match deref(v) {
+    Expr::Num(_x, _s, _n) => { 1 }
+    Expr::BoolLit(_x) => { 2 }
+    Expr::Unchecked(inner) => { comptime_expr_kind(inner, decls, upto, src, locals, nloc, depth + 1) }
+    Expr::Bin(op, left, right) => {
+      if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 {
+        lk := comptime_expr_kind(left, decls, upto, src, locals, nloc, depth + 1)
+        rk := comptime_expr_kind(right, decls, upto, src, locals, nloc, depth + 1)
+        if lk == 1 and rk == 1 { 1 } else { 0 }
+      } else { 0 }
+    }
+    Expr::Field(base, fs, fl) => {
+      fb := expr_var_span(base)
+      if fb.n == 0 or (nloc != 0 and local_in(locals, nloc, src, fb.s, fb.n)) { 0 }
+      else if resolve_ty(src, fb.s, fb.n, decls, upto).tag == 4 and comptime_enum_variant_zero(decls, upto, src, fb.s, fb.n, fs, fl) { 4 }
+      else { 0 }
+    }
+    Expr::EnumLit(es, el, vs, vl, np, _ah) => {
+      if np == 0 and comptime_enum_variant_zero(decls, upto, src, es, el, vs, vl) { 4 } else { 0 }
+    }
+    Expr::Var(vs, vl) => {
+      mut found_local := false
+      if nloc != 0 { found_local = local_in(locals, nloc, src, vs, vl) }
+      if found_local {
+        raw := local_ty(locals, nloc, src, vs, vl)
+        mut tag : u8 = raw.tag
+        if tag >= 128 and tag != 255 { tag = tag - 128 }
+        if not sema_local_is_comptime(src, local_at(locals, nloc, src, vs, vl)) { return 0 }
+        if tag == 1 or tag == 2 or tag == 4 { return tag }
+        if tag == 10 { return 4 }
+        return 0
+      }
+      mut i := 0
+      mut result : u8 = 0
+      while i < upto {
+        d := deref(decl_get(decls, i))
+        if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl == 0 and d.name_len != 0
+           and local_is_mut(src, d.name_start) == false and streq(src, d.name_start, d.name_len, vs, vl) {
+          result = comptime_expr_kind(d.value, decls, i, src, locals, nloc, depth + 1)
+        }
+        i += 1
+      }
+      result
+    }
+    _ => { 0 }
+  }
+}
+
+## Recover the local record for a name.  `local_ty` intentionally returns only a `Ty`; the comptime
+## classifier also needs the declaration span to distinguish a comptime local from a runtime local.
+local_at := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : usize) -> Local {
+  mut result := Local(ns = 0, nl = 0, tag = 255, prov = 0, tns = 0, tnl = 0)
+  mut i := 0
+  while i < upto {
+    l := lvec_at(locals, i)
+    if streq(src, l.ns, l.nl, s, n) { result = l }
+    i += 1
+  }
+  result
+}
+
+## Validate the expression kind against an optional explicit annotation.  The result is nonzero only
+## for the exact scalar category the lower may inline; this makes inferred and typed bindings share one
+## safety fence and keeps runtime-dependent initializers out of the backend.
+comptime_binding_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, ann : VSpan) -> u8 {
+  got := comptime_expr_kind(v, decls, upto, src, locals, nloc, 0)
+  if got == 0 or ann.n == 0 { return got }
+  mut want : u8 = 0
+  if comptime_integer_type_name(src, ann.s, ann.n) { want = 1 }
+  else if str_at((src + ann.s), ann.n) == "bool" { want = 2 }
+  else if resolve_ty(src, ann.s, ann.n, decls, upto).tag == 4 { want = 4 }
+  if want == got { return got }
+  0
 }
 
 ## The declared `Ty` of the i-th parameter of the top-level fn named [s, s+n) (param index by
@@ -7222,6 +7351,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## aggregate copy outrun the destination's proven layout.
         tv := check_expr_da_mode(v, decls, upto, src, a, locals, cnt, da,
           not assign_is_reassign(src, ns, nl) and ann.n == 0)?
+        ## Comptime §2.2 — the bounded worker slice admits only closed scalar literals/arithmetic and
+        ## nullary user-enum values. The lower erases such bindings, so reject a runtime-dependent or
+        ## otherwise unsupported initializer before it can be mistaken for a normal local slot.
+        if not assign_is_reassign(src, ns, nl) and binding_is_comptime(src, ns) {
+          if comptime_binding_kind(v, decls, upto, src, locals, cnt, ann) == 0 { mark_failed(locals, mismatch_err(ns, 0)) }
+        }
         ## FN-11 (Functions §1.6) — a `dyn fn(T…)->R` value is the type-erased two-word {code, env} fat
         ## pair, and the ONLY construction form the spec admits is `dyn_over(ptr(mut <store>))` over a
         ## NAMED PLACE holding a static closure (the env is explicit storage the `dyn` borrows, I3). Any
@@ -7263,6 +7398,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## `mismatch_err`: the assignment's type already agrees, and the useful fact is the write
           ## permission at this source span. The same branch handles plain `=` and every compound
           ## operator after `assign_is_reassign` has recovered its spelling.
+          if sema_local_name_is_comptime(src, locals, cnt, ns, nl) { mark_failed(locals, immutable_err(ns)) }
           if raw.tag < 128 and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or raw.tag == 255 { mark_failed(locals, immutable_err(ns)) }
           mut xtag : u8 = raw.tag
           if xtag >= 128 and xtag != 255 { xtag = xtag - 128 }
@@ -8796,6 +8932,12 @@ check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a 
     ## rejected where it is written, not left to trap when some run-time path reaches it.
     gcte := ct_guard_err(src, gts.s, gts.n, d.value, d.name_start, decls, upto)
     if gcte != 0 { mark_failed(ptr(none), gcte) }
+    ## Comptime §2.2 — module bindings use the same bounded closed-scalar whitelist as locals. This
+    ## prevents a runtime call or aggregate from being treated as an erasable module constant merely
+    ## because the source carries the `comptime` modifier.
+    if binding_is_comptime(src, d.name_start) {
+      if comptime_binding_kind(d.value, decls, upto, src, ptr(none), 0, gts) == 0 { mark_failed(ptr(none), mismatch_err(d.name_start, 0)) }
+    }
     fv := 0
     match rv {
       Result::Ok(t) => {

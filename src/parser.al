@@ -3283,12 +3283,15 @@ p_stmt := fn(in out pc : PC) -> usize {
   ## `mut name … = v` — a mutable binding. The self-host compiler binds every local to a frame
   ## slot regardless (mutability is the front end's concern, not lowering's), so the `mut`
   ## marker is skipped here and the rest parses as an ordinary binding.
-  if tok_kw(pc, "mut") { pc.idx = pc.idx + 1 }
+  mut had_mut := false
+  if tok_kw(pc, "mut") { pc.idx = pc.idx + 1; had_mut = true }
   ## `comptime <block>` — a compile-time statement (`comptime for`/`comptime match` over
   ## `typeinfo(T)`). The lean lower does not emit comptime code; consume and return a dummy
   ## no-op (ExprStmt 0). Scan past the keyword to the first `{`, then balance braces.
   if tok_kw(pc, "comptime") {
     pc.idx = pc.idx + 1   ## 'comptime'
+    if had_mut { reject_at(pc, "selfhost: `comptime mut` is invalid — a comptime binding is immutable (Comptime §2.2)", cur(pc).start) }
+    if tok_kw(pc, "mut") { reject_at(pc, "selfhost: `comptime mut` is invalid — a comptime binding is immutable (Comptime §2.2)", cur(pc).start) }
     ## `comptime if <cond> { then } [else { else }]` — parse into a `CompIf` AST node so the lower
     ## can EVALUATE the condition and emit the taken branch (arch/verify predicates). The condition
     ## is a full expression (`p_or` — handles `target.arch == Arch.x86_64` and a parenthesized
@@ -3426,6 +3429,23 @@ p_stmt := fn(in out pc : PC) -> usize {
       pc.idx = pc.idx + 1                 ## '}'
       return snode(pc.arena, Stmt.CompMatch(cmscrut, cmhead, 0))
     }
+    ## A comptime binding uses the ordinary binding parser below. Validate its head before entering
+    ## the legacy fallback, which is retained only for unsupported comptime block syntax.
+    mut comptime_binding := false
+    mut has_name := cur(pc).kind == 1
+    if cur(pc).kind == 2 {
+      cn := str_at(pc.src + cur(pc).start, cur(pc).len)
+      has_name = str_eq(cn, "in") or str_eq(cn, "out")
+    }
+    if has_name {
+      k1 := tok_at(pc, pc.idx + 1).kind
+      if k1 == 5 or k1 == 8 or is_assign_tok(k1) { comptime_binding = true }
+    }
+    if not comptime_binding {
+      if not has_name { reject_at(pc, "selfhost: expected a comptime binding or comptime control statement", cur(pc).start) }
+      reject_at(pc, "selfhost: expected a binding after `comptime`", cur(pc).start)
+    }
+    if not comptime_binding {
     ## Scan to the comptime BODY's `{` — the first `{` at PAREN-DEPTH 0. A `comptime if (match
     ## typeinfo(T) { … }) { … }` condition wraps its OWN `{ arms }` inside `(…)`; a naive
     ## first-`{` scan stopped there and balance-consumed the MATCH arms, leaving `) { body }`
@@ -3475,6 +3495,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     }
     dummy := newnode(pc.arena, Expr.Num(0, 0, 0))
     return snode(pc.arena, Stmt.ExprStmt(dummy, 0))
+    }
   }
   ## `defer (expr | block)` (Control Flow §9.3 / Memory §5.8) — register a cleanup action that runs
   ## LIFO on every NORMAL exit of the enclosing scope (fall-through / `break` / `continue` / `return` /
@@ -4861,13 +4882,16 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
   ## FIELD-level byte-layout attributes read only the value-position flag, so a prefix-`@packed` struct
   ## carrying an `@offset(N)` field was REJECTED as "requires a @packed struct" — legal code turned away.
   mut pfx_packed := false
+  mut pfx_mut := false
+  mut pfx_comptime := false
   mut want_pfx := true
   while want_pfx {
     if tok_kw(pc, "pub") { pc.idx = pc.idx + 1 }
     ## `mut NAME := <value>` — a MUTABLE module-level global (`@static` data). Consume the `mut`
     ## marker; the value decl parses as usual (kind 0) and the lower recovers the mutability by
     ## source scan (`local_is_mut`) to give it .data storage + label-addressed reads/writes.
-    else if tok_kw(pc, "mut") { pc.idx = pc.idx + 1 }
+    else if tok_kw(pc, "mut") { pc.idx = pc.idx + 1; pfx_mut = true }
+    else if tok_kw(pc, "comptime") { pc.idx = pc.idx + 1; pfx_comptime = true }
     else if cur(pc).kind == 33 and tok_at(pc, pc.idx + 1).kind == 1 {
       pfxnm := str_at(pc.src + tok_at(pc, pc.idx + 1).start, tok_at(pc, pc.idx + 1).len)
       if str_eq(pfxnm, "test") { want_pfx = false }
@@ -4948,6 +4972,10 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       else { pc.idx = pc.idx + 2 }
     }
     else { want_pfx = false }
+  }
+  if pfx_mut and pfx_comptime { reject_at(pc, "selfhost: `comptime mut` is invalid — a comptime binding is immutable (Comptime §2.2)", cur(pc).start) }
+  if pfx_comptime and (tok_kw(pc, "if") or tok_kw(pc, "for") or tok_kw(pc, "match") or cur(pc).kind == 12) {
+    reject_at(pc, "selfhost: standalone top-level `comptime if/for/match` is not a module item (Grammar §130)", cur(pc).start)
   }
   ## `@test("desc") fn() { … }` (TOOL-5) — a TEST function (kind 5). Anonymous: recorded as a
   ## kind-5 fn whose name span is the description (for reporting). The lower emits it under a

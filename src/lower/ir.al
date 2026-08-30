@@ -33,6 +33,7 @@ param_p := ast::param_p
 stmt_p := ast::stmt_p
 stmt_label_span := ast::stmt_label_span
 local_type_span := ast::local_type_span
+binding_is_comptime := ast::binding_is_comptime
 fn_is_naked := lower_asm::fn_is_naked
 (Arg, Decl, Expr, Stmt) := ast
 (push_str, push_int) := strbuf
@@ -1442,7 +1443,12 @@ ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), 
       ## an Assign whose TARGET is a module global is a global WRITE (not a local binding) → reject: the
       ## IR would update a vreg, never the global's `.data` word.
       Stmt::Assign(ns, nl2, v, nx) => {
-        if array_lit_info(v).is_a {
+        if binding_is_comptime(src, ns) {
+          ## The scalar IR has no compile-time side table; force the text emitter, whose lower context
+          ## can inline the erased binding safely.
+          IRP_OK = false
+          s = nx
+        } else if array_lit_info(v).is_a {
           ## an inline SCALAR array local init `ys : [<native-scalar>; N] = [<const>, …]` (COMMIT 6d) → the
           ## statement barrier + a frame-resident array iterated by `for x in ys`. Admit iff: the target is a
           ## real local (not a global / struct param); its declared annotation is `[T; N]` with N == the

@@ -163,6 +163,41 @@ pub local_is_mut := fn(src : ptr(u8), name_s : usize) -> bool {
   (src + p - 3).str_at(3) == "mut"
 }
 
+## Whether a binding carries the `comptime` modifier. The parser deliberately keeps modifiers out of
+## the bootstrap-sensitive AST nodes, so consumers recover this source fact beside `local_is_mut`.
+## Walk only the adjacent declaration-prefix words; this accepts `pub comptime name` and
+## `comptime pub name` without mistaking an earlier, unrelated `comptime` for the binding's modifier.
+pub binding_is_comptime := fn(src : ptr(u8), name_s : usize) -> bool {
+  mut p := name_s
+  mut scanning := true
+  while scanning {
+    while p > 0 {
+      c := (src + p - 1).str_at(1)
+      if c == " " or c == "\n" or c == "\t" or c == "\r" { p = p - 1 }
+      else { break }
+    }
+    if p >= 8 and (src + p - 8).str_at(8) == "comptime" {
+      if p == 8 { return true }
+      c8 := (src + p - 9).str_at(1)
+      if c8 == " " or c8 == "\n" or c8 == "\t" or c8 == "\r" { return true }
+    }
+    if p >= 3 and (src + p - 3).str_at(3) == "pub" {
+      if p == 3 { p = p - 3 } else {
+        c3 := (src + p - 4).str_at(1)
+        if c3 == " " or c3 == "\n" or c3 == "\t" or c3 == "\r" { p = p - 3 }
+        else { scanning = false }
+      }
+    } else if p >= 3 and (src + p - 3).str_at(3) == "mut" {
+      if p == 3 { p = p - 3 } else {
+        c3 := (src + p - 4).str_at(1)
+        if c3 == " " or c3 == "\n" or c3 == "\t" or c3 == "\r" { p = p - 3 }
+        else { scanning = false }
+      }
+    } else { scanning = false }
+  }
+  false
+}
+
 ## The prelude tryable enums `Result(T, E)` / `Option(T)` — the passes return these (e.g.
 ## `parse_decl -> Result(usize, ParseErr)`, `?`). Stage-0 supplies them as prelude built-ins, but
 ## the SELF-HOST lower resolves an enum by its DECL in the compiled tree (`enum_decl_of`), so for

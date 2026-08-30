@@ -2868,6 +2868,45 @@ slot_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> i64 {
   res
 }
 
+## COMPTIME scalar locals have no frame slot.  `collect_slots` records their original value expression
+## in this separate per-function table, and the emitter/condition folder consult it by source name.
+## `ek == 255` is private to this side table; it never enters the ordinary frame-slot vector, so it
+## cannot change a function's ABI or frame size.
+comptime_slot_is := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> bool {
+  if unchecked bitcast(usize, ctslots) == 0 { return false }
+  cnt := svec_len(ctslots)
+  st := svec_stride()
+  base := deref(ctslots).base
+  mut i := 0
+  mut found := false
+  while i < cnt {
+    e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
+    if deref(e).ek == 255 and deref(e).nl == n and streq(src, deref(e).ns, deref(e).nl, s, n) { found = true }
+    i += 1
+  }
+  found
+}
+
+comptime_slot_expr := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> ptr(Expr) {
+  if unchecked bitcast(usize, ctslots) == 0 { return unchecked bitcast(ptr(Expr), 0) }
+  cnt := svec_len(ctslots)
+  st := svec_stride()
+  base := deref(ctslots).base
+  mut i := 0
+  mut result : usize = 0
+  while i < cnt {
+    e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
+    if deref(e).ek == 255 and deref(e).nl == n and streq(src, deref(e).ns, deref(e).nl, s, n) { result = deref(e).sns }
+    i += 1
+  }
+  unchecked bitcast(ptr(Expr), result)
+}
+
+bind_comptime_slot := fn(in out cts : SVec, src : ptr(u8), s : usize, n : usize, v : ptr(Expr)) {
+  if cts.cap == 0 { svec_new(cts, cts.arena, 8) }
+  svec_push(cts, SlotEntry(ns = s, nl = n, off = 0, sns = unchecked bitcast(usize, v), snl = 0, ek = 255, estride = 0, eek = 0, is_ref = false))
+}
+
 ## Look up the full slot ENTRY for a name (last match wins), so a `Field` read can recover
 ## both the base offset and the struct TYPE name (to resolve the field index). Returns a
 ## sentinel entry (sns = snl = 0, off = 0) if unbound — sema rejects that case upstream.
@@ -6933,13 +6972,14 @@ inline_callee_lcount := fn(decls : ptr(rt::Vec), src : ptr(u8), ci : i64, mar : 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   mut s := SVec(base = 0, len = 0, cap = 0, arena = mar)
   svec_new(s, mar, 8)
+  mut cts := SVec(base = 0, len = 0, cap = 0, arena = mar)
   esub := Subst(gps = 0, gpl = 0, its = 0, itl = 0, gps2 = 0, gpl2 = 0, its2 = 0, itl2 = 0, gps3 = 0, gpl3 = 0, its3 = 0, itl3 = 0)
   ## slice B: seed the params first so a body local copied FROM a param reserves its aggregate
   ## words (the emit-side `collect_slots` in `emit_inline_body` is seeded identically — the two
   ## MUST agree, since this count drives the scratch reservation); the seeds are subtracted, so
   ## a callee whose body never copies a param reports exactly its former count (fixpoint-neutral).
   seedn := seed_inline_params(s, decls, src, ci, deref(mar))
-  collect_slots(s, d.body_stmts, src, decls, deref(mar), mar, ptr(esub))
+  collect_slots(s, d.body_stmts, src, decls, deref(mar), mar, ptr(esub), ptr(cts))
   svec_len(ptr(s)) - seedn
 }
 ## Depth guard for the nested-footprint recursion (operator guards nest ~2 deep; a hypothetical
@@ -6957,13 +6997,14 @@ inline_callee_nested_need := fn(decls : ptr(rt::Vec), src : ptr(u8), ci : i64, a
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
   mut sl := SVec(base = 0, len = 0, cap = 0, arena = mar)
   svec_new(sl, mar, 8)
+  mut cts2 := SVec(base = 0, len = 0, cap = 0, arena = mar)
   ## slice B: seed the params with their AGGREGATE-aware shapes (`seed_inline_params` — a struct
   ## param is ek 2, not the former flat typed-scalar entry) so a body local copied from a param
   ## reserves correctly here too; the operand-type reads (`operand_type_from_slots`) key on the
   ## recorded span, unchanged for every pre-slice-B callee.
   seed_inline_params(sl, decls, src, ci, a)
   nsub := Subst(gps = 0, gpl = 0, its = 0, itl = 0, gps2 = 0, gpl2 = 0, its2 = 0, itl2 = 0, gps3 = 0, gpl3 = 0, its3 = 0, itl3 = 0)
-  collect_slots(sl, d.body_stmts, src, decls, a, mar, ptr(nsub))
+  collect_slots(sl, d.body_stmts, src, decls, a, mar, ptr(nsub), ptr(cts2))
   nd := inline_frame_need_stmts(d.body_stmts, decls, src, d.mod_start, d.mod_len, ptr(sl), a, mar)
   INL_NEST_DEPTH = INL_NEST_DEPTH - 1
   nd
@@ -14636,7 +14677,7 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
     ## (`inline_callee_lcount`) — the two MUST agree.
     lseed := seed_inline_params(ls, cx.decls, cx.src, inl_ci, a)
     lsub := Subst(gps = 0, gpl = 0, its = 0, itl = 0, gps2 = 0, gpl2 = 0, its2 = 0, itl2 = 0, gps3 = 0, gpl3 = 0, its3 = 0, itl3 = 0)
-    collect_slots(ls, icd.body_stmts, cx.src, cx.decls, deref(cx.mar), cx.mar, ptr(lsub))
+    collect_slots(ls, icd.body_stmts, cx.src, cx.decls, deref(cx.mar), cx.mar, ptr(lsub), cx.ctslots)
     lcnt := svec_len(ptr(ls)) - lseed
     mut li := 0
     mut lcum := 0
@@ -14960,7 +15001,7 @@ emit_variadic_body := fn(var_ci : i64, args_head : ptr(mut Arg), nfixed : usize,
     mut ls := SVec(base = 0, len = 0, cap = 0, arena = cx.mar)
     svec_new(ls, cx.mar, 8)
     lsub := Subst(gps = 0, gpl = 0, its = 0, itl = 0, gps2 = 0, gpl2 = 0, its2 = 0, itl2 = 0, gps3 = 0, gpl3 = 0, its3 = 0, itl3 = 0)
-    collect_slots(ls, icd.body_stmts, cx.src, cx.decls, deref(cx.mar), cx.mar, ptr(lsub))
+    collect_slots(ls, icd.body_stmts, cx.src, cx.decls, deref(cx.mar), cx.mar, ptr(lsub), cx.ctslots)
     lcnt := svec_len(ptr(ls))
     mut li := 0
     while li < lcnt {
@@ -15052,6 +15093,13 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
     ## A variable: read its frame slot at -(off + 1) * 8(%rbp), push it. An OUT-SCALAR param
     ## (ek 8, is_ref) holds a POINTER to the caller's scalar — load the pointer then deref it.
     Expr::Var(s, n) => {
+      ## A local `comptime` binding is represented only by its side-table expression. Inline that
+      ## expression at every use; the ordinary frame-slot/global resolver must never see its name.
+      cvlocal := comptime_slot_expr(cx.ctslots, cx.src, s, n)
+      if unchecked bitcast(usize, cvlocal) != 0 {
+        emit_gas(cvlocal, sb, cx, a, nl)
+        return
+      }
       ## a bare identifier that is NOT a local/param slot AND names a FUNCTION (kind-1/4 decl) is a
       ## fn-VALUE (a function used as a value, e.g. `apply(add1, …)`): push its code pointer `leaq
       ## <module>__<fn>(%rip)` (the mangled fn label, module-resolved like a call). The parser keeps
@@ -23366,6 +23414,7 @@ mut IRRD_OK : bool = true
 emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx), in out nl : usize) {
   mut slots := SVec(base = 0, len = 0, cap = 0, arena = p.mar)
   svec_new(slots, p.mar, 32)
+  mut ir_cts := SVec(base = 0, len = 0, cap = 0, arena = p.mar)
   mut pp0 := d.params_head
   while pp0 != 0 {
     pm0 := deref(param_p(pp0))
@@ -23373,7 +23422,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
     pp0 = pm0.next
   }
   mut fn_sub := Subst(gps = 0, gpl = 0, its = 0, itl = 0, gps2 = 0, gpl2 = 0, its2 = 0, itl2 = 0, gps3 = 0, gpl3 = 0, its3 = 0, itl3 = 0)
-  collect_slots(slots, d.body_stmts, p.src, p.decls, deref(p.mar), p.mar, ptr(fn_sub))
+  collect_slots(slots, d.body_stmts, p.src, p.decls, deref(p.mar), p.mar, ptr(fn_sub), ptr(ir_cts))
   mut tup_layout := SVec(base = 0, len = 0, cap = 0, arena = p.mar)
   svec_new(tup_layout, p.mar, 4)
   ## MEGASHAPE SCRATCH POOLS (only when the fn has GENERAL BARRIERS, IRP_NGBAR>0 — set by the just-run
@@ -23424,6 +23473,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   }
   mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = ir_agg_next, agg_end = ir_agg_end, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
   cxv.fn_id = di
+  cxv.ctslots = ptr(ir_cts)
   cx := ptr(cxv)
   IRV_N = 0
   IRV_NEXT = 0
@@ -23689,6 +23739,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## COMPTIME — skip it (no slot), so the VALUE parameters take slots 0,1,… in order.
   mut slots := SVec(base = 0, len = 0, cap = 0, arena = p.mar)
   svec_new(slots, p.mar, 32)
+  mut ct_slots := SVec(base = 0, len = 0, cap = 0, arena = p.mar)
   ## FN-6 first slice: a LIFTED LAMBDA (SENTINEL `name_len == 0`) returning a MULTI-WORD aggregate
   ## (struct/enum/str) is not yet supported — a lambda is called only INDIRECTLY (through its
   ## code-pointer value), and the indirect-call site has no signature for the fn value, so it captures
@@ -23815,7 +23866,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
     pp = pm.next
   }
   mut fn_sub := Subst(gps = gps, gpl = gpl, its = its, itl = itl, gps2 = gps2, gpl2 = gpl2, its2 = its2, itl2 = itl2, gps3 = gps3, gpl3 = gpl3, its3 = its3, itl3 = itl3)
-  collect_slots(slots, d.body_stmts, p.src, p.decls, deref(p.mar), p.mar, ptr(fn_sub))
+  collect_slots(slots, d.body_stmts, p.src, p.decls, deref(p.mar), p.mar, ptr(fn_sub), ptr(ct_slots))
   ## MIXED-KIND tuple component layout (§4): record per-component type + cumulative offset for any
   ## mixed tuple LOCAL, so a `t.N.field` read uses element N's OWN type/offset (not the uniform first).
   ## Empty for fns with no mixed tuple → the read falls to the uniform path (byte-identical, neutral).
@@ -24044,6 +24095,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
     push_str(sb, ":\n")
     ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = -1, agg_end = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
     ncx.fn_id = di
+    ncx.ctslots = ptr(ct_slots)
     emit_stmts(d.body_stmts, sb, ptr(ncx), nl)
     ## The body's LAST expression is the fn's trailing VALUE (`d.value`), not a body statement — for a
     ## naked fn that is the closing `ret()` / `syscall()`. Emit it as a raw instruction too (a non-raw
@@ -24298,6 +24350,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
   cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = agg_tmp_base, agg_end = agg_tmp_base + aggpoolw, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
   cx.fn_id = di
+  cx.ctslots = ptr(ct_slots)
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)
   ## Trailing return: an enum- or 2-word-struct-returning fn materializes the value into
   ## %rax/%rdx (no stack push); a scalar fn lowers the value onto the stack and pops it into %rax.
