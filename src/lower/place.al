@@ -207,7 +207,14 @@ pub std_idx_one := fn(arr : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx)) -
   mut r := StdIdxOne(ok = false, bo = 0, ts = 0, tl = 0)
   if var_name_span(arr).n == 0 { return r }
   ent := deref(svec_at(SlotEntry, cx.slots, index_base_entry(arr, cx.slots, cx.src)))
-  if ent.ek != 5 or ent.eek != 2 or ent.is_ref or ent.snl == 0 { return r }
+  ## CLAYOUT S3(d) — the direct `a[i].f` store has the same two supported roots as `std_idx_path`:
+  ## an inline fixed-array local, or an inferred `s := a[lo..hi]` Slice(P) local. A Slice local is
+  ## represented by an `is_ref` slot because its words are a {data,len} view; an annotated array
+  ## parameter is deliberately excluded so this bounded slice does not widen the by-reference array
+  ## ABI or the generic aggregate-indexing surface.
+  mut is_byte_index_root := not ent.is_ref
+  if ent.is_ref { is_byte_index_root = slot_name_is_annotated(cx.src, ent.ns, ent.nl) == false }
+  if ent.ek != 5 or ent.eek != 2 or not is_byte_index_root or ent.snl == 0 { return r }
   if not std_array_elem_byte_tier(cx.decls, cx.src, ent.sns, ent.snl, a) { return r }
   bo := layout_field_offset_bytes(cx.decls, cx.src, ent.sns, ent.snl, fs, fl, a)
   ft := field_type_span(cx.decls, cx.src, ent.sns, ent.snl, fs, fl, a)
