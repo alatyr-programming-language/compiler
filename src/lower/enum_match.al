@@ -27,11 +27,11 @@ fld_p := ast::fld_p
 (Arm, Decl, Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
 (push_str, push_int) := strbuf
 (LCtx, num_lit_value, var_name_span) := lower_ctx
-(base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_word_offset, is_niche_folded, repr_tag_code, struct_decl_of, struct_words, variant_index, variant_payload_type) := lower_layout
+(base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_word_offset, is_niche_folded, layout_kind, layout_kind_is_byte, layout_kind_is_packed, repr_tag_code, struct_decl_of, struct_words, variant_index, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
-(emit_index_addr) := lower::place
+(emit_index_addr, field_place_parts) := lower::place
 
 ## Whether `deref(p)` is a `Var`, and (if so) its name span — a function-body `match` over a
 ## pointer param (the lowerable shape, mirroring `enum_lit_info`/`struct_lit_info`), so
@@ -234,11 +234,11 @@ pub try_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
   ScrutInfo(is_e = true, base = tbase, es = ft.s, el = ft.n, is_ref = false, tmod_s = 0, tmod_l = 0)
 }
 
-## If `scrut` is `cs[i]` where `cs` is an ENUM-element array local (ek 5, eek 3), MATERIALIZE element
-## `i`'s enum words (disc + payload) into this match's scratch temp and return a ScrutInfo over it —
-## so `match cs[i]` dispatches correctly (the array/index dual of `try_field_enum_scrut`). Emits
-## nothing + `is_e = false` otherwise. The logic lives INSIDE the `Index` arm with nested `if`s (no
-## mid-arm early return, no ptr-in-struct destructure — both lean-lower landmines) and a `mut` result.
+## If `scrut` is `cs[i]` or `s.items[i]` where the selected element is an ENUM, MATERIALIZE its enum
+## words (disc + payload) into this match's scratch temp and return a ScrutInfo over it — so indexed
+## local arrays and inline array fields dispatch correctly. Emits nothing + `is_e = false` otherwise.
+## The logic lives INSIDE the `Index` arm with nested `if`s (no mid-arm early return, no ptr-in-struct
+## destructure — both lean-lower landmines) and a `mut` result.
 pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) -> ScrutInfo {
   mut r := ScrutInfo(is_e = false, base = 0, es = 0, el = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
   a := arena_of(cx)
@@ -302,6 +302,82 @@ pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
             j += 1
           }
         r = ScrutInfo(is_e = true, base = tbase, es = ees, el = eel, is_ref = false, tmod_s = 0, tmod_l = 0)
+        }
+      }
+      ## `match G.items[i]` over an ENUM-element ARRAY FIELD of a mutable global struct. Global fields
+      ## have no frame SlotEntry, and the ordinary Index fallback reads one `.data` word at `off+i`;
+      ## an enum element occupies `1 + max-payload` words, so that fallback silently changes both the
+      ## discriminant and the payload for every element after the first. Resolve the complete global
+      ## place, then materialize the same ascending `.data` image used by global enum-field matching.
+      if gaen.is_e == false {
+        gpa := global_place(base, cx, a)
+        if gpa.found and gpa.tl != 0 {
+          gaes := array_elem_span(cx.src, gpa.ts, gpa.tl)
+          if gaes.n != 0 and enum_decl_of(cx.decls, cx.src, gaes.s, gaes.n) >= 0 {
+            gfp := field_place_parts(base)
+            gbv := var_name_span(gfp.base)
+            if gbv.n == 0 { panic("selfhost: matching an enum element of a nested global struct array field is not yet supported — bind the inner struct to a local first") }
+            gro := global_place(gfp.base, cx, a)
+            if gro.found and gro.tl != 0 {
+              if layout_kind_is_packed(layout_kind(cx.decls, cx.src, gro.ts, gro.tl, a)) or layout_kind_is_byte(layout_kind(cx.decls, cx.src, gro.ts, gro.tl, a)) { panic("selfhost: matching an enum element of a packed/byte-layout global struct array field is not yet supported — bind the element through a layout-aware local first") }
+              if layout_kind_is_packed(layout_kind(cx.decls, cx.src, gaes.s, gaes.n, a)) or layout_kind_is_byte(layout_kind(cx.decls, cx.src, gaes.s, gaes.n, a)) { panic("selfhost: matching an enum element with packed/byte layout in a global struct array field is not yet supported — bind the element through a layout-aware local first") }
+              gnw := 1 + enum_inst_words(cx.decls, cx.src, gaes.s, gaes.n, a)
+              gtb := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
+              emit_gas(idx, sb, cx, a, nl)             ## index → stack
+              push_str(sb, "  leaq ")
+              emit_global_label(sb, cx.decls, cx.src, gpa.gs, gpa.gn)
+              push_str(sb, "+")
+              push_int(sb, gpa.off * 8)
+              push_str(sb, "(%rip), %rax\n  popq %rcx\n")
+              mut gnel := parse_arr_len(cx.src, gpa.ts, gpa.tl)
+              if cx.vchk and gnel > 0 { push_str(sb, "  cmpq $"); push_int(sb, i64(gnel)); push_str(sb, ", %rcx\n  jb 1f\n  ud2\n1:\n") }
+              push_str(sb, "  imulq $")
+              push_int(sb, i64(gnw * 8))
+              push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq %rax, %r13\n")
+              mut gj := 0
+              while gj < gnw {
+                push_str(sb, "  movq ")
+                push_int(sb, i64(gj * 8))
+                push_str(sb, "(%r13), %rcx\n  movq %rcx, -")
+                push_int(sb, i64((gtb - gj + 1) * 8))
+                push_str(sb, "(%rbp)\n")
+                gj += 1
+              }
+              r = ScrutInfo(is_e = true, base = gtb, es = gaes.s, el = gaes.n, is_ref = false, tmod_s = 0, tmod_l = 0)
+            }
+          }
+        }
+      }
+      ## `match s.items[i]` over an INLINE ARRAY FIELD of a local/by-reference struct. The field has
+      ## no SlotEntry of its own, so the plain-var path above cannot recover the element enum type and
+      ## the old scalar fallback read the field's first word as the discriminant for every element.
+      ## `field_index_base` already proves this is a plain struct root and `emit_index_addr` already
+      ## composes the field offset plus element stride; only materialize the selected enum words here.
+      if gaen.is_e == false {
+        fib := field_index_base(base, cx)
+        if fib.is_fld {
+          fent := deref(svec_at(SlotEntry, cx.slots, fib.ent_idx))
+          ffp := field_place_parts(base)
+          if fent.ek == 2 and fent.snl != 0 {
+            ffts := field_type_span(cx.decls, cx.src, fent.sns, fent.snl, ffp.fs, ffp.fl, a)
+            faes := array_elem_span(cx.src, ffts.s, ffts.n)
+            if faes.n != 0 and enum_decl_of(cx.decls, cx.src, faes.s, faes.n) >= 0 {
+              if layout_kind_is_packed(layout_kind(cx.decls, cx.src, fent.sns, fent.snl, a)) or layout_kind_is_byte(layout_kind(cx.decls, cx.src, fent.sns, fent.snl, a)) { panic("selfhost: matching an enum element of a packed/byte-layout struct array field is not yet supported — bind the element through a layout-aware local first") }
+              fnw := 1 + enum_inst_words(cx.decls, cx.src, faes.s, faes.n, a)
+              ftb := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
+              emit_index_addr(base, idx, sb, cx, a, nl)   ## element word-0 address → %rax
+              mut fj := 0
+              while fj < fnw {
+                push_str(sb, "  movq ")
+                push_int(sb, i64(fj * 8))
+                push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
+                push_int(sb, i64((ftb - fj + 1) * 8))
+                push_str(sb, "(%rbp)\n")
+                fj += 1
+              }
+              r = ScrutInfo(is_e = true, base = ftb, es = faes.s, el = faes.n, is_ref = false, tmod_s = 0, tmod_l = 0)
+            }
+          }
         }
       }
     }
