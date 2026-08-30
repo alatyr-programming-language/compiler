@@ -8,6 +8,15 @@ arg_p := ast::arg_p
 (push_str, push_int) := rt
 (LCtx, node_ptr, var_name_span, num_lit_value, arg_expr_at, asm_str_span, asm_digit) := lower_ctx
 
+## Emit the stable local GAS name for a source code-point label. The declaration emission index is
+## unique across generic instances, while the label spelling is the function-scoped target name.
+pub emit_code_label_name := fn(in out sb : rt::StrBuf, cx : ptr(LCtx), s : usize, n : usize) {
+  push_str(sb, ".Lcp_")
+  push_int(sb, i64(cx.fn_id))
+  push_str(sb, "_")
+  push_str(sb, str_at((cx.src + s), n))
+}
+
 ## RAW-ASM register operand (spec ch.80 §6): the x86_64 GP register named `nm` → its GAS spelling
 ## (`rax` → `%rax`), or "" if `nm` is not a GP register. Registers are arch-data prelude identifiers
 ## (case-sensitive lowercase), NOT keywords.
@@ -55,6 +64,11 @@ pub is_raw_instr_call := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> bool
       nm := str_at((src + cs), cl)
       if (nm == "syscall" or nm == "ret") and na == 0 { true }
       else if nm == "asm" and na >= 1 { true }   ## `asm("…GAS…", op…)` raw escape, {i}-substituted (§4/§11)
+      else if nm == "jmp" and na == 1 and ah != 0 {
+        a0 := deref(arg_p(ah))
+        dv := var_name_span(a0.e)
+        if dv.n != 0 and x86_gpreg(str_at((src + dv.s), dv.n)) == "" { true } else { false }
+      }
       else if (nm == "negq" or nm == "notq") and na == 1 {   ## 1-operand register-form (`negq(rax)` → `negq %rax`)
         a0 := deref(arg_p(ah))
         dv := var_name_span(a0.e)
@@ -113,6 +127,13 @@ pub emit_raw_instr := fn(e : ptr(Expr), in out sb : rt::StrBuf, cx : ptr(LCtx), 
             j += 1
           }
         }
+        push_str(sb, "\n")
+      }
+      else if nm == "jmp" {
+        a0 := deref(arg_p(ah))
+        dv := var_name_span(a0.e)
+        push_str(sb, "  jmp ")
+        emit_code_label_name(sb, cx, dv.s, dv.n)
         push_str(sb, "\n")
       }
       else if nm == "negq" or nm == "notq" {

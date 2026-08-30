@@ -2716,35 +2716,43 @@ emit_fmt_stmts := fn(list : ptr(mut Stmt), body_head : ptr(mut Stmt), in out sb 
         s = nx
       }
       Stmt::ExprStmt(ex, nx) => {
-        ## DEFER (§9.3): the parser desugars `defer <expr>` to the marker call `__defer(<expr>)` and
-        ## `defer { S1; S2 }` to the flat chain `__deferblk()` → S1 → S2 → `__deferblkend()`, all of
-        ## which STAY in this statement list. Re-emit the SURFACE form — rendering the markers literally
-        ## rewrites the user's `defer` into compiler internals (round-trips only because the lower
-        ## re-intercepts the marker names). FLAT ifs, not nested if/else (the documented big-fn landmine).
-        dact := fmt_defer_action(ex, src)
-        isblk := fmt_is_deferblk(ex, src)
-        isend := fmt_is_deferblkend(ex, src)
-        if unchecked bitcast(usize, dact) != 0 {
+        ls := stmt_label_span(s)
+        if ls.n != 0 {
           emit_indent(sb, indent)
-          push_str(sb, "defer ")
-          emit_fmt_expr(dact, sb, src, a, decls)
-          push_str(sb, "\n")
-        }
-        if isblk {
-          emit_indent(sb, indent)
-          push_str(sb, "defer {\n")
-          extra = extra + 1
-        }
-        if isend {
-          if extra == 0 { panic("selfhost: fmt — a `__deferblkend` marker with no open `defer {` (compiler invariant)") }
-          extra = extra - 1
-          emit_indent(sb, ind0 + extra)
-          push_str(sb, "}\n")
-        }
-        if unchecked bitcast(usize, dact) == 0 and isblk == false and isend == false {
-          emit_indent(sb, indent)
+          emit_fmt_label(ls, sb, src)
           emit_fmt_expr(ex, sb, src, a, decls)
           push_str(sb, "\n")
+        } else {
+          ## DEFER (§9.3): the parser desugars `defer <expr>` to the marker call `__defer(<expr>)` and
+          ## `defer { S1; S2 }` to the flat chain `__deferblk()` → S1 → S2 → `__deferblkend()`, all of
+          ## which STAY in this statement list. Re-emit the SURFACE form — rendering the markers literally
+          ## rewrites the user's `defer` into compiler internals (round-trips only because the lower
+          ## re-intercepts the marker names). FLAT ifs, not nested if/else (the documented big-fn landmine).
+          dact := fmt_defer_action(ex, src)
+          isblk := fmt_is_deferblk(ex, src)
+          isend := fmt_is_deferblkend(ex, src)
+          if unchecked bitcast(usize, dact) != 0 {
+            emit_indent(sb, indent)
+            push_str(sb, "defer ")
+            emit_fmt_expr(dact, sb, src, a, decls)
+            push_str(sb, "\n")
+          }
+          if isblk {
+            emit_indent(sb, indent)
+            push_str(sb, "defer {\n")
+            extra = extra + 1
+          }
+          if isend {
+            if extra == 0 { panic("selfhost: fmt — a `__deferblkend` marker with no open `defer {` (compiler invariant)") }
+            extra = extra - 1
+            emit_indent(sb, ind0 + extra)
+            push_str(sb, "}\n")
+          }
+          if unchecked bitcast(usize, dact) == 0 and isblk == false and isend == false {
+            emit_indent(sb, indent)
+            emit_fmt_expr(ex, sb, src, a, decls)
+            push_str(sb, "\n")
+          }
         }
         s = nx
       }

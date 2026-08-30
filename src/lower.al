@@ -40,6 +40,7 @@ param_p := ast::param_p
 arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
+stmt_label_span := ast::stmt_label_span
 ## FN-6 expression-callee site set — the parser's marker for a call whose ARGUMENT 0 IS THE CALLEE
 ## EXPRESSION (`fs[i](x)`), keyed by the call's borrowed callee-name-span start (see `ast.al`).
 ecallee_is := ast::ecallee_is
@@ -108,7 +109,7 @@ ecallee_is := ast::ecallee_is
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
 (SVec, node_ptr, LCtx, CSpan, var_name_span, asm_str_span, asm_digit, num_lit_value, arg_expr_at) := lower_ctx
-(x86_gpreg, is_raw_instr_call, emit_raw_instr, fn_is_naked) := lower_asm
+(x86_gpreg, is_raw_instr_call, emit_raw_instr, emit_code_label_name, fn_is_naked) := lower_asm
 (fn_is_inline, decl_is_pub, param_is_comptime, type_is_variadic_rest, decl_is_variadic, decl_is_slice_variadic) := lower_attrs
 
 ## One name→frame-slot entry: the variable's source name span + its slot index (the slot
@@ -21960,6 +21961,11 @@ emit_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## emit_gas always leaves exactly one value on the stack for a call, so the single pop
       ## keeps the stack balanced regardless of the callee's return (void/scalar/aggregate).
       Stmt::ExprStmt(e, nx) => {
+        ls := stmt_label_span(s)
+        if ls.n != 0 {
+          emit_code_label_name(sb, cx, ls.s, ls.n)
+          push_str(sb, ":\n")
+        }
         emit_st_expr_stmt(e, nx, head, sb, cx, a, nl)
         s = nx
       }
@@ -23342,6 +23348,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
     }
   }
   mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = ir_agg_next, agg_end = ir_agg_end, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+  cxv.fn_id = di
   cx := ptr(cxv)
   IRV_N = 0
   IRV_NEXT = 0
@@ -23961,6 +23968,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   if fn_is_naked(p.src, d.name_start, d.name_len) {
     push_str(sb, ":\n")
     ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = -1, agg_end = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+    ncx.fn_id = di
     emit_stmts(d.body_stmts, sb, ptr(ncx), nl)
     ## The body's LAST expression is the fn's trailing VALUE (`d.value`), not a body statement — for a
     ## naked fn that is the closing `ret()` / `syscall()`. Emit it as a raw instruction too (a non-raw
@@ -24214,6 +24222,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## neutral). `defer_sp` starts at 0: the fn body has NO frame, only nested blocks push.
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
   cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = agg_tmp_base, agg_end = agg_tmp_base + aggpoolw, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+  cx.fn_id = di
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)
   ## Trailing return: an enum- or 2-word-struct-returning fn materializes the value into
   ## %rax/%rdx (no stack push); a scalar fn lowers the value onto the stack and pops it into %rax.
