@@ -354,6 +354,88 @@ EOF
   rm -rf "$tmp"
 }
 
+# Tooling §2.2/§2.6 / issue #262 — a successful manifest-driven build reports only its selected profile,
+# resolved target and produced artifact on stderr. Keep stdout empty for future machine-readable
+# surfaces, reject the summary on a failed build, and rebuild the same package to pin that this
+# observability line does not alter the artifact bytes.
+run_build_summary() {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/src" "$tmp/fail/src"
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(
+    arch = Arch.x86_64,
+    os = Os.linux,
+    env = Env.gnu,
+    container = Container.elf,
+    entry = "_start",
+    output = "summary-app",
+  )],
+)
+EOF
+  printf 'main := fn() -> u64 { return 42 }\n' >"$tmp/src/main.al"
+  cat >"$tmp/fail/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(
+    arch = Arch.x86_64,
+    os = Os.linux,
+    env = Env.gnu,
+    container = Container.elf,
+    entry = "_start",
+    output = "failed-summary",
+  )],
+)
+EOF
+  printf 'main := fn() -> u64 { return\n' >"$tmp/fail/src/main.al"
+
+  (cd "$tmp" && "$CC" build --profile release package.al) >"$tmp/first.out" 2>"$tmp/first.err"
+  first_rc=$?
+  artifact="$tmp/target/release/summary-app"
+  first_summary=$(cat "$tmp/first.err")
+  first_hash=""
+  if [ -f "$artifact" ]; then first_hash=$(sha256sum "$artifact"); fi
+  if [ "$first_rc" = 0 ] \
+    && [ ! -s "$tmp/first.out" ] \
+    && [ "$first_summary" = "built: profile=release target=x86_64-linux-gnu-elf artifact=target/release/summary-app" ] \
+    && [ "$(wc -l <"$tmp/first.err")" = 1 ] \
+    && [ -x "$artifact" ] \
+    && [ -n "$first_hash" ]; then
+    echo "ok   build_summary: exact profile/target/artifact summary on stderr, stdout stays empty"
+  else
+    echo "FAIL build_summary: rc=$first_rc stdout=$(cat "$tmp/first.out") stderr=$(cat "$tmp/first.err") artifact=$artifact"
+    fail=1
+  fi
+
+  (cd "$tmp" && "$CC" build --profile release package.al) >"$tmp/second.out" 2>"$tmp/second.err"
+  second_rc=$?
+  second_hash=""
+  if [ -f "$artifact" ]; then second_hash=$(sha256sum "$artifact"); fi
+  if [ "$second_rc" = 0 ] && [ ! -s "$tmp/second.out" ] \
+    && [ "$(cat "$tmp/second.err")" = "$first_summary" ] \
+    && [ "$first_hash" = "$second_hash" ]; then
+    echo "ok   build_summary: repeated successful build keeps summary and artifact bytes unchanged"
+  else
+    echo "FAIL build_summary: repeated build rc=$second_rc or summary/artifact changed"
+    fail=1
+  fi
+
+  (cd "$tmp/fail" && "$CC" build package.al) >"$tmp/fail.out" 2>"$tmp/fail.err"
+  fail_rc=$?
+  if [ "$fail_rc" != 0 ] && ! grep -q '^built:' "$tmp/fail.err"; then
+    echo "ok   build_summary: failed package build has no success summary"
+  else
+    echo "FAIL build_summary: failed build rc=$fail_rc emitted success summary or unexpectedly succeeded"
+    fail=1
+  fi
+  rm -rf "$tmp"
+}
+
 run_expect() {
   name="$1"
   want="$2"
@@ -1498,6 +1580,7 @@ run_expect profile_run_debug 7 run package.al
 run_expect profile_run_named 42 run --profile release package.al
 run_expect profile_run_release 42 run --release package.al
 run_profile_program_args
+run_build_summary
 run_expect profile_test_parallel 0 test -j2 --profile release package.al
 run_path_dep dep_declared main__main
 run_path_dep dep_alias_use d__math__answer

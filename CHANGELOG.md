@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- Successful manifest-driven builds now print a deterministic profile, target and artifact summary to
+  stderr while leaving stdout available for machine-readable output.
 - Unrecognised CLI commands and flags now produce invocation-level Config diagnostics naming the
   offending argument instead of a missing-source-file failure.
 - x86_64/Linux now supports direct code-point `jmp(label)` transfers to named `@label(name)` instructions inside `unchecked` scopes.

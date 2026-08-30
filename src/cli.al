@@ -493,11 +493,9 @@ run_target_check := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usize
   return rt::run(a, exe_c, av, envp)
 }
 
-## Report a toolchain failure on stderr. Every `link_exe` failure path used to return a BARE numeric
-## code with no message at all — so `alatyr build` in a shell without binutils exited 11 in total
-## silence, and a link error exited 14 with only `ld`'s own line and nothing saying which alatyr step
-## produced it. The status codes are unchanged; only the diagnostic is new.
-tool_error := fn(msg : str) {
+## Write one complete line to stderr. Toolchain failures use this primitive for their diagnostics, and
+## successful manifest builds use it for their optional summary while stdout remains machine-readable.
+tool_stderr_line := fn(msg : str) {
   w := rt::sys_write(1, 2, unchecked bitcast(usize, msg.ptr), msg.len)
   ## Bind the literal to a LOCAL before taking `.ptr`/`.len`. `"\n".ptr` applied DIRECTLY to a
   ## literal handed `sys_write` an address that wrote nothing, so every toolchain diagnostic came
@@ -506,6 +504,14 @@ tool_error := fn(msg : str) {
   ## is the same rule `link_exe` documents for forwarding a `str` argument.
   nl := "\n"
   n := rt::sys_write(1, 2, unchecked bitcast(usize, nl.ptr), nl.len)
+}
+
+## Report a toolchain failure on stderr. Every `link_exe` failure path used to return a BARE numeric
+## code with no message at all — so `alatyr build` in a shell without binutils exited 11 in total
+## silence, and a link error exited 14 with only `ld`'s own line and nothing saying which alatyr step
+## produced it. The status codes are unchanged; only the diagnostic is new.
+tool_error := fn(msg : str) {
+  tool_stderr_line(msg)
 }
 
 ## Report a failure to RUN a toolchain program at all. This is a DIFFERENT diagnosis from "the tool
@@ -2793,6 +2799,32 @@ manifest_target_projection := fn(in out a : rt::Arena, pkg_al : str, field : str
     return "invalid"
   }
   "invalid"
+}
+
+## Tooling §2.2/§2.6 / issue #262 — report the successful manifest build's resolved profile, machine target and
+## artifact path as one deterministic line. This is success telemetry, not a diagnostic: stderr keeps
+## stdout available for machine-readable surfaces, and the write result is intentionally ignored so a
+## completed build keeps its existing exit status even if its optional summary cannot be written.
+manifest_build_summary := fn(in out a : rt::Arena, pkg_al : str, profile : str, artifact : str) {
+  arch := manifest_target_projection(a, pkg_al, "arch")
+  os := manifest_target_projection(a, pkg_al, "os")
+  env := manifest_target_projection(a, pkg_al, "env")
+  container := manifest_target_projection(a, pkg_al, "container")
+  mut summary := rt::strbuf(a, profile.len + arch.len + os.len + env.len + container.len + artifact.len + 64)
+  rt::push_str(summary, "built: profile=")
+  rt::push_str(summary, profile)
+  rt::push_str(summary, " target=")
+  rt::push_str(summary, arch)
+  rt::push_byte(summary, 45)
+  rt::push_str(summary, os)
+  rt::push_byte(summary, 45)
+  rt::push_str(summary, env)
+  rt::push_byte(summary, 45)
+  rt::push_str(summary, container)
+  rt::push_str(summary, " artifact=")
+  rt::push_str(summary, artifact)
+  msg := str_at(summary.data, summary.len)
+  tool_stderr_line(msg)
 }
 
 ## The first bounded plan slice describes only the currently emitted host target. Rejecting the other
@@ -5711,10 +5743,14 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       anyd = manifest_any_dynamic(a, mpath)
       lflags = manifest_linker_flags(a, mpath)
     }
+    mut build_rc := 0
     if artifact_kind == "object" or artifact_kind == "static_lib" {
-      return emit_library_artifact(a, artifact_kind, outp, sb.data, sb.len, libnames, anyd, lflags)
+      build_rc = emit_library_artifact(a, artifact_kind, outp, sb.data, sb.len, libnames, anyd, lflags)
+    } else {
+      build_rc = link_exe_split(a, outp, paths, sb.data, sb.len, spb, entry_sym, libnames, anyd, lflags)
     }
-    return link_exe_split(a, outp, paths, sb.data, sb.len, spb, entry_sym, libnames, anyd, lflags)
+    if is_pkg and build_rc == 0 { manifest_build_summary(a, mpath, selected_profile, outp) }
+    return build_rc
   }
   out := arg_at(cmd, oi)
   return link_exe_split(a, out, paths, sb.data, sb.len, spb, "_start", "", false, "")
