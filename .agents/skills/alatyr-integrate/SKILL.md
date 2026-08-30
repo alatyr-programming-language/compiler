@@ -187,6 +187,14 @@ seed→Stage1 GAS delta line by line with both label families normalized (**this
 find the compiler miscompiling itself** — one reseed surfaced four latent bugs) → copy Stage1 over
 `seed/alatyr` and append the evidence to `seed/VERSION`.
 
+A self-promote also **bumps `version` in the repository's own `package.al`**, in the same commit that
+replaces the seed. That field is the compiler's only identity: it is part of the input tree, so it stays
+reproducible (unlike a build-time commit string), and a promoted seed that keeps the previous number
+leaves two materially different compilers claiming to be the same build. Move the patch component for an
+ordinary promotion; the versioning policy in `CHANGELOG.md` decides minor and major, and the same rule
+that governs a changelog entry governs this bump. State the old and new version in the acceptance
+comment alongside the three stage hashes.
+
 ## 4 · Gate the merge, then assert the tree
 
 ```sh
