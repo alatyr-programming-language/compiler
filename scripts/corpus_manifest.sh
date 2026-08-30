@@ -149,22 +149,21 @@ excluded_for_source() { # rel -> how many of its four backends are quarantined
 ## which is a real observation about the compiler and not host noise.
 ## Native runners add a second host-only diagnostic layer for signal exits. QEMU and `timeout` can spell
 ## the same terminal result with a target-dependent binary prefix, signal name, or core-dump warning; the
-## row already records the exit code, so retain one stable marker per stream while keeping guest stderr
+## row already records the exit code, so drop those redundant lines while keeping guest stderr byte-for-byte
 ## untouched. The patterns are anchored to the runner-owned prefix/text and do not match an application
-## diagnostic that merely mentions a signal or core dump. Collapse repeated markers because the host may
-## emit both the QEMU report and one or more `timeout` reports for the same child.
+## diagnostic that merely mentions a signal or core dump. Dropping rather than re-emitting a marker also
+## preserves a stream's original final-newline shape.
 normalize_stream() {
   sed -E \
          -e '/error while executing at wasm backtrace:/,/^[[:space:]]+[0-9]+:[[:space:]]+wasm trap:/ s|^([[:space:]]+[0-9]+:[[:space:]]+)0x[[:xdigit:]]+([[:space:]]+-[[:space:]]+<unknown>!<wasm function [0-9]+>[[:space:]]*)$|\1<wasmoff>\2|' \
-         -e 's|^qemu(-[[:alnum:]_.-]+)?: uncaught target signal [0-9]+ \(.*\) - core dumped$|<host-runner-diagnostic>|' \
-         -e 's|^timeout: the monitored command dumped core$|<host-runner-diagnostic>|' \
-         -e 's|^timeout: warning: disabling core dumps failed: Function not implemented$|<host-runner-diagnostic>|' \
+         -e '/^qemu(-[[:alnum:]_.-]+)?: uncaught target signal [0-9]+ \(.*\) - core dumped$/d' \
+         -e '/^timeout: the monitored command dumped core$/d' \
+         -e '/^timeout: warning: disabling core dumps failed: Function not implemented$/d' \
          -e 's|/nix/store/[0-9a-z]{32}-|/nix/store/<hash>-|g' \
          -e "s|$WORK_RE/[a-z0-9_]+/[0-9]{6}/|<artifact>/|g" \
          -e "s|$ROOT_RE|<root>|g" \
          -e "s|$HOME_RE|<home>|g" \
-         "$1" \
-    | awk '!($0 == "<host-runner-diagnostic>" && seen++)'
+         "$1"
 }
 
 hash_stream() {
