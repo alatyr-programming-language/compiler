@@ -5546,6 +5546,7 @@ run agg_call_arg 42
 run agg_arr_elem_arg 42
 run_x86 issue260_slice_field 42
 run_x86 issue261_slice_field 42
+run_x86 issue263_slice_narrow_field_write 42
 run generic_struct_inout 42
 run ufcs_call_recv 42
 run ufcs_call_args 42
