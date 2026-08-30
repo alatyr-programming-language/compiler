@@ -1858,7 +1858,9 @@ EOF
   ( cd "$good" && "$CC" build package.al ) >/dev/null 2>"$err"
   build_rc=$?
   exe="$good/target/debug/issue11-declared-type"
-  if [ "$build_rc" = 0 ] && [ -x "$exe" ] && [ ! -s "$err" ]; then
+  summary='built: profile=debug target=x86_64-linux-gnu-elf artifact=target/debug/issue11-declared-type'
+  if [ "$build_rc" = 0 ] && [ -x "$exe" ] && [ "$(cat "$err")" = "$summary" ] \
+      && [ "$(wc -l <"$err")" = 1 ]; then
     _e2e_exec "$exe" >/dev/null 2>&1; got=$?
     if _e2e_runtime_failure "issue11_package_type_name/control" "$got"; then return; fi
     if [ "$got" = 42 ]; then echo "ok   issue11_package_type_name: declared package control artifact runs 42"; else echo "FAIL issue11_package_type_name: declared package artifact=$got want 42"; fail=1; fi
@@ -2254,14 +2256,18 @@ multi_target_layout_test() {
   if [ -x "$alternate" ]; then _e2e_exec "$alternate" >/dev/null 2>&1; alternate_rc=$?; fi
   if _e2e_runtime_failure "multi_target_layout(all host)" "$host_rc"; then return; fi
   if _e2e_runtime_failure "multi_target_layout(all alternate)" "$alternate_rc"; then return; fi
+  summary="$T/multi_target_layout.all.summary"
+  printf '%s\n%s\n' \
+    'built: profile=debug target=x86_64-linux-gnu-elf artifact=target/host/debug/multi-host' \
+    'built: profile=debug target=x86_64-linux-gnu-elf artifact=target/alternate/debug/multi-alternate' >"$summary"
   if [ "$rc" = 0 ] && [ "$host_rc" = 42 ] && [ "$alternate_rc" = 42 ] \
     && [ -s "$host.s" ] && [ -s "$host.o" ] \
     && [ -s "$alternate.s" ] && [ -s "$alternate.o" ] \
     && [ ! -e "$p/target/debug/multi-host" ] && [ ! -e "$p/target/debug/multi-alternate" ] \
-    && [ ! -s "$T/multi_target_layout.all.err" ]; then
+    && cmp -s "$T/multi_target_layout.all.err" "$summary"; then
     echo "ok   multi_target_layout: --target all builds host and alternate without intermediate collisions"
   else
-    echo "FAIL multi_target_layout: --target all rc=$rc host=$host_rc alternate=$alternate_rc or target-qualified artifacts missing"; fail=1
+    echo "FAIL multi_target_layout: --target all rc=$rc host=$host_rc alternate=$alternate_rc or target-qualified artifacts/summary missing"; fail=1
   fi
   rm -rf "$p/target"
   bad="$T/multi_target_layout_bad_output"
