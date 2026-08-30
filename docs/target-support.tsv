@@ -1,0 +1,13 @@
+surface	arch	os	env	container	build	check	emit	assemble	run	boundary
+linux-x86_64	x86_64	linux	gnu	elf	yes	yes	yes	yes	yes	reference package target
+linux-aarch64	aarch64	linux	gnu	elf	unsupported	yes	yes	test-only	test-only	cross target test path
+linux-riscv64	riscv64	linux	gnu	elf	unsupported	yes	yes	test-only	test-only	cross target test path
+wasm	-	-	-	wasm	unsupported	check-only	yes	test-only	test-only	additive backend; no invented Arch value
+linux-i386	i386	linux	gnu	elf	unsupported	unsupported	unsupported	unsupported	unsupported	32-bit target not implemented
+linux-aarch32	aarch32	linux	eabi	elf	unsupported	unsupported	unsupported	unsupported	unsupported	32-bit target not implemented
+linux-riscv32	riscv32	linux	eabi	elf	unsupported	unsupported	unsupported	unsupported	unsupported	32-bit target not implemented
+machine-freebsd-x86_64	x86_64	freebsd	-	elf	unsupported	check-only	unsupported	unsupported	unsupported	validation only; ABI/linker pending
+machine-windows-x86_64	x86_64	windows	-	pe	unsupported	check-only	unsupported	unsupported	unsupported	validation only; ABI/linker pending
+machine-macos-aarch64	aarch64	macos	-	macho	unsupported	check-only	unsupported	unsupported	unsupported	validation only; ABI/linker pending
+machine-android-aarch64	aarch64	android	-	elf	unsupported	check-only	unsupported	unsupported	unsupported	validation only; ABI/linker pending
+machine-bare-riscv64	riscv64	bare	none	-	unsupported	check-only	unsupported	unsupported	unsupported	validation only; freestanding ABI pending

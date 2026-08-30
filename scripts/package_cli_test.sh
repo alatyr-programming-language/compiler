@@ -4,6 +4,13 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CC="${ALATYR:-$ROOT/target/debug/alatyr}"
 PKG="$ROOT/test/package/profile_cli"
+if [ -x /usr/bin/find ]; then
+  FIND_BIN=/usr/bin/find
+elif [ -x /bin/find ]; then
+  FIND_BIN=/bin/find
+else
+  FIND_BIN=find
+fi
 
 if [ ! -x "$CC" ]; then
   echo "FAIL package_cli: compiler not found at $CC" >&2
@@ -119,6 +126,45 @@ run_zero_tests() {
     fail=1
   fi
   rm -f "$out" "$err" "$want"
+  rm -rf "$tmp"
+}
+
+run_stdlib_surface() {
+  tmp=$(mktemp -d)
+  cat >"$tmp/main.al" <<'EOF'
+main := fn() -> u64 {
+  mut buf : [u8; 256] = [0; 256]
+  n := std::argv::read(ptr(buf[0]), 256)
+  argc := std::argv::count(ptr(buf[0]), n)
+  first := std::argv::get(ptr(buf[0]), n, 0)
+  missing := std::argv::get(ptr(buf[0]), n, argc + 1)
+  if missing.len != 0 { return 2 }
+  wr := std::term::write_str(std::term::stdout(), "term surface\n")
+  match wr {
+    Result::Ok(w) => {
+      if argc > 0 and first.len > 0 and w == 13 { return 42 }
+    }
+    Result::Err(e) => {}
+  }
+  return 1
+}
+EOF
+  (cd "$tmp" && "$CC" -o surface.out main.al) >"$tmp/build.out" 2>"$tmp/build.err"
+  build_rc=$?
+  if [ "$build_rc" = 0 ]; then
+    (cd "$tmp" && ./surface.out) >"$tmp/run.out" 2>"$tmp/run.err"
+    run_rc=$?
+  else
+    run_rc=99
+  fi
+  printf 'term surface\n' >"$tmp/want.out"
+  if [ "$build_rc" = 0 ] && [ "$run_rc" = 42 ] \
+    && cmp -s "$tmp/run.out" "$tmp/want.out" && [ ! -s "$tmp/run.err" ]; then
+    echo "ok   stdlib_surface: std::argv borrowed views and std::term Result write"
+  else
+    echo "FAIL stdlib_surface: build rc=$build_rc run rc=$run_rc stdout=$(cat "$tmp/run.out" 2>/dev/null) stderr=$(cat "$tmp/build.err" "$tmp/run.err" 2>/dev/null)"
+    fail=1
+  fi
   rm -rf "$tmp"
 }
 
@@ -526,6 +572,48 @@ EOF
   rm -rf "$tmp"
 }
 
+run_unsupported_32bit() {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/src"
+  cat >"$tmp/src/main.al" <<'EOF'
+main := fn() -> u64 { return 42 }
+EOF
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(name = "i386", arch = Arch.i386, os = Os.linux, env = Env.gnu, container = Container.elf,
+           entry = "_start", output = "i386"),
+    Target(name = "aarch32", arch = Arch.aarch32, os = Os.linux, env = Env.eabi, container = Container.elf,
+           entry = "_start", output = "aarch32"),
+    Target(name = "riscv32", arch = Arch.riscv32, os = Os.linux, env = Env.eabi, container = Container.elf,
+           entry = "_start", output = "riscv32")
+  ]
+)
+EOF
+  checks=0
+  passed=0
+  for variant in i386 aarch32 riscv32; do
+    checks=$((checks + 1))
+    rm -rf "$tmp/target"
+    (cd "$tmp" && "$CC" build --target "$variant" package.al) >"$tmp/$variant.out" 2>"$tmp/$variant.err"
+    rc=$?
+    if [ "$rc" != 0 ] && grep -qF 'config: Target.arch is unsupported by this compiler' "$tmp/$variant.err" \
+      && grep -qF 'at line' "$tmp/$variant.err" && [ ! -e "$tmp/target" ]; then
+      passed=$((passed + 1))
+    else
+      echo "FAIL unsupported_32bit($variant): rc=$rc stdout=$(cat "$tmp/$variant.out" 2>/dev/null) stderr=$(cat "$tmp/$variant.err" 2>/dev/null)"
+      fail=1
+    fi
+  done
+  if [ "$passed" = "$checks" ]; then
+    echo "ok   unsupported_32bit: i386/aarch32/riscv32 fail closed with located diagnostics"
+  fi
+  rm -rf "$tmp"
+}
+
 run_expect() {
   name="$1"
   want="$2"
@@ -642,7 +730,7 @@ run_path_dep() {
   (cd "$p" && "$CC" run package.al) >/dev/null 2>&1; got=$?
   if [ "$got" = 42 ]; then echo "ok   path_dep($d): run 42"; else echo "FAIL path_dep($d): run rc $got want 42"; fail=1; fi
   (cd "$p" && "$CC" build package.al) >/dev/null 2>&1
-  exe=$(find "$p/target/debug" -maxdepth 1 -type f ! -name '*.s' ! -name '*.o' 2>/dev/null | head -1)
+  exe=$("$FIND_BIN" "$p/target/debug" -maxdepth 1 -type f ! -name '*.s' ! -name '*.o' 2>/dev/null | head -1)
   if [ -x "${exe:-/nonexistent}" ]; then
     "$exe" >/dev/null 2>&1; got=$?
     if [ "$got" = 42 ]; then echo "ok   path_dep($d): artifact 42"; else echo "FAIL path_dep($d): artifact rc $got want 42"; fail=1; fi
@@ -1099,7 +1187,7 @@ run_manifestless_cleanup() {
     fi
     pid=$!
     wait "$pid"; got=$?
-    left=$(find /tmp -maxdepth 1 -name ".alatyr-run-$pid*" 2>/dev/null | sort | tr '\n' ' ')
+    left=$("$FIND_BIN" /tmp -maxdepth 1 -name ".alatyr-run-$pid*" 2>/dev/null | sort | tr '\n' ' ')
     if [ "$got" != 42 ]; then
       echo "FAIL manifestless_cleanup($split): rc=$got, want 42"; fail=1
     elif [ -n "$left" ]; then
@@ -1562,7 +1650,7 @@ EOF
     echo "FAIL tool20_plan: repeat rc=$repeat_rc or bytes changed"
     fail=1
   fi
-  files=$(find "$p/target" -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort)
+  files=$("$FIND_BIN" "$p/target" -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort)
   if [ "$files" = "debug/plan.tsv" ] && [ ! -e "$p/target/debug/tool20-plan.s" ] \
     && [ ! -e "$p/target/debug/tool20-plan.o" ] && [ ! -e "$p/target/debug/tool20-plan" ]; then
     echo "ok   tool20_plan: output-only, no code-generation artifacts"
@@ -1831,10 +1919,12 @@ run_noarg_help
 run_help_version
 run_new_scaffold
 run_zero_tests
+run_stdlib_surface
 run_cross_target_test
 run_machine_schema
 run_invocation_diagnostics
 run_issue2_package_diagnostics
+run_unsupported_32bit
 run_expect profile_check_named 0 check --profile release package.al
 run_expect profile_check_release 0 check --release package.al
 run_expect profile_run_debug 7 run package.al

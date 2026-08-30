@@ -76,6 +76,16 @@ fail=0
 # Logs live in this checkout's own target/, never a fixed /tmp path: every worktree runs this script, and a
 # shared path means two lanes silently overwrite each other's evidence (and then read the other's).
 LOGDIR="$ROOT/target"; mkdir -p "$LOGDIR"
+
+echo "### CONTRACTS ###"
+CONTRACT_LOG="$LOGDIR/full_contracts.log"
+bash scripts/contract_check.sh > "$CONTRACT_LOG" 2>&1
+contract_rc=$?
+cat "$CONTRACT_LOG"
+[ "$contract_rc" = 0 ] || fail=1
+bash scripts/release_manifest_test.sh
+[ "$?" = 0 ] || fail=1
+
 FP_LOG="$LOGDIR/full_fp.log"; E2E_LOG="$LOGDIR/full_e2e.log"; CM_LOG="$LOGDIR/full_corpus_manifest.log"
 
 echo "### FIXPOINT ###"

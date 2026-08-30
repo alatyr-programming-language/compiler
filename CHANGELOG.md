@@ -42,6 +42,12 @@ how this repository proves itself, not part of what it ships.
   offending argument instead of a missing-source-file failure.
 - Package setup failures now produce located Config diagnostics: `new` reports an occupied destination
   or missing name, and an explicitly empty `Package.source_dir` is rejected before codegen or linking.
+- Added the documented `std::argv` borrowed command-line surface and
+  `std::term` standard-stream wrapper. Both preserve explicit buffer ownership
+  and `Result(_, IoError)` error reporting; `std::net` remains an explicit v1
+  exclusion pending a socket/ABI decision.
+- Added target, conformance, package-tooling, safety, and release-provenance
+  contracts plus deterministic `scripts/release_manifest.sh` validation.
 - x86_64/Linux now supports direct code-point `jmp(label)` transfers to named `@label(name)` instructions inside `unchecked` scopes.
 - The compiler now reports a controlled arena-initialization failure when an internal `mmap` fails,
   instead of dereferencing the kernel's negative errno result.

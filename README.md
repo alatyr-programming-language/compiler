@@ -13,6 +13,14 @@ outcome, a clean compile that returns the wrong answer is not. The open
 guarantee does not yet hold and what the cross-backend coverage actually is — read them before deciding
 what this is ready for.
 
+The supported-target and artifact contract is [documented in the repository](docs/target-support.md);
+the machine-readable matrix is [docs/target-support.tsv](docs/target-support.tsv). Linux x86_64 is the
+production build/run target. AArch64, RISC-V64, and WAT rows marked `test-only` or `check-only` are
+explicit probes, not portability promises. Package semantics, standard-library boundaries, safety, and
+release provenance are documented in [docs/package-tooling.md](docs/package-tooling.md),
+[docs/stdlib.md](docs/stdlib.md), [docs/safety.md](docs/safety.md), and
+[docs/release.md](docs/release.md).
+
 ## Quick start
 
 ```sh
@@ -20,6 +28,8 @@ nix develop                              # as / ld
 seed/alatyr build package.al             # bootstrap: build the compiler -> target/debug/alatyr
 target/debug/alatyr build package.al     # rebuild it with itself
 ./scripts/fixpoint.sh                    # verify reproducibility (seed == Stage1 == Stage2)
+bash scripts/contract_check.sh            # validate target/package/stdlib/release contracts
+bash scripts/release_manifest_test.sh    # validate deterministic release metadata
 ```
 
 ## Layout
