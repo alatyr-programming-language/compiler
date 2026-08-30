@@ -36,7 +36,7 @@ stmt_p := ast::stmt_p
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
 ## does not depend on sema → no import cycle. (`struct_decl_of`/`base_type_name`/`brand_underlying` added
 ## for the is-KIND + field-COUNT fold — they classify the resolved type exactly as the lower's own fold.)
-(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field) := lower_layout
+(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element) := lower_layout
 ## §8 `@repr(T)` tag-type primitives (shared with `lower::validate_repr`) for the LOCATED @repr reject:
 ## sema classifies an enum's `@repr(T)` tag exactly as the build's `validate_repr` does (same span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
@@ -121,6 +121,11 @@ packed_array_err := fn(s : usize) -> CheckErr { PACKED_ARRAY_DIAG_MARKER + s * 4
 ## share one pre-emission refusal for the exact shapes whose nested lowering is not yet safe.
 LOCAL_MULTIDIM_ARRAY_DIAG_MARKER := 6880000000000000000
 local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIAG_MARKER + s * 4 }
+## Issue #214 — a direct multidimensional fixed-array STRUCT FIELD has no composed nested address
+## model in the current lower. Keep this class distinct from the bounded local-array fence so both
+## public entry points can report the established field-specific wording and source location.
+MULTIDIM_ARRAY_FIELD_DIAG_MARKER := 6890000000000000000
+multidim_array_field_err := fn(s : usize) -> CheckErr { MULTIDIM_ARRAY_FIELD_DIAG_MARKER + s * 4 }
 
 ## A distinct located diagnostic for a `comptime if` whose condition reads a runtime local. Keep it
 ## between the CT-12 guard class and immutable bindings so every older CheckErr range remains stable;
@@ -2848,6 +2853,22 @@ sema_local_multidim_array := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   p += 1
   p = sema_local_type_trivia(src, p, end)
   p == end
+}
+## Return the source span of the first direct multidimensional fixed-array field in a STRUCT
+## declaration, or 0. This is the semantic twin of lower_layout's pre-emission fence: share its
+## source-shape predicate so check and build cannot disagree about whitespace or nested brackets.
+## Generic instances are passed through `subst_field_ty`; scalar type arguments remain byte-identical,
+## while an aggregate argument is inspected at its effective field span like the lower.
+sema_multidim_array_field_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+  if d.kind != 2 { return 0 }
+  mut f := d.fields_head
+  while f != 0 {
+    fd := deref(fld_p(f))
+    eff := subst_field_ty(decls, src, d.name_start, d.name_len, fd.ts, fd.tl, a)
+    if array_type_has_array_element(src, eff.s, eff.n) { return fd.ts }
+    f = fd.next
+  }
+  0
 }
 ## Is `v` a CONFIDENT numeric/boolean LITERAL (the REVERSE-direction scalar value)? Literals only — a
 ## scalar `Var` local is left tolerant (scalars are not reliably tag-recorded), so no valid program is
@@ -11439,6 +11460,11 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
       ## CALL would therefore be folded as zeroed/static storage while its callee never runs; reject the
       ## same CONST shape before any backend can emit it, with one diagnostic class for every CLI path.
       if sema_global_init_call_bad(d, decls, src) { return global_init_call_err(d.name_start) }
+      ## Issue #214 / Types §6.4 + I11: the lower's direct nested-array field fence must run on the
+      ## check path too. Reject the declaration before any backend can reserve a word-only image;
+      ## the sema helper shares lower_layout's exact source predicate and preserves the field line.
+      mdf := sema_multidim_array_field_bad(d, decls, src, deref(a))
+      if mdf != 0 { return multidim_array_field_err(mdf) }
       ## Types §6.1 / Memory — a direct byte-array component gives a tuple its standard byte layout,
       ## but module-global storage remains word-based. Reject the exact explicit global form before any
       ## backend can emit a partial word copy; the local tuple tier and ordinary tuple ABI remain open.

@@ -39,6 +39,7 @@ how this repository proves itself, not part of what it ships.
   changing the embedded file bytes.
 - Direct multidimensional fixed-array fields now fail loudly with a located diagnostic instead of
   compiling to a wrong value on nested indexing.
+- `check` now agrees with `build` when rejecting direct multidimensional fixed-array fields.
 - Unified sub-word scalar-width classification across parsing, formatting, lower layout, and WAT so
   `bits8`/`bits16`/`bits32` pointer casts preserve their intended width and format safely.
 - Fixed ordinary scalar-field structs to use natural byte alignment, padding, and field offsets instead of one machine word per field.

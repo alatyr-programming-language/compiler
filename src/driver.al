@@ -3288,6 +3288,9 @@ DIAG_PACKED_ARRAY_MARKER := 6845468423603140608
 ## Issue #215 — the bounded local 2D fixed-array lowering fence. Keep this class between the packed-array
 ## and comptime markers so check/build/emit share one located diagnostic without changing older ranges.
 DIAG_LOCAL_MULTIDIM_ARRAY_MARKER := 6880000000000000000
+## Issue #214 — the bounded direct multidimensional struct-field fence. Keep it distinct from the local
+## array class so check/build render the field-specific lower diagnostic while preserving old ranges.
+DIAG_MULTIDIM_ARRAY_FIELD_MARKER := 6890000000000000000
 ## CT-12 / Comptime §2.6 — the COMPTIME guard-failure class (shared with sema::comptime_err). Above
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
@@ -3393,7 +3396,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ctg := code >= DIAG_CT_MARKER and code < DIAG_COMPTIME_COND_MARKER
   global_init_call := code >= DIAG_GLOBAL_INIT_CALL_MARKER and code < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_GLOBAL_INIT_CALL_MARKER
-  multidim_array := code >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and code < DIAG_CT_MARKER
+  multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_CT_MARKER
+  multidim_array := code >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and code < DIAG_MULTIDIM_ARRAY_FIELD_MARKER
   packed_array := code >= DIAG_PACKED_ARRAY_MARKER and code < DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
   enum_global_array := code >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and code < DIAG_PACKED_ARRAY_MARKER
   tuple_global := code >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and code < DIAG_ENUM_GLOBAL_ARRAY_MARKER
@@ -3430,6 +3434,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if packed_array {
     raw = code - DIAG_PACKED_ARRAY_MARKER
     span = raw / 4
+  } else if multidim_array_field {
+    raw = code - DIAG_MULTIDIM_ARRAY_FIELD_MARKER
+    span = raw / 4
   } else if multidim_array {
     raw = code - DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
     span = raw / 4
@@ -3457,7 +3464,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or multidim_array_field or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::push_str(db, "@limits(")
       wk1 := rt::push_str(db, limit_name(kind))
@@ -3469,6 +3476,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if global_init_call { wkgc := rt::push_str(db, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
     else if enum_global_array { wkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if packed_array { wkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
+    else if multidim_array_field { wkmda := rt::push_str(db, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if multidim_array { wkmda := rt::push_str(db, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if tuple_global { wktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if unknown_ctor { wku := rt::push_str(db, "unknown type constructor") }
@@ -5585,7 +5593,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ctg := r >= DIAG_CT_MARKER and r < DIAG_COMPTIME_COND_MARKER
   global_init_call := r >= DIAG_GLOBAL_INIT_CALL_MARKER and r < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_GLOBAL_INIT_CALL_MARKER
-  multidim_array := r >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and r < DIAG_CT_MARKER
+  multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_CT_MARKER
+  multidim_array := r >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and r < DIAG_MULTIDIM_ARRAY_FIELD_MARKER
   packed_array := r >= DIAG_PACKED_ARRAY_MARKER and r < DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
   enum_global_array := r >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and r < DIAG_PACKED_ARRAY_MARKER
   tuple_global := r >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and r < DIAG_ENUM_GLOBAL_ARRAY_MARKER
@@ -5622,6 +5631,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if packed_array {
     raw = r - DIAG_PACKED_ARRAY_MARKER
     span = raw / 4
+  } else if multidim_array_field {
+    raw = r - DIAG_MULTIDIM_ARRAY_FIELD_MARKER
+    span = raw / 4
   } else if multidim_array {
     raw = r - DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
     span = raw / 4
@@ -5650,7 +5662,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or multidim_array_field or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
       else {
@@ -5665,6 +5677,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if global_init_call { dwkgc := rt::push_str(db, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
     else if enum_global_array { dwkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if packed_array { dwkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
+    else if multidim_array_field { dwkmda := rt::push_str(db, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if multidim_array { dwkmda := rt::push_str(db, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if tuple_global { dwktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if unknown_ctor { dwku := rt::push_str(db, "unknown type constructor") }
