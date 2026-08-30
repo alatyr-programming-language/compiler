@@ -3864,6 +3864,8 @@ build_reject_has reject_comptime_overflow_named_constant "comptime overflow at l
 check_build_located reject_comptime_overflow_local 4 "comptime overflow"
 check_build_located reject_comptime_narrow_overflow 5 "comptime overflow"
 check_build_located reject_comptime_overflow_return 5 "comptime overflow"
+check_build_located reject_comptime_overflow_array_element 2 "comptime overflow"
+build_reject_has reject_comptime_overflow_array_element "comptime overflow at line 2"
 check_build_located reject_comptime_call_arg_overflow 8 "comptime overflow"
 build_reject_has reject_comptime_call_arg_overflow "comptime overflow at line 8"
 check_build_located reject_comptime_call_arg_forward_overflow 4 "comptime overflow"
@@ -3879,6 +3881,8 @@ check_accept accept_comptime_unchecked_wrap
 run accept_comptime_unchecked_wrap 42
 check_accept accept_comptime_call_arg_controls
 run accept_comptime_call_arg_controls 42
+check_accept accept_comptime_array_element_controls
+run accept_comptime_array_element_controls 42
 check_located reject_ufcs_arity_under 11
 check_located reject_ufcs_arity_over 9
 check_located reject_ufcs_undef_method 9
