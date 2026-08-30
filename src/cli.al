@@ -1616,6 +1616,229 @@ manifest_dependency_field_known := fn(field : str) -> bool {
   return field == "name" or field == "alias" or field == "source"
 }
 
+## Target's v1 schema is closed. The four flat fields remain accepted only for the pre-TOOL-18
+## manifests already shipped in this repository; a Target carrying `machine` is checked against the
+## variant schema below and cannot mix those compatibility fields with its published projections.
+manifest_target_field_known := fn(field : str) -> bool {
+  return field == "name" or field == "machine" or field == "kind" or field == "entry"
+    or field == "output" or field == "features" or field == "vector_length" or field == "code_size"
+    or field == "arm_mode" or field == "auto_cfi" or field == "arch" or field == "os"
+    or field == "env" or field == "container"
+}
+
+manifest_machine_variant_known := fn(variant : str) -> bool {
+  return variant == "Linux" or variant == "Freebsd" or variant == "Windows"
+    or variant == "Macos" or variant == "Android" or variant == "Bare" or variant == "Com"
+}
+
+## Resolved Machine projections carried across the CLI/driver boundary. The codes are intentionally
+## local scalars: the manifest scanner never passes a configuration aggregate through the lean module
+## seam. 64-bit ISA rows are the bounded implementation here; 32-bit and non-x86 artifact emission
+## remain explicit configuration failures below.
+mut CLI_TARGET_ARCH : usize = 0
+mut CLI_TARGET_OS : usize = 0
+mut CLI_TARGET_ENV : usize = 0
+mut CLI_TARGET_CONTAINER : usize = 0
+mut CLI_TARGET_STARTUP : usize = 0
+mut CLI_TARGET_SUBSYSTEM : usize = 0
+
+manifest_trim := fn(s : str, start : usize, end : usize) -> str {
+  base := unchecked bitcast(usize, s.ptr)
+  mut lo := start
+  mut hi := end
+  while lo < hi and manifest_space(bytes(s)[lo]) { lo += 1 }
+  while hi > lo and manifest_space(bytes(s)[hi - 1]) { hi -= 1 }
+  str_at(base + lo, hi - lo)
+}
+
+## End of one manifest value at the enclosing call's top level. Parentheses and brackets are balanced,
+## strings/comments are skipped, so a nested Machine constructor cannot be cut at its first comma.
+manifest_value_end := fn(s : str, start : usize, limit : usize) -> usize {
+  mut p := start
+  mut par := 0
+  mut br := 0
+  mut out := limit
+  mut done := false
+  while p < limit and not done {
+    c := bytes(s)[p]
+    if c == 35 { p = manifest_skip_trivia(s, p, limit) }
+    else if c == 34 { p = manifest_skip_string(s, p, limit) }
+    else if c == 40 { par += 1 ; p += 1 }
+    else if c == 91 { br += 1 ; p += 1 }
+    else if c == 41 {
+      if par > 0 { par -= 1 ; p += 1 }
+      else if br == 0 { out = p ; done = true }
+      else { p += 1 }
+    }
+    else if c == 93 { if br > 0 { br -= 1 } ; p += 1 }
+    else if c == 44 and par == 0 and br == 0 { out = p ; done = true }
+    else { p += 1 }
+  }
+  out
+}
+
+## The direct `<field> = <value>` span in a bounded constructor call. The result is a view into the
+## original manifest; the companion globals preserve the absolute field/value offsets for located
+## diagnostics, including repeated fields and nested Machine arguments.
+mut MANIFEST_FIELD_VALUE_S : usize = 0
+mut MANIFEST_FIELD_VALUE_N : usize = 0
+mut MANIFEST_FIELD_OFFSET : usize = 0
+manifest_call_field_value := fn(s : str, open : usize, end : usize, wanted : str) -> bool {
+  MANIFEST_FIELD_VALUE_S = 0
+  MANIFEST_FIELD_VALUE_N = 0
+  MANIFEST_FIELD_OFFSET = 0
+  base := unchecked bitcast(usize, s.ptr)
+  mut p := open + 1
+  mut depth := 0
+  mut found := false
+  while p < end and not found {
+    c := bytes(s)[p]
+    if c == 35 { p = manifest_skip_trivia(s, p, end) }
+    else if c == 34 { p = manifest_skip_string(s, p, end) }
+    else if c == 40 { depth += 1 ; p += 1 }
+    else if c == 41 {
+      if depth > 0 { depth -= 1 ; p += 1 }
+      else { p = end }
+    }
+    else if depth == 0 and amb_idc(c) {
+      fs := p
+      fe := manifest_ident_end(s, p, end)
+      q := manifest_skip_trivia(s, fe, end)
+      if q < end and bytes(s)[q] == 61 and (q + 1 >= end or bytes(s)[q + 1] != 61) {
+        field := str_at(base + fs, fe - fs)
+        v := manifest_skip_trivia(s, q + 1, end)
+        ve := manifest_value_end(s, v, end)
+        if field == wanted {
+          vv := manifest_trim(s, v, ve)
+          MANIFEST_FIELD_VALUE_S = unchecked bitcast(usize, vv.ptr)
+          MANIFEST_FIELD_VALUE_N = vv.len
+          MANIFEST_FIELD_OFFSET = fs
+          found = true
+        }
+        p = ve
+      } else { p = fe }
+    }
+    else { p += 1 }
+  }
+  found
+}
+
+manifest_machine_variant := fn(s : str) -> str {
+  base := unchecked bitcast(usize, s.ptr)
+  mut p := manifest_skip_trivia(s, 0, s.len)
+  mut e := manifest_ident_end(s, p, s.len)
+  if e == p or str_at(base + p, e - p) != "Machine" { return str_at(base, 0) }
+  p = manifest_skip_trivia(s, e, s.len)
+  if p >= s.len or bytes(s)[p] != 46 { return str_at(base, 0) }
+  p = manifest_skip_trivia(s, p + 1, s.len)
+  e = manifest_ident_end(s, p, s.len)
+  str_at(base + p, e - p)
+}
+
+## One positional Machine constructor argument. The optional `name` path is reserved for future named
+## variant fields; the v1 language constructor grammar is positional, so this bounded unit validates
+## exactly the published `Machine.Variant(arch, …)` surface.
+manifest_machine_arg := fn(s : str, wanted : usize) -> str {
+  base := unchecked bitcast(usize, s.ptr)
+  mut open := s.len
+  mut i := 0
+  while i < s.len and open == s.len {
+    if bytes(s)[i] == 40 { open = i }
+    i += 1
+  }
+  if open == s.len { return str_at(base, 0) }
+  mut p := open + 1
+  mut start := manifest_skip_trivia(s, p, s.len)
+  mut depth := 0
+  mut index := 0
+  mut done := false
+  while p <= s.len and not done {
+    mut delimiter := false
+    mut closing := false
+    if p == s.len { delimiter = true }
+    else {
+      c := bytes(s)[p]
+      if c == 35 { p = manifest_skip_trivia(s, p, s.len) }
+      else if c == 34 { p = manifest_skip_string(s, p, s.len) }
+      else if c == 40 { depth += 1 ; p += 1 }
+      else if c == 41 {
+        if depth > 0 { depth -= 1 ; p += 1 }
+        else { delimiter = true ; closing = true }
+      }
+      else if c == 44 and depth == 0 { delimiter = true }
+      else { p += 1 }
+    }
+    if delimiter {
+      seg := manifest_trim(s, start, p)
+      if index == wanted { return seg }
+      index += 1
+      if closing or p == s.len { done = true }
+      else { p += 1 ; start = manifest_skip_trivia(s, p, s.len) }
+    }
+  }
+  str_at(base, 0)
+}
+
+manifest_arch_code := fn(tok : str) -> usize {
+  if tok == "Arch.x86_64" { return 0 }
+  if tok == "Arch.i386" { return 1 }
+  if tok == "Arch.aarch64" { return 2 }
+  if tok == "Arch.aarch32" { return 3 }
+  if tok == "Arch.riscv32" { return 4 }
+  if tok == "Arch.riscv64" { return 5 }
+  99
+}
+
+manifest_env_code := fn(tok : str) -> usize {
+  if tok == "Env.gnu" { return 0 }
+  if tok == "Env.musl" { return 1 }
+  if tok == "Env.eabi" { return 2 }
+  if tok == "Env.eabihf" { return 3 }
+  if tok == "Env.bionic" { return 4 }
+  if tok == "Env.none" { return 5 }
+  99
+}
+
+manifest_startup_valid := fn(tok : str) -> bool {
+  tok == "Startup.raw" or tok == "Startup.libc"
+}
+
+manifest_subsystem_valid := fn(tok : str) -> bool {
+  tok == "Subsystem.console" or tok == "Subsystem.windows" or tok == "Subsystem.native"
+}
+
+manifest_decimal_u32_valid := fn(s : str) -> bool {
+  if s.len == 0 { return false }
+  mut v := 0
+  mut i := 0
+  mut ok := true
+  while i < s.len {
+    c := bytes(s)[i]
+    if c < 48 or c > 57 { ok = false }
+    else if v > 429496729 or (v == 429496729 and c > 53) { ok = false }
+    else { v = v * 10 + (c - 48) }
+    i += 1
+  }
+  ok
+}
+
+manifest_decimal_u32 := fn(s : str) -> usize {
+  mut v := 0
+  mut i := 0
+  while i < s.len { v = v * 10 + (bytes(s)[i] - 48) ; i += 1 }
+  v
+}
+
+manifest_machine_pair_supported := fn(variant : str, arch : usize) -> bool {
+  if arch == 1 or arch == 3 or arch == 4 or arch > 5 { return false }
+  if variant == "Linux" { return arch == 0 or arch == 2 or arch == 5 }
+  if variant == "Freebsd" or variant == "Windows" { return arch == 0 }
+  if variant == "Macos" { return arch == 0 or arch == 2 }
+  if variant == "Android" { return arch == 0 or arch == 2 }
+  if variant == "Bare" { return arch == 0 or arch == 2 or arch == 5 }
+  false
+}
+
 manifest_unknown_field_error := fn(in out a : rt::Arena, pkg_al : str, owner : str, field : str, off : usize) {
   MANIFEST_CONFIG_BAD = true
   mut b := rt::strbuf(a, owner.len + field.len + 96)
@@ -1634,7 +1857,7 @@ manifest_unknown_field_error := fn(in out a : rt::Arena, pkg_al : str, owner : s
 ## Validate only named arguments at the immediate call depth. Nested Target/Lib/Profile/etc. calls are
 ## opaque here; their own schema belongs to the manifest checker. This pass is specifically the closed
 ## Package and Dependency field boundary that the CLI's raw scanner used to ignore.
-manifest_validate_call_fields := fn(in out a : rt::Arena, mtext : str, open : usize, end : usize, is_package : bool, pkg_al : str) {
+manifest_validate_call_fields := fn(in out a : rt::Arena, mtext : str, open : usize, end : usize, owner : str, pkg_al : str) {
   base := unchecked bitcast(usize, mtext.ptr)
   mut p := open + 1
   mut depth := 0
@@ -1657,17 +1880,162 @@ manifest_validate_call_fields := fn(in out a : rt::Arena, mtext : str, open : us
       if q < end and bytes(mtext)[q] == 61 and (q + 1 >= end or bytes(mtext)[q + 1] != 61) {
         field := str_at(base + fs, fe - fs)
         mut known := false
-        if is_package { known = manifest_package_field_known(field) }
-        else { known = manifest_dependency_field_known(field) }
+        if owner == "Package" { known = manifest_package_field_known(field) }
+        else if owner == "Dependency" { known = manifest_dependency_field_known(field) }
+        else if owner == "Target" { known = manifest_target_field_known(field) }
         if known == false {
-          if is_package { manifest_unknown_field_error(a, pkg_al, "Package", field, fs) }
-          else { manifest_unknown_field_error(a, pkg_al, "Dependency", field, fs) }
+          manifest_unknown_field_error(a, pkg_al, owner, field, fs)
         }
       }
       p = fe
     } else {
       p = p + 1
     }
+  }
+}
+
+manifest_machine_error := fn(in out a : rt::Arena, pkg_al : str, msg : str, off : usize) {
+  MANIFEST_CONFIG_BAD = true
+  manifest_located_error_at(a, msg, pkg_al, off)
+}
+
+manifest_machine_validate := fn(in out a : rt::Arena, pkg_al : str, expr : str, off : usize) {
+  variant := manifest_machine_variant(expr)
+  if manifest_machine_variant_known(variant) == false {
+    manifest_machine_error(a, pkg_al, "config: Target.machine must name a supported Machine variant", off)
+    return
+  }
+  a0 := manifest_machine_arg(expr, 0)
+  a1 := manifest_machine_arg(expr, 1)
+  a2 := manifest_machine_arg(expr, 2)
+  a3 := manifest_machine_arg(expr, 3)
+  if variant == "Com" {
+    manifest_machine_error(a, pkg_al, "config: Machine.Com is outside this 64-bit target unit", off)
+    return
+  }
+  if a0.len == 0 {
+    manifest_machine_error(a, pkg_al, "config: Machine variant requires an Arch argument", off)
+    return
+  }
+  arch := manifest_arch_code(a0)
+  if arch > 5 {
+    manifest_machine_error(a, pkg_al, "config: Machine variant requires a valid Arch argument", off)
+    return
+  }
+  if manifest_machine_pair_supported(variant, arch) == false {
+    manifest_machine_error(a, pkg_al, "config: Machine variant/architecture combination is unsupported", off)
+    return
+  }
+  if variant == "Linux" {
+    if a3.len != 0 { manifest_machine_error(a, pkg_al, "config: Machine.Linux has too many arguments", off) ; return }
+    mut env := 0
+    if a1.len != 0 { env = manifest_env_code(a1) }
+    if env > 1 or (arch == 5 and env != 0) {
+      manifest_machine_error(a, pkg_al, "config: Machine.Linux has an unsupported Env for this Arch", off)
+      return
+    }
+    if a2.len != 0 and not manifest_startup_valid(a2) {
+      manifest_machine_error(a, pkg_al, "config: Machine variant requires Startup.raw or Startup.libc", off)
+    }
+    return
+  }
+  if variant == "Freebsd" {
+    if a2.len != 0 { manifest_machine_error(a, pkg_al, "config: Machine.Freebsd has too many arguments", off) ; return }
+    if a1.len != 0 and not manifest_startup_valid(a1) {
+      manifest_machine_error(a, pkg_al, "config: Machine variant requires Startup.raw or Startup.libc", off)
+    }
+    return
+  }
+  if variant == "Windows" {
+    if a3.len != 0 { manifest_machine_error(a, pkg_al, "config: Machine.Windows has too many arguments", off) ; return }
+    if a1.len != 0 and not manifest_subsystem_valid(a1) {
+      manifest_machine_error(a, pkg_al, "config: Machine.Windows requires a valid Subsystem", off)
+      return
+    }
+    if a2.len != 0 and not manifest_startup_valid(a2) {
+      manifest_machine_error(a, pkg_al, "config: Machine variant requires Startup.raw or Startup.libc", off)
+    }
+    return
+  }
+  if variant == "Macos" {
+    if a2.len != 0 { manifest_machine_error(a, pkg_al, "config: Machine.Macos has too many arguments", off) ; return }
+    if a1.len != 0 and not manifest_startup_valid(a1) {
+      manifest_machine_error(a, pkg_al, "config: Machine variant requires Startup.raw or Startup.libc", off)
+    }
+    return
+  }
+  if variant == "Android" {
+    if a3.len != 0 { manifest_machine_error(a, pkg_al, "config: Machine.Android has too many arguments", off) ; return }
+    if a1.len != 0 {
+      if manifest_decimal_u32_valid(a1) == false {
+        manifest_machine_error(a, pkg_al, "config: Machine.Android api must be a u32", off)
+        return
+      }
+      api := manifest_decimal_u32(a1)
+      if api < 21 {
+        manifest_machine_error(a, pkg_al, "config: Android API must be at least 21", off)
+        return
+      }
+    }
+    if a2.len != 0 and not manifest_startup_valid(a2) {
+      manifest_machine_error(a, pkg_al, "config: Machine variant requires Startup.raw or Startup.libc", off)
+    }
+    return
+  }
+  if variant == "Bare" {
+    if a2.len != 0 { manifest_machine_error(a, pkg_al, "config: Machine.Bare has too many arguments", off) ; return }
+    if a1.len != 0 and manifest_env_code(a1) != 5 {
+      manifest_machine_error(a, pkg_al, "config: Machine.Bare requires Env.none", off)
+    }
+  }
+}
+
+## Validate one Target's closed field boundary and, when present, its complete Machine variant. The
+## legacy flat target is deliberately left usable for the repository's existing package corpus; the
+## new variant form cannot mix those fields because they are projections, not schema inputs.
+manifest_validate_target_call := fn(in out a : rt::Arena, mtext : str, open : usize, end : usize, pkg_al : str) {
+  manifest_validate_call_fields(a, mtext, open, end, "Target", pkg_al)
+  has_machine := manifest_call_field_value(mtext, open, end, "machine")
+  if has_machine == false { return }
+  machine_s := MANIFEST_FIELD_VALUE_S
+  machine_n := MANIFEST_FIELD_VALUE_N
+  machine_off := MANIFEST_FIELD_OFFSET
+  mut mixed := false
+  mut fields := ["arch", "os", "env", "container"]
+  mut i := 0
+  while i < 4 {
+    if manifest_call_field_value(mtext, open, end, fields[i]) {
+      mixed = true
+      manifest_machine_error(a, pkg_al, "config: Target.machine owns arch/os/env/container projections", MANIFEST_FIELD_OFFSET)
+    }
+    i += 1
+  }
+  if mixed == false {
+    expr := str_at(machine_s, machine_n)
+    manifest_machine_validate(a, pkg_al, expr, machine_off)
+  }
+}
+
+## Walk only Target constructors inside the Package call. Comments and strings are skipped and each
+## target is balanced before the next one, so an untrusted example cannot create a phantom schema node.
+manifest_validate_target_calls := fn(in out a : rt::Arena, mtext : str, package_open : usize, package_end : usize, pkg_al : str) {
+  base := unchecked bitcast(usize, mtext.ptr)
+  mut p := package_open + 1
+  while p < package_end {
+    c := bytes(mtext)[p]
+    if c == 35 { p = manifest_skip_trivia(mtext, p, package_end) }
+    else if c == 34 { p = manifest_skip_string(mtext, p, package_end) }
+    else if amb_idc(c) {
+      s := p
+      e := manifest_ident_end(mtext, p, package_end)
+      word := str_at(base + s, e - s)
+      q := manifest_skip_trivia(mtext, e, package_end)
+      if word == "Target" and q < package_end and bytes(mtext)[q] == 40 {
+        ce := manifest_call_end(mtext, q, package_end)
+        manifest_validate_target_call(a, mtext, q, ce, pkg_al)
+        p = ce
+      } else { p = e }
+    } else { p += 1 }
   }
 }
 
@@ -1720,7 +2088,7 @@ manifest_validate_dependency_calls := fn(in out a : rt::Arena, mtext : str, open
       q := manifest_skip_trivia(mtext, e, end)
       if word == "Dependency" and q < end and bytes(mtext)[q] == 40 {
         de := manifest_call_end(mtext, q, end)
-        manifest_validate_call_fields(a, mtext, q, de, false, pkg_al)
+        manifest_validate_call_fields(a, mtext, q, de, "Dependency", pkg_al)
         p = de
       } else { p = e }
     } else { p = p + 1 }
@@ -1736,7 +2104,8 @@ manifest_config_reject := fn(in out a : rt::Arena, pkg_al : str) {
   if manifest_package_bounds(mtext) {
     mut package_open := MANIFEST_PACKAGE_OPEN
     mut package_end := MANIFEST_PACKAGE_END
-    manifest_validate_call_fields(a, mtext, package_open, package_end, true, pkg_al)
+    manifest_validate_call_fields(a, mtext, package_open, package_end, "Package", pkg_al)
+    manifest_validate_target_calls(a, mtext, package_open, package_end, pkg_al)
     manifest_validate_dependency_calls(a, mtext, package_open, package_end, pkg_al)
   }
 }
@@ -2296,47 +2665,131 @@ manifest_target_token := fn(in out a : rt::Arena, pkg_al : str, field : str) -> 
   return mf_token(rec, usize(wi), field.len)
 }
 
+manifest_target_field_value := fn(rec : str, wanted : str) -> bool {
+  mut open := rec.len
+  mut i := 0
+  while i < rec.len and open == rec.len {
+    if bytes(rec)[i] == 40 { open = i }
+    i += 1
+  }
+  if open == rec.len { return false }
+  manifest_call_field_value(rec, open, rec.len, wanted)
+}
+
+manifest_os_code := fn(tok : str) -> usize {
+  if tok == "Os.linux" { return 0 }
+  if tok == "Os.android" { return 1 }
+  if tok == "Os.windows" { return 2 }
+  if tok == "Os.macos" { return 3 }
+  if tok == "Os.freebsd" { return 4 }
+  if tok == "Os.none" { return 5 }
+  99
+}
+
+manifest_container_code := fn(tok : str) -> usize {
+  if tok == "Container.elf" { return 0 }
+  if tok == "Container.pe" { return 1 }
+  if tok == "Container.macho" { return 2 }
+  if tok == "Container.com" { return 3 }
+  99
+}
+
+## Resolve the selected Target's Machine projections. This is the single CLI-side owner of defaults;
+## later consumers receive only the resulting scalar facts, never a partially specified target.
+manifest_target_model := fn(in out a : rt::Arena, pkg_al : str) {
+  CLI_TARGET_ARCH = 0
+  CLI_TARGET_OS = 0
+  CLI_TARGET_ENV = 0
+  CLI_TARGET_CONTAINER = 0
+  CLI_TARGET_STARTUP = 0
+  CLI_TARGET_SUBSYSTEM = 0
+  rec := manifest_target_record(a, pkg_al)
+  if rec.len == 0 { return }
+  if manifest_target_field_value(rec, "machine") {
+    machine := str_at(MANIFEST_FIELD_VALUE_S, MANIFEST_FIELD_VALUE_N)
+    variant := manifest_machine_variant(machine)
+    CLI_TARGET_ARCH = manifest_arch_code(manifest_machine_arg(machine, 0))
+    if variant == "Linux" {
+      if manifest_machine_arg(machine, 1).len != 0 { CLI_TARGET_ENV = manifest_env_code(manifest_machine_arg(machine, 1)) }
+      if manifest_machine_arg(machine, 2) == "Startup.libc" { CLI_TARGET_STARTUP = 1 }
+    }
+    if variant == "Freebsd" {
+      CLI_TARGET_OS = 4
+      if manifest_machine_arg(machine, 1) == "Startup.libc" { CLI_TARGET_STARTUP = 1 }
+    }
+    if variant == "Windows" {
+      CLI_TARGET_OS = 2
+      CLI_TARGET_ENV = 5
+      CLI_TARGET_CONTAINER = 1
+      if manifest_machine_arg(machine, 1) == "Subsystem.windows" { CLI_TARGET_SUBSYSTEM = 1 }
+      if manifest_machine_arg(machine, 1) == "Subsystem.native" { CLI_TARGET_SUBSYSTEM = 2 }
+      if manifest_machine_arg(machine, 2) == "Startup.libc" { CLI_TARGET_STARTUP = 1 }
+    }
+    if variant == "Macos" {
+      CLI_TARGET_OS = 3
+      CLI_TARGET_ENV = 5
+      CLI_TARGET_CONTAINER = 2
+      if manifest_machine_arg(machine, 1) == "Startup.libc" { CLI_TARGET_STARTUP = 1 }
+    }
+    if variant == "Android" {
+      CLI_TARGET_OS = 1
+      CLI_TARGET_ENV = 4
+      if manifest_machine_arg(machine, 2) == "Startup.libc" { CLI_TARGET_STARTUP = 1 }
+    }
+    if variant == "Bare" {
+      CLI_TARGET_OS = 5
+      CLI_TARGET_ENV = 5
+      if manifest_machine_arg(machine, 1).len != 0 { CLI_TARGET_ENV = manifest_env_code(manifest_machine_arg(machine, 1)) }
+    }
+    return
+  }
+  atok := manifest_target_token(a, pkg_al, "arch")
+  if atok.len != 0 { CLI_TARGET_ARCH = manifest_arch_code(atok) }
+  otok := manifest_target_token(a, pkg_al, "os")
+  if otok.len != 0 { CLI_TARGET_OS = manifest_os_code(otok) }
+  etok := manifest_target_token(a, pkg_al, "env")
+  if etok.len != 0 { CLI_TARGET_ENV = manifest_env_code(etok) }
+  ctok := manifest_target_token(a, pkg_al, "container")
+  if ctok.len != 0 { CLI_TARGET_CONTAINER = manifest_container_code(ctok) }
+}
+
 ## Canonical text for the four target projections used by TOOL-20's fixed meta records. Defaults are
 ## the host-shaped target currently implemented by this compiler; an unknown explicit token remains
 ## `invalid` so plan can fail closed instead of describing a target it did not resolve.
 manifest_target_projection := fn(in out a : rt::Arena, pkg_al : str, field : str) -> str {
-  tok := manifest_target_token(a, pkg_al, field)
+  manifest_target_model(a, pkg_al)
   if field == "arch" {
-    if tok.len == 0 { return "x86_64" }
-    if tok == "Arch.x86_64" { return "x86_64" }
-    if tok == "Arch.i386" { return "i386" }
-    if tok == "Arch.aarch64" { return "aarch64" }
-    if tok == "Arch.aarch32" { return "aarch32" }
-    if tok == "Arch.riscv32" { return "riscv32" }
-    if tok == "Arch.riscv64" { return "riscv64" }
+    if CLI_TARGET_ARCH == 0 { return "x86_64" }
+    if CLI_TARGET_ARCH == 1 { return "i386" }
+    if CLI_TARGET_ARCH == 2 { return "aarch64" }
+    if CLI_TARGET_ARCH == 3 { return "aarch32" }
+    if CLI_TARGET_ARCH == 4 { return "riscv32" }
+    if CLI_TARGET_ARCH == 5 { return "riscv64" }
     return "invalid"
   }
   if field == "os" {
-    if tok.len == 0 { return "linux" }
-    if tok == "Os.linux" { return "linux" }
-    if tok == "Os.android" { return "android" }
-    if tok == "Os.windows" { return "windows" }
-    if tok == "Os.macos" { return "macos" }
-    if tok == "Os.freebsd" { return "freebsd" }
-    if tok == "Os.none" { return "none" }
+    if CLI_TARGET_OS == 0 { return "linux" }
+    if CLI_TARGET_OS == 1 { return "android" }
+    if CLI_TARGET_OS == 2 { return "windows" }
+    if CLI_TARGET_OS == 3 { return "macos" }
+    if CLI_TARGET_OS == 4 { return "freebsd" }
+    if CLI_TARGET_OS == 5 { return "none" }
     return "invalid"
   }
   if field == "env" {
-    if tok.len == 0 { return "gnu" }
-    if tok == "Env.gnu" { return "gnu" }
-    if tok == "Env.musl" { return "musl" }
-    if tok == "Env.eabi" { return "eabi" }
-    if tok == "Env.eabihf" { return "eabihf" }
-    if tok == "Env.bionic" { return "bionic" }
-    if tok == "Env.none" { return "none" }
+    if CLI_TARGET_ENV == 0 { return "gnu" }
+    if CLI_TARGET_ENV == 1 { return "musl" }
+    if CLI_TARGET_ENV == 2 { return "eabi" }
+    if CLI_TARGET_ENV == 3 { return "eabihf" }
+    if CLI_TARGET_ENV == 4 { return "bionic" }
+    if CLI_TARGET_ENV == 5 { return "none" }
     return "invalid"
   }
   if field == "container" {
-    if tok.len == 0 { return "elf" }
-    if tok == "Container.elf" { return "elf" }
-    if tok == "Container.pe" { return "pe" }
-    if tok == "Container.macho" { return "macho" }
-    if tok == "Container.com" { return "com" }
+    if CLI_TARGET_CONTAINER == 0 { return "elf" }
+    if CLI_TARGET_CONTAINER == 1 { return "pe" }
+    if CLI_TARGET_CONTAINER == 2 { return "macho" }
+    if CLI_TARGET_CONTAINER == 3 { return "com" }
     return "invalid"
   }
   "invalid"
@@ -2700,24 +3153,33 @@ manifest_kind_reject := fn(in out a : rt::Arena, pkg_al : str, kind : str) -> us
 ## consumed only by the cross-target `test` path; build/run/dump/check reject it until their own
 ## target-specific link/execute contract is implemented.
 manifest_target_backend := fn(in out a : rt::Arena, pkg_al : str) -> usize {
-  rec := manifest_target_record(a, pkg_al)
-  if rec.len == 0 { return 0 }
-  wi := mf_find_word(rec, 0, "arch")
-  if wi < 0 { return 3 }
-  tok := mf_token(rec, usize(wi), 4)
-  if tok == "Arch.x86_64" { return 0 }
-  if tok == "Arch.aarch64" { return 1 }
-  if tok == "Arch.riscv64" { return 2 }
+  manifest_target_model(a, pkg_al)
+  if CLI_TARGET_ARCH == 0 { return 0 }
+  if CLI_TARGET_ARCH == 2 { return 1 }
+  if CLI_TARGET_ARCH == 5 { return 2 }
   return 3
 }
 
 manifest_target_arch_reject := fn(in out a : rt::Arena, pkg_al : str, backend : usize) -> usize {
   if backend < 3 { return 0 }
-  manifest_located_error(a, "config: Target.arch is unsupported by this compiler", pkg_al, "arch")
+  rec := manifest_target_record(a, pkg_al)
+  mut anchor := "arch"
+  mut msg := "config: Target.arch is unsupported by this compiler"
+  if manifest_target_field_value(rec, "machine") {
+    anchor = "machine"
+    msg = "config: Target.machine architecture is unsupported by this compiler"
+  }
+  manifest_located_error(a, msg, pkg_al, anchor)
   return 44
 }
 
 manifest_target_command_reject := fn(in out a : rt::Arena, pkg_al : str, backend : usize, mode : usize) -> usize {
+  manifest_target_model(a, pkg_al)
+  if mode == 3 { return 0 }
+  if CLI_TARGET_OS != 0 {
+    manifest_located_error(a, "config: the selected Machine has no linker/ABI implementation in this command", pkg_al, "machine")
+    return 45
+  }
   if backend == 0 or mode == 5 { return 0 }
   manifest_located_error(a, "config: non-x86 targets are supported only by `test`", pkg_al, "arch")
   return 45
@@ -4920,6 +5382,21 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   }
   if is_pkg and mode == 6 and CLI_TARGET_SELECT_ALL {
     return build_all_manifest_targets(a, pkg_arg, cmd, n)
+  }
+  ## TOOL-18 — publish one complete Machine model after target selection and before any semantic or
+  ## lowering pass. A bare file list keeps the established host-shaped defaults; a package never
+  ## publishes an arch without the projections that belong to the same variant.
+  if is_pkg {
+    manifest_target_model(a, pkg_arg)
+    model_arch := CLI_TARGET_ARCH
+    model_os := CLI_TARGET_OS
+    model_env := CLI_TARGET_ENV
+    model_container := CLI_TARGET_CONTAINER
+    model_startup := CLI_TARGET_STARTUP
+    model_subsystem := CLI_TARGET_SUBSYSTEM
+    tsm := driver::set_target_model(model_arch, model_os, model_env, model_container, model_startup, model_subsystem)
+  } else {
+    tsm0 := driver::set_target_model(0, 0, 0, 0, 0, 0)
   }
   ## TOOL-17 — publish the selected Target.code_size before package parsing/lowering. The default
   ## is x86_64's CodeSize.b64; an explicit unsupported spelling is a located Config error.

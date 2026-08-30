@@ -3608,6 +3608,15 @@ pub set_target_code_size := fn(code_size : usize) -> i64 {
   return lower::ctfold::set_target_code_size(code_size)
 }
 
+## Tooling §2.7 / TOOL-18 — publish the fully resolved Machine projections to both semantic and lower
+## consumers. Keeping this as one driver seam prevents `check` and artifact lowering from falling back
+## to different host-shaped defaults.
+pub set_target_model := fn(arch : usize, os : usize, env : usize, container : usize, startup : usize, subsystem : usize) -> i64 {
+  lower_rc := lower::ctfold::set_target_model(arch, os, env, container, startup, subsystem)
+  sema_rc := sema::set_target_model(arch, os, env, container, startup, subsystem)
+  return lower_rc + sema_rc
+}
+
 ## Cross-target `test` is routed through the existing non-x86 multi-file front end. These scalars keep
 ## the path-list and test selection out of aggregate parameters, which the lean self-host lower does
 ## not reliably copy across a module boundary.

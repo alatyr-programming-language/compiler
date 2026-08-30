@@ -138,6 +138,222 @@ EOF
   rm -rf "$tmp"
 }
 
+run_machine_schema() {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/src"
+  cat >"$tmp/src/main.al" <<'EOF'
+main := fn() -> u64 {
+  mut x : u64 = 0
+  comptime if target.os == Os.linux { x = x + 1 }
+  comptime if target.env == Env.gnu { x = x + 2 }
+  comptime if target.container == Container.elf { x = x + 4 }
+  comptime if target.os == Os.android { x = x + android_only() }
+  if x == 7 { return 42 }
+  if x == 5 { return pick() }
+  return 7
+}
+
+android_only := fn() -> u64 when target.os == Os.android { return 14 }
+pick := fn() -> u64 when target.env == Env.gnu { return 42 }
+pick := fn() -> u64 when target.env == Env.musl { return 17 }
+pick := fn() -> u64 when target.env == Env.bionic { return 23 }
+pick := fn() -> u64 when target.env == Env.none { return 19 }
+EOF
+
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      name = "linux",
+      machine = Machine.Linux(Arch.x86_64, Env.gnu, Startup.raw),
+      output = "machine-schema"
+    ),
+  ]
+)
+EOF
+  (cd "$tmp" && "$CC" plan --target linux package.al) >"$tmp/plan.out" 2>"$tmp/plan.err"
+  plan_rc=$?
+  if [ "$plan_rc" = 0 ] && [ ! -s "$tmp/plan.out" ] && [ ! -s "$tmp/plan.err" ] \
+    && grep -q meta[[:space:]]arch[[:space:]]x86_64 "$tmp/target/debug/plan.tsv" \
+    && grep -q meta[[:space:]]os[[:space:]]linux "$tmp/target/debug/plan.tsv" \
+    && grep -q meta[[:space:]]env[[:space:]]gnu "$tmp/target/debug/plan.tsv" \
+    && grep -q meta[[:space:]]container[[:space:]]elf "$tmp/target/debug/plan.tsv"; then
+    echo "ok   machine_schema: published Linux projections are deterministic"
+  else
+    echo "FAIL machine_schema: plan rc=$plan_rc stdout=$(cat "$tmp/plan.out" 2>/dev/null) stderr=$(cat "$tmp/plan.err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -rf "$tmp/target"
+  (cd "$tmp" && "$CC" run --target linux package.al) >"$tmp/linux.out" 2>"$tmp/linux.err"
+  linux_rc=$?
+  if [ "$linux_rc" = 42 ] && [ ! -s "$tmp/linux.out" ] && [ ! -s "$tmp/linux.err" ]; then
+    echo "ok   machine_schema: Linux Machine projections select the declared target"
+  else
+    echo "FAIL machine_schema: Linux Machine run rc=$linux_rc stdout=$(cat "$tmp/linux.out" 2>/dev/null) stderr=$(cat "$tmp/linux.err" 2>/dev/null)"
+    fail=1
+  fi
+
+  cat >"$tmp/package.al" <<EOF
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      name = "musl",
+      machine = Machine.Linux(Arch.x86_64, Env.musl, Startup.raw),
+      output = "machine-schema-musl"
+    ),
+  ]
+)
+EOF
+  rm -rf "$tmp/target"
+  (cd "$tmp" && "$CC" run --target musl package.al) >"$tmp/musl.out" 2>"$tmp/musl.err"
+  musl_rc=$?
+  if [ "$musl_rc" = 17 ] && [ ! -s "$tmp/musl.out" ] && [ ! -s "$tmp/musl.err" ]; then
+    echo "ok   machine_schema: Linux environment projection selects the musl declaration"
+  else
+    echo "FAIL machine_schema: Linux musl run rc=$musl_rc stdout=$(cat "$tmp/musl.out" 2>/dev/null) stderr=$(cat "$tmp/musl.err" 2>/dev/null)"
+    fail=1
+  fi
+
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      name = "android",
+      machine = Machine.Android(Arch.aarch64, 21, Startup.raw),
+      kind = Kind.source
+    ),
+  ]
+)
+EOF
+  rm -rf "$tmp/target"
+  (cd "$tmp" && "$CC" check --target android package.al) >"$tmp/android.out" 2>"$tmp/android.err"
+  android_rc=$?
+  if [ "$android_rc" = 0 ] && [ ! -s "$tmp/android.out" ] && [ ! -s "$tmp/android.err" ] && [ ! -e "$tmp/target" ]; then
+    echo "ok   machine_schema: Android API 21 validates without artifact/tool invocation"
+  else
+    echo "FAIL machine_schema: Android API 21 check rc=$android_rc stdout=$(cat "$tmp/android.out" 2>/dev/null) stderr=$(cat "$tmp/android.err" 2>/dev/null)"
+    fail=1
+  fi
+
+  cat >"$tmp/package.al" <<EOF
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(name = "linux-aarch64", machine = Machine.Linux(Arch.aarch64, Env.gnu, Startup.raw), kind = Kind.source),
+    Target(name = "linux-riscv64", machine = Machine.Linux(Arch.riscv64, Env.gnu, Startup.raw), kind = Kind.source),
+    Target(name = "freebsd", machine = Machine.Freebsd(Arch.x86_64, Startup.raw), kind = Kind.source),
+    Target(name = "windows", machine = Machine.Windows(Arch.x86_64, Subsystem.console, Startup.raw), kind = Kind.source),
+    Target(name = "macos", machine = Machine.Macos(Arch.aarch64, Startup.raw), kind = Kind.source),
+    Target(name = "android-aarch64", machine = Machine.Android(Arch.aarch64, 21, Startup.raw), kind = Kind.source),
+    Target(name = "bare", machine = Machine.Bare(Arch.riscv64, Env.none), kind = Kind.source)
+  ]
+)
+EOF
+  variant_checks=0
+  variant_checks_ok=0
+  for variant in linux-aarch64 linux-riscv64 freebsd windows macos android-aarch64 bare; do
+    variant_checks=$((variant_checks + 1))
+    rm -rf "$tmp/target"
+    (cd "$tmp" && "$CC" check --target "$variant" package.al) >"$tmp/variant.out" 2>"$tmp/variant.err"
+    variant_rc=$?
+    if [ "$variant_rc" = 0 ] && [ ! -s "$tmp/variant.out" ] && [ ! -s "$tmp/variant.err" ] && [ ! -e "$tmp/target" ]; then
+      variant_checks_ok=$((variant_checks_ok + 1))
+    else
+      echo "FAIL machine_schema: $variant validation rc=$variant_rc stdout=$(cat "$tmp/variant.out" 2>/dev/null) stderr=$(cat "$tmp/variant.err" 2>/dev/null)"
+      fail=1
+    fi
+  done
+  if [ "$variant_checks_ok" = "$variant_checks" ]; then
+    echo "ok   machine_schema: supported 64-bit Machine variants validate through check"
+  fi
+
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      name = "api",
+      machine = Machine.Android(Arch.x86_64, 20, Startup.raw)
+    ),
+  ]
+)
+EOF
+  rm -rf "$tmp/target"
+  (cd "$tmp" && "$CC" build --target api package.al) >"$tmp/api.out" 2>"$tmp/api.err"
+  api_rc=$?
+  if [ "$api_rc" != 0 ] && grep -qF "config: Android API must be at least 21" "$tmp/api.err" \
+    && grep -qF "at line" "$tmp/api.err" && [ ! -e "$tmp/target" ]; then
+    echo "ok   machine_schema: Android API below 21 is a located pre-tool rejection"
+  else
+    echo "FAIL machine_schema: Android API 20 rc=$api_rc stdout=$(cat "$tmp/api.out" 2>/dev/null) stderr=$(cat "$tmp/api.err" 2>/dev/null)"
+    fail=1
+  fi
+
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      name = "pair",
+      machine = Machine.Windows(Arch.aarch64, Subsystem.console, Startup.raw)
+    ),
+  ]
+)
+EOF
+  rm -rf "$tmp/target"
+  (cd "$tmp" && "$CC" build --target pair package.al) >"$tmp/pair.out" 2>"$tmp/pair.err"
+  pair_rc=$?
+  if [ "$pair_rc" != 0 ] && grep -qF "config: Machine variant/architecture combination is unsupported" "$tmp/pair.err" \
+    && grep -qF "at line" "$tmp/pair.err" && [ ! -e "$tmp/target" ]; then
+    echo "ok   machine_schema: invalid Machine pair is a located pre-tool rejection"
+  else
+    echo "FAIL machine_schema: Windows/AArch64 rc=$pair_rc stdout=$(cat "$tmp/pair.out" 2>/dev/null) stderr=$(cat "$tmp/pair.err" 2>/dev/null)"
+    fail=1
+  fi
+
+  cat >"$tmp/package.al" <<EOF
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      name = "mixed",
+      machine = Machine.Linux(Arch.x86_64, Env.gnu, Startup.raw),
+      os = Os.linux
+    ),
+  ]
+)
+EOF
+  rm -rf "$tmp/target"
+  (cd "$tmp" && "$CC" build --target mixed package.al) >"$tmp/mixed.out" 2>"$tmp/mixed.err"
+  mixed_rc=$?
+  if [ "$mixed_rc" != 0 ] && grep -qF "config: Target.machine owns arch/os/env/container projections" "$tmp/mixed.err" \
+    && grep -qF "at line" "$tmp/mixed.err" && [ ! -e "$tmp/target" ]; then
+    echo "ok   machine_schema: Machine rejects mixed legacy projections"
+  else
+    echo "FAIL machine_schema: mixed target rc=$mixed_rc stdout=$(cat "$tmp/mixed.out" 2>/dev/null) stderr=$(cat "$tmp/mixed.err" 2>/dev/null)"
+    fail=1
+  fi
+
+  rm -rf "$tmp"
+}
+
 run_expect() {
   name="$1"
   want="$2"
@@ -1210,6 +1426,11 @@ if [ "${CROSS_TARGET_ONLY:-0}" = 1 ]; then
   exit "$fail"
 fi
 
+if [ "${MACHINE_SCHEMA_ONLY:-0}" = 1 ]; then
+  run_machine_schema
+  exit "$fail"
+fi
+
 if [ "${TOOL14_ONLY:-0}" = 1 ]; then
   run_tool14_manifest_selection
   exit "$fail"
@@ -1228,6 +1449,7 @@ run_noarg_help
 run_new_scaffold
 run_zero_tests
 run_cross_target_test
+run_machine_schema
 run_expect profile_check_named 0 check --profile release package.al
 run_expect profile_check_release 0 check --release package.al
 run_expect profile_run_debug 7 run package.al

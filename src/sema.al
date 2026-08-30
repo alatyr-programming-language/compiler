@@ -8665,8 +8665,110 @@ same_fn_signature := fn(a0 : Decl, b0 : Decl, src : ptr(u8), ar : ptr(mut rt::Ar
   ap == 0 and bp == 0
 }
 
+## Selected target projections used by declaration-guard folding. The CLI publishes the complete
+## Machine model through driver before `check_files`; defaults retain the existing host target for
+## direct file-list commands. The scalar codes mirror `lower::ctfold`.
+mut SEM_TARGET_ARCH : usize = 0
+mut SEM_TARGET_OS : usize = 0
+mut SEM_TARGET_ENV : usize = 0
+mut SEM_TARGET_CONTAINER : usize = 0
+mut SEM_TARGET_STARTUP : usize = 0
+mut SEM_TARGET_SUBSYSTEM : usize = 0
+pub set_target_model := fn(arch : usize, os : usize, env : usize, container : usize, startup : usize, subsystem : usize) -> i64 {
+  SEM_TARGET_ARCH = arch
+  SEM_TARGET_OS = os
+  SEM_TARGET_ENV = env
+  SEM_TARGET_CONTAINER = container
+  SEM_TARGET_STARTUP = startup
+  SEM_TARGET_SUBSYSTEM = subsystem
+  return 0
+}
+
+SemaQRef := struct { bs : usize, bl : usize, s : usize, n : usize }
+sema_qual_ref_name := fn(e : ptr(Expr), src : ptr(u8)) -> SemaQRef {
+  match deref(e) {
+    Expr::Field(b, fs, fl) => {
+      vn := expr_var_span(b)
+      if vn.n != 0 { return SemaQRef(bs = vn.s, bl = vn.n, s = fs, n = fl) }
+      SemaQRef(bs = 0, bl = 0, s = 0, n = 0)
+    }
+    _ => { SemaQRef(bs = 0, bl = 0, s = 0, n = 0) }
+  }
+}
+
+sema_target_rhs_code := fn(base : str, value : str) -> usize {
+  if base == "Arch" {
+    if value == "x86_64" { return 0 }
+    if value == "i386" { return 1 }
+    if value == "aarch64" { return 2 }
+    if value == "aarch32" { return 3 }
+    if value == "riscv32" { return 4 }
+    if value == "riscv64" { return 5 }
+  }
+  if base == "Os" {
+    if value == "linux" { return 0 }
+    if value == "android" { return 1 }
+    if value == "windows" { return 2 }
+    if value == "macos" { return 3 }
+    if value == "freebsd" { return 4 }
+    if value == "none" { return 5 }
+  }
+  if base == "Env" {
+    if value == "gnu" { return 0 }
+    if value == "musl" { return 1 }
+    if value == "eabi" { return 2 }
+    if value == "eabihf" { return 3 }
+    if value == "bionic" { return 4 }
+    if value == "none" { return 5 }
+  }
+  if base == "Container" {
+    if value == "elf" { return 0 }
+    if value == "pe" { return 1 }
+    if value == "macho" { return 2 }
+    if value == "com" { return 3 }
+  }
+  if base == "Startup" {
+    if value == "raw" { return 0 }
+    if value == "libc" { return 1 }
+  }
+  if base == "Subsystem" {
+    if value == "console" { return 0 }
+    if value == "windows" { return 1 }
+    if value == "native" { return 2 }
+  }
+  99
+}
+
+sema_target_current_code := fn(facet : str) -> usize {
+  if facet == "arch" { return SEM_TARGET_ARCH }
+  if facet == "os" { return SEM_TARGET_OS }
+  if facet == "env" { return SEM_TARGET_ENV }
+  if facet == "container" { return SEM_TARGET_CONTAINER }
+  if facet == "startup" { return SEM_TARGET_STARTUP }
+  if facet == "subsystem" { return SEM_TARGET_SUBSYSTEM }
+  99
+}
+
+sema_target_facet_eq := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> i64 {
+  lq := sema_qual_ref_name(l, src)
+  if lq.n == 0 or str_at((src + lq.bs), lq.bl) != "target" { return -1 }
+  rq := sema_qual_ref_name(r, src)
+  if rq.n == 0 { return -1 }
+  facet := str_at((src + lq.s), lq.n)
+  base := str_at((src + rq.bs), rq.bl)
+  value := str_at((src + rq.s), rq.n)
+  rhs := sema_target_rhs_code(base, value)
+  current := sema_target_current_code(facet)
+  if rhs < 99 and current < 99 {
+    if rhs == current { return 1 }
+    return 0
+  }
+  -1
+}
+
 ## The arch NAME `[s,n)` of an `Arch.<name>` field access (the RHS of `target.arch == Arch.x86_64`),
-## else `n == 0`. Mirrors `lower::arch_rhs_name` so `check` folds a decl guard exactly as `build` does.
+## else `n == 0`. Retained for the older helper surface; guard folding below now uses the generalized
+## target facet comparison so `check` and `build` publish the same Machine projections.
 sema_arch_rhs_name := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
   match deref(e) {
     Expr::Field(b, fs, fl) => {
@@ -8684,12 +8786,13 @@ sema_arch_rhs_name := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
 guard_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
   match deref(cond) {
     Expr::Bin(op, l, r) => {
-      an := sema_arch_rhs_name(r, src)
-      if an.n != 0 {
-        eq := str_at((src + an.s), an.n) == "x86_64"
-        if i64(op) == 20 { if eq { return 1 } return 0 }   ## `==`
-        if i64(op) == 28 { if eq { return 0 } return 1 }   ## `!=`
-        return -1
+      if i64(op) == 20 or i64(op) == 28 {
+        tf := sema_target_facet_eq(l, r, src)
+        if tf >= 0 {
+          if i64(op) == 20 { return tf }
+          if tf == 1 { return 0 }
+          return 1
+        }
       }
       if i64(op) == 42 {                                   ## `not <pred>`
         lv := guard_fold(l, src)
