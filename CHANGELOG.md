@@ -39,6 +39,8 @@ how this repository proves itself, not part of what it ships.
   compile-time diagnostic before emission instead of compiling and trapping at runtime.
 - Fully comptime-known checked overflow in an explicitly typed fixed-array element now produces a
   located compile-time diagnostic before emission instead of compiling and trapping at runtime.
+- Declaration-level `when` guards now fold the selected package's `target.kind` and `target.code_size`
+  consistently in `check` and `build`, excluding inactive duplicate declarations before name resolution.
 - `alatyr fmt` now preserves and canonically emits valid `embed("path")` expressions without
   changing the embedded file bytes.
 - Direct multidimensional fixed-array fields now fail loudly with a located diagnostic instead of
