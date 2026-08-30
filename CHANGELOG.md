@@ -29,6 +29,8 @@ how this repository proves itself, not part of what it ships.
   stderr while leaving stdout available for machine-readable output.
 - The bounded scalar `comptime` binding slice now supports closed integer, boolean, and nullary
   user-enum values, while runtime-dependent initializers and unsafe rebinding cases fail loudly.
+- WAT now materializes the bounded local scalar `comptime` slice, including literal values and
+  `comptime if` conditions, instead of trapping on those programs.
 - Unrecognised CLI commands and flags now produce invocation-level Config diagnostics naming the
   offending argument instead of a missing-source-file failure.
 - Package setup failures now produce located Config diagnostics: `new` reports an occupied destination

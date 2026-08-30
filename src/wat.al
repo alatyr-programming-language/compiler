@@ -3,7 +3,8 @@
 ## A SECOND backend emitting against the SAME parsed `Decl` model the x86_64 lower consumes
 ## (`lower::emit_program`), rather than a fork of the front end. Scope (the scalar kernel): every
 ## function (kind 1) — value-returning (`-> u64`) or void — with `i64` value parameters, module-level
-## scalar `mut`/const globals (WASM `global.get`/`global.set`), local `:=` bindings + reassignment,
+## scalar `mut`/const globals (WASM `global.get`/`global.set`), local `:=` bindings + reassignment, and
+## bounded local scalar `comptime` bindings,
 ## expressions over literals (`Num`/`BoolLit`), params/locals/globals (`Var`), arithmetic + comparison
 ## + boolean `Bin` (uniform i64 value model), value-position `if` (`Expr::If`), direct calls
 ## (`Call`), statement lists with `while` (block/loop/br_if), statement-`if`, `return` at any depth,
@@ -45,6 +46,7 @@ arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 stmt_label_span := ast::stmt_label_span
+local_is_comptime := ast::binding_is_comptime
 (push_str, push_int) := rt
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
@@ -1216,7 +1218,7 @@ first_assign_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : pt
   while s != 0 and res == 0 {
     st := deref(stmt_p(Stmt, s))
     match st {
-      Stmt::Assign(ans, anl, v, nx) => { if streq(src, ans, anl, ns, nl) { res = s } ; s = nx }
+      Stmt::Assign(ans, anl, v, nx) => { if (not local_is_comptime(src, ans)) and streq(src, ans, anl, ns, nl) { res = s } ; s = nx }
       Stmt::While(c, b, nx) => { res = first_assign_handle(b, ns, nl, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { res = first_assign_handle(th, ns, nl, src, a) ; if res == 0 { res = first_assign_handle(el, ns, nl, src, a) } ; s = nx }
       Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 and res == 0 { am := deref(arm_p(arm)) ; res = first_assign_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next } ; s = mnx }
@@ -1265,7 +1267,8 @@ local_slot_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : us
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ans, anl, v, nx) => {
-        if s == target { result = 0 - (b + 1) ; found = true }
+        if local_is_comptime(src, ans) { s = nx }
+        else if s == target { result = 0 - (b + 1) ; found = true }
         else {
           if first_assign_handle(fn_head, ans, anl, src, a) == s and (not is_global(decls, src, ans, anl, a)) { b = b + 1 }
           s = nx
@@ -1541,6 +1544,13 @@ wat_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
         if lv == 0 and rv == 0 { r = 0 }
       }
     }
+    Expr::BoolLit(v) => { if v != 0 { r = 1 } else { r = 0 } }
+    ## A local `comptime` boolean is erased from the frame and its initializer is the condition's value.
+    ## Re-enter the same folder so a supported literal remains the only positive WAT surface here.
+    Expr::Var(vs, vn) => {
+      cv := wat_ct_expr(vs, vn, vs, src)
+      if unchecked bitcast(usize, cv) != 0 { r = wat_comp_cond_fold(cv, src) }
+    }
     ## `verify.checked` (CT-11): the current verification mode (WAT_CHK — checked by default, cleared
     ## inside `unchecked {}`). Mirrors a64/x86 so a `comptime if verify.checked` predicate folds identically.
     Expr::Field(b, fs, fl) => {
@@ -1685,6 +1695,92 @@ mut WAT_PARAMS := 0
 wat_params := fn() -> ptr(mut Param) { unchecked bitcast(ptr(mut Param), WAT_PARAMS) }
 mut WAT_DECLS := 0
 wat_decls := fn() -> ptr(rt::Vec) { unchecked bitcast(ptr(rt::Vec), WAT_DECLS) }
+
+## Local `comptime` bindings have no WASM frame slot. The x86 lower owns an arena-backed event table;
+## WAT is a separate emitter, so keep the same source-ordered facts in a small per-function table here.
+## Kind 1 is a comptime value and kind 2 is a later ordinary binding that shadows it. The source offset
+## makes branch-local uses deterministic even though this collector visits nested lists recursively.
+mut WAT_CT_N := 0
+mut WAT_CT_NS : [usize; 128] = [0; 128]
+mut WAT_CT_NL : [usize; 128] = [0; 128]
+mut WAT_CT_OFF : [usize; 128] = [0; 128]
+mut WAT_CT_EXPR : [usize; 128] = [0; 128]
+mut WAT_CT_KIND : [u8; 128] = [0; 128]
+
+wat_ct_record := fn(ns : usize, nl : usize, v : ptr(Expr), kind : u8) {
+  if WAT_CT_N >= 128 { panic("wasm: local comptime binding table exceeds 128 events") }
+  WAT_CT_NS[WAT_CT_N] = ns
+  WAT_CT_NL[WAT_CT_N] = nl
+  WAT_CT_OFF[WAT_CT_N] = ns
+  WAT_CT_EXPR[WAT_CT_N] = unchecked bitcast(usize, v)
+  WAT_CT_KIND[WAT_CT_N] = kind
+  WAT_CT_N = WAT_CT_N + 1
+}
+
+## Collect every binding event in a function's statement tree. Assignment is the only AST form that
+## can introduce a local; all other arms merely recurse to keep nested branch/loop declarations visible.
+wat_ct_collect := fn(head : ptr(mut Stmt), src : ptr(u8)) {
+  mut s := head
+  while s != 0 {
+    st := deref(stmt_p(Stmt, s))
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if local_is_comptime(src, ns) { wat_ct_record(ns, nl, v, 1) }
+        else { wat_ct_record(ns, nl, unchecked bitcast(ptr(Expr), 0), 2) }
+        s = nx
+      }
+      Stmt::While(c, b, nx) => { wat_ct_collect(b, src) ; s = nx }
+      Stmt::If(c, th, el, nx) => { wat_ct_collect(th, src) ; wat_ct_collect(el, src) ; s = nx }
+      Stmt::Match(msc, mah, nx) => {
+        mut arm := mah
+        while arm != 0 { am := deref(arm_p(arm)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }
+        s = nx
+      }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { wat_ct_collect(fb, src) ; s = nx }
+      Stmt::CompFor(cvs, cvl, cisvar, cb, nx) => { wat_ct_collect(cb, src) ; s = nx }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { wat_ct_collect(rb, src) ; s = nx }
+      Stmt::CompIf(cc, th, el, nx) => { wat_ct_collect(th, src) ; wat_ct_collect(el, src) ; s = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => {
+        mut arm := cmah
+        while arm != 0 { am := deref(arm_p(arm)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }
+        s = nx
+      }
+      Stmt::Loop(b, nx) => { wat_ct_collect(b, src) ; s = nx }
+      Stmt::Unchecked(b, nx) => { wat_ct_collect(b, src) ; s = nx }
+      Stmt::AllocWith(al, b, nx) => { wat_ct_collect(b, src) ; s = nx }
+      Stmt::DerefAssign(p, v, nx) => { s = nx }
+      Stmt::IndexAssign(b, i, v, nx) => { s = nx }
+      Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { s = nx }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, v, nx) => { s = nx }
+      Stmt::FieldPathAssign(fp, v, nx) => { s = nx }
+      Stmt::Break(v, d, nx) => { s = nx }
+      Stmt::Continue(d, nx) => { s = nx }
+      Stmt::Return(v, nx) => { s = nx }
+      Stmt::ExprStmt(e, nx) => { s = nx }
+    }
+  }
+}
+
+## Return the latest visible comptime expression for a variable use, or null after an ordinary shadow.
+## A bounded table and a fail-loud overflow keep unsupported/untrusted source from becoming a silent
+## runtime local or an accidental value.
+wat_ct_expr := fn(ns : usize, nl : usize, use_s : usize, src : ptr(u8)) -> ptr(Expr) {
+  mut found : u8 = 0
+  mut found_off := 0
+  mut result : usize = 0
+  mut i := 0
+  while i < WAT_CT_N {
+    if WAT_CT_OFF[i] <= use_s and WAT_CT_NL[i] == nl and streq(src, WAT_CT_NS[i], nl, ns, nl) {
+      if found == 0 or WAT_CT_OFF[i] >= found_off {
+        found = WAT_CT_KIND[i]
+        found_off = WAT_CT_OFF[i]
+        if found == 1 { result = WAT_CT_EXPR[i] } else { result = 0 }
+      }
+    }
+    i = i + 1
+  }
+  unchecked bitcast(ptr(Expr), result)
+}
 ## Number of components in the current function's tuple return. ArrayLit is also fixed-array syntax;
 ## only a tuple RETURN may materialize it as the WASM aggregate-result block.
 mut WAT_RET_TUPLE := 0
@@ -4030,6 +4126,9 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
     }
     Expr::BoolLit(v) => { push_str(sb, "(i64.const "); push_int(sb, i64(v)); push_str(sb, ")") }
     Expr::Var(ns, nl) => {
+      cv := wat_ct_expr(ns, nl, ns, src)
+      if unchecked bitcast(usize, cv) != 0 { emit_wat_expr(cv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+      else {
       mut bidx := bind_list_index(bind_head, src, ns, nl, a)
       mut bbase := bind_base
       mut bind_blocked := false
@@ -4094,6 +4193,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         push_str(sb, ")")
       } else {
         push_str(sb, "(unreachable) (; unresolved var ;)\n")
+      }
       }
     }
     Expr::Bin(op, l, r) => {
@@ -5405,6 +5505,8 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
+        if local_is_comptime(src, ns) { s = nx }
+        else {
         slit := expr_struct_name(v)
         elit := expr_enum_name(v)
         ## the struct span of an aggregate PLACE RHS (`q := p` / `x := arr[i]`) — a whole-aggregate COPY.
@@ -5705,6 +5807,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           } else { emit_wat_expr(v, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base) }
           push_str(sb, ")\n")
           s = nx
+        }
         }
       }
       Stmt::Return(rv, nx) => {
@@ -6613,6 +6716,10 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   WAT_LOOP_OVF = false
   WAT_DEF_STOP = 0
   WAT_BIND_DEPTH = 0
+  ## collect local comptime values before slot counting and emission; their names must never consume
+  ## runtime locals, while source offsets preserve the same shadowing rule as the x86 lower.
+  WAT_CT_N = 0
+  wat_ct_collect(head, src)
   ## pass 1: declare one (local i64) per distinct non-global local name in the WHOLE fn tree
   ## (top-level + nested scopes). count_locals and name_local_index share local_slot_scan, so the
   ## slot each Var resolves to is exactly its pre-order declaration index.
