@@ -152,7 +152,16 @@ pub std_idx_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), s
   match deref(e) {
     Expr::Index(arr, idx) => {
       ent := deref(svec_at(SlotEntry, slots, index_base_entry(arr, slots, src)))
-      if ent.ek == 5 and ent.eek == 2 and not ent.is_ref and ent.snl != 0 and std_array_elem_byte_tier(decls, src, ent.sns, ent.snl, a) {
+      ## A Slice(P) local and parameter are both represented by an `is_ref` slot, but their element
+      ## address is still the same byte-strided view that the standard-layout resolver must inspect.
+      ## Keep ordinary fixed-array parameters out: they have no `Slice(T)` annotation and retain the
+      ## established word-granular ABI path. Inferred `s := a[lo..hi]` locals are distinguished by the
+      ## absence of an annotation; annotated `s : Slice(P)` parameters are recovered from their type.
+      mut is_slice_view := not ent.is_ref
+      if ent.is_ref {
+        is_slice_view = slot_name_is_annotated(src, ent.ns, ent.nl) == false or slice_param_elem_span(src, ent.ns, ent.nl).n != 0
+      }
+      if ent.ek == 5 and ent.eek == 2 and is_slice_view and ent.snl != 0 and std_array_elem_byte_tier(decls, src, ent.sns, ent.snl, a) {
         StdIdxPath(ok = true, arr = arr, idx = idx, bo = 0, ts = ent.sns, tl = ent.snl)
       } else { StdIdxPath(ok = false, arr = z, idx = z, bo = 0, ts = 0, tl = 0) }
     }
