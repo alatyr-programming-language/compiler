@@ -2464,6 +2464,42 @@ tool17_target_code_size_test() {
   rm -rf "$root"/*/target
 }
 
+## Issue #251 / TOOL-17 + Comptime §7.1/§9 — declaration-level `when` guards must use the same
+## selected artifact facts as the lower. The false duplicate declarations also call nonexistent
+## functions, so a passing check/build proves they were removed before resolution rather than merely
+## tolerated. Keep the package target row-private and inspect the object GAS before assembly.
+tool17_declaration_target_when_test() {
+  root="$(_fixture_tree package)/when_guard_target_declaration"
+  p="$root"
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" check package.al ) >/dev/null 2>"$T/tool17_declaration_target_when.check.err"
+  rc=$?
+  if [ "$rc" = 0 ] && [ ! -e "$p/target" ] && [ ! -s "$T/tool17_declaration_target_when.check.err" ]; then
+    echo "ok   tool17_declaration_target_when: check drops inactive declarations"
+  else
+    echo "FAIL tool17_declaration_target_when: check rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$T/tool17_declaration_target_when.check.err" 2>/dev/null)"
+    fail=1
+  fi
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" build package.al ) >/dev/null 2>"$T/tool17_declaration_target_when.build.err"
+  rc=$?
+  obj="$p/target/debug/when-guard-target-declaration.o"
+  gas="$obj.s"
+  if [ "$rc" = 0 ] && [ -f "$obj" ] && [ -s "$gas" ] \
+    && grep -qF 'movq $20' "$gas" && grep -qF 'movq $22' "$gas" \
+    && ! grep -qF 'movq $200' "$gas" && ! grep -qF 'movq $220' "$gas" \
+    && ! grep -qF 'missing_kind_branch' "$gas" && ! grep -qF 'missing_size_branch' "$gas" \
+    && ! grep -qF 'missing_kind_branch' "$T/tool17_declaration_target_when.build.err" \
+    && ! grep -qF 'missing_size_branch' "$T/tool17_declaration_target_when.build.err"; then
+    echo "ok   tool17_declaration_target_when: object emits only selected kind/code_size branches"
+  else
+    echo "FAIL tool17_declaration_target_when: build rc=$rc artifact=$obj diagnostic=$(cat "$T/tool17_declaration_target_when.build.err" 2>/dev/null)"
+    fail=1
+  fi
+  rm -rf "$p/target"
+}
+
 ## TOOL-17 / Tooling §2.7 — `Package` and `Target` are manifest-only structures, while the selected
 ## target's published projections remain ordinary prelude data. Negative source modules must be
 ## rejected identically by `check` and `build`, with no target artifact; the positive package must keep
@@ -4235,6 +4271,7 @@ multi_target_layout_test
 tool17_source_check_test
 tool17_target_kind_test
 tool17_target_code_size_test
+tool17_declaration_target_when_test
 tool17_prelude_visibility_test
 ext_test package_cli_test
 ## The toolchain-spawn regression (scripts/env_size_test.sh). An environment too large for one read used

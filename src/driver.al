@@ -3599,13 +3599,17 @@ pub set_build_flags := fn(p : usize, n : usize) -> i64 {
 ## boundary. `lower.al` is intentionally not part of this seam: ctfold owns the target-kind fact and
 ## folds it wherever the lower's comptime condition evaluator is reached.
 pub set_target_kind := fn(kind : usize) -> i64 {
-  return lower::ctfold::set_target_kind(kind)
+  lower_rc := lower::ctfold::set_target_kind(kind)
+  sema_rc := sema::set_target_kind(kind)
+  return lower_rc + sema_rc
 }
 
 ## Tooling §2.7 / TOOL-17 — forward the selected x86 code-size enum as a scalar. Keep this beside
 ## target.kind; lower::ctfold owns the comptime fact and src/lower.al stays outside this slice.
 pub set_target_code_size := fn(code_size : usize) -> i64 {
-  return lower::ctfold::set_target_code_size(code_size)
+  lower_rc := lower::ctfold::set_target_code_size(code_size)
+  sema_rc := sema::set_target_code_size(code_size)
+  return lower_rc + sema_rc
 }
 
 ## Tooling §2.7 / TOOL-18 — publish the fully resolved Machine projections to both semantic and lower

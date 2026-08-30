@@ -8832,14 +8832,16 @@ same_fn_signature := fn(a0 : Decl, b0 : Decl, src : ptr(u8), ar : ptr(mut rt::Ar
 }
 
 ## Selected target projections used by declaration-guard folding. The CLI publishes the complete
-## Machine model through driver before `check_files`; defaults retain the existing host target for
-## direct file-list commands. The scalar codes mirror `lower::ctfold`.
+## Machine model plus the selected artifact facts through driver before `check_files`; defaults retain
+## the existing host target for direct file-list commands. The scalar codes mirror `lower::ctfold`.
 mut SEM_TARGET_ARCH : usize = 0
 mut SEM_TARGET_OS : usize = 0
 mut SEM_TARGET_ENV : usize = 0
 mut SEM_TARGET_CONTAINER : usize = 0
 mut SEM_TARGET_STARTUP : usize = 0
 mut SEM_TARGET_SUBSYSTEM : usize = 0
+mut SEM_TARGET_KIND : usize = 0
+mut SEM_TARGET_CODE_SIZE : usize = 2
 pub set_target_model := fn(arch : usize, os : usize, env : usize, container : usize, startup : usize, subsystem : usize) -> i64 {
   SEM_TARGET_ARCH = arch
   SEM_TARGET_OS = os
@@ -8847,6 +8849,14 @@ pub set_target_model := fn(arch : usize, os : usize, env : usize, container : us
   SEM_TARGET_CONTAINER = container
   SEM_TARGET_STARTUP = startup
   SEM_TARGET_SUBSYSTEM = subsystem
+  return 0
+}
+pub set_target_kind := fn(kind : usize) -> i64 {
+  SEM_TARGET_KIND = kind
+  return 0
+}
+pub set_target_code_size := fn(code_size : usize) -> i64 {
+  SEM_TARGET_CODE_SIZE = code_size
   return 0
 }
 
@@ -8870,6 +8880,18 @@ sema_target_rhs_code := fn(base : str, value : str) -> usize {
     if value == "aarch32" { return 3 }
     if value == "riscv32" { return 4 }
     if value == "riscv64" { return 5 }
+  }
+  if base == "Kind" {
+    if value == "executable" { return 0 }
+    if value == "object" { return 1 }
+    if value == "static_lib" { return 2 }
+    if value == "source" { return 3 }
+    if value == "shared_lib" { return 4 }
+  }
+  if base == "CodeSize" {
+    if value == "b16" { return 0 }
+    if value == "b32" { return 1 }
+    if value == "b64" { return 2 }
   }
   if base == "Os" {
     if value == "linux" { return 0 }
@@ -8912,6 +8934,8 @@ sema_target_current_code := fn(facet : str) -> usize {
   if facet == "container" { return SEM_TARGET_CONTAINER }
   if facet == "startup" { return SEM_TARGET_STARTUP }
   if facet == "subsystem" { return SEM_TARGET_SUBSYSTEM }
+  if facet == "kind" { return SEM_TARGET_KIND }
+  if facet == "code_size" { return SEM_TARGET_CODE_SIZE }
   99
 }
 
@@ -8947,8 +8971,9 @@ sema_arch_rhs_name := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
 ## Fold a DECLARATION `when`-guard predicate (Comptime §7.1/§9; CT-5) for the x86_64 build: 1 = TRUE
 ## (decl active), 0 = FALSE (decl "as if absent"), -1 = cannot fold (KEEP active). A BYTE-FOR-BYTE
 ## mirror of `lower::decl_guard_fold` so `check` agrees with `build` on which guarded decls exist —
-## TARGET gating `target.arch == Arch.<name>` composed with `not`/`and`/`or` (ops 42/40/41, `==`/`!=`
-## = 20/28). Recurses on itself (never a nested match) to stay within the self-host lower idiom limits.
+## TARGET gating over the published machine and artifact facets (`target.arch`, `target.kind`, and
+## `target.code_size`) composed with `not`/`and`/`or` (ops 42/40/41, `==`/`!=` = 20/28). Recurses on
+## itself (never a nested match) to stay within the self-host lower idiom limits.
 guard_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
   match deref(cond) {
     Expr::Bin(op, l, r) => {
