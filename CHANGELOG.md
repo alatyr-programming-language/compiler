@@ -31,6 +31,7 @@ how this repository proves itself, not part of what it ships.
   `mmap` requests before constructing an owning pointer.
 - `alatyr fmt` now preserves bare `comptime match` expression arms and keeps the formatted source
   idempotent.
+- `alatyr fmt` now preserves multi-segment qualified function return types and their following bodies.
 - Ordinary source can no longer construct manifest-only `Package` or `Target` values; `check` and
   `build` now reject them with a located diagnostic.
 - Fully comptime-known checked overflow in a direct scalar call argument now produces a located

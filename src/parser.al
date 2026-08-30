@@ -5593,13 +5593,14 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       if str_eq(str_at(pc.src + cur(pc).start, cur(pc).len), "scoped") { pc.idx = pc.idx + 1 }
       rt = cur(pc)                            ## result type head (capture its span)
       pc.idx = pc.idx + 1
-      ## A QUALIFIED return type `mod::Type` (an aliased / cross-module struct, e.g. the driver's
-      ## `-> strbuf::StrBuf`): extend the captured span across `:: Type` so the FULL `mod::Type`
-      ## is recorded. Otherwise only the head `mod` is kept and `struct_decl_of` — which strips the
-      ## `mod::` via `name_tail` — cannot resolve the struct, so `fn_returns_struct` wrongly reports
-      ## a SCALAR return: the GAS then delivers only %rax and the caller's `s := mod::f(…)` binding
-      ## drops the struct's other words (the `compile_files`/`StrBuf`-return fixpoint miscompile).
-      if cur(pc).kind == 7 and tok_at(pc, pc.idx + 1).kind == 1 {
+      ## A QUALIFIED return type `mod::…::Type` (an aliased / cross-module struct, e.g. the driver's
+      ## `-> strbuf::StrBuf`): extend the captured span across EVERY `:: Type` pair so the FULL path
+      ## is recorded. Otherwise only the head (or a partial path) is kept and `struct_decl_of` —
+      ## which strips the module prefix via `name_tail` — cannot resolve the struct, so
+      ## `fn_returns_struct` wrongly reports a SCALAR return: the GAS then delivers only %rax and the
+      ## caller's `s := mod::f(…)` binding drops the struct's other words (the `compile_files`/
+      ## `StrBuf`-return fixpoint miscompile).
+      while cur(pc).kind == 7 and tok_at(pc, pc.idx + 1).kind == 1 {
         pc.idx = pc.idx + 1                   ## '::'
         tt := cur(pc)                         ## tail type ident
         ## Snapshot the old span before rebuilding the byte-layout Token. The self-host lower clears
