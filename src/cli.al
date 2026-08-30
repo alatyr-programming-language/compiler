@@ -4837,6 +4837,7 @@ mut CLI_TARGET_SELECT_COUNT := 0
 mut CLI_TARGET_SELECT_P := 0
 mut CLI_TARGET_SELECT_N := 0
 mut CLI_TARGET_SELECT_ALL := false
+mut CLI_BUILD_PLAN := false
 mut CLI_VENDOR_DIR_COUNT := 0
 mut CLI_OPTION_BAD := false
 mut CLI_UNKNOWN_OPTION_P := 0
@@ -4858,6 +4859,7 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
   CLI_TARGET_SELECT_P = 0
   CLI_TARGET_SELECT_N = 0
   CLI_TARGET_SELECT_ALL = false
+  CLI_BUILD_PLAN = false
   CLI_VENDOR_DIR_COUNT = 0
   CLI_OPTION_BAD = false
   CLI_UNKNOWN_OPTION_P = 0
@@ -4900,6 +4902,9 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
         CLI_OPTION_BAD = true
         i += 1
       }
+    } else if x == "--plan" {
+      CLI_BUILD_PLAN = true
+      i += 1
     } else if x == "--vendor-dir" {
       CLI_VENDOR_DIR_COUNT += 1
       if i + 1 < n { i += 2 } else { CLI_OPTION_BAD = true ; i += 1 }
@@ -4932,7 +4937,8 @@ bare_file_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) ->
   mut i := fi
   while i < n and first == n {
     x := arg_at(cmd, i)
-    if x == "--release" { i += 1 }
+    if x == "--plan" { i += 1 }
+    else if x == "--release" { i += 1 }
     else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--target-dir" or x == "--target" { if i + 1 < n { i += 2 } else { i += 1 } }
@@ -4944,7 +4950,8 @@ bare_file_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) ->
   while i < n {
     x := arg_at(cmd, i)
     mut skip := false
-    if x == "--release" { skip = true ; i += 1 }
+    if x == "--plan" { skip = true ; i += 1 }
+    else if x == "--release" { skip = true ; i += 1 }
     else if x == "--profile" { skip = true ; if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { skip = true ; if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--target-dir" or x == "--target" { skip = true ; if i + 1 < n { i += 2 } else { i += 1 } }
@@ -4969,7 +4976,8 @@ cli_first_input := fn(cmd : str, fi : usize, n : usize) -> str {
   mut i := fi
   while i < n {
     x := arg_at(cmd, i)
-    if x == "--release" { i += 1 }
+    if x == "--plan" { i += 1 }
+    else if x == "--release" { i += 1 }
     else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--target-dir" or x == "--target" { if i + 1 < n { i += 2 } else { i += 1 } }
@@ -4986,7 +4994,8 @@ plan_bare_inputs_reject := fn(in out a : rt::Arena, cmd : str, fi : usize, n : u
   mut i := fi
   while i < n {
     x := arg_at(cmd, i)
-    if x == "--release" { i += 1 }
+    if x == "--plan" { i += 1 }
+    else if x == "--release" { i += 1 }
     else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--target-dir" or x == "--target" { if i + 1 < n { i += 2 } else { i += 1 } }
@@ -5453,6 +5462,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       unknown := str_at(CLI_UNKNOWN_OPTION_P, CLI_UNKNOWN_OPTION_N)
       return cli_unknown_arg_diag(a, unknown)
     }
+    if CLI_BUILD_PLAN and mode != 6 { return cli_config_diag(a, "--plan is supported only by `build`") }
     if CLI_VENDOR_DIR_COUNT > 0 { return cli_config_diag(a, "--vendor-dir is not supported in v1") }
     if CLI_TARGET_DIR_COUNT > 1 { return cli_config_diag(a, "--target-dir was specified more than once") }
     if CLI_MANIFEST_COUNT > 1 { return cli_config_diag(a, "--manifest was specified more than once") }
@@ -5481,6 +5491,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       is_pkg = true
     }
   }
+  if CLI_BUILD_PLAN and not is_pkg { return cli_config_diag(a, "--plan requires a package manifest") }
   selected_profile = cli_profile(a, cmd, profile_n, pkg_arg)
   mut lim_ceiling := ""
   if is_pkg and (mode == 2 or mode == 3 or mode == 5 or mode == 6) {
@@ -5511,6 +5522,9 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     if mode == 1 and CLI_TARGET_SELECT_ALL and manifest_target_count(a, pkg_arg) > 1 {
       return cli_config_diag(a, "--target all cannot be combined with -o")
     }
+    if CLI_BUILD_PLAN and CLI_TARGET_SELECT_ALL {
+      return cli_config_diag(a, "--target all cannot be combined with --plan")
+    }
     if mode == 6 and CLI_TARGET_SELECT_ALL {
     } else {
       if manifest_target_selection_resolve(a, pkg_arg) != 0 { MANIFEST_CONFIG_BAD = true }
@@ -5529,6 +5543,9 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
         }
         if MANIFEST_CONFIG_BAD == false { target_backend = backend }
       }
+    }
+    if MANIFEST_CONFIG_BAD == false and CLI_BUILD_PLAN {
+      if manifest_plan_target_reject(a, pkg_arg) != 0 { MANIFEST_CONFIG_BAD = true }
     }
     if MANIFEST_CONFIG_BAD { return 1 }
     if manifest_source_empty_reject(a, pkg_arg) != 0 { return 1 }
@@ -5835,7 +5852,13 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     } else {
       build_rc = link_exe_split(a, outp, paths, sb.data, sb.len, spb, entry_sym, libnames, anyd, lflags)
     }
-    if is_pkg and build_rc == 0 { manifest_build_summary(a, mpath, selected_profile, outp) }
+    if is_pkg and build_rc == 0 {
+      manifest_build_summary(a, mpath, selected_profile, outp)
+      if CLI_BUILD_PLAN {
+        plan_rc := write_build_plan(a, mpath, "", true, selected_profile)
+        if plan_rc != 0 { return plan_rc }
+      }
+    }
     return build_rc
   }
   out := arg_at(cmd, oi)

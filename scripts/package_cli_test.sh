@@ -1503,6 +1503,106 @@ EOF
   rm -rf "$p/target"
 }
 
+# Tooling §4.2 / TOOL-20 — `build --plan` writes the same v1 plan after a successful build, without
+# changing any build artifact. The parent failure-first is `build --plan package.al`: the old CLI
+# rejects the flag before package resolution. Keep the successful artifact comparison and the failed
+# build check in one focused case so the output-only and publish-after-success boundaries stay coupled.
+run_tool20_build_plan() {
+  p="$ROOT/test/package/tool20_plan"
+  tmp=$(mktemp -d)
+  out=$(mktemp)
+  err=$(mktemp)
+  want=$(mktemp)
+  baseline=$(mktemp)
+  with_plan=$(mktemp)
+  repeat=$(mktemp)
+  cat >"$want" <<'EOF'
+meta	arch	x86_64
+meta	container	elf
+meta	env	gnu
+meta	hermetic	yes
+meta	machine	Linux
+meta	os	linux
+meta	package-version	0.1.0
+meta	plan-version	1
+meta	profile	debug
+meta	toolchain	as,ld
+artifact		debug	executable	debug/tool20-plan	bin/tool20-plan
+EOF
+
+  rm -rf "$p/target"
+  (cd "$p" && "$CC" build package.al) >"$out" 2>"$err"
+  base_rc=$?
+  if [ "$base_rc" = 0 ] && [ -x "$p/target/debug/tool20-plan" ]; then
+    (cd "$p/target" && find . -type f ! -name plan.tsv -printf '%P\n' | LC_ALL=C sort | while IFS= read -r f; do sha256sum "$f"; done) >"$baseline"
+  else
+    echo "FAIL tool20_build_plan: baseline build rc=$base_rc"
+    fail=1
+  fi
+
+  rm -rf "$p/target"
+  (cd "$p" && "$CC" build --plan package.al) >"$out" 2>"$err"
+  plan_rc=$?
+  if [ "$plan_rc" = 0 ] && [ ! -s "$out" ] && cmp -s "$p/target/debug/plan.tsv" "$want"; then
+    echo "ok   tool20_build_plan: build writes deterministic v1 plan"
+  else
+    echo "FAIL tool20_build_plan: build --plan rc=$plan_rc stdout=$(cat "$out") stderr=$(cat "$err")"
+    fail=1
+  fi
+  (cd "$p/target" && find . -type f ! -name plan.tsv -printf '%P\n' | LC_ALL=C sort | while IFS= read -r f; do sha256sum "$f"; done) >"$with_plan"
+  if cmp -s "$baseline" "$with_plan"; then
+    echo "ok   tool20_build_plan: --plan leaves build artifacts byte-identical"
+  else
+    echo "FAIL tool20_build_plan: --plan changed non-plan artifact bytes"
+    fail=1
+  fi
+  cp "$p/target/debug/plan.tsv" "$repeat"
+
+  rm -rf "$p/target"
+  (cd "$p" && "$CC" build --plan package.al) >"$out" 2>"$err"
+  repeat_rc=$?
+  if [ "$repeat_rc" = 0 ] && cmp -s "$p/target/debug/plan.tsv" "$repeat"; then
+    echo "ok   tool20_build_plan: repeated build plan is byte-identical"
+  else
+    echo "FAIL tool20_build_plan: repeated build --plan rc=$repeat_rc or plan changed"
+    fail=1
+  fi
+
+  mkdir -p "$tmp/failing/src"
+  cat >"$tmp/failing/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf,
+                    entry = "_start", output = "failed-plan")],
+)
+EOF
+  printf 'main := fn() -> u64 { return\n' >"$tmp/failing/src/main.al"
+  (cd "$tmp/failing" && "$CC" build --plan package.al) >"$out" 2>"$err"
+  fail_rc=$?
+  if [ "$fail_rc" != 0 ] && [ -s "$err" ] && [ ! -e "$tmp/failing/target/debug/plan.tsv" ]; then
+    echo "ok   tool20_build_plan: failed build publishes no plan"
+  else
+    echo "FAIL tool20_build_plan: failed build rc=$fail_rc or published plan"
+    fail=1
+  fi
+
+  rm -rf "$p/target"
+  (cd "$p" && "$CC" build --plan --target all package.al) >"$out" 2>"$err"
+  all_rc=$?
+  if [ "$all_rc" != 0 ] && grep -qF 'config: --target all cannot be combined with --plan' "$err" \
+    && [ ! -e "$p/target" ]; then
+    echo "ok   tool20_build_plan: --target all is rejected without output"
+  else
+    echo "FAIL tool20_build_plan: --target all rc=$all_rc or published output"
+    fail=1
+  fi
+
+  rm -f "$out" "$err" "$want" "$baseline" "$with_plan" "$repeat"
+  rm -rf "$p/target" "$tmp"
+}
+
 if [ "${CROSS_TARGET_ONLY:-0}" = 1 ]; then
   run_cross_target_test
   exit "$fail"
@@ -1519,6 +1619,7 @@ if [ "${TOOL14_ONLY:-0}" = 1 ]; then
 fi
 
 run_tool20_plan
+run_tool20_build_plan
 
 # TOOL-14 — invocation-level Config diagnostics must name an unrecognized command/flag before the
 # source-path branch can turn it into the misleading missing-source-file failure. Capture the command's
