@@ -78,7 +78,7 @@ ecallee_is := ast::ecallee_is
 ## after it could never be imported by bare name (measured — see the file's header).
 ## `set_build_flags` + `BUILD_FLAGS_*` and `compfor_iter_arg` stay HERE (both are `pub`, and
 ## `compfor_iter_arg` also calls the `fnval` CHILD).
-(lower_show_src_line, comptime_cond_src_off, comptime_reject_cond, comptime_cond_eval, comptime_query_expr_ok, comptime_arg_end, compfor_target_type, comptime_range_bound, stmts_have_compfor, stmts_have_variant_template, emit_build_flag_value) := ctfold
+(lower_show_src_line, comptime_cond_src_off, comptime_reject_cond, comptime_cond_eval, comptime_query_expr_ok, comptime_arg_end, compfor_target_type, comptime_range_bound, stmts_have_compfor, stmts_have_variant_template, emit_build_flag_value, target_facet_eq) := ctfold
 ## The `@abi(c)` FOREIGN-CALL ABI (`src/lower/abi_c.al`) — a CHILD module under MOD-12, imported by
 ## BARE NAME. It is the C-ABI half of the audit's `abi` band; the rest stays here because `lower::fnval`
 ## already names `emit_call_args`/`nstack_args`/`align_pad`/the float classifiers, and a child-to-child
@@ -20927,11 +20927,10 @@ arch_rhs_name := fn(e : ptr(Expr), src : ptr(u8)) -> CSpan {
 decl_guard_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
   match deref(cond) {
     Expr::Bin(op, l, r) => {
-      an := arch_rhs_name(r, src)
-      if an.n != 0 {
-        eq := str_at((src + an.s), an.n) == "x86_64"
-        if i64(op) == 20 { if eq { return 1 } return 0 }   ## `==`
-        if i64(op) == 28 { if eq { return 0 } return 1 }   ## `!=`
+      tf := target_facet_eq(l, r, src)
+      if tf >= 0 {
+        if i64(op) == 20 { return tf }   ## `==`
+        if i64(op) == 28 { if tf == 1 { return 0 } return 1 }   ## `!=`
         return -1
       }
       if i64(op) == 42 {                                   ## `not <pred>` (Bin(42, x, x))

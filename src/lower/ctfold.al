@@ -451,6 +451,80 @@ pub set_target_code_size := fn(code_size : usize) -> i64 {
   return 0
 }
 
+## Selected Machine projections (Tooling §2.7). Defaults describe the compiler's existing host-shaped
+## target; the CLI replaces them with the fully resolved variant before any source reaches lowering.
+## Codes match the manifest scanner: Arch x86_64/i386/aarch64/aarch32/riscv32/riscv64 = 0..5,
+## Os linux/android/windows/macos/freebsd/none = 0..5, Env gnu/musl/eabi/eabihf/bionic/none = 0..5,
+## Container elf/pe/macho/com = 0..3, Startup raw/libc = 0..1, Subsystem console/windows/native = 0..2.
+mut TARGET_ARCH : usize = 0
+mut TARGET_OS : usize = 0
+mut TARGET_ENV : usize = 0
+mut TARGET_CONTAINER : usize = 0
+mut TARGET_STARTUP : usize = 0
+mut TARGET_SUBSYSTEM : usize = 0
+pub set_target_model := fn(arch : usize, os : usize, env : usize, container : usize, startup : usize, subsystem : usize) -> i64 {
+  TARGET_ARCH = arch
+  TARGET_OS = os
+  TARGET_ENV = env
+  TARGET_CONTAINER = container
+  TARGET_STARTUP = startup
+  TARGET_SUBSYSTEM = subsystem
+  return 0
+}
+
+target_model_rhs_code := fn(base : str, value : str) -> usize {
+  if base == "Arch" {
+    if value == "x86_64" { return 0 }
+    if value == "i386" { return 1 }
+    if value == "aarch64" { return 2 }
+    if value == "aarch32" { return 3 }
+    if value == "riscv32" { return 4 }
+    if value == "riscv64" { return 5 }
+  }
+  if base == "Os" {
+    if value == "linux" { return 0 }
+    if value == "android" { return 1 }
+    if value == "windows" { return 2 }
+    if value == "macos" { return 3 }
+    if value == "freebsd" { return 4 }
+    if value == "none" { return 5 }
+  }
+  if base == "Env" {
+    if value == "gnu" { return 0 }
+    if value == "musl" { return 1 }
+    if value == "eabi" { return 2 }
+    if value == "eabihf" { return 3 }
+    if value == "bionic" { return 4 }
+    if value == "none" { return 5 }
+  }
+  if base == "Container" {
+    if value == "elf" { return 0 }
+    if value == "pe" { return 1 }
+    if value == "macho" { return 2 }
+    if value == "com" { return 3 }
+  }
+  if base == "Startup" {
+    if value == "raw" { return 0 }
+    if value == "libc" { return 1 }
+  }
+  if base == "Subsystem" {
+    if value == "console" { return 0 }
+    if value == "windows" { return 1 }
+    if value == "native" { return 2 }
+  }
+  99
+}
+
+target_model_current_code := fn(facet : str) -> usize {
+  if facet == "arch" { return TARGET_ARCH }
+  if facet == "os" { return TARGET_OS }
+  if facet == "env" { return TARGET_ENV }
+  if facet == "container" { return TARGET_CONTAINER }
+  if facet == "startup" { return TARGET_STARTUP }
+  if facet == "subsystem" { return TARGET_SUBSYSTEM }
+  99
+}
+
 ## Fold the EQUALITY of a TARGET-facet comparison `target.<facet> <op> <Enum>.<variant>` against THIS
 ## build's machine model (Comptime §9.2, Tooling §2.7). The lean target is the one `package.al`
 ## declares — x86_64 / linux / gnu / elf — so: 1 = the RHS variant IS this build's value for that
@@ -459,7 +533,7 @@ pub set_target_code_size := fn(code_size : usize) -> i64 {
 ## the previous RHS-only arch fold failed to do. The `arch` facet reproduces `arch_rhs_name`'s fold
 ## exactly for `==` (every `src/`+`lib/` site spells `target.arch == Arch.<name>`), so the self-build's
 ## emission is unchanged.
-target_facet_eq := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> i64 {
+pub target_facet_eq := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> i64 {
   lq := qual_ref_name(l, src)
   if lq.n == 0 { return -1 }
   if str_at((src + lq.bs), lq.bl) != "target" { return -1 }
@@ -468,10 +542,12 @@ target_facet_eq := fn(l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> i64 {
   facet := str_at((src + lq.s), lq.n)
   base := str_at((src + rq.bs), rq.bl)
   vnm := str_at((src + rq.s), rq.n)
-  if facet == "arch" and base == "Arch" { if vnm == "x86_64" { return 1 } return 0 }
-  if facet == "os" and base == "Os" { if vnm == "linux" { return 1 } return 0 }
-  if facet == "env" and base == "Env" { if vnm == "gnu" { return 1 } return 0 }
-  if facet == "container" and base == "Container" { if vnm == "elf" { return 1 } return 0 }
+  rhs := target_model_rhs_code(base, vnm)
+  current := target_model_current_code(facet)
+  if rhs < 99 and current < 99 {
+    if rhs == current { return 1 }
+    return 0
+  }
   if facet == "kind" and base == "Kind" {
     if vnm == "executable" { if TARGET_KIND == 0 { return 1 } return 0 }
     if vnm == "object" { if TARGET_KIND == 1 { return 1 } return 0 }
@@ -578,7 +654,7 @@ pub comptime_cond_src_off := fn(e : ptr(Expr)) -> usize {
 pub comptime_reject_cond := fn(cond : ptr(Expr), src : ptr(u8)) {
   off := comptime_cond_src_off(cond)
   if off != 0 { lower_show_src_line(src, off) }
-  panic("selfhost: `comptime if` — cannot fold this comptime condition (the source line above). The lower folds target.arch/os/env/container, verify.checked, build.<flag>, a module const, an integer comparison, size(T), typeinfo(T).fields/variants.len, a type equality, a `match typeinfo(T)` kind test, resolves(…)/compiles(…), and and/or/not over those. Rejected rather than silently emitting NEITHER branch.")
+  panic("selfhost: `comptime if` — cannot fold this comptime condition (the source line above). The lower folds target machine projections, verify.checked, build.<flag>, a module const, an integer comparison, size(T), typeinfo(T).fields/variants.len, a type equality, a `match typeinfo(T)` kind test, resolves(…)/compiles(…), and and/or/not over those. Rejected rather than silently emitting NEITHER branch.")
 }
 ## Fold a `comptime if` condition at compile time: 1 = true (emit the then-branch), 0 = false (emit
 ## the else-branch), -1 = cannot fold — which the CALLER turns into a LOCATED REJECT
