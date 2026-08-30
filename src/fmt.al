@@ -2217,8 +2217,15 @@ emit_fmt_comptime_arms := fn(arms_head : usize, scrut : ptr(Expr), in out sb : r
         push_str(sb, ")")
       }
     }
-    if am.body_stmts == 0 { panic("selfhost: fmt — non-braced comptime match arm not modelled") }
-    if fmt_compmatch_stmt_is_bare(am.body_stmts, src) {
+    ## An empty `{}` arm has the same null statement-list pointer as a malformed/unsupported bare arm,
+    ## but the source-shape pass above has already proved every outer `=>` is either braced or the
+    ## exact nested-comptime form. A valid null list is therefore the empty braced spelling; emit its
+    ## canonical two-line block. Non-empty bare arms remain handled by the recursive path below.
+    if am.body_stmts == 0 {
+      push_str(sb, " => {\n")
+      emit_indent(sb, indent)
+      push_str(sb, "}\n")
+    } else if fmt_compmatch_stmt_is_bare(am.body_stmts, src) {
       push_str(sb, " => ")
       emit_fmt_bare_comptime_match(am.body_stmts, sb, src, a, decls, indent, tparam)
     } else {
