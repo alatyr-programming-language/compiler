@@ -508,11 +508,6 @@ if [ "$ONLY" != test ]; then
 # longer matches anything is reported as `allow-unused` and does NOT fail: a live lane fixing
 # one of these must not turn this gate red as its reward. Keep the list shrinking.
 MOD_ALLOW=(
-  ## `selfhost: fmt — non-braced comptime match arm not modelled`. The renderer has no spelling
-  ## for a `comptime match` arm without braces, and refuses rather than guess a canonical form
-  ## (the spec posture: a canonical form is normative, so a guess would diverge between
-  ## implementations). Needs the arm form modelled in `src/fmt.al`.
-  "MOD-REFUSE lib/alloc/fmt.al"
 )
 mod_allowed() { # class rel -> 0 if this exact (class, path) pair is a reasoned residual
   local k="$1 $2" e
