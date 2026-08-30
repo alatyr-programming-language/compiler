@@ -2749,8 +2749,10 @@ sema_generic_ctor_shape := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ## construction only when its head resolves to a declared aggregate, a generic type constructor, or
 ## a one-hop alias of one. The parser deliberately erases `X(128)` before producing `StructLit(X, …)`;
 ## keeping this check on the shared semantic path prevents an unresolved head from reaching any lower.
-## The alias scan covers generic-instance aliases such as the prelude's `u128 := uint(128)` without
-## widening the ordinary type-name resolver or changing generic ABI/layout rules.
+## This applies to both the generic-construction spelling and the ordinary `Name(field = value)` form:
+## the latter is still a type construction, not a permissive call-shaped value. The alias scan covers
+## generic-instance aliases such as the prelude's `u128 := uint(128)` without widening the ordinary
+## type-name resolver or changing generic ABI/layout rules.
 sema_unknown_type_ctor_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> VSpan {
   lit := expr_agg_lit(e)
   if not lit.is_agg { return VSpan(s = 0, n = 0) }
@@ -2760,7 +2762,6 @@ sema_unknown_type_ctor_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : us
     _ => {}
   }
   if not is_struct { return VSpan(s = 0, n = 0) }
-  if not sema_generic_ctor_shape(src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
   if qualified_type_name_known(decls, src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
   if callee_is_generic(decls, upto, src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
   cnt := rt::vec_len(deref(decls))

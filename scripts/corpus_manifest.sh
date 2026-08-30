@@ -147,14 +147,24 @@ excluded_for_source() { # rel -> how many of its four backends are quarantined
 ## frame, so a program printing its own hex to stderr is still fully observed. The `<wasm function N>` index
 ## in the same line is deliberately NOT collapsed: it changes only if the emitted function COUNT changes,
 ## which is a real observation about the compiler and not host noise.
+## Native runners add a second host-only diagnostic layer for signal exits. QEMU and `timeout` can spell
+## the same terminal result with a target-dependent binary prefix, signal name, or core-dump warning; the
+## row already records the exit code, so retain one stable marker per stream while keeping guest stderr
+## untouched. The patterns are anchored to the runner-owned prefix/text and do not match an application
+## diagnostic that merely mentions a signal or core dump. Collapse repeated markers because the host may
+## emit both the QEMU report and one or more `timeout` reports for the same child.
 normalize_stream() {
   sed -E \
          -e '/error while executing at wasm backtrace:/,/^[[:space:]]+[0-9]+:[[:space:]]+wasm trap:/ s|^([[:space:]]+[0-9]+:[[:space:]]+)0x[[:xdigit:]]+([[:space:]]+-[[:space:]]+<unknown>!<wasm function [0-9]+>[[:space:]]*)$|\1<wasmoff>\2|' \
+         -e 's|^qemu(-[[:alnum:]_.-]+)?: uncaught target signal [0-9]+ \(.*\) - core dumped$|<host-runner-diagnostic>|' \
+         -e 's|^timeout: the monitored command dumped core$|<host-runner-diagnostic>|' \
+         -e 's|^timeout: warning: disabling core dumps failed: Function not implemented$|<host-runner-diagnostic>|' \
          -e 's|/nix/store/[0-9a-z]{32}-|/nix/store/<hash>-|g' \
          -e "s|$WORK_RE/[a-z0-9_]+/[0-9]{6}/|<artifact>/|g" \
          -e "s|$ROOT_RE|<root>|g" \
          -e "s|$HOME_RE|<home>|g" \
-         "$1"
+         "$1" \
+    | awk '!($0 == "<host-runner-diagnostic>" && seen++)'
 }
 
 hash_stream() {
@@ -625,6 +635,9 @@ normalization_selftest() {
   local guest_err_a="$WORK/normalize.guest-err-a" guest_err_b="$WORK/normalize.guest-err-b"
   local guest_out_a="$WORK/normalize.guest-out-a" guest_out_b="$WORK/normalize.guest-out-b"
   printf '%s\n' \
+    'qemu: uncaught target signal 5 (Trace/breakpoint trap) - core dumped' \
+    'timeout: the monitored command dumped core' \
+    'timeout: warning: disabling core dumps failed: Function not implemented' \
     'Error: failed to run main module <artifact>' \
     'Caused by:' \
     '    1: error while executing at wasm backtrace:' \
@@ -632,6 +645,8 @@ normalization_selftest() {
     '    1:    0x105 - <unknown>!<wasm function 7>' \
     '    2: wasm trap: wasm trap' > "$host_a"
   printf '%s\n' \
+    'qemu-aarch64: uncaught target signal 6 (Aborted) - core dumped' \
+    'timeout: the monitored command dumped core' \
     'Error: failed to run main module <artifact>' \
     'Caused by:' \
     '    1: error while executing at wasm backtrace:' \
@@ -652,7 +667,7 @@ normalization_selftest() {
     echo "corpus manifest: normalization self-test FAILED — guest stream was masked" >&2
     return 1
   fi
-  echo "corpus manifest: normalization self-test ok (host offsets muted; guest stdout/stderr preserved)"
+  echo "corpus manifest: normalization self-test ok (host runner noise/offsets muted; guest stdout/stderr preserved)"
 }
 normalization_selftest || exit 2
 

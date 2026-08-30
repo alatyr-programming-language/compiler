@@ -6703,6 +6703,10 @@ run_wat wasm_value_match_local_decl 42
 run_wat cross_match_local 42
 run_wat wat_loop_expr_value 42
 run_wat wat_labeled_value_break 25
+## x86_64 has the same scalar result-slot contract as WAT. An aggregate break value must therefore
+## fail during build rather than reaching the generic expression placeholder and returning a garbage
+## word; the WAT runtime trap above remains the backend-specific residual assertion.
+build_reject_has wat_labeled_value_break_aggregate 'aggregate `break <expr>` value is unsupported'
 run_wat wat_labeled_value_break_aggregate 134
 run_wat wat_labeled_value_break_ptr_bitcast 134
 run_wat wat_labeled_value_break_global_bitcast 134

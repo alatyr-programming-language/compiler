@@ -22039,6 +22039,15 @@ emit_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx
         }
         if unchecked bitcast(usize, value) != 0 {
           if tisexpr == 0 { panic("selfhost: `break <expr>` targets a non-value loop (loop-expression value only from a loop consumed for a value, Control Flow §7.2)") }
+          ## A value-bearing loop has a scalar result slot in this backend. The generic expression
+          ## emitter's aggregate literal arm is intentionally not a constructor path: it has no frame
+          ## home and used to push `$0`, so `break outer S(...)` reached the done label with an
+          ## uninitialized aggregate result. Reject every direct aggregate literal here, before the
+          ## placeholder can become a backend-dependent value; the WAT classifier enforces the same
+          ## scalar-only contract for its value-break path.
+          if struct_lit_info(value).is_s or enum_lit_info(value).is_e or str_lit_info(value).is_s or array_lit_info(value).is_a {
+            panic("selfhost: aggregate `break <expr>` value is unsupported in a scalar loop-expression result; use a scalar value or keep the loop in statement position")
+          }
           emit_gas(value, sb, cx, a, nl)   ## leave the loop-expression value on the stack at the done-label
         }
         ## DEFER (§9.3): a `break` leaves the TARGET loop, so drain that loop's body-frame defers before
