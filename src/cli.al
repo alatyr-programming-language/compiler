@@ -4872,6 +4872,7 @@ mut CLI_TARGET_SELECT_P := 0
 mut CLI_TARGET_SELECT_N := 0
 mut CLI_TARGET_SELECT_ALL := false
 mut CLI_BUILD_PLAN := false
+mut CLI_QUIET := false
 mut CLI_VENDOR_DIR_COUNT := 0
 mut CLI_OPTION_BAD := false
 mut CLI_UNKNOWN_OPTION_P := 0
@@ -4894,6 +4895,7 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
   CLI_TARGET_SELECT_N = 0
   CLI_TARGET_SELECT_ALL = false
   CLI_BUILD_PLAN = false
+  CLI_QUIET = false
   CLI_VENDOR_DIR_COUNT = 0
   CLI_OPTION_BAD = false
   CLI_UNKNOWN_OPTION_P = 0
@@ -4939,6 +4941,9 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
     } else if x == "--plan" {
       CLI_BUILD_PLAN = true
       i += 1
+    } else if x == "--quiet" or x == "-q" {
+      CLI_QUIET = true
+      i += 1
     } else if x == "--vendor-dir" {
       CLI_VENDOR_DIR_COUNT += 1
       if i + 1 < n { i += 2 } else { CLI_OPTION_BAD = true ; i += 1 }
@@ -4971,7 +4976,7 @@ bare_file_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) ->
   mut i := fi
   while i < n and first == n {
     x := arg_at(cmd, i)
-    if x == "--plan" { i += 1 }
+    if x == "--plan" or x == "--quiet" or x == "-q" { i += 1 }
     else if x == "--release" { i += 1 }
     else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
@@ -4984,7 +4989,7 @@ bare_file_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) ->
   while i < n {
     x := arg_at(cmd, i)
     mut skip := false
-    if x == "--plan" { skip = true ; i += 1 }
+    if x == "--plan" or x == "--quiet" or x == "-q" { skip = true ; i += 1 }
     else if x == "--release" { skip = true ; i += 1 }
     else if x == "--profile" { skip = true ; if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { skip = true ; if i + 1 < n { i += 2 } else { i += 1 } }
@@ -5010,7 +5015,7 @@ cli_first_input := fn(cmd : str, fi : usize, n : usize) -> str {
   mut i := fi
   while i < n {
     x := arg_at(cmd, i)
-    if x == "--plan" { i += 1 }
+    if x == "--plan" or x == "--quiet" or x == "-q" { i += 1 }
     else if x == "--release" { i += 1 }
     else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
@@ -5028,7 +5033,7 @@ plan_bare_inputs_reject := fn(in out a : rt::Arena, cmd : str, fi : usize, n : u
   mut i := fi
   while i < n {
     x := arg_at(cmd, i)
-    if x == "--plan" { i += 1 }
+    if x == "--plan" or x == "--quiet" or x == "-q" { i += 1 }
     else if x == "--release" { i += 1 }
     else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
@@ -5889,7 +5894,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       build_rc = link_exe_split(a, outp, paths, sb.data, sb.len, spb, entry_sym, libnames, anyd, lflags)
     }
     if is_pkg and build_rc == 0 {
-      manifest_build_summary(a, mpath, selected_profile, outp)
+      if not CLI_QUIET { manifest_build_summary(a, mpath, selected_profile, outp) }
       if CLI_BUILD_PLAN {
         plan_rc := write_build_plan(a, mpath, "", true, selected_profile)
         if plan_rc != 0 { return plan_rc }

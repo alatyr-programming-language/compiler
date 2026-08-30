@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- `alatyr build --quiet` / `-q` now suppresses the optional success summary while preserving the
+  artifact, stdout, and exit status.
 - Successful manifest-driven builds now print a deterministic profile, target and artifact summary to
   stderr while leaving stdout available for machine-readable output.
 - The bounded scalar `comptime` binding slice now supports closed integer, boolean, and nullary

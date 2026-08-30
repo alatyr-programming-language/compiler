@@ -479,6 +479,53 @@ EOF
   rm -rf "$tmp"
 }
 
+# Tooling §2.2/§2.6 / issue #262 — `--quiet` and `-q` suppress only the successful build summary;
+# the selected artifact, exit status, and stdout remain unchanged.
+run_quiet_build() {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/src"
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(
+    arch = Arch.x86_64,
+    os = Os.linux,
+    env = Env.gnu,
+    container = Container.elf,
+    entry = "_start",
+    output = "quiet-app",
+  )],
+)
+EOF
+  printf 'main := fn() -> u64 { return 42 }\n' >"$tmp/src/main.al"
+  (cd "$tmp" && "$CC" build package.al) >"$tmp/base.out" 2>"$tmp/base.err"
+  base_rc=$?
+  artifact="$tmp/target/debug/quiet-app"
+  base_hash=""
+  if [ -f "$artifact" ]; then base_hash=$(sha256sum "$artifact"); fi
+  quiet_ok=1
+  for arg in --quiet -q; do
+    rm -rf "$tmp/target"
+    (cd "$tmp" && "$CC" build "$arg" package.al) >"$tmp/quiet.out" 2>"$tmp/quiet.err"
+    quiet_rc=$?
+    quiet_hash=""
+    if [ -f "$artifact" ]; then quiet_hash=$(sha256sum "$artifact"); fi
+    if [ "$quiet_rc" != "0" ] || [ -s "$tmp/quiet.out" ] || [ -s "$tmp/quiet.err" ] \
+      || [ "$quiet_hash" != "$base_hash" ] || [ ! -x "$artifact" ]; then
+      quiet_ok=0
+    fi
+  done
+  if [ "$base_rc" = "0" ] && [ -n "$base_hash" ] && [ "$quiet_ok" = "1" ]; then
+    echo "ok   quiet_build: --quiet/-q suppress summary without changing artifact or stdout"
+  else
+    echo "FAIL quiet_build: rc=$base_rc or quiet output/artifact contract mismatch"
+    fail=1
+  fi
+  rm -rf "$tmp"
+}
+
 run_expect() {
   name="$1"
   want="$2"
@@ -1795,6 +1842,7 @@ run_expect profile_run_named 42 run --profile release package.al
 run_expect profile_run_release 42 run --release package.al
 run_profile_program_args
 run_build_summary
+run_quiet_build
 run_expect profile_test_parallel 0 test -j2 --profile release package.al
 run_path_dep dep_declared main__main
 run_path_dep dep_alias_use d__math__answer
