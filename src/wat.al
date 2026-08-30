@@ -64,7 +64,7 @@ field_type_span := lower::field_type_span
 compfor_iter_arg := lower::compfor_iter_arg
 fn_returns_tuple := lower::fn_returns_tuple
 tuple_words := lower::tuple_words
-(CSpan, decl_at, decl_get, node_ptr, streq, is_slice_local, arrty_nel, sub_arr_len) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, is_slice_local, arrty_nel, sub_arr_len, typeinfo_arg_span) := lower_ctx
 
 ## The EXACT linker symbol of a `@export("name")` attribute attached to `[name_s, name_s+name_l)`
 ## (Modules §6.3), or {0,0}. The parser discards attributes, so recover declaration-prefix and
@@ -643,45 +643,6 @@ count_params := fn(params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena) -
 
 
 
-## Resolve the concrete type named by a `typeinfo(X)` range-bound expression. The `.fields.len` and
-## `.variants.len` forms leave one Field wrapper around the Call; `.n` passes the Call directly. Unlike
-## the old range fold, this keeps the explicit X and substitutes whichever active generic parameter it
-## names instead of always using WAT_SUB_ITS.
-wat_range_typeinfo_arg := fn(base : ptr(Expr), field_s : usize, src : ptr(u8)) -> CSpan {
-  ## The lean backend's Expr::Call/Field shape can be rewritten by the generic-enum parser path, while
-  ## the source spelling is stable. Recover the nearest `typeinfo(` before the outer member and slice its
-  ## balanced argument; this also handles both `.n` and `.fields.len`/`.variants.len`.
-  mut r := CSpan(s = 0, n = 0)
-  mut q := field_s
-  mut open := 0
-  mut found := false
-  while q > 0 and not found {
-    q = q - 1
-    if q + 9 <= field_s and str_at((src + q), 9) == "typeinfo(" { open = q + 9 ; found = true }
-  }
-  if found {
-    mut p := open
-    mut depth := 1
-    while p < field_s and depth != 0 {
-      c := str_at((src + p), 1)
-      if c == "(" { depth = depth + 1 }
-      else if c == ")" { depth = depth - 1 }
-      if depth != 0 { p = p + 1 }
-    }
-    if depth == 0 {
-      mut s := open
-      mut n := p - open
-      while n != 0 and (str_at((src + s), 1) == " " or str_at((src + s), 1) == "\n" or str_at((src + s), 1) == "\t") { s = s + 1 ; n = n - 1 }
-      while n != 0 and (str_at((src + s + n - 1), 1) == " " or str_at((src + s + n - 1), 1) == "\n" or str_at((src + s + n - 1), 1) == "\t") { n = n - 1 }
-      if WAT_SUB_GPL != 0 and n != 0 and streq(src, s, n, WAT_SUB_GPS, WAT_SUB_GPL) { s = WAT_SUB_ITS ; n = WAT_SUB_ITL }
-      else if WAT_SUB_GPL2 != 0 and n != 0 and streq(src, s, n, WAT_SUB_GPS2, WAT_SUB_GPL2) { s = WAT_SUB_ITS2 ; n = WAT_SUB_ITL2 }
-      else if WAT_SUB_GPL3 != 0 and n != 0 and streq(src, s, n, WAT_SUB_GPS3, WAT_SUB_GPL3) { s = WAT_SUB_ITS3 ; n = WAT_SUB_ITL3 }
-      r = CSpan(s = s, n = n)
-    }
-  }
-  r
-}
-
 ## The mutability bit of `<f>.mutable` for the ACTIVE comptime field descriptor (Comptime §5.1). Field
 ## mutability is a source-level marker, so recover it from the current field name exactly as x86 does.
 ## -1 means this is not an active mutable query; the ordinary field path then remains fail-loud.
@@ -724,7 +685,7 @@ wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
     ## instance. STRUCT → field count, ENUM → variant count, TUPLE → top-level-comma+1, ARRAY `[E;N]` → N.
     Expr::Field(b, fs, fl) => {
       fnm := str_at((src + fs), fl)
-      rt := wat_range_typeinfo_arg(b, fs, src)
+      rt := typeinfo_arg_span(src, fs, WAT_SUB_GPS, WAT_SUB_GPL, WAT_SUB_ITS, WAT_SUB_ITL, WAT_SUB_GPS2, WAT_SUB_GPL2, WAT_SUB_ITS2, WAT_SUB_ITL2, WAT_SUB_GPS3, WAT_SUB_GPL3, WAT_SUB_ITS3, WAT_SUB_ITL3)
       if (fnm == "n" or fnm == "len") and rt.n != 0 {
         itb := base_type_name(src, rt.s, rt.n)
         sd := struct_decl_of(decls, src, itb.s, itb.n)

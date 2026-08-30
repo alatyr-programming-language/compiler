@@ -73,7 +73,7 @@ pub set_cross_test_options := fn(keep : usize) -> i64 {
 ## MOD §6.3/§7.2 — the source-scan symbol helpers shared with the x86_64 lower: `@export("sym")` alias
 ## + `@extern("sym")` external symbol (both recover the attribute from source, no Decl field). `CSpan`
 ## is their span-result type. Reused (not duplicated) so the aarch64/x86_64 symbol rules stay identical.
-(CSpan, decl_at, decl_get, node_ptr, streq, param_find, effective_param_count, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl) := lower_ctx
+(CSpan, decl_at, decl_get, node_ptr, streq, param_find, effective_param_count, is_slice_local, arrty_nel, sub_arr_len, ann_span, expr_is_struct_lit, expr_struct_lit_ns, expr_struct_lit_nl, expr_field_base, expr_field_name_s, expr_field_name_l, expr_is_enum_lit, expr_enum_lit_ns, expr_enum_lit_nl, expr_enum_variant_ns, expr_enum_variant_nl, expr_is_str_lit, expr_str_lit_ns, expr_str_lit_nl, expr_str_lit_label, expr_call_name_ns, expr_call_name_nl, typeinfo_arg_span) := lower_ctx
 (export_name, extern_symbol, field_type_span, compfor_iter_arg, fixed_array_byte_return_len, fixed_array_byte_return_len_span, fn_returns_tuple, tuple_words) := lower
 
 handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
@@ -2442,45 +2442,6 @@ a64_inst_add := fn(src : ptr(u8), gi : usize, ts : usize, tl : usize) {
 
 
 
-## Resolve the concrete type named by a `typeinfo(X)` range-bound expression. The `.fields.len` and
-## `.variants.len` forms leave one Field wrapper around the Call; `.n` passes the Call directly. Unlike
-## the old range fold, this keeps the explicit X and substitutes whichever active generic parameter it
-## names instead of always using A64_SUB_ITS.
-a64_range_typeinfo_arg := fn(base : ptr(Expr), field_s : usize, src : ptr(u8)) -> CSpan {
-  ## The lean backend's Expr::Call/Field shape can be rewritten by the generic-enum parser path, while
-  ## the source spelling is stable. Recover the nearest `typeinfo(` before the outer member and slice its
-  ## balanced argument; this also handles both `.n` and `.fields.len`/`.variants.len`.
-  mut r := CSpan(s = 0, n = 0)
-  mut q := field_s
-  mut open := 0
-  mut found := false
-  while q > 0 and not found {
-    q = q - 1
-    if q + 9 <= field_s and str_at((src + q), 9) == "typeinfo(" { open = q + 9 ; found = true }
-  }
-  if found {
-    mut p := open
-    mut depth := 1
-    while p < field_s and depth != 0 {
-      c := str_at((src + p), 1)
-      if c == "(" { depth = depth + 1 }
-      else if c == ")" { depth = depth - 1 }
-      if depth != 0 { p = p + 1 }
-    }
-    if depth == 0 {
-      mut s := open
-      mut n := p - open
-      while n != 0 and (str_at((src + s), 1) == " " or str_at((src + s), 1) == "\n" or str_at((src + s), 1) == "\t") { s = s + 1 ; n = n - 1 }
-      while n != 0 and (str_at((src + s + n - 1), 1) == " " or str_at((src + s + n - 1), 1) == "\n" or str_at((src + s + n - 1), 1) == "\t") { n = n - 1 }
-      if A64_SUB_GPL != 0 and n != 0 and streq(src, s, n, A64_SUB_GPS, A64_SUB_GPL) { s = A64_SUB_ITS ; n = A64_SUB_ITL }
-      else if A64_SUB_GPL2 != 0 and n != 0 and streq(src, s, n, A64_SUB_GPS2, A64_SUB_GPL2) { s = A64_SUB_ITS2 ; n = A64_SUB_ITL2 }
-      else if A64_SUB_GPL3 != 0 and n != 0 and streq(src, s, n, A64_SUB_GPS3, A64_SUB_GPL3) { s = A64_SUB_ITS3 ; n = A64_SUB_ITL3 }
-      r = CSpan(s = s, n = n)
-    }
-  }
-  r
-}
-
 ## Resolve a comptime-for RANGE BOUND to its constant value: a literal, or a module-level const `N := k`
 ## resolved by name (comptime_for_range's `0..N`). Mirrors the subset of the x86 lower's global_init_value
 ## the corpus range bounds use (literal + module const; no const arithmetic — range bounds carry none).
@@ -2505,7 +2466,7 @@ a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
     ## instance. STRUCT → field count, ENUM → variant count, TUPLE → component count, ARRAY → length N.
     Expr::Field(b, fs, fl) => {
       fnm := str_at((src + fs), fl)
-      rt := a64_range_typeinfo_arg(b, fs, src)
+      rt := typeinfo_arg_span(src, fs, A64_SUB_GPS, A64_SUB_GPL, A64_SUB_ITS, A64_SUB_ITL, A64_SUB_GPS2, A64_SUB_GPL2, A64_SUB_ITS2, A64_SUB_ITL2, A64_SUB_GPS3, A64_SUB_GPL3, A64_SUB_ITS3, A64_SUB_ITL3)
       if (fnm == "n" or fnm == "len") and rt.n != 0 {
         itb := base_type_name(src, rt.s, rt.n)
         sd := struct_decl_of(decls, src, itb.s, itb.n)

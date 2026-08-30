@@ -251,6 +251,50 @@ pub expr_call_name_nl := fn(v : ptr(Expr)) -> usize {
 ## a single decimal digit's value (`asm_digit`) — small standalone accessors shared by the raw-asm cluster.
 pub CSpan := struct { s : usize, n : usize }
 
+## Recover the balanced source argument of a `typeinfo(...)` range bound. The parser's compact
+## `CompFor` node does not retain that argument, so callers provide the outer member span and the
+## active generic substitutions explicitly. Keep this source-only scan independent of backend state,
+## AST declarations, and `base` lowering context; a malformed or empty argument is `{0, 0}`.
+pub typeinfo_arg_span := fn(src : ptr(u8), field_s : usize, generic1_s : usize, generic1_n : usize, instance1_s : usize, instance1_n : usize, generic2_s : usize, generic2_n : usize, instance2_s : usize, instance2_n : usize, generic3_s : usize, generic3_n : usize, instance3_s : usize, instance3_n : usize) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
+  mut q := field_s
+  mut open := 0
+  mut found := false
+  while q > 0 and not found {
+    q = q - 1
+    if q + 9 <= field_s and str_at((src + q), 9) == "typeinfo(" { open = q + 9 ; found = true }
+  }
+  if found {
+    mut p := open
+    mut depth := 1
+    mut brackets := 0
+    mut malformed := false
+    while p < field_s and depth != 0 and not malformed {
+      c := str_at((src + p), 1)
+      if c == "(" { depth = depth + 1 }
+      else if c == ")" { depth = depth - 1 }
+      else if c == "[" { brackets = brackets + 1 }
+      else if c == "]" {
+        if brackets == 0 { malformed = true } else { brackets = brackets - 1 }
+      }
+      if depth != 0 { p = p + 1 }
+    }
+    if depth == 0 and brackets == 0 and not malformed {
+      mut s := open
+      mut n := p - open
+      while n != 0 and (str_at((src + s), 1) == " " or str_at((src + s), 1) == "\n" or str_at((src + s), 1) == "\t") { s = s + 1 ; n = n - 1 }
+      while n != 0 and (str_at((src + s + n - 1), 1) == " " or str_at((src + s + n - 1), 1) == "\n" or str_at((src + s + n - 1), 1) == "\t") { n = n - 1 }
+      if n != 0 {
+        if generic1_n != 0 and streq(src, s, n, generic1_s, generic1_n) { s = instance1_s ; n = instance1_n }
+        else if generic2_n != 0 and streq(src, s, n, generic2_s, generic2_n) { s = instance2_s ; n = instance2_n }
+        else if generic3_n != 0 and streq(src, s, n, generic3_s, generic3_n) { s = instance3_s ; n = instance3_n }
+        r = CSpan(s = s, n = n)
+      }
+    }
+  }
+  r
+}
+
 ## The shared native entry point for a `: T` annotation span. Keep the existing three-argument contract
 ## at backend call sites; the implementation carries the native whitespace policy explicitly so this
 ## source scan cannot be mistaken for the distinct AST/WAT annotation contracts by the idiom gate.
