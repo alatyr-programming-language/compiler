@@ -1272,14 +1272,47 @@ index_base_var_span := fn(e : ptr(Expr)) -> CSpan {
 ## tuple)? Such an operand is a whole multi-word element, so the scalar fallthrough compares its WORD 0
 ## only (`ps[0] == ps[1]` over `[P; 2]` with equal `x` read EQUAL though `y` differed). `str` elements
 ## (`eek == 4`) are excluded — a str comparison has its own content-comparing route before this point.
+## The aggregate width of an element of an inline ARRAY FIELD (`s.items[i]`). The field itself has no
+## SlotEntry, so recover its declared element type through `field_index_base`; only word-layout STRUCT
+## and ENUM elements are admitted here. `str` and byte-layout/nested-array elements keep their existing
+## dedicated or fail-loud paths.
+index_field_agg_elem_words := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  fib := field_index_base(base, cx)
+  if not fib.is_fld { return 0 }
+  fent := deref(svec_at(SlotEntry, cx.slots, fib.ent_idx))
+  if fent.ek != 2 or fent.snl == 0 { return 0 }
+  ffp := field_place_parts(base)
+  ffts := field_type_span(cx.decls, cx.src, fent.sns, fent.snl, ffp.fs, ffp.fl, a)
+  faes := array_elem_span(cx.src, ffts.s, ffts.n)
+  if faes.n == 0 { return 0 }
+  if struct_decl_of(cx.decls, cx.src, faes.s, faes.n) >= 0 {
+    if layout_kind_is_packed(layout_kind(cx.decls, cx.src, fent.sns, fent.snl, a)) or layout_kind_is_byte(layout_kind(cx.decls, cx.src, fent.sns, fent.snl, a)) { panic("selfhost: aggregate argument from a packed/byte-layout struct array field is not yet supported — bind the element through a layout-aware local first") }
+    if layout_kind_is_packed(layout_kind(cx.decls, cx.src, faes.s, faes.n, a)) or layout_kind_is_byte(layout_kind(cx.decls, cx.src, faes.s, faes.n, a)) { panic("selfhost: aggregate argument from a packed/byte-layout element in a struct array field is not yet supported — bind the element through a layout-aware local first") }
+    return struct_words(cx.decls, cx.src, faes.s, faes.n, a)
+  }
+  if enum_decl_of(cx.decls, cx.src, faes.s, faes.n) >= 0 {
+    if layout_kind_is_packed(layout_kind(cx.decls, cx.src, fent.sns, fent.snl, a)) or layout_kind_is_byte(layout_kind(cx.decls, cx.src, fent.sns, fent.snl, a)) { panic("selfhost: enum argument from a packed/byte-layout struct array field is not yet supported — bind the element through a layout-aware local first") }
+    return 1 + enum_inst_words(cx.decls, cx.src, faes.s, faes.n, a)
+  }
+  0
+}
+
 index_agg_elem_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
   bv := index_base_var_span(e)
-  if bv.n == 0 { return 0 }
-  ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
-  if streq(cx.src, ent.ns, ent.nl, bv.s, bv.n) == false { return 0 }
-  if ent.ek != 5 { return 0 }
-  if ent.eek != 2 and ent.eek != 3 and ent.eek != 5 { return 0 }
-  ent.estride
+  if bv.n != 0 {
+    ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bv.s, bv.n)))
+    if streq(cx.src, ent.ns, ent.nl, bv.s, bv.n) == false { return 0 }
+    if ent.ek != 5 { return 0 }
+    if ent.eek != 2 and ent.eek != 3 and ent.eek != 5 { return 0 }
+    return ent.estride
+  }
+  ## `s.items[i]` is an aggregate element too, but its ARRAY FIELD has no independent SlotEntry.
+  ## Resolve the containing struct through the already-proven field-index place and recover the
+  ## field's aggregate element width. Pointer-derived roots remain outside this path: field_index_base
+  ## deliberately does not admit aggregate elements there until their pointer ABI is specified.
+  ib := field_base_index(e)
+  if not ib.is_ix { return 0 }
+  index_field_agg_elem_words(ib.arr, cx, arena_of(cx))
 }
 ## The word count of `e` iff it is an INDEX into a fixed array whose elements are plain multi-word
 ## STRUCTS with native scalar leaves. Locals use the down-growing frame fillers; a concrete `[P; N]`
@@ -3725,10 +3758,49 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   ## `src/` passes no aggregate array element as an argument (it segfaulted), so this never fires on
   ## the self-host build → fixpoint-neutral.
   iaex := field_base_index(e)
-  if iaex.is_ix and index_agg_elem_words(e, cx) > 0 {
-    emit_index_addr(iaex.arr, iaex.idx, sb, cx, a, nl)
-    push_str(sb, "  pushq %rax\n")
-    return
+  if iaex.is_ix {
+    iaew := index_agg_elem_words(e, cx)
+    if iaew > 0 {
+      emit_index_addr(iaex.arr, iaex.idx, sb, cx, a, nl)
+      push_str(sb, "  pushq %rax\n")
+      return
+    }
+    ## The same aggregate-element rule applies to an ARRAY FIELD of a mutable global. Its `.data`
+    ## image is ascending and has no frame slot, so `emit_index_addr` deliberately rejects this root;
+    ## compute the label + field offset + element stride directly and pass that element address.
+    gpa := global_place(iaex.arr, cx, a)
+    if gpa.found and gpa.tl != 0 {
+      gaes := array_elem_span(cx.src, gpa.ts, gpa.tl)
+      if gaes.n != 0 {
+        gfp := field_place_parts(iaex.arr)
+        gbv := var_name_span(gfp.base)
+        if gbv.n == 0 { panic("selfhost: aggregate argument from a nested global struct array field is not yet supported — bind the inner struct to a local first") }
+        gro := global_place(gfp.base, cx, a)
+        mut gaw := usize(0)
+        if struct_decl_of(cx.decls, cx.src, gaes.s, gaes.n) >= 0 {
+          if gro.found and gro.tl != 0 and (layout_kind_is_packed(layout_kind(cx.decls, cx.src, gro.ts, gro.tl, a)) or layout_kind_is_byte(layout_kind(cx.decls, cx.src, gro.ts, gro.tl, a))) { panic("selfhost: aggregate argument from a packed/byte-layout global struct array field is not yet supported — bind the element through a layout-aware local first") }
+          if layout_kind_is_packed(layout_kind(cx.decls, cx.src, gaes.s, gaes.n, a)) or layout_kind_is_byte(layout_kind(cx.decls, cx.src, gaes.s, gaes.n, a)) { panic("selfhost: aggregate argument from a packed/byte-layout element in a global struct array field is not yet supported — bind the element through a layout-aware local first") }
+          gaw = struct_words(cx.decls, cx.src, gaes.s, gaes.n, a)
+        } else if enum_decl_of(cx.decls, cx.src, gaes.s, gaes.n) >= 0 {
+          if gro.found and gro.tl != 0 and (layout_kind_is_packed(layout_kind(cx.decls, cx.src, gro.ts, gro.tl, a)) or layout_kind_is_byte(layout_kind(cx.decls, cx.src, gro.ts, gro.tl, a))) { panic("selfhost: enum argument from a packed/byte-layout global struct array field is not yet supported — bind the element through a layout-aware local first") }
+          gaw = 1 + enum_inst_words(cx.decls, cx.src, gaes.s, gaes.n, a)
+        }
+        if gaw > 0 {
+          emit_gas(iaex.idx, sb, cx, a, nl)             ## index → stack
+          push_str(sb, "  leaq ")
+          emit_global_label(sb, cx.decls, cx.src, gpa.gs, gpa.gn)
+          push_str(sb, "+")
+          push_int(sb, gpa.off * 8)
+          push_str(sb, "(%rip), %rax\n  popq %rcx\n")
+          gnel := parse_arr_len(cx.src, gpa.ts, gpa.tl)
+          if cx.vchk and gnel > 0 { push_str(sb, "  cmpq $"); push_int(sb, i64(gnel)); push_str(sb, ", %rcx\n  jb 1f\n  ud2\n1:\n") }
+          push_str(sb, "  imulq $")
+          push_int(sb, i64(gaw * 8))
+          push_str(sb, ", %rcx\n  addq %rcx, %rax\n  pushq %rax\n")
+          return
+        }
+      }
+    }
   }
   ## `bytes(x)` argument — the spec str→`[u8]` view (appendix 160 §3.5). `str` and `[u8]` share
   ## the identical `{ptr, len}` representation, so `bytes(x)` is a no-op VIEW: pass it exactly as

@@ -5744,6 +5744,9 @@ run array_struct_enum_field 42
 run tuple_enum_component 42
 run nested_enum_struct_enum 42
 run enum_array_struct_payload 42
+run_x86 issue254_enum_struct_field_array 42
+build_reject_has issue254_pointer_probe "indexing a struct array FIELD through a non-local root"
+build_reject_has issue254_packed_probe "matching an enum element of a packed/byte-layout struct array field"
 run nested_tuple_bracket 42
 run nested_tuple_dot 42
 run array_enum_match 42

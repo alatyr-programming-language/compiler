@@ -59,6 +59,8 @@ how this repository proves itself, not part of what it ships.
 - Fixed `run` so profile-looking program arguments after `--` cannot change the selected build profile.
 - Fixed silent wrong values when indexing an ordinary byte array through a pointer-derived struct
   field on x86_64.
+- Fixed x86_64 wrong matches and aggregate-call crashes for enum elements selected from struct array
+  fields; unsupported pointer-derived and packed/byte-layout roots remain fail-loud.
 - Statically known out-of-range indexes into fixed arrays now reject at compile time, including every
   index into `[T; 0]`, before any backend emits code.
 - Made unsupported live `str`/view operands fail loudly instead of silently becoming an empty pair.
