@@ -1438,6 +1438,47 @@ fi
 
 run_tool20_plan
 
+# TOOL-14 — invocation-level Config diagnostics must name an unrecognized command/flag before the
+# source-path branch can turn it into the misleading missing-source-file failure. Capture the command's
+# status directly (outside a pipeline), keep the diagnostic on stderr, and pin both the class and exact
+# offending argument. The last row preserves the existing nonzero contract for a mistyped selector.
+run_invocation_diagnostics() {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/src"
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(source_dir = "src",
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf,
+                    entry = "_start", output = "cli-diagnostics")])
+EOF
+  printf 'main := fn() -> u64 { return 42 }\n' >"$tmp/src/main.al"
+
+  check_case() {
+    name="$1"
+    expected="$2"
+    shift 2
+    out="$tmp/$name.out"
+    err="$tmp/$name.err"
+    (cd "$tmp" && "$CC" "$@") >"$out" 2>"$err"
+    got=$?
+    if [ "$got" = 40 ] \
+      && [ ! -s "$out" ] \
+      && grep -qF 'alatyr: config: unrecognised command or flag `' "$err" \
+      && grep -qF -- "$expected" "$err" \
+      && ! grep -qF 'selfhost: cannot open source file' "$err"; then
+      echo "ok   $name: Config rc 40 names $expected"
+    else
+      echo "FAIL $name: rc=$got stdout=$(cat "$out") stderr=$(cat "$err")"
+      fail=1
+    fi
+  }
+
+  check_case tool14_unknown_command biuld biuld package.al
+  check_case tool14_unknown_flag_before --not-a-real-flag build --not-a-real-flag package.al
+  check_case tool14_unknown_flag_after --not-a-real-flag build package.al --not-a-real-flag
+  check_case tool14_mistyped_release --relese build --relese package.al
+  rm -rf "$tmp"
+}
+
 if [ "${TOOL20_ONLY:-0}" = 1 ]; then
   exit "$fail"
 fi
@@ -1450,6 +1491,7 @@ run_new_scaffold
 run_zero_tests
 run_cross_target_test
 run_machine_schema
+run_invocation_diagnostics
 run_expect profile_check_named 0 check --profile release package.al
 run_expect profile_check_release 0 check --release package.al
 run_expect profile_run_debug 7 run package.al

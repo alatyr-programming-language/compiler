@@ -4704,6 +4704,20 @@ cli_config_diag := fn(in out a : rt::Arena, msg : str) -> usize {
   return 40
 }
 
+## TOOL-14 — an argument that is neither a command nor a recognized flag must be diagnosed at the
+## invocation boundary. It has no source span, so name the argument in the invocation-level Config
+## diagnostic and stop before source-path discovery can reinterpret it.
+cli_unknown_arg_diag := fn(in out a : rt::Arena, arg : str) -> usize {
+  mut b := rt::strbuf(a, arg.len + 96)
+  k0 := rt::push_str(b, "alatyr: config: unrecognised command or flag `")
+  k1 := rt::push_str(b, arg)
+  k2 := rt::push_str(b, "`")
+  k3 := rt::push_byte(b, 10)
+  kf := diag_flush(b, 2)
+  if kf != 0 { return kf }
+  return 40
+}
+
 ## The input facts collected while scanning package-command options. They stay scalar/string facts at
 ## the run_cli boundary, avoiding a temporary record whose copyback would be fragile in the self-host
 ## lower. The manifest path is published as pointer/length facts into the command-line arena.
@@ -4721,6 +4735,8 @@ mut CLI_TARGET_SELECT_N := 0
 mut CLI_TARGET_SELECT_ALL := false
 mut CLI_VENDOR_DIR_COUNT := 0
 mut CLI_OPTION_BAD := false
+mut CLI_UNKNOWN_OPTION_P := 0
+mut CLI_UNKNOWN_OPTION_N := 0
 
 ## Scan the source/options portion of a package-aware command. Profiles may be in the leading selector
 ## position (run_cli already advances over those), but skipping them here too keeps `--manifest` valid
@@ -4740,6 +4756,8 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
   CLI_TARGET_SELECT_ALL = false
   CLI_VENDOR_DIR_COUNT = 0
   CLI_OPTION_BAD = false
+  CLI_UNKNOWN_OPTION_P = 0
+  CLI_UNKNOWN_OPTION_N = 0
   mut i := fi
   while i < n {
     x := arg_at(cmd, i)
@@ -4786,8 +4804,17 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
     } else if x == "--profile" {
       if i + 1 < n { i += 2 } else { CLI_OPTION_BAD = true ; i += 1 }
     } else {
-      if CLI_INPUT_COUNT == 0 { CLI_INPUT_FIRST = i }
-      CLI_INPUT_COUNT += 1
+      ## A leading dash marks an option position, not a source path. Preserve the first unknown
+      ## spelling so the caller can report the exact offending argument before build_paths reads it.
+      if x.len > 0 and bytes(x)[0] == 45 {
+        if CLI_UNKNOWN_OPTION_N == 0 {
+          CLI_UNKNOWN_OPTION_P = unchecked bitcast(usize, x.ptr)
+          CLI_UNKNOWN_OPTION_N = x.len
+        }
+      } else {
+        if CLI_INPUT_COUNT == 0 { CLI_INPUT_FIRST = i }
+        CLI_INPUT_COUNT += 1
+      }
       i += 1
     }
   }
@@ -5101,6 +5128,17 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if n >= 4 {
     if arg_at(cmd, 1) == "-o" { mode = 1; oi = 2; fi = 3 }
   }
+  ## TOOL-14 — mode 0 is the legacy direct-source/GAS surface, so retain an existing source path (and
+  ## the established `-o` spelling) but do not reinterpret a missing non-source first argument as a
+  ## file. A typo such as `biuld package.al` is an unrecognized command, not a source-path failure.
+  if n >= 2 and mode == 0 {
+    first := arg_at(cmd, 1)
+    if first == "-o" { }
+    else if first.len > 0 and bytes(first)[0] == 45 { return cli_unknown_arg_diag(a, first) }
+    else if ends_with(first, ".al") == false and path_exists(a, first) == false {
+      return cli_unknown_arg_diag(a, first)
+    }
+  }
   if mode == 4 {
     ## scaffold a new package directory — takes a NAME, not a file list; no compilation.
     if n < 3 { return 40 }
@@ -5294,6 +5332,10 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if scan_package_inputs {
     scan_cli_inputs(cmd, fi, path_n)
     if CLI_OPTION_BAD { return cli_config_diag(a, "an option is missing its argument") }
+    if CLI_UNKNOWN_OPTION_N != 0 {
+      unknown := str_at(CLI_UNKNOWN_OPTION_P, CLI_UNKNOWN_OPTION_N)
+      return cli_unknown_arg_diag(a, unknown)
+    }
     if CLI_VENDOR_DIR_COUNT > 0 { return cli_config_diag(a, "--vendor-dir is not supported in v1") }
     if CLI_TARGET_DIR_COUNT > 1 { return cli_config_diag(a, "--target-dir was specified more than once") }
     if CLI_MANIFEST_COUNT > 1 { return cli_config_diag(a, "--manifest was specified more than once") }
