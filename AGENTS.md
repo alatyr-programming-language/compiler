@@ -9,9 +9,15 @@ step-by-step procedures live in `.agents/skills/`.
   the compiler conforms to it, never the reverse.
 - Decide language questions in the specification before changing `src/`. If the specification is silent,
   stop and get the decision recorded; do not infer semantics from current behavior.
-- This repository is pinned to a specific specification revision. Move that pin only in a separate,
-  explicit commit; never silently update it in a feature. Cite specification anchors, chapter sections,
-  or issue numbers. Repository workstream tags are search tags, not specification citations.
+- **The pin.** This repository is answerable to specification revision **1.0.0** (tag `v1.0.0`,
+  `4e46f04`) plus the post-tag commits up to spec `main` **`b4e7979`**, which added TOOL-21
+  (`help`/`version` introspection), TOOL-22 (output verbosity may not affect a build) and the TOOL-14
+  clarification (an unrecognised argument is an invocation-level Config diagnostic, never a source path).
+- The pin records what the compiler is **answerable to**, not what it has already implemented: the tree
+  may lag it, and each gap is an open issue (TOOL-21 and the TOOL-14 clarification are #192). Move the
+  pin only in a separate, explicit commit; never silently update it in a feature. Cite specification
+  anchors, chapter sections, or issue numbers. Repository workstream tags are search tags, not
+  specification citations.
 
 ## Reproducibility
 
