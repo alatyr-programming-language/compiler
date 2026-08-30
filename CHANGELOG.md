@@ -52,6 +52,7 @@ how this repository proves itself, not part of what it ships.
   `bits8`/`bits16`/`bits32` pointer casts preserve their intended width and format safely.
 - Fixed ordinary scalar-field structs to use natural byte alignment, padding, and field offsets instead of one machine word per field.
 - Fixed x86_64 silent wrong values when indexing arrays of narrow scalar structs by sharing the byte stride between literal initialization and indexed places.
+- Fixed x86_64 wrong values when indexing a byte slice stored in a struct field by preserving its byte stride and data pointer.
 - Fixed x86_64 silent wrong values when reading narrow fields through `Slice(struct)` elements.
 - Fixed public `Option` helpers for niche-folded `Option(ptr(T))` values so they inspect the
   pointer-width representation instead of a two-word discriminant/payload layout.

@@ -19390,7 +19390,11 @@ pair_field_elem_stride := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
   if bt.n == 0 { return 0 }
   fts := field_type_span(cx.decls, cx.src, bt.s, bt.n, fp.fs, fp.fl, a)
   if str_at((cx.src + fts.s), fts.n) == "str" { return 1 }
-  eta := typearg_at(cx.src, fts.s, fts.n, 0)
+  ftb := base_type_name(cx.src, fts.s, fts.n)
+  ## `typearg_at` scans the application suffix after the base name. Passing the
+  ## full `Slice(u8)` span makes the helper miss its argument and silently choose
+  ## the word stride, even though the field address itself is correct.
+  eta := typearg_at(cx.src, ftb.s, ftb.n, 0)
   if eta.n == 0 { return 8 }
   etx := str_at((cx.src + eta.s), eta.n)
   if etx == "u8" or etx == "i8" or etx == "bits8" { return 1 }
