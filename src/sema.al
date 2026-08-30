@@ -126,6 +126,17 @@ local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIA
 ## public entry points can report the established field-specific wording and source location.
 MULTIDIM_ARRAY_FIELD_DIAG_MARKER := 6890000000000000000
 multidim_array_field_err := fn(s : usize) -> CheckErr { MULTIDIM_ARRAY_FIELD_DIAG_MARKER + s * 4 }
+## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
+## while the surrounding visibility walk still returns a source offset for every other declaration kind.
+## Keep this class between the direct multidimensional-field fence and the comptime classes so every
+## older CheckErr range remains byte-identical. The raw visibility walkers carry this full code through
+## their usize return channel; `sema_visibility_err` preserves it at their CheckErr boundaries.
+QUALIFIED_PRIVATE_CONST_DIAG_MARKER := 6900000000000000000
+qualified_private_const_err := fn(s : usize) -> CheckErr { QUALIFIED_PRIVATE_CONST_DIAG_MARKER + s * 4 }
+sema_visibility_err := fn(s : usize) -> CheckErr {
+  if s >= QUALIFIED_PRIVATE_CONST_DIAG_MARKER { return s }
+  located_err(s)
+}
 
 ## A distinct located diagnostic for a `comptime if` whose condition reads a runtime local. Keep it
 ## between the CT-12 guard class and immutable bindings so every older CheckErr range remains stable;
@@ -8488,10 +8499,10 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   ## not a lower/linker accident.
   if failed == false {
     vr0 := sema_vis_stmts(d.body_stmts, decls, src, d.mod_start, d.mod_len, ptr(locals), nloc, a)
-    if vr0 != 0 { err = located_err(vr0); failed = true }
+    if vr0 != 0 { err = sema_visibility_err(vr0); failed = true }
     if failed == false and no_tail == false {
       vr1 := sema_vis_expr(d.value, decls, src, d.mod_start, d.mod_len, ptr(locals), nloc, a)
-      if vr1 != 0 { err = located_err(vr1); failed = true }
+      if vr1 != 0 { err = sema_visibility_err(vr1); failed = true }
     }
   }
   ## §7.2 break-value TYPE CONSISTENCY (spec: "break-values of incompatible type are ill-formed"): run
@@ -8596,7 +8607,7 @@ check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a 
     egab := sema_enum_global_array_value_bad(d.value, decls, upto, src, ptr(none), 0, a, false)
     if egab != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egab)) }
     vr0 := sema_vis_expr(d.value, decls, src, d.mod_start, d.mod_len, ptr(none), 0, a)
-    if vr0 != 0 { return Result(usize, CheckErr).Err(located_err(vr0)) }
+    if vr0 != 0 { return Result(usize, CheckErr).Err(sema_visibility_err(vr0)) }
     rv := check_expr(d.value, decls, upto, src, a, ptr(none), 0)
     ## Declarations §3.1 assignability for a MODULE-LEVEL annotated binding — the same rule
     ## `check_stmts` applies to a local, on the same proven-only whitelist. A module binding carries no
@@ -10839,17 +10850,17 @@ sema_vis_all_bodies := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::A
         while pp != 0 { pm := deref(param_p(pp)); sema_collect_name(ptr(locals), src, pm.ns, pm.nl); pp = pm.next }
         sema_collect_stmts(d.body_stmts, ptr(locals), src, a)
         vr0 := sema_vis_stmts(d.body_stmts, decls, src, d.mod_start, d.mod_len, ptr(locals), deref(locals).len, a)
-        if vr0 != 0 { return located_err(vr0) }
+        if vr0 != 0 { return sema_visibility_err(vr0) }
         if unchecked bitcast(usize, d.value) != 0 {
           vr1 := sema_vis_expr(d.value, decls, src, d.mod_start, d.mod_len, ptr(locals), deref(locals).len, a)
-          if vr1 != 0 { return located_err(vr1) }
+          if vr1 != 0 { return sema_visibility_err(vr1) }
         }
       } else if d.kind == 0 and unchecked bitcast(usize, d.value) != 0 {
         mut fw0 := 0
         mut fs0 := 0
         mut locals0 := lvec_new(a, 1, ptr(fw0), ptr(fs0), d.mod_start, d.mod_len)
         vr2 := sema_vis_expr(d.value, decls, src, d.mod_start, d.mod_len, ptr(locals0), 0, a)
-        if vr2 != 0 { return located_err(vr2) }
+        if vr2 != 0 { return sema_visibility_err(vr2) }
       }
     }
     i += 1
@@ -10884,7 +10895,10 @@ sema_global_ref_bad := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
       if g.qual {
         if sema_mod_seg_eq(src, d.mod_start, d.mod_len, g.ms, g.ml) {
           exact = true
-          if sema_decl_visible_from(src, d, cs, cl) == false { return g.ns }
+          if sema_decl_visible_from(src, d, cs, cl) == false {
+            if not local_is_mut(src, d.name_start) { return qualified_private_const_err(g.ns) }
+            return g.ns
+          }
           visible = true
         }
       } else if sema_mod_anc_rank(src, d.mod_start, d.mod_len, cs, cl) >= 0 { visible = true }
