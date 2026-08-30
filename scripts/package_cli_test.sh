@@ -1561,6 +1561,74 @@ EOF
   rm -rf "$tmp"
 }
 
+# Issue #2 — the three remaining first-run failures must be diagnostics at the boundary where the
+# compiler already knows the answer. Capture every status directly (never through a pipeline), keep
+# the historical nonzero codes for `new`, and put a linker shim on PATH so the empty-source case proves
+# that no `ld` invocation happens after the Config rejection.
+run_issue2_package_diagnostics() {
+  tmp=$(mktemp -d)
+
+  mkdir -p "$tmp/existing"
+  (cd "$tmp" && "$CC" new existing) >"$tmp/existing.out" 2>"$tmp/existing.err"
+  existing_rc=$?
+  if [ "$existing_rc" = 30 ] \
+    && [ ! -s "$tmp/existing.out" ] \
+    && grep -qF 'alatyr: config: new destination `existing` already exists' "$tmp/existing.err"; then
+    echo "ok   issue2_new_existing: Config rc 30 names the occupied destination"
+  else
+    echo "FAIL issue2_new_existing: rc=$existing_rc stdout=$(cat "$tmp/existing.out") stderr=$(cat "$tmp/existing.err")"
+    fail=1
+  fi
+
+  (cd "$tmp" && "$CC" new) >"$tmp/no-name.out" 2>"$tmp/no-name.err"
+  no_name_rc=$?
+  if [ "$no_name_rc" = 40 ] \
+    && [ ! -s "$tmp/no-name.out" ] \
+    && grep -qF 'alatyr: config: new requires a package name operand' "$tmp/no-name.err"; then
+    echo "ok   issue2_new_missing_name: Config rc 40 names the missing operand"
+  else
+    echo "FAIL issue2_new_missing_name: rc=$no_name_rc stdout=$(cat "$tmp/no-name.out") stderr=$(cat "$tmp/no-name.err")"
+    fail=1
+  fi
+
+  mkdir -p "$tmp/empty/src"
+  cat >"$tmp/empty/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf,
+                    entry = "_start", output = "empty-source")]
+)
+EOF
+  shim=$(mktemp -d)
+  ld_log="$tmp/ld.log"
+  real_ld=$(command -v ld)
+  cat >"$shim/ld" <<EOF
+#!/bin/sh
+printf '%s\n' invoked >> "$ld_log"
+exec "$real_ld" "\$@"
+EOF
+  chmod +x "$shim/ld"
+  (cd "$tmp/empty" && PATH="$shim:$PATH" "$CC" build package.al) >"$tmp/empty.out" 2>"$tmp/empty.err"
+  empty_rc=$?
+  if [ "$empty_rc" = 1 ] \
+    && [ ! -s "$tmp/empty.out" ] \
+    && grep -qF 'config: Package.source_dir contains no Alatyr modules' "$tmp/empty.err" \
+    && grep -qF 'package root' "$tmp/empty.err" \
+    && grep -qF 'source_dir' "$tmp/empty.err" \
+    && grep -qF 'at line' "$tmp/empty.err" \
+    && [ ! -e "$tmp/empty/target/debug/empty-source" ] \
+    && [ ! -s "$ld_log" ]; then
+    echo "ok   issue2_empty_source: Config rc 1 names package root/source_dir before codegen/link"
+  else
+    echo "FAIL issue2_empty_source: rc=$empty_rc stdout=$(cat "$tmp/empty.out") stderr=$(cat "$tmp/empty.err") artifact=$(test -e "$tmp/empty/target/debug/empty-source" && echo present || echo absent) ld=$(test -s "$ld_log" && echo invoked || echo not-invoked)"
+    fail=1
+  fi
+
+  rm -rf "$shim" "$tmp"
+}
+
 if [ "${TOOL20_ONLY:-0}" = 1 ]; then
   exit "$fail"
 fi
@@ -1574,6 +1642,7 @@ run_zero_tests
 run_cross_target_test
 run_machine_schema
 run_invocation_diagnostics
+run_issue2_package_diagnostics
 run_expect profile_check_named 0 check --profile release package.al
 run_expect profile_check_release 0 check --release package.al
 run_expect profile_run_debug 7 run package.al

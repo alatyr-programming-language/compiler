@@ -31,6 +31,8 @@ how this repository proves itself, not part of what it ships.
   user-enum values, while runtime-dependent initializers and unsafe rebinding cases fail loudly.
 - Unrecognised CLI commands and flags now produce invocation-level Config diagnostics naming the
   offending argument instead of a missing-source-file failure.
+- Package setup failures now produce located Config diagnostics: `new` reports an occupied destination
+  or missing name, and an explicitly empty `Package.source_dir` is rejected before codegen or linking.
 - x86_64/Linux now supports direct code-point `jmp(label)` transfers to named `@label(name)` instructions inside `unchecked` scopes.
 - The compiler now reports a controlled arena-initialization failure when an internal `mmap` fails,
   instead of dereferencing the kernel's negative errno result.

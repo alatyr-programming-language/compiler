@@ -1606,6 +1606,42 @@ manifest_package_bounds := fn(mtext : str) -> bool {
   return false
 }
 
+## A Package manifest may also be the source of a supported single-file program. Recognize that
+## existing form without treating arbitrary trailing text as a source tree: only a root-level `main`
+## binding after the Package call exempts an empty configured source_dir from the module-directory
+## diagnostic below.
+manifest_has_root_main := fn(mtext : str) -> bool {
+  mut i := MANIFEST_PACKAGE_END
+  mut block_depth := 0
+  base := unchecked bitcast(usize, mtext.ptr)
+  while i < mtext.len {
+    c := bytes(mtext)[i]
+    if c == 35 {
+      i = manifest_skip_trivia(mtext, i, mtext.len)
+    } else if c == 34 {
+      i = manifest_skip_string(mtext, i, mtext.len)
+    } else if c == 123 {
+      block_depth += 1
+      i += 1
+    } else if c == 125 {
+      if block_depth > 0 { block_depth -= 1 }
+      i += 1
+    } else if block_depth == 0 and amb_idc(c) {
+      s := i
+      e := manifest_ident_end(mtext, i, mtext.len)
+      word := str_at(base + s, e - s)
+      q := manifest_skip_trivia(mtext, e, mtext.len)
+      if word == "main" and q + 1 < mtext.len and bytes(mtext)[q] == 58 and bytes(mtext)[q + 1] == 61 {
+        return true
+      }
+      i = e
+    } else {
+      i += 1
+    }
+  }
+  return false
+}
+
 manifest_package_field_known := fn(field : str) -> bool {
   return field == "version" or field == "targets" or field == "default_target" or field == "license"
     or field == "authors" or field == "repository" or field == "description"
@@ -3727,6 +3763,36 @@ pkg_src_dir := fn(in out a : rt::Arena, pkg_al : str, pkgdir : str) -> str {
   return normalize_path(a, raw)
 }
 
+## A module-backed Package must have at least one root source module. Do this after manifest path
+## validation but before any target artifact is created: falling back to compiling `package.al` when
+## the configured source tree is empty turns a configuration mistake into an `ld` failure about a
+## synthetic entry symbol. Keep the supported single-file Package form valid when its root `main` is
+## in package.al; it has no module directory to validate.
+manifest_source_empty_reject := fn(in out a : rt::Arena, pkg_al : str) -> usize {
+  if manifest_has_package(a, pkg_al) == false { return 0 }
+  ## An omitted source_dir is the supported single-file Package form: package.al itself is the root
+  ## program. Only an explicitly configured source_dir owns this empty-directory contract.
+  mc := cstr(a, pkg_al)
+  mtext := read_proc(a, mc, 262144)
+  if mf_find_word(mtext, 0, "source_dir") < 0 { return 0 }
+  rootdir0 := dir_of(pkg_al)
+  rootdir := normalize_path(a, rootdir0)
+  srcdir := pkg_src_dir(a, pkg_al, rootdir)
+  mods := list_al_in_dir(a, srcdir)
+  if mods.len != 0 { return 0 }
+  if manifest_has_root_main(mtext) { return 0 }
+  MANIFEST_CONFIG_BAD = true
+  mut b := rt::strbuf(a, rootdir.len + srcdir.len + 160)
+  k0 := rt::push_str(b, "config: Package.source_dir contains no Alatyr modules (package root `")
+  k1 := rt::push_str(b, rootdir)
+  k2 := rt::push_str(b, "`, source_dir `")
+  k3 := rt::push_str(b, srcdir)
+  k4 := rt::push_str(b, "`)")
+  msg := str_at(b.data, b.len)
+  manifest_located_error(a, msg, pkg_al, "source_dir")
+  return 1
+}
+
 ## The full newline-joined module list for a PACKAGE rooted at `root_pkg` (a `…/package.al` path),
 ## INCLUDING transitive `Path` dependencies. BFS over the dep graph (a worklist queue — no recursion,
 ## which the lean lower's call-ABI handles less robustly), deduping each package directory so cycles
@@ -4125,7 +4191,13 @@ new_package := fn(in out a : rt::Arena, name : str) -> usize {
   ## mkdir <name> (0755)
   ndir := cstr(a, name)
   md := rt::sys_mkdir(83, ndir, 493)
-  if md < 0 { return 30 }
+  if md < 0 {
+    ## EEXIST is an actionable invocation error. Check the path after mkdir rather than guessing from
+    ## an errno value, so the message stays correct for an existing file or directory and other mkdir
+    ## failures keep the established status without inventing a cause.
+    if path_exists(a, name) { return new_existing_directory_diag(a, name) }
+    return 30
+  }
   ## The manifest omits source_dir, so scaffold the spec-default `src` tree rather than a legacy
   ## flat root. A separate mkdir keeps a failed partial scaffold fail-loud.
   srcdir := cat2(a, name, "/src")
@@ -5116,6 +5188,19 @@ diag_flush := fn(in out b : rt::StrBuf, fd : usize) -> usize {
   return flush_status(d, b.len)
 }
 
+## `new`'s destination collision is an invocation-level Config diagnostic, but its historical mkdir
+## status (30) remains part of the CLI contract. The operand is the location because there is no source
+## span for a directory that already exists.
+new_existing_directory_diag := fn(in out a : rt::Arena, path : str) -> usize {
+  mut b := rt::strbuf(a, path.len + 96)
+  k0 := rt::push_str(b, "alatyr: config: new destination `")
+  k1 := rt::push_str(b, path)
+  k2 := rt::push_str(b, "` already exists\n")
+  kf := diag_flush(b, 2)
+  if kf != 0 { return kf }
+  return 30
+}
+
 ## The exit status of an EMIT-to-stdout surface (`alatyr wat|aarch64|riscv64 <file>`, and `alatyr
 ## <file>` — the x86 GAS dump). Each of those modes used to `return 0` unconditionally right after
 ## flushing, so NO failure on the path could be reported through the exit code — not a failed write,
@@ -5173,7 +5258,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   }
   if mode == 4 {
     ## scaffold a new package directory — takes a NAME, not a file list; no compilation.
-    if n < 3 { return 40 }
+    if n < 3 { return cli_config_diag(a, "new requires a package name operand") }
     nm := arg_at(cmd, 2)
     return new_package(a, nm)
   }
@@ -5446,6 +5531,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       }
     }
     if MANIFEST_CONFIG_BAD { return 1 }
+    if manifest_source_empty_reject(a, pkg_arg) != 0 { return 1 }
   }
   if mode == 12 and not is_pkg and CLI_TARGET_SELECT_COUNT != 0 {
     return cli_config_diag(a, "--target requires a package manifest")
