@@ -16,15 +16,58 @@ fail=0
 run_noarg_help() {
   out=$(mktemp)
   err=$(mktemp)
+  help_out=$(mktemp)
+  help_err=$(mktemp)
   (cd "$PKG" && "$CC") >"$out" 2>"$err"
   got=$?
-  if [ "$got" = "40" ] && grep -q '^Usage: run$' "$out" && [ ! -s "$err" ]; then
-    echo "ok   noarg_help: usage on stdout, rc 40"
+  (cd "$PKG" && "$CC" --help) >"$help_out" 2>"$help_err"
+  help_rc=$?
+  if [ "$got" = "40" ] && [ ! -s "$out" ] \
+    && [ "$help_rc" = "0" ] && [ ! -s "$help_err" ] \
+    && cmp -s "$err" "$help_out" \
+    && grep -qF 'Usage: alatyr <command> [options]' "$err" \
+    && grep -qF '  plan     ' "$err"; then
+    echo "ok   noarg_help: same help on stderr, rc 40; explicit help rc 0"
   else
-    echo "FAIL noarg_help: rc $got, expected 40 with usage-only stdout"
+    echo "FAIL noarg_help: rc=$got/help_rc=$help_rc or no-argument help stream/content mismatch"
     fail=1
   fi
-  rm -f "$out" "$err"
+  rm -f "$out" "$err" "$help_out" "$help_err"
+}
+
+run_help_version() {
+  tmp=$(mktemp -d)
+  out=$(mktemp)
+  err=$(mktemp)
+  want=$(mktemp)
+  help_ok=1
+  for arg in --help -h help; do
+    (cd "$tmp" && "$CC" "$arg") >"$out" 2>"$err"
+    got=$?
+    if [ "$got" != "0" ] || [ ! -s "$out" ] || [ -s "$err" ] \
+      || ! grep -qF 'Usage: alatyr <command> [options]' "$out" \
+      || ! grep -qF '  fmt      ' "$out"; then
+      help_ok=0
+    fi
+  done
+  printf 'alatyr 0.1.0\n' >"$want"
+  version_ok=1
+  for arg in --version -V version; do
+    (cd "$tmp" && "$CC" "$arg") >"$out" 2>"$err"
+    got=$?
+    if [ "$got" != "0" ] || ! cmp -s "$out" "$want" || [ -s "$err" ]; then
+      version_ok=0
+    fi
+  done
+  if [ "$help_ok" = "1" ] && [ "$version_ok" = "1" ] \
+    && [ -z "$(find "$tmp" -mindepth 1 -print -quit)" ]; then
+    echo "ok   help_version: aliases succeed without manifest reads or artifacts"
+  else
+    echo "FAIL help_version: help/version aliases, output, or side-effect contract mismatch"
+    fail=1
+  fi
+  rm -f "$out" "$err" "$want"
+  rm -rf "$tmp"
 }
 
 run_new_scaffold() {
@@ -1738,6 +1781,7 @@ fi
 # `check` proves argument routing. `run` additionally proves the selected profile's
 # manifest flag reaches `build.*` before lowering.
 run_noarg_help
+run_help_version
 run_new_scaffold
 run_zero_tests
 run_cross_target_test

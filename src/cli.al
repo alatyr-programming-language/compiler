@@ -3952,12 +3952,46 @@ parse_uint_arg := fn(s : str) -> usize {
   return v
 }
 
+## TOOL-21 — the top-level help surface is deliberately small and stable: it names every public v1
+## command and the `run --` argument boundary, but does not read package input or create artifacts.
+## `fd`/`status` let the no-argument path reuse the exact same material while remaining a failing
+## invocation-level diagnostic.
+cli_help := fn(in out a : rt::Arena, fd : usize, status : usize) -> usize {
+  mut b := rt::strbuf(a, 512)
+  k0 := rt::push_str(b, "Usage: alatyr <command> [options]\n\nCommands:\n")
+  k1 := rt::push_str(b, "  new      create a package\n")
+  k2 := rt::push_str(b, "  build    build a package\n")
+  k3 := rt::push_str(b, "  run      build and run a program\n")
+  k4 := rt::push_str(b, "  test     build and run package tests\n")
+  k5 := rt::push_str(b, "  check    type-check a package\n")
+  k6 := rt::push_str(b, "  plan     write a deterministic build plan\n")
+  k7 := rt::push_str(b, "  fmt      format package sources\n\n")
+  k8 := rt::push_str(b, "Run program arguments after `--`: alatyr run <program> -- <args>\n")
+  kf := diag_flush(b, fd)
+  if kf != 0 { return kf }
+  return status
+}
+
+## TOOL-21 — the version is the compiler package's manifest version. `app.version` is injected as a
+## compile-time constant for modules owned by this package (TOOL-15), so this command neither opens
+## package.al nor depends on the current working directory at runtime.
+cli_version := fn(in out a : rt::Arena, fd : usize) -> usize {
+  version := app.version
+  mut b := rt::strbuf(a, version.len + 16)
+  k0 := rt::push_str(b, "alatyr ")
+  k1 := rt::push_str(b, version)
+  k2 := rt::push_byte(b, 10)
+  kf := diag_flush(b, fd)
+  if kf != 0 { return kf }
+  return 0
+}
+
 test_jobs_diag := fn(in out a : rt::Arena, msg : str) -> usize {
   mut b := rt::strbuf(a, 128)
   k0 := rt::push_str(b, "Usage: ")
   k1 := rt::push_str(b, msg)
   k2 := rt::push_byte(b, 10)
-  kf := diag_flush(b, 1)
+  kf := diag_flush(b, 2)
   if kf != 0 { return kf }
   return 40
 }
@@ -5236,9 +5270,11 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   mut fi := 1
   mut test_jobs := 1
   mut test_keep_going := false
-  if n == 1 { return test_jobs_diag(a, "run") }
+  if n == 1 { return cli_help(a, 2, 40) }
   if n >= 2 {
     a1 := arg_at(cmd, 1)
+    if a1 == "--help" or a1 == "-h" or a1 == "help" { return cli_help(a, 1, 0) }
+    if a1 == "--version" or a1 == "-V" or a1 == "version" { return cli_version(a, 1) }
     if a1 == "run" { mode = 2; fi = 2 }
     if a1 == "check" { mode = 3; fi = 2 }
     if a1 == "new" { mode = 4; fi = 2 }
