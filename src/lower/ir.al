@@ -31,6 +31,7 @@ arg_p := ast::arg_p
 fld_p := ast::fld_p
 param_p := ast::param_p
 stmt_p := ast::stmt_p
+stmt_label_span := ast::stmt_label_span
 local_type_span := ast::local_type_span
 fn_is_naked := lower_asm::fn_is_naked
 (Arg, Decl, Expr, Stmt) := ast
@@ -1499,7 +1500,11 @@ ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), 
       ## take the value-to-format as a PARAM → arity != 0) is ever admitted. A non-call ExprStmt cannot be
       ## modeled → reject. A modeled scalar the call reads (the printed `sum`) is synced to its slot at emit.
       Stmt::ExprStmt(e, nx) => {
-        if ir_is_call_rhs(e) and IRP_NGBAR < 16 {
+        ls := stmt_label_span(s)
+        mut is_jmp := false
+        match deref(e) { Expr::Call(cs, cl, na, ah) => { is_jmp = str_at((src + cs), cl) == "jmp" } _ => {} }
+        if ls.n != 0 or is_jmp { IRP_OK = false
+        } else if ir_is_call_rhs(e) and IRP_NGBAR < 16 {
           IRP_NGBAR = IRP_NGBAR + 1
           IRP_NSTMT = IRP_NSTMT - 1
           ir_count_barrier_syncs(src, decls, s)

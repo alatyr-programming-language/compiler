@@ -564,4 +564,7 @@ pub LCtx := struct {
   ## use, and for the same reason: an extra `emit_call_args` parameter would push the threaded
   ## `in out nl` counter past the argument registers. Was the module global `IND_FN_FMASK`.
   ind_fn_fmask : usize,
+  ## CODE-POINT LABELS: declaration emission index of the enclosing function, used to make named
+  ## local GAS labels unique across generic instances without changing the direct x86_64 surface.
+  fn_id : usize,
 }

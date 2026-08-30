@@ -305,6 +305,24 @@ run_x86() { # name, want
   if [ "$got" = "$2" ]; then echo "ok   $1: $got"; else echo "FAIL $1: got $got want $2"; fail=1; fi
 }
 
+# Control Flow §2.1–§2.3 / x86_64 appendix §3 — a direct code-point transfer must be a GAS jump to
+# the named local target, not an ordinary call or an unresolved symbol. The target prefix is compiler
+# generated, so pair the one emitted `done` label with its transfer rather than asserting a pointer-derived
+# spelling. This row is x86-only: the non-x86/WAT follow-ups are deliberately outside issue #207.
+check_x86_gas() { # name
+  src="$E2E_TEST/$1.al"
+  gas="$T/e2e_$1.gas"
+  [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
+  "$CC" "$src" > "$gas" 2>/dev/null || { echo "FAIL $1(gas): emit"; fail=1; return; }
+  label="$(grep -E '^\.Lcp_[^:]*_done:$' "$gas" | sed 's/:$//' | sed -n '1p')"
+  [ -n "$label" ] || { echo "FAIL $1(gas): named local target missing"; fail=1; return; }
+  if grep -qE "^[[:space:]]+jmp[[:space:]]+$label$" "$gas"; then
+    echo "ok   $1(gas): direct jmp to $label"
+  else
+    echo "FAIL $1(gas): direct jmp to $label missing"; fail=1
+  fi
+}
+
 # x86_64-only build+run with a checked-in exact stdout golden and exit code.
 run_x86_out() { # name, want-exit; expected output is test/<name>.out
   src="$E2E_TEST/$1.al"
@@ -5113,6 +5131,12 @@ run_x86 raw_asm_logic 42
 run_x86 raw_asm_shift 42
 run_x86 raw_asm_mul 42
 run_x86 raw_asm_escape 42
+run_x86 direct_jmp 42
+check_x86_gas direct_jmp
+fmt_test_has direct_jmp 42 "@label(done)"
+build_reject_has reject_jmp_unknown "unbound name"
+build_reject_has reject_jmp_duplicate "duplicate name"
+build_reject_has reject_jmp_checked "invalid at line"
 check_accept atomic_global_counter
 check_accept ambient
 check_accept check_typed_local

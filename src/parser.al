@@ -652,7 +652,7 @@ clone_one_stmt := fn(a : ptr(mut rt::Arena), st : ptr(mut Stmt), ok : ptr(mut bo
   match x {
     Stmt::Assign(ns, nl, v, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cv := clone_expr(a, v, ok); r = snode(a, Stmt.Assign(ns, nl, cv, 0)) }
     Stmt::Return(rv, nx) => { deref(nxout) = unchecked bitcast(usize, nx); mut crv := expr_null(); if unchecked bitcast(usize, rv) != 0 { crv = clone_expr(a, rv, ok) }; r = snode(a, Stmt.Return(crv, 0)) }
-    Stmt::ExprStmt(e, nx) => { deref(nxout) = unchecked bitcast(usize, nx); ce := clone_expr(a, e, ok); r = snode(a, Stmt.ExprStmt(ce, 0)) }
+    Stmt::ExprStmt(e, nx) => { deref(nxout) = unchecked bitcast(usize, nx); ce := clone_expr(a, e, ok); r = snode(a, Stmt.ExprStmt(ce, 0)); ls := stmt_label_span(st); stmt_label_mark(r, ls.s, ls.n) }
     Stmt::If(c, th, el, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cc := clone_expr(a, c, ok); cth := clone_stmts(a, th, ok); cel := clone_stmts(a, el, ok); r = snode(a, Stmt.If(cc, cth, cel, 0)) }
     Stmt::While(c, b, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cc := clone_expr(a, c, ok); cb := clone_stmts(a, b, ok); r = snode(a, Stmt.While(cc, cb, 0)); ls := stmt_label_span(st); stmt_label_mark(r, ls.s, ls.n) }
     Stmt::For(fns, fnl, lo, hi, b, nx) => { deref(nxout) = unchecked bitcast(usize, nx); mut clo := expr_null(); if unchecked bitcast(usize, lo) != 0 { clo = clone_expr(a, lo, ok) }; mut chi := expr_null(); if unchecked bitcast(usize, hi) != 0 { chi = clone_expr(a, hi, ok) }; cb := clone_stmts(a, b, ok); r = snode(a, Stmt.For(fns, fnl, clo, chi, cb, 0)); ls := stmt_label_span(st); stmt_label_mark(r, ls.s, ls.n) }
@@ -3807,6 +3807,20 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     istmt := snode(pc.arena, Stmt.For(iv.start, iv.len, lo, nullhi, ibody, 0))
     stmt_label_mark(istmt, loop_label_s, loop_label_l)
     return istmt
+  }
+  ## `@label(name) <instruction>` — a DIRECT CODE-POINT label. Keep the existing Stmt::ExprStmt
+  ## shape and recover the label through the AST side table, just like structured loop labels; this
+  ## avoids widening the bootstrap-sensitive statement enum while letting lower emit a named GAS
+  ## target. Sema validates the instruction/jump shape and the `unchecked` grant before emission.
+  if P_PEND_L != 0 {
+    code_label_s := P_PEND_S
+    code_label_l := P_PEND_L
+    code := p_or(pc)
+    cstmt := snode(pc.arena, Stmt.ExprStmt(code, 0))
+    stmt_label_mark(cstmt, code_label_s, code_label_l)
+    P_PEND_S = 0
+    P_PEND_L = 0
+    return cstmt
   }
   ## `deref(p).field[index] = v` — an element WRITE through a pointer-derived struct array field.
   ## Keep this before the scalar field path below: both start with the same `deref(…).field` prefix,

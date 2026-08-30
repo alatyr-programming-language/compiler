@@ -31,6 +31,7 @@ param_p := ast::param_p
 arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
+stmt_label_span := ast::stmt_label_span
 ## Decl-layout primitives (shared with `lower`) for the generic when-GUARD located reject: sema folds a
 ## `size(T)`/is-KIND/field-COUNT/named-predicate guard against a concrete type-arg using the SAME functions
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
@@ -1662,6 +1663,7 @@ da_bad_expr := fn(e : ptr(Expr), da : ptr(DA), src : ptr(u8)) -> bool {
       bad
     }
     Expr::Call(cs, cl, na, gh) => {
+      if sema_is_direct_jmp(e, src) { return false }
       ## Capability-query operands are checked in a private semantic attempt and do not read runtime state.
       qnm := str_at((src + cs), cl)
       if qnm == "resolves" or qnm == "compiles" { return false }
@@ -4509,6 +4511,26 @@ is_register_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
     or nm == "r12" or nm == "r13" or nm == "r14" or nm == "r15"
 }
 
+## A direct code-point jump is deliberately narrower than the general call surface: only the exact
+## unqualified `jmp(label)` spelling with one non-register NAME operand is a raw target transfer.
+## Invalid shapes remain ordinary semantic errors rather than reaching a linker or another backend.
+sema_is_direct_jmp := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+  cs := expr_call_callee_span(e)
+  cs.n == 3 and str_at((src + cs.s), cs.n) == "jmp"
+}
+sema_direct_jmp_target := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
+  mut r := VSpan(s = 0, n = 0)
+  if sema_is_direct_jmp(e, src) and expr_call_arity(e) == 1 {
+    ah := expr_call_args_head(e)
+    if ah != 0 {
+      a0 := deref(arg_p(ah))
+      av := expr_var_span(a0.e)
+      if av.n != 0 and not is_register_name(src, av.s, av.n) { r = av }
+    }
+  }
+  r
+}
+
 ## The variant/field NAME of a prelude enum literal (`Ordering.acquire` → "acquire"), else "". Handles
 ## both the `Field` (`Ordering.acquire`) and nullary-`EnumLit` (`Ordering.acquire()`) spellings. A
 ## single-level fn-body match (avoids a nested `match … return`, which the seed miscompiles).
@@ -4627,6 +4649,7 @@ expr_statement_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usi
     Expr::If(c, t, f) => { false }
     Expr::Match(scrut, head) => { false }
     Expr::Call(cs, cl, na, ah) => {
+      if sema_is_direct_jmp(e, src) { return false }
       nm := str_at((src + cs), cl)
       ## These names are parser-only defer markers, not user calls. Their action/body is checked by the
       ## established defer-aware paths; treating the marker as an ordinary unresolved call would reject
@@ -4743,6 +4766,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       bad
     }
     Expr::Call(cs, cl, na, ah) => {
+      if sema_is_direct_jmp(e, src) { return false }
       ## Capability-query operands are checked in a private semantic attempt. A failed attempt is the
       ## compile-time bool false, not an error in the enclosing expression.
       qnm := str_at((src + cs), cl)
@@ -4859,6 +4883,10 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## under the bootstrap seed (scar #2); recursing on the inner reliably yields the inner's type.
   bci := bitcast_inner(e)
   if unchecked bitcast(usize, bci) != 0 { return check_expr(bci, decls, upto, src, a, locals, nloc) }
+  if sema_is_direct_jmp(e, src) {
+    jcs := expr_call_callee_span(e)
+    return Result(Ty, CheckErr).Err(located_err(jcs.s))
+  }
   mvc0 := sema_manifest_value_ctor_span(e, src)
   if mvc0.n != 0 { return Result(Ty, CheckErr).Err(manifest_value_err(mvc0.s)) }
   uct0 := sema_unknown_type_ctor_span(e, decls, upto, src)
@@ -7704,13 +7732,19 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
       ## A bare expression statement (a call / `?` for effect): type-check the expression for
       ## well-formedness; its result is discarded, so it introduces no local.
       Stmt::ExprStmt(e, nx) => {
-        ## a bare atomic/fence call in statement position — check ordering legality here (it reaches
-        ## only `check_expr`, and the wrapper is the reliable hook, §1/§4 / spec ch.110).
-        if call_atomic_ordering_bad(e, src, a) { er := Result(usize, CheckErr).Err(mismatch_err(0, 0)); return er }
-        if expr_statement_has_unbound(e, decls, upto, src, a, locals, cnt) {
-          return Result(usize, CheckErr).Err(unbound_code(e, decls, upto, src, a, locals, cnt))
+        ## A validated direct code-point `jmp(label)` has no value expression to type-check: its target
+        ## is a function-scoped label, not a runtime Var. The dedicated prepass above has already checked
+        ## its target, duplicate namespace, and `unchecked` grant before this ordinary statement walk.
+        if sema_is_direct_jmp(e, src) { }
+        else {
+          ## a bare atomic/fence call in statement position — check ordering legality here (it reaches
+          ## only `check_expr`, and the wrapper is the reliable hook, §1/§4 / spec ch.110).
+          if call_atomic_ordering_bad(e, src, a) { er := Result(usize, CheckErr).Err(mismatch_err(0, 0)); return er }
+          if expr_statement_has_unbound(e, decls, upto, src, a, locals, cnt) {
+            return Result(usize, CheckErr).Err(unbound_code(e, decls, upto, src, a, locals, cnt))
+          }
+          ce := check_expr_da(e, decls, upto, src, a, locals, cnt, da)?
         }
-        ce := check_expr_da(e, decls, upto, src, a, locals, cnt, da)?
         cur = nx
       }
       ## COMPTIME statements (`comptime if`/`for`/`match`) — advance to the next statement. The branch
@@ -7890,6 +7924,105 @@ stmts_bad_loop_control := fn(head : ptr(mut Stmt), in_loop : bool, a : ptr(mut r
     }
   }
   bad
+}
+
+## Issue #207 / Control Flow §§2.1–2.3: direct code-point labels share one flat function namespace with
+## structured labels. The parser keeps
+## their spelling in the existing statement-label side table, so this pass can collect every forward or
+## backward target before validating jumps. A bounded table is intentional: exhausting it is a located
+## reject, never a silent loss of a target. `kind` distinguishes a direct code-point (1) from a
+## structured loop label (2): both occupy the function namespace, but only kind 1 has an address.
+CodePointLabels := struct { starts : [usize; 256], lens : [usize; 256], count : usize, kind : [usize; 256] }
+codepoint_label_add := fn(labels : ptr(mut CodePointLabels), src : ptr(u8), s : usize, n : usize, k : usize) -> CheckErr {
+  if s == 0 or n == 0 { return 0 }
+  mut i := 0
+  while i < labels.count {
+    if streq(src, labels.starts[i], labels.lens[i], s, n) { return 3 + s * 4 }
+    i += 1
+  }
+  if labels.count >= 256 { return located_err(s) }
+  labels.starts[labels.count] = s
+  labels.lens[labels.count] = n
+  labels.kind[labels.count] = k
+  labels.count += 1
+  0
+}
+codepoint_label_has := fn(labels : ptr(CodePointLabels), src : ptr(u8), s : usize, n : usize) -> bool {
+  mut i := 0
+  mut found := false
+  while i < labels.count and not found {
+    if labels.kind[i] == 1 and streq(src, labels.starts[i], labels.lens[i], s, n) { found = true }
+    i += 1
+  }
+  found
+}
+codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLabels), src : ptr(u8), a : ptr(mut rt::Arena)) -> CheckErr {
+  mut cur := head
+  mut err : CheckErr = 0
+  while cur != 0 and err == 0 {
+    st := deref(stmt_p(Stmt, cur))
+    match st {
+      Stmt::ExprStmt(e, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, 1) }
+      Stmt::While(c, b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, 2); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
+      Stmt::For(ns, nl, lo, hi, b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, 2); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
+      Stmt::Loop(b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, 2); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
+      Stmt::If(c, th, el, nx) => { err = codepoint_collect_stmts(th, labels, src, a); if err == 0 { err = codepoint_collect_stmts(el, labels, src, a) } }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm := ah
+        while arm != 0 and err == 0 { am := deref(arm_p(arm)); err = codepoint_collect_stmts(am.body_stmts, labels, src, a); arm = am.next }
+      }
+      Stmt::Unchecked(b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
+      Stmt::AllocWith(ae, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
+      Stmt::CompIf(c, th, el, nx) => { err = codepoint_collect_stmts(th, labels, src, a); if err == 0 { err = codepoint_collect_stmts(el, labels, src, a) } }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
+      Stmt::CompMatch(sc, ah, nx) => {
+        mut arm2 := ah
+        while arm2 != 0 and err == 0 { am2 := deref(arm_p(arm2)); err = codepoint_collect_stmts(am2.body_stmts, labels, src, a); arm2 = am2.next }
+      }
+      _ => {}
+    }
+    cur = stmt_next_at(cur, a)
+  }
+  err
+}
+codepoint_check_stmts := fn(head : ptr(mut Stmt), labels : ptr(CodePointLabels), src : ptr(u8), a : ptr(mut rt::Arena), unchecked_mode : bool) -> CheckErr {
+  mut cur := head
+  mut err : CheckErr = 0
+  while cur != 0 and err == 0 {
+    st := deref(stmt_p(Stmt, cur))
+    match st {
+      Stmt::ExprStmt(e, nx) => {
+        if sema_is_direct_jmp(e, src) {
+          target := sema_direct_jmp_target(e, src)
+          callee := expr_call_callee_span(e)
+          if target.n == 0 { err = located_err(callee.s) }
+          else if not unchecked_mode { err = located_err(callee.s) }
+          else if not codepoint_label_has(labels, src, target.s, target.n) { err = unbound_err(target.s, target.n) }
+        }
+      }
+      Stmt::While(c, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::For(ns, nl, lo, hi, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::Loop(b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::If(c, th, el, nx) => { err = codepoint_check_stmts(th, labels, src, a, unchecked_mode); if err == 0 { err = codepoint_check_stmts(el, labels, src, a, unchecked_mode) } }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm := ah
+        while arm != 0 and err == 0 { am := deref(arm_p(arm)); err = codepoint_check_stmts(am.body_stmts, labels, src, a, unchecked_mode); arm = am.next }
+      }
+      Stmt::Unchecked(b, nx) => { err = codepoint_check_stmts(b, labels, src, a, true) }
+      Stmt::AllocWith(ae, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::CompIf(c, th, el, nx) => { err = codepoint_check_stmts(th, labels, src, a, unchecked_mode); if err == 0 { err = codepoint_check_stmts(el, labels, src, a, unchecked_mode) } }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
+      Stmt::CompMatch(sc, ah, nx) => {
+        mut arm2 := ah
+        while arm2 != 0 and err == 0 { am2 := deref(arm_p(arm2)); err = codepoint_check_stmts(am2.body_stmts, labels, src, a, unchecked_mode); arm2 = am2.next }
+      }
+      _ => {}
+    }
+    cur = stmt_next_at(cur, a)
+  }
+  err
 }
 
 ## Whether normal execution of a statement list must finish through `return`. Only the final
@@ -8472,6 +8605,13 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   ## Locate structural rejections at the FN's declaration name (a `break`/`continue` AST node carries
   ## no span, and a missing result is a whole-fn property) — an honest "invalid at line N in <module>"
   ## rather than "location not tracked" (§1 item 6).
+  mut code_labels := CodePointLabels(starts = [0; 256], lens = [0; 256], count = 0)
+  cpl := codepoint_collect_stmts(d.body_stmts, ptr(code_labels), src, a)
+  if cpl != 0 { failed = true; err = cpl }
+  if failed == false {
+    cjp := codepoint_check_stmts(d.body_stmts, ptr(code_labels), src, a, false)
+    if cjp != 0 { failed = true; err = cjp }
+  }
   if stmts_bad_loop_control(d.body_stmts, false, a) { failed = true; err = located_err(d.name_start) }
   if d.ret_tl != 0 and no_tail and not (stmts_return(d.body_stmts, a) or stmts_tail_value(d.body_stmts, a)) { failed = true; err = located_err(d.name_start) }
   ## FN-6 first slice: a LIFTED LAMBDA (SENTINEL `name_len == 0`) returning a MULTI-WORD aggregate —
@@ -11383,6 +11523,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
   }
   ec0 := expr_call_callee_span(e)
   if ec0.n != 0 {
+    if sema_is_direct_jmp(e, src) { return 0 }
     mut cr0 := sema_vis_qual(decls, src, ec0.s, ec0.n, cs, cl, 1, 4)
     if cr0 == 0 { cr0 = sema_vis_qual(decls, src, ec0.s, ec0.n, cs, cl, 2, 3) }
     if cr0 == 0 and (nloc == 0 or not local_in(locals, nloc, src, ec0.s, ec0.n)) {
