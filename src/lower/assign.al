@@ -2026,7 +2026,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
 pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## A comptime binding has no runtime store. Its value is re-entered only when a later expression
   ## asks for the name through `emit_gas`.
-  if comptime_slot_is(cx.ctslots, cx.src, ns, nl2) { return }
+  if comptime_slot_is(cx.ctslots, cx.src, ns, nl2, ns) { return }
   ## `name : T` has a parser-only zero sentinel but no initializer. Reserve the slot from the
   ## declaration annotation in collect_slots, then emit no store here: checked sema enforces that
   ## every read follows a real write, while unchecked code observes the target's raw contents.

@@ -3926,10 +3926,15 @@ run accept_comptime_array_element_controls 42
 check_accept issue268_comptime_binding
 run issue268_comptime_binding 42
 fmt_test_has_all issue268_comptime_binding 42 "comptime base : u64 = 5" "comptime inferred := base + 2" "comptime local : u64 = inferred + 1" "comptime flag := true"
+check_accept issue268_comptime_rebind
+run issue268_comptime_rebind 26
+fmt_test_has_all issue268_comptime_rebind 26 "comptime x := 5" "x := 7"
 check_reject_has reject_issue268_comptime_runtime "type mismatch"
 check_reject_has reject_issue268_comptime_mut "comptime mut"
 check_reject_has reject_issue268_comptime_reassign "immutable binding"
 check_reject_has reject_issue268_comptime_top_level_if "standalone top-level"
+check_reject_has reject_issue268_comptime_branch_escape "ambiguous call"
+check_reject_has reject_issue268_comptime_branch_rebind "ambiguous call"
 check_located reject_ufcs_arity_under 11
 check_located reject_ufcs_arity_over 9
 check_located reject_ufcs_undef_method 9

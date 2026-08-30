@@ -2345,12 +2345,13 @@ sema_local_is_comptime := fn(src : ptr(u8), l : Local) -> bool {
 ## declaration from the local table instead.
 sema_local_name_is_comptime := fn(src : ptr(u8), locals : ptr(LVec), upto : usize, s : usize, n : usize) -> bool {
   mut i := 0
+  mut result := false
   while i < upto {
     l := lvec_at(locals, i)
-    if streq(src, l.ns, l.nl, s, n) { return sema_local_is_comptime(src, l) }
+    if streq(src, l.ns, l.nl, s, n) { result = sema_local_is_comptime(src, l) }
     i += 1
   }
-  false
+  result
 }
 
 ## The [s, s+n) name span of a `Var` expression (0/0 otherwise). A SMALL inline `match deref(e)`: the
@@ -7145,12 +7146,91 @@ stmt_mentions_var := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : pt
     Stmt::While(c, b, nx) => { res = expr_mentions_var(c, src, xs, xl, a) or stmts_mention_var(b, src, xs, xl, a) }
     Stmt::Loop(b, nx) => { res = stmts_mention_var(b, src, xs, xl, a) }
     Stmt::Unchecked(b, nx) => { res = stmts_mention_var(b, src, xs, xl, a) }
-    Stmt::AllocWith(ae, b, nx) => { res = stmts_mention_var(b, src, xs, xl, a) }
+    Stmt::AllocWith(ae, b, nx) => { res = expr_mentions_var(ae, src, xs, xl, a) or stmts_mention_var(b, src, xs, xl, a) }
     Stmt::For(fns, fnl, lo, hi, b, nx) => { res = expr_mentions_var(lo, src, xs, xl, a) or expr_mentions_var(hi, src, xs, xl, a) or stmts_mention_var(b, src, xs, xl, a) }
     Stmt::Match(sc, ah, nx) => { res = expr_mentions_var(sc, src, xs, xl, a) or arms_mention_var(ah, src, xs, xl, a) }
+    Stmt::CompIf(c, th, el, nx) => { res = expr_mentions_var(c, src, xs, xl, a) or stmts_mention_var(th, src, xs, xl, a) or stmts_mention_var(el, src, xs, xl, a) }
+    Stmt::CompFor(ns, nl, iv, b, nx) => { res = stmts_mention_var(b, src, xs, xl, a) }
+    Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { res = expr_mentions_var(lo, src, xs, xl, a) or expr_mentions_var(hi, src, xs, xl, a) or stmts_mention_var(b, src, xs, xl, a) }
+    Stmt::CompMatch(sc, ah, nx) => { res = expr_mentions_var(sc, src, xs, xl, a) or arms_mention_var(ah, src, xs, xl, a) }
     _ => {}
   }
   res
+}
+
+## Return whether the continuation first uses `[xs, xl)` before a direct ordinary redeclaration of
+## that name: 1 = use first (unsafe branch escape), 2 = ordinary binding first (safe rebind), 0 = no
+## relevant event. The direct-binding case is what the bounded comptime lower can prove; a nested
+## conditional binding is deliberately not treated as a safe rebind and therefore remains fail-closed.
+sema_comptime_cont_state := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> u8 {
+  mut cur := head
+  while cur != 0 {
+    if stmt_mentions_var(cur, src, xs, xl, a) { return 1 }
+    st := deref(stmt_p(Stmt, cur))
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if not assign_is_reassign(src, ns, nl) and not binding_is_comptime(src, ns) and streq(src, ns, nl, xs, xl) { return 2 }
+      }
+      _ => {}
+    }
+    cur = stmt_next_at(cur, a)
+  }
+  0
+}
+
+## Find a branch-local comptime binding whose name is read after the enclosing conditional. The
+## current local checker/lower uses a flat function table, so such a read has no single runtime path
+## to select: a branch may not execute, and a sibling branch may install a different binding. Reject
+## the escape at the binding rather than letting one textual branch silently win. A direct ordinary
+## rebind at the start of the continuation re-establishes an unambiguous runtime binding and is allowed.
+sema_comptime_branch_escape_stmts := fn(head : ptr(mut Stmt), cont : ptr(mut Stmt), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+  mut cur := head
+  mut out := VSpan(s = 0, n = 0)
+  while cur != 0 and out.n == 0 {
+    st := deref(stmt_p(Stmt, cur))
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if not assign_is_reassign(src, ns, nl) and binding_is_comptime(src, ns) {
+          if sema_comptime_cont_state(cont, src, ns, nl, a) == 1 { out = VSpan(s = ns, n = nl) }
+        } else if not assign_is_reassign(src, ns, nl) and sema_local_name_is_comptime(src, locals, nloc, ns, nl) {
+          ## An ordinary binding in this branch can shadow an incoming comptime name. It is equally
+          ## ambiguous after the join unless the continuation first redeclares that name directly.
+          if sema_comptime_cont_state(cont, src, ns, nl, a) == 1 { out = VSpan(s = ns, n = nl) }
+        }
+      }
+      Stmt::If(c, th, el, nx) => {
+        out = sema_comptime_branch_escape_stmts(th, cont, src, locals, nloc, a)
+        if out.n == 0 { out = sema_comptime_branch_escape_stmts(el, cont, src, locals, nloc, a) }
+      }
+      Stmt::While(c, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::Loop(b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::For(ns, nl, lo, hi, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::Match(sc, ah, nx) => { out = sema_comptime_branch_escape_arms(ah, cont, src, locals, nloc, a) }
+      Stmt::CompIf(c, th, el, nx) => {
+        out = sema_comptime_branch_escape_stmts(th, cont, src, locals, nloc, a)
+        if out.n == 0 { out = sema_comptime_branch_escape_stmts(el, cont, src, locals, nloc, a) }
+      }
+      Stmt::CompFor(ns, nl, iv, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::CompMatch(sc, ah, nx) => { out = sema_comptime_branch_escape_arms(ah, cont, src, locals, nloc, a) }
+      Stmt::Unchecked(b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      Stmt::AllocWith(e, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
+      _ => {}
+    }
+    cur = stmt_next_at(cur, a)
+  }
+  out
+}
+
+sema_comptime_branch_escape_arms := fn(head : ptr(mut Arm), cont : ptr(mut Stmt), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+  mut arm := head
+  mut out := VSpan(s = 0, n = 0)
+  while arm != 0 and out.n == 0 {
+    am := deref(arm_p(arm))
+    out = sema_comptime_branch_escape_stmts(am.body_stmts, cont, src, locals, nloc, a)
+    arm = am.next
+  }
+  out
 }
 
 ## Does a lambda body bind `[xs, xl)` itself? Parameters, `:=` locals, loop variables, and match
@@ -7636,6 +7716,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
         ## the condition must be bool (a known non-bool is a `Mismatch`).
         if cc.tag != 0 and cc.tag != 2 { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
+        ## A branch-local comptime name cannot safely be read after this join while the current
+        ## bounded lower uses a flat function-local map. Allow an explicit direct ordinary rebind in
+        ## the continuation, but reject a bare post-join read instead of selecting one branch's value.
+        mut branch_escape := sema_comptime_branch_escape_stmts(th, nx, src, locals, cnt, a)
+        if branch_escape.n == 0 { branch_escape = sema_comptime_branch_escape_stmts(el, nx, src, locals, cnt, a) }
+        if branch_escape.n != 0 { return Result(usize, CheckErr).Err(ambiguous_err(branch_escape.s)) }
         ## With no unreadied places, preserve the established linear checker path. This is also important
         ## for the self-hosted compiler's large, fully-initialized source tree: branch snapshots are only
         ## materialized when the function actually contains an uninitialized place.

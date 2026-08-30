@@ -2868,35 +2868,43 @@ slot_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> i64 {
   res
 }
 
-## COMPTIME scalar locals have no frame slot.  `collect_slots` records their original value expression
-## in this separate per-function table, and the emitter/condition folder consult it by source name.
-## `ek == 255` is private to this side table; it never enters the ordinary frame-slot vector, so it
-## cannot change a function's ABI or frame size.
-comptime_slot_is := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> bool {
+## COMPTIME scalar locals have no frame slot. `collect_slots` records binding events in this separate
+## per-function table, and the emitter/condition folder consults it by source name plus use position.
+## `ek == 255` is a comptime expression and `ek == 254` is a tombstone for a later ordinary binding;
+## both markers stay out of the ordinary frame-slot vector, so they cannot change a function's ABI or
+## frame size. The source offset in `off` keeps an earlier branch/use from inheriting a later rebind.
+comptime_slot_is := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize, use_s : usize) -> bool {
   if unchecked bitcast(usize, ctslots) == 0 { return false }
   cnt := svec_len(ctslots)
   st := svec_stride()
   base := deref(ctslots).base
   mut i := 0
-  mut found := false
+  mut found : u8 = 0
+  mut found_s : usize = 0
   while i < cnt {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
-    if deref(e).ek == 255 and deref(e).nl == n and streq(src, deref(e).ns, deref(e).nl, s, n) { found = true }
+    if deref(e).off <= use_s and deref(e).nl == n and streq(src, deref(e).ns, deref(e).nl, s, n) {
+      if found == 0 or deref(e).off >= found_s { found = deref(e).ek ; found_s = deref(e).off }
+    }
     i += 1
   }
-  found
+  found == 255
 }
 
-comptime_slot_expr := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> ptr(Expr) {
-  if unchecked bitcast(usize, ctslots) == 0 { return unchecked bitcast(ptr(Expr), 0) }
+comptime_slot_expr := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize, use_s : usize) -> ptr(Expr) {
+  if comptime_slot_is(ctslots, src, s, n, use_s) == false { return unchecked bitcast(ptr(Expr), 0) }
   cnt := svec_len(ctslots)
   st := svec_stride()
   base := deref(ctslots).base
   mut i := 0
   mut result : usize = 0
+  mut result_s : usize = 0
+  mut found := false
   while i < cnt {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
-    if deref(e).ek == 255 and deref(e).nl == n and streq(src, deref(e).ns, deref(e).nl, s, n) { result = deref(e).sns }
+    if deref(e).off <= use_s and deref(e).ek == 255 and deref(e).nl == n and streq(src, deref(e).ns, deref(e).nl, s, n) {
+      if not found or deref(e).off >= result_s { result = deref(e).sns ; result_s = deref(e).off ; found = true }
+    }
     i += 1
   }
   unchecked bitcast(ptr(Expr), result)
@@ -2904,7 +2912,12 @@ comptime_slot_expr := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usiz
 
 bind_comptime_slot := fn(in out cts : SVec, src : ptr(u8), s : usize, n : usize, v : ptr(Expr)) {
   if cts.cap == 0 { svec_new(cts, cts.arena, 8) }
-  svec_push(cts, SlotEntry(ns = s, nl = n, off = 0, sns = unchecked bitcast(usize, v), snl = 0, ek = 255, estride = 0, eek = 0, is_ref = false))
+  svec_push(cts, SlotEntry(ns = s, nl = n, off = s, sns = unchecked bitcast(usize, v), snl = 0, ek = 255, estride = 0, eek = 0, is_ref = false))
+}
+
+bind_comptime_shadow := fn(in out cts : SVec, s : usize, n : usize) {
+  if cts.cap == 0 { svec_new(cts, cts.arena, 8) }
+  svec_push(cts, SlotEntry(ns = s, nl = n, off = s, sns = 0, snl = 0, ek = 254, estride = 0, eek = 0, is_ref = false))
 }
 
 ## Look up the full slot ENTRY for a name (last match wins), so a `Field` read can recover
@@ -15095,7 +15108,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
     Expr::Var(s, n) => {
       ## A local `comptime` binding is represented only by its side-table expression. Inline that
       ## expression at every use; the ordinary frame-slot/global resolver must never see its name.
-      cvlocal := comptime_slot_expr(cx.ctslots, cx.src, s, n)
+      cvlocal := comptime_slot_expr(cx.ctslots, cx.src, s, n, s)
       if unchecked bitcast(usize, cvlocal) != 0 {
         emit_gas(cvlocal, sb, cx, a, nl)
         return

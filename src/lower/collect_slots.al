@@ -42,6 +42,10 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           s = nx
           continue
         }
+        ## A later ordinary binding shadows an earlier comptime binding. Record that event in the
+        ## side table before reserving the ordinary frame slot; lookup uses the event's source offset,
+        ## so uses in an earlier branch still see the earlier comptime value.
+        bind_comptime_shadow(deref(ctslots), ns, nl)
         ## A `name := S(…)` binding gets a struct slot (base + nfields reserved); a
         ## `name := E.V(…)` binding gets an enum slot (base + 1 discriminant + max_arity
         ## payload words reserved); any other value is a scalar single slot.

@@ -707,7 +707,7 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
     Expr::Var(cvs, cvl) => {
       ## A local `comptime` binding has no frame slot; fold its recorded scalar expression exactly like
       ## a module constant, with the same recursion bound.
-      cvlocal := comptime_slot_expr(cx.ctslots, cx.src, cvs, cvl)
+      cvlocal := comptime_slot_expr(cx.ctslots, cx.src, cvs, cvl, cvs)
       if unchecked bitcast(usize, cvlocal) != 0 {
         if COMPTIME_CONST_DEPTH >= 8 { return -1 }
         COMPTIME_CONST_DEPTH = COMPTIME_CONST_DEPTH + 1
