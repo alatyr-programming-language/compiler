@@ -729,11 +729,18 @@ run_manifestless_cleanup() {
 # WRITE into a frame store that smashed the stack (SIGSEGV), and the qualified `mod::G = v` into a
 # silent no-op. Every case below is package-shaped (it needs two modules), so it lives here rather
 # than in the single-file `build_reject` table.
-run_pkg_check_build_located() { # package dir, source line, naming module
-  d="$1"; line="$2"; module="$3"
+run_pkg_check_build_located() { # package dir, source line, naming module, optional diagnostic needle
+  d="$1"; line="$2"; module="$3"; needle="${4:-}"
   p="$ROOT/test/package/$d"
   [ -f "$p/package.al" ] || { echo "FAIL pkg_check_build_located($d): no $p/package.al"; fail=1; return; }
-  want="alatyr: check: invalid at line $line in $module"
+  if [ -n "$needle" ] && grep -R --include='*.al' -qF -- "$needle" "$p/src"; then
+    echo "FAIL pkg_check_build_located($d): diagnostic needle appears in fixture source"; fail=1; return
+  fi
+  if [ -n "$needle" ]; then
+    want="alatyr: check: $needle at line $line in $module"
+  else
+    want="alatyr: check: invalid at line $line in $module"
+  fi
   rm -rf "$p/target"
   check_out=$( (cd "$p" && "$CC" check package.al) 2>&1 ); check_rc=$?
   rm -rf "$p/target"
@@ -1307,7 +1314,7 @@ run_pkg_check_build_located visibility_enum_reject       3 main
 run_pkg_check_build_located visibility_alias_reject      4 main
 run_pkg_check_build_located visibility_projection_reject 4 main
 run_pkg_check_build_located visibility_sig_type_reject   5 main
-run_pkg_check_build_located visibility_const_reject      3 main
+run_pkg_check_build_located visibility_const_reject      3 main "qualified private constant is not visible from this module"
 ## Modules §4.3 — a re-export may name only `pub` items, so a DESCENDANT may READ its ancestor's
 ## private helper (legal, §3) but may not `pub`-bind it upward.
 run_pkg_check_build_located visibility_reexport_reject 5 geo__child
