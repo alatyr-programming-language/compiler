@@ -146,7 +146,9 @@ COMPTIME_COND_DIAG_MARKER := 7493989779944505344
 comptime_cond_err := fn(s : usize) -> CheckErr { COMPTIME_COND_DIAG_MARKER + s * 4 }
 
 ## A synthesized type: a tag (0 unknown/error, 1 int, 2 bool, 3 struct, 4 enum, 5 pointer,
-## 6 str, 7 array) and, for a struct/enum, the type's name span `[ns, ns+nl)`.
+## 6 str, 7 array) and, for a struct/enum, the type's name span `[ns, ns+nl)`. Tag 11 is reserved
+## for the narrow Issue #269 wrapper-result marker stored in locals; it is intentionally not surfaced
+## through the ordinary `check_expr` carrier or `ty_compat`.
 pub Ty := struct { tag : u8, ns : usize, nl : usize }
 
 ## Are two types compatible? Unknown (tag 0) is compatible with anything (poison-tolerant —
@@ -3034,6 +3036,234 @@ agg_scalar_bad := fn(ss : usize, sn : usize, v : ptr(Expr), decls : ptr(rt::Vec)
   }
   bad
 }
+
+## Issue #269 — compare only a DIRECT, uniquely resolved call against a concrete by-value parameter.
+## The ordinary sema resolver intentionally treats unresolved generic instances as unknown, which is
+## still the right poison-tolerant rule for most callers. This lane needs one stricter, isolated query:
+## a direct `Option(...)`/`Result(...)` return value is a tagged wrapper, never its first payload word.
+## A direct call surface may be qualified (`m::f`) but must not be UFCS (`x.f`) or an expression
+## callee. The latter is checked by `ecallee_is` at the call site because the AST stores only the name
+## tail for that shape.
+sema_direct_named_call := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+  if n == 0 { return false }
+  mut p := s
+  while p > 0 {
+    c := str_at((src + p - 1), 1)
+    if c == " " or c == "\n" or c == "\t" or c == "\r" { p -= 1 }
+    else { return c != "." }
+  }
+  true
+}
+
+## Resolve one non-generic function for the Issue #269 query. Qualified calls require an exact module
+## head (or the established relative module leaf); bare calls prefer the caller's module and otherwise
+## require one global exact-name/exact-arity candidate. Declaration order never breaks a tie.
+sema_direct_call_decl_idx := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), cs : usize, cn : usize, nargs : usize, caller_s : usize, caller_l : usize) -> i64 {
+  if not sema_direct_named_call(src, cs, cn) { return 0 - 1 }
+  mut tail_s := cs
+  mut tail_n := cn
+  mut head_s := 0
+  mut head_n := 0
+  cp := sema_colon_pos(src, cs, cn)
+  if cp >= 0 {
+    head_s = cs
+    head_n = usize(cp)
+    if head_n == 0 or head_n + 2 >= cn { return 0 - 1 }
+    tail_s = cs + head_n + 2
+    tail_n = cn - head_n - 2
+  }
+  mut chosen : i64 = 0 - 1
+  mut hits := 0
+  mut own := 0 - 1
+  mut own_hits := 0
+  mut global := 0 - 1
+  mut global_hits := 0
+  mut i := 0
+  while i < upto {
+    d := deref(decl_get(decls, i))
+    same := d.kind == 1 and d.is_generic == false and d.arity == nargs and streq(src, d.name_start, d.name_len, tail_s, tail_n)
+    if same {
+      if head_n != 0 {
+        if sema_mod_head_matches(src, d.mod_start, d.mod_len, head_s, head_n) {
+          chosen = i64(i)
+          hits += 1
+        }
+      } else {
+        global = i64(i)
+        global_hits += 1
+        if sema_mod_seg_eq(src, d.mod_start, d.mod_len, caller_s, caller_l) {
+          own = i64(i)
+          own_hits += 1
+        }
+      }
+    }
+    i += 1
+  }
+  if head_n != 0 {
+    if hits == 1 { return chosen }
+    return 0 - 1
+  }
+  if own_hits == 1 { return own }
+  if own_hits > 1 { return 0 - 1 }
+  if global_hits == 1 { return global }
+  0 - 1
+}
+
+## Recover a selected callee's raw parameter type. Keeping this separate from `callee_param_ty` is
+## deliberate: that older helper is tail-name based and is allowed to feed the broad tolerant checks.
+sema_direct_param_span := fn(decls : ptr(rt::Vec), di : i64, pidx : usize) -> VSpan {
+  if di < 0 { return VSpan(s = 0, n = 0) }
+  d := deref(decl_get(decls, usize(di)))
+  mut p := d.params_head
+  mut i := 0
+  while p != 0 {
+    pm := deref(param_p(p))
+    if i == pidx { return VSpan(s = pm.ts, n = pm.tl) }
+    i += 1
+    p = pm.next
+  }
+  VSpan(s = 0, n = 0)
+}
+
+sema_direct_param_mode := fn(decls : ptr(rt::Vec), di : i64, pidx : usize) -> u8 {
+  if di < 0 { return 255 }
+  d := deref(decl_get(decls, usize(di)))
+  mut p := d.params_head
+  mut i := 0
+  while p != 0 {
+    pm := deref(param_p(p))
+    if i == pidx { return pm.pmode }
+    i += 1
+    p = pm.next
+  }
+  255
+}
+
+## True only for one non-generic named declaration of the requested kind. A qualified type uses its
+## module path; a bare type prefers the callee's owning module and otherwise needs one global match.
+## Generic instances, aliases, pointers, arrays, tuples and brands therefore stay outside this lane.
+sema_concrete_named_type := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), ts : usize, tl : usize, ctx_s : usize, ctx_l : usize, want : u8) -> bool {
+  if tl == 0 { return false }
+  bn := base_type_name(src, ts, tl)
+  if bn.n == 0 or typearg_at(src, bn.s, bn.n, 0).n != 0 { return false }
+  mut name_s := bn.s
+  mut name_n := bn.n
+  mut mod_s := 0
+  mut mod_n := 0
+  cp := sema_colon_pos(src, bn.s, bn.n)
+  if cp >= 0 {
+    mod_s = bn.s
+    mod_n = usize(cp)
+    if mod_n == 0 or mod_n + 2 >= bn.n { return false }
+    name_s = bn.s + mod_n + 2
+    name_n = bn.n - mod_n - 2
+  }
+  mut qualified_hits := 0
+  mut own_hits := 0
+  mut global_hits := 0
+  mut i := 0
+  while i < upto {
+    d := deref(decl_get(decls, i))
+    if d.kind == want and d.is_generic == false and streq(src, d.name_start, d.name_len, name_s, name_n) {
+      if mod_n != 0 {
+        if sema_mod_head_matches(src, d.mod_start, d.mod_len, mod_s, mod_n) { qualified_hits += 1 }
+      } else {
+        global_hits += 1
+        if sema_mod_seg_eq(src, d.mod_start, d.mod_len, ctx_s, ctx_l) { own_hits += 1 }
+      }
+    }
+    i += 1
+  }
+  if mod_n != 0 { return qualified_hits == 1 }
+  if own_hits == 1 { return true }
+  if own_hits > 1 { return false }
+  global_hits == 1
+}
+
+## The first payload of this issue's wrapper must be a concrete scalar or a plain named struct. This
+## intentionally excludes `ptr(T)` (including niche `Option(ptr(T))`), `str`, arrays, brands, aliases,
+## nested wrappers and generic parameters.
+sema_wrapper_value_type_concrete := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), ts : usize, tl : usize, ctx_s : usize, ctx_l : usize) -> bool {
+  if tl == 0 { return false }
+  bn := base_type_name(src, ts, tl)
+  if bn.n == 0 or typearg_at(src, bn.s, bn.n, 0).n != 0 { return false }
+  if is_builtin_scalar_name(src, bn.s, bn.n) { return true }
+  sema_concrete_named_type(decls, upto, src, ts, tl, ctx_s, ctx_l, 2)
+}
+
+## The Result error argument only establishes that this is a concrete, non-nested instantiation. It may
+## be a scalar, str, named struct, or named enum; unresolved/generic/alias shapes fail closed. The first
+## payload remains governed by the stricter scalar-or-struct predicate above.
+sema_wrapper_error_type_concrete := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), ts : usize, tl : usize, ctx_s : usize, ctx_l : usize) -> bool {
+  if tl == 0 { return false }
+  bn := base_type_name(src, ts, tl)
+  if bn.n == 0 or typearg_at(src, bn.s, bn.n, 0).n != 0 { return false }
+  if is_builtin_scalar_name(src, bn.s, bn.n) or str_at((src + bn.s), bn.n) == "str" { return true }
+  if sema_concrete_named_type(decls, upto, src, ts, tl, ctx_s, ctx_l, 2) { return true }
+  sema_concrete_named_type(decls, upto, src, ts, tl, ctx_s, ctx_l, 3)
+}
+
+## Recover the narrow wrapper marker for a direct call. The return declaration's `ret_ts/ret_tl` keeps
+## the wrapper head; `typearg_at` re-reads its concrete arguments from the shared source buffer.
+sema_wrapper_return_ty := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), cs : usize, cn : usize, nargs : usize, caller_s : usize, caller_l : usize) -> Ty {
+  di := sema_direct_call_decl_idx(decls, upto, src, cs, cn, nargs, caller_s, caller_l)
+  if di < 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  d := deref(decl_get(decls, usize(di)))
+  if d.ret_tl == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  bn := base_type_name(src, d.ret_ts, d.ret_tl)
+  if bn.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  head := str_at((src + bn.s), bn.n)
+  ta0 := typearg_at(src, bn.s, bn.n, 0)
+  ta1 := typearg_at(src, bn.s, bn.n, 1)
+  ta2 := typearg_at(src, bn.s, bn.n, 2)
+  if head == "Option" {
+    if ta0.n == 0 or ta1.n != 0 or not sema_wrapper_value_type_concrete(decls, upto, src, ta0.s, ta0.n, d.mod_start, d.mod_len) { return Ty(tag = 0, ns = 0, nl = 0) }
+    return Ty(tag = 11, ns = d.ret_ts, nl = d.ret_tl)
+  }
+  if head == "Result" {
+    if ta0.n == 0 or ta1.n == 0 or ta2.n != 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+    if not sema_wrapper_value_type_concrete(decls, upto, src, ta0.s, ta0.n, d.mod_start, d.mod_len) { return Ty(tag = 0, ns = 0, nl = 0) }
+    if not sema_wrapper_error_type_concrete(decls, upto, src, ta1.s, ta1.n, d.mod_start, d.mod_len) { return Ty(tag = 0, ns = 0, nl = 0) }
+    return Ty(tag = 11, ns = d.ret_ts, nl = d.ret_tl)
+  }
+  Ty(tag = 0, ns = 0, nl = 0)
+}
+
+## Recover a wrapper value only from the two bounded source forms: a direct call or a local `:=` binding
+## carrying the marker. No aliases, field paths, nested expressions, UFCS or indirect calls enter here.
+sema_wrapper_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Ty {
+  cs := expr_call_callee_span(v)
+  if cs.n != 0 {
+    lv := deref(locals)
+    return sema_wrapper_return_ty(decls, upto, src, cs.s, cs.n, expr_call_arity(v), lv.mod_s, lv.mod_l)
+  }
+  vs := expr_var_span(v)
+  if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
+    raw := local_ty(locals, nloc, src, vs.s, vs.n)
+    mut tag : u8 = raw.tag
+    if tag >= 128 and tag != 255 { tag = tag - 128 }
+    if tag == 11 { return Ty(tag = 11, ns = raw.ns, nl = raw.nl) }
+  }
+  Ty(tag = 0, ns = 0, nl = 0)
+}
+
+## A true result means exactly "wrapper value into concrete by-value parameter". Wrapper-to-wrapper,
+## out/in out/array modes and every unresolved shape return false so the existing checks remain in force.
+sema_wrapper_payload_arg_bad := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, outer_cs : usize, outer_cn : usize, outer_nargs : usize, pidx : usize) -> bool {
+  lv := deref(locals)
+  di := sema_direct_call_decl_idx(decls, upto, src, outer_cs, outer_cn, outer_nargs, lv.mod_s, lv.mod_l)
+  if di < 0 { return false }
+  if sema_direct_param_mode(decls, di, pidx) != 0 { return false }
+  psp := sema_direct_param_span(decls, di, pidx)
+  if psp.n == 0 { return false }
+  pbn := base_type_name(src, psp.s, psp.n)
+  if pbn.n == 0 { return false }
+  if str_at((src + pbn.s), pbn.n) == "Option" or str_at((src + pbn.s), pbn.n) == "Result" { return false }
+  cd := deref(decl_get(decls, usize(di)))
+  if not sema_wrapper_value_type_concrete(decls, upto, src, psp.s, psp.n, cd.mod_start, cd.mod_len) { return false }
+  wt := sema_wrapper_value_ty(v, decls, upto, src, locals, nloc)
+  wt.tag == 11
+}
 ## The raw TYPE-annotation span `[ts,tl)` of the i-th parameter of the top-level fn named [s,n) (walk
 ## order); {0,0} if absent. The NAME half of `callee_param_ty` — the conformance check needs the raw
 ## name to see a float/char scalar sink that `resolve_ty` reports as tag 0.
@@ -5125,6 +5355,19 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## false reject. Stepped bools (the isolated `streq` dodges the `cmp-and-fn-call` mis-lower scar).
   ecs := expr_call_callee_span(e)
   cgen := callee_is_generic(decls, upto, src, ecs.s, ecs.n)
+  ## Issue #269 — the bounded wrapper-result fence. Run before the broad aggregate↔scalar mirror so
+  ## a direct qualified call cannot fall through to the tail-name-based tolerant path. The helper is
+  ## intentionally limited to one direct argument shape and records the argument's own location.
+  if ecs.n != 0 and not ecallee_is(ecs.s) and sema_direct_named_call(src, ecs.s, ecs.n) {
+    mut warg := expr_call_args_head(e)
+    mut wpidx := 0
+    while warg != 0 {
+      wa := deref(arg_p(warg))
+      if sema_wrapper_payload_arg_bad(wa.e, decls, upto, src, locals, nloc, ecs.s, ecs.n, expr_call_arity(e), wpidx) { mark_failed(locals, mismatch_err(s_of(wa.e, a), 0)) }
+      wpidx += 1
+      warg = wa.next
+    }
+  }
   ## CT-12 / Comptime §2.6 — a fully comptime-known checked guard in a direct scalar call argument
   ## fails before emission, just as the existing binding/return sinks do. Keep the source-shape gates
   ## here because `Expr::Call` is also the representation for UFCS, qualified and expression-callee
@@ -7561,6 +7804,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             ## call-created enum's generic return-type name — e.g. `Result(U, E)` — would make the match
             ## exhaustiveness check mis-resolve its variants and spuriously reject; found via result_and_then).
             if crt.tag == 3 and crt.nl != 0 { bind_tag = crt.tag; bind_ns = crt.ns; bind_nl = crt.nl }
+            ## Issue #269: preserve a separate concrete wrapper marker for the one bounded local form.
+            ## Do not turn it into ordinary enum type information — existing match/exhaustiveness paths
+            ## deliberately remain unaware of generic `Option`/`Result` identities.
+            lvwrap := deref(locals)
+            wrt := sema_wrapper_return_ty(decls, upto, src, ccs.s, ccs.n, expr_call_arity(v), lvwrap.mod_s, lvwrap.mod_l)
+            if wrt.tag == 11 { bind_tag = wrt.tag; bind_ns = wrt.ns; bind_nl = wrt.nl }
           }
           ## POINTER value (tag 5): the pointee NAME drives `ty_compat`'s ptr(X)-vs-ptr(Y) discrimination,
           ## but `tv.ns/tv.nl` came back through the truncating `Result(Ty,…)` (see above) → GARBAGE. A
