@@ -5942,6 +5942,28 @@ ct_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), name_st
   comptime_err(sp, c % 8)
 }
 
+## CT-12 ARRAY-ELEMENT sink: an explicitly typed fixed-array initializer supplies the element's
+## integer context, not the aggregate spelling (`[u64; 2]`). Check each array element through the
+## shared guard evaluator. Non-integer elements and non-constant/runtime-dependent expressions remain
+## untouched; `ct_guard_err` also preserves the `unchecked` escape semantics.
+ct_array_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), decls : ptr(rt::Vec), upto : usize) -> CheckErr {
+  esp := array_elem_span(src, ts, tl)
+  if esp.n == 0 or resolve_ty(src, esp.s, esp.n, decls, upto).tag != 1 { return 0 }
+  match deref(e) {
+    Expr::ArrayLit(nel, ah) => {
+      mut g := ah
+      while g != 0 {
+        ga := deref(arg_p(g))
+        got := ct_guard_err(src, esp.s, esp.n, ga.e, 0, decls, upto)
+        if got != 0 { return got }
+        g = ga.next
+      }
+    }
+    _ => {}
+  }
+  0
+}
+
 ## CT-12 CALL-ARG sink: recover a parameter type only for one unqualified, direct, non-generic,
 ## non-variadic function. An aggregate/`out`/`in out` parameter is deliberately refused because its
 ## parameter span is not a scalar value context; an unknown or non-integer type is refused as well.
@@ -7275,6 +7297,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## initializer is a LOCATED diagnostic at the operation's site, never a deferred trap.
           cte := ct_guard_err(src, ann.s, ann.n, v, ns, decls, upto)
           if cte != 0 { mark_failed(locals, cte) }
+          ## CT-12 ARRAY-ELEMENT: recover the integer context from an explicitly typed fixed-array
+          ## annotation and apply the same guard to each element before lowering can emit the array.
+          acte := ct_array_guard_err(src, ann.s, ann.n, v, decls, upto)
+          if acte != 0 { mark_failed(locals, acte) }
           ## The same whitelist over a CALL result, whose type comes from the callee's own DECLARED
           ## return type — the second source reliable enough to reject on (`sole_fn_ret_ty` answers only
           ## for an unambiguous, non-overloaded name). `g := fn() -> str { … }  x : u64 = g()` used to
