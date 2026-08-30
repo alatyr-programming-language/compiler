@@ -81,9 +81,6 @@ ulimit -c 0
 # enumerable it immediately named three stale entries that the `case` had hidden: `FMT-REFUSE
 # embed_missing` and both `while_labels` rows.)
 ALLOW=(
-  ## `bitcast(T, v)` is IDENTITY-ERASED at parse time for a scalar/`ptr(scalar)` target, so the
-  ## written type is simply absent from the AST. Needs the parser to keep the span; see the issues.
-  "BEHAVIOUR-EXIT byte_precise"
 )
 allowed() { # class rel -> 0 if this exact (class, fixture) pair is a known, reasoned residual
   local k="$1 $2" e
