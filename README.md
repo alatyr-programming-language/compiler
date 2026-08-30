@@ -38,7 +38,10 @@ Cross-language benchmarks live in a separate repository,
 
 The language is defined by the [specification](https://github.com/alatyr-programming-language/spec),
 which is the source of truth: the toolchain conforms to it, never the other way round. This tree
-implements spec revision **1.0.0** (tag `v1.0.0`, `4e46f04`) plus the post-tag editorial commits up to
-spec `main` `5cf3af5` — `AGENTS.md` carries the full pin and moves it in its own commit. The Rust
+is answerable to spec revision **1.0.0** (tag `v1.0.0`) plus the post-tag commits up to spec `main`
+`b4e7979` — `AGENTS.md` carries the full pin and moves it in its own commit. The pin is an obligation,
+not a claim of completeness: where the tree lags it, the gap is an open issue — today that is the
+`help`/`version` surface and the diagnostic for an unrecognised argument
+([#192](https://github.com/alatyr-programming-language/compiler/issues/192)). The Rust
 compiler that bootstrapped the first self-host binary is frozen and not published; `seed/VERSION`
 records the lineage.
