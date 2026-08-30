@@ -179,16 +179,21 @@ step() { # phase stdout-file stderr-file -- cmd...
   return "$rc"
 }
 
-## Run one corpus program. The subshell's own stderr is discarded so that bash's "Trace/breakpoint trap"
-## report for a child that died by signal — an EXPECTED terminal result here, the non-x86 backends
-## fail loud on unsupported shapes — never reaches the gate's output; the program's own stderr still
-## goes to its file, and $? still carries 128+signal. The environment is fixed (see the header): only
-## these four variables, never the host's.
+## Run one corpus program. The timeout supervisor and the guest must have separate stderr streams:
+## timeout's "dumped core" report describes how the supervisor reaped the child, not guest behaviour.
+## The small wrapper execs the guest immediately, so argv, stdout, environment, exit status and timeout
+## semantics stay the same; only the guest's stderr is written to the stream that gets hashed. The
+## subshell's own stderr is discarded so that bash's "Trace/breakpoint trap" report for a child that
+## died by signal — an EXPECTED terminal result here, the non-x86 backends fail loud on unsupported
+## shapes — never reaches the gate's output. The environment is fixed (see the header): only these four
+## variables, never the host's.
 run_prog() { # stdout-file stderr-file -- cmd...
   local out="$1" err="$2"; shift 2
+  local supervisor_err="${err}.timeout"
   ( exec 2>/dev/null
     timeout "$TIMEOUT_SECS" env -i LC_ALL=C TZ=UTC HOME=/nonexistent PATH=/usr/bin:/bin \
-      "$@" >"$out" 2>"$err" </dev/null )
+      /bin/sh -c 'child_err="$1"; shift; exec "$@" 2>"$child_err"' \
+      corpus-manifest-child "$err" "$@" >"$out" 2>"$supervisor_err" </dev/null )
   return $?
 }
 
@@ -650,6 +655,87 @@ normalization_selftest() {
   echo "corpus manifest: normalization self-test ok (host offsets muted; guest stdout/stderr preserved)"
 }
 normalization_selftest || exit 2
+
+## Prove the stream boundary without relying on a host's coredump policy. The fake supervisor emits the
+## exact class of text that GNU timeout writes after a signal; the guest emits its own stderr and exits
+## with a signal-shaped status. The old combined-redirection implementation puts both lines in the
+## hashed file, while the wrapper above leaves only the guest line there. The second probe uses the real
+## timeout for a 124 status, and the third keeps step's existing <phase>_timeout mapping alive.
+stream_separation_selftest() {
+  local d="$WORK/stream-selftest" supervisor_line='timeout: the monitored command dumped core'
+  local hash_a hash_b expected_hash sleep_bin rc_a rc_b rc
+  rm -rf "$d"
+  mkdir -p "$d"
+  sleep_bin="$(command -v sleep)"
+
+  (
+    timeout() {
+      shift
+      printf '%s\n' 'timeout: the monitored command dumped core' >&2
+      "$@"
+    }
+    run_prog "$d/a.out" "$d/a.err" /bin/sh -c 'printf "%s\n" "guest-child-diagnostic" >&2; printf "%s\n" "guest-stdout"; exit 133'
+    rc_a=$?
+    run_prog "$d/b.out" "$d/b.err" /bin/sh -c 'printf "%s\n" "guest-child-diagnostic" >&2; printf "%s\n" "guest-stdout"; exit 133'
+    rc_b=$?
+    printf '%s\n' 'guest-child-diagnostic' >"$d/expected.err"
+    printf '%s\n' 'guest-stdout' >"$d/expected.out"
+    printf '%s\n' "$supervisor_line" >"$d/expected.timeout"
+    if [ "$rc_a" != 133 ] || [ "$rc_b" != 133 ]; then
+      echo "corpus manifest: stream separation self-test FAILED — child status changed ($rc_a/$rc_b, want 133)" >&2
+      exit 1
+    fi
+    if ! cmp -s "$d/a.err" "$d/expected.err" || ! cmp -s "$d/b.err" "$d/expected.err"; then
+      echo "corpus manifest: stream separation self-test FAILED — child stderr was mixed or masked" >&2
+      exit 1
+    fi
+    if ! cmp -s "$d/a.out" "$d/expected.out" || ! cmp -s "$d/b.out" "$d/expected.out"; then
+      echo "corpus manifest: stream separation self-test FAILED — child stdout changed" >&2
+      exit 1
+    fi
+    if ! cmp -s "$d/a.err.timeout" "$d/expected.timeout" || ! cmp -s "$d/b.err.timeout" "$d/expected.timeout"; then
+      echo "corpus manifest: stream separation self-test FAILED — supervisor stderr was not separated" >&2
+      exit 1
+    fi
+    hash_a="$(hash_stream "$d/a.err")"
+    hash_b="$(hash_stream "$d/b.err")"
+    expected_hash="$(hash_stream "$d/expected.err")"
+    if [ "$hash_a" != "$hash_b" ] || [ "$hash_a" != "$expected_hash" ]; then
+      echo "corpus manifest: stream separation self-test FAILED — child hash was not stable ($hash_a/$hash_b/$expected_hash)" >&2
+      exit 1
+    fi
+  ) || return 1
+
+  (
+    TIMEOUT_SECS=1
+    run_prog "$d/run-timeout.out" "$d/run-timeout.err" /bin/sh -c 'printf "%s\n" "guest-before-timeout" >&2; "$1" 2' corpus-stream-timeout "$sleep_bin"
+    rc=$?
+    if [ "$rc" != 124 ]; then
+      echo "corpus manifest: stream separation self-test FAILED — run timeout status changed ($rc, want 124)" >&2
+      exit 1
+    fi
+    printf '%s\n' 'guest-before-timeout' >"$d/expected-run-timeout.err"
+    if ! cmp -s "$d/run-timeout.err" "$d/expected-run-timeout.err"; then
+      echo "corpus manifest: stream separation self-test FAILED — timed-out child stderr changed" >&2
+      exit 1
+    fi
+  ) || return 1
+
+  (
+    timeout() { shift; return 124; }
+    PHASE=unset
+    step compile "$d/step-timeout.out" "$d/step-timeout.err" /bin/true
+    rc=$?
+    if [ "$rc" != 124 ] || [ "$PHASE" != compile_timeout ]; then
+      echo "corpus manifest: stream separation self-test FAILED — timeout phase/status changed (rc=$rc, phase=$PHASE)" >&2
+      exit 1
+    fi
+  ) || return 1
+
+  echo "corpus manifest: stream separation self-test ok (child hash stable, supervisor stderr separate, run rc=124, compile_timeout preserved)"
+  return 0
+}
+stream_separation_selftest || exit 2
 
 ## The corpus's own source tree has one particular compiler layout. A manifest can therefore remain
 ## green while a compiler change breaks a second layout that no tracked fixture reaches. Exercise that
