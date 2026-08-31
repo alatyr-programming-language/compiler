@@ -687,7 +687,8 @@ codegen_reject := fn(src : ptr(u8), off : usize, mod_s : usize, mod_l : usize, m
 }
 
 ## A representative SOURCE OFFSET for a condition expression — the leftmost leaf that carries a span
-## of its own (a `Var` / `Field` / `Call` / `StrLit` name). 0 when none does. Recurses on itself
+## of its own (a `Var` / `Field` / `Call` / `StrLit` name). Transparent expression wrappers recurse
+## to their inner condition, while 0 means that no reachable leaf carries a span. Recurses on itself
 ## (never a nested `match`) to stay within the self-host lower's idiom limits.
 pub comptime_cond_src_off := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
@@ -701,6 +702,7 @@ pub comptime_cond_src_off := fn(e : ptr(Expr)) -> usize {
       o
     }
     Expr::Match(msc, mah) => { comptime_cond_src_off(msc) }
+    Expr::Unchecked(inner) => { comptime_cond_src_off(inner) }
     _ => { 0 }
   }
 }
