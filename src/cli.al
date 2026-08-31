@@ -422,9 +422,10 @@ pub exec6 := fn(in out a : rt::Arena, prog_c : usize, a1 : usize, a2 : usize, a3
 
 ## Run the current compiler again with the original argv, replacing the reserved `--target all`
 ## selector by one concrete target name. Reusing the complete argv preserves profile, target-dir,
-## manifest and option-order behavior; each child then enters the already-tested single-target build
+## manifest and option-order behavior; each child then enters the already-tested single-target command
 ## pipeline with its own target selection globals and output path. `drop_selector` handles a one-target
-## manifest whose Target.name is optional: `--target all` still means the sole default target.
+## manifest whose Target.name is optional: `--target all` still means the sole default target. The same
+## rewrite serves `plan` and `build --plan`; both commands remain the child's original argv surface.
 run_target_command := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usize, target : str, drop_selector : bool, envp : usize) -> rt::Spawned {
   av := rt::bump(a, (n + 1) * 8)
   mut i := 0
@@ -469,23 +470,29 @@ run_target_check := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usize
       k += 1
       i += 1
     } else {
-      mut selector := false
-      if x == "--target" and i + 1 < n and arg_at(cmd, i + 1) == "all" { selector = true }
-      if selector {
-        if drop_selector {
-          i += 2
-        } else {
-          wword(av + k * 8, cstr(a, x))
-          k += 1
-          wword(av + k * 8, cstr(a, target))
-          k += 1
-          i += 2
-        }
-      } else {
-        if i == 0 { wword(av + k * 8, exe_c) }
-        else { wword(av + k * 8, cstr(a, x)) }
-        k += 1
+      ## `build --plan --target all` reuses this preflight, but `--plan` belongs to build and must not
+      ## leak into the check child (which would otherwise reject it before checking the target).
+      if x == "--plan" {
         i += 1
+      } else {
+        mut selector := false
+        if x == "--target" and i + 1 < n and arg_at(cmd, i + 1) == "all" { selector = true }
+        if selector {
+          if drop_selector {
+            i += 2
+          } else {
+            wword(av + k * 8, cstr(a, x))
+            k += 1
+            wword(av + k * 8, cstr(a, target))
+            k += 1
+            i += 2
+          }
+        } else {
+          if i == 0 { wword(av + k * 8, exe_c) }
+          else { wword(av + k * 8, cstr(a, x)) }
+          k += 1
+          i += 1
+        }
       }
     }
   }
@@ -4152,12 +4159,54 @@ build_and_run_cross := fn(in out a : rt::Arena, outp : str, keep_artifacts : boo
   result
 }
 
-## TOOL-13/Tooling §4 — build every Target for the reserved `--target all` selection. The normal
-## single-target path already owns target validation, target.* publication, compilation and linking;
-## dispatching one named invocation per manifest record keeps those contracts identical and gives each
-## child its own target-specific artifact/intermediate namespace. The argv rewrite is data-only: target
-## names are passed as argv elements, never interpolated into a shell command.
-build_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, n : usize) -> usize {
+## Validate one target for the command that `--target all` will dispatch. `check` deliberately accepts
+## shapes that `build` and `plan` cannot execute, so the all-target parent must run these command-specific
+## predicates before any child can publish a plan or artifact. The selector is installed as pointer/length
+## facts into the command arena; `drop_selector` retains the unnamed single-target default.
+manifest_all_target_preflight := fn(in out a : rt::Arena, pkg_al : str, target : str, drop_selector : bool, mode : usize) -> usize {
+  if drop_selector {
+    CLI_TARGET_SELECT_COUNT = 0
+    CLI_TARGET_SELECT_P = 0
+    CLI_TARGET_SELECT_N = 0
+  } else {
+    CLI_TARGET_SELECT_COUNT = 1
+    CLI_TARGET_SELECT_P = unchecked bitcast(usize, target.ptr)
+    CLI_TARGET_SELECT_N = target.len
+  }
+  selected := manifest_target_selection_resolve(a, pkg_al)
+  if selected != 0 { return selected }
+  manifest_output_reject(a, pkg_al)
+  if MANIFEST_CONFIG_BAD { return 1 }
+  backend := manifest_target_backend(a, pkg_al)
+  arch_rc := manifest_target_arch_reject(a, pkg_al, backend)
+  if arch_rc != 0 { return arch_rc }
+  command_rc := manifest_target_command_reject(a, pkg_al, backend, mode)
+  if command_rc != 0 { return command_rc }
+  kind := manifest_target_kind(a, pkg_al)
+  if mode == 6 {
+    kind_rc := manifest_kind_reject(a, pkg_al, kind, mode)
+    if kind_rc != 0 { return kind_rc }
+  } else if kind == "invalid" {
+    manifest_located_error(a, "config: the target's kind is invalid or unsupported", pkg_al, "kind")
+    return 40
+  }
+  if mode == 12 or (mode == 6 and CLI_BUILD_PLAN) {
+    plan_rc := manifest_plan_target_reject(a, pkg_al)
+    if plan_rc != 0 { return plan_rc }
+  }
+  code_size := manifest_target_code_size(a, pkg_al)
+  manifest_code_size_reject(a, pkg_al, code_size)
+  if code_size >= 3 { return 1 }
+  0
+}
+
+## TOOL-13/Tooling §4 — run every Target for the reserved `--target all` selection. The normal
+## single-target path already owns target validation, target.* publication, compilation, linking and
+## plan writing; dispatching one named invocation per manifest record keeps those contracts identical and
+## gives each child its own target-specific artifact/plan namespace. The parent preflights every target
+## first; `plan` intentionally skips the semantic `check` child because it is output-only. The argv
+## rewrite is data-only: target names are passed as argv elements, never interpolated into a shell command.
+run_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, n : usize, mode : usize) -> usize {
   count := manifest_target_count(a, pkg_al)
   names := manifest_target_names(a, pkg_al)
   mut name_count := 0
@@ -4184,9 +4233,9 @@ build_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, 
   environ := read_environ(a, etr)
   if etr != 0 { env_truncation_error(); return 21 }
   envp := build_envp(a, environ)
-  ## A check child is deliberately run for every target before any build child. This closes the
-  ## partial-output hole where a later target's Config/source error was discovered only after earlier
-  ## targets had already produced artifacts.
+  ## The command-specific preflight above runs for every target before any child can publish output.
+  ## Build commands additionally run a check child for every target, closing the partial-output hole
+  ## where a later source error would otherwise be discovered after an earlier artifact was produced.
   nb := unchecked bitcast(usize, names.ptr)
   mut pre_start := 0
   mut pre_idx := 0
@@ -4200,10 +4249,14 @@ build_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, 
       manifest_located_error(a, "config: Target.name is invalid for --target all", pkg_al, "name")
       return 1
     }
-    spc := run_target_check(a, exe_c, cmd, n, pre_target, pre_drop, envp)
-    if spc.kind != 0 { spawn_error(a, "target check", "alatyr", spc); return 19 }
-    crc := wexit(unchecked bitcast(usize, spc.code))
-    if crc != 0 { return crc }
+    preflight_rc := manifest_all_target_preflight(a, pkg_al, pre_target, pre_drop, mode)
+    if preflight_rc != 0 { return preflight_rc }
+    if mode != 12 {
+      spc := run_target_check(a, exe_c, cmd, n, pre_target, pre_drop, envp)
+      if spc.kind != 0 { spawn_error(a, "target check", "alatyr", spc); return 19 }
+      crc := wexit(unchecked bitcast(usize, spc.code))
+      if crc != 0 { return crc }
+    }
     pre_start = pre_end + 1
     pre_idx += 1
   }
@@ -5201,7 +5254,11 @@ write_build_plan := fn(in out a : rt::Arena, pkg_al : str, root_file : str, is_p
   plan_push_meta(plan, "profile", profile)
   plan_push_meta(plan, "toolchain", "as,ld")
   if kind != "source" {
-    rel0 := cat2(a, profile, "/")
+    mut rel0 := cat2(a, profile, "/")
+    if is_pkg and manifest_target_count(a, pkg_al) > 1 {
+      target_rel := cat2(a, target_name, "/")
+      rel0 = cat2(a, target_rel, rel0)
+    }
     rel := cat2(a, rel0, artifact_name)
     mut install := ""
     if kind == "executable" { install = cat2(a, "bin/", artifact_name) }
@@ -5586,19 +5643,13 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if DEP_CONFIG_BAD { return 1 }
   if is_pkg {
     manifest_path_reject(a, pkg_arg)
-    if mode == 12 and (CLI_TARGET_SELECT_ALL or manifest_target_count(a, pkg_arg) > 1) {
-      return cli_config_diag(a, "plan supports one manifest target; multi-target plans are not supported")
-    }
-    ## `--target all` is a build-only multi-artifact selection. Defer target-specific validation to
-    ## the per-target child invocations below; the ordinary resolver must not interpret the reserved
-    ## word as a Target.name and must not publish the first target's machine model for every build.
+    ## `--target all` is a multi-artifact selection. Defer target-specific publication to the per-target
+    ## dispatch below; the ordinary resolver must not interpret the reserved word as a Target.name and
+    ## must not publish the first target's machine model for every command.
     if mode == 1 and CLI_TARGET_SELECT_ALL and manifest_target_count(a, pkg_arg) > 1 {
       return cli_config_diag(a, "--target all cannot be combined with -o")
     }
-    if CLI_BUILD_PLAN and CLI_TARGET_SELECT_ALL {
-      return cli_config_diag(a, "--target all cannot be combined with --plan")
-    }
-    if mode == 6 and CLI_TARGET_SELECT_ALL {
+    if (mode == 6 or mode == 12) and CLI_TARGET_SELECT_ALL {
     } else {
       if manifest_target_selection_resolve(a, pkg_arg) != 0 { MANIFEST_CONFIG_BAD = true }
       if MANIFEST_CONFIG_BAD == false { manifest_output_reject(a, pkg_arg) }
@@ -5617,7 +5668,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
         if MANIFEST_CONFIG_BAD == false { target_backend = backend }
       }
     }
-    if MANIFEST_CONFIG_BAD == false and CLI_BUILD_PLAN {
+    if MANIFEST_CONFIG_BAD == false and CLI_BUILD_PLAN and not CLI_TARGET_SELECT_ALL {
       if manifest_plan_target_reject(a, pkg_arg) != 0 { MANIFEST_CONFIG_BAD = true }
     }
     if MANIFEST_CONFIG_BAD { return 1 }
@@ -5630,8 +5681,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     pbrc := plan_bare_inputs_reject(a, cmd, fi, path_n)
     if pbrc != 0 { return pbrc }
   }
-  if is_pkg and mode == 6 and CLI_TARGET_SELECT_ALL {
-    return build_all_manifest_targets(a, pkg_arg, cmd, n)
+  if is_pkg and (mode == 6 or mode == 12) and CLI_TARGET_SELECT_ALL {
+    return run_all_manifest_targets(a, pkg_arg, cmd, n, mode)
   }
   ## TOOL-18 — publish one complete Machine model after target selection and before any semantic or
   ## lowering pass. A bare file list keeps the established host-shaped defaults; a package never

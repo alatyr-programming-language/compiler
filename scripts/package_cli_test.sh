@@ -1746,10 +1746,13 @@ EOF
 # build check in one focused case so the output-only and publish-after-success boundaries stay coupled.
 run_tool20_build_plan() {
   p="$ROOT/test/package/tool20_plan"
+  multi="$ROOT/test/package/multi_target_layout"
   tmp=$(mktemp -d)
   out=$(mktemp)
   err=$(mktemp)
   want=$(mktemp)
+  host_want=$(mktemp)
+  alternate_want=$(mktemp)
   baseline=$(mktemp)
   with_plan=$(mktemp)
   repeat=$(mktemp)
@@ -1825,18 +1828,114 @@ EOF
     fail=1
   fi
 
-  rm -rf "$p/target"
-  (cd "$p" && "$CC" build --plan --target all package.al) >"$out" 2>"$err"
-  all_rc=$?
-  if [ "$all_rc" != 0 ] && grep -qF 'config: --target all cannot be combined with --plan' "$err" \
-    && [ ! -e "$p/target" ]; then
-    echo "ok   tool20_build_plan: --target all is rejected without output"
+  cat >"$host_want" <<'EOF'
+meta	arch	x86_64
+meta	container	elf
+meta	env	gnu
+meta	hermetic	yes
+meta	machine	Linux
+meta	os	linux
+meta	package-version	0.1.0
+meta	plan-version	1
+meta	profile	debug
+meta	toolchain	as,ld
+artifact	host	debug	executable	host/debug/multi-host	bin/multi-host
+EOF
+  cat >"$alternate_want" <<'EOF'
+meta	arch	x86_64
+meta	container	elf
+meta	env	gnu
+meta	hermetic	yes
+meta	machine	Linux
+meta	os	linux
+meta	package-version	0.1.0
+meta	plan-version	1
+meta	profile	debug
+meta	toolchain	as,ld
+artifact	alternate	debug	executable	alternate/debug/multi-alternate	bin/multi-alternate
+EOF
+
+  # Tooling §4.2 — `plan --target all` emits one target-qualified plan beside each selected target's
+  # eventual artifact. Each plan carries the target name and a path relative to the package target_dir.
+  rm -rf "$multi/target"
+  (cd "$multi" && "$CC" plan --target all package.al) >"$out" 2>"$err"
+  all_plan_rc=$?
+  multi_files=$(find "$multi/target" -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort)
+  if [ "$all_plan_rc" = 0 ] && [ ! -s "$out" ] && [ ! -s "$err" ] \
+    && cmp -s "$multi/target/host/debug/plan.tsv" "$host_want" \
+    && cmp -s "$multi/target/alternate/debug/plan.tsv" "$alternate_want" \
+    && [ "$multi_files" = "alternate/debug/plan.tsv
+host/debug/plan.tsv" ]; then
+    echo "ok   tool20_build_plan: multi-target plan writes target-qualified v1 plans"
   else
-    echo "FAIL tool20_build_plan: --target all rc=$all_rc or published output"
+    echo "FAIL tool20_build_plan: multi-target plan rc=$all_plan_rc files=$multi_files stdout=$(cat "$out") stderr=$(cat "$err")"
+    fail=1
+  fi
+  cp "$multi/target/host/debug/plan.tsv" "$repeat"
+  cp "$multi/target/alternate/debug/plan.tsv" "$baseline"
+  rm -rf "$multi/target"
+  (cd "$multi" && "$CC" plan --target all package.al) >"$out" 2>"$err"
+  all_plan_repeat_rc=$?
+  if [ "$all_plan_repeat_rc" = 0 ] \
+    && cmp -s "$multi/target/host/debug/plan.tsv" "$repeat" \
+    && cmp -s "$multi/target/alternate/debug/plan.tsv" "$baseline"; then
+    echo "ok   tool20_build_plan: repeated multi-target plan is byte-identical"
+  else
+    echo "FAIL tool20_build_plan: repeated multi-target plan rc=$all_plan_repeat_rc or bytes changed"
     fail=1
   fi
 
-  rm -f "$out" "$err" "$want" "$baseline" "$with_plan" "$repeat"
+  # `build --plan --target all` must retain the normal build artifacts and add the same per-target plans.
+  rm -rf "$multi/target"
+  (cd "$multi" && "$CC" build --plan --target all package.al) >"$out" 2>"$err"
+  all_build_plan_rc=$?
+  if [ "$all_build_plan_rc" = 0 ] && [ ! -s "$out" ] \
+    && [ -x "$multi/target/host/debug/multi-host" ] \
+    && [ -x "$multi/target/alternate/debug/multi-alternate" ] \
+    && cmp -s "$multi/target/host/debug/plan.tsv" "$host_want" \
+    && cmp -s "$multi/target/alternate/debug/plan.tsv" "$alternate_want"; then
+    echo "ok   tool20_build_plan: build --plan emits one plan per built target"
+  else
+    echo "FAIL tool20_build_plan: multi-target build --plan rc=$all_build_plan_rc stdout=$(cat "$out") stderr=$(cat "$err")"
+    fail=1
+  fi
+
+  # All targets are checked before the first plan is published, so a later target configuration error
+  # cannot leave a plausible plan for an earlier target.
+  bad="$tmp/multi_target_layout_bad_plan"
+  rm -rf "$multi/target"
+  cp -r "$multi" "$bad"
+  sed -i 's/output = "multi-alternate"/output = "bad\/name"/' "$bad/package.al"
+  (cd "$bad" && "$CC" plan --target all package.al) >"$out" 2>"$err"
+  bad_plan_rc=$?
+  if [ "$bad_plan_rc" != 0 ] && [ -s "$err" ] && [ ! -e "$bad/target" ]; then
+    echo "ok   tool20_build_plan: failed multi-target plan publishes no partial plan"
+  else
+    echo "FAIL tool20_build_plan: failed multi-target plan rc=$bad_plan_rc target=$(test -e "$bad/target" && echo yes || echo no)"
+    fail=1
+  fi
+  (cd "$bad" && "$CC" build --plan --target all package.al) >"$out" 2>"$err"
+  bad_build_plan_rc=$?
+  if [ "$bad_build_plan_rc" != 0 ] && [ -s "$err" ] && [ ! -e "$bad/target" ]; then
+    echo "ok   tool20_build_plan: failed multi-target build --plan publishes no partial plan"
+  else
+    echo "FAIL tool20_build_plan: failed multi-target build --plan rc=$bad_build_plan_rc target=$(test -e "$bad/target" && echo yes || echo no)"
+    fail=1
+  fi
+
+  non_x86="$tmp/multi_target_layout_non_x86_plan"
+  cp -r "$multi" "$non_x86"
+  sed -i '/name = "alternate"/{n;s/Arch.x86_64/Arch.aarch64/;}' "$non_x86/package.al"
+  (cd "$non_x86" && "$CC" plan --target all package.al) >"$out" 2>"$err"
+  non_x86_rc=$?
+  if [ "$non_x86_rc" != 0 ] && [ -s "$err" ] && [ ! -e "$non_x86/target" ]; then
+    echo "ok   tool20_build_plan: unsupported later target is rejected before plan publication"
+  else
+    echo "FAIL tool20_build_plan: unsupported later target rc=$non_x86_rc target=$(test -e "$non_x86/target" && echo yes || echo no)"
+    fail=1
+  fi
+
+  rm -f "$out" "$err" "$want" "$host_want" "$alternate_want" "$baseline" "$with_plan" "$repeat"
   rm -rf "$p/target" "$tmp"
 }
 
