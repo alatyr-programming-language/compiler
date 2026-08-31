@@ -2276,15 +2276,26 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     base := slot_of(cx.slots, cx.src, ns, nl2)
     emit_array_assign(v, base, sb, cx, nl)
   } else if fixed_array_byte_return_len(v, cx.decls, cx.src, a) >= 1 {
-    ## BYTES: the bounded `[u8; N]` return is one packed word in %rax. The byte-array local's
-    ## data block begins at `-(base*8)(%rbp)` (the filler below its metadata slot), exactly the
-    ## address used by `emit_index_addr`/`emit_array_assign`; store the whole returned word there.
+    ## BYTES: the bounded `[u8; N]` return is one or two packed words in %rax/%rdx. The byte-array
+    ## local's data block begins at `-(base*8)(%rbp)` (the filler below its metadata slot), exactly
+    ## the address used by `emit_index_addr`/`emit_array_assign`; store both returned words there.
     ## No other array return reaches this arm, so unsupported shapes retain their old rejects.
     base := slot_of(cx.slots, cx.src, ns, nl2)
-    emit_gas(v, sb, cx, a, nl)
-    push_str(sb, "  popq %rax\n  movq %rax, -")
-    push_int(sb, base * 8)
-    push_str(sb, "(%rbp)\n")
+    rnel := fixed_array_byte_return_len(v, cx.decls, cx.src, a)
+    if rnel <= 8 {
+      emit_gas(v, sb, cx, a, nl)
+      push_str(sb, "  popq %rax\n  movq %rax, -")
+      push_int(sb, base * 8)
+      push_str(sb, "(%rbp)\n")
+    }
+    if rnel > 8 {
+      emit_byte_array_return_value(v, sb, cx, a, nl)
+      push_str(sb, "  movq %rax, -")
+      push_int(sb, base * 8)
+      push_str(sb, "(%rbp)\n  movq %rdx, -")
+      push_int(sb, (base - 1) * 8)
+      push_str(sb, "(%rbp)\n")
+    }
   } else if str_ret_call(v, cx.decls, cx.src, deref(cx.mar)) or generic_inferred_str_ret(v, cx, a) {
     ## a `name := f(…)` where `f` returns a `str`: the call leaves ptr/%rax, len/%rdx
     ## (emit_struct_value's Call arm emits the call); store ptr at the base slot, len at base+1

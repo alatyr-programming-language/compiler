@@ -82,6 +82,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Packed `[u8; N]` returns now extend to two machine words: a return of `N = 9..16` bytes is carried
+  in two registers, indexed both after binding and directly on x86_64 and read directly on AArch64,
+  and composes with fixed-array forwarding and fixed-array arguments on x86_64. `N = 1..8` keeps its
+  existing one-word ABI, and a fixed-array return shape the compiler does not support is now refused
+  with a located shape-specific diagnostic instead of falling through to scalar lowering.
 - An equal-width aggregate `bitcast` used directly as a by-value struct ARGUMENT
   (`consume(bitcast(B, a))`) now passes the source aggregate's own block on x86_64 instead of passing
   its first word as a scalar, which the callee dereferenced as the block address — the reproducer

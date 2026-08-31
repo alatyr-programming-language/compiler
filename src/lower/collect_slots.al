@@ -28,6 +28,7 @@ local_is_comptime := ast::binding_is_comptime
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
 (field_read_agg) := lower::place
+(lower_show_src_line) := lower::ctfold
 
 pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), sub : ptr(Subst), ctslots : ptr(SVec)) {
   mut s := head
@@ -206,12 +207,15 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## the Assign emits `cmpxchg` into the two slots (`r.0` current, `r.1` succeeded 0/1).
           bind_array_slot(slots, src, ns, nl, 2, AElem(eek = 0, ess = 0, esl = 0, stride = 1))
         } else if fixed_array_byte_return_len(v, decls, src, a) >= 1 {
-          ## BYTES: a bounded `r := f(…)` where `f` returns `[u8; N]`, 1 <= N <= 8. The
-          ## returned %rax word is copied into the same packed byte block used by typed locals, so
-          ## `r[k]` reuses the existing byte-address/load path. Wider or non-u8 array returns do not
-          ## match and continue to their existing fail-loud scalar/aggregate diagnostics.
+          ## BYTES: a bounded `r := f(…)` where `f` returns `[u8; N]`, 1 <= N <= 16. The
+          ## returned one- or two-word carrier is copied into the same packed byte block used by typed
+          ## locals, so `r[k]` reuses the existing byte-address/load path. Wider or non-u8 array returns
+          ## do not match and are rejected below instead of falling through to a scalar slot.
           rnel := usize(fixed_array_byte_return_len(v, decls, src, a))
           bind_array_slot(slots, src, ns, nl, rnel, AElem(eek = 8, ess = 0, esl = 0, stride = 1))
+        } else if fixed_array_ret_call(v, decls, src, a) {
+          lower_show_src_line(src, ns)
+          panic("selfhost: unsupported fixed-array return shape; only [u8; N] with 1 <= N <= 16 is supported")
         } else if tuple_ret_call(v, decls, src, a) {
           ## a `name := f(…)` binding where `f` returns a TUPLE `(…)` — reserve `name` as an N-word
           ## scalar array (like a tuple LITERAL binding); the components arrive %rax/%rdx/… and are
