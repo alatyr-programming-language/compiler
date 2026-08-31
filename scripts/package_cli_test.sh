@@ -526,6 +526,72 @@ EOF
   rm -rf "$tmp"
 }
 
+# Tooling §2.2 / issue #262 — `--verbose` and `-v` are build-only observation flags. They report the
+# manifest, selected profile/target, every resolved module, and the assemble/link outputs on stderr;
+# stdout, exit status and the artifact bytes must remain identical to an ordinary build.
+run_verbose_build() {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/src"
+  cat >"$tmp/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(
+    arch = Arch.x86_64,
+    os = Os.linux,
+    env = Env.gnu,
+    container = Container.elf,
+    entry = "_start",
+    output = "verbose-app",
+  )],
+)
+EOF
+  printf 'pub answer := fn() -> u64 { return 35 }\n' >"$tmp/src/helper.al"
+  printf 'main := fn() -> u64 { return helper::answer() + 7 }\n' >"$tmp/src/main.al"
+  (cd "$tmp" && "$CC" build package.al) >"$tmp/base.out" 2>"$tmp/base.err"
+  base_rc=$?
+  artifact="$tmp/target/debug/verbose-app"
+  base_hash=""
+  if [ -f "$artifact" ]; then base_hash=$(sha256sum "$artifact"); fi
+  verbose_ok=1
+  first_verbose_err=""
+  for arg in --verbose -v; do
+    rm -rf "$tmp/target"
+    (cd "$tmp" && "$CC" build "$arg" package.al) >"$tmp/verbose.out" 2>"$tmp/verbose.err"
+    verbose_rc=$?
+    verbose_hash=""
+    if [ -f "$artifact" ]; then verbose_hash=$(sha256sum "$artifact"); fi
+    "$artifact" >/dev/null 2>&1
+    verbose_run_rc=$?
+    if [ "$verbose_rc" != "0" ] || [ "$verbose_run_rc" != "42" ] \
+      || [ -s "$tmp/verbose.out" ] || [ "$verbose_hash" != "$base_hash" ] \
+      || ! grep -qF 'verbose: manifest=package.al' "$tmp/verbose.err" \
+      || ! grep -qF 'verbose: profile=debug' "$tmp/verbose.err" \
+      || ! grep -qF 'verbose: target=x86_64-linux-gnu-elf' "$tmp/verbose.err" \
+      || ! grep -qF 'verbose: modules' "$tmp/verbose.err" \
+      || ! grep -qF 'verbose: module=src/helper.al' "$tmp/verbose.err" \
+      || ! grep -qF 'verbose: module=src/main.al' "$tmp/verbose.err" \
+      || ! grep -qF 'verbose: assemble=target/debug/verbose-app.s' "$tmp/verbose.err" \
+      || ! grep -qF 'verbose: link=target/debug/verbose-app' "$tmp/verbose.err"; then
+      verbose_ok=0
+    fi
+    if [ -z "$first_verbose_err" ]; then
+      first_verbose_err="$tmp/verbose-first.err"
+      cp "$tmp/verbose.err" "$first_verbose_err"
+    elif ! cmp -s "$first_verbose_err" "$tmp/verbose.err"; then
+      verbose_ok=0
+    fi
+  done
+  if [ "$base_rc" = "0" ] && [ -n "$base_hash" ] && [ "$verbose_ok" = "1" ]; then
+    echo "ok   verbose_build: --verbose/-v report deterministic build facts without changing output"
+  else
+    echo "FAIL verbose_build: rc=$base_rc or verbose output/artifact contract mismatch"
+    fail=1
+  fi
+  rm -rf "$tmp"
+}
+
 run_expect() {
   name="$1"
   want="$2"
@@ -2090,6 +2156,7 @@ run_expect profile_run_release 42 run --release package.al
 run_profile_program_args
 run_build_summary
 run_quiet_build
+run_verbose_build
 run_expect profile_test_parallel 0 test -j2 --profile release package.al
 run_path_dep dep_declared main__main
 run_path_dep dep_alias_use d__math__answer

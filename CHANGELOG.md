@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- `alatyr build --verbose` / `-v` now reports the selected manifest, profile, target, modules, and
+  assemble/link outputs on stderr without changing the build artifact or machine-readable stdout.
 - x86_64/Linux/ELF package targets with `Kind.shared_lib` now build a `lib<base>.so` artifact with
   the package's `pub`/`@export` surface and no executable entry point.
 - Multi-target `plan` and `build --plan --target all` now emit one deterministic, target-qualified
