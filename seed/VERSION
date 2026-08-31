@@ -16,6 +16,44 @@
 # The entries below are APPEND-ONLY. Do not rewrite them to make old hashes resolve.
 rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 #
+# ─── HOW TO READ THIS FILE ────────────────────────────────────────────────────────────────────────
+#
+# It has two opposite orderings, for a historical reason that cannot be tidied away: the entries are
+# APPEND-ONLY, so reordering 1190 lines to make the presentation uniform would rewrite the record.
+#
+#   * The entries BELOW, from the 2026-08-19 one down to 2026-07-03, are REVERSE-chronological: the
+#     top of that run is its newest. They predate this repository — 41 of them have no commit here at
+#     all, because development happened outside git until the 2026-08-24 import.
+#   * The entries appended SINCE the import are FORWARD-chronological, at the END of the file. The
+#     newest entry in the whole file is therefore the LAST one, not the first.
+#
+# Consequence, and the reason for the block below: someone opening this file to learn which compiler
+# `seed/alatyr` currently IS reads the topmost entry and takes away the hash of the 2026-08-19
+# promotion. That is not the seed in the tree. Read CURRENT SEED and nothing else for the present
+# state; read the entries for how it got here.
+#
+# ─── CURRENT SEED ─────────────────────────────────────────────────────────────────────────────────
+# The state of `seed/alatyr` as committed. `scripts/fixpoint.sh` CHECKS these two lines against the
+# tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
+# file quietly describing a different compiler.
+#
+current-seed-sha256: 01aef87ee1ca35b893edbe37559a2d926b7be6a932dcedebc085f740c69812cd
+current-seed-version: 0.1.0
+#
+# Promoted:      2026-08-27 (the follow-up promotion; see the last entry in this file)
+# Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
+# GAS at promotion: 1082427 lines
+# GAS SHA-256:   40af11b885aa3b3a2a50fe551ed6536e8b6d518fcc93ff98ef6f72c9e954d45b
+#
+# `current-seed-version` is the `version` field of `package.al` at the moment of the promotion, and by
+# the versioning order in CHANGELOG.md the two must agree at all times: the version moves ON a
+# promotion and only on one. The gate enforces that agreement in both directions — a promotion that
+# forgets the bump, and a bump made without a promotion, both fail. Note that this value cannot be
+# obtained by asking the seed: the committed seed predates `--version` and answers
+# `selfhost: cannot open source file` to it. That is expected, not a defect; the self-built compiler
+# implements TOOL-21.
+#
+#
 # Self-promoted 2026-08-19 — nested enum and Slice(T) payload construction now preserves the complete
 # word layout through Result/Option return, local, match, and call boundaries; the remaining nested
 # Option/Result call/variable payload forms stay fail-loud. The frozen Rust ancestor at

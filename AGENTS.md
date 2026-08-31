@@ -29,6 +29,11 @@ step-by-step procedures live in `.agents/skills/`.
   Stage2 → Stage3 must match byte-for-byte in GAS and the binary, with full e2e and sweeps; inspect the
   normalized seed-to-Stage1 delta, promote Stage2, append evidence to `seed/VERSION`, and re-run the
   post-promotion fixpoint. A lane never promotes the seed.
+- A promotion is also a version release. `package.al`'s `version` moves on a seed promotion and only on
+  one, `seed/VERSION`'s CURRENT SEED block records the promoted hash and that version, and
+  `scripts/fixpoint.sh` refuses a tree where the two disagree — in either direction. The complete file
+  set and the annotated `v<version>` tag are defined by `CHANGELOG.md`'s versioning order and by
+  `alatyr-integrate`. The specification pin is a separate number and never moves with it.
 
 ## Workspace invariants
 
