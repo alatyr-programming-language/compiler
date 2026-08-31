@@ -27,6 +27,7 @@
 #
 #   scripts/land.sh <pr-number>          prepare + gate the merge, print the push command, stop
 #   scripts/land.sh <pr-number> --push   the same, then publish it if the gate was green
+#   scripts/land.sh --self-test          exercise the message-shape detector without GitHub or a merge
 #
 # An intentional behavior change that updates an oracle uses the first form as a pre-oracle
 # inspection step. The feature PR must contain no oracle file. If the first full gate fails only on
@@ -48,6 +49,65 @@ REPO="${ALATYR_REPO:-alatyr-programming-language/compiler}"
 say()  { printf '\n=== %s\n' "$*"; }
 die()  { printf 'land: %s\n' "$*" >&2; exit 2; }
 verdict() { printf '\n*** %s ***\n' "$*"; }
+
+# A JSON or shell layer that escapes a newline one time too many leaves the two literal characters
+# backslash+n in a one-line message. Existing main history contains this debt and is deliberately not
+# rescanned here: landing checks the selected PR body and only the commits it introduces, so the check
+# prevents new malformed records without rewriting or blocking on old ones. A real newline makes a
+# literal \n in prose or a fenced example harmless; trailing transport newlines are not separators.
+message_shape_check() {
+  local object="$1"
+  local message="$2"
+  local normalized="$message"
+  local literal_backslash_n='\n'
+  local real_newline=$'\n'
+
+  while [[ "$normalized" == *"$real_newline" ]]; do
+    normalized="${normalized%"$real_newline"}"
+  done
+  if [[ "$normalized" == *"$literal_backslash_n"* &&
+        "$normalized" != *"$real_newline"* ]]; then
+    printf '  REFUSE: %s contains literal backslash-n as its only line separator\n' "$object"
+    return 1
+  fi
+  return 0
+}
+
+land_message_shape_self_test() {
+  local malformed prose fenced output rc
+
+  malformed=$'Summary\\n\\nVerification\n'
+  output="$(message_shape_check 'commit deadbeef' "$malformed" 2>&1)"
+  rc=$?
+  if [ "$rc" = 0 ]; then
+    echo 'land self-test: malformed one-line message was accepted' >&2
+    return 1
+  fi
+  case "$output" in
+    *'commit deadbeef'*) ;;
+    *)
+      echo 'land self-test: malformed message did not name the offending object' >&2
+      return 1
+      ;;
+  esac
+
+  prose=$'Summary\n\nThe prose mentions literal \\n as data.\n\nVerification.\n'
+  message_shape_check 'PR #prose' "$prose" || {
+    echo 'land self-test: a formatted prose example was rejected' >&2
+    return 1
+  }
+  fenced=$'Summary\n\n```text\nliteral \\n\n```\n\nVerification.\n'
+  message_shape_check 'PR #fenced' "$fenced" || {
+    echo 'land self-test: a formatted fenced example was rejected' >&2
+    return 1
+  }
+  echo 'ok   land message-shape self-test: malformed body rejected; formatted literal examples accepted'
+}
+
+if [ "${1:-}" = '--self-test' ]; then
+  land_message_shape_self_test
+  exit $?
+fi
 
 PR="${1:-}"
 case "$PR" in
@@ -105,6 +165,17 @@ echo "  head=$HEAD_SHA"
 say "PHASE 2 — PR shape"
 shape_fail=0
 CHANGED="$(git diff --name-only "$BASE...$HEAD_SHA")"
+# The PR body is mutable GitHub metadata, so read it after the immutable head was fetched and checked.
+# Commit messages are read from the fetched objects, not executed; only BASE..HEAD is inspected, while
+# the 39 historical malformed bodies already reachable from main remain grandfathered.
+PR_BODY="$(gh pr view "$PR" -R "$REPO" --json body --jq .body 2>/dev/null)" || die "could not read the selected PR body"
+message_shape_check "PR #$PR body" "$PR_BODY" || shape_fail=1
+for c in $(git rev-list "$BASE..$HEAD_SHA"); do
+  COMMIT_OBJECT="$(git cat-file commit "$c")" || die "could not read commit $c"
+  COMMIT_MESSAGE="${COMMIT_OBJECT#*$'\n\n'}"
+  COMMIT_BODY="${COMMIT_MESSAGE#*$'\n\n'}"
+  message_shape_check "commit $c" "$COMMIT_BODY" || shape_fail=1
+done
 # A feature PR and an oracle regeneration are separate review objects. Checking each oracle commit in
 # isolation is not enough: a PR can otherwise hide a feature change beside an oracle-only commit, and
 # the resulting combined review would violate the worker/maintainer boundary even when both commits
