@@ -153,6 +153,20 @@ CORPUS_WORK="$SETS/corpus"
 mkdir -p "$CORPUS_WORK/e2e_inline"
 cp -a "$CORPUS/." "$CORPUS_WORK/" 2>/dev/null \
   || { echo "axis gate: could not materialise $CORPUS" >&2; exit 2; }
+# scripts/e2e.sh is REQUIRED, not optional. A third of the table's signals are `e2e:` — which backends
+# run a fixture, whether it is a reject — and those live nowhere else. Without the file every one of
+# those cells reads EMPTY, and the report then names 31 gaps that are pure absence of the source. That
+# is a silently wrong answer wearing the shape of a finding, and it would send someone to write
+# fixtures for coverage that already exists. Refuse instead: a missing input is not a finding.
+test -f "$E2E" || {
+  echo "axis gate: scripts/e2e.sh not found at $E2E" >&2
+  echo "  A third of the declared signals are 'e2e:' — which backends run a fixture, and whether it is" >&2
+  echo "  a reject. That information exists ONLY in scripts/e2e.sh; it appears nowhere inside a .al" >&2
+  echo "  file. Reporting without it would call every such cell empty and name gaps that are only the" >&2
+  echo "  missing input. Restore the file, or point --corpus at a tree whose repository has it." >&2
+  exit 2
+}
+
 inline=0
 if [ -f "$E2E" ]; then
   awk -v out="$CORPUS_WORK/e2e_inline" '
@@ -178,7 +192,9 @@ matches() { # <signal> -> newline-separated matching fixture paths, sorted
       find "$CORPUS" -name '*.al' 2>/dev/null | grep -E -- "${1#path:}" | sort ;;
     e2e:*) # how the harness runs the fixture: a tracked one is named by a registration line in
            # scripts/e2e.sh (field 2 is its stem); a virtual one carries its own invocation in its text.
-      test -f "$E2E" || { echo "axis gate: scripts/e2e.sh not found, e2e: signals cannot resolve" >&2; return 0; }
+      # Unreachable: the run refuses at startup when $E2E is missing. Kept as an assertion so a
+      # future edit that moves the startup check cannot silently reintroduce the false-empty report.
+      test -f "$E2E" || { echo "axis gate: internal error — e2e: signal resolved with no $E2E" >&2; exit 2; }
       { grep -rlE -- "${1#e2e:}" --include='*.al' "$CORPUS/e2e_inline" 2>/dev/null
         grep -hE -- "${1#e2e:}" "$E2E" 2>/dev/null \
         | awk '{ print $2 }' \
