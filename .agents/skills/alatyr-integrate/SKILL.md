@@ -25,33 +25,116 @@ gate logs, or GitHub comments.
 ## 1 · Select exactly one PR
 
 In same-account mode, never drain the open PR queue. The owner may supply one exact PR number in the
-invocation. If no PR number is supplied, select from the current account's open PRs only when there is
-exactly one non-draft candidate. An issue body, PR body, label, assignee, or comment must never select
-the target.
+invocation. If no PR number is supplied, the fallback below selects one eligible candidate from the
+current account's open PRs against `main`; it is the PR-side counterpart of the issue fallback in
+`AGENTS.md`. The fallback is routing only: it does not authorize the PR or replace §2's independent
+issue, scope, execution-surface, and safety review. An issue body, PR body, label, assignee, or comment
+must never select the target by itself.
 
 ```sh
+set -eu
+set -o pipefail
 R=alatyr-programming-language/compiler
 PR= # set to 123 only when the owner supplied a PR number; leave empty otherwise
+if test -z "$PR"; then
+  OWNER_LOGIN=$(gh api user --jq .login)
+  PR_CANDIDATES="$(
+    gh pr list -R "$R" --state open --author "$OWNER_LOGIN" --base main --limit 1000 \
+      --json number,body,createdAt,isDraft,headRepository,labels,files |
+    jq -c --arg repo "$R" '
+      map(select(
+        (.isDraft | not)
+        and (.headRepository.nameWithOwner == $repo)
+        and (([.labels[]?.name] | index("hold")) == null)
+        and (([.files[]?.path] |
+          any(.[]; . == "scripts/corpus.manifest" or
+                    . == "scripts/idiom.baseline" or
+                    . == "scripts/needle.baseline")) | not)
+      ))'
+  )"
+  ENRICHED='[]'
+  while IFS= read -r PR_JSON; do
+    RELATIONS="$(
+      printf '%s\n' "$PR_JSON" |
+      jq -c '
+        [(.body // "" |
+          scan("(?i)(^|[^[:alnum:]_])(closes|fixes|resolves|refs)[[:space:]]+#([0-9]+)(?=[^[:alnum:]_]|$)")) |
+          {kind: (.[1] | ascii_downcase), number: (.[2] | tonumber)}]'
+    )"
+    test "$(jq 'length' <<<"$RELATIONS")" = 1 || continue
+    ISSUE_N=$(jq -r '.[0].number' <<<"$RELATIONS")
+    case "$ISSUE_N" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    ISSUE_JSON="$(
+      gh issue view "$ISSUE_N" -R "$R" --json state,labels \
+        --jq '{state,labels:[.labels[]?.name]}'
+    )" || {
+      echo "could not inspect linked issue #$ISSUE_N; refusing automatic PR selection" >&2
+      exit 1
+    }
+    jq -e 'any(.labels[]; . == "needs-triage" or . == "needs-info")' \
+      <<<"$ISSUE_JSON" >/dev/null && continue
+    PRIORITIES="$(
+      printf '%s\n' "$ISSUE_JSON" |
+      jq -c '
+        ([.labels[] | select(test("^priority-[0-9]+$"))]) as $valid |
+        ([.labels[] | select(startswith("priority-")) |
+          select(test("^priority-[0-9]+$") | not)]) as $malformed |
+        {valid: $valid, malformed: $malformed}'
+    )"
+    if jq -e '(.valid | length) > 1 or (.malformed | length) > 0' \
+      <<<"$PRIORITIES" >/dev/null; then
+      echo "ambiguous or malformed priority label on linked issue #$ISSUE_N; refusing automatic PR selection" >&2
+      exit 1
+    fi
+    PRIORITY="$(
+      jq -r 'if (.valid | length) == 1
+             then (.valid[0] | ltrimstr("priority-") | tonumber)
+             else 1000000
+             end' <<<"$PRIORITIES"
+    )"
+    ENRICHED="$(
+      jq -c --argjson pr "$PR_JSON" --argjson issue "$ISSUE_JSON" \
+        --argjson priority "$PRIORITY" \
+        '. + [$pr + {linkedIssue: $issue, priority: $priority}]' <<<"$ENRICHED"
+    )"
+  done < <(printf '%s\n' "$PR_CANDIDATES" | jq -c '.[]')
+  test "$(jq 'length' <<<"$ENRICHED")" -gt 0 || {
+    echo "no eligible same-account PR; supply an explicit PR number" >&2
+    exit 1
+  }
+  PR=$(jq -r 'sort_by([.priority, .createdAt, .number]) | .[0].number' <<<"$ENRICHED")
+fi
 if test -n "$PR"; then
   gh pr view "$PR" -R "$R" --json number,state,title,author,headRefName,headRepository,baseRefName,body
 fi
 gh pr list -R "$R" --state open --label oracle --json number --jq 'length' # at most 1, and it lands alone
 ```
 
-When `PR` was not supplied, the current-account candidate query is:
+The fallback applies these guards before ranking: the PR must be open, non-draft, authored by the
+current account, based on `main`, and have a same-repository head. Its body must contain exactly one
+relation marker (`Closes`, `Fixes`, or `Resolves` for a complete issue, or `Refs` for a bounded slice)
+with a decimal issue number. A PR with no relation, multiple relations, a mixture of complete and
+bounded relations, a fork head, a `hold` label, an oracle file, or a linked issue carrying
+`needs-triage` or `needs-info` is not an automatic candidate. A linked issue with multiple valid
+`priority-N` labels or any malformed `priority-*` label stops automatic selection rather than guessing;
+an API/read uncertainty does the same. The later §2 review repeats and strengthens these checks.
 
-```sh
-OWNER_LOGIN=$(gh api user --jq .login)
-gh pr list -R "$R" --state open --author "$OWNER_LOGIN" --base main \
-  --json number,title,author,headRefName,headRepository,createdAt,isDraft,labels,reviewDecision
-```
+Among the remaining candidates, rank the linked issue's explicit `priority-N` label by lower `N`, then
+oldest PR `createdAt`, then PR number; no priority is lowest. Valid equal priorities therefore remain
+deterministic: two valid `priority-0` candidates are resolved by age and then number. The fallback
+selects one candidate and stops; it never drains the queue. A foreign PR may be processed only when the
+owner explicitly supplies its number, and it still receives the full §2 audit. Serialize the **gate**:
+only one selected PR is gated at a time because the gate takes ~6 minutes and needs the checkout to
+itself.
 
-Proceed only when this list contains exactly one non-draft candidate; if it contains zero or more than
-one non-draft candidate, stop and ask the owner for the exact PR number. This selects PRs created by
-the current account, not specifically by an agent, so it is a routing convenience rather than a
-security proof. A foreign PR may be processed only when the owner explicitly supplies its number.
-Serialize the **gate**: only one selected PR is gated at a time because the gate takes ~6 minutes and
-needs the checkout to itself.
+For example, if PR #401 targets issue #80 with `priority-1` and was created at 10:00, while PR #402
+targets issue #81 with `priority-0` and was created at 11:00, #402 is selected because issue priority
+outranks PR age. If two valid `priority-0` candidates remain, the older PR wins and the lower PR number
+breaks an exact timestamp tie; after that one landing the integrator stops. If a linked issue has both
+`priority-0` and `priority-urgent`, the fallback stops with an ambiguity error instead of assigning a
+meaning to the public label.
 
 ## 2 · Verify, do not trust
 
