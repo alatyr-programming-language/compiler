@@ -1051,6 +1051,108 @@ issue299_brand_identity_test() {
   if [ "$got" = 1 ]; then echo "ok   issue299/same: same brand remains accepted"; else echo "FAIL issue299/same: got $got want 1"; fail=1; fi
 }
 
+## Issue #304 / TYP-6 + Types §§4.2–4.3 — direct field and local fixed-array-element stores must
+## compare the value with the declared destination type before lower can emit a word-sized store.
+## These sources live only in the gate's private scratch directory: each negative case checks both
+## semantic entry points, the existing located `type mismatch` wording, and the absence of an output
+## artifact. The generated headers deliberately do not quote that needle, so an unfixed compiler cannot
+## pass by matching its own fixture documentation. The pinned spec puts bool outside the numeric lattice,
+## so both direct bool-to-u64 forms are negative controls for that rule; explicit `u64(bool)` remains
+## outside this slice as a conversion-constructor surface.
+issue304_place_type_test() {
+  local d="$T/issue304_place_type"
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue304_place_type: scratch"; fail=1; return; }
+  printf '%s\n' \
+    '## The direct field store used to be accepted and reached emission.' \
+    'S := struct { f : u64 }' \
+    'main := fn() -> u64 {' \
+    '  mut s := S(f = 1)' \
+    '  s.f = "text"' \
+    '  return s.f' \
+    '}' > "$d/field_str.al"
+  printf '%s\n' \
+    '## The direct local fixed-array element store used to be accepted and reached emission.' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 2] = [1, 2]' \
+    '  a[0] = "text"' \
+    '  return a[0]' \
+    '}' > "$d/array_str.al"
+  printf '%s\n' \
+    '## bool is outside the numeric lattice; an implicit store is not a conversion.' \
+    'S := struct { f : u64 }' \
+    'main := fn() -> u64 {' \
+    '  mut s := S(f = 1)' \
+    '  s.f = true' \
+    '  return s.f' \
+    '}' > "$d/field_bool.al"
+  printf '%s\n' \
+    '## bool is outside the numeric lattice for an array element too.' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 2] = [1, 2]' \
+    '  a[0] = true' \
+    '  return a[0]' \
+    '}' > "$d/array_bool.al"
+  printf '%s\n' \
+    '## Existing aggregate-to-scalar rejection remains active on a direct field.' \
+    'P := struct { x : u64 }' \
+    'S := struct { f : u64 }' \
+    'main := fn() -> u64 {' \
+    '  mut s := S(f = 1)' \
+    '  s.f = P(x = 7)' \
+    '  return s.f' \
+    '}' > "$d/field_aggregate.al"
+  printf '%s\n' \
+    '## Existing aggregate-to-scalar rejection remains active on a direct array element.' \
+    'P := struct { x : u64 }' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 2] = [1, 2]' \
+    '  a[0] = P(x = 7)' \
+    '  return a[0]' \
+    '}' > "$d/array_aggregate.al"
+
+  issue304_reject() { # name, source line
+    local n="$1" want_line="$2" src="$d/$1.al"
+    local needle="type mismatch at line $want_line in $n"
+    local co="$d/$1.check.out" ce="$d/$1.check.err"
+    "$CC" check "$src" >"$co" 2>"$ce"; crc=$?
+    if [ "$crc" != 1 ] || [ -s "$co" ] || [ ! -s "$ce" ] || ! grep -qF "$needle" "$ce"; then
+      echo "FAIL issue304/$n(check): rc=$crc or output/diagnostic mismatch [$(<"$ce")]"; fail=1; return
+    fi
+    local out="$d/$1.out" bo="$d/$1.build.out" be="$d/$1.build.err"
+    rm -f "$out"
+    "$CC" -o "$out" "$src" >"$bo" 2>"$be"; brc=$?
+    if [ "$brc" != 1 ] || [ -e "$out" ] || [ ! -s "$be" ] || ! grep -qF "$needle" "$be"; then
+      echo "FAIL issue304/$n(build): rc=$brc or artifact/diagnostic mismatch [$(<"$be")]"; fail=1; return
+    fi
+    echo "ok   issue304/$n: check/build rejected with located type-mismatch diagnostic and no artifact"
+  }
+  issue304_reject field_str 5
+  issue304_reject array_str 4
+  issue304_reject field_bool 5
+  issue304_reject array_bool 4
+  issue304_reject field_aggregate 6
+  issue304_reject array_aggregate 5
+
+  local src="$d/valid.al" out="$d/valid.out"
+  printf '%s\n' \
+    '## Correct scalar stores through both direct place forms remain valid.' \
+    'S := struct { f : u64 }' \
+    'main := fn() -> u64 {' \
+    '  mut s := S(f = 1)' \
+    '  s.f = 40' \
+    '  mut a : [u64; 2] = [1, 2]' \
+    '  a[0] = 2' \
+    '  return s.f + a[0]' \
+    '}' > "$src"
+  "$CC" check "$src" >/dev/null 2>&1 || { echo "FAIL issue304/valid: check"; fail=1; return; }
+  "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL issue304/valid: build"; fail=1; return; }
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "issue304/valid" "$got"; then return; fi
+  if [ "$got" = 42 ]; then echo "ok   issue304/valid: field and local array-element stores run 42"; else echo "FAIL issue304/valid: got $got want 42"; fail=1; fi
+  rm -f "$out"
+}
+
 ## Issue #213 / Types §6.4 / Functions §2.3 / ABI §3.2 / Architecture §7 — the generic call-argument
 ## `gislice` path may widen local slice passing, but the RV64 write lowering is intentionally narrow:
 ## only an effective `Slice(u64)` parameter is supported, and checked indices must stay in the runtime
@@ -3792,6 +3894,7 @@ check_reject reject_call_paren_callee
 check_located reject_struct_type_params 7
 issue174_name_resolution_test
 issue298_immutable_places_test
+issue304_place_type_test
 check_reject reject_lambda_aggregate_return
 check_reject reject_lambda_capture_escape
 check_accept accept_param_default

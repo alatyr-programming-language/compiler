@@ -5993,6 +5993,38 @@ lbv_lit_tag := fn(e : ptr(Expr)) -> u8 {
   }
 }
 
+## TYP-6 — compare a DIRECT place's declared destination type with its stored value before lower can
+## emit a word-sized store. `check_expr` is intentionally poison-tolerant for some value forms, and the
+## frozen seed may lose type-name payloads while returning a `Ty`; recover a bare local's recorded type
+## and the exact literal tag only when the ordinary result is UNKNOWN. Hidden aggregate binding tags are
+## normalized to their public tags. Unknowns remain accepted so this helper cannot widen the bounded
+## direct-field/direct-local-array slice into nested, slice, or other deferred assignment paths.
+sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
+  mut actual := checked
+  mut atag : u8 = actual.tag
+  if atag >= 128 and atag != 255 { atag = atag - 128 }
+  if atag == 9 { atag = 3 }
+  if atag == 10 { atag = 4 }
+  actual = Ty(tag = atag, ns = actual.ns, nl = actual.nl)
+  if actual.tag == 0 {
+    vs := expr_var_span(v)
+    if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
+      raw := local_ty(locals, nloc, src, vs.s, vs.n)
+      mut rtag : u8 = raw.tag
+      if rtag >= 128 and rtag != 255 { rtag = rtag - 128 }
+      if rtag == 9 { rtag = 3 }
+      if rtag == 10 { rtag = 4 }
+      if rtag != 0 and rtag != 255 { actual = Ty(tag = rtag, ns = raw.ns, nl = raw.nl) }
+    }
+  }
+  if actual.tag == 0 {
+    ltag := lbv_lit_tag(v)
+    if ltag != 0 { actual = Ty(tag = ltag, ns = 0, nl = 0) }
+  }
+  if dst.tag == 0 or actual.tag == 0 { return false }
+  not ty_compat(actual, dst, src)
+}
+
 ## ── Types §9.1 — an integer literal's PER-TYPE range is checked at compile time ──────────────────
 ##
 ## "An integer literal is a compile-time number; its type is inferred from context, and its
@@ -8029,6 +8061,15 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           return Result(usize, CheckErr).Err(unbound_err(fns, fnl))
         }
         cv := check_expr_da(fv, decls, upto, src, a, locals, cnt, da)?
+        ## Direct field destination/value conformance. The owner was resolved above from a direct
+        ## local, parameter, or global struct root; nested paths and array-held fields remain residual.
+        if bowner.n != 0 {
+          ftsp0 := sema_field_ann_span(decls, upto, src, bowner.s, bowner.n, fns, fnl, a)
+          if ftsp0.n != 0 {
+            ft0 := resolve_ty(src, ftsp0.s, ftsp0.n, decls, upto)
+            if sema_direct_place_value_bad(ft0, cv, fv, src, locals, cnt) { mark_failed(locals, mismatch_err(bns, 0)) }
+          }
+        }
         ## Issue #298 — a field store is authorized by the ROOT binding's `mut`, not by the field
         ## token. A const local/global that was already initialized has no unreadied DA marker, while
         ## the one permitted first write to an uninitialized local still has one.
@@ -8309,6 +8350,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ibv := expr_var_span(ib)
         if ibv.n != 0 {
           iae := local_ty(locals, cnt, src, ibv.s, ibv.n)
+          aet := array_elem_ty(src, iae, decls, upto)
+          if sema_direct_place_value_bad(aet, civ, iv, src, locals, cnt) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
           if expr_is_num_lit(ii) {
             da_assign_array(deref(da), src, ibv.s, ibv.n, expr_num_lit_val(ii), iae)
           }
