@@ -9,19 +9,68 @@
 # It also asserts the committed seed is CURRENT (its emission == Stage1's — i.e. seed/ matches src/)
 # and that a self-built compiler builds + links + runs an arbitrary program standalone (no seed at
 # runtime). Run inside the dev shell (`nix develop`) so `as`/`ld` are on PATH.  Exit 0 = fixpoint.
+#
+# And it checks, BEFORE building anything, that `seed/VERSION`'s CURRENT SEED block actually describes
+# the committed seed. That correspondence used to be maintained entirely by hand, on the one file the
+# whole trust chain rests on: a promotion that forgot to update the block left the journal quietly
+# describing a different compiler, and the mistake surfaced only when somebody tried to explain a
+# reproducibility failure months later. It costs one sha256sum and no build, so it runs first.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 SEED="$ROOT/seed/alatyr"
 M="$ROOT/package.al"
 [ -x "$SEED" ] || { echo "FAIL: no seed at $SEED"; exit 1; }
+step() { printf '=== %s ===\n' "$1"; }
+
+step "seed identity — seed/VERSION's CURRENT SEED block vs the committed tree"
+VF="$ROOT/seed/VERSION"
+[ -f "$VF" ] || { echo "FAIL: no seed/VERSION at $VF"; exit 6; }
+field() { # <name> -> the value, or empty when the line is absent
+  grep -oE "^${1}:[[:space:]]*[^[:space:]]+" "$VF" 2>/dev/null | head -1 | sed -E "s/^${1}:[[:space:]]*//"
+}
+want_sha="$(field current-seed-sha256)"
+want_ver="$(field current-seed-version)"
+if [ -z "$want_sha" ] || [ -z "$want_ver" ]; then
+  echo "FAIL: seed/VERSION has no CURRENT SEED block (need both 'current-seed-sha256:' and"
+  echo "      'current-seed-version:' lines). That block is the only place the file states which"
+  echo "      compiler seed/alatyr IS — the entries themselves read in two directions, so the topmost"
+  echo "      one is not the newest. See the HOW TO READ THIS FILE header."
+  exit 6
+fi
+have_sha="$(sha256sum "$SEED" | cut -d' ' -f1)"
+if [ "$have_sha" != "$want_sha" ]; then
+  echo "FAIL: seed/VERSION describes a different seed than the one committed."
+  echo "      seed/VERSION current-seed-sha256: $want_sha"
+  echo "      sha256sum seed/alatyr:            $have_sha"
+  echo "      A promotion updates the CURRENT SEED block in the same commit that replaces the seed."
+  echo "      If the seed is right and the block is stale, fix the block — never the other way round:"
+  echo "      the block is a claim about the artifact, not a place to record a wish."
+  exit 6
+fi
+have_ver="$(grep -oE '^[[:space:]]*version[[:space:]]*=[[:space:]]*"[^"]*"' "$M" 2>/dev/null | head -1 | sed -E 's/.*"([^"]*)".*/\1/')"
+if [ -z "$have_ver" ]; then
+  echo "FAIL: package.al has no version field to compare against seed/VERSION"; exit 6
+fi
+if [ "$have_ver" != "$want_ver" ]; then
+  echo "FAIL: package.al's version and the promoted seed's version disagree."
+  echo "      package.al version:                $have_ver"
+  echo "      seed/VERSION current-seed-version: $want_ver"
+  echo "      CHANGELOG.md's versioning order moves the version ON a seed promotion and only on one, so"
+  echo "      these two must always agree. This fires on both ways of breaking it: a promotion that"
+  echo "      forgot the bump, and a bump made without a promotion. Note the version IS part of the"
+  echo "      emission — it is a compile-time constant (src/cli.al, TOOL-21) — but changing it moves"
+  echo "      the seed's and Stage1's output identically, so the fixpoint below would NOT catch this."
+  exit 6
+fi
+echo "seed identity ok: sha256 ${have_sha:0:16}… version $have_ver (seed/VERSION agrees)"
+
 mkdir -p target
 ## Do not let a compiler from a previous self-build satisfy the seed-stage assertion after the
 ## layout transition. The frozen seed must itself create the profile path; remove only that exact
 ## compiler-under-test artifact, never package fixture or gate scratch trees.
 rm -f "$ROOT/target/alatyr" "$ROOT/target/alatyr.s" "$ROOT/target/alatyr.o"
 rm -f "$ROOT/target/debug/alatyr" "$ROOT/target/debug/alatyr.s" "$ROOT/target/debug/alatyr.o"
-step() { printf '=== %s ===\n' "$1"; }
 
 step "Stage1 — the committed seed builds the tree (alatyr build) -> target/debug/alatyr or legacy target/alatyr"
 SEED_LOG="$ROOT/target/fixpoint_seedbuild.log"

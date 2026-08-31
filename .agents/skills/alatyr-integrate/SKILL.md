@@ -187,13 +187,38 @@ seed→Stage1 GAS delta line by line with both label families normalized (**this
 find the compiler miscompiling itself** — one reseed surfaced four latent bugs) → copy Stage1 over
 `seed/alatyr` and append the evidence to `seed/VERSION`.
 
-A self-promote also **bumps `version` in the repository's own `package.al`**, in the same commit that
-replaces the seed. That field is the compiler's only identity: it is part of the input tree, so it stays
+A self-promote also **releases a version**, in the same commit that replaces the seed. `version` in the
+repository's own `package.al` is the compiler's identity: it is part of the input tree, so it stays
 reproducible (unlike a build-time commit string), and a promoted seed that keeps the previous number
 leaves two materially different compilers claiming to be the same build. Move the patch component for an
-ordinary promotion; the versioning policy in `CHANGELOG.md` decides minor and major, and the same rule
-that governs a changelog entry governs this bump. State the old and new version in the acceptance
-comment alongside the three stage hashes.
+ordinary promotion; `CHANGELOG.md`'s versioning order decides minor and major.
+
+Five files move together, and `scripts/fixpoint.sh` refuses the tree if the first four disagree:
+
+| file | what changes |
+|---|---|
+| `seed/alatyr` | the promoted Stage2 binary |
+| `seed/VERSION` | the appended entry (three stage hashes + the **read** delta) **and** the CURRENT SEED block's `current-seed-sha256` / `current-seed-version` |
+| `package.al` | the new `version` |
+| `scripts/package_cli_test.sh` | its expected `alatyr <version>` line |
+| `CHANGELOG.md` | `## Unreleased` becomes `## <version> — <date>`; a fresh empty `## Unreleased` opens above it |
+
+The `package_cli_test.sh` line is the one that gets forgotten: it hardcodes the expected `--version`
+output, and forgetting it fails e2e with a diagnostic that never mentions the version. Note also that
+the fixpoint does **not** catch a wrong version by itself — the version is a compile-time constant, so
+changing it moves the seed's emission and Stage1's identically. The seed-identity check at the top of
+`scripts/fixpoint.sh` is what catches it, in both directions: a promotion that forgot the bump, and a
+bump made without a promotion.
+
+After the promotion lands on `main`, place an **annotated** tag `v<version>` on the promotion commit,
+with the digest as its message — one paragraph on what this generation does that the previous one did
+not, the three hashes, the promoted stage, the gate line and the spec revision. The template is in
+`CHANGELOG.md`. The tag is created after the merge, so nothing reviews it: it is navigation, and the
+full delta audit stays in `seed/VERSION`, which the promotion PR does review. Push the tag explicitly
+(`git push origin v<version>`) — a branch push does not carry it.
+
+State the old and new version in the acceptance comment alongside the three stage hashes, and name the
+tag you placed.
 
 ## 4 · Gate the merge, then assert the tree
 

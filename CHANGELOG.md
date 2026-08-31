@@ -11,17 +11,74 @@ conforms to. Those two numbers move for different reasons and must not be confla
 can land without any compiler change, and the compiler changes constantly without the language
 moving at all.
 
-- **MAJOR** — a program that used to compile no longer does, or produces a different result. Also:
-  the spec revision this build conforms to moves by a major.
+- **MAJOR** — a program **the specification calls valid** no longer compiles, or produces a different
+  result. Also: the spec revision this build conforms to moves by a major. The qualifier is doing real
+  work: this compiler has accepted many programs the specification declares invalid, and refusing one
+  of those is a defect fixed, not a break — see PATCH.
 - **MINOR** — new surface: a construct that used to be rejected now works, a backend gains a shape,
   a CLI verb or flag appears.
 - **PATCH** — a defect fixed with no new surface, or a diagnostic improved. A **silent wrong value**
   turned into a correct one, or into a loud failure, is a PATCH even though its effect on a program
-  can be dramatic; that is the class this project treats as most urgent.
+  can be dramatic; that is the class this project treats as most urgent. **Newly rejecting a program
+  the specification declares invalid** is also a PATCH: the defect was accepting it, and someone whose
+  code stops compiling for that reason was relying on a bug. Say so in the entry, so the reader can
+  tell this case from a break.
 
 Two things that deliberately do **not** move the version: making an existing rejection *louder* or
 better-located (the program was already refused), and any change under `scripts/` — the gates are
 how this repository proves itself, not part of what it ships.
+
+## When the version moves, and the tag that records it
+
+**The version moves on a seed promotion, and only on one.** `package.al`'s `version` field is the
+compiler's identity; a promotion replaces `seed/alatyr` with a materially different compiler, and two
+promoted builds reporting the same number is exactly what a version exists to prevent. Between
+promotions the number stands still and `## Unreleased` accumulates, so the number identifies a seed
+generation together with the tree that seed reproduces — not an individual commit.
+
+`scripts/fixpoint.sh` enforces the pairing: `package.al`'s `version` must equal
+`current-seed-version` in `seed/VERSION`'s CURRENT SEED block. It fires on both ways of breaking it — a
+promotion that forgets the bump, and a bump made without a promotion. The fixpoint itself would not
+catch either: the version IS part of the emission (a compile-time constant, TOOL-21), but changing it
+moves the seed's output and Stage1's identically, so they stay byte-equal.
+
+A promotion commit therefore carries all of these, and the gate is red if any is missing:
+
+1. `seed/alatyr` — the promoted Stage2 binary.
+2. `seed/VERSION` — the appended entry with the three stage hashes and the **read** delta, plus the
+   CURRENT SEED block updated to the new hash and version. The entry is the reviewable part: it lands
+   in the promotion PR, where a human can read the delta before it becomes history.
+3. `package.al` — the new `version`.
+4. `scripts/package_cli_test.sh` — its expected `alatyr <version>` line. Easy to forget, and forgetting
+   it fails the gate with a diagnostic that never mentions the version.
+5. This file — `## Unreleased` becomes `## <version> — <date>`, and a fresh empty `## Unreleased`
+   opens above it.
+
+**The tag.** After the promotion lands, an **annotated** tag `v<version>` goes on the promotion commit.
+It is created after the merge, so nothing reviews its message — which is why the tag carries the digest
+and never the primary record:
+
+```
+git tag -a v0.2.0 <promotion commit> -F - <<'EOF'
+alatyr 0.2.0
+
+<one paragraph: what this generation of the compiler does that the previous one did not>
+
+Stage1 == Stage2 == Stage3, GAS <n> lines
+GAS SHA-256:    <hash>
+binary SHA-256: <hash>
+Promoted stage: Stage2
+Gate: e2e <n>/<n>, corpus <n>/<n>, formatter clean, idiom new=0, sweeps clean
+Spec revision: <revision this build conforms to>
+EOF
+```
+
+The full delta audit stays in `seed/VERSION`. A tag is not in the input tree — a source tarball loses
+it, and a tag can be moved with a force-push — so it is navigation, not the record.
+
+Two numbers that are **not** the compiler's version: the specification revision (this build cites it,
+`README.md` carries the badge) and the seed lineage in `seed/VERSION`. The specification's own `v1.0.0`
+tag lives in the sibling repository; a `v1.0.0` here would mean something else entirely.
 
 ## Unreleased
 
