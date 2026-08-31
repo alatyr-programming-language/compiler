@@ -91,6 +91,12 @@ limit_err := fn(s : usize, kind : usize) -> CheckErr { LIMIT_DIAG_MARKER + s * 8
 ## remains unchanged while check/build/emit surfaces can preserve the lower's established wording.
 SCALAR_CONVERSION_DIAG_MARKER := 5764607523034234880
 scalar_conversion_err := fn(s : usize) -> CheckErr { SCALAR_CONVERSION_DIAG_MARKER + s * 4 }
+## A distinct located diagnostic for a direct builtin scalar conversion whose operand is a named user
+## aggregate without a matching in-scope @convert. Keep it between the arity and global-aggregate
+## classes so existing CheckErr ranges remain byte-identical while pre-emission surfaces retain the
+## lower's established "needs a scalar operand" wording.
+AGG_SCALAR_CONVERSION_DIAG_MARKER := 6050000000000000000
+agg_scalar_conversion_err := fn(s : usize) -> CheckErr { AGG_SCALAR_CONVERSION_DIAG_MARKER + s * 4 }
 ## A distinct located diagnostic for the unsupported non-literal mutable-struct-global assignment
 ## fence. Keep it between the scalar-conversion and comptime classes so older CheckErr ranges remain
 ## byte-identical while every CLI renderer can retain the existing lower's useful wording.
@@ -5389,6 +5395,13 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   if ecs.n != 0 and sema_scalar_conversion_arity_bad(e, decls, src) {
     mark_failed(locals, scalar_conversion_err(ecs.s))
   }
+  ## Types §4.6 / TYP-6 — move the direct named-aggregate operand residual from the lower's builtin
+  ## conversion fail-loud into the shared semantic path. A matching @convert remains an explicit user
+  ## conversion; the helper is intentionally narrower than the lower net so tuple/array and indirect
+  ## forms keep their existing diagnostics and scope.
+  if ecs.n != 0 and sema_builtin_aggregate_conversion_bad(e, decls, upto, src, locals, nloc) {
+    mark_failed(locals, agg_scalar_conversion_err(ecs.s))
+  }
   ## A builtin numeric conversion from a string is outside the conversion lattice. Keep this guard on
   ## the shared pre-match path so a direct call and the private `compiles` transaction observe the same
   ## rejection; the frozen seed may otherwise skip the payload-heavy Call arm and leave it unknown.
@@ -9605,6 +9618,68 @@ sema_scalar_conversion_arity_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), src 
   nm := str_at((src + cs.s), cs.n)
   if sema_conv_kind(nm) >= 0 { return true }
   brand_underlying(decls, src, cs.s, cs.n).n != 0
+}
+## Is a function declaration marked `@convert`? The parser discards this value-position marker, so
+## mirror lower::fn_is_convert's bounded forward source scan. This helper is used only by the narrow
+## aggregate-operand conversion fence below; ordinary call resolution remains untouched.
+sema_fn_is_convert := fn(src : ptr(u8), name_s : usize, name_l : usize) -> bool {
+  mut p := name_s + name_l
+  mut scanning := true
+  while scanning {
+    c := str_at((src + p), 1)
+    if c == " " or c == "\n" or c == "\t" or c == "\r" { p += 1 } else { scanning = false }
+  }
+  if str_at((src + p), 2) != ":=" { return false }
+  p += 2
+  scanning = true
+  while scanning {
+    c := str_at((src + p), 1)
+    if c == " " or c == "\n" or c == "\t" or c == "\r" { p += 1 } else { scanning = false }
+  }
+  str_at((src + p), 8) == "@convert"
+}
+## True iff an in-scope @convert accepts the named aggregate `agg` and returns the builtin target
+## `[cs,cl)`. The lower's aggregate conversion dispatch is target-keyed; checking the first parameter
+## here keeps this shared fence faithful to Types §4.6 instead of allowing an unrelated conversion to
+## rescue a mismatched source. Only a non-generic, single-parameter named conversion is considered;
+## unresolved, qualified, aliased and generic source shapes remain on their existing lower paths.
+sema_aggregate_conversion_exists := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), cs : usize, cl : usize, agg : Ty, caller_s : usize, caller_l : usize) -> bool {
+  if agg.nl == 0 { return false }
+  mut i := 0
+  while i < upto {
+    d := deref(decl_get(decls, i))
+    if d.kind == 1 and d.is_fn and not d.is_generic and d.arity == 1 and sema_fn_is_convert(src, d.name_start, d.name_len) {
+      rb := base_type_name(src, d.ret_ts, d.ret_tl)
+      if rb.n != 0 and streq(src, rb.s, rb.n, cs, cl) and sema_decl_visible_from(src, d, caller_s, caller_l) {
+        pm := d.params_head
+        if pm != 0 {
+          p0 := deref(param_p(pm))
+          pb := base_type_name(src, p0.ts, p0.tl)
+          if pb.n != 0 and streq(src, pb.s, pb.n, agg.ns, agg.nl) { return true }
+        }
+      }
+    }
+    i += 1
+  }
+  false
+}
+## Types §4.6 / TYP-6 — the smallest shared pre-emission fence for the live residual: a direct
+## builtin numeric conversion `T(rec)` where `rec` is a named user-aggregate local. A scalar local,
+## direct aggregate literals, tuples/arrays, indirect/UFCS/qualified forms and brands are deliberately
+## outside this increment. A matching in-scope @convert keeps the explicit user-conversion path alive.
+sema_builtin_aggregate_conversion_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 or expr_call_arity(e) != 1 { return false }
+  if sema_conv_kind(str_at((src + cs.s), cs.n)) < 0 { return false }
+  ah := expr_call_args_head(e)
+  if ah == 0 { return false }
+  a0 := deref(arg_p(ah))
+  vs := expr_var_span(a0.e)
+  if vs.n == 0 or nloc == 0 or not local_in(locals, nloc, src, vs.s, vs.n) { return false }
+  agg := value_agg_ty(a0.e, decls, upto, src, locals, nloc)
+  if agg.tag != 3 and agg.tag != 4 { return false }
+  lv := deref(locals)
+  not sema_aggregate_conversion_exists(decls, upto, src, cs.s, cs.n, agg, lv.mod_s, lv.mod_l)
 }
 ## Is `nm` a built-in SCALAR type spelling (a recognized concrete scalar — never a user type-param name)?
 ## The kernel scalars are NOT brands (only bool/char/f32/f64 are), so `brand_underlying` cannot see them;
