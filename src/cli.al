@@ -500,17 +500,22 @@ run_target_check := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usize
   return rt::run(a, exe_c, av, envp)
 }
 
+## Write one fragment to stderr. Verbose build telemetry composes dynamic paths without allocating more
+## StrBufs after the linker has used most of the command arena; the caller owns line boundaries.
+tool_stderr_piece := fn(msg : str) {
+  w := rt::sys_write(1, 2, unchecked bitcast(usize, msg.ptr), msg.len)
+}
+
+tool_stderr_newline := fn() {
+  nl := "\n"
+  n := rt::sys_write(1, 2, unchecked bitcast(usize, nl.ptr), nl.len)
+}
+
 ## Write one complete line to stderr. Toolchain failures use this primitive for their diagnostics, and
 ## successful manifest builds use it for their optional summary while stdout remains machine-readable.
 tool_stderr_line := fn(msg : str) {
-  w := rt::sys_write(1, 2, unchecked bitcast(usize, msg.ptr), msg.len)
-  ## Bind the literal to a LOCAL before taking `.ptr`/`.len`. `"\n".ptr` applied DIRECTLY to a
-  ## literal handed `sys_write` an address that wrote nothing, so every toolchain diagnostic came
-  ## out WITHOUT its line break and ran into whatever the caller printed next
-  ## (`…rejected the emitted assemblyrc=13`). A `str` local materializes the {ptr,len} pair, which
-  ## is the same rule `link_exe` documents for forwarding a `str` argument.
-  nl := "\n"
-  n := rt::sys_write(1, 2, unchecked bitcast(usize, nl.ptr), nl.len)
+  tool_stderr_piece(msg)
+  tool_stderr_newline()
 }
 
 ## Report a toolchain failure on stderr. Every `link_exe` failure path used to return a BARE numeric
@@ -2868,6 +2873,47 @@ manifest_target_projection := fn(in out a : rt::Arena, pkg_al : str, field : str
   "invalid"
 }
 
+## The projections already published for the selected target. Unlike manifest_target_projection this
+## view does not reread the manifest or allocate a scanner buffer, so verbose telemetry can safely run
+## after code generation and linking have consumed the command arena.
+manifest_resolved_projection := fn(field : str) -> str {
+  if field == "arch" {
+    if CLI_TARGET_ARCH == 0 { return "x86_64" }
+    if CLI_TARGET_ARCH == 1 { return "i386" }
+    if CLI_TARGET_ARCH == 2 { return "aarch64" }
+    if CLI_TARGET_ARCH == 3 { return "aarch32" }
+    if CLI_TARGET_ARCH == 4 { return "riscv32" }
+    if CLI_TARGET_ARCH == 5 { return "riscv64" }
+    return "invalid"
+  }
+  if field == "os" {
+    if CLI_TARGET_OS == 0 { return "linux" }
+    if CLI_TARGET_OS == 1 { return "android" }
+    if CLI_TARGET_OS == 2 { return "windows" }
+    if CLI_TARGET_OS == 3 { return "macos" }
+    if CLI_TARGET_OS == 4 { return "freebsd" }
+    if CLI_TARGET_OS == 5 { return "none" }
+    return "invalid"
+  }
+  if field == "env" {
+    if CLI_TARGET_ENV == 0 { return "gnu" }
+    if CLI_TARGET_ENV == 1 { return "musl" }
+    if CLI_TARGET_ENV == 2 { return "eabi" }
+    if CLI_TARGET_ENV == 3 { return "eabihf" }
+    if CLI_TARGET_ENV == 4 { return "bionic" }
+    if CLI_TARGET_ENV == 5 { return "none" }
+    return "invalid"
+  }
+  if field == "container" {
+    if CLI_TARGET_CONTAINER == 0 { return "elf" }
+    if CLI_TARGET_CONTAINER == 1 { return "pe" }
+    if CLI_TARGET_CONTAINER == 2 { return "macho" }
+    if CLI_TARGET_CONTAINER == 3 { return "com" }
+    return "invalid"
+  }
+  "invalid"
+}
+
 ## Tooling §2.2/§2.6 / issue #262 — report the successful manifest build's resolved profile, machine target and
 ## artifact path as one deterministic line. This is success telemetry, not a diagnostic: stderr keeps
 ## stdout available for machine-readable surfaces, and the write result is intentionally ignored so a
@@ -2892,6 +2938,62 @@ manifest_build_summary := fn(in out a : rt::Arena, pkg_al : str, profile : str, 
   rt::push_str(summary, artifact)
   msg := str_at(summary.data, summary.len)
   tool_stderr_line(msg)
+}
+
+## Tooling §2.2 / issue #262 — the build-only verbose view reports the resolved inputs and the
+## phases that produced a successful artifact. It is deliberately emitted after the build succeeds:
+## a failed build keeps its existing diagnostic stream, while a successful build gets deterministic
+## facts on stderr and stdout remains available for machine-readable callers. Compose the lines from
+## direct writes so telemetry cannot exhaust the command arena after linking. This is observation only;
+## no compiler or linker input is changed.
+manifest_build_verbose := fn(pkg_al : str, profile : str, artifact : str, paths : str) {
+  if pkg_al.len > 0 {
+    tool_stderr_piece("verbose: manifest=")
+    tool_stderr_piece(pkg_al)
+    tool_stderr_newline()
+  } else {
+    tool_stderr_line("verbose: source-list build")
+  }
+  tool_stderr_piece("verbose: profile=")
+  tool_stderr_piece(profile)
+  tool_stderr_newline()
+  tool_stderr_piece("verbose: target=")
+  if pkg_al.len > 0 {
+    arch := manifest_resolved_projection("arch")
+    os := manifest_resolved_projection("os")
+    env := manifest_resolved_projection("env")
+    container := manifest_resolved_projection("container")
+    tool_stderr_piece(arch)
+    tool_stderr_piece("-")
+    tool_stderr_piece(os)
+    tool_stderr_piece("-")
+    tool_stderr_piece(env)
+    tool_stderr_piece("-")
+    tool_stderr_piece(container)
+  } else {
+    tool_stderr_piece("x86_64-linux-gnu-elf")
+  }
+  tool_stderr_newline()
+  tool_stderr_line("verbose: modules")
+  mut i := 0
+  while i < paths.len {
+    mut e := i
+    while e < paths.len and bytes(paths)[e] != 10 { e += 1 }
+    if e > i {
+      path := str_at(unchecked bitcast(usize, paths.ptr) + i, e - i)
+      tool_stderr_piece("verbose: module=")
+      tool_stderr_piece(path)
+      tool_stderr_newline()
+    }
+    i = e + 1
+  }
+  tool_stderr_piece("verbose: assemble=")
+  tool_stderr_piece(artifact)
+  tool_stderr_piece(".s")
+  tool_stderr_newline()
+  tool_stderr_piece("verbose: link=")
+  tool_stderr_piece(artifact)
+  tool_stderr_newline()
 }
 
 ## The first bounded plan slice describes only the currently emitted host target. Rejecting the other
@@ -3951,7 +4053,7 @@ pub build_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize, pk
 ##   <prog> check ( <file.al>... | <pkg>/package.al )    — TYPE-CHECK only (no emit): exit 0 ok / 1 reject / 9 parse
 ##   <prog> new <name>                                   — scaffold a package dir <name>/ (package.al + main.al)
 ##   <prog> test ( <file.al>... | <pkg>/package.al )     — build a @test runner + run it; exit = #failing tests
-##   <prog> build <pkg>/package.al                       — manifest build: artifact → `<target_dir>/<output>`
+##   <prog> build [--verbose|-v] <pkg>/package.al        — manifest build: artifact → `<target_dir>/<output>`
 ## A lone `…/package.al` arg discovers the package's `.al` modules under the manifest's `source_dir`
 ## (default `src`); else the args are the file list. The entry is the module named `main` (the emitted
 ## `_start` → `main__main`), falling back to the last module for a single-file build.
@@ -4958,6 +5060,7 @@ mut CLI_TARGET_SELECT_N := 0
 mut CLI_TARGET_SELECT_ALL := false
 mut CLI_BUILD_PLAN := false
 mut CLI_QUIET := false
+mut CLI_VERBOSE := false
 mut CLI_VENDOR_DIR_COUNT := 0
 mut CLI_OPTION_BAD := false
 mut CLI_UNKNOWN_OPTION_P := 0
@@ -4981,6 +5084,7 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
   CLI_TARGET_SELECT_ALL = false
   CLI_BUILD_PLAN = false
   CLI_QUIET = false
+  CLI_VERBOSE = false
   CLI_VENDOR_DIR_COUNT = 0
   CLI_OPTION_BAD = false
   CLI_UNKNOWN_OPTION_P = 0
@@ -5029,6 +5133,9 @@ scan_cli_inputs := fn(cmd : str, fi : usize, n : usize) {
     } else if x == "--quiet" or x == "-q" {
       CLI_QUIET = true
       i += 1
+    } else if x == "--verbose" or x == "-v" {
+      CLI_VERBOSE = true
+      i += 1
     } else if x == "--vendor-dir" {
       CLI_VENDOR_DIR_COUNT += 1
       if i + 1 < n { i += 2 } else { CLI_OPTION_BAD = true ; i += 1 }
@@ -5061,7 +5168,7 @@ bare_file_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) ->
   mut i := fi
   while i < n and first == n {
     x := arg_at(cmd, i)
-    if x == "--plan" or x == "--quiet" or x == "-q" { i += 1 }
+    if x == "--plan" or x == "--quiet" or x == "-q" or x == "--verbose" or x == "-v" { i += 1 }
     else if x == "--release" { i += 1 }
     else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
@@ -5074,7 +5181,7 @@ bare_file_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) ->
   while i < n {
     x := arg_at(cmd, i)
     mut skip := false
-    if x == "--plan" or x == "--quiet" or x == "-q" { skip = true ; i += 1 }
+    if x == "--plan" or x == "--quiet" or x == "-q" or x == "--verbose" or x == "-v" { skip = true ; i += 1 }
     else if x == "--release" { skip = true ; i += 1 }
     else if x == "--profile" { skip = true ; if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { skip = true ; if i + 1 < n { i += 2 } else { i += 1 } }
@@ -5100,7 +5207,7 @@ cli_first_input := fn(cmd : str, fi : usize, n : usize) -> str {
   mut i := fi
   while i < n {
     x := arg_at(cmd, i)
-    if x == "--plan" or x == "--quiet" or x == "-q" { i += 1 }
+    if x == "--plan" or x == "--quiet" or x == "-q" or x == "--verbose" or x == "-v" { i += 1 }
     else if x == "--release" { i += 1 }
     else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
@@ -5118,7 +5225,7 @@ plan_bare_inputs_reject := fn(in out a : rt::Arena, cmd : str, fi : usize, n : u
   mut i := fi
   while i < n {
     x := arg_at(cmd, i)
-    if x == "--plan" or x == "--quiet" or x == "-q" { i += 1 }
+    if x == "--plan" or x == "--quiet" or x == "-q" or x == "--verbose" or x == "-v" { i += 1 }
     else if x == "--release" { i += 1 }
     else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
     else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
@@ -5592,6 +5699,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       unknown := str_at(CLI_UNKNOWN_OPTION_P, CLI_UNKNOWN_OPTION_N)
       return cli_unknown_arg_diag(a, unknown)
     }
+    if CLI_VERBOSE and mode != 6 { return cli_config_diag(a, "--verbose is supported only by `build`") }
     if CLI_BUILD_PLAN and mode != 6 { return cli_config_diag(a, "--plan is supported only by `build`") }
     if CLI_VENDOR_DIR_COUNT > 0 { return cli_config_diag(a, "--vendor-dir is not supported in v1") }
     if CLI_TARGET_DIR_COUNT > 1 { return cli_config_diag(a, "--target-dir was specified more than once") }
@@ -5977,7 +6085,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       build_rc = link_exe_split(a, outp, paths, sb.data, sb.len, spb, entry_sym, libnames, anyd, lflags)
     }
     if is_pkg and build_rc == 0 {
-      if not CLI_QUIET { manifest_build_summary(a, mpath, selected_profile, outp) }
+      if CLI_VERBOSE { manifest_build_verbose(mpath, selected_profile, outp, paths) }
+      else if not CLI_QUIET { manifest_build_summary(a, mpath, selected_profile, outp) }
       if CLI_BUILD_PLAN {
         plan_rc := write_build_plan(a, mpath, "", true, selected_profile)
         if plan_rc != 0 { return plan_rc }
