@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- Direct struct-field and explicitly typed local fixed-array-element assignments now enforce the
+  declared destination type, rejecting silent `str`/`bool`-to-integer stores with located diagnostics.
 - Direct user-defined brands now retain their nominal identity during semantic type resolution, so
   distinct brands with the same underlying layout are not treated as the same semantic type.
 - `alatyr build --verbose` / `-v` now reports the selected manifest, profile, target, modules, and
