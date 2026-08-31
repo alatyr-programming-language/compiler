@@ -152,9 +152,10 @@ COMPTIME_COND_DIAG_MARKER := 7493989779944505344
 comptime_cond_err := fn(s : usize) -> CheckErr { COMPTIME_COND_DIAG_MARKER + s * 4 }
 
 ## A synthesized type: a tag (0 unknown/error, 1 int, 2 bool, 3 struct, 4 enum, 5 pointer,
-## 6 str, 7 array) and, for a struct/enum, the type's name span `[ns, ns+nl)`. Tag 11 is reserved
-## for the narrow Issue #269 wrapper-result marker stored in locals; it is intentionally not surfaced
-## through the ordinary `check_expr` carrier or `ty_compat`.
+## 6 str, 7 array, 8 direct user brand) and, for a named type, its identity name span `[ns, ns+nl)`.
+## Tag 8 only carries the nominal identity in this slice; conversion compatibility remains a later
+## issue step. Tag 11 is reserved for the narrow Issue #269 wrapper-result marker stored in locals; it
+## is intentionally not surfaced through the ordinary `check_expr` carrier or `ty_compat`.
 pub Ty := struct { tag : u8, ns : usize, nl : usize }
 
 ## Are two types compatible? Unknown (tag 0) is compatible with anything (poison-tolerant —
@@ -179,7 +180,13 @@ tag_compat := fn(x : u8, y : u8) -> bool {
   if x == 5 and y == 1 { return true }
   false
 }
-ty_eq := fn(a : Ty, b : Ty) -> bool {
+ty_eq := fn(a : Ty, b : Ty, src : ptr(u8)) -> bool {
+  ## Types §4.1/§5.4 — equal-layout user brands are equal only when their declaration names match.
+  ## This is nominal identity, not the conversion lattice; `ty_compat` remains the deferred boundary.
+  if a.tag == 8 and b.tag == 8 {
+    if a.nl == 0 or b.nl == 0 { return true }
+    return streq(src, a.ns, a.nl, b.ns, b.nl)
+  }
   tag_compat(a.tag, b.tag)
 }
 
@@ -1928,6 +1935,35 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
   ## type-alias hop. The returned span is the nominal target declaration, so `C := Color` and
   ## `Color` produce the same identity instead of two unrelated aggregate names.
   bn := base_type_name(src, ts, tl)
+  ## Issue #299 Step 1 — resolve only a DIRECT, unqualified user brand. Generic/wrapper spellings are
+  ## deliberately left on their existing paths, and the four prelude interpretation brands retain
+  ## their established scalar/unknown treatment until the later conversion work is specified here.
+  mut direct_brand := bn.n == tl
+  mut bp := ts + tl
+  while str_at((src + bp), 1) == " " or str_at((src + bp), 1) == "\n" or str_at((src + bp), 1) == "\t" or str_at((src + bp), 1) == "\r" { bp = bp + 1 }
+  if str_at((src + bp), 1) == "(" { direct_brand = false }
+  mut bsep := 0
+  while bsep + 1 < tl {
+    if str_at((src + ts + bsep), 2) == "::" { direct_brand = false }
+    bsep = bsep + 1
+  }
+  if direct_brand and w != "char" and w != "f32" and w != "f64" {
+    ## Keep this lookup local to the semantic declaration prefix. `brand_underlying` is a lower-layout
+    ## query whose ranked index is built by lowering; using it here left a user brand UNKNOWN during
+    ## the standalone semantic pass. The direct scan preserves the resolver's existing declaration
+    ## order/scope rule and only recognizes the parser's nominal-brand marker (kind 0, arity 1).
+    mut is_brand := false
+    for i in 0..ncnt {
+      d := deref(decl_get(decls, i))
+      if d.is_fn == false and d.kind == 0 and d.arity == 1 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, bn.s, bn.n) {
+        is_brand = true
+      }
+    }
+    if is_brand {
+      r = Ty(tag = 8, ns = ts, nl = tl)
+      return r
+    }
+  }
   mut alias_ts := 0
   mut alias_tl := 0
   for i in 0..ncnt {
@@ -2335,6 +2371,23 @@ local_in := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : u
 ## `comptime N` and the `: type` marker from `Param`, so recover the two source spellings here. Type
 ## parameters (`T : type`) and comptime value parameters (`comptime N : u64`) are valid in a foldable
 ## condition and must not be mistaken for runtime locals; ordinary body bindings remain runtime values.
+## Compare the two direct local-value branches of an `if` when both resolve to user-defined brands.
+## This is deliberately narrower than the ordinary `if` checker: Step 1 only preserves the brands'
+## nominal identity, while conversion compatibility and the full branch lattice remain later issue work.
+## A zero result means either that the expression is not this narrow shape or that no mismatch is proven.
+sema_direct_brand_if_mismatch := fn(e : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> usize {
+  ip := expr_if_parts(e)
+  if not ip.is_if or nloc == 0 { return 0 }
+  ls := expr_var_span(ip.then_e)
+  rs := expr_var_span(ip.else_e)
+  if ls.n == 0 or rs.n == 0 { return 0 }
+  if not local_in(locals, nloc, src, ls.s, ls.n) or not local_in(locals, nloc, src, rs.s, rs.n) { return 0 }
+  lt := local_ty(locals, nloc, src, ls.s, ls.n)
+  rt := local_ty(locals, nloc, src, rs.s, rs.n)
+  if lt.tag == 8 and rt.tag == 8 and not streq(src, lt.ns, lt.nl, rt.ns, rt.nl) { return rs.s }
+  0
+}
+
 sema_local_is_comptime := fn(src : ptr(u8), l : Local) -> bool {
   if param_is_comptime(src, l.ns) { return true }
   if binding_is_comptime(src, l.ns) { return true }
@@ -2615,6 +2668,15 @@ expr_match_parts := fn(e : ptr(Expr)) -> MatchParts {
 ## The statement body of a value-position `loop` expression, else null. This small accessor keeps the
 ## loop type rule on the pre-match path: payload-heavy expression arms can be skipped by the frozen seed's
 ## large bound-deref dispatcher, just like `Var` and `Match`.
+## `IfParts` keeps the accessor's result explicit at the call site and avoids a second broad type rule.
+IfParts := struct { is_if : bool, cond : ptr(Expr), then_e : ptr(Expr), else_e : ptr(Expr) }
+expr_if_parts := fn(e : ptr(Expr)) -> IfParts {
+  match deref(e) {
+    Expr::If(c, t, f) => { IfParts(is_if = true, cond = c, then_e = t, else_e = f) }
+    _ => { IfParts(is_if = false, cond = unchecked bitcast(ptr(Expr), 0), then_e = unchecked bitcast(ptr(Expr), 0), else_e = unchecked bitcast(ptr(Expr), 0)) }
+  }
+}
+
 expr_loop_body := fn(e : ptr(Expr)) -> ptr(mut Stmt) {
   match deref(e) {
     Expr::Loop(b) => { b }
@@ -5287,6 +5349,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## under the bootstrap seed (scar #2); recursing on the inner reliably yields the inner's type.
   bci := bitcast_inner(e)
   if unchecked bitcast(usize, bci) != 0 { return check_expr(bci, decls, upto, src, a, locals, nloc) }
+  ibm := sema_direct_brand_if_mismatch(e, src, locals, nloc)
+  if ibm != 0 { return Result(Ty, CheckErr).Err(mismatch_err(ibm, 0)) }
   if sema_is_direct_jmp(e, src) {
     jcs := expr_call_callee_span(e)
     return Result(Ty, CheckErr).Err(located_err(jcs.s))
@@ -5373,11 +5437,12 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     mut ltag : u8 = raw.tag
     if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
     mut rtag : u8 = 0
-    ## surface a CONCRETE tag for a struct/enum (3/4) local AND a POINTER (5) local — the latter carries
-    ## its pointee name in ns/nl (when nominal), so `ty_compat` can reject a `ptr(X)` flowing into a
-    ## `ptr(Y)` slot. Scalars/str/bool stay tolerant (tag 0); a ptr with an unknown pointee (nl==0) is
-    ## still tolerant inside `ty_compat`, so nothing new is FALSE-rejected.
-    if ltag == 3 or ltag == 4 or ltag == 5 { rtag = ltag }
+  ## surface a CONCRETE tag for a struct/enum (3/4), pointer (5), or direct user brand (8) local —
+  ## pointers and brands carry their nominal name in ns/nl, so `ty_compat`/`ty_eq` can distinguish
+  ## incompatible identities. Scalars/str/bool stay tolerant (tag 0); an unknown pointee/brand name
+  ## remains tolerant inside the corresponding comparison, so this does not widen rejection beyond
+  ## a resolved identity.
+  if ltag == 3 or ltag == 4 or ltag == 5 or ltag == 8 { rtag = ltag }
     return Result(Ty, CheckErr).Ok(Ty(tag = rtag, ns = raw.ns, nl = raw.nl))
   }
   ## A direct `local[N]` over a fixed `[T; N]` is the one indexed shape whose bound is already
@@ -5627,7 +5692,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       tr := check_expr(r, decls, upto, src, a, locals, nloc)?
       ## A comparison (kinds 20/24/25/26/27/28) yields bool; its operands must agree.
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
-        if ty_eq(tl, tr) { Result(Ty, CheckErr).Ok(Ty(tag = 2, ns = 0, nl = 0)) }
+        if ty_eq(tl, tr, src) { Result(Ty, CheckErr).Ok(Ty(tag = 2, ns = 0, nl = 0)) }
         else { Result(Ty, CheckErr).Err(mismatch_err(s_of(l, a), 0)) }
       } else if op == 40 or op == 41 {
         ## boolean `and`/`or`: both operands must be bool (tag 2) → bool. (`not` is op 42,
@@ -5660,7 +5725,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       if cc.tag != 0 and cc.tag != 2 { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(c, a), 0)); return er }
       tt := check_expr(t, decls, upto, src, a, locals, nloc)?
       tf := check_expr(f, decls, upto, src, a, locals, nloc)?
-      if ty_eq(tt, tf) { Result(Ty, CheckErr).Ok(unify(tt, tf)) }
+      if ty_eq(tt, tf, src) { Result(Ty, CheckErr).Ok(unify(tt, tf)) }
       else { Result(Ty, CheckErr).Err(mismatch_err(s_of(f, a), 0)) }
     }
     Expr::Match(scrut, head) => {
@@ -5689,7 +5754,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         lvec_truncate(deref(locals), base)
         nl2 = base
         if seen {
-          if not ty_eq(acc, cb) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(am.body, a), 0)); return er }
+          if not ty_eq(acc, cb, src) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(am.body, a), 0)); return er }
           acc = unify(acc, cb)
         } else { acc = cb; seen = true }
         arm = am.next

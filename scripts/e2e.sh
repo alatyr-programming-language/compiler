@@ -1001,6 +1001,56 @@ issue298_immutable_places_test() {
   if [ "$got" = 17 ]; then echo "ok   issue298/first_write: immutable field/index first writes run 17"; else echo "FAIL issue298/first_write: got $got want 17"; fail=1; fi
 }
 
+## Issue #299 / Types §4.1 + §5.4 — direct user brands carry nominal identity in sema. These generated
+## sources stay in the row's private scratch directory: the negative branch must fail only after the
+## resolver stops returning UNKNOWN for the two declared brands, while the same-brand control remains
+## accepted. No conversion-lattice, generic-payload, alias, wrapper, lowering, or oracle behavior is
+## asserted here.
+issue299_brand_identity_test() {
+  local d="$T/issue299_brand_identity"
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue299_brand_identity: scratch"; fail=1; return; }
+  printf '%s\n' \
+    'A := brand(u64)' \
+    'B := brand(u64)' \
+    'main := fn() -> u64 {' \
+    '  a : A = A(1)' \
+    '  b : B = B(2)' \
+    '  return if true { a } else { b }' \
+    '}' > "$d/sibling.al"
+  printf '%s\n' \
+    'A := brand(u64)' \
+    'main := fn() -> u64 {' \
+    '  a : A = A(1)' \
+    '  return if true { a } else { a }' \
+    '}' > "$d/same.al"
+
+  local src="$d/sibling.al" co="$d/sibling.check.out" ce="$d/sibling.check.err"
+  "$CC" check "$src" >"$co" 2>"$ce"; crc=$?
+  if [ "$crc" = 0 ] || [ -s "$co" ] || ! grep -qF "type mismatch" "$ce" || ! grep -qF "at line 6" "$ce"; then
+    echo "FAIL issue299/sibling(check): rc=$crc or diagnostic mismatch [$(<"$ce")]"; fail=1
+  else
+    echo "ok   issue299/sibling(check): distinct brands rejected at line 6"
+  fi
+  local bo="$d/sibling.bin" be="$d/sibling.build.err"
+  "$CC" -o "$bo" "$src" >"$d/sibling.build.out" 2>"$be"; brc=$?
+  if [ "$brc" = 0 ] || [ -e "$bo" ] || ! grep -qF "type mismatch" "$be" || ! grep -qF "at line 6" "$be"; then
+    echo "FAIL issue299/sibling(build): rc=$brc or artifact/diagnostic mismatch [$(<"$be")]"; fail=1
+  else
+    echo "ok   issue299/sibling(build): distinct brands rejected at line 6 without artifact"
+  fi
+
+  src="$d/same.al"; bo="$d/same.bin"
+  "$CC" check "$src" >/dev/null 2>"$d/same.check.err"; crc=$?
+  "$CC" -o "$bo" "$src" >/dev/null 2>"$d/same.build.err"; brc=$?
+  if [ "$crc" != 0 ] || [ "$brc" != 0 ] || [ ! -x "$bo" ]; then
+    echo "FAIL issue299/same: check=$crc build=$brc"; fail=1; return
+  fi
+  _e2e_exec "$bo" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "issue299/same" "$got"; then return; fi
+  if [ "$got" = 1 ]; then echo "ok   issue299/same: same brand remains accepted"; else echo "FAIL issue299/same: got $got want 1"; fail=1; fi
+}
+
 ## Issue #213 / Types §6.4 / Functions §2.3 / ABI §3.2 / Architecture §7 — the generic call-argument
 ## `gislice` path may widen local slice passing, but the RV64 write lowering is intentionally narrow:
 ## only an effective `Slice(u64)` parameter is supported, and checked indices must stay in the runtime
@@ -3957,6 +4007,7 @@ check_accept accept_ann_global_conforming
 ## check-only to a real run.
 run accept_ann_call_overloaded 9
 check_accept accept_ann_brand_and_generic
+issue299_brand_identity_test
 run accept_ann_str_binding 9
 run accept_ann_conforming 7
 run accept_ann_global_conforming 9
