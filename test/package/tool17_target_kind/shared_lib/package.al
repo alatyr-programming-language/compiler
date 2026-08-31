@@ -8,6 +8,5 @@ app := Package(
     env = Env.gnu,
     container = Container.elf,
     kind = Kind.shared_lib,
-    output = "tool17-kind-shared.so",
   )],
 )

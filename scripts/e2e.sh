@@ -2357,9 +2357,9 @@ tool17_source_check_test() {
 
 ## TOOL-17 / Tooling §2.7 — `target.kind` is the selected artifact kind, not a hard-coded executable
 ## answer. The executable branch runs; object/static_lib branches are checked in their emitted GAS
-## before assembly/archive; source is check-only and shared_lib remains a located unsupported-kind
-## reject. Each package is row-private through `_fixture_tree`, so artifact existence cannot leak between
-## the assertions.
+## before assembly/archive; source is check-only; shared_lib is built as the released x86_64/Linux/ELF
+## dynamic object. Each package is row-private through `_fixture_tree`, so artifact existence cannot
+## leak between the assertions.
 tool17_target_kind_test() {
   root="$(_fixture_tree package)/tool17_target_kind"
   p="$root/red"
@@ -2425,11 +2425,14 @@ tool17_target_kind_test() {
   rm -rf "$p/target"
   ( cd "$p" && "$CC" build package.al ) >/dev/null 2>"$T/tool17_target_kind.shared.err"
   rc=$?
-  if [ "$rc" = 41 ] && [ ! -e "$p/target" ] \
-    && grep -qF 'config: Target.kind = Kind.shared_lib is not implemented yet at line 10 in package.al' "$T/tool17_target_kind.shared.err"; then
-    echo "ok   tool17_target_kind: shared_lib keeps located reject"
+  lib="$p/target/debug/libapp.so"
+  if [ "$rc" = 0 ] && [ -f "$lib" ] \
+    && readelf -h "$lib" 2>/dev/null | grep -qE 'Type:[[:space:]]+DYN[[:space:]]+\(Shared object file\)' \
+    && nm -D "$lib" 2>/dev/null | grep -qE ' T api__probe$' \
+    && ! nm "$lib" 2>/dev/null | grep -qE ' [Tt] _start$'; then
+    echo "ok   tool17_target_kind: shared_lib emits default .so with pub surface and no entry"
   else
-    echo "FAIL tool17_target_kind: shared_lib rc=$rc diagnostic=$(cat "$T/tool17_target_kind.shared.err" 2>/dev/null)"; fail=1
+    echo "FAIL tool17_target_kind: shared_lib rc=$rc artifact=$lib diagnostic=$(cat "$T/tool17_target_kind.shared.err" 2>/dev/null)"; fail=1
   fi
   rm -rf "$root"/*/target
 }
