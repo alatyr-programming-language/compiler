@@ -6,7 +6,7 @@ main := fn() -> u64 {
   mut x : usize = 0
   x += 10
   x += 5
-  c := Counter(n = 0)
+  mut c := Counter(n = 0)
   c.n += 27
   return u64(x + c.n)
 }

@@ -9,7 +9,7 @@ desc := fn(a : u64, b : u64) -> bool { a > b }
 
 main := fn() -> u64 {
   ## reversed 512 (adversarial for selection sort) — must sort ascending
-  a : [u64; 512] = [0; 512]
+  mut a : [u64; 512] = [0; 512]
   mut i : u64 = 0
   while i < 512 {
     a[i] = 511 - i
@@ -43,7 +43,7 @@ main := fn() -> u64 {
 
   ## A LARGER reversed slice — 20000 elements: heapsort ~260k compares (fast); a selection sort would
   ## do ~200M compares here (seconds), the quadratic behavior this conformance forbids.
-  e : [u64; 20000] = [0; 20000]
+  mut e : [u64; 20000] = [0; 20000]
   i = 0
   while i < 20000 {
     e[i] = 19999 - i

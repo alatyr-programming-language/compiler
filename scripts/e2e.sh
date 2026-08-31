@@ -896,6 +896,111 @@ issue174_name_resolution_test() {
   issue174_run pointless_ok 42
 }
 
+## Issue #298 / Declarations §3.1 + Memory §1.6 — path stores must use the root binding's mutability,
+## not only the bare-name re-assignment path. These generated fixtures stay in the gate's private scratch
+## directory: the five negative forms and one positive control exercise check/build without changing the
+## per-file corpus oracle. The negative sources contain no diagnostic wording, so the needle cannot pass
+## by matching fixture documentation.
+issue298_immutable_places_test() {
+  local d="$T/issue298_immutable_places"
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue298_immutable_places: scratch"; fail=1; return; }
+  printf '%s\n' \
+    'S := struct {' \
+    '  f : u64' \
+    '}' \
+    'main := fn() -> u64 {' \
+    '  s := S(f = 1)' \
+    '  s.f = 9' \
+    '  return s.f' \
+    '}' > "$d/field.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  a := [1, 2, 3]' \
+    '  a[0] = 9' \
+    '  return a[0]' \
+    '}' > "$d/array.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  a := [1, 2, 3]' \
+    '  s := a[0..3]' \
+    '  s[0] = 9' \
+    '  return s[0]' \
+    '}' > "$d/slice.al"
+  printf '%s\n' \
+    'G : u64 = 1' \
+    'main := fn() -> u64 {' \
+    '  G = 9' \
+    '  return G' \
+    '}' > "$d/global.al"
+  printf '%s\n' \
+    'Inner := struct { f : u64 }' \
+    'Outer := struct { inner : Inner }' \
+    'main := fn() -> u64 {' \
+    '  s := Outer(inner = Inner(f = 1))' \
+    '  s.inner.f = 9' \
+    '  return s.inner.f' \
+    '}' > "$d/nested.al"
+  printf '%s\n' \
+    'Inner := struct { f : u64 }' \
+    'Outer := struct { inner : Inner }' \
+    'mut G : u64 = 1' \
+    'main := fn() -> u64 {' \
+    '  mut s := Outer(inner = Inner(f = 1))' \
+    '  s.inner.f = 9' \
+    '  mut a : [u64; 3] = [1, 2, 3]' \
+    '  a[0] = 7' \
+    '  mut view := a[0..3]' \
+    '  view[1] = 6' \
+    '  G = 5' \
+    '  return s.inner.f + a[0] + view[1] + G' \
+    '}' > "$d/mutable.al"
+  printf '%s\n' \
+    'Inner := struct { f : u64 }' \
+    'Outer := struct { inner : Inner }' \
+    'main := fn() -> u64 {' \
+    '  s : Outer' \
+    '  s.inner.f = 9' \
+    '  a : [u64; 2]' \
+    '  a[0] = 8' \
+    '  return s.inner.f + a[0]' \
+    '}' > "$d/first_write.al"
+
+  issue298_reject() { # name, source line
+    local n="$1" want_line="$2" src="$d/$1.al"
+    local co="$d/$1.check.out" ce="$d/$1.check.err"
+    "$CC" check "$src" >"$co" 2>"$ce"; crc=$?
+    if [ "$crc" != 1 ] || [ -s "$co" ] || ! grep -qF "immutable binding" "$ce" || ! grep -qF "at line $want_line" "$ce"; then
+      echo "FAIL issue298/$n(check): rc=$crc or output/diagnostic mismatch [$(<"$ce")]"; fail=1; return
+    fi
+    local bo="$d/$1.bin" be="$d/$1.build.err"
+    "$CC" -o "$bo" "$src" >"$d/$1.build.out" 2>"$be"; brc=$?
+    if [ "$brc" != 1 ] || [ -e "$bo" ] || ! grep -qF "immutable binding" "$be" || ! grep -qF "at line $want_line" "$be"; then
+      echo "FAIL issue298/$n(build): rc=$brc or artifact/diagnostic mismatch [$(<"$be")]"; fail=1; return
+    fi
+    echo "ok   issue298/$n: check/build rejected with located immutable-binding diagnostic"
+  }
+  issue298_reject field 6
+  issue298_reject array 3
+  issue298_reject slice 4
+  issue298_reject global 3
+  issue298_reject nested 5
+
+  local src="$d/mutable.al" out="$d/mutable.bin"
+  "$CC" check "$src" >/dev/null 2>&1 || { echo "FAIL issue298/mutable: check"; fail=1; return; }
+  "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL issue298/mutable: build"; fail=1; return; }
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "issue298/mutable" "$got"; then return; fi
+  if [ "$got" = 27 ]; then echo "ok   issue298/mutable: mut field/path/index/slice/global writes run 27"; else echo "FAIL issue298/mutable: got $got want 27"; fail=1; fi
+
+  src="$d/first_write.al"; out="$d/first_write.bin"
+  "$CC" check "$src" >/dev/null 2>&1 || { echo "FAIL issue298/first_write: check"; fail=1; return; }
+  "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL issue298/first_write: build"; fail=1; return; }
+  _e2e_exec "$out" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "issue298/first_write" "$got"; then return; fi
+  if [ "$got" = 17 ]; then echo "ok   issue298/first_write: immutable field/index first writes run 17"; else echo "FAIL issue298/first_write: got $got want 17"; fail=1; fi
+}
+
 ## Issue #213 / Types §6.4 / Functions §2.3 / ABI §3.2 / Architecture §7 — the generic call-argument
 ## `gislice` path may widen local slice passing, but the RV64 write lowering is intentionally narrow:
 ## only an effective `Slice(u64)` parameter is supported, and checked indices must stay in the runtime
@@ -3636,6 +3741,7 @@ check_reject reject_call_paren_callee
 ## diagnostic; now a located parse reject. (The valid form is `Box := fn(T : type) -> type { return struct {…} }`.)
 check_located reject_struct_type_params 7
 issue174_name_resolution_test
+issue298_immutable_places_test
 check_reject reject_lambda_aggregate_return
 check_reject reject_lambda_capture_escape
 check_accept accept_param_default

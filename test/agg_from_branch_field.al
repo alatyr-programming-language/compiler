@@ -8,7 +8,7 @@ Rec := struct { a : i64, b : i64 }
 Outer := struct { inner : Rec, tag : i64 }
 main := fn() -> u64 {
   c := true
-  o := Outer(inner = Rec(a = 0, b = 0), tag = 7)
+  mut o := Outer(inner = Rec(a = 0, b = 0), tag = 7)
   o.inner = if c { Rec(a = 12, b = 30) } else { Rec(a = 0, b = 0) }
   return u64(o.inner.a + o.inner.b)
 }
