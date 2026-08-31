@@ -2616,30 +2616,40 @@ manifest_linker_flags := fn(in out a : rt::Arena, pkg_al : str) -> str {
 mf_find_word := fn(s : str, from : usize, word : str) -> i64 {
   mut i := from
   while i + word.len <= s.len {
-    mut ok := true
-    mut j := 0
-    while j < word.len { if bytes(s)[i + j] != bytes(word)[j] { ok = false } ; j += 1 }
-    mut lb := true
-    if i > 0 { lb = not amb_idc(bytes(s)[i - 1]) }
-    mut rb := true
-    if i + word.len < s.len { rb = not amb_idc(bytes(s)[i + word.len]) }
-    if ok and lb and rb {
-      mut p := i + word.len
-      while p < s.len and (bytes(s)[p] == 32 or bytes(s)[p] == 9 or bytes(s)[p] == 10 or bytes(s)[p] == 13) { p = p + 1 }
-      if p < s.len and bytes(s)[p] == 61 { return i64(i) }   ## '=' (61)
+    ## A manifest field name is meaningful only in code. Skipping comments and strings here is
+    ## essential for callers that inspect an untrusted manifest: `# link = …` and a quoted example
+    ## must not become a real field merely because their bytes have identifier boundaries.
+    if bytes(s)[i] == 35 {
+      i = manifest_skip_trivia(s, i, s.len)
+    } else if bytes(s)[i] == 34 {
+      i = manifest_skip_string(s, i, s.len)
+    } else {
+      mut ok := true
+      mut j := 0
+      while j < word.len { if bytes(s)[i + j] != bytes(word)[j] { ok = false } ; j += 1 }
+      mut lb := true
+      if i > 0 { lb = not amb_idc(bytes(s)[i - 1]) }
+      mut rb := true
+      if i + word.len < s.len { rb = not amb_idc(bytes(s)[i + word.len]) }
+      if ok and lb and rb {
+        mut p := manifest_skip_trivia(s, i + word.len, s.len)
+        if p < s.len and bytes(s)[p] == 61 { return i64(i) }   ## '=' (61)
+      }
+      i += 1
     }
-    i += 1
   }
   return 0 - 1
 }
 
-## The `"…"` string value of the `<field> = "…"` whose field name STARTS at `wi` (length `wl`) in `s`:
-## skip to the opening quote, capture to the closing quote. Empty if malformed. (Used for `name = "…"`.)
+## The `"…"` string value of the `<field> = "…"` whose field name STARTS at `wi` (length `wl`) in `s`.
+## Follow the field grammar and skip trivia before the value; searching blindly for the next quote
+## would let a quoted comment supply a fake value. Empty if malformed. (Used for `name = "…"`.)
 mf_quoted := fn(s : str, wi : usize, wl : usize) -> str {
   bb := unchecked bitcast(usize, s.ptr)
-  mut q := wi + wl
-  while q < s.len and bytes(s)[q] != 34 { q = q + 1 }   ## opening '"' (34)
-  if q >= s.len { return str_at(bb, 0) }
+  mut q := manifest_skip_trivia(s, wi + wl, s.len)
+  if q >= s.len or bytes(s)[q] != 61 { return str_at(bb, 0) }   ## '=' (61)
+  q = manifest_skip_trivia(s, q + 1, s.len)
+  if q >= s.len or bytes(s)[q] != 34 { return str_at(bb, 0) }   ## opening '"' (34)
   mut e := q + 1
   while e < s.len {
     if bytes(s)[e] == 34 {
@@ -2657,10 +2667,9 @@ mf_quoted := fn(s : str, wi : usize, wl : usize) -> str {
 ## read the token up to `,` / `)` / whitespace (a bool `true`/`false`, an integer, or an enum `E.V`).
 mf_token := fn(s : str, wi : usize, wl : usize) -> str {
   bb := unchecked bitcast(usize, s.ptr)
-  mut p := wi + wl
-  while p < s.len and bytes(s)[p] != 61 { p = p + 1 }   ## to '=' (61)
-  p = p + 1
-  while p < s.len and (bytes(s)[p] == 32 or bytes(s)[p] == 9 or bytes(s)[p] == 10 or bytes(s)[p] == 13) { p = p + 1 }
+  mut p := manifest_skip_trivia(s, wi + wl, s.len)
+  if p >= s.len or bytes(s)[p] != 61 { return str_at(bb, 0) }   ## '=' (61)
+  p = manifest_skip_trivia(s, p + 1, s.len)
   if p < s.len and bytes(s)[p] == 34 {   ## a quoted str default
     mut qe := p + 1
     while qe < s.len {
