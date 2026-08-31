@@ -1188,7 +1188,7 @@ pub list_al_in_dir := fn(in out a : rt::Arena, dir : str) -> str {
 }
 
 ## List every `.al` file below `root`, including the manifest, in deterministic path order. This is
-## the package-wide `fmt` discovery surface (Tooling §4.2): unlike build module discovery, it walks
+## the package-wide `fmt` discovery surface (Tooling §4.3): unlike build module discovery, it walks
 ## subdirectories and must not discard `package.al`. Linux getdents64 supplies the directory-entry
 ## type byte, so the queue can descend without a stat pass. Paths are kept newline-joined because that
 ## is the proven self-host I/O boundary shape; the fixed arena bounds match the existing package scan.
@@ -5582,7 +5582,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   }
   if mode == 10 {
     ## (`alatyr fmt`): with a path, preserve the existing filter-friendly stdout form;
-    ## with no path, Tooling §4.2 formats every `.al` below the current package root in place.
+    ## with no path, Tooling §4.3 formats every `.al` below the current package root in place.
     if n < 3 {
       allpaths := list_al_in_tree(a, ".")
       return fmt_package_files(a, allpaths)

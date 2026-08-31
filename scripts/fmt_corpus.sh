@@ -3,7 +3,7 @@
 #
 # `alatyr fmt` has NO fail-loud channel for a wrong RENDERING: it exits 0 and writes source. So a
 # mis-rendered form is a SILENT MISCOMPILE of the user's program. The only honest check is the
-# spec's own norm (Tooling §4.2: semantics-preserving + idempotent), applied to every program the
+# spec's own norm (Tooling §4.3: semantics-preserving + idempotent), applied to every program the
 # repo already owns:
 #
 #     run(fmt(x)) == run(x)        (same exit status AND same stdout)
@@ -34,7 +34,7 @@
 #
 # Walk 2 exists because walk 1 could not see it. `src/`/`lib/` files are modules, not programs:
 # they have no `_start`, so `run(fmt(x)) == run(x)` has no meaning and idempotence is the only
-# half of §4.2 that applies to them. That half was worth a gate on its own — `fmt` was
+# half of §4.3 that applies to them. That half was worth a gate on its own — `fmt` was
 # non-idempotent on SIX of the compiler's own modules and nothing noticed until someone ran `fmt`
 # by hand, and it was not cosmetic: on the `deref(p) = v` shape the reparse dropped the STORE, so
 # `fmt` was silently rewriting the program. Walk 2 costs ~3 s serial (65 files, 128 `fmt`
@@ -485,7 +485,7 @@ fi
 # WALK 2 — `src/` + `lib/`: the compiler's own MODULES, IDEMPOTENCE ONLY.
 #
 # A module has no `_start`, so there is no program to run and `run(fmt(x)) == run(x)` is not a
-# statement about it. What remains is §4.2's acceptance property, `fmt(fmt(x)) == fmt(x)`, and
+# statement about it. What remains is §4.3's acceptance property, `fmt(fmt(x)) == fmt(x)`, and
 # it is the half that was unwatched: `fmt` was non-idempotent on six of these files while walk 1
 # stayed green, and one of those non-idempotences DROPPED A STORE on reparse.
 #
