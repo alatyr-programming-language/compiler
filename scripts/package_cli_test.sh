@@ -1802,6 +1802,75 @@ EOF
     echo "FAIL tool20_plan: missing input rc=$missing_rc stderr=$(cat "$err")"
     fail=1
   fi
+
+  # Tooling §4.2 / MOD-9 — dynamic-library records must be derived from real Lib fields, not comments,
+  # and must survive comments between a field's `=` and its value. The parent implementation scans
+  # those bytes naively: this fixture therefore fails before the structural lexer fix by reporting the
+  # static library named `z`, omitting `m`, and capturing the quoted comment text as a name.
+  dyn=$(mktemp -d)
+  mkdir -p "$dyn/src"
+  cat >"$dyn/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  libs = [
+    Lib(
+      # link = LinkMode.dynamic
+      name = "z",
+      link = LinkMode.static,
+    ),
+    Lib(
+      name =
+        # the scanner must ignore this quoted comment: "not-a-library"
+        "m",
+      link =
+        # trivia after `=` is still part of the value
+        LinkMode.dynamic,
+    ),
+    Lib(name = "a", link = LinkMode.dynamic),
+    Lib(name = "m", link = LinkMode.dynamic),
+  ],
+  targets = [
+    Target(
+      arch = Arch.x86_64,
+      os = Os.linux,
+      env = Env.gnu,
+      container = Container.elf,
+      entry = "_start",
+      output = "dynamic-plan"
+    ),
+  ]
+)
+EOF
+  printf 'main := fn() -> u64 { return 0 }\n_start := fn() -> u64 { return 0 }\n' >"$dyn/src/main.al"
+  cat >"$want" <<'EOF'
+meta	arch	x86_64
+meta	container	elf
+meta	env	gnu
+meta	hermetic	no
+meta	machine	Linux
+meta	os	linux
+meta	package-version	0.1.0
+meta	plan-version	1
+meta	profile	debug
+meta	toolchain	as,ld
+artifact		debug	executable	debug/dynamic-plan	bin/dynamic-plan
+dylib		a
+dylib		m
+EOF
+  (cd "$dyn" && "$CC" plan package.al) >"$out" 2>"$err"
+  dyn_rc=$?
+  files=$(find "$dyn/target" -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort)
+  if [ "$dyn_rc" = 0 ] && [ ! -s "$out" ] && [ ! -s "$err" ] \
+    && cmp -s "$dyn/target/debug/plan.tsv" "$want" \
+    && [ "$files" = "debug/plan.tsv" ]; then
+    echo "ok   tool20_plan: dynamic records ignore comments, preserve values, sort, and deduplicate"
+  else
+    echo "FAIL tool20_plan: dynamic records rc=$dyn_rc files=$files stdout=$(cat "$out") stderr=$(cat "$err")"
+    fail=1
+  fi
+  rm -rf "$dyn"
   rm -f "$out" "$err" "$want" "$repeat"
   rm -rf "$p/target"
 }
