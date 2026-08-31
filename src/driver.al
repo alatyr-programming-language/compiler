@@ -2054,6 +2054,7 @@ pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
     strbuf::push_str(sb, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
   }
   mut nl := 0
+  zdiag := lower::set_codegen_files(0, 0, 0, 0, 0)
   lower::emit_program(ptr(decls), sb, base, ptr(na), na, nl, 0, false)
   sb = lower::peephole_gas(ptr(sb), tar)
 
@@ -2086,14 +2087,28 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
   mut na := rt::Arena(base = 0, off = 0, cap = 0)
   rt::arena_init(na, 33554432)
   ## --- build the single buffer: "m0" | "main" | sa | sb_src (names first, then sources) ---
+  ## Keep the same source table as the file-backed path so lower diagnostics remain file-relative
+  ## even when this in-memory two-module entry is used by an embedding caller.
   mut bld := strbuf::strbuf(tar, 1048576)
+  mut name_start := rt::Vec(data = rt::bump(tar, 2 * 8), len = 0, cap = 2)
+  mut name_len := rt::Vec(data = rt::bump(tar, 2 * 8), len = 0, cap = 2)
+  mut src_off := rt::Vec(data = rt::bump(tar, 2 * 8), len = 0, cap = 2)
+  mut src_len := rt::Vec(data = rt::bump(tar, 2 * 8), len = 0, cap = 2)
   la := 2                  ## len("m0")
   lb := 4                  ## len("main")
   lsa := sa.len
   lsb := sb_src.len
+  rt::vec_push(name_start, strbuf::buf_len(bld))
+  rt::vec_push(name_len, la)
   strbuf::push_str(bld, "m0")
+  rt::vec_push(name_start, strbuf::buf_len(bld))
+  rt::vec_push(name_len, lb)
   strbuf::push_str(bld, "main")
+  rt::vec_push(src_off, strbuf::buf_len(bld))
+  rt::vec_push(src_len, lsa)
   strbuf::push_str(bld, sa)
+  rt::vec_push(src_off, strbuf::buf_len(bld))
+  rt::vec_push(src_len, lsb)
   strbuf::push_str(bld, sb_src)
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
   sa_off := la + lb               ## source A begins after the two names
@@ -2131,6 +2146,7 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
   mut gas := strbuf::strbuf(tar, 4194304)
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
   mut nl := 0
+  zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), 2)
   lower::emit_program(ptr(decls), gas, base, ptr(na), na, nl, 0, false)
   gas = lower::peephole_gas(ptr(gas), tar)
   ## discharge the working containers (the buffer is freed AFTER emit, which read spans off it).
@@ -2213,6 +2229,7 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
   mut gas := strbuf::strbuf(tar, 16777216)
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
   mut nl := 0
+  zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), n)
   lower::emit_program(ptr(decls), gas, base, ptr(na), na, nl, 0, false)
   gas = lower::peephole_gas(ptr(gas), tar)
   ## The file-table vectors (name/src offsets) + buffers live in the rt arena `tar`, reclaimed in
@@ -4270,6 +4287,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## across functions. (Idiomatic form, exercising the scalar out-param ABI; was a `StrBuf.lbl`
   ## field workaround while scalar `in out` write-back was unimplemented.)
   mut nl := 0
+  zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), n)
   lower::emit_program(ptr(decls), gas, base, ptr(na), na, nl, spanbase, library_mode)
   ## TOOL-6 1c-γ: when a span buffer was supplied (the build path), peephole PER SPAN and rewrite the
   ## table to post-peephole offsets so `cli::link_exe` can split the final `.s` into per-module `.o`.

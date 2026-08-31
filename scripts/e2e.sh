@@ -6328,6 +6328,7 @@ run comptime_typeinfo_arg 42
 run comptime_resolves_args 42
 ## Comptime §9.1/§9.2 — every public entry point must reject a runtime-dependent comptime-if condition
 ## before emission, with the same located diagnostic and no output/artifact.
+build_reject_has reject_codegen_comptime_cond 'codegen: `comptime if` — cannot fold this comptime condition. The lower folds target machine projections, verify.checked, build.<flag>, a module const, an integer comparison, size(T), typeinfo(T).fields/variants.len, a type equality, a `match typeinfo(T)` kind test, resolves(…)/compiles(…), and and/or/not over those. Rejected rather than silently emitting NEITHER branch. at line 8 in reject_codegen_comptime_cond'
 check_reject_has reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
 build_reject_has reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
 emit_reject_has wat reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
