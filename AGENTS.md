@@ -55,6 +55,18 @@ when the PR completes it. A bounded slice uses an explicit `Refs #N` relation, r
 scope, and leaves the issue open for a later owner-selected unit. The GitHub merge button is not used;
 an approval is not a landing.
 
+Maintainer triage is an owner-controlled control-plane operation, not an automatic agent queue. The
+owner (or a maintainer explicitly delegated by the owner) may inspect incoming issues and PRs, request
+information, reject or close them, set workflow state, assign a trusted worker or reviewer, and select
+the exact item for an agent operation. An agent must not perform a repository-wide triage sweep, choose
+a foreign-authored item by label or assignee, or post a triage decision on an item that the owner did
+not select. The worker skills below are the only automatic routing paths: an explicit issue or PR number,
+or the narrowly scoped same-account fallback documented by that skill. Those paths are routing only and
+do not grant authorization. If triage authority or a required decision is unclear, stop and report it
+to the owner; do not resolve the ambiguity by adding a label or changing the item. Existing issue or PR
+comments and other context, including context on #288, are evidence: preserve them and add a correction
+or follow-up rather than deleting or rewriting history.
+
 `needs-info` is both an implementation hold and a research queue. The separate
 `alatyr-research` operation may read the pinned specification, inspect the repository,
 and make safe observations. If it proves a complete, safe brief from the specification and evidence,
