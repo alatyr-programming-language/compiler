@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- Direct user-defined brands now retain their nominal identity during semantic type resolution, so
+  distinct brands with the same underlying layout are not treated as the same semantic type.
 - `alatyr build --verbose` / `-v` now reports the selected manifest, profile, target, modules, and
   assemble/link outputs on stderr without changing the build artifact or machine-readable stdout.
 - x86_64/Linux/ELF package targets with `Kind.shared_lib` now build a `lib<base>.so` artifact with
