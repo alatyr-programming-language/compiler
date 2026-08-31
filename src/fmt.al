@@ -270,7 +270,7 @@ emit_fmt_label := fn(label : LabelSpan, in out sb : rt::StrBuf, src : ptr(u8)) {
   }
 }
 
-## ---- §4.2.3, the 100-column wrapping rule -------------------------------------------------------
+## ---- §4.3.3, the 100-column wrapping rule -------------------------------------------------------
 ##
 ## `fmt` renders a construct SINGLE-LINE first, then measures what it actually wrote and — if the
 ## OPENING LINE overflows the 100-column soft maximum — rolls the buffer back and re-renders the
@@ -303,7 +303,7 @@ fmt_sb_line_start := fn(in out sb : rt::StrBuf, at : usize) -> usize {
   i
 }
 
-## The width of the buffer range `[from, to)` in UNICODE SCALAR VALUES — the unit §4.2.3 names, NOT
+## The width of the buffer range `[from, to)` in UNICODE SCALAR VALUES — the unit §4.3.3 names, NOT
 ## bytes. A byte in `0x80 .. 0xBF` (128..191) is a UTF-8 CONTINUATION byte and starts no scalar; every
 ## other byte starts exactly one. The corpus carries `—`, `§` and Cyrillic in comments and string
 ## literals, where a byte count runs 2-3x ahead of the column and would wrap lines well inside the
@@ -320,7 +320,7 @@ fmt_sb_scalars := fn(in out sb : rt::StrBuf, from : usize, to : usize) -> usize 
 }
 
 ## The leading-space count of the line the buffer currently ENDS on — the indent of the line the
-## construct about to be emitted starts on, and so (§4.2.3) the indent its closing bracket returns to.
+## construct about to be emitted starts on, and so (§4.3.3) the indent its closing bracket returns to.
 fmt_sb_indent := fn(in out sb : rt::StrBuf) -> usize {
   ls := fmt_sb_line_start(sb, sb.len)
   mut i := ls
@@ -346,7 +346,7 @@ fmt_open_line_cols := fn(in out sb : rt::StrBuf, mark : usize) -> usize {
 }
 
 ## Did the render from `mark` BREAK A LINE — i.e. did a DESCENDANT wrap inside this construct's own
-## single-line trial? §4.2.3 puts the wrap at the OUTERMOST construct, so that descendant's decision
+## single-line trial? §4.3.3 puts the wrap at the OUTERMOST construct, so that descendant's decision
 ## has to be thrown away with the trial and retaken at the deeper indent; and the signal is not
 ## redundant with the width test, because a descendant that wraps SHORTENS the opening line (it now
 ## ends at the descendant's `(`), hiding the overflow from any measurement.
@@ -358,7 +358,7 @@ fmt_open_line_cols := fn(in out sb : rt::StrBuf, mark : usize) -> usize {
 ##                  statements then break lines of their own. Such a construct is inherently
 ##                  multi-line, so its newlines are NOT a descendant's wrap and must not force one —
 ##                  a region holding a `{\n` falls back to the opening-line width test alone.
-##   any other `\n` a broken BINARY-OPERATOR CHAIN (§4.2.3's second bullet). Its continuation begins
+##   any other `\n` a broken BINARY-OPERATOR CHAIN (§4.3.3's second bullet). Its continuation begins
 ##                  with the OPERATOR, so the newline has no fixed neighbour to key on; what makes it
 ##                  identifiable is that, absent a braced body, no other construct puts one there.
 fmt_region_has_wrap := fn(in out sb : rt::StrBuf, mark : usize) -> bool {
@@ -381,7 +381,7 @@ fmt_region_has_wrap := fn(in out sb : rt::StrBuf, mark : usize) -> bool {
   anynl
 }
 
-## Does the buffer line containing `at` already carry a `##` COMMENT? §4.2.4: a trailing comment
+## Does the buffer line containing `at` already carry a `##` COMMENT? §4.3.4: a trailing comment
 ## SUPPRESSES re-wrapping of the line it trails, so a deliberately laid-out, commented line is never
 ## reflowed. Two things this deliberately does not do. It does not consult the SOURCE line: comment
 ## retention is still imperfect, and a comment dropped on the way out would suppress pass 1 and not
@@ -412,7 +412,7 @@ fmt_line_has_comment := fn(in out sb : rt::StrBuf, at : usize) -> bool {
   r
 }
 
-## The width of a `str` in UNICODE SCALAR VALUES (§4.2.3's unit) — the `fmt_sb_scalars` rule applied
+## The width of a `str` in UNICODE SCALAR VALUES (§4.3.3's unit) — the `fmt_sb_scalars` rule applied
 ## to a source span rather than to the buffer, for a caller that must know how wide a tail will be
 ## BEFORE it writes it.
 fmt_str_scalars := fn(s : str) -> usize {
@@ -426,13 +426,13 @@ fmt_str_scalars := fn(s : str) -> usize {
   n
 }
 
-## The §4.2.3 verdict on the construct just rendered SINGLE-LINE into `[mark, sb.len)`: true — with the
+## The §4.3.3 verdict on the construct just rendered SINGLE-LINE into `[mark, sb.len)`: true — with the
 ## buffer already rolled back to `mark`, ready for the wrapped re-render — iff the opening line
 ## overflows the 100-column soft maximum, or a descendant wrapped inside the trial and the wrap
-## therefore belongs out here. A `##` comment on that line suppresses it (§4.2.4).
+## therefore belongs out here. A `##` comment on that line suppresses it (§4.3.4).
 ##
 ## `reserve` is the width, in scalars, of text the CALLER knows will still land on this line after the
-## construct — the `-> R` of a signature, a wrapped list's mandatory trailing `,`. §4.2.3 caps the
+## construct — the `-> R` of a signature, a wrapped list's mandatory trailing `,`. §4.3.3 caps the
 ## LINE, not the construct, and the construct's own verdict cannot see its successor: `add8 := @extern
 ## @abi(c) fn(a : i64, … h : i64)` measures 98 and stays single-line, then ` -> i64` makes the line
 ## 105. A reserve of 0 is the plain "nothing follows" case.
@@ -449,12 +449,12 @@ fmt_wrap_needed := fn(in out sb : rt::StrBuf, mark : usize) -> bool {
   return fmt_wrap_needed_res(sb, mark, 0)
 }
 
-## §4.2.3 verdict for the ONE construct whose overflow is invisible to the sub-construct that caused
+## §4.3.3 verdict for the ONE construct whose overflow is invisible to the sub-construct that caused
 ## it: an INLINE if-EXPRESSION. Its condition's own width verdict is taken before ` { … } else { … }`
 ## exists, so a condition that fits at 96 columns yields a 116-column LINE. Only the OPENING-LINE
 ## width counts here — deliberately NOT `fmt_region_has_wrap`: a descendant that broke a line inside
 ## a BRANCH already took the outermost wrap available to it, and re-taking that decision out here
-## would wrap the CONDITION for an overflow it did not cause. A `##` comment suppresses it (§4.2.4).
+## would wrap the CONDITION for an overflow it did not cause. A `##` comment suppresses it (§4.3.4).
 ## Rolls the buffer back to `mark` when it returns true, exactly like `fmt_wrap_needed`.
 fmt_if_wrap_needed := fn(in out sb : rt::StrBuf, mark : usize) -> bool {
   if fmt_line_has_comment(sb, mark) { return false }
@@ -464,7 +464,7 @@ fmt_if_wrap_needed := fn(in out sb : rt::StrBuf, mark : usize) -> bool {
 }
 
 ## The WRAPPED spelling of a plain `Arg` list: one element per line at `ind + 2` columns, each with a
-## trailing comma (canonical for a wrapped list, §4.2.3 — a single-line list has none), then `close`
+## trailing comma (canonical for a wrapped list, §4.3.3 — a single-line list has none), then `close`
 ## back at `ind`. A separate function on purpose: the self-host lower miscompiles an `Arg` read bound
 ## inside a nested `if` in a `match` arm whose expression is then handed to `emit_fmt_expr` (the
 ## landmine `fmt_emit_arraylit` documents), and the re-render is reached through exactly such an `if`.
@@ -485,8 +485,8 @@ fmt_emit_arg_list_multi := fn(head : ptr(mut Arg), close : str, ind : usize, in 
   push_str(sb, close)
 }
 
-## Emit a plain `Arg` list as `open … close`, applying §4.2.3: single-line first, wrapped if that
-## overflows. Shared by the three §4.2.3 forms whose elements are bare expressions — a CALL's argument
+## Emit a plain `Arg` list as `open … close`, applying §4.3.3: single-line first, wrapped if that
+## overflows. Shared by the three §4.3.3 forms whose elements are bare expressions — a CALL's argument
 ## list, an enum constructor's payload, and an array/list literal. An EMPTY list is never wrapped:
 ## `(\n)` is not a spelling of `()`, and a line that overflows around an argument-less call overflows
 ## for a reason no wrap of that call can fix.
@@ -513,7 +513,7 @@ fmt_emit_arg_list := fn(head : ptr(mut Arg), open : str, close : str, in out sb 
 }
 
 ## A struct literal's field list `(f = v, …)` rendered from the struct DECL's `FieldDecl` list, in
-## either spelling: `multi` selects the §4.2.3 wrapped form (one `f = v` per line at `ind + 2`, each
+## either spelling: `multi` selects the §4.3.3 wrapped form (one `f = v` per line at `ind + 2`, each
 ## with a trailing comma, `)` back at `ind`), else the single-line form. ONE renderer with two
 ## spellings on purpose — a second copy of the field-name recovery could drift from this one, and the
 ## by-name pairing it performs is the part whose divergence is a SILENT relabelling of the fields.
@@ -903,8 +903,8 @@ fmt_emit_arraylit := fn(n : usize, head : ptr(mut Arg), in out sb : rt::StrBuf, 
   ## the `[e; N]` fill form is an ARRAY spelling only — a tuple never shares one element node.
   mut fill := fmt_arraylit_is_fill(n, head)
   if tup { fill = false }
-  ## §4.2.3 — the plain `[e0, e1, …]` LIST literal is one of the four wrapping forms. A TUPLE `(a, b)`
-  ## is a tuple-ctor, which §4.2.3 does NOT list, and `[e; N]` is one element plus a repeat count, not
+  ## §4.3.3 — the plain `[e0, e1, …]` LIST literal is one of the four wrapping forms. A TUPLE `(a, b)`
+  ## is a tuple-ctor, which §4.3.3 does NOT list, and `[e; N]` is one element plus a repeat count, not
   ## a list of elements; both keep their single-line spelling however wide they are.
   if not tup {
     if not fill {
@@ -1430,7 +1430,7 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
         ## Re-insert grouping parens the parser erased: a LEFT child of strictly-lower precedence (or
         ## equal precedence under a non-associative comparison parent) and a RIGHT child of lower-OR-
         ## EQUAL precedence must be wrapped, so the re-parse rebuilds the identical tree.
-        ## §4.2.3, second bullet — a binary-operator CHAIN that overflows breaks BEFORE each of its
+        ## §4.3.3, second bullet — a binary-operator CHAIN that overflows breaks BEFORE each of its
         ## operators. Rendered single-line first, then re-rendered broken when the opening line
         ## overflows (or when a descendant already broke a line, which puts the break out here).
         bmark := sb.len
@@ -1486,7 +1486,7 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
       } else {
         push_str(sb, str_at((src + cs), cl))
       }
-      ## §4.2.3 — the argument list is one of the four wrapping forms; `fmt_emit_arg_list` renders it
+      ## §4.3.3 — the argument list is one of the four wrapping forms; `fmt_emit_arg_list` renders it
       ## single-line and re-renders it one-argument-per-line when the opening line overflows 100 columns.
       fmt_emit_arg_list(g, "(", ")", sb, src, a, decls, reserve)
     }
@@ -1531,7 +1531,7 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
     }
     Expr::If(c, t, f) => {
       ## Rendered inline first, then RE-rendered with the condition's operator chain broken when the
-      ## whole line overflows (§4.2.3): the condition is the only construct on that line the spec
+      ## whole line overflows (§4.3.3): the condition is the only construct on that line the spec
       ## names a wrapped spelling for, and its own verdict could not see the ` { … } else { … }` that
       ## follows it. `fmt_emit_if_expr` is the single renderer, parameterized by that one choice, so
       ## the two spellings cannot drift apart.
@@ -1555,7 +1555,7 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
       }
       push_str(sb, ".")
       push_str(sb, str_at((src + vs), vl))
-      ## §4.2.3 — an enum CONSTRUCTOR's payload wraps by the same rule as a call's argument list.
+      ## §4.3.3 — an enum CONSTRUCTOR's payload wraps by the same rule as a call's argument list.
       if ph != 0 { fmt_emit_arg_list(ph, "(", ")", sb, src, a, decls, reserve) }
     }
     Expr::Match(scrut, arms_head) => {
@@ -1604,7 +1604,7 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
         ## FIELD-NAME recovery keys on the BASE name (a generic instance `Slice(u64)` is declared as
         ## `Slice`); the full instance span is still what was rendered above, so the name round-trips.
         push_str(sb, str_at((src + ss), sl))
-        ## §4.2.3 — a struct CONSTRUCTOR's fields are one of the four wrapping forms.
+        ## §4.3.3 — a struct CONSTRUCTOR's fields are one of the four wrapping forms.
         dmark := sb.len
         dind := fmt_sb_indent(sb)
         fmt_emit_declfields(ah, fh, dind, false, sb, src, a, decls)
@@ -1626,7 +1626,7 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
         fopen := sfopen
         if fopen == 0 { panic("selfhost: fmt — struct literal field-list not found in source") }
         push_str(sb, str_at((src + hs), fopen - hs))
-        ## §4.2.3 — as the decl-based path above, on the source-scanned field names.
+        ## §4.3.3 — as the decl-based path above, on the source-scanned field names.
         smark := sb.len
         sind := fmt_sb_indent(sb)
         fmt_emit_scanfields(ah, fopen, sind, false, sb, src, a, decls)
@@ -1707,7 +1707,7 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
     Expr::Lambda(fnpos, ph, rts, rtl, bh, val) => {
       push_str(sb, "fn")
       ## The `-> R {` that follows the list is on the SAME line, so it belongs to the list's width
-      ## verdict (§4.2.3 caps the line): 4 for `" -> "`, the return type's own scalars, 2 for `" {"`.
+      ## verdict (§4.3.3 caps the line): 4 for `" -> "`, the return type's own scalars, 2 for `" {"`.
       mut lres : usize = 2
       if rtl != 0 { lres = 6 + fmt_str_scalars(str_at((src + rts), fmt_fnty_len(src, rts, rtl))) }
       emit_fmt_params(ph, lres, sb, src, a)
@@ -1776,7 +1776,7 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
 
 ## The ordinary expression entry point has no caller-supplied tail. Wrapping-aware callers use the
 ## reserve-carrying entry point above; keeping this wrapper preserves the intentionally flat call
-## sites whose surrounding syntax is not a §4.2.3 list element.
+## sites whose surrounding syntax is not a §4.3.3 list element.
 emit_fmt_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
   emit_fmt_expr_res(e, sb, src, a, decls, 0)
 }
@@ -2428,11 +2428,11 @@ fmt_stmt_lead_attr := fn(src : ptr(u8), name_s : usize, out_s : ptr(mut usize)) 
 ## The RIGHT operand of a `Bin` value, or null for any other shape. Its own function because the
 ## `Stmt::Assign` arm must stay flat — a nested match/if-else there mis-lowers in a fn this big (the arm's
 ## own comment records it), so the destructuring lives out here. It is also the third of the `Bin`
-## destructuring probes the §4.2.3 chain renderer needs (`fmt_is_bin` / `fmt_bin_op` / `fmt_bin_left`
+## destructuring probes the §4.3.3 chain renderer needs (`fmt_is_bin` / `fmt_bin_op` / `fmt_bin_left`
 ## sit with the other single-match probes), for the same reason: a `match` nested inside a `match` arm.
-## `if c { t } else { f }` as an EXPRESSION, in one of its two §4.2.3 spellings: `chain` false is the
+## `if c { t } else { f }` as an EXPRESSION, in one of its two §4.3.3 spellings: `chain` false is the
 ## single-line form, `chain` true breaks the CONDITION before each of its operators at `ind + 2`
-## columns (§4.2.3's operator-chain bullet) and leaves the braced arms on the last continuation line.
+## columns (§4.3.3's operator-chain bullet) and leaves the braced arms on the last continuation line.
 ## An `else` whose whole content is another `if` is the `else if` CHAIN of Control Flow §4 and stays
 ## FLAT: re-braced as `} else { if … }` it becomes the LAST element of a block, which the parser
 ## classifies as an if-EXPRESSION, so pass 2 sees a different tree and renders it differently — that
@@ -2479,7 +2479,7 @@ fmt_emit_if_expr := fn(c : ptr(Expr), t : ptr(Expr), f : ptr(Expr), chain : bool
 }
 
 ## Can the CONDITION of an inline if-expression be re-rendered as a broken operator chain
-## (§4.2.3, second bullet)? Only a `Bin` can, and not the unary `not` the parser stores as one
+## (§4.3.3, second bullet)? Only a `Bin` can, and not the unary `not` the parser stores as one
 ## (op 42). Everything else — a bare `Var`, a call, a comparison against a call — has no wrapped
 ## spelling the spec names, so the overflowing line is left as written rather than guessed at.
 fmt_if_cond_chainable := fn(c : ptr(Expr)) -> bool {
@@ -3169,7 +3169,7 @@ fmt_param_mode := fn(src : ptr(u8), ns : usize) -> usize {
   r
 }
 
-## Emit a fn parameter list `(name : Type, …)` from `params_head`, applying §4.2.3: the single-line
+## Emit a fn parameter list `(name : Type, …)` from `params_head`, applying §4.3.3: the single-line
 ## form first and — when its opening line overflows the 100-column soft maximum — the wrapped form,
 ## one parameter per line at one level in with a trailing comma and the `)` back at the opening line's
 ## indent. An EMPTY list is never wrapped (`()` has no elements to put on their own lines).
@@ -3189,7 +3189,7 @@ emit_fmt_params := fn(params_head : ptr(mut Param), reserve : usize, in out sb :
   return
 }
 
-## The parameter list itself, in either spelling (`multi` = the §4.2.3 wrapped form). ONE renderer with
+## The parameter list itself, in either spelling (`multi` = the §4.3.3 wrapped form). ONE renderer with
 ## two spellings, so the `comptime` / `in` / `out` / `in out` markers and the type-span recovery below
 ## — every one of which a second copy could silently drop — are written exactly once.
 fmt_emit_params_body := fn(params_head : ptr(mut Param), ind : usize, multi : bool, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
@@ -3243,7 +3243,7 @@ fmt_emit_params_body := fn(params_head : ptr(mut Param), ind : usize, multi : bo
 ## grouped sub-expression, not a chain link. `not` (op 42, a unary prefix the parser stores as a `Bin`)
 ## is never a link. A DIFFERENT precedence ends the chain too: the `*` of `a * b + c` lives inside the
 ## `+` node's left operand, so it is a sub-expression that stays on its line and breaks only if that
-## line still overflows — which is exactly §4.2.3's "an inner construct wraps only if it still
+## line still overflows — which is exactly §4.3.3's "an inner construct wraps only if it still
 ## overflows once the outer one has".
 fmt_bin_chain_link := fn(l : ptr(Expr), pp : i64, pcmp : bool) -> bool {
   if pcmp { return false }
@@ -3252,7 +3252,7 @@ fmt_bin_chain_link := fn(l : ptr(Expr), pp : i64, pcmp : bool) -> bool {
   fmt_expr_prec(l) == pp
 }
 
-## The WRAPPED spelling of a binary-operator chain (§4.2.3, second bullet): the chain breaks BEFORE
+## The WRAPPED spelling of a binary-operator chain (§4.3.3, second bullet): the chain breaks BEFORE
 ## each of its operators, at the continuation indent (one level in), the operator BEGINNING the
 ## continuation line. The chain's first operand stays on the opening line; the left spine is walked by
 ## recursion, so `a + b + c` — which is `Bin(+, Bin(+, a, b), c)` — comes out with BOTH operators
@@ -3938,7 +3938,7 @@ emit_fmt_fn := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena
   apl := fmt_decl_attr_prefix(src, d.name_start + d.name_len, ptr(aps))
   if apl != 0 { push_str(sb, str_at((src + aps), apl)) ; push_str(sb, " ") }
   push_str(sb, "fn")
-  ## `-> R` lands on this same line; count it into the list's verdict (§4.2.3 caps the LINE).
+  ## `-> R` lands on this same line; count it into the list's verdict (§4.3.3 caps the LINE).
   mut fres : usize = 0
   if d.ret_tl != 0 { fres = 4 + fmt_str_scalars(str_at((src + d.ret_ts), fmt_fnty_len(src, d.ret_ts, d.ret_tl))) }
   emit_fmt_params(d.params_head, fres, sb, src, a)
