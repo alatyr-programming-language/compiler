@@ -26,9 +26,22 @@ step() { printf '=== %s ===\n' "$1"; }
 step "seed identity — seed/VERSION's CURRENT SEED block vs the committed tree"
 VF="$ROOT/seed/VERSION"
 [ -f "$VF" ] || { echo "FAIL: no seed/VERSION at $VF"; exit 6; }
-field() { # <name> -> the value, or empty when the line is absent
+field() { # <name> -> the single value, or empty when the line is absent
   grep -oE "^${1}:[[:space:]]*[^[:space:]]+" "$VF" 2>/dev/null | head -1 | sed -E "s/^${1}:[[:space:]]*//"
 }
+field_count() { grep -cE "^${1}:" "$VF" 2>/dev/null; true; }
+# Two lines naming the same field is an ambiguity, not a value. A promotion that APPENDS a new
+# current-seed line instead of replacing the old one would otherwise be measured against whichever
+# came first, which is the stale one — and silently, since head -1 always yields something.
+for f in current-seed-sha256 current-seed-version; do
+  n="$(field_count "$f")"
+  if [ "$n" -gt 1 ]; then
+    echo "FAIL: seed/VERSION declares '$f' $n times; the CURRENT SEED block must declare it once."
+    echo "      A promotion REPLACES those two lines. Appending a second one leaves the stale value"
+    echo "      first, which is the one that would be checked."
+    exit 6
+  fi
+done
 want_sha="$(field current-seed-sha256)"
 want_ver="$(field current-seed-version)"
 if [ -z "$want_sha" ] || [ -z "$want_ver" ]; then
@@ -39,7 +52,10 @@ if [ -z "$want_sha" ] || [ -z "$want_ver" ]; then
   exit 6
 fi
 have_sha="$(sha256sum "$SEED" | cut -d' ' -f1)"
-if [ "$have_sha" != "$want_sha" ]; then
+# Compare hex case-insensitively. Case carries no meaning in a digest, and rejecting an upper-case
+# copy of the CORRECT hash would fail with "describes a different seed" — a true verdict about a false
+# thing, which is the class of measurement error AGENTS.md warns about by name.
+if [ "$(printf '%s' "$have_sha" | tr 'A-F' 'a-f')" != "$(printf '%s' "$want_sha" | tr 'A-F' 'a-f')" ]; then
   echo "FAIL: seed/VERSION describes a different seed than the one committed."
   echo "      seed/VERSION current-seed-sha256: $want_sha"
   echo "      sha256sum seed/alatyr:            $have_sha"
