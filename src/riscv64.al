@@ -422,6 +422,30 @@ rv_slice_param_u64 := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize
   }
   r
 }
+## Is the PARAM [ns,nl] a `Slice` whose EFFECTIVE element type is exactly u32? This is the bounded
+## word-element write extension for the generic parameter path. Ordinary RV64 scalar arrays and slices
+## reserve one backend word per element; byte-tier layout is a separate, unsupported shape here.
+rv_slice_param_u32 := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize) -> bool {
+  mut p := params_head
+  mut r := false
+  while p != 0 {
+    pm := deref(param_p(p))
+    if streq(src, pm.ns, pm.nl, ns, nl) {
+      es := rv_slice_elem_span(src, pm.ns, pm.nl)
+      if es.n != 0 {
+        mut ets := es.s
+        mut etn := es.n
+        if RV_SUB_GPL != 0 and streq(src, es.s, es.n, RV_SUB_GPS, RV_SUB_GPL) {
+          ets = RV_SUB_ITS
+          etn = RV_SUB_ITL
+        }
+        if str_at((src + ets), etn) == "u32" { r = true }
+      }
+    }
+    p = pm.next
+  }
+  r
+}
 ## The CURRENT fn's params + decls, stashed as module globals at the top of emit_rv_fn (the RV_CHK/RV_AGG
 ## pattern) so the per-fn FRAME SCANNERS (rv_iter_stride / rv_arr_elem_struct_span), which take no
 ## params_head, can recognize a slice PARAM base — needed to size + type a struct/enum-element loop var.
@@ -5794,6 +5818,9 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         if (not isslice) and (not isarr) and pidxS >= 0 {
           if rv_slice_param_u64(params_head, src, bns, bnl) { isparamslice = true }
         }
+        if (not isslice) and (not isarr) and pidxS >= 0 {
+          if rv_slice_param_u32(params_head, src, bns, bnl) { isparamslice = true }
+        }
         aoff := rv_local_off(body_head, src, bns, bnl, pcount, a, decls)
         ## `xs[i] = v` — a whole-ELEMENT write into a fixed array of scalar-only STRUCTS (a LOCAL
         ## array-lit or an array GLOBAL). MUST be tested BEFORE the scalar `isarr` path: that path
@@ -5891,9 +5918,11 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         }
         else if easp.n != 0 { push_str(sb, "  ebreak\n") }
         else if isparamslice {
-          ## Bounded Slice(u64) PARAM write: the slot points to the caller's two-word pair. Preserve the
-          ## value across index evaluation, check the runtime length, then store through the data pointer.
-          ## Unsupported element sizes and shapes do not enter this branch and remain an explicit ebreak.
+          ## Bounded word-granular Slice(u64)/Slice(u32) PARAM write: the slot points to the caller's
+          ## two-word pair. Preserve the value across index evaluation, check the runtime length, then
+          ## store through the data pointer. RV64's ordinary scalar-array model reserves one word per
+          ## element, so both supported types use the existing 8-byte stride/store. Unsupported element
+          ## sizes and shapes do not enter this branch and remain an explicit ebreak.
           emit_rv_expr(ival, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
           emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)

@@ -1053,10 +1053,10 @@ issue299_brand_identity_test() {
 
 ## Issue #213 / Types §6.4 / Functions §2.3 / ABI §3.2 / Architecture §7 — the generic call-argument
 ## `gislice` path may widen local slice passing, but the RV64 write lowering is intentionally narrow:
-## only an effective `Slice(u64)` parameter is supported, and checked indices must stay in the runtime
-## view length. These generated sources stay in this row's private scratch directory, so they add no
-## corpus rows and cannot authorize an oracle change. The positive fixture row above proves the supported
-## path; these three controls prove its bounds: checked OOB, non-u64 scalar, and aggregate element.
+## only effective `Slice(u64)` and `Slice(u32)` word elements are supported, and checked indices must stay
+## in the runtime view length. These generated sources stay in this row's private scratch directory, so
+## they add no corpus rows and cannot authorize an oracle change. The existing u64 and aggregate controls
+## remain unchanged; the u32 controls cover the supported write and its checked OOB boundary.
 issue213_rv64_slice_controls_test() {
   command -v riscv64-unknown-linux-gnu-as >/dev/null 2>&1 && command -v riscv64-unknown-linux-gnu-ld >/dev/null 2>&1 && command -v qemu-riscv64 >/dev/null 2>&1 \
     || { echo "skip issue213_rv64_slice_controls: riscv64 toolchain absent"; return; }
@@ -1080,6 +1080,14 @@ issue213_rv64_slice_controls_test() {
     '  return 42' \
     '}' > "$d/u32.al"
   printf '%s\n' \
+    'setw := fn(T : type, s : Slice(T), i : usize, x : T) { s[i] = x }' \
+    'main := fn() -> u64 {' \
+    '  arr : [u32; 3] = [10, 20, 30]' \
+    '  s := arr[0..3]' \
+    '  setw(u32, s, 3, 99)' \
+    '  return 42' \
+    '}' > "$d/u32_oob.al"
+  printf '%s\n' \
     'P := struct { x : u64 }' \
     'setw := fn(T : type, s : Slice(T), i : usize, x : T) { s[i] = x }' \
     'main := fn() -> u64 {' \
@@ -1098,7 +1106,7 @@ issue213_rv64_slice_controls_test() {
       fail=1
       return
     fi
-    if [ "$n" = oob ] && ! grep -qF 'bltu a0, t1, 1f' "$gas"; then
+    if { [ "$n" = oob ] || [ "$n" = u32_oob ]; } && ! grep -qF 'bltu a0, t1, 1f' "$gas"; then
       echo "FAIL issue213/$n: missing runtime-length branch before ebreak"
       fail=1
       return
@@ -1123,7 +1131,8 @@ issue213_rv64_slice_controls_test() {
   }
 
   issue213_rv64_case oob 133
-  issue213_rv64_case u32 133
+  issue213_rv64_case u32 42
+  issue213_rv64_case u32_oob 133
   issue213_rv64_case aggregate 133
 }
 
@@ -6654,6 +6663,9 @@ run slice_toolkit 42
 ## param binds by-ref (was is_ref=false → the write overwrote the slot / a read returned the block ptr).
 run slice_generic_write 42
 run_rv64 slice_generic_write 42
+## Issue #213 residual: RV64/Linux same-module monomorphized Slice(u32) parameter write. The fixture
+## checks the write, neighbouring elements, and read-after-write; its row-private control checks OOB.
+run_rv64 slice_generic_u32_write 42
 issue213_rv64_slice_controls_test
 ## The AArch64 generic Slice(T) write path is also used transitively by base::slice::sort's sift_down.
 run_a64 slice_generic_write 42
