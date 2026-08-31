@@ -151,6 +151,29 @@ pub std_idx_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), s
   z := unchecked bitcast(ptr(Expr), 0)
   match deref(e) {
     Expr::Index(arr, idx) => {
+      ## CLAYOUT S4/S3(d) — a fixed array FIELD of a plain local struct has no SlotEntry of its own,
+      ## so the ordinary Var-rooted byte-tier resolver above cannot see `s.items[i].a`. Recover the
+      ## field type from the owning struct, then hand the element type to the SAME byte-tier stride
+      ## and field-offset machinery used by local arrays. Keep this bounded to a non-generic,
+      ## direct-scalar element and a statically sized field: Slice fields, packed/nested/aggregate
+      ## elements, generic instances, globals and word-tier elements retain their existing routes.
+      match deref(arr) {
+        Expr::Field(fbase, afs, afl) => {
+          fav := var_name_span(fbase)
+          if fav.n != 0 {
+            faent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, fav.s, fav.n)))
+            if streq(src, faent.ns, faent.nl, fav.s, fav.n) and faent.ek == 2 and not faent.is_ref and faent.snl != 0 {
+              faft := field_type_span(decls, src, faent.sns, faent.snl, afs, afl, a)
+              faes := array_elem_span(src, faft.s, faft.n)
+              fabn := base_type_name(src, faes.s, faes.n)
+              if faes.n != 0 and fabn.n == faes.n and parse_arr_len(src, faft.s, faft.n) > 0 and std_array_direct_scalar_byte_tier(decls, src, faes.s, faes.n, a) {
+                return StdIdxPath(ok = true, arr = arr, idx = idx, bo = 0, ts = faes.s, tl = faes.n)
+              }
+            }
+          }
+        }
+        _ => {}
+      }
       ent := deref(svec_at(SlotEntry, slots, index_base_entry(arr, slots, src)))
       ## A Slice(P) local and parameter are both represented by an `is_ref` slot, but their element
       ## address is still the same byte-strided view that the standard-layout resolver must inspect.
@@ -205,6 +228,27 @@ pub std_idx_byte_field_eek := fn(base : ptr(Expr), slots : ptr(SVec), decls : pt
 pub std_idx_one := fn(arr : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx)) -> StdIdxOne {
   a := deref(cx.mar)
   mut r := StdIdxOne(ok = false, bo = 0, ts = 0, tl = 0)
+  ## `s.items[i].f` is parsed as `Index(Field(Var(s), items), i)` and therefore has no SlotEntry
+  ## for `arr` itself. Recover the owning plain local struct and its array-field element type before
+  ## the ordinary Var-rooted lookup below. This is the depth-1 write counterpart of the `std_idx_path`
+  ## read resolver above; keep both bounded to a statically sized, direct-scalar byte-tier element.
+  afp := field_place_parts(arr)
+  if unchecked bitcast(usize, afp.base) != 0 {
+    afv := var_name_span(afp.base)
+    if afv.n != 0 {
+      afent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, afv.s, afv.n)))
+      if streq(cx.src, afent.ns, afent.nl, afv.s, afv.n) and afent.ek == 2 and not afent.is_ref and afent.snl != 0 {
+        afft := field_type_span(cx.decls, cx.src, afent.sns, afent.snl, afp.fs, afp.fl, a)
+        afes := array_elem_span(cx.src, afft.s, afft.n)
+        afbn := base_type_name(cx.src, afes.s, afes.n)
+        if afes.n != 0 and afbn.n == afes.n and parse_arr_len(cx.src, afft.s, afft.n) > 0 and std_array_direct_scalar_byte_tier(cx.decls, cx.src, afes.s, afes.n, a) {
+          abo := layout_field_offset_bytes(cx.decls, cx.src, afes.s, afes.n, fs, fl, a)
+          aft := field_type_span(cx.decls, cx.src, afes.s, afes.n, fs, fl, a)
+          if abo >= 0 and aft.n != 0 { return StdIdxOne(ok = true, bo = abo, ts = aft.s, tl = aft.n) }
+        }
+      }
+    }
+  }
   if var_name_span(arr).n == 0 { return r }
   ent := deref(svec_at(SlotEntry, cx.slots, index_base_entry(arr, cx.slots, cx.src)))
   ## CLAYOUT S3(d) — the direct `a[i].f` store has the same two supported roots as `std_idx_path`:
