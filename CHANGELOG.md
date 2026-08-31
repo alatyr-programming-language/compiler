@@ -82,6 +82,7 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Unsupported `comptime if` codegen rejections now retain their source location through transparent `unchecked` conditions in multi-file builds without changing rejection semantics.
 - Direct struct-field and explicitly typed local fixed-array-element assignments now enforce the
   declared destination type, rejecting silent `str`/`bool`-to-integer stores with located diagnostics.
 - Direct user-defined brands now retain their nominal identity during semantic type resolution, so

@@ -3375,6 +3375,61 @@ ext_test() { # name
   if [ "$got" = 0 ]; then echo "ok   $1(ext): exit 0"; else echo "FAIL $1(ext): exit $got"; fail=1; fi
 }
 
+## Issue #297 / Comptime §§8.2–9.1 + Tooling §5 — the lower's unsupported comptime-if fold must
+## retain the condition's source location after the driver concatenates several files. The helper
+## generates a private package so it exercises the file-backed `compile_files_mode` without adding
+## corpus rows; the reject is in the first user module and has leading lines so a global-buffer line
+## count would be observably wrong. The needle is kept here, not in the generated source, so an old
+## compiler cannot pass by echoing its own assertion text.
+issue297_codegen_multi_reject_test() {
+  local d="$T/issue297_codegen_multi"
+  rm -rf "$d"
+  mkdir -p "$d/src" || { echo "FAIL issue297_codegen_multi: scratch"; fail=1; return; }
+  printf '%s\n' \
+    'app := Package(' \
+    '  version = "0.1.0",' \
+    '  source_dir = "src",' \
+    '  target_dir = "target",' \
+    '  targets = [' \
+    '    Target(' \
+    '      arch = Arch.x86_64,' \
+    '      os = Os.linux,' \
+    '      env = Env.gnu,' \
+    '      container = Container.elf,' \
+    '      entry = "_start",' \
+    '      output = "issue297-codegen",' \
+    '    ),' \
+    '  ],' \
+    ')' > "$d/package.al"
+  printf '%s\n' \
+    '## Leading lines make a shared-buffer line count observably wrong.' \
+    '' \
+    '' \
+    'pub reject_here := fn() -> u64 {' \
+    '  mut x : u64 = 5' \
+    '  comptime v : u64 = 5' \
+    '  comptime if unchecked (v == 5) { x = 30 } else { x = 70 }' \
+    '  return x' \
+    '}' > "$d/src/helper.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  return helper::reject_here()' \
+    '}' > "$d/src/main.al"
+
+  local needle='codegen: `comptime if` — cannot fold this comptime condition. The lower folds target machine projections, verify.checked, build.<flag>, a module const, an integer comparison, size(T), typeinfo(T).fields/variants.len, a type equality, a `match typeinfo(T)` kind test, resolves(…)/compiles(…), and and/or/not over those. Rejected rather than silently emitting NEITHER branch. at line 7 in helper'
+  local err="$T/issue297_codegen_multi.err"
+  rm -rf "$d/target"
+  ( cd "$d" && "$CC" build package.al > /dev/null 2> "$err" )
+  local rc=$?
+  local out="$d/target/debug/issue297-codegen"
+  if [ "$rc" = 0 ] || [ -e "$out" ] || ! grep -qF "$needle" "$err"; then
+    echo "FAIL issue297_codegen_multi: rc=$rc/artifact=$(test -e "$out" && echo yes || echo no)/diagnostic=$(<"$err")"
+    fail=1
+  else
+    echo "ok   issue297_codegen_multi: build rejected with exact located diagnostic in helper"
+  fi
+}
+
 # ==================================================================================================
 # THE DRIVER, part 1 — arm the helpers, then let the table RECORD itself.
 #
@@ -6499,6 +6554,7 @@ run comptime_resolves_args 42
 ## Comptime §9.1/§9.2 — every public entry point must reject a runtime-dependent comptime-if condition
 ## before emission, with the same located diagnostic and no output/artifact.
 build_reject_has reject_codegen_comptime_cond 'codegen: `comptime if` — cannot fold this comptime condition. The lower folds target machine projections, verify.checked, build.<flag>, a module const, an integer comparison, size(T), typeinfo(T).fields/variants.len, a type equality, a `match typeinfo(T)` kind test, resolves(…)/compiles(…), and and/or/not over those. Rejected rather than silently emitting NEITHER branch. at line 8 in reject_codegen_comptime_cond'
+issue297_codegen_multi_reject_test
 check_reject_has reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
 build_reject_has reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
 emit_reject_has wat reject_comptime_cond_unfoldable "comptime if condition must be comptime-known (runtime-dependent value) at line 11 in reject_comptime_cond_unfoldable"
