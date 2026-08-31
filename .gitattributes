@@ -31,3 +31,12 @@ scripts/idiom.baseline   -diff -merge linguist-generated
 # baseline that matches neither run of the gate. `scripts/land.sh` already treats all three as
 # oracles; this line is what makes git agree.
 scripts/needle.baseline  -merge
+
+# `scripts/axis.baseline` is line-oriented and reviewed, so it needs `-merge` for the same reason the
+# three oracles do: two branches recording DISJOINT reviewed cells would merge clean into a file that
+# matches neither run of the detector. It is deliberately NOT being called a fourth oracle here — that
+# word carries `scripts/land.sh`'s enforcement and the one-oracle-per-PR rule, and the protocol's list
+# lives in AGENTS.md, CONTRIBUTING.md, the PR template, land.sh and three skills. `scripts/axis_gate.sh`
+# is not wired into `full.sh`, so this file gates nothing yet; promoting it is a maintainer decision and
+# a separate change. This line is the part that is safe and useful today.
+scripts/axis.baseline -merge
