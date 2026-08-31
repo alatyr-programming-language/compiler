@@ -1098,6 +1098,31 @@ pub layout_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
 pub layout_kind_is_packed := fn(k : usize) -> bool { k == 1 }
 pub layout_kind_is_byte := fn(k : usize) -> bool { k == 2 }
 
+## THE FIELD PLACE — one answer to "where does this field start", so no call site picks a tier itself.
+## It is `layout_kind` applied to a field: PACKED and BYTE answer their own §6.1 byte offsets, WORD
+## answers the historical word offset converted to bytes. Every tier function returns -1 for a field it
+## cannot place; `addressable` carries that as its own field rather than as a magic number, so a caller
+## cannot mistake "no offset here" for offset 0 — the fail-loud contract `layout_field_offset_bytes`
+## states and `lower/assign.al` already keeps at its two call sites. `off` is meaningless when
+## `addressable` is false and is fixed at 0 so a caller that ignores the flag fails loudly at 0 rather
+## than silently at -1 * 8.
+FieldPlace := struct { off : i64, addressable : bool }
+
+pub field_byte_place := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, fs : usize, fl : usize, a : rt::Arena) -> FieldPlace {
+  lk := layout_kind(decls, src, s, n, a)
+  mut off : i64 = 0 - 1
+  if layout_kind_is_packed(lk) { off = packed_field_byte_offset(decls, src, s, n, fs, fl, a) }
+  else {
+    if layout_kind_is_byte(lk) { off = standard_field_byte_offset(decls, src, s, n, fs, fl, a) }
+    else {
+      fwo := field_word_offset(decls, src, s, n, fs, fl, a)
+      if fwo >= 0 { off = fwo * 8 }
+    }
+  }
+  if off < 0 { return FieldPlace(off = 0, addressable = false) }
+  FieldPlace(off = off, addressable = true)
+}
+
 ## ─── THE PER-HOP HALF OF THE ORACLE ──────────────────────────────────────────────────────────────
 ## `layout_kind` decides the tier of ONE type. A field PATH (`o.inner.tail`) walks a CHAIN of types,
 ## and each link must be read in ITS OWN tier, because each tier is written by a different emitter:

@@ -5929,6 +5929,7 @@ run nullary_enum_return 42
 ## deliver EVERY payload word — regression lock for a silent miscompile that dropped payload words 1..N.
 run return_enum_lit_multiword 42
 run array_struct_enum_field 42
+run enum_match_field_place 42
 run tuple_enum_component 42
 run nested_enum_struct_enum 42
 run enum_array_struct_payload 42

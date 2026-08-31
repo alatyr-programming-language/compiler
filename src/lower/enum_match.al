@@ -27,7 +27,7 @@ fld_p := ast::fld_p
 (Arm, Decl, Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
 (push_str, push_int) := strbuf
 (LCtx, num_lit_value, var_name_span) := lower_ctx
-(base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_word_offset, is_niche_folded, layout_kind, layout_kind_is_byte, layout_kind_is_packed, repr_tag_code, struct_decl_of, struct_words, variant_index, variant_payload_type) := lower_layout
+(base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_byte_place, is_niche_folded, layout_kind, layout_kind_is_byte, layout_kind_is_packed, repr_tag_code, struct_decl_of, struct_words, variant_index, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
@@ -197,35 +197,35 @@ pub try_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
   if ft.n == 0 { return z }
   ## §8 `@niche`: a NICHE-FOLDED `Option(ptr(T))` FIELD is ONE pointer word (no discriminant) that
   ## `enum_decl_of` can't resolve (the parenthesized generic instance), so the ordinary enum-field
-  ## path below rejects it. Materialize that single field word (at struct word `fwo`) into the scratch
+  ## path below rejects it. Materialize that single field word (at struct byte `nfp.off`) into the scratch
   ## WORD-0 slot (`-((ftb+1)*8)`) — exactly where the folded dispatch reads `%r12`
   ## (`emit_repr_tag_load`, code 0) and where the `Some(p)` payload binds (`off = base`). Return the
   ## full `Option(ptr(T))` span as `es`/`el` so `is_niche_folded` fires in BOTH match paths. Gated by
   ## `is_niche_folded` → every non-folded enum field is byte-identical (the corpus has no such field).
   if is_niche_folded(cx.src, ft.s, ft.n) {
-    ffwo := field_word_offset(cx.decls, cx.src, bent.sns, bent.snl, fe.fs, fe.fl, a)
-    if ffwo < 0 { return z }
+    nfp := field_byte_place(cx.decls, cx.src, bent.sns, bent.snl, fe.fs, fe.fl, a)
+    if not nfp.addressable { return z }
     ftb := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
     emit_agg_base_addr(bent, sb)                     ## struct word-0 address → %rax
     push_str(sb, "  movq ")
-    push_int(sb, ffwo * 8)
+    push_int(sb, nfp.off)
     push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
     push_int(sb, i64((ftb + 1) * 8))
     push_str(sb, "(%rbp)\n")
     return ScrutInfo(is_e = true, base = ftb, es = ft.s, el = ft.n, is_ref = false, tmod_s = 0, tmod_l = 0)
   }
   if enum_decl_of(cx.decls, cx.src, ft.s, ft.n) < 0 { return z }
-  fwo := field_word_offset(cx.decls, cx.src, bent.sns, bent.snl, fe.fs, fe.fl, a)
-  if fwo < 0 { return z }
+  efp := field_byte_place(cx.decls, cx.src, bent.sns, bent.snl, fe.fs, fe.fl, a)
+  if not efp.addressable { return z }
   nw := 1 + enum_inst_words(cx.decls, cx.src, ft.s, ft.n, a)
   tbase := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
   emit_agg_base_addr(bent, sb)                       ## struct word-0 address → %rax
   mut j := 0
   while j < nw {
-    ## enum field word `j` sits at struct word `fwo + j` (down-growing: `-((fwo+j)*8)(%rax)`);
+    ## enum field word `j` sits at struct byte `efp.off + j*8` from the base (down-growing);
     ## copy it into scratch slot `tbase + 1 + j`.
     push_str(sb, "  movq ")
-    push_int(sb, (fwo + i64(j)) * 8)
+    push_int(sb, efp.off + i64(j) * 8)
     push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
     push_int(sb, i64((tbase - j + 1) * 8))
     push_str(sb, "(%rbp)\n")
@@ -390,7 +390,7 @@ pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
 ## Materialize the field's enum words into the match scratch. `field_base_index` destructures the
 ## `Index` (a proven ptr-in-FBIx helper — no nested match / ptr-in-struct in this arm), the array's
 ## element struct type comes from its slot's `sns`/`snl` (eek 2), and `emit_index_addr` gives the
-## element base; the enum field sits at `-((fwo+j)*8)(%rax)` (down-growing). 0/0 otherwise.
+## element base; the enum field sits at `-(afp.off + j*8)(%rax)` (down-growing). 0/0 otherwise.
 pub try_arrelem_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) -> ScrutInfo {
   mut r := ScrutInfo(is_e = false, base = 0, es = 0, el = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
   a := arena_of(cx)
@@ -402,15 +402,15 @@ pub try_arrelem_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::St
         if aent.ek == 5 and aent.eek == 2 and aent.snl != 0 {
           ft := field_type_span(cx.decls, cx.src, aent.sns, aent.snl, ffs, ffl, a)
           if ft.n != 0 and enum_decl_of(cx.decls, cx.src, ft.s, ft.n) >= 0 {
-            fwo := field_word_offset(cx.decls, cx.src, aent.sns, aent.snl, ffs, ffl, a)
-            if fwo >= 0 {
+            afp := field_byte_place(cx.decls, cx.src, aent.sns, aent.snl, ffs, ffl, a)
+            if afp.addressable {
               nw := 1 + enum_inst_words(cx.decls, cx.src, ft.s, ft.n, a)
               tbase := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
               emit_index_addr(fbi.arr, fbi.idx, sb, cx, a, nl)   ## element base address → %rax
               mut j := 0
               while j < nw {
                 push_str(sb, "  movq ")
-                push_int(sb, (fwo + i64(j)) * 8)
+                push_int(sb, afp.off + i64(j) * 8)
                 push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
                 push_int(sb, i64((tbase - j + 1) * 8))
                 push_str(sb, "(%rbp)\n")
