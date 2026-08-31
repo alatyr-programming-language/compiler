@@ -5584,6 +5584,11 @@ check_accept lower_bugA_neg_operand
 ## intact, whole-struct copy. 42 < 126 WASI-safe; a64/rv64/wasm trap (x86-only). (cfd5d39)
 run struct_array_of_struct_field 42
 check_accept struct_array_of_struct_field
+## Issue #263 bounded x86_64 slice: direct struct-field arrays of plain narrow structs use the
+## element's byte address and width for `s.items[1].a = value`; wide-field and local-array controls
+## remain in the same focused fixture. The Slice(P), packed, pointer, generic, enum, global and
+## non-x86 paths stay outside this registration.
+run_x86 struct_field_array_narrow_write 42
 ## The LOCAL [Struct; N] field now works (above). The POINTER-COMPOUND `deref(p).cells[i].m` (a struct array
 ## field through a non-local root) stays a controlled panic — never a silent-0 / SIGILL — until the deep-nested
 ## resolver composes it. Workaround: bind the pointee to a local.

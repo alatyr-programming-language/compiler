@@ -17401,6 +17401,22 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## root), so the place read here is exactly the place the ONE byte-precise writer wrote. The load
       ## is SIZED to the leaf's own width and sign-extended for an `iN`: reading a `u16` leaf with a
       ## `movq` would drag in its three neighbours.
+      ## The depth-1 query is deliberately used before the recursive path query. `s.items[i].f` has
+      ## an array FIELD as its root, and the compact `StdIdxOne` result keeps this direct case on the
+      ## same proven address/width path as the writer even though the recursive aggregate result has
+      ## no SlotEntry for that intermediate field.
+      s3fbi := field_base_index(base)
+      if s3fbi.is_ix {
+        s3dread := std_idx_one(s3fbi.arr, fs, fl, cx)
+        if s3dread.ok {
+          if std_idx_leaf_is_agg(cx.decls, cx.src, s3dread.ts, s3dread.tl) {
+            panic("selfhost: reading a whole AGGREGATE field of a byte-layout array element as a value (`xs[i].inner` / `xs[i].data` where the field is a struct, str, enum or array) has no value home in this slice — index a byte array element (`xs[i].data[j]`), read a scalar leaf, or bind the whole element to a local first (`e := xs[i]`)")
+          }
+          emit_index_addr(s3fbi.arr, s3fbi.idx, sb, cx, a, nl)
+          emit_packed_load_rax(sb, scalar_byte_size(cx.src, s3dread.ts, s3dread.tl), s3dread.tl != 0 and str_at((cx.src + s3dread.ts), 1) == "i", s3dread.bo, false)
+          return
+        }
+      }
       s3dr := std_idx_path(e, cx.slots, cx.decls, cx.src, a)
       if s3dr.ok {
         if std_idx_leaf_is_agg(cx.decls, cx.src, s3dr.ts, s3dr.tl) {
