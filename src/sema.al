@@ -7684,6 +7684,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) and not is_mod_mut_global(decls, src, ns, nl) and not declared(decls, upto, src, ns, nl) and not sema_global_name_anywhere(decls, src, ns, nl) {
           return Result(usize, CheckErr).Err(unbound_err(ns, nl))
         }
+        ## Issue #298 — a module-level immutable scalar is also a write place. It has no Local record
+        ## and therefore cannot reach the local re-assignment branch below; reject it here while the
+        ## source still identifies the assignment target. Mutable globals remain on their existing path.
+        if assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) {
+          groot := VSpan(s = ns, n = nl)
+          gperm := sema_write_mutability(decls, src, locals, cnt, groot)
+          if gperm == 2 { mark_failed(locals, immutable_err(groot.s)) }
+        }
         ## Types §8 — reject the initialized local array literal before any lower/backend can apply
         ## the word-granular array stride to a byte-precise @packed element. Reassignments stay on
         ## their ordinary path; this is intentionally the exact local-initializer slice only.
@@ -7828,6 +7836,19 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           mut bind_prov : u8 = 0
           ain := expr_addr_inner(v)
           if unchecked bitcast(usize, ain) != 0 and expr_field_span(ain).n != 0 { bind_prov = 1 }
+          ## A range-slice local is a view, so its write permission follows the backing place rather
+          ## than the view's own copied pair. Keep that provenance in the existing `prov` byte: 2 means
+          ## an immutable backing place, 3 means mutable/unknown backing. This preserves the existing
+          ## `mut ws; w := ws[...]; w[i] = ...` view idiom while rejecting `a := [...]; s := a[...];
+          ## s[i] = ...` from Issue #298. A pointer-field provenance (1) remains higher priority.
+          if bind_prov == 0 {
+            slice_base := sema_slice_base(v)
+            if unchecked bitcast(usize, slice_base) != 0 {
+              sroot := sema_place_root_var(slice_base)
+              sperm := sema_write_mutability(decls, src, locals, cnt, sroot)
+              if sperm == 1 or sperm == 2 { bind_prov = 2 } else { bind_prov = 3 }
+            }
+          }
           ## The binding's type NAME never comes from `tv`: `check_expr` hands its `Ty` back through the
           ## PACKED `Result(Ty, CheckErr)` carrier, which preserves only the TAG — `tv.ns`/`tv.nl` are
           ## STACK GARBAGE (the truncation the tag-5 recovery below already documents, generalized: it is
@@ -7943,6 +7964,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           return Result(usize, CheckErr).Err(unbound_err(fns, fnl))
         }
         cv := check_expr_da(fv, decls, upto, src, a, locals, cnt, da)?
+        ## Issue #298 — a field store is authorized by the ROOT binding's `mut`, not by the field
+        ## token. A const local/global that was already initialized has no unreadied DA marker, while
+        ## the one permitted first write to an uninitialized local still has one.
+        broot := VSpan(s = bns, n = bnl)
+        bperm := sema_write_mutability(decls, src, locals, cnt, broot)
+        if bperm == 2 or (bperm == 1 and not sema_da_field_write_unready(da, src, broot, VSpan(s = fns, n = fnl))) {
+          mark_failed(locals, immutable_err(broot.s))
+        }
         ## FIELD-ASSIGN conformance (TYP-6): `t.field = <aggregate>` into a scalar field (or the
         ## REVERSE, a scalar literal into an aggregate field) — the retired `Stmt::FieldAssign` emit net.
         ## Resolve the base's struct type NAME from its recorded local tag (3 = struct), then the field's
@@ -7966,17 +7995,31 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           return Result(usize, CheckErr).Err(located_err(pfs.s))
         }
         cvp := check_expr_da(fpv, decls, upto, src, a, locals, cnt, da)?
+        ## Issue #298 — nested field paths carry the same root mutability rule as direct fields. Query
+        ## the exact DA marker BEFORE the write bookkeeping below removes it; an initialized immutable
+        ## aggregate has no marker and must not reach lower as a writable place.
+        proot := sema_place_root_var(pl)
+        pperm := sema_write_mutability(decls, src, locals, cnt, proot)
+        mut p_unready := da_has_root(da, src, proot.s, proot.n)
         aep := expr_array_elem_nested_path(pl)
+        anp := expr_array_nested_path(pl)
+        np := expr_nested_path(pl)
+        if aep.ok {
+          p_unready = sema_da_index_write_unready(da, src, VSpan(s = aep.rs, n = aep.rn), VSpan(s = aep.fs, n = aep.fl), VSpan(s = aep.ss, n = aep.sl), i64(aep.ix))
+        } else if anp.ok {
+          p_unready = sema_da_index_write_unready(da, src, VSpan(s = anp.rs, n = anp.rn), VSpan(s = anp.fs, n = anp.fl), VSpan(s = anp.ss, n = anp.sl), i64(anp.ix))
+        } else if np.sl != 0 {
+          p_unready = sema_da_path_write_unready(da, src, np)
+        }
+        if pperm == 2 or (pperm == 1 and not p_unready) { mark_failed(locals, immutable_err(proot.s)) }
         if aep.ok {
           aty1 := local_ty(locals, cnt, src, aep.rs, aep.rn)
           da_assign_array_elem_nested_field(deref(da), decls, upto, src, aep.rs, aep.rn, aep.fs, aep.fl, aep.ss, aep.sl, i64(aep.ix), aty1)
         }
-        anp := expr_array_nested_path(pl)
         if anp.ok {
           aty0 := local_ty(locals, cnt, src, anp.rs, anp.rn)
           da_assign_array_nested_field(deref(da), decls, upto, src, anp.rs, anp.rn, anp.fs, anp.fl, anp.ss, anp.sl, i64(anp.ix), aty0)
         }
-        np := expr_nested_path(pl)
         if np.sl != 0 {
           mut rt := local_ty(locals, cnt, src, np.rs, np.rn)
           if rt.tag == 255 {
@@ -8183,6 +8226,17 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cii := check_expr_da(ii, decls, upto, src, a, locals, cnt, da)?
         if cii.tag != 0 and cii.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(ii, a), 0)) }
         civ := check_expr_da(iv, decls, upto, src, a, locals, cnt, da)?
+        ## Issue #298 — `base[index] = value` is writable only when the base's root binding is
+        ## mutable. The DA query preserves the language's single first assignment for an uninitialized
+        ## local and recognizes the exact constant element where that state is tracked.
+        iroot := sema_place_root_var(ib)
+        mut ibfield := VSpan(s = 0, n = 0)
+        ibbase := expr_field_base(ib)
+        if unchecked bitcast(usize, ibbase) != 0 { ibfield = expr_field_span(ib) }
+        mut iix : i64 = 0 - 1
+        if expr_is_num_lit(ii) { iix = expr_num_lit_val(ii) }
+        iperm := sema_write_mutability(decls, src, locals, cnt, iroot)
+        i_unready := sema_da_index_write_unready(da, src, iroot, ibfield, VSpan(s = 0, n = 0), iix)
         ## INDEX-ASSIGN conformance (TYP-6): `xs[i] = <aggregate>` where `xs` is a SCALAR-element
         ## array (tag 7, recorded at binding from a scalar-literal-element ArrayLit) — the retired
         ## `Stmt::IndexAssign` emit net. Poison-tolerant: only a confidently scalar-element array + a
@@ -8214,6 +8268,9 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             }
           }
         }
+        ## Keep an established type-conformance diagnostic ahead of the mutability fence: a scalar
+        ## array receiving an aggregate is a type error even when its immutable root is also unwritable.
+        if iperm == 2 or (iperm == 1 and not i_unready) { mark_failed(locals, immutable_err(iroot.s)) }
         cur = nx
       }
       ## `a[i].f = v` — an array-of-struct element-field write. The base array, index, and
@@ -8231,6 +8288,18 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cfi := check_expr_da(fii, decls, upto, src, a, locals, cnt, da)?
         if cfi.tag != 0 and cfi.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(fii, a), 0)) }
         cfv := check_expr_da(fiv, decls, upto, src, a, locals, cnt, da)?
+        ## Issue #298 — the field after the index is still governed by the indexed base's root
+        ## binding. Exact AVec/NAVec/NAPVec markers keep first writes to uninitialized aggregates
+        ## legal while repeated writes to initialized immutable places fail before emission.
+        ifroot := sema_place_root_var(fia)
+        mut ifbasefield := VSpan(s = 0, n = 0)
+        ifbase := expr_field_base(fia)
+        if unchecked bitcast(usize, ifbase) != 0 { ifbasefield = expr_field_span(fia) }
+        mut ifix : i64 = 0 - 1
+        if expr_is_num_lit(fii) { ifix = expr_num_lit_val(fii) }
+        ifperm := sema_write_mutability(decls, src, locals, cnt, ifroot)
+        if_unready := sema_da_index_write_unready(da, src, ifroot, ifbasefield, VSpan(s = ifs, n = ifl), ifix)
+        if ifperm == 2 or (ifperm == 1 and not if_unready) { mark_failed(locals, immutable_err(ifroot.s)) }
         iav := expr_var_span(fia)
         if iav.n != 0 and expr_is_num_lit(fii) {
           aty := local_ty(locals, cnt, src, iav.s, iav.n)
@@ -9017,6 +9086,92 @@ is_mod_mut_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
   res
 }
 
+## Issue #298 / Declarations §3.1 + Memory §1.6 — every compound write place must enforce the
+## mutability of its ROOT binding, not just a bare `name = value`. The parser stores field writes as
+## either separate spans or an expression, so recover one root Var for all bounded aggregate paths.
+## Pointers/deref places deliberately return no root: their mutability contract is a separate pointer
+## tier and must not be guessed by this local-binding fence.
+sema_place_root_var := fn(e : ptr(Expr)) -> VSpan {
+  match deref(e) {
+    Expr::Var(s, n) => { VSpan(s = s, n = n) }
+    Expr::Field(base, fs, fl) => { sema_place_root_var(base) }
+    Expr::Index(base, ix) => { sema_place_root_var(base) }
+    Expr::Slice(base, lo, hi) => { sema_place_root_var(base) }
+    Expr::Unchecked(inner) => { sema_place_root_var(inner) }
+    Expr::Bitcast(inner, ts, tl) => { sema_place_root_var(inner) }
+    _ => { VSpan(s = 0, n = 0) }
+  }
+}
+
+## Return the backing expression of a direct range-slice initializer, or null for every other value.
+## Keeping this one shape-only query beside the root-place query lets sema preserve the existing
+## typed-view rule without adding a field to the bootstrap-sensitive AST or Local records.
+sema_slice_base := fn(e : ptr(Expr)) -> ptr(Expr) {
+  match deref(e) {
+    Expr::Slice(base, lo, hi) => { base }
+    _ => { unchecked bitcast(ptr(Expr), 0) }
+  }
+}
+
+## Return the write permission class for a place root: 0 = unknown/mutable/out of scope, 1 = an
+## immutable local/parameter, 2 = an immutable module global. Local records retain the declaration's
+## mut bit in the high tag bit; checking the target occurrence with `local_is_mut` would always miss
+## `s.f = …` because that token is no longer preceded by the declaration modifier.
+sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, root : VSpan) -> u8 {
+  if root.n == 0 { return 0 }
+  if local_in(locals, nloc, src, root.s, root.n) {
+    prov := local_prov(locals, nloc, src, root.s, root.n)
+    if prov == 2 { return 1 }
+    if prov == 3 { return 0 }
+    raw := local_ty(locals, nloc, src, root.s, root.n)
+    mut tag : u8 = raw.tag
+    if tag >= 128 and tag != 255 { tag = tag - 128 }
+    ## Pointer/deref places have a separate pointer mutability contract. Pattern/loop bindings and
+    ## other unresolved locals are deliberately unknown, so this fence must not turn them into false
+    ## rejects. `Slice(T)` parameters are borrowed views whose element permission is not expressible
+    ## until the separate `[mut T]` work; retain their established writable-view behavior here.
+    if tag == 0 or tag == 5 or tag == 255 { return 0 }
+    if raw.nl != 0 and str_at((src + raw.ns), raw.nl) == "Slice" { return 0 }
+    if tag != 0 and raw.tag < 128 { return 1 }
+    return 0
+  }
+  if sema_global_name_anywhere(decls, src, root.s, root.n) and not is_mod_mut_global(decls, src, root.s, root.n) { return 2 }
+  0
+}
+
+## A direct field write is a first write only while its root or exact field marker remains unreadied.
+## Once a nested child has been written, the direct field marker is gone, so overwriting the whole
+## field is correctly treated as another write to the immutable root.
+sema_da_field_write_unready := fn(da : ptr(DA), src : ptr(u8), root : VSpan, field : VSpan) -> bool {
+  da_has_root(da, src, root.s, root.n) or da_has_field(da, src, root.s, root.n, field.s, field.n)
+}
+
+## A bounded nested field write is a first write while the root, first field, or exact leaf marker is
+## still present. The same query is used for `root.array[index].field` and `root[index].field` after
+## their respective path recognizers have normalized those places.
+sema_da_path_write_unready := fn(da : ptr(DA), src : ptr(u8), path : NestedPath) -> bool {
+  da_has_root(da, src, path.rs, path.rn) or da_has_field(da, src, path.rs, path.rn, path.fs, path.fl) or da_has_path(da, src, path.rs, path.rn, path.fs, path.fl, path.ss, path.sl)
+}
+
+## A constant-index element/field write is a first write while its enclosing root/field, whole
+## element, or exact field marker remains. Dynamic indexes have no exact DA key; an entirely unreadied
+## root/field still permits their first write, while an already-partially-initialized aggregate stays
+## conservative and is rejected for an immutable target.
+sema_da_index_write_unready := fn(da : ptr(DA), src : ptr(u8), root : VSpan, base_field : VSpan, field : VSpan, ix : i64) -> bool {
+  if da_has_root(da, src, root.s, root.n) { return true }
+  if base_field.n == 0 {
+    if ix < 0 { return false }
+    if da_has_array(da, src, root.s, root.n, usize(ix)) { return true }
+    if field.n != 0 and navec_has(da_navec(da), src, root.s, root.n, field.s, field.n, usize(ix)) { return true }
+    return false
+  }
+  if da_has_field(da, src, root.s, root.n, base_field.s, base_field.n) { return true }
+  if ix < 0 { return false }
+  if da_has_nested_array(da, src, root.s, root.n, base_field.s, base_field.n, usize(ix)) { return true }
+  if field.n != 0 and da_has_nested_path(da, src, root.s, root.n, base_field.s, base_field.n, field.s, field.n, usize(ix)) { return true }
+  false
+}
+
 ## True if `[s, n)` names an `out` / `in out` parameter of the fn whose params are `params_head`
 ## (pmode == 2, ast.al). Such a parameter is a reference to the CALLER's place, which outlives the
 ## callee (Memory §5.3.1) — so storing a callee-local's address into it escapes upward.
@@ -9147,7 +9302,12 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     pt := resolve_ty(src, pm.ts, pm.tl, decls, upto)
     mut ptag : u8 = pt.tag
     if pm.pmode == 2 { ptag = ptag + 128 }
-    lvec_push(locals, Local(ns = pm.ns, nl = pm.nl, tag = ptag, prov = 0, tns = pt.ns, tnl = pt.nl))
+    ## Fixed-array parameters are already caller-backed places in the existing ABI (pmode 1); keep
+    ## their element writes compatible with the pre-existing aggregate-parameter contract. Scalar
+    ## parameters still require the explicit `out`/`in out` pmode 2 marker below.
+    mut pprov : u8 = 0
+    if pm.pmode == 1 { pprov = 3 }
+    lvec_push(locals, Local(ns = pm.ns, nl = pm.nl, tag = ptag, prov = pprov, tns = pt.ns, tnl = pt.nl))
     pp = pm.next
   }
   ## Keep the scalar error code in a frame home while the internal Result path is active. The lean
