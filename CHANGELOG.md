@@ -25,6 +25,9 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- Direct builtin scalar conversions of named user aggregates without an in-scope `@convert` now
+  fail at compile time with a located diagnostic on every backend instead of emitting an invalid
+  aggregate-as-scalar conversion.
 - `alatyr build --quiet` / `-q` now suppresses the optional success summary while preserving the
   artifact, stdout, and exit status.
 - Successful manifest-driven builds now print a deterministic profile, target and artifact summary to

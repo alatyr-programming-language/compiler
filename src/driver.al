@@ -3268,6 +3268,7 @@ DIAG_LINKER_SYMBOL_KIND := 7
 DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER := 5188146770730811392
 DIAG_MANIFEST_VALUE_MARKER := 5476377146882523136
 DIAG_SCALAR_CONVERSION_MARKER := 5764607523034234880
+DIAG_AGG_SCALAR_CONVERSION_MARKER := 6050000000000000000
 ## Types §9.4 / Memory §§1.6, 5.9 — the pre-emission fence for a non-literal aggregate
 ## assigned to a mutable struct global. Keep it between scalar-conversion and comptime classes so
 ## every pre-existing CheckErr range remains byte-identical while all CLI renderers agree.
@@ -3407,7 +3408,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   tuple_global := code >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and code < DIAG_ENUM_GLOBAL_ARRAY_MARKER
   unknown_ctor := code >= DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER and code < DIAG_MANIFEST_VALUE_MARKER
   manifest_value := code >= DIAG_MANIFEST_VALUE_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
-  conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_GLOBAL_AGG_MARKER
+  agg_conv := code >= DIAG_AGG_SCALAR_CONVERSION_MARKER and code < DIAG_GLOBAL_AGG_MARKER
+  conv := code >= DIAG_SCALAR_CONVERSION_MARKER and code < DIAG_AGG_SCALAR_CONVERSION_MARKER
   ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := code
   mut kind := 0
@@ -3456,6 +3458,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if manifest_value {
     raw = code - DIAG_MANIFEST_VALUE_MARKER
     span = raw / 4
+  } else if agg_conv {
+    raw = code - DIAG_AGG_SCALAR_CONVERSION_MARKER
+    span = raw / 4
   } else if conv {
     raw = code - DIAG_SCALAR_CONVERSION_MARKER
     span = raw / 4
@@ -3495,6 +3500,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
         wkm := rt::push_str(db, "manifest-only structure Target cannot be constructed from ordinary source")
       }
     }
+    else if agg_conv { wkac := rt::push_str(db, "builtin scalar conversion needs a scalar operand — a struct/enum operand requires a matching @convert fn(U) -> T (Types §4.6 / TYP-6)") }
     else if conv { wksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { wk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { wk := rt::push_str(db, "unbound name") }
@@ -5622,7 +5628,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   tuple_global := r >= DIAG_STANDARD_TUPLE_GLOBAL_MARKER and r < DIAG_ENUM_GLOBAL_ARRAY_MARKER
   unknown_ctor := r >= DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER and r < DIAG_MANIFEST_VALUE_MARKER
   manifest_value := r >= DIAG_MANIFEST_VALUE_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
-  conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_GLOBAL_AGG_MARKER
+  agg_conv := r >= DIAG_AGG_SCALAR_CONVERSION_MARKER and r < DIAG_GLOBAL_AGG_MARKER
+  conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_AGG_SCALAR_CONVERSION_MARKER
   ambig := r >= DIAG_AMBIG_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := r
   mut kind := 0
@@ -5671,6 +5678,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if manifest_value {
     raw = r - DIAG_MANIFEST_VALUE_MARKER
     span = raw / 4
+  } else if agg_conv {
+    raw = r - DIAG_AGG_SCALAR_CONVERSION_MARKER
+    span = raw / 4
   } else if conv {
     raw = r - DIAG_SCALAR_CONVERSION_MARKER
     span = raw / 4
@@ -5714,6 +5724,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
         dwkm := rt::push_str(db, "manifest-only structure Target cannot be constructed from ordinary source")
       }
     }
+    else if agg_conv { dwkac := rt::push_str(db, "builtin scalar conversion needs a scalar operand — a struct/enum operand requires a matching @convert fn(U) -> T (Types §4.6 / TYP-6)") }
     else if conv { dwksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
     else if ambig { dwk := rt::push_str(db, "ambiguous call") }
     else if kind == 1 { dwk := rt::push_str(db, "unbound name") }
