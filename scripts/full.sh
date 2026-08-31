@@ -59,6 +59,11 @@ _full_gate_filter_self_test() {
 _full_gate_filter_guard || exit $?
 if [ "${1:-}" = "--self-test" ]; then
   _full_gate_filter_self_test
+  _full_gate_filter_self_test_rc=$?
+  [ "$_full_gate_filter_self_test_rc" = 0 ] || exit "$_full_gate_filter_self_test_rc"
+  bash "$ROOT/scripts/land.sh" --self-test
+  _full_land_self_test_rc=$?
+  [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
   exit $?
 fi
 
