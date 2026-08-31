@@ -1,0 +1,70 @@
+# scripts/axis.baseline — the reviewed empty cells of scripts/axis_gate.sh.
+#
+# One `<class> <axisAxaxisB> <valueAxvalueB>` per line, exactly as `--emit-baseline` prints it. A cell
+# listed here has been LOOKED AT and given a reason below; a cell NOT listed here is new and the gate
+# says so. The gate stays reporting-only either way: it exits 0 whether a cell is new or not, so this
+# file is a review record, never a permission slip.
+#
+# A reason is one of three kinds, and the difference matters:
+#   GAP     — the combination is missing and should exist. It carries the issue that owns the work.
+#   NO FORM — the language has no such combination, so an empty cell is correct and permanent.
+#   ACCEPTED— the combination exists but is deliberately not covered, with the reason stated.
+# A GAP line is a debt, not a dismissal: it disappears from this file when its issue lands, and if it
+# is still here months later that is the file doing its job.
+
+# ── GAP — mixed-width struct fields, owned by #306 ──────────────────────────────────────────────
+# `struct { wide : u64, narrow : u8 }` and its mirror put a sub-word field at a non-zero offset inside
+# its eightbyte. That is the exact shape #167 and #170 were, and the corpus exercises it in one position
+# only: a local, on x86. `wide-then-narrow` appears in a single tracked fixture, and that one introspects
+# the type at compile time rather than loading or storing the field.
+field-layout eightbytexoperation wide-then-narrowxread
+field-layout eightbytexoperation wide-then-narrowxwrite
+field-layout eightbytexpath narrow-then-widexthrough-field
+field-layout eightbytexpath narrow-then-widexpointer-deref
+field-layout eightbytexpath wide-then-narrowxthrough-field
+field-layout eightbytexpath wide-then-narrowxpointer-deref
+# The non-x86 half is the sharper one: the sweeps are conditional, so a mixed-width form that only ever
+# runs on x86 can stay wrong on three backends behind a green gate for as long as nobody varies it.
+field-layout eightbytexbackend narrow-then-widexwasm
+field-layout eightbytexbackend narrow-then-widexa64
+field-layout eightbytexbackend narrow-then-widexrv64
+aggregate-byval widthxbackend narrowxwasm
+aggregate-byval widthxbackend narrowxa64
+aggregate-byval widthxbackend narrowxrv64
+
+# ── GAP — narrow field through a slice or a struct-field array, owned by #263 (priority-0) ──────
+# Already a reproduced wrong value, not a coverage question: writing a narrow field through these two
+# paths destroys its neighbour. The cells stay listed so the gate does not report them twice.
+field-layout eightbytexpath narrow-then-widexarray-element
+field-layout eightbytexpath narrow-then-widexslice-element
+field-layout eightbytexpath wide-then-narrowxarray-element
+field-layout eightbytexpath wide-then-narrowxslice-element
+
+# ── GAP — a wrong-typed value into a field or an element, owned by #304 (priority-0) ────────────
+# `s.f = "text"` with `f : u64` is accepted and stores the string's address; `a[0] = "text"` likewise.
+# The assignment-type check follows the name and not the path.
+place-check targetxcheck array-elementxassignment-type
+place-check targetxcheck element-fieldxassignment-type
+place-check targetxcheck pointer-derefxassignment-type
+
+# ── GAP — the residual of #298 at the two remaining targets ─────────────────────────────────────
+# #303 landed the mutability check for a field, a bare element, a slice element and a global. A write to
+# the FIELD OF AN ELEMENT and a write THROUGH A POINTER are the two path shapes its fixtures do not name.
+place-check targetxcheck element-fieldximmutability
+place-check targetxcheck pointer-derefximmutability
+
+# ── ACCEPTED — an unresolved name in a path position ────────────────────────────────────────────
+# The unbound-name check resolves the ROOT of a path, so varying the path should not change its verdict,
+# and `binding-name x unbound-name` covers the root. Recorded rather than deleted because that is exactly
+# the reasoning that was WRONG for immutability: #298 assumed a place check follows the root too, and it
+# did not. If a defect ever appears in this family, start here.
+place-check targetxcheck array-elementxunbound-name
+place-check targetxcheck element-fieldxunbound-name
+place-check targetxcheck pointer-derefxunbound-name
+
+# ── ACCEPTED — call arity on the right of a path store ──────────────────────────────────────────
+# Arity is checked at the call, before the store's target is considered; `s.f = g(1,2,3)` fails on `g`'s
+# argument list whatever the left side is. `pointer-deref x arity` and `array-element x arity` happen to
+# be filled by fixtures that combine both, which is coincidence rather than intent.
+place-check targetxcheck fieldxarity
+place-check targetxcheck element-fieldxarity
