@@ -25,6 +25,8 @@ how this repository proves itself, not part of what it ships.
 
 ## Unreleased
 
+- x86_64/Linux/ELF package targets with `Kind.shared_lib` now build a `lib<base>.so` artifact with
+  the package's `pub`/`@export` surface and no executable entry point.
 - Direct builtin scalar conversions of named user aggregates without an in-scope `@convert` now
   fail at compile time with a located diagnostic on every backend instead of emitting an invalid
   aggregate-as-scalar conversion.

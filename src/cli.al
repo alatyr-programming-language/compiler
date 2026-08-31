@@ -648,16 +648,40 @@ build_static_archive := fn(in out a : rt::Arena, out : str, gbase : usize, glen 
   return 0
 }
 
-## Dispatch the two currently supported non-executable Target.kind values. A package target cannot
+## Build the released x86_64/Linux/ELF shared-library form from the same one-object GAS stream as the
+## static-library path. The x86 emitter uses position-independent addressing for this surface; `ld
+## -shared` is the target-specific link step and deliberately receives no executable entry point.
+build_shared_library := fn(in out a : rt::Arena, out : str, gbase : usize, glen : usize) -> usize {
+  obj := cat2(a, out, ".o")
+  ao := assemble_object(a, obj, gbase, glen)
+  if ao != 0 { return ao }
+  mut etr := 0
+  environ := read_environ(a, etr)
+  if etr != 0 { env_truncation_error(); return 21 }
+  envp := build_envp(a, environ)
+  ld_c := resolve_in_path(a, environ, "ld")
+  if ld_c == 0 { tool_error("alatyr: `ld` not found on PATH (the linker is required for shared_lib targets)"); return 12 }
+  shared_c := cstr(a, "-shared")
+  dash_o := cstr(a, "-o")
+  out_c := cstr(a, out)
+  obj_c := cstr(a, obj)
+  rr := exec6(a, ld_c, shared_c, obj_c, dash_o, out_c, 0, envp)
+  if rr.kind != 0 { spawn_error(a, "linker", "ld", rr); return 19 }
+  if rr.code != 0 { tool_error("alatyr: the linker (`ld`) failed to create the shared library"); return 14 }
+  return 0
+}
+
+## Dispatch the three currently supported non-executable Target.kind values. A package target cannot
 ## smuggle executable-only foreign-link inputs into an object/archive: those inputs belong to a final
-## executable target and are rejected until shared-library packaging defines their ABI surface.
+## executable target and are rejected because this bounded library surface has no dependency-archive ABI.
 emit_library_artifact := fn(in out a : rt::Arena, kind : str, out : str, gbase : usize, glen : usize, libnames : str, any_dyn : bool, lflags : str) -> usize {
   if libnames.len > 0 or any_dyn or lflags.len > 0 {
-    tool_error("alatyr: object/static_lib targets cannot declare executable linker inputs")
+    tool_error("alatyr: object/static_lib/shared_lib targets cannot declare executable linker inputs")
     return 18
   }
   if kind == "object" { return assemble_object(a, out, gbase, glen) }
-  return build_static_archive(a, out, gbase, glen)
+  if kind == "static_lib" { return build_static_archive(a, out, gbase, glen) }
+  return build_shared_library(a, out, gbase, glen)
 }
 
 ## MOD-9 foreign-library link of the already-assembled `<out>.o` (at `outo_c`) into the executable
@@ -3191,21 +3215,17 @@ manifest_path_reject := fn(in out a : rt::Arena, pkg_al : str) {
   }
 }
 
-## Tooling §2.2 / §5 — the selected target's `kind` decides what a command may produce, so a `kind`
-## this toolchain cannot honour is a CONFIGURATION failure that must abort EVERY package-aware command
-## consulting it, not only `build`. `check` used to return **0** on exactly the manifests `build`
-## refuses (an unrecognized `Kind.…` → 40, `Kind.shared_lib` → 41, `Kind.source` → 42): the one command
-## whose entire job is to say whether a package is well-formed WITHOUT producing an artifact was the
-## one command that accepted an unbuildable configuration. Returns 0 for a kind that is implemented,
-## else `build`'s own exit code, having printed the diagnostic LOCATED at the manifest's `kind` line —
-## the same verdict and the same code from both commands, so neither can drift from the other.
-manifest_kind_reject := fn(in out a : rt::Arena, pkg_al : str, kind : str) -> usize {
+## Tooling §2.2 / §5 — the selected target's `kind` decides what a command may produce. `shared_lib`
+## is implemented for the released build surface; `run` and `test` still fail closed because neither
+## command can execute a shared object. `check` validates the supported kind without producing an
+## artifact. Other unsupported kinds retain their located configuration failures.
+manifest_kind_reject := fn(in out a : rt::Arena, pkg_al : str, kind : str, mode : usize) -> usize {
   if kind == "invalid" {
     manifest_located_error(a, "config: the target's kind is invalid or unsupported", pkg_al, "kind")
     return 40
   }
-  if kind == "shared_lib" {
-    manifest_located_error(a, "config: Target.kind = Kind.shared_lib is not implemented yet", pkg_al, "kind")
+  if kind == "shared_lib" and (mode == 2 or mode == 5) {
+    manifest_located_error(a, "config: Target.kind = Kind.shared_lib can only be built as a library", pkg_al, "kind")
     return 41
   }
   if kind == "source" {
@@ -3243,6 +3263,15 @@ manifest_target_arch_reject := fn(in out a : rt::Arena, pkg_al : str, backend : 
 
 manifest_target_command_reject := fn(in out a : rt::Arena, pkg_al : str, backend : usize, mode : usize) -> usize {
   manifest_target_model(a, pkg_al)
+  kind := manifest_target_kind(a, pkg_al)
+  if kind == "shared_lib" and CLI_TARGET_OS == 5 {
+    manifest_located_error(a, "config: Target.kind = Kind.shared_lib is incompatible with Os.none", pkg_al, "kind")
+    return 45
+  }
+  if kind == "shared_lib" and CLI_TARGET_CONTAINER == 3 {
+    manifest_located_error(a, "config: Target.kind = Kind.shared_lib is incompatible with Container.com", pkg_al, "kind")
+    return 45
+  }
   if mode == 3 { return 0 }
   if CLI_TARGET_OS != 0 {
     manifest_located_error(a, "config: the selected Machine has no linker/ABI implementation in this command", pkg_al, "machine")
@@ -3619,6 +3648,9 @@ manifest_output := fn(in out a : rt::Arena, pkg_al : str) -> str {
 
 manifest_artifact_basename := fn(in out a : rt::Arena, pkg_al : str) -> str {
   if manifest_has_package(a, pkg_al) == false { return file_stem(pkg_al) }
+  if manifest_target_kind(a, pkg_al) == "shared_lib" and manifest_plan_explicit_output(a, pkg_al).len == 0 {
+    return manifest_plan_artifact_name(a, pkg_al)
+  }
   return manifest_output(a, pkg_al)
 }
 
@@ -5666,7 +5698,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     ckind := manifest_target_kind(a, ckp)
     if mode == 3 and ckind == "source" { }
     else {
-      ckrc := manifest_kind_reject(a, ckp, ckind)
+      ckrc := manifest_kind_reject(a, ckp, ckind, mode)
       if ckrc != 0 { return ckrc }
     }
     ## `check` has no lower/codegen phase, but publish the same selected configuration at its
@@ -5794,7 +5826,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     if is_pkg { artifact_kind = manifest_target_kind(a, pkg_arg) }
     ## the same predicate `check` runs (Tooling §2.2/§5): one function, so the two commands cannot
     ## drift into disagreeing about which manifests are buildable.
-    if is_pkg { krc := manifest_kind_reject(a, pkg_arg, artifact_kind) ; if krc != 0 { return krc } }
+    if is_pkg { krc := manifest_kind_reject(a, pkg_arg, artifact_kind, mode) ; if krc != 0 { return krc } }
     ## Publish the actual manifest/default artifact kind before the front end reaches lowering.
     ## This is the same resolved value that selects the executable versus object/archive emitter.
     kset := driver::set_target_kind(manifest_target_kind_code(artifact_kind))
@@ -5832,7 +5864,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## for word0 + N×(start,len): 262144 B / 16 = 16384 spans >> the module count.
   mut spb := 0
   if mode != 0 and osplit_on(a) { spb = rt::bump(a, 262144) }
-  mut sb := driver::compile_files_target(paths, a, entry_sym, lim_ceiling, spb, artifact_kind == "object" or artifact_kind == "static_lib")
+  mut sb := driver::compile_files_target(paths, a, entry_sym, lim_ceiling, spb, artifact_kind == "object" or artifact_kind == "static_lib" or artifact_kind == "shared_lib")
   ## The driver has already resolved a non-default package entry against the package declaration
   ## graph before emitting GAS. Use that linker symbol (not the manifest path) for the subsequent
   ## assembler/linker step; empty preserves the established `_start` compatibility path.
@@ -5888,7 +5920,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       lflags = manifest_linker_flags(a, mpath)
     }
     mut build_rc := 0
-    if artifact_kind == "object" or artifact_kind == "static_lib" {
+    if artifact_kind == "object" or artifact_kind == "static_lib" or artifact_kind == "shared_lib" {
       build_rc = emit_library_artifact(a, artifact_kind, outp, sb.data, sb.len, libnames, anyd, lflags)
     } else {
       build_rc = link_exe_split(a, outp, paths, sb.data, sb.len, spb, entry_sym, libnames, anyd, lflags)

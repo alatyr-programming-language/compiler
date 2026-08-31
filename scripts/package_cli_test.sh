@@ -953,7 +953,6 @@ run_check_build_parity() {
     printf 'main := fn() -> u64 { return 42 }\n' > "$tmp/$1/src/main.al"
     printf 'app := Package(version = "0.1.0", source_dir = "src", target_dir = "target",\n  %s\n' "$2" > "$tmp/$1/package.al"
   }
-  mkcase kind_shared "$(tgt 'kind = Kind.shared_lib, ')"
   mkcase kind_source "$(tgt 'kind = Kind.source, ')"
   mkcase kind_bogus  "$(tgt 'kind = Kind.no_such_kind, ')"
   mkcase dep_git "dependencies = [Dependency(name = \"g\", source = DepSource.Git(\"https://example.invalid/g.git\", GitRef.Commit(\"0123456789abcdef0123456789abcdef01234567\")))],
@@ -962,10 +961,9 @@ run_check_build_parity() {
   $(tgt '')"
   mkcase dep_selfcycle "dependencies = [Dependency(name = \"me\", alias = \"m\", source = DepSource.Path(\".\"))],
   $(tgt '')"
-  # `run` and `test` compile the package too, so the parity spans all FOUR verbs, not just check/build:
-  # a `Kind.shared_lib` target cannot produce something to run, and an unrecognized `Kind.…` is a Config
-  # error whatever the verb. Measured before this: `run` and `test` returned 0 on every kind case.
-  for case in kind_shared kind_source kind_bogus dep_git dep_missing dep_selfcycle; do
+  # `run` and `test` compile the package too, so the parity spans all FOUR verbs, not just check/build.
+  # The positive `Kind.shared_lib` build and its run/test boundary have a dedicated assertion below.
+  for case in kind_source kind_bogus dep_git dep_missing dep_selfcycle; do
     cerr=$(mktemp); berr=$(mktemp); rerr=$(mktemp); terr=$(mktemp)
     ( cd "$tmp/$case" && rm -rf target && "$CC" check package.al >/dev/null 2>"$cerr" ); crc=$?
     cleft=0; [ -e "$tmp/$case/target" ] && cleft=1
@@ -1007,6 +1005,155 @@ run_check_build_parity() {
   done
   unset -f tgt mkcase
   rm -rf "$tmp"
+}
+
+# Issue #36 / Tooling §2.2 / Manifest §3.2 / §4.2 / Modules §6.4 — the released shared-library
+# surface is one x86_64/Linux/ELF package object: `check` accepts it without an artifact, `build`
+# derives `lib<base>.so`, writes the v1 install path under `lib/`, and `run`/`test` reject it before
+# code generation. The two explicitly unsupported target shapes must fail at the located Config
+# boundary rather than reaching the host linker.
+run_tool36_shared_lib() {
+  p="$ROOT/test/package/tool17_target_kind/shared_lib"
+  tmp=$(mktemp -d)
+  out=$(mktemp)
+  err=$(mktemp)
+  want=$(mktemp)
+  cat >"$want" <<'EOF'
+meta	arch	x86_64
+meta	container	elf
+meta	env	gnu
+meta	hermetic	yes
+meta	machine	Linux
+meta	os	linux
+meta	package-version	0.1.0
+meta	plan-version	1
+meta	profile	debug
+meta	toolchain	as,ld
+artifact		debug	shared_lib	debug/libapp.so	lib/libapp.so
+EOF
+
+  positive="$tmp/positive"
+  mkdir -p "$positive/src"
+  cat >"$positive/src/api.al" <<'EOF'
+pub probe := fn() -> u64 { return 42 }
+@export("shared_exact") exact := fn() -> u64 { return 7 }
+EOF
+  cat >"$positive/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(
+    arch = Arch.x86_64,
+    os = Os.linux,
+    env = Env.gnu,
+    container = Container.elf,
+    kind = Kind.shared_lib,
+  )],
+)
+EOF
+  (cd "$positive" && "$CC" build --quiet package.al) >"$out" 2>"$err"
+  positive_rc=$?
+  positive_lib="$positive/target/debug/libapp.so"
+  if [ "$positive_rc" = 0 ] && [ -f "$positive_lib" ] \
+    && readelf -h "$positive_lib" 2>/dev/null | grep -qE 'Type:[[:space:]]+DYN[[:space:]]+\(Shared object file\)' \
+    && nm -D "$positive_lib" 2>/dev/null | grep -qE ' T api__probe$' \
+    && nm -D "$positive_lib" 2>/dev/null | grep -qE ' T shared_exact$' \
+    && ! nm "$positive_lib" 2>/dev/null | grep -qE ' [Tt] _start$'; then
+    echo "ok   tool36_shared_lib: temporary package keeps pub/@export surface and omits entry"
+  else
+    echo "FAIL tool36_shared_lib: temporary pub/@export package rc=$positive_rc artifact=$positive_lib stdout=$(cat "$out") stderr=$(cat "$err")"
+    fail=1
+  fi
+
+  rm -rf "$p/target"
+  (cd "$p" && "$CC" check package.al) >"$out" 2>"$err"
+  check_rc=$?
+  if [ "$check_rc" = 0 ] && [ ! -s "$out" ] && [ ! -s "$err" ] && [ ! -e "$p/target" ]; then
+    echo "ok   tool36_shared_lib: check accepts shared_lib without an artifact"
+  else
+    echo "FAIL tool36_shared_lib: check rc=$check_rc stdout=$(cat "$out") stderr=$(cat "$err") target=$(test -e "$p/target" && echo yes || echo no)"
+    fail=1
+  fi
+
+  rm -rf "$p/target"
+  (cd "$p" && "$CC" build --quiet --plan package.al) >"$out" 2>"$err"
+  build_rc=$?
+  lib="$p/target/debug/libapp.so"
+  if [ "$build_rc" = 0 ] && [ ! -s "$out" ] && [ -f "$lib" ] && cmp -s "$p/target/debug/plan.tsv" "$want"; then
+    echo "ok   tool36_shared_lib: build emits default libapp.so and the v1 shared install plan"
+  else
+    echo "FAIL tool36_shared_lib: build rc=$build_rc artifact=$lib stdout=$(cat "$out") stderr=$(cat "$err")"
+    fail=1
+  fi
+
+  for cmd in run test; do
+    rm -rf "$p/target"
+    (cd "$p" && "$CC" "$cmd" package.al) >"$out" 2>"$err"
+    rc=$?
+    if [ "$rc" = 41 ] && [ ! -e "$p/target" ] \
+      && grep -qF 'config: Target.kind = Kind.shared_lib can only be built as a library' "$err" \
+      && grep -qE 'at line [0-9]+ in package.al' "$err"; then
+      echo "ok   tool36_shared_lib: $cmd rejects shared_lib before code generation"
+    else
+      echo "FAIL tool36_shared_lib: $cmd rc=$rc stdout=$(cat "$out") stderr=$(cat "$err")"
+      fail=1
+    fi
+  done
+
+  for shape in none com; do
+    d="$tmp/$shape"
+    mkdir -p "$d/src"
+    printf 'pub probe := fn() -> u64 { return 42 }\n' >"$d/src/api.al"
+    if [ "$shape" = none ]; then
+      cat >"$d/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(
+    arch = Arch.x86_64,
+    os = Os.none,
+    env = Env.none,
+    container = Container.elf,
+    kind = Kind.shared_lib,
+  )],
+)
+EOF
+      needle='config: Target.kind = Kind.shared_lib is incompatible with Os.none'
+    else
+      cat >"$d/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [Target(
+    arch = Arch.x86_64,
+    os = Os.linux,
+    env = Env.gnu,
+    container = Container.com,
+    kind = Kind.shared_lib,
+  )],
+)
+EOF
+      needle='config: Target.kind = Kind.shared_lib is incompatible with Container.com'
+    fi
+    for cmd in check build; do
+      rm -rf "$d/target"
+      (cd "$d" && "$CC" "$cmd" package.al) >"$out" 2>"$err"
+      rc=$?
+      if [ "$rc" != 0 ] && [ ! -e "$d/target" ] && grep -qF "$needle" "$err" \
+        && grep -qE 'at line [0-9]+ in package.al' "$err"; then
+        echo "ok   tool36_shared_lib: $shape/$cmd is a located Config reject"
+      else
+        echo "FAIL tool36_shared_lib: $shape/$cmd rc=$rc stdout=$(cat "$out") stderr=$(cat "$err")"
+        fail=1
+      fi
+    done
+  done
+
+  rm -f "$out" "$err" "$want"
+  rm -rf "$p/target" "$tmp"
 }
 
 # TOOL-7 (Tooling §4.1) — THE TEST ARTIFACT OWNS ITS ENTRY. What `alatyr test` builds is a separate
@@ -1710,6 +1857,7 @@ fi
 
 run_tool20_plan
 run_tool20_build_plan
+run_tool36_shared_lib
 
 # TOOL-14 — invocation-level Config diagnostics must name an unrecognized command/flag before the
 # source-path branch can turn it into the misleading missing-source-file failure. Capture the command's
