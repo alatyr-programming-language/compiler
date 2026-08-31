@@ -21442,6 +21442,24 @@ mut BUILD_FLAGS_P : usize = 0
 mut BUILD_FLAGS_N : usize = 0
 pub set_build_flags := fn(p : usize, n : usize) -> i64 { BUILD_FLAGS_P = p ; BUILD_FLAGS_N = n ; return 0 }
 
+## Codegen diagnostics need the same global-source-to-file mapping that the driver's semantic and
+## limit renderers already use. The table is published for the duration of one lowering invocation;
+## zero pointers mean a single in-memory source whose offsets are already file-relative. Reset it at
+## every driver entry so a later compile cannot inspect vectors owned by an earlier arena.
+mut CODEGEN_FILE_NS_P : usize = 0
+mut CODEGEN_FILE_NL_P : usize = 0
+mut CODEGEN_FILE_SO_P : usize = 0
+mut CODEGEN_FILE_SL_P : usize = 0
+mut CODEGEN_FILE_N : usize = 0
+pub set_codegen_files := fn(ns : usize, nl : usize, so : usize, sl : usize, n : usize) -> i64 {
+  CODEGEN_FILE_NS_P = ns
+  CODEGEN_FILE_NL_P = nl
+  CODEGEN_FILE_SO_P = so
+  CODEGEN_FILE_SL_P = sl
+  CODEGEN_FILE_N = n
+  return 0
+}
+
 ## The AMBIENT ALLOCATOR (MEM-5): the `alloc::with(A) { … }` scope in effect, as the `A` expression's
 ## pointer (a `ptr(Expr)` bit-cast to `usize`; 0 = none). Set/restored around the body in `emit_stmts`'s
 ## `AllocWith` arm; read at a call site with an ELIDED allocator parameter to inject `ptr(A)` (§5.5).
@@ -21542,7 +21560,7 @@ emit_st_comp_if := fn(ccond : ptr(Expr), cthen : ptr(mut Stmt), celse : ptr(mut 
   ov_tail := cx.tail
   cx.tail = ov_tail and nx == 0
   cv := comptime_cond_eval(ccond, cx, a)
-  if cv < 0 { comptime_reject_cond(ccond, cx.src) }
+  if cv < 0 { comptime_reject_cond(ccond, cx, a) }
   if cv == 1 { emit_stmts(cthen, sb, cx, nl) }
   else if cv == 0 { emit_stmts(celse, sb, cx, nl) }
   cx.tail = ov_tail

@@ -1,7 +1,7 @@
 ## selfhost::lower::ctfold — COMPILE-TIME FOLDING: the `comptime if` condition evaluator and its
 ## located reject, the `build.<flag>` profile facts (Tooling §2.7), the `target.<facet>` facet
 ## comparison, the capability queries (`resolves`/`compiles`), the `comptime for` header recovery and
-## its range bounds, and the `typeinfo(T)` counts. 29 functions, one type (`QRef`).
+## its range bounds, and the `typeinfo(T)` counts. 30 functions, one type (`QRef`).
 ##
 ## MOD-12: `src/lower.al` supplies module `lower`'s own items and `src/lower/` supplies its children;
 ## the two halves are ONE module scope (Modules §1), so `driver`'s `lower::` call sites are untouched
@@ -626,6 +626,66 @@ pub lower_show_src_line := fn(src : ptr(u8), off : usize) {
   w := rt::sys_write(1, 2, unchecked bitcast(usize, rt::addr(src, s)), n)
 }
 
+## Emit the first lower diagnostic that carries a real stage and source span. The driver publishes
+## the file table before emission, so a global AST offset is converted to a FILE-relative line and
+## the owning module name exactly like its semantic/config renderers. A plain in-memory compile has
+## no table and therefore treats offset zero as the beginning of its one source file. This helper
+## allocates only in the failing path; successful compiler output is unchanged.
+codegen_reject := fn(src : ptr(u8), off : usize, mod_s : usize, mod_l : usize, message : str, a : rt::Arena) {
+  base := unchecked bitcast(usize, src)
+  mut fbase := 0
+  mut file_s := mod_s
+  mut file_l := mod_l
+  mut found := false
+  if CODEGEN_FILE_N != 0 and CODEGEN_FILE_SO_P != 0 {
+    sov := unchecked bitcast(ptr(rt::Vec), CODEGEN_FILE_SO_P)
+    slv := unchecked bitcast(ptr(rt::Vec), CODEGEN_FILE_SL_P)
+    nsv := unchecked bitcast(ptr(rt::Vec), CODEGEN_FILE_NS_P)
+    nlv := unchecked bitcast(ptr(rt::Vec), CODEGEN_FILE_NL_P)
+    mut i := 0
+    while i < CODEGEN_FILE_N {
+      fo := rt::vec_get(deref(sov), i)
+      fl := rt::vec_get(deref(slv), i)
+      if off >= fo and off < fo + fl {
+        fbase = fo
+        file_s = rt::vec_get(deref(nsv), i)
+        file_l = rt::vec_get(deref(nlv), i)
+        found = true
+      }
+      i += 1
+    }
+  }
+  ## If no table was published, the source is the whole input. If a table was published but the
+  ## span is outside it, keep the line relative to the shared buffer and omit a guessed filename.
+  mut line := 1
+  mut line_base := 0
+  if found { line_base = fbase }
+  if found == false and CODEGEN_FILE_N != 0 { line = 0 }
+  if line != 0 {
+    srcv := str_at(base, off)
+    mut p := line_base
+    while p < off { if bytes(srcv)[p] == 10 { line = line + 1 } ; p += 1 }
+  }
+  mut db := rt::strbuf(a, message.len + 256)
+  z0 := rt::push_str(db, "codegen: ")
+  z1 := rt::push_str(db, message)
+  if line != 0 {
+    z2 := rt::push_str(db, " at line ")
+    z3 := rt::push_int(db, i64(line))
+  } else {
+    z2b := rt::push_str(db, " at byte ")
+    z3b := rt::push_int(db, i64(off))
+  }
+  if file_l != 0 and (found or CODEGEN_FILE_N == 0) {
+    z4 := rt::push_str(db, " in ")
+    z5 := rt::push_str(db, str_at(base + file_s, file_l))
+  }
+  z6 := rt::push_byte(db, 10)
+  z7 := rt::sb_flush(db, 2)
+  if z7 < 0 { panic("rt: diagnostic write failed") }
+  panic("")
+}
+
 ## A representative SOURCE OFFSET for a condition expression — the leftmost leaf that carries a span
 ## of its own (a `Var` / `Field` / `Call` / `StrLit` name). 0 when none does. Recurses on itself
 ## (never a nested `match`) to stay within the self-host lower's idiom limits.
@@ -649,12 +709,11 @@ pub comptime_cond_src_off := fn(e : ptr(Expr)) -> usize {
 ## expression MUST be comptime-known and emission applies to the SELECTED branch — so "cannot fold"
 ## has no selected branch and MUST be a REJECT. Emitting NEITHER arm (the previous behaviour) silently
 ## DELETES both arms' effects, which is a silent miscompile: `comptime if target.os == Os.linux
-## { x = 30 } else { x = 70 }` left `x` at its prior value with no diagnostic at all. The offending
-## source line is written to stderr first (`lower_show_src_line`), so the reject is located.
-pub comptime_reject_cond := fn(cond : ptr(Expr), src : ptr(u8)) {
+## { x = 30 } else { x = 70 }` left `x` at its prior value with no diagnostic at all. The condition's
+## source span is rendered by the shared `codegen_reject` helper instead of echoing its whole line.
+pub comptime_reject_cond := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) {
   off := comptime_cond_src_off(cond)
-  if off != 0 { lower_show_src_line(src, off) }
-  panic("selfhost: `comptime if` — cannot fold this comptime condition (the source line above). The lower folds target machine projections, verify.checked, build.<flag>, a module const, an integer comparison, size(T), typeinfo(T).fields/variants.len, a type equality, a `match typeinfo(T)` kind test, resolves(…)/compiles(…), and and/or/not over those. Rejected rather than silently emitting NEITHER branch.")
+  codegen_reject(cx.src, off, cx.mod_s, cx.mod_l, "`comptime if` — cannot fold this comptime condition. The lower folds target machine projections, verify.checked, build.<flag>, a module const, an integer comparison, size(T), typeinfo(T).fields/variants.len, a type equality, a `match typeinfo(T)` kind test, resolves(…)/compiles(…), and and/or/not over those. Rejected rather than silently emitting NEITHER branch.", a)
 }
 ## Fold a `comptime if` condition at compile time: 1 = true (emit the then-branch), 0 = false (emit
 ## the else-branch), -1 = cannot fold — which the CALLER turns into a LOCATED REJECT
