@@ -37,7 +37,7 @@ stmt_label_span := ast::stmt_label_span
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
 ## does not depend on sema → no import cycle. (`struct_decl_of`/`base_type_name`/`brand_underlying` added
 ## for the is-KIND + field-COUNT fold — they classify the resolved type exactly as the lower's own fold.)
-(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element) := lower_layout
+(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element) := lower_layout
 ## §8 `@repr(T)` tag-type primitives (shared with `lower::validate_repr`) for the LOCATED @repr reject:
 ## sema classifies an enum's `@repr(T)` tag exactly as the build's `validate_repr` does (same span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
@@ -2916,6 +2916,44 @@ value_is_scalar_lit := fn(v : ptr(Expr)) -> bool {
     _ => { false }
   }
 }
+## The exact value shape selected by issue #5: a two-element tuple literal whose components are direct
+## numeric literals. The parser shares `ArrayLit` for tuples and arrays, so the source delimiter is the
+## stable discriminator. Keep this deliberately narrower than the lower's complete tuple/array net:
+## nested expressions, arrays, aliases, wrappers and every other tuple form remain outside this slice.
+sema_num_literal_start := fn(e : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(e) {
+    Expr::Num(v, s, n) => { r = s }
+    _ => {}
+  }
+  r
+}
+sema_two_word_tuple_literal := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+  match deref(e) {
+    Expr::ArrayLit(nel, eh) => {
+      if nel != 2 or eh == 0 { return false }
+      e0 := deref(arg_p(eh))
+      if e0.next == 0 { return false }
+      e1 := deref(arg_p(e0.next))
+      if e1.next != 0 { return false }
+      s0 := sema_num_literal_start(e0.e)
+      s1 := sema_num_literal_start(e1.e)
+      if s0 == 0 or s1 == 0 { return false }
+      mut p := s0
+      mut open := false
+      while p > 0 and not open {
+        p = p - 1
+        c := str_at((src + p), 1)
+        if c == "(" { open = true }
+        else if c == "[" { return false }
+        else if c == " " or c == "\n" or c == "\t" or c == "\r" {}
+        else { return false }
+      }
+      open
+    }
+    _ => { false }
+  }
+}
 ## Is `[s,n)` a BUILTIN SCALAR type NAME (int width / float / bool / char)? Mirrors the retired emit
 ## nets' `conv_kind(nm) >= 0 or nm == "bool" or nm == "char"` — the FORWARD scalar-sink test. Covers
 ## f32/f64/char that `resolve_ty` leaves tag 0, so a float/char sink still reads as a scalar sink here.
@@ -5572,6 +5610,10 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         raw := local_ty(locals, nloc, src, s, n)
         mut ltag : u8 = raw.tag
         if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
+        ## Issue #5's hidden tuple marker is only for the direct builtin-conversion fence. Keep it
+        ## UNKNOWN in ordinary compatibility so tuple parameters and unrelated expression paths retain
+        ## their pre-existing conservative behavior.
+        if ltag == 12 { ltag = 0 }
         Result(Ty, CheckErr).Ok(Ty(tag = ltag, ns = raw.ns, nl = raw.nl))
       } else if upto == 0 {
         Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
@@ -7863,6 +7905,16 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
               if unchecked bitcast(usize, afe) != 0 and value_is_scalar_lit(afe) { bind_tag = 7 }
             }
           }
+          ## Issue #5 / TYP-6 — preserve the exact direct two-word tuple residual as a hidden local
+          ## marker. Tag 12 is intentionally not a public type tag (wrapper values use tag 11); the
+          ## Var arm maps it back to UNKNOWN for ordinary type compatibility, while the conversion
+          ## fence below can still distinguish this proven tuple from an array or an unrelated local.
+          ## An explicit tuple annotation is accepted; an array annotation cannot opt into this marker.
+          if sema_two_word_tuple_literal(v, src) and (ann.n == 0 or str_at((src + ann.s), 1) == "(") {
+            bind_tag = 12
+            bind_ns = 0
+            bind_nl = 0
+          }
           ## ANNOTATED-local conformance (both directions): `x : <scalar> = <aggregate>` or `x :
           ## <aggregate> = <scalar-literal>` — covers the float/char sink the tag-only `bad_decl` misses.
           if agg_scalar_bad(ann.s, ann.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
@@ -9663,10 +9715,42 @@ sema_aggregate_conversion_exists := fn(decls : ptr(rt::Vec), upto : usize, src :
   }
   false
 }
+## True iff `d`'s first parameter is the exact two-component tuple shape used by issue #5. Param stores
+## only the first tuple component for the aggregate ABI, so recover the opening delimiter from the
+## parameter name and re-read the top-level components from source. Arrays, nested tuples and other
+## parameter forms deliberately return false.
+sema_two_word_tuple_param := fn(d : Decl, src : ptr(u8)) -> bool {
+  if d.params_head == 0 { return false }
+  p0 := deref(param_p(d.params_head))
+  open := param_tuple_open_at(src, p0.ns, p0.nl)
+  if open < 0 { return false }
+  t0 := typearg_at(src, usize(open), 0, 0)
+  t1 := typearg_at(src, usize(open), 0, 1)
+  t2 := typearg_at(src, usize(open), 0, 2)
+  t0.n != 0 and t1.n != 0 and t2.n == 0
+}
+## True iff an in-scope, non-generic one-parameter @convert accepts the bounded two-word tuple and
+## returns the builtin target `[cs,cl)`. This is the tuple counterpart of the landed named-aggregate
+## lookup above; it does not broaden conversion resolution or inspect aliases/generics/indirect forms.
+sema_tuple_conversion_exists := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), cs : usize, cl : usize, caller_s : usize, caller_l : usize) -> bool {
+  mut i := 0
+  while i < upto {
+    d := deref(decl_get(decls, i))
+    if d.kind == 1 and d.is_fn and not d.is_generic and d.arity == 1 and sema_fn_is_convert(src, d.name_start, d.name_len) {
+      rb := base_type_name(src, d.ret_ts, d.ret_tl)
+      if rb.n != 0 and streq(src, rb.s, rb.n, cs, cl) and sema_decl_visible_from(src, d, caller_s, caller_l) {
+        if sema_two_word_tuple_param(d, src) { return true }
+      }
+    }
+    i += 1
+  }
+  false
+}
 ## Types §4.6 / TYP-6 — the smallest shared pre-emission fence for the live residual: a direct
-## builtin numeric conversion `T(rec)` where `rec` is a named user-aggregate local. A scalar local,
-## direct aggregate literals, tuples/arrays, indirect/UFCS/qualified forms and brands are deliberately
-## outside this increment. A matching in-scope @convert keeps the explicit user-conversion path alive.
+## builtin numeric conversion `T(rec)` where `rec` is either the landed named user-aggregate local or
+## issue #5's exact direct two-word tuple local. Scalar locals, direct aggregate literals, arrays,
+## indirect/UFCS/qualified forms and brands remain outside this increment. A matching in-scope @convert
+## keeps the explicit user-conversion path alive.
 sema_builtin_aggregate_conversion_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
   cs := expr_call_callee_span(e)
   if cs.n == 0 or expr_call_arity(e) != 1 { return false }
@@ -9676,9 +9760,13 @@ sema_builtin_aggregate_conversion_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec),
   a0 := deref(arg_p(ah))
   vs := expr_var_span(a0.e)
   if vs.n == 0 or nloc == 0 or not local_in(locals, nloc, src, vs.s, vs.n) { return false }
+  lv := deref(locals)
+  raw := local_ty(locals, nloc, src, vs.s, vs.n)
+  mut ltag : u8 = raw.tag
+  if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
+  if ltag == 12 { return not sema_tuple_conversion_exists(decls, upto, src, cs.s, cs.n, lv.mod_s, lv.mod_l) }
   agg := value_agg_ty(a0.e, decls, upto, src, locals, nloc)
   if agg.tag != 3 and agg.tag != 4 { return false }
-  lv := deref(locals)
   not sema_aggregate_conversion_exists(decls, upto, src, cs.s, cs.n, agg, lv.mod_s, lv.mod_l)
 }
 ## Is `nm` a built-in SCALAR type spelling (a recognized concrete scalar — never a user type-param name)?
