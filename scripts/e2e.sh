@@ -5999,6 +5999,12 @@ run_x86 fixed_array_byte_param 42
 run_x86 string_xhh 42
 run_x86 string_xhh_print 42
 check_reject string_xhh_invalid
+# Issue #321 / Stdlib appendix §3.6 + §8 — invalid raw str views must fail loudly; the
+# corpus independently records the corresponding cross-target terminal trap rows.
+run_x86_trap chariter_truncated_lead 132
+## The invalid lead is a library validity failure (`panic`/exit 1), not the architecture's direct bounds trap.
+run_x86 chariter_invalid_ff 1
+run chariter_valid_utf8 42
 ## Variadic print must resolve indexed values and indexed call arguments to the same concrete
 ## `print_one__T` instance in the mono pre-pass and the emit pass.
 run_x86 variadic_print_index 42
