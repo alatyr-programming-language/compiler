@@ -6025,6 +6025,23 @@ sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : p
   not ty_compat(actual, dst, src)
 }
 
+## TYP-6 bounded nested-place slice — resolve exactly `root.first.second` through the two declared
+## struct layers before comparing the stored value with the leaf destination. Array, pointer, slice,
+## deeper, and unknown-owner paths stay poison-tolerant for their separate residual slices.
+sema_nested_field_path_value_bad := fn(path : NestedPath, checked : Ty, v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
+  if path.sl == 0 { return false }
+  owner := sema_struct_owner_name_span(decls, upto, src, locals, nloc, path.rs, path.rn)
+  if owner.n == 0 { return false }
+  first_span := sema_field_ann_span(decls, upto, src, owner.s, owner.n, path.fs, path.fl, a)
+  if first_span.n == 0 { return false }
+  first_ty := resolve_ty(src, first_span.s, first_span.n, decls, upto)
+  if first_ty.tag != 3 or first_ty.nl == 0 { return false }
+  leaf_span := sema_field_ann_span(decls, upto, src, first_ty.ns, first_ty.nl, path.ss, path.sl, a)
+  if leaf_span.n == 0 { return false }
+  leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
+  sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc)
+}
+
 ## ── Types §9.1 — an integer literal's PER-TYPE range is checked at compile time ──────────────────
 ##
 ## "An integer literal is a compile-time number; its type is inferred from context, and its
@@ -8101,6 +8118,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           return Result(usize, CheckErr).Err(located_err(pfs.s))
         }
         cvp := check_expr_da(fpv, decls, upto, src, a, locals, cnt, da)?
+        np := expr_nested_path(pl)
+        if sema_nested_field_path_value_bad(np, cvp, fpv, decls, upto, src, locals, cnt, a) {
+          mark_failed(locals, mismatch_err(np.ss, 0))
+        }
         ## Issue #298 — nested field paths carry the same root mutability rule as direct fields. Query
         ## the exact DA marker BEFORE the write bookkeeping below removes it; an initialized immutable
         ## aggregate has no marker and must not reach lower as a writable place.
@@ -8109,7 +8130,6 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         mut p_unready := da_has_root(da, src, proot.s, proot.n)
         aep := expr_array_elem_nested_path(pl)
         anp := expr_array_nested_path(pl)
-        np := expr_nested_path(pl)
         if aep.ok {
           p_unready = sema_da_index_write_unready(da, src, VSpan(s = aep.rs, n = aep.rn), VSpan(s = aep.fs, n = aep.fl), VSpan(s = aep.ss, n = aep.sl), i64(aep.ix))
         } else if anp.ok {
