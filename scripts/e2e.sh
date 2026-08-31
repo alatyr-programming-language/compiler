@@ -6433,6 +6433,7 @@ run struct_return_1field 42
 run return_match_agg 42
 run if_return_agg 42
 run nested_field_assign 42
+check_build_located reject_nested_field_type_mismatch 7 "type mismatch"
 run deep_field_agg_write 42
 run deep_field_agg_if 42
 run str_match_if_local 42
