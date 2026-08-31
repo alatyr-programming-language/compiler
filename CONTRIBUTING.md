@@ -22,7 +22,7 @@ get it decided there, then implement. That rule is why this compiler can claim c
 
 **Which revision, and how to cite it.** This tree implements spec revision **1.0.0** (tag `v1.0.0`,
 `4e46f0489ffddb8060d87451ed3aa65c15646885`) plus the post-tag editorial commits up to spec `main`
-`5cf3af57efa1122f130465f5bb9ddcb22c6dc188`. The spec's citation anchors are theme-prefixed — `FND-*`,
+`b4e797910584333844e04362705d881313846e37`. The spec's citation anchors are theme-prefixed — `FND-*`,
 `TYP-*`, `MOD-*`, `TOOL-*`, `CG-*`, `CF-*`, `CT-*`, `FN-*`, `MEM-*`, `OP-*`, `SYN-*`, `STD-*`, `CC-*`,
 `PRIN-*` — and a new comment or issue cites one of those, or an issue number.
 
