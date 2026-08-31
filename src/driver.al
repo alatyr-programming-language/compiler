@@ -3309,6 +3309,9 @@ DIAG_LOCAL_MULTIDIM_ARRAY_MARKER := 6880000000000000000
 ## Issue #214 — the bounded direct multidimensional struct-field fence. Keep it distinct from the local
 ## array class so check/build render the field-specific lower diagnostic while preserving old ranges.
 DIAG_MULTIDIM_ARRAY_FIELD_MARKER := 6890000000000000000
+## Issue #324 — the bounded direct nested fixed-array parameter fence. Keep it between the field and
+## visibility classes so check/build/emit share one located refusal without changing older ranges.
+DIAG_NESTED_ARRAY_PARAM_MARKER := 6895000000000000000
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
 DIAG_QUALIFIED_PRIVATE_CONST_MARKER := 6900000000000000000
@@ -3418,7 +3421,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   global_init_call := code >= DIAG_GLOBAL_INIT_CALL_MARKER and code < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_GLOBAL_INIT_CALL_MARKER
   private_const := code >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and code < DIAG_CT_MARKER
-  multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
+  multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
+  nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
   multidim_array := code >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and code < DIAG_MULTIDIM_ARRAY_FIELD_MARKER
   packed_array := code >= DIAG_PACKED_ARRAY_MARKER and code < DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
   enum_global_array := code >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and code < DIAG_PACKED_ARRAY_MARKER
@@ -3460,6 +3464,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if multidim_array_field {
     raw = code - DIAG_MULTIDIM_ARRAY_FIELD_MARKER
     span = raw / 4
+  } else if nested_array_param {
+    raw = code - DIAG_NESTED_ARRAY_PARAM_MARKER
+    span = raw / 4
   } else if private_const {
     raw = code - DIAG_QUALIFIED_PRIVATE_CONST_MARKER
     span = raw / 4
@@ -3493,7 +3500,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or multidim_array_field or private_const or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or multidim_array_field or nested_array_param or private_const or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::push_str(db, "@limits(")
       wk1 := rt::push_str(db, limit_name(kind))
@@ -3506,6 +3513,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if enum_global_array { wkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if packed_array { wkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
     else if multidim_array_field { wkmda := rt::push_str(db, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
+    else if nested_array_param { wknap := rt::push_str(db, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
     else if multidim_array { wkmda := rt::push_str(db, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { wkv := rt::push_str(db, "qualified private constant is not visible from this module") }
     else if tuple_global { wktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
@@ -5639,7 +5647,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   global_init_call := r >= DIAG_GLOBAL_INIT_CALL_MARKER and r < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_GLOBAL_INIT_CALL_MARKER
   private_const := r >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and r < DIAG_CT_MARKER
-  multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
+  multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
+  nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
   multidim_array := r >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and r < DIAG_MULTIDIM_ARRAY_FIELD_MARKER
   packed_array := r >= DIAG_PACKED_ARRAY_MARKER and r < DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
   enum_global_array := r >= DIAG_ENUM_GLOBAL_ARRAY_MARKER and r < DIAG_PACKED_ARRAY_MARKER
@@ -5681,6 +5690,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if multidim_array_field {
     raw = r - DIAG_MULTIDIM_ARRAY_FIELD_MARKER
     span = raw / 4
+  } else if nested_array_param {
+    raw = r - DIAG_NESTED_ARRAY_PARAM_MARKER
+    span = raw / 4
   } else if private_const {
     raw = r - DIAG_QUALIFIED_PRIVATE_CONST_MARKER
     span = raw / 4
@@ -5715,7 +5727,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or multidim_array_field or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or multidim_array_field or nested_array_param or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
       else {
@@ -5731,6 +5743,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if enum_global_array { dwkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
     else if packed_array { dwkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
     else if multidim_array_field { dwkmda := rt::push_str(db, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
+    else if nested_array_param { dwknap := rt::push_str(db, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
     else if multidim_array { dwkmda := rt::push_str(db, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { dwkv := rt::push_str(db, "qualified private constant is not visible from this module") }
     else if tuple_global { dwktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
