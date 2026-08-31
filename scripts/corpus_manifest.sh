@@ -652,6 +652,16 @@ normalization_selftest() {
     echo "corpus manifest: normalization self-test FAILED — guest stream was masked" >&2
     return 1
   fi
+
+  ## A guest is allowed to print text that is byte-for-byte indistinguishable from a runner diagnostic.
+  ## The stream boundary, not content matching, is what identifies supervisor output. Keep two such guest
+  ## messages different so a future normalizer cannot silently erase an application-owned signal report.
+  printf '%s\n' 'qemu-aarch64: uncaught target signal 5 (Trace/breakpoint trap) - core dumped' > "$guest_err_a"
+  printf '%s\n' 'qemu-aarch64: uncaught target signal 6 (Aborted) - core dumped' > "$guest_err_b"
+  if [ "$(hash_stream "$guest_err_a")" = "$(hash_stream "$guest_err_b")" ]; then
+    echo "corpus manifest: normalization self-test FAILED — runner-looking guest diagnostics were masked" >&2
+    return 1
+  fi
   echo "corpus manifest: normalization self-test ok (host offsets muted; guest stdout/stderr preserved)"
 }
 normalization_selftest || exit 2
