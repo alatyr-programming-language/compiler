@@ -82,6 +82,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `Result`/`Option` values can no longer be implicitly treated as their payload in explicitly
+  annotated local bindings; invalid direct and inferred-local assignments now fail with located diagnostics.
 - `std::os::args` now reads the complete NUL-separated process command line, growing its arena-backed
   buffer instead of silently dropping arguments beyond the initial 64 KiB chunk.
 - Unsupported `comptime if` codegen rejections now retain their source location through transparent `unchecked` conditions in multi-file builds without changing rejection semantics.
