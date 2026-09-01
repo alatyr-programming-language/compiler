@@ -82,6 +82,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Fixed runtime comparison conditions for materialized typed `comptime` `u64` locals so high-bit values
+  use unsigned ordering while signed `i64` and ordinary runtime `u64` comparisons retain their paths.
 - `CharIter` now bounds-checks its backing view in checked mode and rejects malformed UTF-8 instead of reading past the view or producing an out-of-range code point.
 - Direct nested fixed-array parameters are now rejected with one located diagnostic before their malformed parameter ABI can reach lowering; full nested-array parameter support remains a follow-up.
 - Fixed x86_64 silent wrong values when an inferred pointer's pointee type lies beyond the old

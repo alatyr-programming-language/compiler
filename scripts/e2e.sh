@@ -4590,6 +4590,10 @@ check_reject reject_attr_abi_prefix
 ## orderings, u64/usize, a literal at/above 2**63 (whose own i64 word is negative), and the signed
 ## controls that must NOT flip (`x < -1` over i64 stays signed).
 run cmp_unsigned_literal 42
+## Issue #367 / Types §3.2 and Comptime §§1.4–1.6: typed comptime u64 locals are materialized into
+## runtime comparisons without losing unsigned condition selection; the fixture covers all six operators,
+## both operand orders, high-bit/max/small values, ordinary u64 controls, and signed i64 controls.
+run issue367_comptime_u64_cmp 42
 ## Codec acceptance probes: nested enum and Slice(T) payloads must preserve their complete values through
 ## construction, return, matching, and a second call boundary; the specification's [T] slice spelling
 ## must not be accepted as a parameter/return fixed-array shape; and a range over a usize bound must retain
