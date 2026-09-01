@@ -487,7 +487,7 @@ pub eq_ignore_ascii_case := fn(a : str, b : str) -> bool {
 pub CharIter := struct { ptr : ptr(u8), len : usize, pos : usize }
 
 ## A code-point iterator over `s`.
-chars := fn(s : str) -> CharIter {
+pub chars := fn(s : str) -> CharIter {
   CharIter(ptr = s.ptr, len = s.len, pos = 0)
 }
 
@@ -501,14 +501,14 @@ char_byte := fn(c : CharIter, i : usize) -> u8 {
 
 ## A `CharIter` **is** the iterator — the Iterator protocol's `iter` (identity).
 ## Returns a constructor copy (a non-place aggregate) rather than the place `c`.
-iter := fn(c : CharIter) -> CharIter {
+pub iter := fn(c : CharIter) -> CharIter {
   CharIter(ptr = c.ptr, len = c.len, pos = c.pos)
 }
 
 ## Decode the next **code point** (UTF-8) and advance; `None` at the end. The
 ## codepoint is reassembled from 6-bit groups with the standard lead/continuation
 ## masks, written as arithmetic (`% 64`, `* 64`, …) — the inverse of `push_char`.
-next := fn(in out c : CharIter) -> Option(char) {
+pub next := fn(in out c : CharIter) -> Option(char) {
   if c.pos >= c.len {
     return Option(char).None
   }

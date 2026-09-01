@@ -82,6 +82,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `base::str` now publishes the `chars`, `iter`, and `next` functions required to consume the
+  specification's `CharIter` protocol from an external package, in the qualified, bare and UFCS
+  spellings; its representation and decoding behavior are unchanged, and `char_byte` stays private.
+  The `for c in chars(s)` spelling still walks the byte length and yields garbage code points — a
+  separate lowering defect, unrelated to visibility; drive `next` explicitly until it is fixed.
 - An equal-width aggregate `bitcast` used directly as a by-value struct ARGUMENT
   (`consume(bitcast(B, a))`) now passes the source aggregate's own block on x86_64 instead of passing
   its first word as a scalar, which the callee dereferenced as the block address — the reproducer
