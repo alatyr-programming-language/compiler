@@ -1,7 +1,7 @@
 ## selfhost::lower::ctfold — COMPILE-TIME FOLDING: the `comptime if` condition evaluator and its
 ## located reject, the `build.<flag>` profile facts (Tooling §2.7), the `target.<facet>` facet
 ## comparison, the capability queries (`resolves`/`compiles`), the `comptime for` header recovery and
-## its range bounds, and the `typeinfo(T)` counts. 30 functions, one type (`QRef`).
+## its range bounds, and the `typeinfo(T)` counts. 31 functions, two types (`QRef`, `ComptimeScalar`).
 ##
 ## MOD-12: `src/lower.al` supplies module `lower`'s own items and `src/lower/` supplies its children;
 ## the two halves are ONE module scope (Modules §1), so `driver`'s `lower::` call sites are untouched
@@ -48,6 +48,63 @@ stmt_p := ast::stmt_p
 ## Recursion budget for a `comptime if <CONST>` chain (a module const whose value is itself a const).
 ## A cycle terminates at -1 (the located reject) instead of recursing forever.
 mut COMPTIME_CONST_DEPTH : i64 = 0
+
+## A scalar value that the lower may safely use while folding a `comptime if` comparison. The resolver
+## deliberately admits only integer/bool literals, their scalar arithmetic/logical/comparison trees,
+## and names that resolve to the same scalar forms through a local `comptime` side-table entry or an
+## immutable module constant. Unsupported values (enum, float, string, aggregate, function, and config
+## prelude values) remain unknown and therefore take the existing located-reject path.
+ComptimeScalar := struct { known : bool, value : i64 }
+
+comptime_scalar_value := fn(e : ptr(Expr), cx : ptr(LCtx)) -> ComptimeScalar {
+  match deref(e) {
+    Expr::Num(v, _s, _n) => { return ComptimeScalar(known = true, value = i64(v)) }
+    Expr::BoolLit(v) => { return ComptimeScalar(known = true, value = i64(v)) }
+    Expr::Unchecked(inner) => { return comptime_scalar_value(inner, cx) }
+    Expr::Var(s, n) => {
+      cv := comptime_slot_expr(cx.ctslots, cx.src, s, n, s)
+      if unchecked bitcast(usize, cv) != 0 {
+        if COMPTIME_CONST_DEPTH >= 8 { return ComptimeScalar(known = false, value = 0) }
+        COMPTIME_CONST_DEPTH = COMPTIME_CONST_DEPTH + 1
+        rv := comptime_scalar_value(cv, cx)
+        COMPTIME_CONST_DEPTH = COMPTIME_CONST_DEPTH - 1
+        return rv
+      }
+      ## An ordinary local shadows a same-named module constant. Do not let the module lookup turn a
+      ## runtime-dependent condition into a false comptime fact.
+      if slot_of(cx.slots, cx.src, s, n) >= 0 { return ComptimeScalar(known = false, value = 0) }
+      mcv := module_const_value(cx.decls, cx.src, s, n)
+      if unchecked bitcast(usize, mcv) == 0 { return ComptimeScalar(known = false, value = 0) }
+      if COMPTIME_CONST_DEPTH >= 8 { return ComptimeScalar(known = false, value = 0) }
+      COMPTIME_CONST_DEPTH = COMPTIME_CONST_DEPTH + 1
+      rv := comptime_scalar_value(mcv, cx)
+      COMPTIME_CONST_DEPTH = COMPTIME_CONST_DEPTH - 1
+      return rv
+    }
+    Expr::Bin(op, l, r) => {
+      lv := comptime_scalar_value(l, cx)
+      rv := comptime_scalar_value(r, cx)
+      if lv.known and rv.known {
+        if op == 16 { return ComptimeScalar(known = true, value = unchecked (lv.value + rv.value)) }
+        if op == 17 { return ComptimeScalar(known = true, value = unchecked (lv.value - rv.value)) }
+        if op == 18 { return ComptimeScalar(known = true, value = unchecked (lv.value * rv.value)) }
+        if op == 19 and rv.value != 0 { return ComptimeScalar(known = true, value = unchecked (lv.value / rv.value)) }
+        if op == 29 and rv.value != 0 { return ComptimeScalar(known = true, value = unchecked (lv.value % rv.value)) }
+        if op == 20 { if lv.value == rv.value { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
+        if op == 24 { if lv.value < rv.value { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
+        if op == 25 { if lv.value > rv.value { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
+        if op == 26 { if lv.value <= rv.value { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
+        if op == 27 { if lv.value >= rv.value { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
+        if op == 28 { if lv.value != rv.value { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
+        if op == 40 { if lv.value != 0 and rv.value != 0 { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
+        if op == 41 { if lv.value != 0 or rv.value != 0 { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
+        if op == 42 { if lv.value == 0 { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
+      }
+      ComptimeScalar(known = false, value = 0)
+    }
+    _ => { ComptimeScalar(known = false, value = 0) }
+  }
+}
 
 ## Is `s` a non-empty run of ASCII decimal digits (an integer flag default)?
 bf_is_int := fn(s : str) -> bool {
@@ -877,6 +934,14 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
           if eq { return 0 }
           return 1
         }
+      }
+      ## Scalar comptime bindings are closed values too. Resolve both operands only through the
+      ## bounded scalar resolver above; an ordinary local, enum, float, string, aggregate, function,
+      ## or configuration value stays unknown and continues to the existing reject path.
+      if i64(op) == 20 or i64(op) == 24 or i64(op) == 25 or i64(op) == 26 or i64(op) == 27 or i64(op) == 28 {
+        lsv := comptime_scalar_value(l, cx)
+        rsv := comptime_scalar_value(r, cx)
+        if lsv.known and rsv.known { return guard_cmp(i64(op), lsv.value, rsv.value) }
       }
       ## STRUCTURAL comparisons, DELEGATED to the `when`-guard fold helpers over this context's
       ## `GuardTP` (so `comptime if` and `when` agree to the byte): `size(X) <op> N` (§8 word model)
