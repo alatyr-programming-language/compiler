@@ -82,6 +82,7 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- AArch64 now emits module-qualified labels for named non-generic functions and direct qualified calls while preserving exact `@extern`/`@export` symbols.
 - Aggregate `Slice(T)` parameter recovery now uses the complete source buffer instead of a fixed
   512-byte lookahead, so valid aggregate Slice field access beyond that boundary is recovered on
   x86_64 while unsupported non-x86 aggregate lowering remains fail-loud.

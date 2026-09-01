@@ -2276,6 +2276,14 @@ a64_local_off := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize,
   off
 }
 
+a64_emit_fn_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
+  if not lower::is_root_mod(d.mod_start, d.mod_len) {
+    if d.mod_len == 0 { push_str(sb, "main") } else { push_str(sb, str_at((src + d.mod_start), d.mod_len)) }
+    push_str(sb, "__")
+  }
+  push_str(sb, str_at((src + d.name_start), d.name_len))
+}
+
 a64_callee_defined := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a : rt::Arena) -> bool {
   cnt := rt::vec_len(deref(decls))
   mut i := 0
@@ -2289,23 +2297,25 @@ a64_callee_defined := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
 }
 
 ## Emit the `bl` target label for a call to `[cs,cl)`: the callee's `@extern("sym")` external symbol
-## (Modules §7.2) when the callee is a bodyless import, else the bare call name. Resolves the callee among
-## the kind-1 fn decls by name; a non-`@extern` callee keeps the source name (this backend's bare-label
-## scheme — no module mangling).
+## (Modules §7.2) when the callee is a bodyless import, else the callee declaration's module-qualified
+## label. The non-x86 driver has already resolved a qualified call to the target declaration's NAME span;
+## use that declaration's module span here rather than the caller's context. `@extern` remains exact.
 a64_emit_bl_target := fn(in out sb : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) {
   cnt := rt::vec_len(deref(decls))
-  mut es := 0
-  mut en := 0
+  mut target_i : i64 = 0 - 1
   mut i := 0
   while i < cnt {
     d := deref(decl_get(decls, i))
-    if d.kind == 1 and streq(src, d.name_start, d.name_len, cs, cl) {
-      sym := extern_symbol(src, d.name_start, d.name_len)
-      if sym.n != 0 { es = sym.s ; en = sym.n }
-    }
+    if target_i < 0 and d.kind == 1 and streq(src, d.name_start, d.name_len, cs, cl) { target_i = i64(i) }
     i += 1
   }
-  if en != 0 { push_str(sb, str_at((src + es), en)) } else { push_str(sb, str_at((src + cs), cl)) }
+  if target_i >= 0 {
+    d := deref(decl_get(decls, usize(target_i)))
+    sym := extern_symbol(src, d.name_start, d.name_len)
+    if sym.n != 0 { push_str(sb, str_at((src + sym.s), sym.n)) }
+    if sym.n == 0 { a64_emit_fn_label(sb, src, d) }
+  }
+  if target_i < 0 { push_str(sb, str_at((src + cs), cl)) }
 }
 
 ## The generic type-param's NAME span (the `T` of `T : type`), 0/0 if `d` has none.
@@ -7633,7 +7643,7 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   ## is asm() lines over the AArch64 registers; the trailing value (a closing `asm("ret")`) is emitted too.
   if a64_fn_is_naked(src, d.name_start, d.name_len) {
     emit_a64_export(sb, src, d.name_start, d.name_len)
-    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(A64_TEST_DECL_INDEX)) } else if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
+    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(A64_TEST_DECL_INDEX)) } else if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { a64_emit_fn_label(sb, src, d) } ; push_str(sb, ":\n")
     emit_a64_stmts(d.body_stmts, sb, a, src, ephead, pcount, d.body_stmts, decls, frame, 0, 0)
     if not ex_is_no_tail(d.value) { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
     return
@@ -7779,7 +7789,7 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
     push_str(sb, ":\n")
   } else {
     emit_a64_export(sb, src, d.name_start, d.name_len)
-    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(A64_TEST_DECL_INDEX)) } else if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
+    if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(A64_TEST_DECL_INDEX)) } else if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { a64_emit_fn_label(sb, src, d) } ; push_str(sb, ":\n")
   }
   if standard_byte_abi_fence { push_str(sb, "  brk #0 // unsupported standard-byte by-value ABI boundary (#169)\n") }
   ## AArch64's pre-index pair-store has the same +504-byte upper bound as the epilogue's post-index
@@ -8043,9 +8053,23 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on another arch is neutered to an
   ## as-if-absent no-op here, so an arch-gated raw-`asm` body (`lib/std/thread.al`) never reaches `as`.
   apply_when_guards(decls, src, a64_target_arch())
-  if A64_TEST_MODE { a64_emit_test_runner(decls, sb, src, a) }
-  if not A64_TEST_MODE { push_str(sb, ".text\n.global _start\n_start:\n  bl main\n  mov x8, #93\n  svc #0\n") }
   cnt := rt::vec_len(deref(decls))
+  if A64_TEST_MODE { a64_emit_test_runner(decls, sb, src, a) }
+  if not A64_TEST_MODE {
+    push_str(sb, ".text\n.global _start\n_start:\n  bl ")
+    mut entry_found := false
+    mut ei := 0
+    while ei < cnt {
+      d := deref(decl_get(decls, ei))
+      if not entry_found and d.kind == 1 and d.name_len == 4 and str_at((src + d.name_start), d.name_len) == "main" and extern_symbol(src, d.name_start, d.name_len).n == 0 {
+        a64_emit_fn_label(sb, src, d)
+        entry_found = true
+      }
+      ei += 1
+    }
+    if not entry_found { push_str(sb, "main") }
+    push_str(sb, "\n  mov x8, #93\n  svc #0\n")
+  }
   ## GENERICS (§8 mono): instances are RECORDED DURING EMIT — every generic CALL site (`emit_a64_expr`)
   ## resolves its type-arg and appends via `a64_inst_add` (dedup) into the fixed A64_INST_* arrays.
   ## Emitting the non-generic fns seeds the set; the mono loop below emits each instance, and an

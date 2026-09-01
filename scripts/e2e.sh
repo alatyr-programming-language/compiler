@@ -678,6 +678,33 @@ run_a64() { # name, want
   if [ "$got" = "$2" ]; then echo "ok   $1(a64): $got"; else echo "FAIL $1(a64): got $got want $2"; fail=1; fi
 }
 
+# Issue #41 / Modules §6.1–§7.2 — a qualified AArch64 call must execute and its named, non-generic
+# definitions must carry their module-qualified labels. The symbol arguments are deliberately not
+# searched in the fixture comments: this assertion reads the linked ELF produced from the emitted GAS.
+run_a64_symbols() { # name, want, symbol…
+  command -v aarch64-unknown-linux-gnu-as >/dev/null 2>&1 && command -v aarch64-unknown-linux-gnu-ld >/dev/null 2>&1 \
+    && command -v qemu-aarch64 >/dev/null 2>&1 && command -v nm >/dev/null 2>&1 \
+    || { echo "skip $1(a64-symbols): aarch64 toolchain or nm absent"; return; }
+  local name="$1" want="$2"; shift 2
+  local src="$E2E_TEST/$name.al"
+  [ -f "$src" ] || { echo "MISS $name(a64-symbols): no $src"; fail=1; return; }
+  local s="$T/e2e_$name.symbols.s" o="$T/e2e_$name.symbols.o" elf="$T/e2e_$name.symbols.elf" nmout="$T/e2e_$name.symbols.nm"
+  "$CC" aarch64 "$src" > "$s" 2>/dev/null || { echo "FAIL $name(a64-symbols): emit"; fail=1; return; }
+  aarch64-unknown-linux-gnu-as "$s" -o "$o" 2>/dev/null || { echo "FAIL $name(a64-symbols): as"; fail=1; return; }
+  aarch64-unknown-linux-gnu-ld "$o" -o "$elf" 2>/dev/null || { echo "FAIL $name(a64-symbols): ld"; fail=1; return; }
+  _e2e_exec qemu-aarch64 "$elf" >/dev/null 2>&1; local got=$?
+  if [ "$got" != "$want" ]; then echo "FAIL $name(a64-symbols): got $got want $want"; fail=1; return; fi
+  nm "$elf" > "$nmout" 2>/dev/null || { echo "FAIL $name(a64-symbols): nm"; fail=1; return; }
+  local symbol missing=0
+  for symbol in "$@"; do
+    if ! grep -qE " [tT] $symbol$" "$nmout"; then
+      echo "FAIL $name(a64-symbols): missing $symbol"
+      missing=1
+    fi
+  done
+  if [ "$missing" = 0 ]; then echo "ok   $name(a64-symbols): $got + nm $# module-qualified symbols"; else fail=1; fi
+}
+
 # §8.2 aarch64 print: emit, assemble+link, run under qemu-aarch64, check BOTH stdout and exit code.
 run_a64_out() { # name, want-out, want-exit
   command -v aarch64-unknown-linux-gnu-as >/dev/null 2>&1 && command -v qemu-aarch64 >/dev/null 2>&1 || { echo "skip $1: aarch64 toolchain absent"; return; }
@@ -7204,6 +7231,7 @@ run_a64 early_return_result 42
 run_a64 module_const 42
 run_a64 module_mut_global 42
 run_a64 section_global 42
+run_a64_symbols issue41_a64_fn_mangling 42 std__probe__answer issue41_a64_fn_mangling__main
 ## §8.2 aarch64 value structs (scalar fields): construct `p := S(f=…)`, field read `p.f`, field write,
 ## and struct PARAMS by-reference (read-only; a field write through a param traps).
 run_a64 wasm_struct 42
