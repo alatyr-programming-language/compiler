@@ -82,6 +82,9 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Aggregate `Slice(T)` parameter recovery now uses the complete source buffer instead of a fixed
+  512-byte lookahead, so valid aggregate Slice field access beyond that boundary is recovered on
+  x86_64 while unsupported non-x86 aggregate lowering remains fail-loud.
 - `Result`/`Option` values can no longer be implicitly treated as their payload in explicitly
   annotated local bindings; invalid direct and inferred-local assignments now fail with located diagnostics.
 - Semantic checking now rejects a wrong-typed value assigned through a fixed array of structs held in a struct field; deeper and pointer/slice-derived place paths remain separate work.

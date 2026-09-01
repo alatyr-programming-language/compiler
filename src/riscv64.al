@@ -53,6 +53,9 @@ mut RV_TEST_FILTER_P : usize = 0
 mut RV_TEST_FILTER_N : usize = 0
 mut RV_TEST_KEEP : bool = false
 mut RV_TEST_DECL_INDEX : usize = 0
+## The raw source buffer is shared by all parsed modules. Slice parameter recovery consumes absolute
+## source offsets, so it must stop at the buffer extent rather than an arbitrary post-name window.
+mut RV_SRC_N : usize = 0
 pub set_cross_test_mode := fn(mode : usize) -> i64 {
   RV_TEST_MODE = mode != 0
   return 0
@@ -363,20 +366,31 @@ rv_param_gen_arr_stride := fn(params_head : ptr(mut Param), src : ptr(u8), ns : 
 }
 ## The ELEMENT-type span of a `Slice(E)` PARAM named `[s,n)`, by scanning SOURCE forward from the param
 ## name (`: Slice(E)`) — the riscv64 twin of lower.al's `slice_param_elem_span` / aarch64's a64_slice_elem_span.
+rv_slice_scan_has := fn(src : ptr(u8), end : usize, p : usize, want : str) -> bool {
+  if p > end { return false }
+  if want.len > end - p { return false }
+  str_at((src + p), want.len) == want
+}
+rv_slice_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
+  if p >= end { return false }
+  c := str_at((src + p), 1)
+  c == " " or c == "\n" or c == "\t" or c == "\r"
+}
 rv_slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   mut p := s + n
-  end := p + 512
-  mut c := str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") { p = p + 1 ; c = str_at((src + p), 1) }
-  if c != ":" { return CSpan(s = 0, n = 0) }
+  end := RV_SRC_N
+  while p < end and rv_slice_scan_ws(src, end, p) { p = p + 1 }
+  if rv_slice_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
   p = p + 1
-  c = str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") { p = p + 1 ; c = str_at((src + p), 1) }
-  if str_at((src + p), 6) != "Slice(" { return CSpan(s = 0, n = 0) }
+  while p < end and rv_slice_scan_ws(src, end, p) { p = p + 1 }
+  if rv_slice_scan_has(src, end, p, "Slice(") == false { return CSpan(s = 0, n = 0) }
   es := p + 6
   mut ee := es
-  while ee < end and str_at((src + ee), 1) != ")" { ee = ee + 1 }
-  if ee == end { return CSpan(s = 0, n = 0) }
+  while ee < end {
+    if str_at((src + ee), 1) == ")" { break }
+    ee = ee + 1
+  }
+  if ee >= end { return CSpan(s = 0, n = 0) }
   if ee == es { return CSpan(s = 0, n = 0) }
   CSpan(s = es, n = ee - es)
 }
@@ -7151,7 +7165,8 @@ rv_emit_test_runner := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
 }
 
 ## Emit a complete runnable RV64 GAS program: `_start` (call main, exit(a0)) + every fn + `.data`.
-pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
+pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), src_n : usize, a : rt::Arena) {
+  RV_SRC_N = src_n
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any callee resolution or emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on another arch is neutered to an
   ## as-if-absent no-op here, so an arch-gated raw-`asm` body (`lib/std/thread.al`) never reaches `as`.

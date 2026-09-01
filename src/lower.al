@@ -5257,32 +5257,33 @@ slice_arr_espan := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan 
 ## `slice_param_elem_span` / `local_is_mut`.
 slot_name_is_annotated := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   mut p := s + n
-  end := p + 512
-  mut c := str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") { p = p + 1; c = str_at((src + p), 1) }
-  if c != ":" { return false }
-  return str_at((src + p + 1), 1) != "="
+  end := LOWER_SRC_N
+  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+  if ptr_scan_has(src, end, p, ":") == false { return false }
+  p = p + 1
+  ptr_scan_has(src, end, p, "=") == false
 }
 
 slice_param_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   mut p := s + n
-  end := p + 512
-  mut c := str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") { p = p + 1; c = str_at((src + p), 1) }
-  if c != ":" { return CSpan(s = 0, n = 0) }
+  end := LOWER_SRC_N
+  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+  if ptr_scan_has(src, end, p, ":") == false { return CSpan(s = 0, n = 0) }
   p = p + 1
-  c = str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") { p = p + 1; c = str_at((src + p), 1) }
-  if str_at((src + p), 6) != "Slice(" {
+  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+  if ptr_scan_has(src, end, p, "Slice(") == false {
     ## §7.2 slice-VARIADIC `name : ...T` — the element type follows `...`. Recover `T`'s span so a
     ## `...Pt` / `...E` param reads its struct/enum element exactly like a `Slice(Pt)` param (field
     ## resolution + the by-ref for-loop). A bare `...` (the §7.1 comptime variadic — no element type,
     ## `)` right after) yields 0/0, unchanged from before → fixpoint-neutral for the lib `args : ...`.
-    if str_at((src + p), 3) == "..." {
+    if ptr_scan_has(src, end, p, "...") {
       vs := p + 3
       mut ve := vs
-      mut vc := str_at((src + ve), 1)
-      while ve < end and vc != ")" and vc != "," and vc != " " and vc != "\n" and vc != "\t" and vc != "\r" { ve = ve + 1; vc = str_at((src + ve), 1) }
+      while ve < end {
+        c := str_at((src + ve), 1)
+        if c == ")" or c == "," or c == " " or c == "\n" or c == "\t" or c == "\r" { break }
+        ve = ve + 1
+      }
       if ve == vs { return CSpan(s = 0, n = 0) }
       return CSpan(s = vs, n = ve - vs)
     }
@@ -5290,8 +5291,11 @@ slice_param_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
   }
   es := p + 6
   mut ee := es
-  while ee < end and str_at((src + ee), 1) != ")" { ee = ee + 1 }
-  if ee == end { return CSpan(s = 0, n = 0) }
+  while ee < end {
+    if str_at((src + ee), 1) == ")" { break }
+    ee = ee + 1
+  }
+  if ee >= end { return CSpan(s = 0, n = 0) }
   if ee == es { return CSpan(s = 0, n = 0) }
   CSpan(s = es, n = ee - es)
 }
