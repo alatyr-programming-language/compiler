@@ -1382,7 +1382,7 @@ fmt_crossmod_test() {
   echo "ok   fmt_crossmod: bare + generic + qualified imported struct-lits round-trip"
 }
 
-# Tooling §4.2 — no-path `fmt` rewrites every `.al` below the package root in place. This locks the
+# Tooling §4.3 — no-path `fmt` rewrites every `.al` below the package root in place. This locks the
 # package-wide contract: deterministic recursive discovery, manifest inclusion, idempotence, and the
 # required invalid-file behavior (the malformed file remains byte-for-byte unchanged and is reported).
 # TOOL-10 / I11 on the OUTPUT descriptor: a path that writes its result to stdout must report a failed or
@@ -4902,7 +4902,7 @@ fmt_test_has_all fmt_tuple 42 "p : (u64, u64) = (3, 4)" "t.1.0 = 20" "a.0[2] = 7
     "mut t := (10, (99, 88))" "mut a : ([u8; 4], u64) = ([1, 2, 3, 4], 9)" \
     "cnt((u64, u64))" "mut x : u64"
 fmt_test_has_all comptime_typeinfo_field_mutable 42 "mut x : u64"
-## Tooling §4.2.3 — the 100-COLUMN limit, measured in Unicode scalars. Two assertions in each fixture,
+## Tooling §4.3.3 — the 100-COLUMN limit, measured in Unicode scalars. Two assertions in each fixture,
 ## because a wrapper is wrong in both directions: the LONG constructs must fold (the `  epsilon_value :
 ## u64,` / `    epsilon = 500000,` / `    and alpha2 == 2` needles are one-item-per-line at the wrapped
 ## indent, and none of them existed before the fix), and the SHORT ones must stay put (`small_array_value
