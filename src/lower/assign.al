@@ -26,7 +26,7 @@ fld_p := ast::fld_p
 (Decl, Expr, local_is_uninit, local_type_span) := ast
 (push_str, push_int) := strbuf
 (CSpan, LCtx, arg_expr_at, num_lit_value, var_name_span) := lower_ctx
-(eff_field_wsize, enum_decl_of, enum_inst_words, field_align_attr, field_byte_size, field_endian_attr, field_offset_attr, field_word_offset, field_words, is_niche_folded, is_packed, is_packed_aggregate, is_union_decl, is_view_type, layout_copy_nsteps, layout_copy_step, layout_kind, layout_kind_is_byte, layout_struct_is_word_stored, packed_field_byte_offset, packed_field_endian, round_up_to, scalar_byte_size, standard_field_byte_offset, standard_struct_bytes, std_array_elem_byte_tier, std_copy_image_bytes, std_copy_kind, std_struct_has_direct_byte_layout, std_struct_is_byte_writable, std_struct_is_word_granular, struct_decl_of, struct_words, subst_field_ty, variant_index) := lower_layout
+(eff_field_wsize, enum_decl_of, enum_inst_words, field_align_attr, field_byte_size, field_endian_attr, field_offset_attr, field_word_offset, field_words, is_niche_folded, is_packed, is_packed_aggregate, is_union_decl, is_view_type, layout_copy_nsteps, layout_copy_step, layout_kind, layout_kind_is_byte, layout_struct_is_word_stored, packed_field_byte_offset, packed_field_endian, packed_struct_bytes, round_up_to, scalar_byte_size, standard_field_byte_offset, standard_struct_bytes, std_array_elem_byte_tier, std_copy_image_bytes, std_copy_kind, std_struct_has_direct_byte_layout, std_struct_is_byte_writable, std_struct_is_word_granular, struct_decl_of, struct_words, subst_field_ty, variant_index) := lower_layout
 ## SIBLING children, reached by an EXPLICIT qualified path (Modules §4) — never by a bare name. Each
 ## of these was a bare name while the arms lived in `src/lower.al` and the ancestor chain answered;
 ## from here a bare call would bind through the unique-declaration leniency instead, and
@@ -68,6 +68,14 @@ direct_num_float_target := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usi
     _ => {}
   }
   r
+}
+
+## Aggregate bitcasts preserve the exact bit image. The ordinary word model still governs
+## non-packed aggregates here, while a packed aggregate must be checked by its exact byte size;
+## `struct_words` rounds both sizes up to frame words and would accept unequal packed images.
+aggregate_bitcast_width_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> usize {
+  if is_packed(decls, src, s, n) { return packed_struct_bytes(decls, src, s, n, a) }
+  struct_words(decls, src, s, n, a) * 8
 }
 
 emit_direct_num_float_assign := fn(v : ptr(Expr), target : u8, base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
@@ -2580,14 +2588,18 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
   } else if bitcast_struct_target(v, cx.decls, cx.src).n != 0 {
     ## `y := bitcast(<UserStruct>, x)` — the parser-preserved aggregate reinterpret. `y` was
     ## reserved as the TARGET struct by collect_slots; copy the SOURCE aggregate `x`'s words into
-    ## `y`'s slots (bit-identical, same size). The source must be a struct VAR of the SAME word
-    ## count — else the reinterpret's size contract is violated; fail loud (never a silent copy).
+    ## `y`'s slots (bit-identical, same size). Packed structs are checked by exact byte width;
+    ## other aggregates retain the existing word-count check. The source must be a struct VAR;
+    ## fail loud (never a silent copy) when the reinterpret's size contract is violated.
     btsc := bitcast_struct_target(v, cx.decls, cx.src)
     inner := bitcast_inner_expr(v)
     nfbc := struct_words(cx.decls, cx.src, btsc.s, btsc.n, a)
     iva := var_agg_info(inner, cx.slots, cx.src)
     if iva.ek != 2 { panic("selfhost: bitcast to a struct expects a struct VARIABLE source (bitcast of a call/expression result to a struct is not lowered — bind the source to a local first)") }
-    if struct_words(cx.decls, cx.src, iva.s, iva.n, a) != nfbc { panic("selfhost: aggregate bitcast between structs of different word size (bitcast requires same-size types)") }
+    if aggregate_bitcast_width_bytes(cx.decls, cx.src, iva.s, iva.n, a) != aggregate_bitcast_width_bytes(cx.decls, cx.src, btsc.s, btsc.n, a) {
+      lower_show_src_line(cx.src, btsc.s)
+      panic("selfhost: aggregate bitcast between structs of different bit width (bitcast requires equal bit-width)")
+    }
     dstbc := slot_of(cx.slots, cx.src, ns, nl2)
     isvc := var_name_span(inner)
     isentc := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, isvc.s, isvc.n)))

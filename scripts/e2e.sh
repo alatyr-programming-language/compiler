@@ -6617,6 +6617,10 @@ run struct_match_field 42
 run bitcast_agg2word 42
 run bitcast_agg2word_unchecked 42
 run issue369_aggregate_return 42
+build_reject_has reject_issue371_packed_width "bitcast requires equal bit-width"
+build_reject_has reject_issue371_packed_word_control "bitcast requires equal bit-width"
+run_x86 accept_issue371_packed_equal_width 42
+check_accept accept_issue371_packed_equal_width
 run_x86 slice_field_compare 42
 run qualified_value_arg 42
 run cmp_prelude 42
