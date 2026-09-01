@@ -292,24 +292,25 @@ if [ "$SELF_TEST" = 1 ]; then
   trap 'rm -rf "$SETS" "$tmp"' EXIT
   cp -a "$CORPUS/." "$tmp/" || { echo "axis gate: self-test could not copy the corpus" >&2; exit 1; }
 
-  # The probed cell: field-layout, cross eightbyte x operation, wide-then-narrow x write. Both signals
-  # are textual, so the planted fixture needs no e2e.sh registration to fill it.
+  # The probed cell: place-check, cross target x check, element-field x unbound-name. Both signals are
+  # textual, so the planted fixture needs no e2e.sh registration to fill it.
   cell_value() { # -> the cell's printed value, e.g. "EMPTY" or "3"
     bash "$0" --corpus "$1" 2>/dev/null | awk '
-      /^  cross eightbyte x operation:/ { inblock = 1; next }
+      /^  cross target x check:/ { inblock = 1; next }
       /^  cross / { inblock = 0 }
-      inblock && /^    wide-then-narrow:/ {
-        for (i = 1; i <= NF; i++) if ($i ~ /^write=/) { sub(/^write=/, "", $i); print $i; exit }
+      inblock && /^    element-field:/ {
+        for (i = 1; i <= NF; i++) if ($i ~ /^unbound-name=/) { sub(/^unbound-name=/, "", $i); print $i; exit }
       }'
   }
 
   before="$(cell_value "$tmp")"
   cat > "$tmp/axis_selftest_planted.al" <<'PLANT'
 ## planted by scripts/axis_gate.sh --self-test; removed again before the script exits.
-Probe := struct { wide : u64, narrow : u8 }
+## unbound element-field target probe
+Probe := struct { field : u64 }
 main := fn() -> u64 {
-  mut p := Probe(wide = 1, narrow = 2)
-  p.narrow = 7
+  mut p : [Probe; 1] = [Probe(field = 1)]
+  p[0].field = 7
   42
 }
 PLANT
@@ -319,7 +320,7 @@ PLANT
 
   ok=1
   test "$before" = "EMPTY"   || { echo "axis gate: SELF-TEST SETUP STALE — the probed cell reads '$before', not EMPTY." >&2
-                                  echo "  A fixture has since filled wide-then-narrow x write. That is good news for the" >&2
+                                  echo "  A fixture has since filled element-field x unbound-name. That is good news for the" >&2
                                   echo "  corpus; move the self-test to another empty cell from the report above." >&2; ok=0; }
   test "$planted" != "EMPTY" && test -n "$planted" \
                              || { echo "axis gate: SELF-TEST FAILED — a planted fixture left the cell reading '$planted'." >&2
@@ -327,7 +328,7 @@ PLANT
   test "$restored" = "EMPTY" || { echo "axis gate: SELF-TEST FAILED — after removal the cell reads '$restored', not EMPTY." >&2
                                   echo "  The detector is reporting state that outlives the corpus it claims to measure." >&2; ok=0; }
   test "$ok" = 1 || exit 1
-  echo "axis gate: self-test ok (wide-then-narrow x write: $before -> $planted -> $restored)"
+  echo "axis gate: self-test ok (element-field x unbound-name: $before -> $planted -> $restored)"
 fi
 
 if [ "$EMIT" = 1 ]; then
