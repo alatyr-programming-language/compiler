@@ -4705,6 +4705,10 @@ ext_test env_size_test
 ## regression exercises the generated 483/484-byte source-recovery boundary without adding corpus
 ## oracle rows. The script also asserts the emitted x86 load width.
 ext_test issue344_pointee_width_test
+## Issue #342: keep the aggregate Slice parameter source-recovery boundary fixture private so the
+## regression exercises both name/type spacing beyond the old window without adding corpus oracle rows.
+## The helper also checks the three backend twins while preserving their existing fail-loud aggregate path.
+ext_test issue342_aggregate_slice_test
 ## The ambient source scan used to read every user file at a 512 KiB cap while `src/lower.al` is ~1.8 MB,
 ## so the library-injection scan saw 28% of the largest module — output-neutral by luck, not by design.
 ext_test source_read_cap_test

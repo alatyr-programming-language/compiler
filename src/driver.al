@@ -5007,7 +5007,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     ed.len = ekept
   }
   mut out := strbuf::strbuf(tar, 67108864)
-  if backend == 0 { wat::emit_wat_program(ptr(ed), out, base, na) }
+  if backend == 0 { wat::emit_wat_program(ptr(ed), out, base, strbuf::buf_len(bld), na) }
   if backend == 1 {
     mut cross_test_mode := D_TEST_MODE
     aarch64::set_cross_test_mode(cross_test_mode)
@@ -5016,7 +5016,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     aarch64::set_cross_test_filter(cross_filter_p, cross_filter_n)
     mut cross_keep := D_TEST_KEEP
     aarch64::set_cross_test_options(cross_keep)
-    aarch64::emit_a64_program(ptr(ed), out, base, na)
+    aarch64::emit_a64_program(ptr(ed), out, base, strbuf::buf_len(bld), na)
   }
   if backend == 2 {
     mut rv_test_mode := D_TEST_MODE
@@ -5026,7 +5026,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     riscv64::set_cross_test_filter(rv_filter_p, rv_filter_n)
     mut rv_keep := D_TEST_KEEP
     riscv64::set_cross_test_options(rv_keep)
-    riscv64::emit_rv_program(ptr(ed), out, base, na)
+    riscv64::emit_rv_program(ptr(ed), out, base, strbuf::buf_len(bld), na)
   }
   out
 }

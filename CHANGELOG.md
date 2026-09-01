@@ -82,6 +82,9 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Aggregate `Slice(T)` parameter recovery now uses the complete source buffer instead of a fixed
+  512-byte lookahead, so valid aggregate Slice field access beyond that boundary is recovered on
+  x86_64 while unsupported non-x86 aggregate lowering remains fail-loud.
 - Direct nested fixed-array parameters are now rejected with one located diagnostic before their malformed parameter ABI can reach lowering; full nested-array parameter support remains a follow-up.
 - Fixed x86_64 silent wrong values when an inferred pointer's pointee type lies beyond the old
   512-byte source-recovery window; the scan is now bounded by the actual source-buffer length.

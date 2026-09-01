@@ -67,6 +67,9 @@ compfor_iter_arg := lower::compfor_iter_arg
 fn_returns_tuple := lower::fn_returns_tuple
 tuple_words := lower::tuple_words
 (CSpan, decl_at, decl_get, node_ptr, streq, is_slice_local, arrty_nel, sub_arr_len, typeinfo_arg_span) := lower_ctx
+## The raw source buffer is shared by all parsed modules. Slice parameter recovery consumes absolute
+## source offsets, so it must stop at the buffer extent rather than an arbitrary post-name window.
+mut WAT_SRC_N : usize = 0
 
 ## The EXACT linker symbol of a `@export("name")` attribute attached to `[name_s, name_s+name_l)`
 ## (Modules §6.3), or {0,0}. The parser discards attributes, so recover declaration-prefix and
@@ -1653,20 +1656,31 @@ wat_call_ret_tuple_words := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
 }
 ## The ELEMENT-type span of a `Slice(E)` PARAM named `[s,n)`, by scanning SOURCE forward from the param
 ## name (`: Slice(E)`) — the wasm twin of lower.al's `slice_param_elem_span`. {0,0} when not a slice param.
+wat_slice_scan_has := fn(src : ptr(u8), end : usize, p : usize, want : str) -> bool {
+  if p > end { return false }
+  if want.len > end - p { return false }
+  str_at((src + p), want.len) == want
+}
+wat_slice_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
+  if p >= end { return false }
+  c := str_at((src + p), 1)
+  c == " " or c == "\n" or c == "\t" or c == "\r"
+}
 wat_slice_elem_span := fn(src : ptr(u8), s : usize, n : usize) -> WSpan {
   mut p := s + n
-  end := p + 512
-  mut c := str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") { p = p + 1 ; c = str_at((src + p), 1) }
-  if c != ":" { return WSpan(s = 0, n = 0) }
+  end := WAT_SRC_N
+  while p < end and wat_slice_scan_ws(src, end, p) { p = p + 1 }
+  if wat_slice_scan_has(src, end, p, ":") == false { return WSpan(s = 0, n = 0) }
   p = p + 1
-  c = str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") { p = p + 1 ; c = str_at((src + p), 1) }
-  if str_at((src + p), 6) != "Slice(" { return WSpan(s = 0, n = 0) }
+  while p < end and wat_slice_scan_ws(src, end, p) { p = p + 1 }
+  if wat_slice_scan_has(src, end, p, "Slice(") == false { return WSpan(s = 0, n = 0) }
   es := p + 6
   mut ee := es
-  while ee < end and str_at((src + ee), 1) != ")" { ee = ee + 1 }
-  if ee == end { return WSpan(s = 0, n = 0) }
+  while ee < end {
+    if str_at((src + ee), 1) == ")" { break }
+    ee = ee + 1
+  }
+  if ee >= end { return WSpan(s = 0, n = 0) }
   if ee == es { return WSpan(s = 0, n = 0) }
   WSpan(s = es, n = ee - es)
 }
@@ -7057,7 +7071,8 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   }
 }
 
-pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
+pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), src_n : usize, a : rt::Arena) {
+  WAT_SRC_N = src_n
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any import/global/func emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on an arch that is not this target is
   ## neutered to an as-if-absent no-op here, so an arch-gated raw-GAS `asm(…)` body never reaches WAT.
