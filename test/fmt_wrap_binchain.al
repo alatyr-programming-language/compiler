@@ -1,4 +1,4 @@
-## e2e/fmt — §4.2.3, second bullet: a binary-operator CHAIN that overflows 100 columns breaks BEFORE
+## e2e/fmt — §4.3.3, second bullet: a binary-operator CHAIN that overflows 100 columns breaks BEFORE
 ## each of its operators, at the continuation indent (one level in), the operator BEGINNING the
 ## continuation line. fmt used to emit any chain on one line however wide.
 ##
