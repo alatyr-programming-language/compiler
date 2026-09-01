@@ -3380,7 +3380,9 @@ ext_test() { # name
 ## generates a private package so it exercises the file-backed `compile_files_mode` without adding
 ## corpus rows; the reject is in the first user module and has leading lines so a global-buffer line
 ## count would be observably wrong. The needle is kept here, not in the generated source, so an old
-## compiler cannot pass by echoing its own assertion text.
+## compiler cannot pass by echoing its own assertion text. The enum-valued binding is intentionally
+## outside issue #268's bounded scalar fold; keep the `unchecked` wrapper so this remains the wrapped
+## source-location regression rather than weakening the new scalar path.
 issue297_codegen_multi_reject_test() {
   local d="$T/issue297_codegen_multi"
   rm -rf "$d"
@@ -3403,12 +3405,13 @@ issue297_codegen_multi_reject_test() {
     ')' > "$d/package.al"
   printf '%s\n' \
     '## Leading lines make a shared-buffer line count observably wrong.' \
+    'E := enum { Zero, One }' \
     '' \
     '' \
     'pub reject_here := fn() -> u64 {' \
     '  mut x : u64 = 5' \
-    '  comptime v : u64 = 5' \
-    '  comptime if unchecked (v == 5) { x = 30 } else { x = 70 }' \
+    '  comptime v : E = E.One' \
+    '  comptime if unchecked (v == E.One) { x = 30 } else { x = 70 }' \
     '  return x' \
     '}' > "$d/src/helper.al"
   printf '%s\n' \
@@ -3416,7 +3419,7 @@ issue297_codegen_multi_reject_test() {
     '  return helper::reject_here()' \
     '}' > "$d/src/main.al"
 
-  local needle='codegen: `comptime if` — cannot fold this comptime condition. The lower folds target machine projections, verify.checked, build.<flag>, a module const, an integer comparison, size(T), typeinfo(T).fields/variants.len, a type equality, a `match typeinfo(T)` kind test, resolves(…)/compiles(…), and and/or/not over those. Rejected rather than silently emitting NEITHER branch. at line 7 in helper'
+  local needle='codegen: `comptime if` — cannot fold this comptime condition. The lower folds target machine projections, verify.checked, build.<flag>, a module const, an integer comparison, size(T), typeinfo(T).fields/variants.len, a type equality, a `match typeinfo(T)` kind test, resolves(…)/compiles(…), and and/or/not over those. Rejected rather than silently emitting NEITHER branch. at line 8 in helper'
   local err="$T/issue297_codegen_multi.err"
   rm -rf "$d/target"
   ( cd "$d" && "$CC" build package.al > /dev/null 2> "$err" )
