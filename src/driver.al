@@ -2055,7 +2055,7 @@ pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
   }
   mut nl := 0
   zdiag := lower::set_codegen_files(0, 0, 0, 0, 0)
-  lower::emit_program(ptr(decls), sb, base, ptr(na), na, nl, 0, false)
+  lower::emit_program(ptr(decls), sb, base, src.len, ptr(na), na, nl, 0, false)
   sb = lower::peephole_gas(ptr(sb), tar)
 
   ## `tar` (tokens + decls + GAS buffer) and `na` (AST nodes) are freestanding mmap regions
@@ -2147,7 +2147,7 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
   mut nl := 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), 2)
-  lower::emit_program(ptr(decls), gas, base, ptr(na), na, nl, 0, false)
+  lower::emit_program(ptr(decls), gas, base, strbuf::buf_len(bld), ptr(na), na, nl, 0, false)
   gas = lower::peephole_gas(ptr(gas), tar)
   ## discharge the working containers (the buffer is freed AFTER emit, which read spans off it).
   ## The rt token arena `tar` is a freestanding mmap region reclaimed at process exit.
@@ -2230,7 +2230,7 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
   mut nl := 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), n)
-  lower::emit_program(ptr(decls), gas, base, ptr(na), na, nl, 0, false)
+  lower::emit_program(ptr(decls), gas, base, strbuf::buf_len(bld), ptr(na), na, nl, 0, false)
   gas = lower::peephole_gas(ptr(gas), tar)
   ## The file-table vectors (name/src offsets) + buffers live in the rt arena `tar`, reclaimed in
   ## bulk at process exit — nothing to free per-vector.
@@ -4288,7 +4288,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## field workaround while scalar `in out` write-back was unimplemented.)
   mut nl := 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), n)
-  lower::emit_program(ptr(decls), gas, base, ptr(na), na, nl, spanbase, library_mode)
+  lower::emit_program(ptr(decls), gas, base, strbuf::buf_len(bld), ptr(na), na, nl, spanbase, library_mode)
   ## TOOL-6 1c-γ: when a span buffer was supplied (the build path), peephole PER SPAN and rewrite the
   ## table to post-peephole offsets so `cli::link_exe` can split the final `.s` into per-module `.o`.
   ## The dump/test paths pass `spanbase == 0` → the plain whole-buffer peephole (byte-identical result).

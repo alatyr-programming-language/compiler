@@ -10685,12 +10685,27 @@ deref_store_words := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
   return 1
 }
 
+## Length-aware primitives for the narrow inferred-pointer source recovery below. Every prefix/byte
+## read is proven to stay in `[0, end)`, because `src` is a raw pointer rather than a length-carrying
+## `str` value. Keeping these helpers local to this mechanism avoids widening the unrelated typed-local
+## recovery path.
+ptr_scan_has := fn(src : ptr(u8), end : usize, p : usize, want : str) -> bool {
+  if p > end { return false }
+  if want.len > end - p { return false }
+  str_at((src + p), want.len) == want
+}
+ptr_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
+  if p >= end { return false }
+  c := str_at((src + p), 1)
+  c == " " or c == "\n" or c == "\t" or c == "\r"
+}
+
 ## Recover the pointee name of a pointer local. An annotated local is covered by `local_type_span`;
 ## an inferred local needs the source spelling of the preserved `bitcast(ptr(T), …)` target because
 ## `Stmt::Assign` deliberately carries no type field. This is intentionally limited to the exact
 ## `name := [unchecked ]bitcast(ptr([mut ]T), …)` shape: an unresolved pointer keeps the old word-sized
-## fallback rather than guessing a width. The source scan is the same bounded recovery used by
-## `byte_ptr_local` and does not change any ordinary scalar slot layout.
+## fallback rather than guessing a width. The source scan is bounded by the exact source-buffer extent
+## published by `emit_program` and does not change any ordinary scalar slot layout.
 ## CLAYOUT S3(b): a local bound from a CALL returning `ptr(mut T)` carries no `bitcast` in its
 ## source and no annotation, so the scan below finds nothing. `bind_ptrview_slot` records the
 ## ALREADY-RESOLVED §7 view pointee on such a slot (the eek-6/eek-13 marker); read it first — it is
@@ -10702,6 +10717,7 @@ slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usi
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
   if streq(src, ent.ns, ent.nl, s, n) == false { return CSpan(s = 0, n = 0) }
   if ent.ek == 0 and (ent.eek == 6 or ent.eek == 13) and ent.snl != 0 { return CSpan(s = ent.sns, n = ent.snl) }
+  if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return CSpan(s = 0, n = 0) }
   lts := local_type_span(src, ent.ns, ent.nl)
   if lts.n != 0 {
     if str_at((src + lts.s), 4) == "ptr(" {
@@ -10713,34 +10729,22 @@ slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usi
     return CSpan(s = 0, n = 0)
   }
   mut p := ent.ns + ent.nl
-  end := p + 512
-  mut c := str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") {
-    p = p + 1
-    c = str_at((src + p), 1)
-  }
-  if str_at((src + p), 2) != ":=" { return CSpan(s = 0, n = 0) }
+  end := LOWER_SRC_N
+  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+  if ptr_scan_has(src, end, p, ":=") == false { return CSpan(s = 0, n = 0) }
   p = p + 2
-  c = str_at((src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") {
-    p = p + 1
-    c = str_at((src + p), 1)
-  }
-  if str_at((src + p), 9) == "unchecked" {
+  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+  if ptr_scan_has(src, end, p, "unchecked") {
     p = p + 9
-    c = str_at((src + p), 1)
-    while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") {
-      p = p + 1
-      c = str_at((src + p), 1)
-    }
+    while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
   }
-  if str_at((src + p), 8) != "bitcast(" { return CSpan(s = 0, n = 0) }
+  if ptr_scan_has(src, end, p, "bitcast(") == false { return CSpan(s = 0, n = 0) }
   p = p + 8
   ts := p
   mut depth := 0
   mut done := false
   while p < end and done == false {
-    c = str_at((src + p), 1)
+    c := str_at((src + p), 1)
     if c == "(" { depth = depth + 1 }
     else if c == ")" {
       if depth > 0 { depth = depth - 1 }
@@ -10750,11 +10754,11 @@ slot_ptr_pointee_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usi
   if done == false { return CSpan(s = 0, n = 0) }
   mut te := p
   while te > ts {
-    c = str_at((src + te - 1), 1)
+    c := str_at((src + te - 1), 1)
     if c == " " or c == "\n" or c == "\t" or c == "\r" { te = te - 1 }
     else { break }
   }
-  if te <= ts or str_at((src + ts), 4) != "ptr(" { return CSpan(s = 0, n = 0) }
+  if te <= ts or ptr_scan_has(src, end, ts, "ptr(") == false { return CSpan(s = 0, n = 0) }
   mut ps2 := ts + 4
   mut pl2 := te - ts - 5
   if pl2 > 4 and str_at((src + ps2), 4) == "mut " { ps2 = ps2 + 4 ; pl2 = pl2 - 4 }
@@ -21467,6 +21471,11 @@ mut CODEGEN_FILE_NL_P : usize = 0
 mut CODEGEN_FILE_SO_P : usize = 0
 mut CODEGEN_FILE_SL_P : usize = 0
 mut CODEGEN_FILE_N : usize = 0
+## The byte extent of the source buffer supplied to `emit_program`. Source spans are offsets from
+## that buffer's base, so inferred-pointer recovery can scan to the real end instead of reading an
+## arbitrary window past the source. Zero means no recovery is admitted (the fail-closed default for
+## any direct/internal caller that has not published an extent).
+mut LOWER_SRC_N : usize = 0
 pub set_codegen_files := fn(ns : usize, nl : usize, so : usize, sl : usize, n : usize) -> i64 {
   CODEGEN_FILE_NS_P = ns
   CODEGEN_FILE_NL_P = nl
@@ -25853,7 +25862,8 @@ module_decl_ranges := fn(decls : ptr(rt::Vec), src : ptr(u8), base : usize) -> u
 ## is 0 or a buffer → the fixpoint GAS dump (which passes 0) is unaffected. The build path (link_exe, 1c-γ)
 ## consumes the table to split the single `.s` into per-module `.o`; `start` is a byte offset from `sb.data`
 ## (the buffer only ever grows by append, so an offset captured mid-emit is its final file offset).
-pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : ptr(u8), mar : ptr(mut rt::Arena), a : rt::Arena, in out nl : usize, spanbase : usize, library_mode : bool) {
+pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : ptr(u8), src_n : usize, mar : ptr(mut rt::Arena), a : rt::Arena, in out nl : usize, spanbase : usize, library_mode : bool) {
+  LOWER_SRC_N = src_n
   ## COMMIT 3 (--ra default-on): probe the `ALATYR_RA=0` OFF escape hatch ONCE (intra-module write of
   ## RA_ON). Default → `emit_fn` register-allocates the scalar-leaf shape; `ALATYR_RA=0` forces the old
   ## text path (for debugging). This build is self-promoted (its own scalar-leaf fns are allocated).

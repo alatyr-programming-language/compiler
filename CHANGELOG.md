@@ -82,6 +82,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Fixed x86_64 silent wrong values when an inferred pointer's pointee type lies beyond the old
+  512-byte source-recovery window; the scan is now bounded by the actual source-buffer length.
 - `std::os::args` now reads the complete NUL-separated process command line, growing its arena-backed
   buffer instead of silently dropping arguments beyond the initial 64 KiB chunk.
 - Unsupported `comptime if` codegen rejections now retain their source location through transparent `unchecked` conditions in multi-file builds without changing rejection semantics.
