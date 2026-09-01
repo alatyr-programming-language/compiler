@@ -3397,6 +3397,20 @@ sema_wrapper_payload_arg_bad := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : u
   wt := sema_wrapper_value_ty(v, decls, upto, src, locals, nloc)
   wt.tag == 11
 }
+
+## A true result means exactly "wrapper value into a concrete by-value local annotation". The same
+## conservative wrapper marker and concrete scalar/plain-struct whitelist as the call-argument fence
+## are reused verbatim: explicit wrapper destinations, aliases, nested/generic types, and unresolved
+## shapes remain on their established tolerant paths. Direct calls and inferred locals are the only
+## value forms admitted by `sema_wrapper_value_ty`; the caller supplies the current function module
+## for resolving an unqualified named destination.
+sema_wrapper_payload_binding_bad := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, ann_s : usize, ann_n : usize) -> bool {
+  if ann_n == 0 { return false }
+  wt := sema_wrapper_value_ty(v, decls, upto, src, locals, nloc)
+  if wt.tag != 11 { return false }
+  lv := deref(locals)
+  sema_wrapper_value_type_concrete(decls, upto, src, ann_s, ann_n, lv.mod_s, lv.mod_l)
+}
 ## The raw TYPE-annotation span `[ts,tl)` of the i-th parameter of the top-level fn named [s,n) (walk
 ## order); {0,0} if absent. The NAME half of `callee_param_ty` — the conformance check needs the raw
 ## name to see a float/char scalar sink that `resolve_ty` reports as tag 0.
@@ -7963,6 +7977,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         } else {
           mut bad_decl := false
           if ann.n != 0 { bad_decl = not tag_compat(dt.tag, tv.tag) }
+          ## Issue #269 — an annotated local is another value sink, not an implicit unwrap boundary.
+          ## Keep this beside the ordinary declaration conformance checks so `check`, build, and every
+          ## emit-to-stdout backend reject the same direct-call/inferred-local wrapper forms before
+          ## lowering can consume the payload-sized slot.
+          if sema_wrapper_payload_binding_bad(v, decls, upto, src, locals, cnt, ann.s, ann.n) { bad_decl = true }
           ## Declarations §3.1 assignability, on the RELIABLE literal tag (`ann_lit_incompatible`) —
           ## `tv.tag` above is 0 for a literal whose `check_expr` arm does not dispatch, so the
           ## annotation constrained nothing. Located at the binding's own name span.

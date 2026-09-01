@@ -4161,6 +4161,15 @@ check_reject reject_p1_call_result_conformance_ufcs
 check_reject_has reject_issue269_direct_option_result "type mismatch"
 check_reject_has reject_issue269_option_result_payload "type mismatch"
 check_reject_has reject_issue269_os_arena_result "type mismatch"
+## Issue #269 / Types §4.1–§4.3 / Declarations §3.1 — wrapper results are never implicitly projected
+## into an explicitly annotated scalar or named-struct local. The local-binding case is separate from
+## the already-landed call-argument fence; each fixture carries no searched diagnostic wording.
+check_reject_has reject_issue269_annotated_result_scalar "type mismatch"
+check_reject_has reject_issue269_annotated_option_scalar "type mismatch"
+check_reject_has reject_issue269_annotated_result_payload "type mismatch"
+check_reject_has reject_issue269_annotated_option_payload "type mismatch"
+check_reject_has reject_issue269_annotated_local_result "type mismatch"
+check_accept accept_issue269_annotated_wrapper_values
 check_reject reject_p1_return_mismatch_direct
 check_reject reject_p1_return_mismatch_ufcs
 check_reject reject_p1_return_aggregate_builtin_cast
