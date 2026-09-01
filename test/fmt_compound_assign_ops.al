@@ -35,8 +35,31 @@
 ## rendering is behaviour-identical (a `name.field` place has no side effects to re-run) and
 ## idempotent, so it is a fidelity gap, not a defect. Asserted below only as "runs to the same value".
 ##
-## Expected exit: 42. A failure exits 100 + the failing group's index (max 108 < 126).
+## Issue #343: the shared source recovery in `ast` capped its whitespace scan a fixed 512 bytes past
+## the place's name span, so an assignment separated from its operator by a longer whitespace run was
+## reclassified as a DECLARATION. `boundary512` / `boundary513` straddle that exact threshold (the old
+## cap accepted 512 and lost 513); the eight `long_*` groups repeat it for every glyph; `plain343`,
+## `fresh343` and `cmp343` are the non-compound controls (`=` stays an assignment, `:=` stays a fresh
+## binding, `==` stays an expression). `GMOD343` is the heaviest witness: `sema` tests the module-`mut`
+## -global predicate AFTER the reassignment predicate while `lower`'s slot collection tests it BEFORE,
+## so a lost reassignment made those two consumers disagree about one statement — the drift this file's
+## single-source recovery exists to prevent. Every group carries its OWN index, so a red run names the
+## group that broke; the unique names also keep the formatter needles out of this explanatory header.
+##
+## The last three groups cover the SAME fixed window in the SAME helper family, on the DECLARATION side
+## (Declarations §3.3). A typed no-initializer local carries its type only in source, so `lower` recovers
+## it by the same forward scan. Past the old cap the annotation was lost and the binding was reserved as
+## ONE SCALAR WORD: a two-field element array's stride collapsed from 16 bytes to 8 and element 1 read
+## element 0's second word — measured standalone on the parent (7774f91) as a clean 8-byte stride
+## (`imulq $8` where `imulq $16` is owed), accepted by `check` and wrong only at run time. The parser had
+## its own copy of the no-initializer decision and, past its own cap, ABSORBED the following statement
+## into the declaration, so the next binding silently took the wrong value; when nothing absorbable
+## followed it refused the valid file outright.
+##
+## Expected exit: 42. A failure exits 100 + the failing group's index (max 125 < 126).
 Acc := struct { v : u64 }
+Row := struct { a : u64, b : u64 }
+mut GMOD343 : u64 = 1
 main := fn() -> u64 {
   mut bad : u64 = 0
   mut a : u64 = 100
@@ -67,6 +90,82 @@ main := fn() -> u64 {
   mut s := Acc(v = 100)
   s.v &= 58
   if bad == 0 and s.v != 32 { bad = 8 }
+  mut boundary512 : u64 = 1
+  boundary512                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                += 1
+  if bad == 0 and boundary512 != 2 { bad = 9 }
+  boundary512 = 9
+  if bad == 0 and boundary512 != 9 { bad = 9 }
+  mut boundary513 : u64 = 1
+  boundary513                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 += 1
+  if bad == 0 and boundary513 != 2 { bad = 10 }
+  boundary513 = 9
+  if bad == 0 and boundary513 != 9 { bad = 10 }
+  mut long_add : u64 = 1
+  long_add                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 += 1
+  if bad == 0 and long_add != 2 { bad = 11 }
+  long_add = 9
+  if bad == 0 and long_add != 9 { bad = 11 }
+  mut long_sub : u64 = 3
+  long_sub                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 -= 1
+  if bad == 0 and long_sub != 2 { bad = 12 }
+  long_sub = 9
+  if bad == 0 and long_sub != 9 { bad = 12 }
+  mut long_mul : u64 = 2
+  long_mul                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 *= 3
+  if bad == 0 and long_mul != 6 { bad = 13 }
+  long_mul = 9
+  if bad == 0 and long_mul != 9 { bad = 13 }
+  mut long_div : u64 = 8
+  long_div                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 /= 2
+  if bad == 0 and long_div != 4 { bad = 14 }
+  long_div = 9
+  if bad == 0 and long_div != 9 { bad = 14 }
+  mut long_rem : u64 = 8
+  long_rem                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 %= 3
+  if bad == 0 and long_rem != 2 { bad = 15 }
+  long_rem = 9
+  if bad == 0 and long_rem != 9 { bad = 15 }
+  mut long_and : u64 = 6
+  long_and                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 &= 3
+  if bad == 0 and long_and != 2 { bad = 16 }
+  long_and = 9
+  if bad == 0 and long_and != 9 { bad = 16 }
+  mut long_or : u64 = 2
+  long_or                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |= 1
+  if bad == 0 and long_or != 3 { bad = 17 }
+  long_or = 9
+  if bad == 0 and long_or != 9 { bad = 17 }
+  mut long_xor : u64 = 6
+  long_xor                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ^= 3
+  if bad == 0 and long_xor != 5 { bad = 18 }
+  long_xor = 9
+  if bad == 0 and long_xor != 9 { bad = 18 }
+  mut plain343 : u64 = 1
+  plain343                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 = 2
+  if bad == 0 and plain343 != 2 { bad = 19 }
+  mut fresh343 : u64 = 4
+  fresh343                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 := 5
+  if bad == 0 and fresh343 != 5 { bad = 20 }
+  mut cmp343 : u64 = 2
+  cmp343                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 == 2
+  if bad == 0 and cmp343 != 2 { bad = 21 }
+  GMOD343                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 += 1
+  if bad == 0 and GMOD343 != 2 { bad = 22 }
+  GMOD343 = 9
+  if bad == 0 and GMOD343 != 9 { bad = 22 }
+  mut xs343                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        : [Row; 2]
+  xs343[0] = Row(a = 11, b = 12)
+  xs343[1] = Row(a = 21, b = 31)
+  if bad == 0 and xs343[1].b != 31 { bad = 23 }
+  if bad == 0 and xs343[0].a != 11 { bad = 23 }
+  mut scal343                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        : u64
+  scal343 = 7
+  if bad == 0 and scal343 != 7 { bad = 24 }
+  mut idle343                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        : u64
+  mut seen343 : u64 = 5
+  if bad == 0 and seen343 != 5 { bad = 25 }
+  idle343 = 9
+  if bad == 0 and idle343 != 9 { bad = 25 }
   if bad != 0 { return 100 + bad }
   return 42
 }

@@ -6396,7 +6396,12 @@ check_reject reject_compound_immut_xor
 run fmt_compound_assign_ops 42
 check_accept fmt_compound_assign_ops
 fmt_test_has_all fmt_compound_assign_ops 42 "a += 7" "a -= 7" "a *= 7" "a /= 7" "e %= 51" \
-    "f &= 58" "g |= 51" "h ^= 51" "k &= 58" "m - 50"
+    "f &= 58" "g |= 51" "h ^= 51" "k &= 58" "m - 50" \
+    "boundary512 += 1" "boundary513 += 1" \
+    "long_add += 1" "long_sub -= 1" "long_mul *= 3" "long_div /= 2" \
+    "long_rem %= 3" "long_and &= 3" "long_or |= 1" "long_xor ^= 3" \
+    "plain343 = 2" "fresh343 := 5" "cmp343 == 2" "GMOD343 += 1" \
+    "xs343 : [Row; 2]" "idle343 : u64"
 ## The FIELD place, which the bare-name lane deliberately left alone: `Stmt::FieldAssign` carried no
 ## compound-spelling probe at all, so `s.v &= 7` was re-emitted expanded as `s.v = s.v & 7` — for all eight
 ## glyphs, including the four that always parsed. Behaviour-identical (a `name.field` place has no side

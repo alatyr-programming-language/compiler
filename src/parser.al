@@ -3157,17 +3157,23 @@ defer_stmts_clean := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
 ## multiline type remains fail-loud rather than being guessed.
 local_uninit_end := fn(pc : PC, ns : usize, nl : usize) -> usize {
   mut p := ns + nl
-  end := p + 512
-  mut c := (pc.src + p).str_at(1)
-  while p < end and (c == " " or c == "\t" or c == "\r") {
-    p += 1
-    c = (pc.src + p).str_at(1)
+  ## Bounded by the driver-published SOURCE EXTENT rather than a fixed window past the name. The
+  ## whitespace run before the `:` is unbounded in the grammar (Grammar 130 §1), and this decides the
+  ## SHAPE that `ast::local_is_uninit` / `local_type_span` then describe for `sema`, `lower` and `fmt`.
+  ## With a shorter window here the parser missed the no-initializer form and folded the FOLLOWING
+  ## statement into this one, so the other consumers described a statement that was never built.
+  ## Zero admits nothing (the fail-closed default when no extent has been published).
+  end := ast::src_extent()
+  while p < end {
+    c0 := (pc.src + p).str_at(1)
+    if c0 == " " or c0 == "\t" or c0 == "\r" { p += 1 } else { break }
   }
-  if c != ":" { return 0 }
+  if p >= end { return 0 }
+  if (pc.src + p).str_at(1) != ":" { return 0 }
   p += 1
   mut depth := 0
   while p < end {
-    c = (pc.src + p).str_at(1)
+    c := (pc.src + p).str_at(1)
     if c == "(" or c == "[" { depth += 1 }
     if c == ")" or c == "]" {
       if depth > 0 { depth -= 1 }
