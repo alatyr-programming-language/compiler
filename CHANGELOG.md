@@ -82,6 +82,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Fixed x86_64 silent wrong values when an inferred pointer's pointee type lies beyond the old
+  512-byte source-recovery window; the scan is now bounded by the actual source-buffer length.
 - Unsupported `comptime if` codegen rejections now retain their source location through transparent `unchecked` conditions in multi-file builds without changing rejection semantics.
 - Direct struct-field and explicitly typed local fixed-array-element assignments now enforce the
   declared destination type, rejecting silent `str`/`bool`-to-integer stores with located diagnostics.
