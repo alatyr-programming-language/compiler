@@ -71,8 +71,10 @@ pub free := fn(a : OsArena) -> isize {
 ## name then each argument, **NUL-separated** (Linux `/proc/self/cmdline`).
 ## Returns the byte count read (`0` if the source could not be opened/read).
 ## Reuses the `std::io` file surface (which NUL-terminates the path internally).
+cmdline_path := fn() -> str { return "/proc/self/cmdline" }
+
 pub read_cmdline := fn(buf : ptr(mut u8), cap : usize) -> usize {
-  path : str = "/proc/self/cmdline"
+  path := cmdline_path()
   of := io::open(path, 0)
   mut got : usize = 0
   match of {
@@ -243,18 +245,46 @@ pub env := fn(a : ptr(mut Arena), name : str) -> Option(str) {
 ## extent, freed when the caller frees it (allocator-explicit). Traps on
 ## allocator exhaustion (the trapping convenience; the recoverable form is additive).
 pub args := fn(a : ptr(mut Arena)) -> Slice(str) {
-  cap : usize = 65536
-  rb := allocate(deref(a), u8, cap, 1)
-  mut bidx : usize = 0
-  match rb {
-    Result::Ok(h) => { bidx = h.idx }
-    Result::Err(e) => { panic("args: allocator out of memory") }
+  ## Keep the initial allocation small, but retain and grow the copied image until
+  ## the open file reports EOF. `read_cmdline` remains the explicit up-to-cap
+  ## low-level helper; the allocating API owns the completeness guarantee.
+  mut data := alloc::strbuf::strbuf(a, 65536)
+  path := cmdline_path()
+  of := io::open(path, 0)
+  match of {
+    Result::Ok(f) => {
+      mut done : bool = false
+      while not done {
+        chunk : usize = 8192
+        alloc::strbuf::reserve(data, chunk).expect("args: allocator out of memory")
+        base := unchecked bitcast(usize, alloc::strbuf::strbuf_base(data))
+        dst := unchecked bitcast(ptr(mut u8), base + data.len)
+        r := io::file_read(f, dst, chunk)
+        match r {
+          Result::Ok(nr) => {
+            if nr == 0 {
+              done = true
+            } else {
+              data.len = data.len + nr
+            }
+          }
+          Result::Err(e) => {
+            cc := io::file_close(f)
+            alloc::strbuf::strbuf_free(data)
+            assert(false)
+          }
+        }
+      }
+      cc := io::file_close(f)
+    }
+    Result::Err(e) => {
+      alloc::strbuf::strbuf_free(data)
+      assert(false)
+    }
   }
-  aa := deref(a)
-  base := get(u8, aa, Handle(u8)(idx = bidx))
-  bp := unchecked bitcast(ptr(mut u8), bitcast(usize, base))
-  n := read_cmdline(bp, cap)
-  rbase := unchecked bitcast(ptr(u8), bitcast(usize, bp))
+  rbase := unchecked bitcast(ptr(u8), bitcast(usize, alloc::strbuf::strbuf_base(data)))
+  n := data.len
+  alloc::strbuf::strbuf_free(data)
   count := seg_count(rbase, n)
   ## A `str` is two machine words (`{ptr, len}`) — the table stride. (x86_64 /
   ## 64-bit; an arch-general stride is additive, arch-priority §arch.)

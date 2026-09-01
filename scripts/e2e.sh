@@ -378,6 +378,21 @@ run_cli_args() { # name, want-status
   if [ "$got" = "$2" ]; then echo "ok   cli_run_$1: forwarded program argv"; else echo "FAIL cli_run_$1: got $got want $2"; fail=1; fi
 }
 
+# `std::os::args` must keep reading when one argument crosses its initial staging chunk. Generate the
+# payload here so the fixture can assert exact length and bytes without storing a giant source literal.
+run_cli_args_sized() { # name, argument-length, fill-byte, want-status, optional trailing argument
+  src="$E2E_TEST/$1.al"
+  [ -f "$src" ] || { echo "MISS cli_run_$1: no $src"; fail=1; return; }
+  long_arg="$(awk -v n="$2" -v c="$3" 'BEGIN { for (i = 0; i < n; i++) printf "%s", c }')"
+  if [ "$#" -ge 5 ]; then
+    _e2e_exec "$CC" run "$src" -- "$long_arg" "$5" >/dev/null 2>&1; got=$?
+  else
+    _e2e_exec "$CC" run "$src" -- "$long_arg" >/dev/null 2>&1; got=$?
+  fi
+  if _e2e_runtime_failure "cli_run_$1" "$got"; then return; fi
+  if [ "$got" = "$4" ]; then echo "ok   cli_run_$1: complete argv across read chunk"; else echo "FAIL cli_run_$1: got $got want $4"; fail=1; fi
+}
+
 # FFI (spec 150 §FN-9, C-ABI foreign calls): link an Alatyr program `test/ffi/<name>.al` against a
 # PURE-ARITHMETIC C stub `test/ffi/<name>.c` (no libc). The C stub compiles to an object (`cc -c`);
 # the Alatyr program emits GAS ("$CC test/ffi/<name>.al" to stdout), assembles (`as`), and BOTH
@@ -6144,6 +6159,8 @@ run_cli_trap checked_add_ovf 132
 run_cli_trap checked_div_zero 132
 run_cli_trap require_trap 132
 run_cli_args cli_run_args 42
+run_cli_args_sized issue346_args_65k 65000 c 42
+run_cli_args_sized issue346_args_long 70000 x 42 tail
 run_x86 os_arena_result 42
 run size_type_arg 42
 ## Types §7 — a `[T]`/`str` VIEW is its two-word pointer+length pair wherever it appears, so `size(str)`,

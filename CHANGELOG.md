@@ -82,6 +82,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `std::os::args` now reads the complete NUL-separated process command line, growing its arena-backed
+  buffer instead of silently dropping arguments beyond the initial 64 KiB chunk.
 - Unsupported `comptime if` codegen rejections now retain their source location through transparent `unchecked` conditions in multi-file builds without changing rejection semantics.
 - Direct struct-field and explicitly typed local fixed-array-element assignments now enforce the
   declared destination type, rejecting silent `str`/`bool`-to-integer stores with located diagnostics.
