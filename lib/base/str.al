@@ -491,10 +491,12 @@ chars := fn(s : str) -> CharIter {
   CharIter(ptr = s.ptr, len = s.len, pos = 0)
 }
 
-## The byte at index `i` of the iterator's backing memory.
+## The byte at index `i` of the iterator's backing memory. `str_at` is an
+## explicitly unchecked escape hatch, so retain the view's length by indexing a
+## Slice; the compiler then emits its checked bounds guard before the load.
 char_byte := fn(c : CharIter, i : usize) -> u8 {
-  base := unchecked bitcast(usize, c.ptr)
-  unchecked deref(bitcast(ptr(u8), base + i))
+  view := Slice(u8)(ptr = c.ptr, len = c.len)
+  view[i]
 }
 
 ## A `CharIter` **is** the iterator — the Iterator protocol's `iter` (identity).
@@ -516,21 +518,43 @@ next := fn(in out c : CharIter) -> Option(char) {
   if b0 < 128 {
     cp = u32(b0)
   } else if b0 < 224 {
+    comptime if verify.checked {
+      if b0 < 194 { panic("invalid UTF-8 lead byte") }
+    }
     b1 := char_byte(c, c.pos + 1)
+    comptime if verify.checked {
+      if b1 < 128 or b1 >= 192 { panic("invalid UTF-8 continuation byte") }
+    }
     hi := u32(b0 % 32) * 64
     cp = hi + u32(b1 % 64)
     n = 2
   } else if b0 < 240 {
     b1 := char_byte(c, c.pos + 1)
     b2 := char_byte(c, c.pos + 2)
+    comptime if verify.checked {
+      if b1 < 128 or b1 >= 192 { panic("invalid UTF-8 continuation byte") }
+      if b2 < 128 or b2 >= 192 { panic("invalid UTF-8 continuation byte") }
+      if b0 == 224 and b1 < 160 { panic("overlong UTF-8 sequence") }
+      if b0 == 237 and b1 >= 160 { panic("UTF-8 surrogate sequence") }
+    }
     t0 := u32(b0 % 16) * 4096
     t1 := u32(b1 % 64) * 64
     cp = t0 + t1 + u32(b2 % 64)
     n = 3
   } else {
+    comptime if verify.checked {
+      if b0 >= 245 { panic("invalid UTF-8 lead byte") }
+    }
     b1 := char_byte(c, c.pos + 1)
     b2 := char_byte(c, c.pos + 2)
     b3 := char_byte(c, c.pos + 3)
+    comptime if verify.checked {
+      if b1 < 128 or b1 >= 192 { panic("invalid UTF-8 continuation byte") }
+      if b2 < 128 or b2 >= 192 { panic("invalid UTF-8 continuation byte") }
+      if b3 < 128 or b3 >= 192 { panic("invalid UTF-8 continuation byte") }
+      if b0 == 240 and b1 < 144 { panic("overlong UTF-8 sequence") }
+      if b0 == 244 and b1 >= 144 { panic("UTF-8 code point out of range") }
+    }
     t0 := u32(b0 % 8) * 262144
     t1 := u32(b1 % 64) * 4096
     t2 := u32(b2 % 64) * 64
@@ -538,7 +562,7 @@ next := fn(in out c : CharIter) -> Option(char) {
     n = 4
   }
   c.pos += n
-  Option(char).Some(char(cp))
+  Option(char).Some(unchecked bitcast(char, cp))
 }
 
 ## `SplitIter` — splits a `str` into the substrings between occurrences of a
