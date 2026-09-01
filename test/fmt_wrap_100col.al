@@ -1,4 +1,4 @@
-## e2e/fmt — §4.2.3, the 100-column rule. fmt did NO wrapping at all: a call's argument list, an
+## e2e/fmt — §4.3.3, the 100-column rule. fmt did NO wrapping at all: a call's argument list, an
 ## array literal, a struct constructor's fields and a parameter list came out on ONE line however
 ## wide, so `alatyr fmt` was not conforming — and by TOOL-2 the canonical form is NORMATIVE
 ## (byte-identical across conforming implementations), which makes a line fmt refuses to fold a

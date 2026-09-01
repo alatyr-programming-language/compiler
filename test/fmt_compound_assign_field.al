@@ -1,4 +1,4 @@
-## e2e fmt focused regression (Tooling §4.2; Grammar §130; OP-2): canonical formatting retains
+## e2e fmt focused regression (Tooling §4.3; Grammar §130; OP-2): canonical formatting retains
 ## the authored compound-assignment surface for a field place. The parser lowers these statements
 ## to ordinary field stores with binary right-hand sides, so this exercises source-span recovery at
 ## the field name while checking canonical idempotence and runtime preservation.

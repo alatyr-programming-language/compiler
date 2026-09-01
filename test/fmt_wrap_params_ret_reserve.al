@@ -1,4 +1,4 @@
-## e2e — §4.2.3 caps the LINE, not the construct. The parameter list below closes at column 98 and
+## e2e — §4.3.3 caps the LINE, not the construct. The parameter list below closes at column 98 and
 ## so stays single-line by its own measurement; the result type that follows it on the same line
 ## carries the line to 105, and the list's width verdict never saw it. `fmt` now counts that pending
 ## result type into the verdict, so the list wraps one parameter per line, with the canonical
