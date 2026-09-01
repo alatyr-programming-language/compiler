@@ -7280,6 +7280,22 @@ run_rv64_out wasm_print_multi 'abc' 42
 run_rv64_out wasm_print_val 'val = 42' 42
 run_rv64_out wasm_print_two '40 and 2' 42
 
+## Issue #306: axis-only coverage for mixed-width struct fields and narrow aggregate arguments.
+## The local mixed-width, pointer-path, and narrow aggregate fixtures run on every supported backend;
+## the pointer-path body is x86-only because its existing non-x86 boundary is intentionally fail-loud.
+run issue306_mixed_width_local 42
+run issue306_mixed_width_paths 42
+run issue306_narrow_aggregate_byval 42
+run_wat issue306_mixed_width_local 42
+run_wat issue306_mixed_width_paths 42
+run_wat issue306_narrow_aggregate_byval 42
+run_a64 issue306_mixed_width_local 42
+run_a64 issue306_mixed_width_paths 42
+run_a64 issue306_narrow_aggregate_byval 42
+run_rv64 issue306_mixed_width_local 42
+run_rv64 issue306_mixed_width_paths 42
+run_rv64 issue306_narrow_aggregate_byval 42
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

@@ -12,26 +12,6 @@
 # A GAP line is a debt, not a dismissal: it disappears from this file when its issue lands, and if it
 # is still here months later that is the file doing its job.
 
-# ── GAP — mixed-width struct fields, owned by #306 ──────────────────────────────────────────────
-# `struct { wide : u64, narrow : u8 }` and its mirror put a sub-word field at a non-zero offset inside
-# its eightbyte. That is the exact shape #167 and #170 were, and the corpus exercises it in one position
-# only: a local, on x86. `wide-then-narrow` appears in a single tracked fixture, and that one introspects
-# the type at compile time rather than loading or storing the field.
-field-layout eightbytexoperation wide-then-narrowxread
-field-layout eightbytexoperation wide-then-narrowxwrite
-field-layout eightbytexpath narrow-then-widexthrough-field
-field-layout eightbytexpath narrow-then-widexpointer-deref
-field-layout eightbytexpath wide-then-narrowxthrough-field
-field-layout eightbytexpath wide-then-narrowxpointer-deref
-# The non-x86 half is the sharper one: the sweeps are conditional, so a mixed-width form that only ever
-# runs on x86 can stay wrong on three backends behind a green gate for as long as nobody varies it.
-field-layout eightbytexbackend narrow-then-widexwasm
-field-layout eightbytexbackend narrow-then-widexa64
-field-layout eightbytexbackend narrow-then-widexrv64
-aggregate-byval widthxbackend narrowxwasm
-aggregate-byval widthxbackend narrowxa64
-aggregate-byval widthxbackend narrowxrv64
-
 # ── GAP — narrow field through a slice or a struct-field array, owned by #263 (priority-0) ──────
 # Already a reproduced wrong value, not a coverage question: writing a narrow field through these two
 # paths destroys its neighbour. The cells stay listed so the gate does not report them twice.
