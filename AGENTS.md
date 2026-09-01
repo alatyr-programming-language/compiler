@@ -92,7 +92,9 @@ target selection, and independent safety checks are the operational boundary.
   authored by the current account, excluding `needs-triage`, `needs-info`, and `in-progress`. It ranks explicit
   `priority-N` labels by lower `N`, then oldest creation time, then issue number; no priority is lowest.
   Multiple or malformed priority labels stop automatic selection. It selects one issue and never drains
-  the queue. The `needs-info` exclusion is for implementation; the research skill has its own
+  the queue. Before ranking, it must validate every open PR's body and `closingIssuesReferences`; a
+  missing, multiple, mixed, malformed, disagreeing, fork-owned, or oracle PR stops the fallback rather
+  than being ignored. The `needs-info` exclusion is for implementation; the research skill has its own
   narrowly scoped fallback for that queue.
 - `in-progress` is the visible operation-claim marker for research or implementation. The
   operation adds it only after its preflight and a final re-read immediately before starting; an issue

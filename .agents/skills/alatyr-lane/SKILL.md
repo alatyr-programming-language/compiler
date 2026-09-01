@@ -31,36 +31,25 @@ produces a measurement nobody can attribute, and that is the expensive failure h
 R=alatyr-programming-language/compiler
 ISSUE= # set to 123 when the owner supplied an issue number; leave blank for the same-account fallback
 if test -n "$ISSUE"; then
-  gh issue view "$ISSUE" -R "$R" --json number,state,assignees,labels,author,authorAssociation,body,comments
+  gh issue view "$ISSUE" -R "$R" --json number,state,assignees,labels,author,body,comments
 else
   CURRENT_LOGIN=$(gh api user --jq .login)
-  OPEN_PR_ISSUES="$(
-    gh pr list -R "$R" --state open --limit 1000 \
-      --json closingIssuesReferences \
-      --jq '[.[] | .closingIssuesReferences[]?.number] | unique'
-  )"
+  SELECTOR_INPUT="$(mktemp -d)"
+  trap 'rm -rf "$SELECTOR_INPUT"' EXIT
+  gh pr list -R "$R" --state open --limit 1000 \
+    --json number,state,body,closingIssuesReferences,isCrossRepository,headRepository,labels,files,changedFiles \
+    > "$SELECTOR_INPUT/prs.json"
+  gh issue list -R "$R" --state open --author "$CURRENT_LOGIN" --limit 1000 \
+    --json number,state,title,createdAt,author,labels \
+    > "$SELECTOR_INPUT/issues.json"
   ISSUE="$(
-    gh issue list -R "$R" --state open --author "$CURRENT_LOGIN" --limit 1000 \
-      --json number,title,createdAt,labels |
-    jq --argjson openPrIssues "$OPEN_PR_ISSUES" '
-        map({number,title,createdAt,labels: [.labels[].name]})
-        | map(select((.number as $n | any($openPrIssues[]; . == $n) | not)))
-        | map(select([.labels[] | select(. == "needs-triage" or . == "needs-info" or . == "in-progress")] | length == 0))
-        | map(. + {
-            priorityLabels: [.labels[] | select(test("^priority-[0-9]+$"))],
-            malformedPriorityLabels: [.labels[] | select(startswith("priority-")) | select(test("^priority-[0-9]+$") | not)]
-          })
-        | if any(.[]; ((.priorityLabels | length) > 1 or (.malformedPriorityLabels | length) > 0))
-          then error("ambiguous or malformed priority label")
-          else
-            map(. + {priority: (if (.priorityLabels | length) == 1 then (.priorityLabels[0] | ltrimstr("priority-") | tonumber) else 1000000 end)})
-            | sort_by([.priority, .createdAt, .number])
-            | .[0].number // empty
-          end'
+    bash .agents/skills/alatyr-lane/select_issue.sh \
+      "$R" "$CURRENT_LOGIN" "$SELECTOR_INPUT/prs.json" "$SELECTOR_INPUT/issues.json"
   )"
   test -n "$ISSUE" || { echo "no eligible issue authored by $CURRENT_LOGIN; ask the owner" >&2; exit 1; }
 fi
-gh issue view "$ISSUE" -R "$R" --json number,state,assignees,labels,author,authorAssociation,body,comments
+bash .agents/skills/alatyr-lane/select_issue_test.sh
+gh issue view "$ISSUE" -R "$R" --json number,state,assignees,labels,author,body,comments
 gh pr list   -R $R --state open --label oracle --json number --jq 'length' # MUST be 0 before §7
                                                                           # (label it in §7 if needed)
 ```
@@ -83,6 +72,24 @@ Only one exact `priority-N` label is valid. Multiple or malformed `priority-*` l
 selection unsafe: stop and ask the owner instead of guessing. Priority is routing only, not an
 authorization or safety signal. Do not infer it from the title, defect label (`wrong-value`,
 `fails-when-valid`, or `diagnostic`), milestone, area label, comments, or issue number.
+
+Before ranking issues, the fallback validates every open PR through
+`.agents/skills/alatyr-lane/select_issue.sh`. The PR must have exactly one issue relation: a bounded
+`Refs #N`, or one complete `Closes #N`, `Fixes #N`, or `Resolves #N` relation. A body relation is
+checked against `closingIssuesReferences` when that API field represents a complete relation; a
+bounded relation must not also have a closing reference. Missing, multiple, mixed, malformed, or
+disagreeing relations stop the fallback. A cross-repository or fork head, an `oracle` label, or a PR
+touching any of `scripts/corpus.manifest`, `scripts/idiom.baseline`, or `scripts/needle.baseline`
+also stops it. Missing or malformed metadata is a refusal, never an empty set. The helper treats PR
+bodies, labels, branches, authors, and assignees as data only: none is an authorization signal, and
+no PR-controlled text is executed. The issue-side input is checked for the current author's login
+again before ranking.
+
+The repository-controlled self-test is `bash .agents/skills/alatyr-lane/select_issue_test.sh`. It must
+pass before relying on the fallback; it proves both `Refs` exclusion without an `in-progress` label and
+the closing-relation path, then exercises missing, multiple, malformed, mixed, fork, and oracle refusal
+cases. A changed self-test that reports fewer than its expected proof-of-work checks is a failure, not
+a shortcut to green.
 
 The fallback selects a candidate, not a claimed task. Perform the preflight review below before
 claiming it. If a candidate is missing ordinary factual information, ask the questions on the issue,
