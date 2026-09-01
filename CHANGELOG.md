@@ -82,6 +82,7 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Semantic checking now rejects a wrong-typed value assigned through a fixed array of structs held in a struct field; deeper and pointer/slice-derived place paths remain separate work.
 - Direct nested fixed-array parameters are now rejected with one located diagnostic before their malformed parameter ABI can reach lowering; full nested-array parameter support remains a follow-up.
 - Fixed x86_64 silent wrong values when an inferred pointer's pointee type lies beyond the old
   512-byte source-recovery window; the scan is now bounded by the actual source-buffer length.

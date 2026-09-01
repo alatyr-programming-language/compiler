@@ -2518,6 +2518,22 @@ expr_array_nested_path := fn(e : ptr(Expr)) -> ArrayNestedPath {
   z
 }
 
+## The parser stores `root.array[index].field = value` as IndexFieldAssign: the indexed base and
+## index are separate statement fields, not one Expr tree. Recover the same bounded path record for
+## that representation; dynamic indexes and non-field bases remain outside this slice.
+expr_index_array_nested_path := fn(base : ptr(Expr), index : ptr(Expr), fs : usize, fl : usize) -> ArrayNestedPath {
+  mut z := ArrayNestedPath(ok = false, rs = 0, rn = 0, fs = 0, fl = 0, ss = 0, sl = 0, ix = 0)
+  if not expr_is_num_lit(index) { return z }
+  iv := expr_num_lit_val(index)
+  if iv < 0 { return z }
+  root := expr_field_base(base)
+  if unchecked bitcast(usize, root) == 0 { return z }
+  rv := expr_var_span(root)
+  af := expr_field_span(base)
+  if rv.n != 0 and af.n != 0 and fl != 0 { z = ArrayNestedPath(ok = true, rs = rv.s, rn = rv.n, fs = af.s, fl = af.n, ss = fs, sl = fl, ix = usize(iv)) }
+  z
+}
+
 ## The spans of a constant-index local-array element leaf path `root[index].field.leaf`.
 ## This is distinct from `root.array_field[index].leaf` above: the index is applied to the root
 ## array, then a nested aggregate field is selected inside that element. Non-literal indices and
@@ -6047,6 +6063,30 @@ sema_nested_field_path_value_bad := fn(path : NestedPath, checked : Ty, v : ptr(
   sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc)
 }
 
+## TYP-6 bounded array-field path — resolve exactly `root.array[index].field` through the root
+## struct, its fixed-array field, and the array element's struct before comparing the stored value
+## with the leaf declaration. Pointer, slice, dynamic/deeper paths, and non-struct array elements
+## stay poison-tolerant for their separate residual slices.
+sema_array_nested_field_path_value_bad := fn(path : ArrayNestedPath, checked : Ty, v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
+  if not path.ok { return false }
+  owner := sema_struct_owner_name_span(decls, upto, src, locals, nloc, path.rs, path.rn)
+  if owner.n == 0 { return false }
+  array_span := sema_field_ann_span(decls, upto, src, owner.s, owner.n, path.fs, path.fl, a)
+  if array_span.n == 0 { return false }
+  array_ty := resolve_ty(src, array_span.s, array_span.n, decls, upto)
+  mut array_tag : u8 = array_ty.tag
+  if array_tag >= 128 and array_tag != 255 { array_tag = array_tag - 128 }
+  if array_tag != 7 { return false }
+  elem_ty := array_elem_ty(src, array_ty, decls, upto)
+  mut elem_tag : u8 = elem_ty.tag
+  if elem_tag >= 128 and elem_tag != 255 { elem_tag = elem_tag - 128 }
+  if elem_tag != 3 or elem_ty.nl == 0 { return false }
+  leaf_span := sema_field_ann_span(decls, upto, src, elem_ty.ns, elem_ty.nl, path.ss, path.sl, a)
+  if leaf_span.n == 0 { return false }
+  leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
+  sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc)
+}
+
 ## ── Types §9.1 — an integer literal's PER-TYPE range is checked at compile time ──────────────────
 ##
 ## "An integer literal is a compile-time number; its type is inferred from context, and its
@@ -8127,6 +8167,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if sema_nested_field_path_value_bad(np, cvp, fpv, decls, upto, src, locals, cnt, a) {
           mark_failed(locals, mismatch_err(np.ss, 0))
         }
+        afp := expr_array_nested_path(pl)
+        if sema_array_nested_field_path_value_bad(afp, cvp, fpv, decls, upto, src, locals, cnt, a) {
+          mark_failed(locals, mismatch_err(afp.ss, 0))
+        }
         ## Issue #298 — nested field paths carry the same root mutability rule as direct fields. Query
         ## the exact DA marker BEFORE the write bookkeeping below removes it; an initialized immutable
         ## aggregate has no marker and must not reach lower as a writable place.
@@ -8421,6 +8465,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cfi := check_expr_da(fii, decls, upto, src, a, locals, cnt, da)?
         if cfi.tag != 0 and cfi.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(fii, a), 0)) }
         cfv := check_expr_da(fiv, decls, upto, src, a, locals, cnt, da)?
+        afp := expr_index_array_nested_path(fia, fii, ifs, ifl)
+        if sema_array_nested_field_path_value_bad(afp, cfv, fiv, decls, upto, src, locals, cnt, a) {
+          mark_failed(locals, mismatch_err(afp.ss, 0))
+        }
         ## Issue #298 — the field after the index is still governed by the indexed base's root
         ## binding. Exact AVec/NAVec/NAPVec markers keep first writes to uninitialized aggregates
         ## legal while repeated writes to initialized immutable places fail before emission.

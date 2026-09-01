@@ -4027,6 +4027,8 @@ check_located reject_struct_type_params 7
 issue174_name_resolution_test
 issue298_immutable_places_test
 issue304_place_type_test
+check_build_located reject_issue304_array_field_type 5 "type mismatch"
+check_accept accept_issue304_array_field_type
 check_reject reject_lambda_aggregate_return
 check_reject reject_lambda_capture_escape
 check_accept accept_param_default
