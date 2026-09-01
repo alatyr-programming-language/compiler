@@ -56,6 +56,28 @@ mut COMPTIME_CONST_DEPTH : i64 = 0
 ## prelude values) remain unknown and therefore take the existing located-reject path.
 ComptimeScalar := struct { known : bool, value : i64 }
 
+## Compare the raw i64 words as unsigned values. The self-host representation keeps a u64 value in an
+## i64 slot, so equal sign bits retain signed ordering and differing sign bits reverse it. This is the
+## same conservative unsignedness rule used by lower's runtime comparison path; callers must prove the
+## operand type first and must not use this for an unresolved runtime expression.
+comptime_unsigned_lt := fn(l : i64, r : i64) -> bool {
+  if (l < 0) == (r < 0) { return l < r }
+  return r < 0
+}
+comptime_cmp := fn(op : i64, l : i64, r : i64, unsigned : bool) -> i64 {
+  if unsigned {
+    lt := comptime_unsigned_lt(l, r)
+    gt := comptime_unsigned_lt(r, l)
+    if op == 20 { if l == r { return 1 }; return 0 }
+    if op == 24 { if lt { return 1 }; return 0 }
+    if op == 25 { if gt { return 1 }; return 0 }
+    if op == 26 { if not gt { return 1 }; return 0 }
+    if op == 27 { if not lt { return 1 }; return 0 }
+    if op == 28 { if l != r { return 1 }; return 0 }
+  }
+  guard_cmp(op, l, r)
+}
+
 comptime_scalar_value := fn(e : ptr(Expr), cx : ptr(LCtx)) -> ComptimeScalar {
   match deref(e) {
     Expr::Num(v, _s, _n) => { return ComptimeScalar(known = true, value = i64(v)) }
@@ -941,7 +963,9 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
       if i64(op) == 20 or i64(op) == 24 or i64(op) == 25 or i64(op) == 26 or i64(op) == 27 or i64(op) == 28 {
         lsv := comptime_scalar_value(l, cx)
         rsv := comptime_scalar_value(r, cx)
-        if lsv.known and rsv.known { return guard_cmp(i64(op), lsv.value, rsv.value) }
+        if lsv.known and rsv.known {
+          return comptime_cmp(i64(op), lsv.value, rsv.value, is_unsigned_cmp(l, r, cx))
+        }
       }
       ## STRUCTURAL comparisons, DELEGATED to the `when`-guard fold helpers over this context's
       ## `GuardTP` (so `comptime if` and `when` agree to the byte): `size(X) <op> N` (§8 word model)

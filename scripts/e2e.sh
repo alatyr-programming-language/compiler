@@ -4347,6 +4347,7 @@ run accept_comptime_array_element_controls 42
 ## reassignment, `comptime mut`, and a standalone top-level `comptime if` fail-closed.
 check_accept issue268_comptime_binding
 run issue268_comptime_binding 42
+run_x86 issue268_comptime_if_u64_high 42
 fmt_test_has_all issue268_comptime_binding 42 "comptime base : u64 = 5" "comptime inferred := base + 2" "comptime local : u64 = inferred + 1" "comptime flag := true"
 check_accept issue268_comptime_rebind
 run issue268_comptime_rebind 26
