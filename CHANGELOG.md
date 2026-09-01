@@ -82,6 +82,7 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Semantic checking now rejects a wrong-typed value assigned through a fixed array of structs held in a struct field; deeper and pointer/slice-derived place paths remain separate work.
 - Fixed runtime comparison conditions for materialized typed `comptime` `u64` locals so high-bit values
   use unsigned ordering while signed `i64` and ordinary runtime `u64` comparisons retain their paths.
 - Duplicate enum discriminants are now rejected by `check` on every target, instead of only by the
