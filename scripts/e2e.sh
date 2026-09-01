@@ -3474,6 +3474,56 @@ _dispatch() {
 ## Clone every helper `f` to `t_f` and replace `f` with a recording stub. `declare -f` is bash's own
 ## serialisation of a function — re-`eval`ing it is exactly what `export -f` does — so the clone is
 ## not a textual approximation of the helper, it IS the helper.
+## Issue #324 / Types §6.4 + I11 — direct nested fixed-array parameters are fenced before their
+## parser-corrupted ABI can reach any backend. Generate these private cases so the refusal matrix does
+## not add oracle rows; every negative case is read-only, while the separate one-dimensional control
+## proves ordinary array-parameter addressing remains supported on the existing x86 surface.
+issue324_nested_array_param_test() {
+  local d="$T/issue324_nested_array_param"
+  mkdir -p "$d"
+  local E2E_TEST="$d"
+
+  write_case() { # name, element type, inner length, outer length, literal, expected element
+    local name="$1" typ="$2" inner="$3" outer="$4" values="$5" expected="$6"
+    printf '%s\n' \
+      '## This read-only case keeps every stored element distinct.' \
+      '## The caller supplies both indexes so the old accepted shape has a concrete wrong-value witness.' \
+      "read2 := fn(xs : [[$typ; $inner]; $outer], i : u64, j : u64) -> u64 {" \
+      '  return u64(xs[i][j])' \
+      '}' \
+      '' \
+      'main := fn() -> u64 {' \
+      "  if read2($values, 1, 0) != $expected { return 1 }" \
+      '  42' \
+      '}' > "$d/$name.al"
+  }
+
+  write_case issue324_nested_u8 u8 2 2 '[[11, 12], [21, 22]]' 21
+  write_case issue324_nested_u16 u16 2 2 '[[11, 12], [21, 22]]' 21
+  write_case issue324_nested_u64 u64 2 2 '[[11, 12], [21, 22]]' 21
+  write_case issue324_nested_nonsquare u16 3 2 '[[11, 12, 13], [21, 22, 23]]' 21
+  for name in issue324_nested_u8 issue324_nested_u16 issue324_nested_u64 issue324_nested_nonsquare; do
+    check_build_located "$name" 3 "nested fixed-array parameter"
+    emit_reject_has wat "$name" "nested fixed-array parameter"
+    emit_reject_has aarch64 "$name" "nested fixed-array parameter"
+    emit_reject_has riscv64 "$name" "nested fixed-array parameter"
+  done
+
+  printf '%s\n' \
+    '## A one-dimensional array parameter remains a supported control.' \
+    'read1 := fn(xs : [u64; 3], i : u64) -> u64 {' \
+    '  return xs[i]' \
+    '}' \
+    '' \
+    'main := fn() -> u64 {' \
+    '  if read1([11, 22, 42], 2) != 42 { return 1 }' \
+    '  42' \
+    '}' > "$d/issue324_array_1d_control.al"
+  ## The one-dimensional fixed-array parameter control is an x86 control, matching the existing
+  ## fixed_array_byte_param row; non-x86 parameter ABI support is a separate pre-existing boundary.
+  run_x86 issue324_array_1d_control 42
+}
+
 _e2e_arm() {
   local f body n=0
   while read -r _ _ f; do
@@ -6430,6 +6480,9 @@ run issue215_local_array_1d_control 42
 run_a64 issue215_local_array_1d_control 42
 run_rv64 issue215_local_array_1d_control 42
 run_wat issue215_local_array_1d_control 42
+## Issue #324: direct nested fixed-array parameters are rejected before their corrupted ABI reaches a
+## backend; the helper also keeps the existing x86 one-dimensional parameter control green.
+issue324_nested_array_param_test
 check_build_located reject_standard_byte_param 17 "check: invalid"
 check_build_located reject_standard_byte_field_by_value 22 "check: invalid"
 check_build_located reject_standard_byte_nested_field_addr 19 "check: invalid"

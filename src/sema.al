@@ -133,6 +133,11 @@ local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIA
 ## public entry points can report the established field-specific wording and source location.
 MULTIDIM_ARRAY_FIELD_DIAG_MARKER := 6890000000000000000
 multidim_array_field_err := fn(s : usize) -> CheckErr { MULTIDIM_ARRAY_FIELD_DIAG_MARKER + s * 4 }
+## Issue #324 — a direct nested fixed-array PARAMETER has no composed ABI/address model in the current
+## lower. Keep this class between the field fence and visibility classes so older CheckErr values remain
+## byte-identical while every public semantic entry point shares one located refusal.
+NESTED_ARRAY_PARAM_DIAG_MARKER := 6895000000000000000
+nested_array_param_err := fn(s : usize) -> CheckErr { NESTED_ARRAY_PARAM_DIAG_MARKER + s * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -11362,6 +11367,25 @@ sema_param_array_open := fn(src : ptr(u8), ts : usize) -> usize {
   0
 }
 
+## Return the source location of the first direct nested fixed-array PARAMETER (`[[T; N]; M]`). The
+## parser records only the first token after the outer `[`, so a nested form leaves `pm.ts` at the inner
+## `[`. `pmode == 1` proves the enclosing spelling entered the array-parameter path; the source token
+## proves the element is itself an array. Reject before type checking/lowering can observe the corrupted
+## parameter list, while leaving one-dimensional array parameters unchanged.
+sema_nested_array_param_bad := fn(d : Decl, src : ptr(u8)) -> usize {
+  if d.kind != 1 { return 0 }
+  mut pp := d.params_head
+  while pp != 0 {
+    pm := deref(param_p(pp))
+    if pm.pmode == 1 and pm.tl == 1 and str_at((src + pm.ts), 1) == "[" {
+      open := sema_param_array_open(src, pm.ts)
+      if open != 0 { return open }
+    }
+    pp = pm.next
+  }
+  0
+}
+
 ## Return the first source location of an unsupported `[T]` parameter/return annotation. A zero offset
 ## cannot be encoded as a located CheckErr, so malformed/edge source spans fall back to the declaration
 ## name; valid user declarations normally place the bracket at a nonzero offset.
@@ -12702,6 +12726,11 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
       ## the sema helper shares lower_layout's exact source predicate and preserves the field line.
       mdf := sema_multidim_array_field_bad(d, decls, src, deref(a))
       if mdf != 0 { return multidim_array_field_err(mdf) }
+      ## Issue #324 / Types §6.4 + I11: the lower cannot compose the nested indexes of a direct fixed-array
+      ## parameter. Reject the parameter before its parser-corrupted arity/ABI reaches any backend; the
+      ## one-dimensional parameter path remains untouched.
+      nap := sema_nested_array_param_bad(d, src)
+      if nap != 0 { return nested_array_param_err(nap) }
       ## Types §6.1 / Memory — a direct byte-array component gives a tuple its standard byte layout,
       ## but module-global storage remains word-based. Reject the exact explicit global form before any
       ## backend can emit a partial word copy; the local tuple tier and ordinary tuple ABI remain open.
