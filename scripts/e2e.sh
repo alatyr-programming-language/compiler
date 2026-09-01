@@ -1893,6 +1893,28 @@ root_package_test() { # dir, expected-symbols...
   done
 }
 
+## Issue #269 — a package-owned descendant of `std::os` may name the private OsArena through its
+## ancestor, but a direct Result(OsArena, IoError) value must not enter that concrete return sink. Keep
+## this package fixture separate from the flat corpus because only the nested module can express the
+## exact qualified private type without weakening stdlib visibility. Check and build must agree.
+issue269_os_arena_return_test() {
+  p="$(_fixture_tree package)/issue269_os_arena_return"
+  [ -f "$p/package.al" ] || { echo "MISS issue269_os_arena_return: no $p/package.al"; fail=1; return; }
+  for verb in check build; do
+    rm -rf "$p/target"
+    err="$T/issue269-os-arena-return.$verb.err"
+    ( cd "$p" && "$CC" "$verb" package.al ) >/dev/null 2>"$err"
+    rc=$?
+    artifact="$p/target/debug/issue269-os-arena-return"
+    if [ "$rc" = 1 ] && [ ! -e "$artifact" ] && grep -qF "type mismatch" "$err"; then
+      echo "ok   issue269_os_arena_return/$verb: rejected with located type-mismatch diagnostic"
+    else
+      echo "FAIL issue269_os_arena_return/$verb: rc=$rc artifact=$(test -e "$artifact" && echo yes || echo no) diagnostic=$(cat "$err" 2>/dev/null)"
+      fail=1
+    fi
+  done
+}
+
 ## MOD-8 / Modules §5 + Tooling §2.6 — the anonymous package root merges declarations from package.al
 ## with direct source_dir child-module names. A root binding may not silently win over a same-named child;
 ## same-scope root declarations remain rejected, while unrelated root/child names keep the ordinary
@@ -4188,6 +4210,14 @@ check_reject reject_p1_call_result_conformance_ufcs
 check_reject_has reject_issue269_direct_option_result "type mismatch"
 check_reject_has reject_issue269_option_result_payload "type mismatch"
 check_reject_has reject_issue269_os_arena_result "type mismatch"
+## Issue #269 residual / Types §4.1–§4.3 — direct qualified wrapper calls are rejected at the
+## remaining scalar and named-struct return sinks; the existing annotated-binding rows above/below
+## remain the independently landed annotation coverage.
+check_reject_has reject_issue269_return_scalar "type mismatch"
+check_reject_has reject_issue269_return_struct "type mismatch"
+check_reject_has reject_issue269_tail "type mismatch"
+issue269_os_arena_return_test
+run accept_issue269_value_sink_control 42
 ## Issue #269 / Types §4.1–§4.3 / Declarations §3.1 — wrapper results are never implicitly projected
 ## into an explicitly annotated scalar or named-struct local. The local-binding case is separate from
 ## the already-landed call-argument fence; each fixture carries no searched diagnostic wording.
