@@ -16,9 +16,12 @@
 ## (`parser::PC`, `lower::LCtx`/`SlotEntry`) stay local to their modules; `compile` only
 ## touches the public surface (`lex_all`, `parse_program`, `emit_program`).
 ##
-## NOTE on the compatibility entry convention: the synthesized default `_start` does `call
-## <module>__main` then moves `%rax` into `%rdi` and invokes `syscall` 60 (exit). A custom
-## manifest `entry` is not synthesized here; it must resolve as an emitted symbol.
+## NOTE on the entry convention: the synthesized default `_start` does `call <module>__main` then
+## moves `%rax` into `%rdi` and invokes `syscall` 60 (exit). A custom raw entry naming an ordinary
+## no-parameter function receives the same generated call/exit wrapper, and that wrapper is emitted
+## UNDER THE ENTRY DECLARATION'S OWN LINKER SYMBOL — its exact `@export` when it has one, else its
+## Modules §6.1 spelling — because Tooling §2.2 passes exactly that symbol to `ld -e`. An `@abi(naked)`
+## entry remains programmer-owned and is passed through unchanged.
 vec := alloc::vec
 ## The output/source buffers are `rt::StrBuf` (off `alloc::strbuf` for the §1 fixpoint); aliasing
 ## `rt` as `strbuf` keeps `strbuf::StrBuf`/`strbuf_base`/`buf_len`/`strbuf_free`/`push_byte` resolving
@@ -2436,12 +2439,12 @@ d_lift_lambdas := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(
 }
 
 ## Compile `src` to a complete runnable x86_64 GAS program in a fresh `StrBuf` allocated
-## from `a`. Lexes into a token `Vec`, parses into a `Decl` `Vec`, emits the `_start`
-## entry wrapper (call `main`, exit with its result) followed by every function
-## definition. The source byte base address + length are taken from `bytes(src)` (the
-## parser/lower read literal + name spans relative to that base). The token + decl `Vec`s
-## are allocated from `a` and freed before return; the returned `StrBuf` is the caller's
-## to flush + free.
+## from `a`. Lexes into a token `Vec`, parses into a `Decl` `Vec`, emits the selected process
+## entry wrapper (default `_start`, or the bounded ordinary custom-entry wrapper) followed by
+## every function definition. The source byte base address + length are taken from `bytes(src)`
+## (the parser/lower read literal + name spans relative to that base). The token + decl `Vec`s
+## are allocated from `a` and freed before return; the returned `StrBuf` is the caller's to flush
+## + free.
 pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
   base := unchecked bitcast(usize, src.ptr)
   ## Publish this buffer's extent BEFORE the lexer runs, so the shared `ast` source-recovery helpers
@@ -3460,6 +3463,63 @@ d_package_entry_count := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : rt
   count
 }
 
+## Return the unique package-owned declaration matching `Target.entry`. The caller has already checked
+## the count, so `-1` is only the defensive no-match result. Keeping the index lets the driver publish
+## the selected declaration to lower's DCE without resolving the path a second way.
+d_package_entry_index := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec) -> i64 {
+  mut i := 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d_entry_matches_decl(src, d, entry) and d_manifest_owned_module(src, d.mod_start, d.mod_len, pv, name_start, name_len) { return i64(i) }
+    i += 1
+  }
+  -1
+}
+
+## The bounded ordinary raw process entry accepts only the specification's `i32` result or no result.
+## Aggregate, floating, wider integer, and named-alias results need a typed entry contract and are
+## rejected here rather than silently reading the wrong register or applying an undocumented conversion.
+d_entry_result_kind := fn(src : ptr(u8), d : Decl) -> i64 {
+  if d.ret_tl == 0 { return 0 }
+  t := str_at((src + d.ret_ts), d.ret_tl)
+  if t == "i32" { return 1 }
+  -1
+}
+
+## A wrapped entry with no exact `@export` surrenders its §6.1 spelling to the generated wrapper and is
+## re-emitted under the reserved `__alatyr_raw_entry_body`. Catch an exact export or an anonymous-root
+## function that already claims that reserved name before GAS is emitted.
+d_entry_wrapper_symbol_taken := fn(decls : rt::Vec, src : ptr(u8), symbol : str) -> bool {
+  mut i := 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    ex := d_export_name(src, d.name_start, d.name_len)
+    if ex.n != 0 and str_at((src + ex.s), ex.n) == symbol { return true }
+    if d.kind == 1 and d.name_len != 0 and lower::is_root_mod(d.mod_start, d.mod_len)
+      and str_at((src + d.name_start), d.name_len) == symbol { return true }
+    i += 1
+  }
+  false
+}
+
+## The Modules §6.1 label lower leaves on a declaration, ignoring any exact `@export`. Derived from the
+## DECLARATION's module + name spans — the same two inputs `emit_mod_qual`/`emit_mangled_def` use — and
+## never from the manifest's `entry` text, which may name the declaration by an exact export spelling
+## that has no relation to its module. The wrapper generator needs both spellings separately: §2.2
+## hands the linker the declaration's emitted symbol, so an exported entry's wrapper takes the exact
+## name while its wrapped body keeps this one.
+d_entry_body_symbol := fn(src : ptr(u8), d : Decl, in out tar : rt::Arena) -> str {
+  if lower::is_root_mod(d.mod_start, d.mod_len) { return str_at((src + d.name_start), d.name_len) }
+  ## `rt::StrBuf` needs 8 bytes of slack past its content (`sb_byte`), and the content is the module
+  ## qualification (the span, or the 4-byte `main` default) plus `__` plus the name: 14 bytes over the
+  ## two spans in the worst case. Reserve 16 rather than sit on the boundary.
+  mut out := rt::strbuf(tar, d.mod_len + d.name_len + 16)
+  if d.mod_len == 0 { rt::push_str(out, "main") } else { rt::push_str(out, str_at((src + d.mod_start), d.mod_len)) }
+  rt::push_str(out, "__")
+  rt::push_str(out, str_at((src + d.name_start), d.name_len))
+  str_at(out.data, out.len)
+}
+
 ## Return the linker symbol emitted for the one resolved declaration.  Exact `@export` wins over the
 ## automatic module/name mangling; both are views into the live compile arena except the derived
 ## spelling, which is copied into a small arena-backed buffer for the CLI linker call.
@@ -4270,6 +4330,12 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   EMISSION_PATHS_N = 0
   ENTRY_SYMBOL_P = 0
   ENTRY_SYMBOL_N = 0
+  lower::clear_entry_decl()
+  mut entry_body := str_at(0, 0)
+  mut entry_symbol := str_at(0, 0)
+  mut entry_wrap := false
+  mut entry_body_has_result := false
+  entry_body_symbol := "__alatyr_raw_entry_body"
   mut na := rt::Arena(base = 0, off = 0, cap = 0)
   rt::arena_init(na, 536870912)
   ## A SEPARATE arena for the per-module TOKEN records (handles + `{kind,start,len}` records).
@@ -4496,6 +4562,36 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     resolved := d_package_entry_symbol(decls, base, entry, pv, name_start, name_len, tar)
     ENTRY_SYMBOL_P = unchecked bitcast(usize, resolved.ptr)
     ENTRY_SYMBOL_N = resolved.len
+    entry_body = resolved
+    entry_symbol = resolved
+    entry_index := d_package_entry_index(decls, base, entry, pv, name_start, name_len)
+    selected := deref(decl_at(Decl, rt::vec_get(decls, usize(entry_index))))
+    lower::set_entry_decl(selected.mod_start, selected.mod_len, selected.name_start, selected.name_len)
+    if lower::entry_is_naked(base, selected.name_start, selected.name_len) == false {
+      if selected.is_generic or selected.arity != 0 {
+        d_limit_reject(entry_span.s * 4, "codegen: ordinary raw package entry must have no parameters", base, ptr(ftab), tar)
+      }
+      result_kind := d_entry_result_kind(base, selected)
+      if result_kind < 0 {
+        d_limit_reject(entry_span.s * 4, "codegen: ordinary raw package entry must return i32 or have no result", base, ptr(ftab), tar)
+      }
+      ## Tooling §2.2 — the linker receives the symbol THIS DECLARATION emits, so the generated wrapper
+      ## is emitted under `resolved` and `ENTRY_SYMBOL_*` stays exactly what the resolution produced.
+      ## The body therefore needs a different symbol: an exact `@export` already gives the declaration a
+      ## second, §6.1-derived one, so the body keeps that; otherwise the body moves to the reserved name.
+      sx := d_export_name(base, selected.name_start, selected.name_len)
+      if sx.n != 0 {
+        entry_body = d_entry_body_symbol(base, selected, tar)
+      } else {
+        if d_entry_wrapper_symbol_taken(decls, base, entry_body_symbol) {
+          d_limit_reject(entry_span.s * 4, "codegen: reserved raw package entry body symbol is already declared", base, ptr(ftab), tar)
+        }
+        entry_body = entry_body_symbol
+      }
+      lower::set_entry_wrap(sx.n == 0)
+      entry_wrap = true
+      entry_body_has_result = result_kind != 0
+    }
   }
   ## §8 `@repr(T)` representability: reject a non-integer / too-narrow enum tag type (spec Types §8)
   ## fail-loud before emission. No `@repr` in the corpus → never fires for the self-host build.
@@ -4707,13 +4803,27 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     }
     strbuf::push_str(gas, "  movq %rbx, %rdi\n  movq $60, %rax\n  syscall\n")
   } else {
-    ## Compatibility wrapper for the DEFAULT ELF entry only. A manifest custom `Target.entry` is a
-    ## linker symbol chosen by the package author; the compiler must not invent a body for it. Such a
-    ## symbol can be supplied by source with `@export("<entry>")` (or by future artifact forms) and
-    ## `cli::link_exe` selects it with `ld -e <entry>`. For `_start`, preserve the existing
-    ## `<module>__main` wrapper when the program has not defined its own `_start`; the self-host build
-    ## depends on that compatibility path because `package.al` is a manifest, not a compiled module.
-    if entry == "_start" and library_mode == false and d_has_start(decls, base) == false {
+    ## A custom ordinary raw entry is a real process entry, not a normal callable function: the loader
+    ## supplies no return address. Align the captured initial stack, call the selected body under the
+    ## ordinary internal convention, and terminate with its i32 result (or zero for a procedure).
+    ## `entry_symbol` is the declaration's own emitted symbol — the one Tooling §2.2 hands to `ld -e`, so
+    ## the ELF `e_entry` resolves to it — and `entry_body` is the label lower left on the wrapped body.
+    ## The wrapper is emitted before lower's per-module spans so split builds retain it in the first
+    ## object; the body's label is `.globl` in executable emission, so the cross-object call resolves.
+    if entry_wrap {
+      strbuf::push_str(gas, ".text\n.global ")
+      strbuf::push_str(gas, entry_symbol)
+      strbuf::push_str(gas, "\n")
+      strbuf::push_str(gas, entry_symbol)
+      strbuf::push_str(gas, ":\n  movq %rsp, %r12\n  andq $-16, %rsp\n  call ")
+      strbuf::push_str(gas, entry_body)
+      if entry_body_has_result { strbuf::push_str(gas, "\n  movq %rax, %rdi\n") }
+      else { strbuf::push_str(gas, "\n  xorq %rdi, %rdi\n") }
+      strbuf::push_str(gas, "  movq $60, %rax\n  syscall\n")
+    } else if entry == "_start" and library_mode == false and d_has_start(decls, base) == false {
+      ## Compatibility wrapper for the DEFAULT ELF entry. For `_start`, preserve the existing
+      ## `<module>__main` wrapper when the program has not defined its own `_start`; the self-host build
+      ## depends on that compatibility path because `package.al` is a manifest, not a compiled module.
       strbuf::push_str(gas, ".global ")
       strbuf::push_str(gas, entry)
       strbuf::push_str(gas, "\n")

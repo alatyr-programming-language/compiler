@@ -13,6 +13,23 @@ fi
 
 fail=0
 
+# Tooling §2.2 — the toolchain passes the ENTRY DECLARATION's own linker symbol to `ld -e`, so the
+# built ELF's `e_entry` must land on that symbol. Nothing else in this suite reads `e_entry`: an exit
+# code and a present symbol are both satisfied by an executable entered somewhere else entirely, which
+# is how a wrong `ld -e` stayed invisible. Print every `T`/`t` symbol defined at `e_entry`, one per
+# line, so the caller asserts a whole-line match instead of a substring.
+elf_entry_symbols() {
+  local bin="$1" ep addr kind name
+  ep=$(readelf -h "$bin" 2>/dev/null | sed -n 's/^ *Entry point address: *//p' | tr -d '[:space:]')
+  [ -n "$ep" ] || return 0
+  nm "$bin" 2>/dev/null | while read -r addr kind name; do
+    [ -n "$name" ] || continue
+    case "$kind" in T|t) ;; *) continue ;; esac
+    case "$addr" in ''|*[!0-9a-fA-F]*) continue ;; esac
+    [ "$((16#$addr))" = "$((ep))" ] && printf '%s\n' "$name"
+  done
+}
+
 run_noarg_help() {
   out=$(mktemp)
   err=$(mktemp)
@@ -1399,6 +1416,10 @@ run_tool12_entry_resolution() {
   local root="$ROOT/test/package/tool12_entry_resolution"
   local bad="$root/negative" good="$root/positive"
   local bad_out bad_rc good_out good_rc artifact_rc syms
+  local custom scalar void scalar_run_rc scalar_build_rc void_run_rc void_build_rc scalar_syms void_syms
+  local scalar_artifact_rc void_artifact_rc entry_syms
+  local expw expw_run_rc expw_build_rc expw_artifact_rc expw_syms
+  local scalar_entry void_entry expw_entry
   rm -rf "$bad/target" "$good/target"
 
   bad_out=$(cd "$bad" && "$CC" check package.al 2>&1); bad_rc=$?
@@ -1437,15 +1458,165 @@ run_tool12_entry_resolution() {
   if [ "$good_rc" = 0 ] && [ -x "$artifact" ]; then
     "$artifact" >/dev/null 2>&1; artifact_rc=$?
     syms=$(nm "$artifact" 2>/dev/null)
-    if [ "$artifact_rc" = 42 ] && printf '%s\n' "$syms" | grep -qE ' [Tt] tool12_exact_entry$'; then
-      echo "ok   tool12_entry_resolution: built exact-export control runs 42 and exports the selected symbol"
+    entry_syms=$(elf_entry_symbols "$artifact")
+    if [ "$artifact_rc" = 42 ] && printf '%s\n' "$syms" | grep -qE ' [Tt] tool12_exact_entry$' \
+      && printf '%s\n' "$entry_syms" | grep -qx 'tool12_exact_entry'; then
+      echo "ok   tool12_entry_resolution: built exact-export control runs 42 and is entered at the selected symbol"
     else
-      echo "FAIL tool12_entry_resolution: artifact rc=$artifact_rc or exact export missing"; fail=1
+      echo "FAIL tool12_entry_resolution: artifact rc=$artifact_rc, exact export missing, or e_entry=[$entry_syms]"; fail=1
     fi
   else
     echo "FAIL tool12_entry_resolution: control build rc=$good_rc out=$good_out or artifact missing"; fail=1
   fi
   rm -rf "$bad/target" "$good/target"
+
+  # ABI §3.3 — an ordinary custom raw entry is called by a generated process wrapper. Keep these
+  # packages dynamic so the fixtures do not enter the corpus oracle: both an i32 result and a
+  # procedure must terminate through the wrapper rather than return into the loader's initial stack.
+  custom=$(mktemp -d)
+  scalar="$custom/scalar"
+  void="$custom/void"
+  expw="$custom/expw"
+  mkdir -p "$scalar/src" "$void/src" "$expw/src"
+  cat >"$scalar/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      arch = Arch.x86_64,
+      os = Os.linux,
+      env = Env.gnu,
+      container = Container.elf,
+      entry = "main::boot",
+      output = "tool12-entry-i32",
+    ),
+  ],
+)
+EOF
+  cat >"$void/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      arch = Arch.x86_64,
+      os = Os.linux,
+      env = Env.gnu,
+      container = Container.elf,
+      entry = "main::boot",
+      output = "tool12-entry-void",
+    ),
+  ],
+)
+EOF
+  cat >"$expw/package.al" <<'EOF'
+app := Package(
+  version = "0.1.0",
+  source_dir = "src",
+  target_dir = "target",
+  targets = [
+    Target(
+      arch = Arch.x86_64,
+      os = Os.linux,
+      env = Env.gnu,
+      container = Container.elf,
+      entry = "boot::start",
+      output = "tool12-entry-export",
+    ),
+  ],
+)
+EOF
+  # Modules §6.3 — an exact `@export` is the second of the two spellings Tooling §2.2 derives from.
+  # This entry RETURNS instead of calling `exit`, so without the generated contract the ordinary `ret`
+  # unwinds into the loader's initial stack; the wrapper must own `tool12_wrapped_export` (what `ld -e`
+  # receives) while the body keeps its §6.1 label, so an ordinary internal call still returns.
+  cat >"$expw/src/boot.al" <<'EOF'
+start := @export("tool12_wrapped_export") fn() -> i32 {
+  return again()
+}
+
+again := fn() -> i32 {
+  return 42
+}
+EOF
+  cat >"$expw/src/main.al" <<'EOF'
+main := fn() -> u64 {
+  return 7
+}
+EOF
+  cat >"$scalar/src/main.al" <<'EOF'
+boot := fn() -> i32 {
+  return helper()
+}
+
+helper := fn() -> i32 {
+  return 42
+}
+EOF
+  cat >"$void/src/main.al" <<'EOF'
+boot := fn() {
+  return
+}
+EOF
+
+  (cd "$scalar" && "$CC" run package.al) >/dev/null 2>&1; scalar_run_rc=$?
+  (cd "$scalar" && "$CC" build package.al) >/dev/null 2>&1; scalar_build_rc=$?
+  (cd "$void" && "$CC" run package.al) >/dev/null 2>&1; void_run_rc=$?
+  (cd "$void" && "$CC" build package.al) >/dev/null 2>&1; void_build_rc=$?
+  (cd "$expw" && "$CC" run package.al) >/dev/null 2>&1; expw_run_rc=$?
+  (cd "$expw" && "$CC" build package.al) >/dev/null 2>&1; expw_build_rc=$?
+  scalar="$scalar/target/debug/tool12-entry-i32"
+  void="$void/target/debug/tool12-entry-void"
+  expw="$expw/target/debug/tool12-entry-export"
+  scalar_syms=$(nm "$scalar" 2>/dev/null)
+  void_syms=$(nm "$void" 2>/dev/null)
+  expw_syms=$(nm "$expw" 2>/dev/null)
+  scalar_entry=$(elf_entry_symbols "$scalar")
+  void_entry=$(elf_entry_symbols "$void")
+  expw_entry=$(elf_entry_symbols "$expw")
+  "$scalar" >/dev/null 2>&1; artifact_rc=$?
+  scalar_artifact_rc=$artifact_rc
+  "$void" >/dev/null 2>&1; artifact_rc=$?
+  void_artifact_rc=$artifact_rc
+  "$expw" >/dev/null 2>&1; artifact_rc=$?
+  expw_artifact_rc=$artifact_rc
+  # Tooling §2.2 — with no exact `@export` the derived symbol IS the §6.1 spelling, so the generated
+  # wrapper owns `main__boot`, `e_entry` resolves to it, and the wrapped body carries the reserved
+  # `__alatyr_raw_entry_body` label. Assert the entry address, not merely the symbols' presence.
+  if [ "$scalar_run_rc" = 42 ] && [ "$scalar_build_rc" = 0 ] \
+    && [ "$scalar_artifact_rc" = 42 ] \
+    && printf '%s\n' "$scalar_syms" | grep -qE ' [Tt] __alatyr_raw_entry_body$' \
+    && printf '%s\n' "$scalar_syms" | grep -qE ' [Tt] main__boot$' \
+    && printf '%s\n' "$scalar_entry" | grep -qx 'main__boot'; then
+    echo "ok   tool12_entry_resolution: custom i32 entry is entered at main__boot and returns 42"
+  else
+    echo "FAIL tool12_entry_resolution: custom i32 entry run=$scalar_run_rc build=$scalar_build_rc artifact=$scalar_artifact_rc e_entry=[$scalar_entry]"; fail=1
+  fi
+  if [ "$void_run_rc" = 0 ] && [ "$void_build_rc" = 0 ] \
+    && [ "$void_artifact_rc" = 0 ] \
+    && printf '%s\n' "$void_syms" | grep -qE ' [Tt] __alatyr_raw_entry_body$' \
+    && printf '%s\n' "$void_syms" | grep -qE ' [Tt] main__boot$' \
+    && printf '%s\n' "$void_entry" | grep -qx 'main__boot'; then
+    echo "ok   tool12_entry_resolution: custom void entry is entered at main__boot and returns 0"
+  else
+    echo "FAIL tool12_entry_resolution: custom void entry run=$void_run_rc build=$void_build_rc artifact=$void_artifact_rc e_entry=[$void_entry]"; fail=1
+  fi
+  # Tooling §2.2 second spelling — the exact `@export` is what `ld -e` receives, so `e_entry` must
+  # resolve to `tool12_wrapped_export` and NOT to the §6.1 label the body keeps for internal calls.
+  if [ "$expw_run_rc" = 42 ] && [ "$expw_build_rc" = 0 ] \
+    && [ "$expw_artifact_rc" = 42 ] \
+    && printf '%s\n' "$expw_syms" | grep -qE ' [Tt] tool12_wrapped_export$' \
+    && printf '%s\n' "$expw_syms" | grep -qE ' [Tt] boot__start$' \
+    && printf '%s\n' "$expw_entry" | grep -qx 'tool12_wrapped_export' \
+    && ! printf '%s\n' "$expw_entry" | grep -qx 'boot__start'; then
+    echo "ok   tool12_entry_resolution: wrapped exact-export entry is entered at tool12_wrapped_export and returns 42"
+  else
+    echo "FAIL tool12_entry_resolution: exported wrapped entry run=$expw_run_rc build=$expw_build_rc artifact=$expw_artifact_rc e_entry=[$expw_entry]"; fail=1
+  fi
+  rm -rf "$custom"
 }
 
 # TOOL-15 / MOD-14 — the package manifest's private Package handle is visible only to the
