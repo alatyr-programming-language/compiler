@@ -13521,6 +13521,46 @@ signedness_ptr_field_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
   }
   res
 }
+## Recover the declared type of a local `comptime` value that is materialized by the runtime emitter.
+## Such a binding is intentionally absent from `cx.slots`; its side-table entry stores the initializer
+## but not the annotation. Match the same latest-binding/shadowing rule as `comptime_slot_expr`, then
+## read the annotation from the DECLARATION name span (the use-site span is followed by an operator and
+## therefore cannot be passed to `local_type_span`). Keep this bridge type-only: it does not fold the
+## initializer and does not classify module constants, comptime-if values, generic parameters, or any
+## other unresolved expression as unsigned.
+comptime_local_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  match deref(e) {
+    Expr::Var(s, n) => {
+      cts := cx.ctslots
+      if unchecked bitcast(usize, cts) == 0 { return CSpan(s = 0, n = 0) }
+      cnt := svec_len(cts)
+      mut i := 0
+      mut found := false
+      mut found_off := 0
+      mut found_kind : u8 = 0
+      mut decl_s := 0
+      mut decl_n := 0
+      while i < cnt {
+        ent := svec_at(SlotEntry, cts, i)
+        if deref(ent).off <= s and deref(ent).nl == n and streq(cx.src, deref(ent).ns, deref(ent).nl, s, n) {
+          if not found or deref(ent).off >= found_off {
+            found = true
+            found_off = deref(ent).off
+            found_kind = deref(ent).ek
+            decl_s = deref(ent).ns
+            decl_n = deref(ent).nl
+          }
+        }
+        i += 1
+      }
+      if not found or found_kind != 255 { return CSpan(s = 0, n = 0) }
+      lt := local_type_span(cx.src, decl_s, decl_n)
+      if lt.n != 0 { return CSpan(s = lt.s, n = lt.n) }
+    }
+    _ => {}
+  }
+  CSpan(s = 0, n = 0)
+}
 is_signed_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   mut t := expr_type_span(e, cx)
   if t.n == 0 { t = signedness_ptr_field_type_span(e, cx) }
@@ -13542,6 +13582,7 @@ is_signed_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
 ## mis-lower the compiler's own `isize` comparisons that go negative → break self-build).
 is_unsigned_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   mut t := expr_type_span(e, cx)
+  if t.n == 0 { t = comptime_local_type_span(e, cx) }
   if t.n == 0 { t = signedness_ptr_field_type_span(e, cx) }
   if t.n == 0 { t = index_signedness_type_span(e, cx) }
   if t.n == 0 { t = global_array_signedness_type_span(e, cx) }

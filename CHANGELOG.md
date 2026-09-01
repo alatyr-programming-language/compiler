@@ -82,6 +82,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Fixed runtime comparison conditions for materialized typed `comptime` `u64` locals so high-bit values
+  use unsigned ordering while signed `i64` and ordinary runtime `u64` comparisons retain their paths.
 - Duplicate enum discriminants are now rejected by `check` on every target, instead of only by the
   x86_64 lower — the three non-x86 backends previously accepted and ran such a program.
 - `CharIter` now bounds-checks its backing view in checked mode and rejects malformed UTF-8 instead of reading past the view or producing an out-of-range code point.
