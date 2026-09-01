@@ -9730,6 +9730,25 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
     emit_require_agg_value(e, sb, cx, a, nl)
     return
   }
+  ## Types §§3.4, 4.4 and Memory §5.9 — an aggregate-to-aggregate `bitcast` is identity on the
+  ## source block. The parser preserves a user-struct target as `Expr::Bitcast`, but before this arm
+  ## existed the return-position fallback below wrote zero to `%rax/%rdx` (and left later registers
+  ## untouched). Re-enter the ordinary aggregate-value emitter for the source so its existing Var,
+  ## StructLit, Call, and Field arms deliver the same physical words through the normal small-return
+  ## ABI. `bitcast_struct_target` sees the optional outer `unchecked` wrapper; all other preserved
+  ## bitcast targets (scalar/pointer) remain on their existing paths. Keep the guard to the register
+  ## return budget: wider values belong to the separate sret emitter, and an unresolvable/zero-width
+  ## target must fail loudly rather than becoming another silent zero return.
+  bts := bitcast_struct_target(e, cx.decls, cx.src)
+  if bts.n != 0 {
+    bw := struct_words(cx.decls, cx.src, bts.s, bts.n, deref(cx.mar))
+    if bw == 0 or bw > 7 { panic("selfhost: an aggregate bitcast in a register-return position has no supported small struct width") }
+    match deref(e) {
+      Expr::Unchecked(inner) => { emit_struct_value(inner, sb, cx, a, nl); return }
+      Expr::Bitcast(inner, _bcs, _bcl) => { emit_struct_value(inner, sb, cx, a, nl); return }
+      _ => {}
+    }
+  }
   match deref(e) {
     ## Types §9.4 — a RANGE-SLICE expression returned BY VALUE from a `-> Slice(T)` / `-> str` fn
     ## (`return xs[0..4]`). `Expr::Slice` had NO arm here, so the value fell to the `_` default and the

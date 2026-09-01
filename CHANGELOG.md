@@ -86,6 +86,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 - Direct nested fixed-array parameters are now rejected with one located diagnostic before their malformed parameter ABI can reach lowering; full nested-array parameter support remains a follow-up.
 - Fixed x86_64 silent wrong values when an inferred pointer's pointee type lies beyond the old
   512-byte source-recovery window; the scan is now bounded by the actual source-buffer length.
+- Direct equal-width aggregate bitcasts used as small struct return values now preserve the source
+  words instead of silently returning zero values on x86_64.
 - `std::os::args` now reads the complete NUL-separated process command line, growing its arena-backed
   buffer instead of silently dropping arguments beyond the initial 64 KiB chunk.
 - Unsupported `comptime if` codegen rejections now retain their source location through transparent `unchecked` conditions in multi-file builds without changing rejection semantics.

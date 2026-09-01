@@ -6590,6 +6590,7 @@ run struct_if_expr2 42
 run struct_match_field 42
 run bitcast_agg2word 42
 run bitcast_agg2word_unchecked 42
+run issue369_aggregate_return 42
 run_x86 slice_field_compare 42
 run qualified_value_arg 42
 run cmp_prelude 42
