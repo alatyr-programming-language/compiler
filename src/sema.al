@@ -37,7 +37,7 @@ stmt_label_span := ast::stmt_label_span
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
 ## does not depend on sema → no import cycle. (`struct_decl_of`/`base_type_name`/`brand_underlying` added
 ## for the is-KIND + field-COUNT fold — they classify the resolved type exactly as the lower's own fold.)
-(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element) := lower_layout
+(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc) := lower_layout
 ## §8 `@repr(T)` tag-type primitives (shared with `lower::validate_repr`) for the LOCATED @repr reject:
 ## sema classifies an enum's `@repr(T)` tag exactly as the build's `validate_repr` does (same span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
@@ -131,6 +131,12 @@ local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIA
 ## Issue #214 — a direct multidimensional fixed-array STRUCT FIELD has no composed nested address
 ## model in the current lower. Keep this class distinct from the bounded local-array fence so both
 ## public entry points can report the established field-specific wording and source location.
+## Issue #16 / Types §6.2 — two enum variants resolving to the same discriminant are ill-formed, and
+## that is a TARGET-INDEPENDENT rule: the check belonged in `check`, not in the x86 lower. Keep this class
+## between the local-multidim and field-multidim markers so every older CheckErr value stays
+## byte-identical.
+ENUM_DUP_DISC_DIAG_MARKER := 6885000000000000000
+enum_dup_disc_err := fn(s : usize) -> CheckErr { ENUM_DUP_DISC_DIAG_MARKER + s * 4 }
 MULTIDIM_ARRAY_FIELD_DIAG_MARKER := 6890000000000000000
 multidim_array_field_err := fn(s : usize) -> CheckErr { MULTIDIM_ARRAY_FIELD_DIAG_MARKER + s * 4 }
 ## Issue #324 — a direct nested fixed-array PARAMETER has no composed ABI/address model in the current
@@ -11321,6 +11327,12 @@ sema_unknown_prefix_attr := fn(decls : ptr(rt::Vec), cnt : usize, src : ptr(u8),
 ## `src/`+`lib/` → `enum_repr_ty` returns an empty span for every enum → always 0.
 sema_repr_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
   if d.kind != 3 { return 0 }
+  ## Issue #16 / Types §6.2 — "Two variants resolving to the same value are ill-formed." This mirrors
+  ## `lower::validate_repr`'s FIRST check, which sema had never mirrored: the `@repr` half below was
+  ## copied, the duplicate-discriminant half three lines above it was not. It must be tested BEFORE the
+  ## `rsp.n == 0` exit, because a duplicate pin is possible on an enum carrying no `@repr` at all —
+  ## which is exactly the shape `test/enum_disc_dup.al` has.
+  if enum_dup_disc(src, d.fields_head) >= 0 { return enum_dup_disc_err(d.name_start) }
   rsp := enum_repr_ty(decls, src, d.name_start, d.name_len)
   if rsp.n == 0 { return 0 }
   if repr_ty_is_integer(src, rsp.s, rsp.n) == false { return located_err(d.name_start) }

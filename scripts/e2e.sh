@@ -3797,7 +3797,14 @@ run enum_unit_local_cmp 42
 run_a64 enum_unit_local_cmp 42
 run_rv64 enum_unit_local_cmp 42
 run_x86 enum_disc_unpinned 42
+## Issue #16 / Types §6.2 — a duplicate effective discriminant is TARGET-INDEPENDENT ill-formedness, so
+## every surface must refuse it. The check moved from the x86-only lower into `check`, which is why the
+## three non-x86 rows below are new: they previously ACCEPTED this program and ran it to exit 0.
+check_reject_has enum_disc_dup "two enum variants resolve to the same discriminant"
 build_reject_has enum_disc_dup "two enum variants resolve to the same discriminant"
+emit_reject_has aarch64 enum_disc_dup "two enum variants resolve to the same discriminant"
+emit_reject_has riscv64 enum_disc_dup "two enum variants resolve to the same discriminant"
+emit_reject_has wat enum_disc_dup "two enum variants resolve to the same discriminant"
 build_reject_has enum_disc_expr_reject "enum discriminant pin must be a SINGLE integer literal"
 run_x86 enum_disc_pin_bases 42
 check_located reject_enum_disc_pin_overflow 3
