@@ -3411,6 +3411,55 @@ sema_wrapper_payload_binding_bad := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto
   lv := deref(locals)
   sema_wrapper_value_type_concrete(decls, upto, src, ann_s, ann_n, lv.mod_s, lv.mod_l)
 }
+
+## Return the semantic mismatch for a direct wrapper call entering a concrete return sink. Keep the
+## direct-call guard explicit: the local marker is also used by the annotated-binding fence, but the
+## current bounded return slice deliberately does not classify an inferred local as a direct call.
+## Wrapper-to-wrapper, pointer-niche, alias, generic, nested, UFCS, indirect and unresolved shapes stay
+## on their existing conservative paths.
+sema_wrapper_payload_sink_err := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, rts : usize, rtl : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+  cs := expr_call_callee_span(v)
+  if cs.n == 0 or ecallee_is(cs.s) or not sema_direct_named_call(src, cs.s, cs.n) { return 0 }
+  wt := sema_wrapper_value_ty(v, decls, upto, src, locals, nloc)
+  if wt.tag != 11 { return 0 }
+  lv := deref(locals)
+  if sema_wrapper_value_type_concrete(decls, upto, src, rts, rtl, lv.mod_s, lv.mod_l) { return mismatch_err(s_of(v, a), 0) }
+  0
+}
+
+## Scan all ordinary return statements for the same direct wrapper-to-concrete-sink mismatch. This
+## mirrors the existing return-sink walkers so an early return in control flow receives the same fence
+## as a function's tail expression. The first mismatch is retained for a located diagnostic.
+sema_wrapper_payload_returns_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+  mut cur := head
+  mut got : CheckErr = 0
+  while cur != 0 and got == 0 {
+    st := deref(stmt_p(Stmt, cur))
+    match st {
+      Stmt::Return(rv, nx) => { got = sema_wrapper_payload_sink_err(rv, decls, upto, src, locals, nloc, rts, rtl, a) }
+      Stmt::If(c, th, el, nx) => {
+        got = sema_wrapper_payload_returns_err(th, rts, rtl, decls, upto, src, locals, nloc, a)
+        if got == 0 { got = sema_wrapper_payload_returns_err(el, rts, rtl, decls, upto, src, locals, nloc, a) }
+      }
+      Stmt::While(c, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::Loop(b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::Unchecked(b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::AllocWith(ae, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm := ah
+        while arm != 0 and got == 0 {
+          am := deref(arm_p(arm))
+          got = sema_wrapper_payload_returns_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
+          arm = am.next
+        }
+      }
+      _ => {}
+    }
+    cur = stmt_next_at(cur, a)
+  }
+  got
+}
 ## The raw TYPE-annotation span `[ts,tl)` of the i-th parameter of the top-level fn named [s,n) (walk
 ## order); {0,0} if absent. The NAME half of `callee_param_ty` — the conformance check needs the raw
 ## name to see a float/char scalar sink that `resolve_ty` reports as tag 0.
@@ -9561,6 +9610,13 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     Result::Ok(n) => { nloc = n }
     Result::Err(e) => { err = e; failed = true }
   }
+  ## Issue #269 — after the ordinary statement pass has populated the local table, fence direct
+  ## Option/Result calls at every explicit return sink. The helper deliberately runs only after the
+  ## parent checks succeeded, so an existing, more specific semantic diagnostic remains authoritative.
+  if failed == false {
+    wret := sema_wrapper_payload_returns_err(d.body_stmts, d.ret_ts, d.ret_tl, decls, upto, src, ptr(locals), nloc, a)
+    if wret != 0 { err = wret; failed = true }
+  }
   ## Modules §3 body parity: check_stmts has already populated the function-wide local table, so the
   ## structural visibility walk can distinguish a legitimate local shadow from an inaccessible global
   ## without duplicating the checker’s block-scope bookkeeping.  A failure is a located semantic fact,
@@ -9584,6 +9640,13 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
       lsp := lbv_code_span(lbvc)
       if lsp != 0 { err = mismatch_err(lsp, 0) } else { err = mismatch_err(d.name_start, 0) }
     }
+  }
+  ## The trailing expression is the other remaining value sink. Keep this beside the ordinary tail
+  ## checks so a direct qualified stdlib call cannot be accepted merely because its generic wrapper
+  ## return is unknown to `resolve_ty`.
+  if failed == false and no_tail == false {
+    wtail := sema_wrapper_payload_sink_err(d.value, decls, upto, src, ptr(locals), nloc, d.ret_ts, d.ret_tl, a)
+    if wtail != 0 { err = wtail; failed = true }
   }
   if failed == false and no_tail == false {
     s3at := s3a_return_bad(d.value, decls, upto, src, a, ptr(locals), nloc)
@@ -12166,7 +12229,9 @@ sema_vis_all_bodies := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::A
   mut i := 0
   while i < cnt {
     d := deref(decl_get(decls, i))
-    if is_lib_module(src, d.mod_start, d.mod_len) and not sema_is_ambient_nested(src, d.mod_start, d.mod_len) and not guard_is_false(d, src) {
+    if is_lib_module(src, d.mod_start, d.mod_len)
+       and (not sema_is_ambient_nested(src, d.mod_start, d.mod_len) or sema_module_in_package(src, d.mod_start, d.mod_len))
+       and not guard_is_false(d, src) {
       if d.kind == 1 or d.kind == 4 or d.kind == 5 {
         mut fw := 0
         mut fs := 0
@@ -12176,6 +12241,18 @@ sema_vis_all_bodies := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::A
         sema_collect_stmts(d.body_stmts, ptr(locals), src, a)
         vr0 := sema_vis_stmts(d.body_stmts, decls, src, d.mod_start, d.mod_len, ptr(locals), deref(locals).len, a)
         if vr0 != 0 { return sema_visibility_err(vr0) }
+        ## Package-owned nested modules normally share the `__` spelling used by ambient library
+        ## modules, so the ordinary checker intentionally skips them here. They still need this
+        ## narrow direct wrapper-sink fence: the source-only locals table is sufficient because the
+        ## return query resolves only direct calls and the owning module, not inferred local types.
+        if sema_module_in_package(src, d.mod_start, d.mod_len) {
+          wret0 := sema_wrapper_payload_returns_err(d.body_stmts, d.ret_ts, d.ret_tl, decls, cnt, src, ptr(locals), deref(locals).len, a)
+          if wret0 != 0 { return wret0 }
+          if d.kind == 1 and not expr_is_no_tail(d.value) {
+            wtail0 := sema_wrapper_payload_sink_err(d.value, decls, cnt, src, ptr(locals), deref(locals).len, d.ret_ts, d.ret_tl, a)
+            if wtail0 != 0 { return wtail0 }
+          }
+        }
         if unchecked bitcast(usize, d.value) != 0 {
           vr1 := sema_vis_expr(d.value, decls, src, d.mod_start, d.mod_len, ptr(locals), deref(locals).len, a)
           if vr1 != 0 { return sema_visibility_err(vr1) }
