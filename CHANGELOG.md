@@ -82,6 +82,7 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- AArch64 now emits module-qualified labels for named non-generic functions and direct qualified calls while preserving exact `@extern`/`@export` symbols.
 - Aggregate bitcasts now reject packed records with unequal exact byte widths instead of accepting representations that only share a rounded machine-word count.
 - Aggregate `Slice(T)` parameter recovery now uses the complete source buffer instead of a fixed
   512-byte lookahead, so valid aggregate Slice field access beyond that boundary is recovered on
