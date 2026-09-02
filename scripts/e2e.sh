@@ -6060,6 +6060,14 @@ run agg_arr_elem_arg 42
 run_x86 issue260_slice_field 42
 run_x86 issue261_slice_field 42
 run_x86 issue263_slice_narrow_field_write 42
+## CLAYOUT S4 (#263) — the CROSS-BACKEND half of the same defect: a struct-field array literal was
+## materialized one machine WORD per field by aarch64/riscv64/wat, while every reader of
+## `s.items[i].f` resolved it through the byte tier, so `s.items[1].a = v` destroyed `s.items[1].b`.
+## Registered `run`, not `run_x86`, deliberately: the sweeps build their corpus from `^run [a-z]`, so a
+## `run_x86` row is invisible to them — which is exactly why the three cross backends kept a silent
+## wrong value here after the x86 fix landed. This fixture carries no local byte-tier array literal, so
+## it stays clear of the wat construction fence and asserts a real 42 on all four backends.
+run issue263_struct_field_array_neighbour 42
 run generic_struct_inout 42
 run ufcs_call_recv 42
 run ufcs_call_args 42
