@@ -82,6 +82,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `alatyr fmt` now keeps the qualifier an enum-variant pattern was written with: `Result::Ok(h)` and
+  `AllocError.OutOfMemory` come back qualified in both the expression- and statement-form arm
+  renderers, instead of as a bare `Ok(h)` / `OutOfMemory`; a pattern written bare stays bare. The
+  de-qualified text could stop compiling outright — the ambient standard-library prelude is injected
+  by scanning the source for a bare `Result`, so deleting a file's last qualified spelling took
+  `Arena`, `allocate` and `AllocError` out of scope while `fmt` still exited 0.
 - `alloc::string::push` and `alloc::string::push_str` now report the **new byte length** of the
   string in their `Ok` arm, as the Stdlib appendix requires, instead of the number of bytes they
   appended: appending a 1-byte `char` to a 2-byte string answers `Ok(3)`, not `Ok(1)`, and

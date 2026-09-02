@@ -1888,6 +1888,39 @@ fmt_dotvar_head := fn(src : ptr(u8), vs : usize, out_s : ptr(mut usize)) -> usiz
   he - p
 }
 
+## Recover the SOURCE start of a QUALIFIED variant PATTERN whose `Arm` kept only the variant's own
+## name span. `parse_pat_alt` overwrites `vs`/`vl` with the LAST path segment, so `Result::Ok(h)`,
+## `AllocError.OutOfMemory` and `mod::E.V` all reach the formatter as the bare tail — and re-emitting
+## that tail alone REWROTE the program: the ambient prelude is injected by a TEXTUAL scan for a bare
+## `Result` (`cli::ambient_paths`), so deleting the last `Result::` in a file took `Arena`,
+## `allocate` and `AllocError` out of scope and the formatted text stopped compiling. Control Flow
+## §5.2 makes the bare, `::`-qualified and `.`-spelled forms the SAME variant ("a pattern may mirror
+## exactly how the variant is built") and Tooling §4.3 makes `fmt` semantics-preserving, and §4.3's
+## canonical form is whitespace/wrapping — it gives `fmt` no licence to respell a path — so the
+## author's spelling is what must come back out.
+##
+## The `::` head reuses `fmt_var_path_start` (the same recovery lower's `gref_split` uses, with its
+## comment/string/multiline fences). The `.`-spelling adds ONE guarded step: the `.` must be real
+## code — not inside a string/char literal, not in a comment — and blanks are skipped WITHOUT
+## crossing a line break, so a `## sentence.` comment line above an arm can never be mistaken for a
+## qualifier. Anything that does not match falls back to the bare span, never to a guess.
+fmt_variant_pat_start := fn(src : ptr(u8), vs : usize, vl : usize) -> usize {
+  if vl == 0 { return vs }
+  mut p := vs
+  while p > 0 and (bytes(str_at((src + p - 1), 1))[0] == 32 or bytes(str_at((src + p - 1), 1))[0] == 9) { p -= 1 }
+  if p < 2 { return fmt_var_path_start(src, vs, vl) }
+  if bytes(str_at((src + p - 1), 1))[0] != 46 { return fmt_var_path_start(src, vs, vl) }
+  dot := p - 1
+  if not fmt_path_sep_is_real(src, dot) { return fmt_var_path_start(src, vs, vl) }
+  if fmt_path_line_kind(src, dot) != 0 { return fmt_var_path_start(src, vs, vl) }
+  mut q := dot
+  while q > 0 and (bytes(str_at((src + q - 1), 1))[0] == 32 or bytes(str_at((src + q - 1), 1))[0] == 9) { q -= 1 }
+  he := q
+  while q > 0 and fmt_is_ident_byte(bytes(str_at((src + q - 1), 1))[0]) { q -= 1 }
+  if he <= q { return fmt_var_path_start(src, vs, vl) }
+  fmt_var_path_start(src, q, he - q)
+}
+
 ## Emit the PATTERN portion of a value-match arm. Keeping this separate lets the wrapped renderer
 ## reuse exactly the same source-span recovery as the legacy single-line spelling.
 fmt_emit_template_header := fn(am : Arm, in out sb : rt::StrBuf, src : ptr(u8), out_iopen : ptr(mut usize)) {
@@ -1940,7 +1973,10 @@ fmt_emit_value_arm_pattern := fn(am : Arm, in out sb : rt::StrBuf, src : ptr(u8)
   if am.wild == 6 { push_int(sb, am.lit); push_str(sb, "..="); push_int(sb, am.hi) }
   if am.wild == 0 {
     if am.vl != 0 {
-      push_str(sb, str_at((src + am.vs), am.vl))
+      ## the AUTHOR's spelling, qualifier and all (`fmt_variant_pat_start`) — re-emitting only the
+      ## variant's own span deleted a `Result::` / `AllocError.` prefix and broke the program.
+      vps := fmt_variant_pat_start(src, am.vs, am.vl)
+      push_str(sb, str_at((src + vps), am.vs + am.vl - vps))
       emit_fmt_binds(am.binds_head, sb, src)
     } else {
       push_int(sb, am.lit)
@@ -2305,7 +2341,10 @@ emit_fmt_stmt_match_arms := fn(arms_head : usize, body_head : ptr(mut Stmt), in 
     if am.wild == 6 { push_int(sb, am.lit); push_str(sb, "..="); push_int(sb, am.hi) }
     if am.wild == 0 {
       if am.vl != 0 {
-        push_str(sb, str_at((src + am.vs), am.vl))
+        ## the statement-match twin of the value-match qualifier recovery above: a `match` whose arms
+        ## are braced blocks renders here, and it de-qualified `Result::Ok` exactly the same way.
+        svps := fmt_variant_pat_start(src, am.vs, am.vl)
+        push_str(sb, str_at((src + svps), am.vs + am.vl - svps))
         if unchecked bitcast(usize, am.binds_head) != 0 {
           push_str(sb, "(")
           mut b := am.binds_head
