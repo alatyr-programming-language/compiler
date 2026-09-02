@@ -132,18 +132,41 @@ hash := fn(T : type, v : T) -> u64 {
         }
         return h
       } else {
-        return u64(v)
+        comptime if (match typeinfo(T) { Str(_) => true; _ => false }) {
+          ## `str` is the OPAQUE base view (§4.1 `TypeInfo.Str`): no fields to fold, and its two
+          ## `{ptr, len}` words are an ADDRESS, not the value. The derived `eq` for a `str` bottoms
+          ## out at its own `_` arm's `a == b`, which the lower compares by CONTENT — so §2.6's
+          ## "`Hash` consistent with `Eq`" REQUIRES the content hash here: two equal-content views
+          ## in distinct allocations must hash equally. Without this arm the fallthrough `u64(v)`
+          ## rejected the two-word view as a non-scalar conversion operand, so `HashMap(str, V)`
+          ## could not be instantiated at all — a valid program refused. This arm, not the concrete
+          ## `hash(s : str)` overload below, is the one that a generic container reaches: the
+          ## generic map's own `rehash` spells `hash(K, k)` EXPLICITLY, which can only ever select
+          ## the generic, so a fix that only re-routed the implicit `hash(key)` sites would make a
+          ## grown map hash differently from the one it grew out of.
+          return str_hash(v)
+        } else {
+          return u64(v)
+        }
       }
     }
   }
 }
 
-## Content hash for `str` (FNV-1a over the bytes) — a concrete overload of `hash`,
-## so a `str`-keyed container hashes by content, not by the {ptr,len} struct bits.
-hash := fn(s : str) -> u64 {
+## FNV-1a over a `str`'s bytes — the single content-hash DECISION, so the concrete `hash(s : str)`
+## override and the structural derive's `Str` arm can never drift apart (they must agree: a program
+## may reach either, and a `HashMap(str, V)` that hashed a key one way on insert and the other way
+## after a grow would lose it).
+str_hash := fn(s : str) -> u64 {
   mut h : u64 = 1469598103934665603
   for c in bytes(s) {
     h = unchecked ((h ^ u64(c)) * 1099511628211)
   }
   h
+}
+
+## Content hash for `str` (FNV-1a over the bytes) — a concrete overload of `hash`,
+## so a `str`-keyed container hashes by content, not by the {ptr,len} struct bits.
+hash := fn(s : str) -> u64 {
+  str_hash(s)
 }

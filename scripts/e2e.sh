@@ -6868,6 +6868,14 @@ run ambient_hashmap 42
 ## map outgrew 8 buckets (`hash(k)` with an un-inferable `K`), which no fixture had ever reached.
 run_x86 generic_view_targ_infer 42
 run_x86 hashmap_rehash_grow 42
+## Stdlib §6 / §2.6 — a `str` KEY: `HashMap(str, V)` was REJECTED outright. `typeinfo(str)` is the
+## opaque §4.1 `Str` kind, for which the structural `hash(T, v)` had no arm — it fell through to
+## `u64(v)`, which refuses a two-word view — and inside the instance the key PARAMETER carries no
+## readable `str` annotation, so `hash(key)` / `eq(existing, key)` inferred no comptime type argument
+## either (Comptime §3.3 reject). Two equal-content views in SEPARATE mmap allocations, so a
+## `{ptr,len}` hash or equality cannot pass; the 7th insert forces the rehash, whose `hash(K, k)` is
+## the explicit spelling and must agree with `insert`'s implicit one.
+run_x86 hashmap_str_key 42
 run ambient_hashmap_struct 42
 ## NESTED-aggregate structural eq through the derive: a nested field must compare ALL its words, not
 ## word 0 only (the derive recurses explicitly `eq(f.type, …)`, so a struct-in-struct key is exact).

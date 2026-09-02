@@ -13920,7 +13920,26 @@ nongen_type_match := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : us
 ## same annotation span, so both sides mangle the identical `…__str` instance. Restricted to a VIEW
 ## type so no other implicit-type-argument call's resolution moves.
 view_arg_ty_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
-  view_str_ty_span(e, cx.slots, cx.src)
+  d := view_str_ty_span(e, cx.slots, cx.src)
+  if d.n != 0 { return d }
+  ## Comptime §3.3 — inside a MONOMORPHIZED INSTANCE the `str` view is a PARAMETER, not an annotated
+  ## local, and `ast::local_type_span` reads a *local* declaration: it stops at `=`/newline/`;`/`}`,
+  ## none of which ends a parameter, so for `key : K` in `fn(K : type, …, key : K, …) -> R {` it runs
+  ## past the whole signature and the `== "str"` test above answers 0/0. `key`'s slot nevertheless
+  ## PROVES the type: `bind_param` substituted `K` -> the instance type before binding, and slot kind
+  ## `ek 4` is reached only from a `str` binding (a str local, a str parameter, or a str enum payload)
+  ## — nothing else in the lower ever writes it. So a kind-4 argument inside an instance whose own
+  ## type-argument spells `str` IS a `str`, and the instance tag it needs is exactly that `str` span.
+  ## Without this, `hash(key)` / `eq(existing, key)` inside a `HashMap(str, V)` instance could infer
+  ## NO comptime type argument and the instantiation was REJECTED (Comptime §3.3) — every `str`-keyed
+  ## map was a valid program the compiler refused. Gated on view kind 4 (a `str`, never a slice view)
+  ## AND on a type-argument that really is `str`, so no other instance's inference moves; `src/`
+  ## declares no generic fn with a `str` type-argument, so this never fires on the self-host build.
+  if view_var_kind(e, cx.slots, cx.src) != 4 { return CSpan(s = 0, n = 0) }
+  if cx.it_l != 0 and str_at((cx.src + cx.it_s), cx.it_l) == "str" { return CSpan(s = cx.it_s, n = cx.it_l) }
+  if cx.it2_l != 0 and str_at((cx.src + cx.it2_s), cx.it2_l) == "str" { return CSpan(s = cx.it2_s, n = cx.it2_l) }
+  if cx.it3_l != 0 and str_at((cx.src + cx.it3_s), cx.it3_l) == "str" { return CSpan(s = cx.it3_s, n = cx.it3_l) }
+  CSpan(s = 0, n = 0)
 }
 
 ## The slots-only core of `view_arg_ty_span`, shared with the SLOT-BINDING side (`collect_slots` has
