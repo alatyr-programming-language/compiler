@@ -82,6 +82,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `HashMap(str, V)` now compiles and keys by string CONTENT: the structural `hash` derive gained the
+  `Str` case it was missing (it fell through to a scalar conversion and refused the two-word view), and
+  a `str` key parameter inside a monomorphized container instance now resolves its comptime type
+  argument instead of being rejected. Equal-content views in distinct allocations are one key, through
+  `insert`/`get`/`contains`/`remove` and across a rehash.
 - AArch64 now emits module-qualified labels for named non-generic functions and direct qualified calls while preserving exact `@extern`/`@export` symbols.
 - Aggregate bitcasts now reject packed records with unequal exact byte widths instead of accepting representations that only share a rounded machine-word count.
 - Aggregate `Slice(T)` parameter recovery now uses the complete source buffer instead of a fixed
