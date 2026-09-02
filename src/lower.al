@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -7130,6 +7130,11 @@ infer_local_scalar_type := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::
         }
       }
     }
+    ## A preserved bare narrow scalar bitcast has the TARGET type, not the source type. Record it so
+    ## inferred locals retain the same width/signedness facts as explicitly annotated locals.
+    Expr::Bitcast(inner, ts, tl) => {
+      if bitcast_target_is_narrow_scalar(src, ts, tl) { r = CSpan(s = ts, n = tl) }
+    }
     ## `x := s.f` — a struct-field read: the field's declared type (resolve the base struct's type
     ## from its slot, then the field type). `base` must be a struct-typed Var in the slot table.
     Expr::Field(base, fs, fl) => {
@@ -7196,14 +7201,14 @@ infer_local_scalar_type := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::
     ## answer, which is exactly the shape of a dropped fact.
     ##
     ## STRICTLY ONE-DIRECTIONAL: a peeled type is recorded ONLY when it is UNSIGNED (`unsigned_ty_only`
-    ## below). The reason is `bitcast`: the parser ERASES a scalar `bitcast(T, x)` (it is a pure
-    ## reinterpretation, no code), so the inner expression of `unchecked bitcast(usize, n)` is just
-    ## `n` — and propagating THAT type would record the SOURCE type `isize` for a value the program
-    ## explicitly reinterpreted as unsigned, marking it signed for the division/overflow-guard
-    ## classification. Refusing the signed direction keeps the always-signed default exactly where it
-    ## was (it is what the compiler's own `isize` comparisons depend on — flipping that default to
-    ## unsigned was tried on 2026-07-24 and broke self-reproduction) and moves an operand only where
-    ## unsignedness is PROVEN.
+    ## below). Word-sized `bitcast(T, x)` targets remain erased, so the inner expression of
+    ## `unchecked bitcast(usize, n)` is still just `n`; propagating THAT type would record the SOURCE
+    ## type `isize` for a value the program explicitly reinterpreted as unsigned, marking it signed for
+    ## division/overflow-guard classification. Narrow targets are preserved and handled by the direct
+    ## `Bitcast` arm above, but the same conservative filter applies when they are wrapped in `unchecked`.
+    ## Refusing the signed direction keeps the always-signed default exactly where it was (it is what
+    ## the compiler's own `isize` comparisons depend on — flipping that default to unsigned was tried
+    ## on 2026-07-24 and broke self-reproduction) and moves an operand only where unsignedness is PROVEN.
     Expr::Unchecked(inner) => { r = unsigned_ty_only(infer_local_scalar_type(inner, slots, decls, src, a), src) }
     _ => {}
   }
@@ -7414,30 +7419,37 @@ Subst := struct { gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usi
 ## arguments immediately following it. A fn `Decl`'s `ret_ts`/`ret_tl` records only the BASE name
 ## (`ptr`), but `ret_ts` points at the full type in the source, so `ptr(mut K)` is recovered by
 ## scanning the parens. Returns `tl` unchanged when no `(` follows (a plain `u64` return).
+##
+## BOUNDED by the `emit_program` source extent, like the inferred-pointer recovery below. Both reads
+## used to be open-ended — the leading `(` test and the balance walk, whose only exit was the balance
+## itself — so a type text that ran to the end of the buffer scanned past it, and the length this
+## returned is what `ptr_pointee_name` then reads inside. Fail closed to `tl` on every refusal (no
+## published extent, the base name already ends the buffer, or an UNBALANCED group): the caller then
+## keeps its base-name fallback rather than receiving a length that spans past the source.
 extend_type_span := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   mut e := ts + tl
+  end := LOWER_SRC_N
+  if e >= end { return tl }
   if str_at((src + e), 1) != "(" { return tl }
   mut depth := 0
   mut go := true
-  while go {
+  while go and e < end {
     c := str_at((src + e), 1)
     if c == "(" { depth = depth + 1; e = e + 1 }
     else if c == ")" { depth = depth - 1; e = e + 1; if depth == 0 { go = false } }
     else { e = e + 1 }
   }
+  if go { return tl }
   e - ts
 }
 
 ## The pointee NAME span of a `ptr(...)` / `ptr(mut ...)` type — like `ptr_pointee_struct_span` but
 ## WITHOUT the struct check, so a type-parameter pointee (`ptr(mut K)`) is returned for substitution.
-## `tl` must be the FULL type length (`extend_type_span`), not the truncated base name.
+## `tl` must be the FULL type length (`extend_type_span`), not the truncated base name; the parse is
+## bounded by that length and lives in `lower_layout` — one home, shared with `src/wat.al`, and
+## tolerant of the token spacing the grammar permits inside `ptr( … )`.
 ptr_pointee_name := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
-  if tl < 6 { return CSpan(s = 0, n = 0) }
-  if str_at((src + ts), 4) != "ptr(" { return CSpan(s = 0, n = 0) }
-  mut ps := ts + 4
-  mut pl := tl - 5
-  if pl > 4 and str_at((src + ps), 4) == "mut " { ps = ps + 4; pl = pl - 4 }
-  CSpan(s = ps, n = pl)
+  CSpan(s = ptr_target_pointee_s(src, ts, tl), n = ptr_target_pointee_n(src, ts, tl))
 }
 
 ## The exact aggregate-string pointer shape needed by a niche `Some(p)` alias. Keep this narrower
@@ -10901,15 +10913,17 @@ deref_view_span_cx := fn(v : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
 
 ## The pointee BYTE WIDTH (1 / 2 / 4 / 8) that a `deref` LOAD/STORE through pointer expression `p`
 ## must move, or 8 when the pointee is word-sized / unknown (keep the full `movq`). Sees THROUGH an
-## `Unchecked` wrapper and reads the parser-preserved `Expr::Bitcast(_, ps, pl)` pointee span (the
-## parser records it ONLY for a known sub-word pointee, so `scalar_byte_size` returns 1/2/4 there);
-## every other shape → 8. Isolated pointer-PARAM helper — a nested `match deref(x)` in another arm
-## does not lower, hence this stands alone (per the self-host lower idiom).
+## `Unchecked` wrapper and parses the full pointer target in `Expr::Bitcast(_, ts, tl)`; a bare narrow
+## scalar bitcast is not a pointer and therefore keeps the 8-byte fallback here. Isolated pointer-PARAM
+## helper — a nested `match deref(x)` in another arm does not lower, hence this stands alone.
 deref_pointee_bytes := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
   mut w := 8
   match deref(p) {
     Expr::Unchecked(inner) => { w = deref_pointee_bytes(inner, cx) }
-    Expr::Bitcast(inner, ps, pl) => { w = scalar_byte_size(cx.src, ps, pl) }
+    Expr::Bitcast(inner, ps, pl) => {
+      pn := ptr_pointee_name(cx.src, ps, pl)
+      if pn.n != 0 { w = scalar_byte_size(cx.src, pn.s, pn.n) }
+    }
     Expr::Var(vs, vn) => {
       pty := local_ptr_pointee_span(cx, vs, vn)
       if pty.n != 0 { w = scalar_byte_size(cx.src, pty.s, pty.n) }
@@ -10978,16 +10992,18 @@ byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
 }
 
 ## Is the pointee of `p` a SIGNED sub-word integer (`i8`/`i16`/`i32`) — so a `deref` LOAD must
-## SIGN-extend (`movsbq`/`movswq`/`movslq`) instead of zero-extend? Sees through `Unchecked`; reads
-## the parser-preserved `Bitcast` pointee NAME span and tests its leading `i` (the parser records the
-## span ONLY for a known sub-word pointee, so an `i`-prefixed name here is exactly i8/i16/i32).
-## `u8`/`u16`/`u32`/`bool`/`char`/`f32`/word-sized/unknown → false (zero-extend / word `movq`).
+## SIGN-extend (`movsbq`/`movswq`/`movslq`) instead of zero-extend? Sees through `Unchecked`; parses
+## the pointee out of the full pointer target. Bare scalar bitcasts and word-sized/unknown targets
+## answer false (zero-extend / word `movq`).
 ## Isolated pointer-PARAM helper (the `match deref(p)` idiom), mirroring `deref_pointee_bytes`.
 deref_pointee_signed := fn(p : ptr(Expr), cx : ptr(LCtx)) -> bool {
   mut sg := false
   match deref(p) {
     Expr::Unchecked(inner) => { sg = deref_pointee_signed(inner, cx) }
-    Expr::Bitcast(inner, ps, pl) => { sg = pl != 0 and str_at((cx.src + ps), 1) == "i" }
+    Expr::Bitcast(inner, ps, pl) => {
+      pn := ptr_pointee_name(cx.src, ps, pl)
+      sg = pn.n != 0 and str_at((cx.src + pn.s), 1) == "i"
+    }
     Expr::Var(vs, vn) => {
       pty := local_ptr_pointee_span(cx, vs, vn)
       if pty.n != 0 { sg = str_at((cx.src + pty.s), 1) == "i" }
@@ -13295,6 +13311,19 @@ emit_int_narrow_reg := fn(in out sb : strbuf::StrBuf, name : str) {
   else if name == "i32" { push_str(sb, "  movslq %eax, %rax\n") }
 }
 
+## Restore the target representation of a narrow scalar bitcast in `%rax`. A SIGNED target reuses
+## the ordinary narrowing conversion; every other narrow target (`uN`, `bitsN`, `bool`, `char`,
+## `f32`) is a raw low-N-byte pattern, and its zero-extension is byte-for-byte what
+## `emit_int_narrow_reg` already emits for `uN`. Which names those are is `lower_layout`'s decision,
+## shared with the three other backends — this function owns only the x86_64 encoding.
+emit_bitcast_narrow_reg := fn(in out sb : strbuf::StrBuf, name : str) {
+  w := bitcast_narrow_bytes(name)
+  if bitcast_narrow_is_signed(name) { emit_int_narrow_reg(sb, name) }
+  else if w == 1 { push_str(sb, "  movzbq %al, %rax\n") }
+  else if w == 2 { push_str(sb, "  movzwq %ax, %rax\n") }
+  else if w == 4 { push_str(sb, "  movl %eax, %eax\n") }
+}
+
 emit_shift_width_guard := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)) {
   t := expr_type_span(e, cx)
   if t.n == 0 {
@@ -13859,6 +13888,12 @@ expr_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       ## `i64(x)` / `u64(x)` correctly (Verification §, the signedness prerequisite).
       if conv_kind(str_at((cx.src + cs), cl)) >= 0 { return CSpan(s = cs, n = cl) }
       return call_ret_ty_span(e, cx.decls, cx.src, deref(cx.mar))
+    }
+    ## A preserved bare narrow scalar bitcast yields the target representation. Pointer and aggregate
+    ## targets remain type-specific paths and deliberately stay unresolved here.
+    Expr::Bitcast(inner, ts, tl) => {
+      if bitcast_target_is_narrow_scalar(cx.src, ts, tl) { return CSpan(s = ts, n = tl) }
+      return CSpan(s = 0, n = 0)
     }
     ## An INDEX read `xs[i]` of a SCALAR-element array (`ek == 5, eek == 0`) carries the array's
     ## DECLARED element type (CG-6 / I11): without it a narrow element (`u8`/…) read as an operand
@@ -18033,10 +18068,17 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       emit_deref_load(sb, deref_pointee_bytes(p, cx), deref_pointee_signed(p, cx))
       push_str(sb, "  pushq %rax\n")
     }
-    ## `bitcast(ptr(<sub-word>), v)` PRESERVED (parser) — bit-identity, so emit exactly the inner
-    ## VALUE; the node exists only to carry the pointee width to a `deref` load/store (above).
+    ## A preserved `bitcast` either carries a bare narrow scalar target or a pointer/aggregate target.
+    ## Pointer/aggregate casts are machine-word identities; a narrow scalar cast must canonicalize the
+    ## destination word after the source has been evaluated, otherwise a signed source leaks its
+    ## sign-extended high bits into an unsigned target (or an unsigned source into a signed target).
     Expr::Bitcast(inner, bps, bpl) => {
       emit_gas(inner, sb, cx, a, nl)
+      if bitcast_target_is_narrow_scalar(cx.src, bps, bpl) {
+        push_str(sb, "  popq %rax\n")
+        emit_bitcast_narrow_reg(sb, str_at((cx.src + bps), bpl))
+        push_str(sb, "  pushq %rax\n")
+      }
     }
     ## A string literal in bare expression position pushes its data POINTER (a single word —
     ## `leaq .Lstr<idx>(%rip)`). A `str` is a 2-word {ptr, len} value, but the stack machine

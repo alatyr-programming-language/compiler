@@ -30,7 +30,7 @@ stmt_p := ast::stmt_p
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
-(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv) := lower_layout
+(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
 (param_ann_signed, param_ann_unsigned, named_param_is_float, callee_ret_is_float) := lower_layout
 (ct_kind_of_name, ct_num_kind_of_name, ct_scalar_num_kind, ct_type_kind, std_ty_aggregate, struct_plain, ty_is_scalar) := lower_layout
@@ -2915,6 +2915,18 @@ rv_emit_narrow := fn(name : str, in out sb : rt::StrBuf) {
   else if name == "i16" { push_str(sb, "  slli a0, a0, 48\n  srai a0, a0, 48\n") }
   else if name == "i32" { push_str(sb, "  addiw a0, a0, 0\n") }
 }
+## A preserved bare narrow scalar bitcast restores the destination word just like a conversion.
+## WHICH targets those are, and their width/signedness, is `lower_layout`'s shared decision (a
+## complete `ptr(...)` target is excluded there — its pointee width belongs to deref lowering); this
+## function owns only the RV64 encoding. A SIGNED target reuses `rv_emit_narrow`; every other narrow
+## target zero-extends, which is byte-for-byte what `rv_emit_narrow` emits for `uN`.
+rv_emit_bitcast_narrow := fn(name : str, in out sb : rt::StrBuf) {
+  w := bitcast_narrow_bytes(name)
+  if bitcast_narrow_is_signed(name) { rv_emit_narrow(name, sb) }
+  else if w == 1 { push_str(sb, "  andi a0, a0, 255\n") }
+  else if w == 2 { push_str(sb, "  slli a0, a0, 48\n  srli a0, a0, 48\n") }
+  else if w == 4 { push_str(sb, "  slli a0, a0, 32\n  srli a0, a0, 32\n") }
+}
 ## CHECKED narrow-width OVERFLOW trap (I11 / CG-6/CG-8) — the RV64 dual of `emit_int_narrow_reg`: the
 ## 64-bit result in a0 must fit the narrow type, else `ebreak`. UNSIGNED `uN` overflows iff any bit above
 ## bit N is set (`srli` nonzero); SIGNED `iN` overflows iff the sign-extension of the low N bits differs
@@ -4674,6 +4686,16 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         push_str(sb, "  ld a0, 0(a0)\n")
       }
       else { push_str(sb, "  ebreak\n") }
+    }
+    ## A preserved bare narrow scalar bitcast restores the target's zero/sign-extended word. Pointer
+    ## and aggregate casts retain the existing fail-loud backend path.
+    Expr::Bitcast(inner, ts, tl) => {
+      if bitcast_target_is_narrow_scalar(src, ts, tl) {
+        emit_rv_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        rv_emit_bitcast_narrow(str_at((src + ts), tl), sb)
+      } else {
+        push_str(sb, "  ebreak # unsupported bitcast\n")
+      }
     }
     Expr::Unchecked(inner) => {
       ov := RV_CHK

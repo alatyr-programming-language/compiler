@@ -351,15 +351,14 @@ pub Expr := enum {
   Lambda(usize, ptr(mut Param), usize, usize, usize, ptr(Expr)),
   ## Reference to a lifted lambda as a value → code pointer `leaq <mod>__lam<fnpos>(%rip)`. Leaf.
   FnRef(usize, usize, usize),
-  ## SUB-WORD pointer `bitcast(ptr(<sub-word scalar>), v)` PRESERVED (not identity-erased) so a
-  ## `deref` LOAD/STORE through it narrows the machine move to the pointee width (`movzbq`/`movb`
-  ## …) instead of a full 8-byte `movq` that would read/clobber the 7 neighbouring bytes. Fields:
-  ## the inner VALUE expr (bitcast is bit-identity, so this node lowers EXACTLY to the inner value —
-  ## transparent to every other pass) and the POINTEE type-name source span `[s, s+n)` (fed to
-  ## `scalar_byte_size`). The parser creates it ONLY for a KNOWN sub-word pointee; a word-sized /
-  ## aggregate / unknown pointee stays identity-erased, so the node NEVER appears in the compiler's
-  ## own reached tree (`src/` reads bytes via `bytes(s)[i]` slice views, not sub-word deref) — the
-  ## fixpoint stays byte-identical.
+  ## A representation-significant `bitcast` is PRESERVED rather than identity-erased. Fields are the
+  ## inner VALUE expr and a target-type source span `[s, s+n)`. A bare narrow scalar target (`u8`,
+  ## `i16`, `bits32`, …) makes the lowerer restore the target's zero/sign-extended machine-word
+  ## representation after evaluating the source. A full `ptr([mut] T)` target lets pointer-specific
+  ## paths recover `T` for sub-word deref loads or aggregate pointee layout. A bare aggregate target
+  ## keeps the existing aggregate reinterpretation inference. Word-sized scalar and unknown targets
+  ## remain identity-erased. The node is transparent only for pointer/aggregate paths; narrow scalar
+  ## nodes are normalized by each backend.
   Bitcast(ptr(Expr), usize, usize),
   ## LOOP-AS-EXPRESSION (Control Flow §3/§6/§7.2): an infinite `loop { … }` used in VALUE position
   ## (`total := loop { … break v … }`). The single field is the body statement-list head (same as

@@ -1,12 +1,8 @@
-## e2e/fmt — `Expr::Bitcast` carries a type span, and the parser fills that span from THREE different
-## surfaces (`p_factor`'s bitcast branch): the POINTEE name of a sub-word `ptr(u8)` (span `u8`), the
-## WHOLE pointer type of `ptr(mut S)` (span `ptr(mut S)`), and the bare TARGET TYPE of an
-## aggregate→aggregate reinterpret `bitcast(B, x)` (span `B`). fmt used to decide by "does the span
-## start with `ptr(`" and put `ptr(…)` round everything that did not — conflating the aggregate target
-## with a sub-word pointee, so the binding that bitcasts to `B` came back as `unchecked bitcast(ptr(B), x)`: a
-## POINTER where a struct value stood. `bitcast_agg2word` ran 42 before a reformat and SEGFAULTED
-## after. The parser's own gate (a bare pointee is preserved only when it is a SUB-WORD SCALAR) is
-## what fmt now mirrors.
+## e2e/fmt — `Expr::Bitcast` carries a complete target span for THREE representation-significant
+## surfaces (`p_factor`'s bitcast branch): a sub-word pointer target `ptr(u8)`, a pointer target such
+## as `ptr(mut S)`, and the bare TARGET TYPE of an aggregate→aggregate reinterpret `bitcast(B, x)`.
+## fmt emits the stored target verbatim, so it cannot conflate a pointer target with an aggregate value
+## target or lose pointer mutability. A bare word-sized scalar target remains identity-erased.
 ##
 ## The `unchecked` marker is recovered too, and NOT invented: the node records nothing about it, and
 ## `unchecked bitcast(B, x)` over a 2-word aggregate is a DIFFERENT program from the plain form today
@@ -14,8 +10,8 @@
 ## itself a silent miscompile.
 ## The three shapes below, in order: `y` is aggregate -> aggregate with the target written BARE and
 ## no `unchecked` marker; `sp` is a POINTER-to-user-type target whose whole `ptr(mut S)` is the span
-## and must come back verbatim; `bp` is a SUB-WORD pointee whose span is the bare `u8`, so the
-## `ptr(…)` around it has to be put back.
+## and must come back verbatim; `bp` is a SUB-WORD pointer target whose complete `ptr(u8)` span also
+## comes back verbatim.
 A := struct { a : u64, b : u64 }
 B := struct { p : u64, q : u64 }
 S := struct { m : u64 }

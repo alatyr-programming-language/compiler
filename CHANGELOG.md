@@ -215,6 +215,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 - `check` now agrees with `build` when rejecting direct multidimensional fixed-array fields.
 - Unified sub-word scalar-width classification across parsing, formatting, lower layout, and WAT so
   `bits8`/`bits16`/`bits32` pointer casts preserve their intended width and format safely.
+- Fixed silent wrong values when equal-width bitcasts target narrow signed, unsigned, or raw scalar
+  types by preserving their low-width representation and canonicalizing the machine word on every
+  backend.
+- The pointee of a `ptr( [mut] T )` bitcast target is now recovered by one bounded, spacing-tolerant
+  parse shared by every backend, so the permitted token spacing inside `ptr( … )` no longer widens a
+  sub-word `deref` to a full machine word; the generic type-argument scan that feeds it is bounded by
+  the published source extent instead of running past the buffer.
 - Fixed ordinary scalar-field structs to use natural byte alignment, padding, and field offsets instead of one machine word per field.
 - Fixed x86_64 silent wrong values when indexing arrays of narrow scalar structs by sharing the byte stride between literal initialization and indexed places.
 - Fixed x86_64 wrong values when indexing a byte slice stored in a struct field by preserving its byte stride and data pointer.

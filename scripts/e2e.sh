@@ -6765,6 +6765,10 @@ check_accept issue372_generic_bitcast_target
 run issue370_bitcast_scalar_arg 42
 check_accept issue370_bitcast_scalar_arg
 build_reject_has reject_issue370_arg_width "bitcast requires equal bit-width"
+## Issue #345 / Types §§3.4, 4.4: equal-width narrow bitcasts canonicalize the destination's
+## low-width representation in both signedness directions; the same fixture also covers bitsN,
+## same-interpretation, and unchecked controls.
+run issue345_narrow_signed_bitcast 42
 run_x86 slice_field_compare 42
 run qualified_value_arg 42
 run cmp_prelude 42
@@ -7248,6 +7252,10 @@ run bitcast_ptr_struct 42
 run bitcast_ptr_struct_deref 42
 run slice_struct_over_arena 42
 run subword_ptr_deref 42
+## Issue #345: the permitted token spacing inside a `ptr( … )` bitcast target must resolve the same
+## one-byte pointee as the canonical spelling. A regressed spelling reads a full word (298) and
+## returns its own code, so this row names which spelling widened rather than only that one did.
+run issue345_ptr_target_spacing 42
 run ptr_ret_infer 42
 run ambient_hashmap_value 42
 run option_map 42
@@ -7422,6 +7430,9 @@ run_a64 wasm_array_index 42
 run_a64 wasm_nested_local 45
 run_a64 wasm_value_match_local_decl 42
 run_a64 cross_match_local 42
+run_a64 issue345_narrow_signed_bitcast 42
+run_rv64 issue345_narrow_signed_bitcast 42
+run_wat issue345_narrow_signed_bitcast 42
 run_a64 raw_asm_a64 42
 run_a64 naked_a64 42
 run_a64 raw_asm_a64_sub 42

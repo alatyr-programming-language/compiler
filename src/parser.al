@@ -1746,9 +1746,9 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         return embed_strlit(pc, pt.start + 1, pt.len - 2)
       }
       ## `bitcast(T, v)` — a same-size reinterpretation (Types/ABI). At the machine level the bits
-      ## are unchanged (a `usize`↔`ptr` / `isize`→`ptr` cast is a register no-op), so it lowers to
-      ## just the VALUE: skip the target type up to the top-level `,` (paren-balanced, since a
-      ## `ptr(mut T)` type holds parens), parse the value, and return it.
+      ## are unchanged, but a narrow scalar target needs its destination representation restored
+      ## after the source value has been widened to the machine word. Preserve that bare target
+      ## span for the lowerer; word-sized and aggregate values can still use the identity path.
       ##
       ## EXCEPTION (soundness): when the target is `ptr( [mut] <sub-word scalar> )` — a pointer to a
       ## 1/2/4-byte scalar — the pointee width is PRESERVED in an `Expr::Bitcast` node so a `deref`
@@ -1757,7 +1757,8 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       ## Only a KNOWN sub-word pointee triggers it, so a word-sized / aggregate / unknown pointee (all
       ## the compiler's own bitcasts) stays identity-erased → the node never appears in the reached
       ## tree → fixpoint-neutral. While scanning the target type, capture the pointee name span (the
-      ## last ident at paren-depth 1 of a `ptr(…)` head).
+      ## last ident at paren-depth 1 of a `ptr(…)` head), while `tgt_s`/`tgt_e` retain the complete
+      ## target text for the formatter and pointer-specific lower paths.
       if str_eq(str_at(pc.src + t.start, t.len), "bitcast") and cur(pc).kind == 10 {
         pc.idx = pc.idx + 1               ## '('
         mut bdepth := 0
@@ -1783,7 +1784,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         bv := p_or(pc)                    ## the value — bitcast is identity (same bits)
         pc.idx = pc.idx + 1               ## ')'
         if sawptr and scalar_width::subword_bytes(pc.src, pps, ppl) != 0 {
-          return newnode(pc.arena, Expr.Bitcast(bv, pps, ppl))
+          return newnode(pc.arena, Expr.Bitcast(bv, tgt_s, tgt_e - tgt_s))
+        }
+        ## A bare narrow scalar target is also representation-significant. The source expression
+        ## already occupies a machine word, so erasing `bitcast(u8, signed_value)` leaves sign bits
+        ## in the result instead of preserving exactly the target's low-byte pattern. Keep the full
+        ## bare target span; the lowerers canonicalize its zero/sign extension per backend.
+        if not sawptr and htl != 0 and scalar_width::subword_bytes(pc.src, hts, htl) != 0 {
+          return newnode(pc.arena, Expr.Bitcast(bv, hts, htl))
         }
         ## An aggregate→aggregate reinterpret to a USER type name (a struct or enum — NOT a scalar,
         ## `str` or `ptr(…)`): PRESERVE the target in an `Expr::Bitcast` carrying the type's own NAME

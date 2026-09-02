@@ -1726,48 +1726,29 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
       push_str(sb, "}")
     }
     Expr::Bitcast(inner, pts, ptl) => {
-      ## A preserved sub-word pointer cast comes from `unchecked bitcast(ptr(<T>), v)`. The node stores
-      ## the inner value plus the pointee type span; re-add the surrounding `unchecked bitcast(ptr(...), ...)`
-      ## surface so a reparse keeps the same narrowing-aware AST node.
-      ## The parser builds this node for THREE different surfaces and the span alone does not say
-      ## which (`p_factor`'s bitcast branch): the POINTEE name for a sub-word `ptr(u8)` (span `u8`),
-      ## the WHOLE pointer type for `ptr(mut Pt)` (span `ptr(mut Pt)`), and the bare TARGET TYPE of an
-      ## aggregate→aggregate reinterpret `bitcast(B, x)` (span `B`). Wrapping the span in `ptr(…)`
-      ## whenever it did not already start with `ptr(` conflated the last two: the aggregate cast
-      ## `y := bitcast(B, x)` came back as `y := unchecked bitcast(ptr(B), x)` — a POINTER where a
-      ## struct value stood, and `bitcast_agg2word` ran 42 before a reformat and SEGFAULTED after.
-      ## The parser's own gate decides: it preserves a bare POINTEE only when that pointee is a
-      ## SUB-WORD SCALAR, so those are exactly the spans that get the `ptr(…)` put back.
-      ## The `mut` marker of a sub-word pointee (`ptr(mut u8)`) is NOT in the node either — the parser
-      ## keeps the bare pointee span — so re-adding a flat `ptr(` dropped it and `bitcast(ptr(mut u8),
-      ## a)` came back `bitcast(ptr(u8), a)`: the same program TODAY (pointer mutability is not yet
-      ## enforced) but a different SOURCE, and a build break the day it is. Recovered by exactly the
-      ## source-scan `Expr::AddrOf` uses for `ptr(mut x)` (`local_is_mut` off the span's own start) —
-      ## and it is sound for the same reason: this branch runs only for a span the parser preserved
-      ## from a `ptr( … )` target, and inside that `ptr(` the only token that can precede the pointee
-      ## is the marker itself. `ptr(u8)` sees `tr(` before the span, so nothing is invented.
+      ## The parser stores the target type VERBATIM for every representation-significant cast: a bare
+      ## narrow scalar (`u8`, `bits16`, …), a complete `ptr([mut] T)`, or a bare aggregate name. Emit
+      ## that span as it stands — reconstructing a `ptr(…)` wrapper around a bare span used to be
+      ## required and is now WRONG, because a bare narrow scalar target and a sub-word POINTEE both
+      ## answer `subword_bytes != 0` and the wrapper would turn `bitcast(u8, x)` into
+      ## `bitcast(ptr(u8), x)` — a pointer where a value stood. The `unchecked` marker is still
+      ## recovered from source context because it is intentionally not stored in the AST node.
       if fmt_bitcast_is_unchecked(src, pts) { push_str(sb, "unchecked ") }
       push_str(sb, "bitcast(")
-      if scalar_width::subword_bytes(src, pts, ptl) != 0 {
-        push_str(sb, "ptr(")
-        if local_is_mut(src, pts) { push_str(sb, "mut ") }
-        push_str(sb, str_at((src + pts), ptl))
-        push_str(sb, ")")
-      } else {
-        ## An aggregate TARGET is recorded as the type's BARE NAME, so a GENERIC INSTANCE target
-        ## (`bitcast(Box(P), p)`, issue #372) keeps its type-arg group only in the SOURCE that
-        ## FOLLOWS that name — exactly like the head of a generic struct literal `Box(P)(v = …)`,
-        ## which this file already renders verbatim up to its field `(`. Re-attach the group the
-        ## same way: `Box` alone would reparse as the UN-instantiated generic (a different, narrower
-        ## layout — the equal-width check then rejects the program), so dropping it would make fmt
-        ## rewrite a working program into a broken one.
-        mut tl2 := ptl
-        if str_at(((src + pts) + ptl), 1) == "(" {
-          te := skip_balanced_group(src, pts + ptl)
-          if te > pts + ptl { tl2 = te - pts }
-        }
-        push_str(sb, str_at((src + pts), tl2))
+      ## An aggregate TARGET is recorded as the type's BARE NAME, so a GENERIC INSTANCE target
+      ## (`bitcast(Box(P), p)`, issue #372) keeps its type-arg group only in the SOURCE that
+      ## FOLLOWS that name — exactly like the head of a generic struct literal `Box(P)(v = …)`,
+      ## which this file already renders verbatim up to its field `(`. Re-attach the group the
+      ## same way: `Box` alone would reparse as the UN-instantiated generic (a different, narrower
+      ## layout — the equal-width check then rejects the program), so dropping it would make fmt
+      ## rewrite a working program into a broken one. A narrow scalar and a `ptr(…)` target are
+      ## both followed by the argument `,`, so neither ever picks up a group here.
+      mut tl2 := ptl
+      if str_at(((src + pts) + ptl), 1) == "(" {
+        te := skip_balanced_group(src, pts + ptl)
+        if te > pts + ptl { tl2 = te - pts }
       }
+      push_str(sb, str_at((src + pts), tl2))
       push_str(sb, ", ")
       emit_fmt_expr(inner, sb, src, a, decls)
       push_str(sb, ")")
