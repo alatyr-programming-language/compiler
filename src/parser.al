@@ -310,7 +310,7 @@ dnode := fn(in out da : rt::Arena, d : Decl) -> usize {
 
 ## Allocate a match `Arm` in the arena and return its handle index (arm lists link via
 ## `next`, like statement lists).
-anode := fn(a : ptr(mut rt::Arena), val : Arm) -> ptr(mut Arm) {
+pub anode := fn(a : ptr(mut rt::Arena), val : Arm) -> ptr(mut Arm) {
   idx := node_alloc(deref(a), 96)
   p := node_ptr(Arm, deref(a), idx)
   deref(p) = val
@@ -784,7 +784,7 @@ pub synth_hof_name := fn(a : ptr(mut rt::Arena), src_int : usize, fnpos : usize,
 
 ## Allocate a `Bind` (match variant-pattern payload binding) in the arena; returns its handle
 ## (binds link via `next`).
-bnode := fn(a : ptr(mut rt::Arena), val : Bind) -> ptr(mut Bind) {
+pub bnode := fn(a : ptr(mut rt::Arena), val : Bind) -> ptr(mut Bind) {
   idx := node_alloc(deref(a), 64)
   p := node_ptr(Bind, deref(a), idx)
   deref(p) = val

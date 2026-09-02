@@ -176,16 +176,7 @@ d_alias_type_head := fn(src : ptr(u8), d : Decl) -> DSpan {
   mut n := 0
   if d.ret_tl != 0 { s = d.ret_ts; n = d.ret_tl }
   else if d.alias_tl != 0 { s = d.alias_ts; n = d.alias_tl }
-  if n == 0 { return DSpan(s = 0, n = 0) }
-  mut e := s
-  while e < s + n and str_at((src + e), 1) != "(" { e += 1 }
-  mut ts := s
-  mut p := s
-  while p + 1 < e {
-    if str_at((src + p), 2) == "::" { ts = p + 2; p += 2 }
-    else { p += 1 }
-  }
-  DSpan(s = ts, n = e - ts)
+  d_type_base_span(src, s, n)
 }
 
 ## Does the declaration set contain the DIRECT enum target head? The scan compares text, because
@@ -1974,6 +1965,455 @@ d_elide_alloc_stmts := fn(head : ptr(mut Stmt), amb : usize, decls : rt::Vec, na
   }
 }
 
+## ---- ITERATOR-DRIVEN `for` (Control Flow §6, Stdlib appendix §2.4) ----------------------------
+## Control Flow §6 binds `for x in iter { … }` to the "structural iterator protocol … defined in the
+## Stdlib appendix §2.4", and §2.4 fixes the two admitted shapes: a type is an **iterator** when it
+## provides `next(in out self) -> Opt` (drive `next`, a present result yields the value, an absent one
+## ends the loop), and a type is **iterable** when its `iter` returns an iterator "or … a **slice
+## `[T]`** (e.g. `Vec`) … so `for` iterates the returned slice directly (the built-in counted loop)".
+##
+## The back ends implement ONLY the counted form, and their iterable arm treats any two-word aggregate
+## as that slice: a `CharIter` (`{ptr : ptr(u8), len : usize, pos : usize}`) therefore ran `len` times —
+## the BYTE count — and read each yielded element as a word out of the string's bytes (#402: `"Aé€😀"`
+## walked 10 times yielding `65, 152, 0, 78, 0, …` instead of the four code points `65, 233, 8364,
+## 128512`). `SplitIter` (8 iterations for 3 pieces) and `HashMapIter` (0 for 2 entries) measured the
+## same way. `next` itself decodes correctly — only the FORM CHOICE was wrong.
+##
+## The choice is a front-end fact, not an emission detail, so it is made ONCE here, on the shared AST,
+## before any back end sees the statement: all four emitters inherit the fix, and none of their counted
+## loops change. A `for` whose iterable resolves to a type that provides `next` is rewritten to the
+## `next`-driven form the appendix specifies:
+##
+##     for x in E { body }
+##  ⇒  mut __forit<N> := E
+##     loop {
+##       __foropt<N> := next(__forit<N>)
+##       match __foropt<N> {
+##         Some(__forpay<N>) => { x := unwrap(<T>, __foropt<N>) ; body }
+##         None              => { break }
+##       }
+##     }
+##
+## The iterable is copied into a fresh mutable temp: `next` takes `in out self`, so the loop needs a
+## PLACE (a call-valued iterable such as `chars(s)` has none), and copying leaves a named iterator
+## variable unadvanced, matching the appendix's `iter` identity, which "Returns a constructor copy".
+## The loop var is bound with `unwrap(T, opt)` rather than from the match payload binding, so it
+## carries the payload TYPE (`u32(c)` on a bare match binding is rejected as a non-scalar operand —
+## a separate pre-existing gap); `T` is read off `next`'s declared `Option(T)` return annotation, a
+## real source span, and §2.3 fixes `Some` = present / `None` = absent for the prelude `Option(T)`.
+##
+## Every synthesized name lives in the AST arena and is addressed as a span relative to the source
+## base, the technique `parser::synth_hof_name` established. `mut ` is materialized IN FRONT of the
+## temp's name so `ast::local_is_mut`'s backwards scan recovers it; the forward-scanning recoveries
+## (`local_type_span`, `local_is_uninit`, `assign_is_reassign`, `compound_assign_op_at`) are bounded
+## by the published source extent, which a synthesized span is outside of, so each of them answers
+## its fail-closed default — no annotation, initialized, a DECLARATION, no compound operator — which
+## is exactly what these two bindings are.
+##
+## A `for` whose iterable type is NOT resolvable, or resolves to a type with no `next`, is left
+## alone: ranges, arrays, slices, str views, array globals and `Vec` (whose `iter` returns a slice)
+## keep the counted loop byte-for-byte. A type that DOES provide `next` but whose overload this
+## slice cannot call (a GENERIC `next(K : type, V : type, in out self)` such as `HashMapIter`'s, or a
+## `next` returning something other than the prelude `Option(T)`) is REJECTED fail-loud rather than
+## silently walked as a slice — a trap is acceptable, a wrong value is not.
+mut D_ITERFOR_N := 0
+
+## The BASE type NAME of a type-reference span: the head up to the first top-level `(` with any `::`
+## path prefix stripped (`base::str::CharIter` → `CharIter`, `Option(char)` → `Option`). One spelling
+## for both sides of every type comparison below; `d_alias_type_head` selects a decl's recorded span
+## and then delegates here.
+d_type_base_span := fn(src : ptr(u8), s : usize, n : usize) -> DSpan {
+  if n == 0 { return DSpan(s = 0, n = 0) }
+  mut e := s
+  while e < s + n and str_at((src + e), 1) != "(" { e += 1 }
+  mut ts := s
+  mut p := s
+  while p + 1 < e {
+    if str_at((src + p), 2) == "::" { ts = p + 2; p += 2 }
+    else { p += 1 }
+  }
+  DSpan(s = ts, n = e - ts)
+}
+
+## The FIRST type ARGUMENT that FOLLOWS a recorded type HEAD span (`Option` + source `(char)` →
+## `char`; `Option(Entry(K, V))` → `Entry(K, V)`); `{0, 0}` when the head carries none. The parser
+## records a fn return type as its HEAD TOKEN (`rt = cur(pc)`, extended only across a `::` path), so
+## the type arguments live in the source right after the span — read there, bounded by the published
+## source extent, the way the rest of this family recovers front-end-only text. Nested parentheses
+## are balanced so a nested instance comes back whole; a trailing whitespace run is trimmed.
+d_type_arg0_span := fn(src : ptr(u8), s : usize, n : usize) -> DSpan {
+  if n == 0 { return DSpan(s = 0, n = 0) }
+  end := ast::src_extent()
+  mut p := s + n
+  while p < end and str_at((src + p), 1) == " " { p += 1 }
+  if p >= end { return DSpan(s = 0, n = 0) }
+  if str_at((src + p), 1) != "(" { return DSpan(s = 0, n = 0) }
+  p += 1
+  while p < end and str_at((src + p), 1) == " " { p += 1 }
+  a0 := p
+  mut depth := 0
+  mut stop := false
+  while p < end and stop == false {
+    c := str_at((src + p), 1)
+    if c == "(" { depth += 1; p += 1 }
+    else if c == ")" { if depth == 0 { stop = true } else { depth -= 1; p += 1 } }
+    else if c == "," and depth == 0 { stop = true }
+    else { p += 1 }
+  }
+  if stop == false { return DSpan(s = 0, n = 0) }
+  if p <= a0 { return DSpan(s = 0, n = 0) }
+  mut e := p
+  while e > a0 and str_at((src + e - 1), 1) == " " { e -= 1 }
+  DSpan(s = a0, n = e - a0)
+}
+
+## The SELF-parameter type of a fn decl: the first parameter whose annotation is not the comptime
+## `type` marker. `next(in out c : CharIter)` → `CharIter`; `next(K : type, V : type, in out it :
+## HashMapIter(K, V))` → `HashMapIter`, so a generic overload is still keyed on its iterator type
+## (and then refused below, because the desugared call site carries no type arguments).
+d_self_param_base := fn(src : ptr(u8), d : Decl) -> DSpan {
+  mut p := d.params_head
+  while unchecked bitcast(usize, p) != 0 {
+    pm := deref(param_p(p))
+    pb := d_type_base_span(src, pm.ts, pm.tl)
+    if pb.n != 0 and str_at((src + pb.s), pb.n) != "type" { return pb }
+    p = pm.next
+  }
+  DSpan(s = 0, n = 0)
+}
+
+## Stdlib appendix §2.4 — does the type named `[ts, ts+tn)` provide `next(in out self)`? Returns that
+## overload's decl index + 1, else 0. Keyed on the SELF parameter's base type name, which is what
+## makes `next` an OVERLOAD SET (`CharIter`, `SplitIter`, `HashMapIter` each declare their own) rather
+## than one function; a slice, array, range or `Vec` matches none of them and keeps the counted loop.
+d_iter_next_decl := fn(decls : rt::Vec, src : ptr(u8), ts : usize, tn : usize) -> usize {
+  mut r := 0
+  mut i := 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d.is_fn and d.name_len != 0 {
+      if str_at((src + d.name_start), d.name_len) == "next" {
+        sb := d_self_param_base(src, d)
+        if sb.n != 0 and streq(src, sb.s, sb.n, ts, tn) { r = i + 1 }
+      }
+    }
+    i = i + 1
+  }
+  r
+}
+
+## A local BINDING's declaration name span plus its initializer expression. The name span is the
+## `mut cur := …` / `cur : CharIter = …` token, not the use site, so a source-recovered annotation is
+## read at the right offset; the initializer types an un-annotated `mut cur := chars(s)`.
+DLocal := struct { ns : usize, nl : usize, init : ptr(Expr) }
+
+## Find local `[vs, vs+vl)`'s binding anywhere in a statement list, nested lists included. A
+## REASSIGNMENT (`cur = …`) is skipped — only a binding introduces the type — and the FIRST binding
+## found wins. `{0, 0, null}` means the function declares no such local, which leaves the caller
+## resolving nothing and the `for` on its existing counted path.
+d_local_binding := fn(head : ptr(mut Stmt), src : ptr(u8), vs : usize, vl : usize, na : ptr(mut rt::Arena)) -> DLocal {
+  mut s := head
+  mut r := DLocal(ns = 0, nl = 0, init = unchecked bitcast(ptr(Expr), 0))
+  while s != 0 {
+    st := deref(stmt_p(Stmt, s))
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if r.nl == 0 and streq(src, ns, nl, vs, vl) and ast::assign_is_reassign(src, ns, nl) == false { r = DLocal(ns = ns, nl = nl, init = v) }
+      }
+      Stmt::If(c, th, el, nx) => {
+        if r.nl == 0 { r0 := d_local_binding(th, src, vs, vl, na); if r0.nl != 0 { r = r0 } }
+        if r.nl == 0 { r1 := d_local_binding(el, src, vs, vl, na); if r1.nl != 0 { r = r1 } }
+      }
+      Stmt::While(c, b, nx) => { if r.nl == 0 { r2 := d_local_binding(b, src, vs, vl, na); if r2.nl != 0 { r = r2 } } }
+      Stmt::Loop(b, nx) => { if r.nl == 0 { r3 := d_local_binding(b, src, vs, vl, na); if r3.nl != 0 { r = r3 } } }
+      Stmt::Unchecked(b, nx) => { if r.nl == 0 { r4 := d_local_binding(b, src, vs, vl, na); if r4.nl != 0 { r = r4 } } }
+      Stmt::AllocWith(ae, b, nx) => { if r.nl == 0 { r5 := d_local_binding(b, src, vs, vl, na); if r5.nl != 0 { r = r5 } } }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if r.nl == 0 { r6 := d_local_binding(fb, src, vs, vl, na); if r6.nl != 0 { r = r6 } } }
+      Stmt::Match(sc, ah, nx) => { if r.nl == 0 { r7 := d_local_binding_arms(ah, src, vs, vl, na); if r7.nl != 0 { r = r7 } } }
+      Stmt::CompIf(c, th, el, nx) => {
+        if r.nl == 0 { r8 := d_local_binding(th, src, vs, vl, na); if r8.nl != 0 { r = r8 } }
+        if r.nl == 0 { r9 := d_local_binding(el, src, vs, vl, na); if r9.nl != 0 { r = r9 } }
+      }
+      Stmt::CompMatch(sc, ah, nx) => { if r.nl == 0 { ra := d_local_binding_arms(ah, src, vs, vl, na); if ra.nl != 0 { r = ra } } }
+      _ => {}
+    }
+    s = d_next_stmt(s, na)
+  }
+  r
+}
+
+## `d_local_binding` across a match arm list — each arm's statement body is an ordinary nested list.
+d_local_binding_arms := fn(ah : ptr(mut Arm), src : ptr(u8), vs : usize, vl : usize, na : ptr(mut rt::Arena)) -> DLocal {
+  mut arm := ah
+  mut r := DLocal(ns = 0, nl = 0, init = unchecked bitcast(ptr(Expr), 0))
+  while arm != 0 {
+    am := deref(arm_p(arm))
+    if r.nl == 0 { rb := d_local_binding(am.body_stmts, src, vs, vl, na); if rb.nl != 0 { r = rb } }
+    arm = am.next
+  }
+  r
+}
+
+## The declared type of PARAMETER `[vs, vs+vl)` of this function, or `{0, 0}`. A `for` over an
+## iterator handed in as a parameter (`fn walk(in out it : CharIter)`) resolves here.
+d_param_type_base := fn(src : ptr(u8), ph : ptr(mut Param), vs : usize, vl : usize) -> DSpan {
+  mut p := ph
+  while unchecked bitcast(usize, p) != 0 {
+    pm := deref(param_p(p))
+    if streq(src, pm.ns, pm.nl, vs, vl) { return d_type_base_span(src, pm.ts, pm.tl) }
+    p = pm.next
+  }
+  DSpan(s = 0, n = 0)
+}
+
+## Does fn/type decl `d` answer to the callee span `[cs, cs+cl)`? A qualified callee splits at its
+## LAST `::` into module head + tail name and must match both (segment-aware, `alloc::vec` ==
+## `alloc__vec`); an unqualified one matches on the name alone. The same rule `d_find_fn_decl` uses,
+## reusable here because this resolution needs arity and overload filtering on top of it.
+d_callee_name_matches := fn(src : ptr(u8), d : Decl, cs : usize, cl : usize) -> bool {
+  cp := d_colon_pos(src, cs, cl)
+  if cp >= 0 {
+    hl := unchecked bitcast(usize, cp)
+    ts := cs + hl + 2
+    tl := cl - hl - 2
+    if str_at((src + d.name_start), d.name_len) != str_at((src + ts), tl) { return false }
+    return d_mod_seg_eq(src, d.mod_start, d.mod_len, cs, hl)
+  }
+  str_at((src + d.name_start), d.name_len) == str_at((src + cs), cl)
+}
+
+## The base name of a CALL's result type. One candidate (name + arity) answers directly; an OVERLOAD
+## SET is disambiguated on argument 0's resolved type against each candidate's self-parameter type,
+## which is what tells the appendix's `iter(CharIter)` and `iter(SplitIter)` apart at `for c in
+## iter(cur)`. A callee naming no function is tried as a constructor `T(…)`, whose result type is `T`.
+## `{0, 0}` means "not resolvable here", and every caller then leaves the statement alone.
+d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : ptr(mut Arg), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : ptr(mut Param), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
+  mut cnt := 0
+  mut hit := 0
+  mut i := 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d.is_fn and d.name_len != 0 and d.arity == nargs and d_callee_name_matches(src, d, cs, cl) { cnt = cnt + 1; hit = i + 1 }
+    i = i + 1
+  }
+  if cnt == 1 {
+    d1 := deref(decl_at(Decl, rt::vec_get(decls, hit - 1)))
+    return d_type_base_span(src, d1.ret_ts, d1.ret_tl)
+  }
+  if cnt > 1 {
+    if unchecked bitcast(usize, ah) == 0 { return DSpan(s = 0, n = 0) }
+    ab := d_expr_type_base(deref(arg_p(ah)).e, decls, src, body, ph, na, depth + 1)
+    if ab.n == 0 { return DSpan(s = 0, n = 0) }
+    mut c2 := 0
+    mut h2 := 0
+    mut j := 0
+    while j < rt::vec_len(decls) {
+      d2 := deref(decl_at(Decl, rt::vec_get(decls, j)))
+      if d2.is_fn and d2.name_len != 0 and d2.arity == nargs and d_callee_name_matches(src, d2, cs, cl) {
+        sb := d_self_param_base(src, d2)
+        if sb.n != 0 and streq(src, sb.s, sb.n, ab.s, ab.n) { c2 = c2 + 1; h2 = j + 1 }
+      }
+      j = j + 1
+    }
+    if c2 != 1 { return DSpan(s = 0, n = 0) }
+    d3 := deref(decl_at(Decl, rt::vec_get(decls, h2 - 1)))
+    return d_type_base_span(src, d3.ret_ts, d3.ret_tl)
+  }
+  mut tk := 0
+  mut k := 0
+  while k < rt::vec_len(decls) {
+    dk := deref(decl_at(Decl, rt::vec_get(decls, k)))
+    if dk.is_fn == false and dk.name_len != 0 and d_callee_name_matches(src, dk, cs, cl) { tk = k + 1 }
+    k = k + 1
+  }
+  if tk == 0 { return DSpan(s = 0, n = 0) }
+  dt := deref(decl_at(Decl, rt::vec_get(decls, tk - 1)))
+  DSpan(s = dt.name_start, n = dt.name_len)
+}
+
+## The base type NAME of an expression's value, for the ONE question this pass asks: does the
+## iterable provide `next`? Only the forms a `for` iterable is actually written in are resolved — a
+## parameter, a local (its annotation, else its initializer), a constructor literal, and a call — and
+## anything else answers `{0, 0}`, which keeps the existing counted loop. The depth cap bounds the
+## local-initializer chain.
+d_expr_type_base := fn(e : ptr(Expr), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : ptr(mut Param), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
+  if depth > 4 { return DSpan(s = 0, n = 0) }
+  if unchecked bitcast(usize, e) == 0 { return DSpan(s = 0, n = 0) }
+  mut r := DSpan(s = 0, n = 0)
+  match deref(e) {
+    Expr::Var(vs, vl) => {
+      pb := d_param_type_base(src, ph, vs, vl)
+      if pb.n != 0 { r = pb }
+      else {
+        lb := d_local_binding(body, src, vs, vl, na)
+        if lb.nl != 0 {
+          lts := ast::local_type_span(src, lb.ns, lb.nl)
+          if lts.n != 0 { r = d_type_base_span(src, lts.s, lts.n) }
+          else if unchecked bitcast(usize, lb.init) != 0 { r = d_expr_type_base(lb.init, decls, src, body, ph, na, depth + 1) }
+        }
+      }
+    }
+    Expr::StructLit(sns, snl, snn, sah) => { r = d_type_base_span(src, sns, snl) }
+    Expr::Call(cs, cl, cnn, cah) => { r = d_call_ret_base(cs, cl, cnn, cah, decls, src, body, ph, na, depth) }
+    Expr::Unchecked(inner) => { r = d_expr_type_base(inner, decls, src, body, ph, na, depth + 1) }
+    _ => {}
+  }
+  r
+}
+
+## A synthesized identifier for the desugar, materialized in the AST arena and handed back as a span
+## RELATIVE to the source base — the addressing `parser::synth_hof_name` established, so every span
+## consumer (`streq`, `str_at`, the slot binders) reads it exactly like a source name. `pre` is
+## emitted BEFORE the name and excluded from the span, which is how `mut ` reaches
+## `ast::local_is_mut`'s backwards scan without becoming part of the identifier.
+d_iterfor_name := fn(a : ptr(mut rt::Arena), src_int : usize, pre : str, name : str, n : usize, lenout : ptr(mut usize)) -> usize {
+  mut sb := rt::strbuf(deref(a), 64)
+  rt::push_str(sb, pre)
+  rt::push_str(sb, name)
+  total := rt::push_int(sb, i64(n))
+  base_abs := unchecked bitcast(usize, rt::strbuf_base(sb))
+  deref(lenout) = total - pre.len
+  unchecked ((base_abs + pre.len) - src_int)
+}
+
+## A synthesized fixed identifier (`next`, `unwrap`, `Some`, `None`) in the AST arena, addressed the
+## same way. The callee spellings are UNQUALIFIED on purpose: Stdlib §1 injects the base prelude
+## unqualified, and a program's own iterator declares its `next` in the program's own module, so both
+## resolve the way the hand-written driver `next(cursor)` does. An iterator whose `next` is neither
+## visible nor in scope makes the desugared call FAIL TO RESOLVE — a rejected build, never a wrong
+## value.
+d_iterfor_lit := fn(a : ptr(mut rt::Arena), src_int : usize, name : str, lenout : ptr(mut usize)) -> usize {
+  mut sb := rt::strbuf(deref(a), 32)
+  total := rt::push_str(sb, name)
+  base_abs := unchecked bitcast(usize, rt::strbuf_base(sb))
+  deref(lenout) = total
+  unchecked (base_abs - src_int)
+}
+
+## Rewrite ONE iterable-form `for` into the `next`-driven loop (the shape in this band's block
+## comment). The `for` node itself is OVERWRITTEN with the temp binding so the list predecessor's
+## `next` link stays valid without a second pass; the loop, the `next` call, the match and the
+## loop-var binding hang off it, and the original body is spliced in behind the binding.
+d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut Stmt), nx : ptr(mut Stmt), pays : usize, payl : usize, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  src_int := unchecked bitcast(usize, src)
+  n := D_ITERFOR_N
+  D_ITERFOR_N = D_ITERFOR_N + 1
+  mut itl := 0
+  its := d_iterfor_name(na, src_int, "mut ", "__forit", n, ptr(itl))
+  mut opl := 0
+  ops := d_iterfor_name(na, src_int, "", "__foropt", n, ptr(opl))
+  mut pyl := 0
+  pys := d_iterfor_name(na, src_int, "", "__forpay", n, ptr(pyl))
+  mut nxl := 0
+  nxs := d_iterfor_lit(na, src_int, "next", ptr(nxl))
+  mut uwl := 0
+  uws := d_iterfor_lit(na, src_int, "unwrap", ptr(uwl))
+  mut sml := 0
+  sms := d_iterfor_lit(na, src_int, "Some", ptr(sml))
+  mut nol := 0
+  nos := d_iterfor_lit(na, src_int, "None", ptr(nol))
+  ## `x := unwrap(<T>, __foropt<N>)` in front of the author's body
+  uwa1 := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(ops, opl)), next = ast::arg_null()))
+  uwa0 := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(pays, payl)), next = uwa1))
+  bindst := parser::snode(na, Stmt.Assign(fns, fnl, parser::newnode(na, Expr.Call(uws, uwl, 2, uwa0)), fb))
+  ## §2.3 — `Some` is present (yield and continue), `None` is absent (leave the loop)
+  dummy := parser::newnode(na, Expr.Num(0, 0, 0))
+  brk := parser::snode(na, Stmt.Break(unchecked bitcast(ptr(Expr), 0), 0, ast::stmt_null()))
+  armn := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = ast::arm_null(), vs = nos, vl = nol, binds_head = unchecked bitcast(ptr(mut Bind), 0), body_stmts = brk, hi = 0))
+  bh := parser::bnode(na, Bind(ns = pys, nl = pyl, next = unchecked bitcast(ptr(mut Bind), 0)))
+  arms := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = armn, vs = sms, vl = sml, binds_head = bh, body_stmts = bindst, hi = 0))
+  mst := parser::snode(na, Stmt.Match(parser::newnode(na, Expr.Var(ops, opl)), arms, ast::stmt_null()))
+  ## `__foropt<N> := next(__forit<N>)`, then the match — both inside the loop
+  nca := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(its, itl)), next = ast::arg_null()))
+  ost := parser::snode(na, Stmt.Assign(ops, opl, parser::newnode(na, Expr.Call(nxs, nxl, 1, nca)), mst))
+  lst := parser::snode(na, Stmt.Loop(ost, nx))
+  ## `@label(name) for …` labels the LOOP; move the mark off the node that becomes the binding so a
+  ## labeled `break name` still resolves and the binding does not inherit a control label.
+  ls := ast::stmt_label_span(s)
+  if ls.n != 0 { ast::stmt_label_mark(lst, ls.s, ls.n); ast::stmt_label_mark(s, 0, 0) }
+  deref(stmt_p(Stmt, s)) = Stmt.Assign(its, itl, flo, lst)
+}
+
+## Decide the FORM of one iterable-form `for` (Stdlib appendix §2.4) and desugar it when the iterable
+## is an ITERATOR. An unresolvable iterable type, or one that provides no `next`, keeps the counted
+## loop untouched — that is every range, array, slice, str view, array global and `Vec` in the tree.
+## A type that DOES provide `next` but in a shape this desugar cannot call is refused fail-loud: the
+## counted loop is a measured wrong value for exactly those types, and a trap beats a wrong value.
+d_iterfor_try := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut Stmt), nx : ptr(mut Stmt), body : ptr(mut Stmt), ph : ptr(mut Param), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  tb := d_expr_type_base(flo, decls, src, body, ph, na, 0)
+  if tb.n == 0 { return }
+  ni := d_iter_next_decl(decls, src, tb.s, tb.n)
+  if ni == 0 { return }
+  nd := deref(decl_at(Decl, rt::vec_get(decls, ni - 1)))
+  if nd.is_generic {
+    panic("selfhost: `for x in <iterator>` whose `next` is GENERIC (`next(K : type, …, in out self)`, e.g. `alloc::hashmap::HashMapIter`) is not lowered — the desugared call site carries no type arguments. Drive it explicitly: `loop { match next(K, V, it) { … } }`. [fail-loud guard: the counted slice loop walks the wrong count and yields raw words]")
+  }
+  rb := d_type_base_span(src, nd.ret_ts, nd.ret_tl)
+  if rb.n == 0 or str_at((src + rb.s), rb.n) != "Option" {
+    panic("selfhost: `for x in <iterator>` whose `next` does not return the prelude `Option(T)` is not lowered — Stdlib appendix §2.3 fixes `Some`/`None` as the optional shape this desugar matches on. Drive `next` explicitly. [fail-loud guard: never the counted slice loop]")
+  }
+  pay := d_type_arg0_span(src, nd.ret_ts, nd.ret_tl)
+  if pay.n == 0 {
+    panic("selfhost: `for x in <iterator>` whose `next` returns a bare `Option` with no type argument is not lowered — the loop variable has no payload type to bind. [fail-loud guard: never the counted slice loop]")
+  }
+  d_iterfor_rewrite(s, fns, fnl, flo, fb, nx, pay.s, pay.n, src, na)
+}
+
+## Walk one statement list and desugar every iterable-form `for` in it. `body`/`ph` stay the ENCLOSING
+## FUNCTION's body head and parameter list — the scope the iterable's type is resolved against — while
+## `head` descends. The next link is captured BEFORE the rewrite, so the walk continues past the
+## statement the `for` became instead of re-entering the loop it just built. A nested `for` is
+## desugared first (bottom-up), so an outer rewrite splices an already-final body.
+d_iterfor_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), ph : ptr(mut Param), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  mut s := head
+  while s != 0 {
+    nxt := d_next_stmt(s, na)
+    st := deref(stmt_p(Stmt, s))
+    match st {
+      Stmt::For(fns, fnl, flo, fhi, fb, fnx) => {
+        d_iterfor_stmts(fb, body, ph, decls, src, na)
+        if unchecked bitcast(usize, fhi) == 0 { d_iterfor_try(s, fns, fnl, flo, fb, fnx, body, ph, decls, src, na) }
+      }
+      Stmt::If(c, th, el, inx) => { d_iterfor_stmts(th, body, ph, decls, src, na); d_iterfor_stmts(el, body, ph, decls, src, na) }
+      Stmt::While(c, wb, wnx) => { d_iterfor_stmts(wb, body, ph, decls, src, na) }
+      Stmt::Loop(lb, lnx) => { d_iterfor_stmts(lb, body, ph, decls, src, na) }
+      Stmt::Unchecked(ub, unx) => { d_iterfor_stmts(ub, body, ph, decls, src, na) }
+      Stmt::AllocWith(ae, ab, anx) => { d_iterfor_stmts(ab, body, ph, decls, src, na) }
+      Stmt::Match(sc, mah, mnx) => { d_iterfor_arms(mah, body, ph, decls, src, na) }
+      Stmt::CompIf(cc, cth, cel, cnx) => { d_iterfor_stmts(cth, body, ph, decls, src, na); d_iterfor_stmts(cel, body, ph, decls, src, na) }
+      Stmt::CompFor(cvs, cvl, civ, cfb, cfnx) => { d_iterfor_stmts(cfb, body, ph, decls, src, na) }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb2, rnx) => { d_iterfor_stmts(rb2, body, ph, decls, src, na) }
+      Stmt::CompMatch(csc, cah, cmnx) => { d_iterfor_arms(cah, body, ph, decls, src, na) }
+      _ => {}
+    }
+    s = nxt
+  }
+}
+
+## `d_iterfor_stmts` across a match arm list.
+d_iterfor_arms := fn(ah : ptr(mut Arm), body : ptr(mut Stmt), ph : ptr(mut Param), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  mut arm := ah
+  while arm != 0 {
+    am := deref(arm_p(arm))
+    d_iterfor_stmts(am.body_stmts, body, ph, decls, src, na)
+    arm = am.next
+  }
+}
+
+## Entry point: choose the `for` FORM for every function in the program, once, on the shared AST.
+## Runs beside `d_lift_lambdas` in each front-end path, so all four back ends (x86_64 GAS, aarch64,
+## riscv64, WAT) receive the already-decided statement and none of them needs an iterator arm. The
+## formatter's path deliberately does NOT run it — `fmt` must reprint the author's `for`, not this
+## desugar.
+d_desugar_iter_for := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut i := 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d.is_fn { d_iterfor_stmts(d.body_stmts, d.body_stmts, d.params_head, decls, src, na) }
+    i = i + 1
+  }
+}
+
 ## Entry point: scan every fn decl (incl. synthetic ones appended during the walk — the loop re-reads
 ## the count) for lambdas. Require-typed aliases are not functions, but their inline predicate is an
 ## Expr::Lambda stored in `Decl.value`, so lift that value too. Reads decls the WORKING driver way
@@ -2052,6 +2492,7 @@ pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
   ## label is `main__main` (the `main` fn in the `main` module — or in the implicit default
   ## module, which lower maps to the `main` prefix), so a single-source program still works.
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
+  d_desugar_iter_for(decls, ptr(na), base)
   mut sb := strbuf::strbuf(tar, 4194304)
   ## Synthesize the `_start` → `main` wrapper ONLY when the program does not define its own `_start`
   ## (else the lower emits the user's `_start` as the ELF entry — a synthesized one would duplicate it).
@@ -2234,6 +2675,7 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
     k += 1
   }
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
+  d_desugar_iter_for(decls, ptr(na), base)
   ## --- emit the runnable program (bld stays alive: emit reads spans off its base) ---
   mut gas := strbuf::strbuf(tar, 16777216)
   strbuf::push_str(gas, ".global _start\n_start:\n  call main__main\n  movq %rax, %rdi\n  movq $60, %rax\n  syscall\n")
@@ -4007,6 +4449,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   }
   if root_k < n { d_manifest_drop_root_decl(decls, rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k)) }
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
+  d_desugar_iter_for(decls, ptr(na), base)
   d_manifest_module_decls(pv, name_start, name_len, decls, na, tar, nstr)
   d_manifest_rewrite_decls(decls, pv, name_start, name_len, base, nstr, ptr(na))
   ## TOOL-6 — lower groups the final declaration vector, including manifest/synthetic declarations, by
@@ -4978,6 +5421,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## normalization or backend emission. This multi-file path previously passed Expr::Lambda
   ## through unchanged, while compile/compile_program/compile_files_mode all lift exactly once.
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
+  d_desugar_iter_for(decls, ptr(na), base)
   ## §5.1 fill omitted trailing parameter-defaults (same filler the x86_64 emit runs) so defaults are
   ## uniform across backends. No-op for a program with no defaults.
   lower::fill_program(ptr(decls), base, ptr(na))
@@ -5644,6 +6088,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   if perr { return 9 }
   if root_k < n { d_manifest_drop_root_decl(decls, rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k)) }
   d_lift_lambdas(decls, ptr(na), ptr(tar), base)
+  d_desugar_iter_for(decls, ptr(na), base)
   d_manifest_module_decls(pv, name_start, name_len, decls, na, tar, nstr)
   d_manifest_rewrite_decls(decls, pv, name_start, name_len, base, nstr, ptr(na))
   d_manifest_set_sema_modules(pv, name_start, name_len, tar)

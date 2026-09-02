@@ -8,10 +8,12 @@
 ## UFCS spellings resolve through the unqualified base injection and already compiled on the parent,
 ## so they are conformance coverage of the specified spelling, not the red measurement.
 ##
-## `for c in s.chars()` is NOT exercised here: it compiles and walks the BYTE length, yielding
-## garbage code points. That is a separate silent-wrong-value defect, present on the parent with a
-## hand-built `CharIter` too, and independent of visibility; it is filed and recorded in the PR body.
-## Representation and decoding are unchanged.
+## `for c in chars(s)` / `for c in s.chars()` ARE exercised now (#363 acceptance criterion 1, which
+## #402 blocked): until #402 the loop compiled and walked the BYTE length, yielding garbage code
+## points. Control Flow §6 binds `for` to the Stdlib appendix §2.4 iterator protocol, and §2.4 makes
+## a type an iterator when it provides `next(in out self) -> Opt`; `test/iter_for_chars.al` owns the
+## single-file measurement, and these two rows prove the loop reaches the protocol from an EXTERNAL
+## package through the published surface. Representation and decoding are unchanged.
 
 main := fn() -> u64 {
   s := "Aé€😀"
@@ -42,6 +44,27 @@ main := fn() -> u64 {
   b1 := unwrap(char, next(b))
   if u32(b0) != 65 or u32(b1) != 233 { return 6 }
   if b.pos != 3 { return 7 }
+
+  ## #363 criterion 1 — the `for` spelling, from outside `lib/base/str.al`, over the four code
+  ## points of a string that mixes 1-, 2-, 3- and 4-byte encodings. Each index is checked on its own
+  ## and every rejection code is distinct, so no total can alias a pass.
+  mut i : u64 = 0
+  for c in chars(s) {
+    if i == 0 and u32(c) != 65 { return 8 }
+    if i == 1 and u32(c) != 233 { return 9 }
+    if i == 2 and u32(c) != 8364 { return 10 }
+    if i == 3 and u32(c) != 128512 { return 11 }
+    i = i + 1
+  }
+  if i != 4 { return 12 }
+
+  mut j : u64 = 0
+  for c in s.chars() {
+    if j == 0 and u32(c) != 65 { return 13 }
+    if j == 3 and u32(c) != 128512 { return 14 }
+    j = j + 1
+  }
+  if j != 4 { return 15 }
 
   42
 }
