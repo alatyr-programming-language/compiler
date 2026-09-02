@@ -48,14 +48,22 @@ pub from_str := fn(a : ptr(mut Arena), t : str) -> String {
   strbuf::by_value(s)
 }
 
-## Append a string's UTF-8 bytes, returning the new byte length or `AllocError`.
+## Append a string's UTF-8 bytes, returning the **new byte length** or `AllocError`
+## (Stdlib appendix §6: "a fallible mutator with no natural result carries a `usize`
+## count in its `Ok` arm — the new length for `push`/`push_str`"). `strbuf`'s own
+## `push_str` reports the number of bytes it appended, which is the buffer writer's
+## convention and not `String`'s, so the count is re-read from the buffer here.
 pub push_str := fn(in out s : String, t : str) -> Result(usize, AllocError) {
-  strbuf::push_str(s, t)
+  strbuf::push_str(s, t)?
+  Result(usize, AllocError).Ok(s.len)
 }
 
-## Append one `char` as its UTF-8 bytes, returning the new byte length or `AllocError`.
+## Append one `char` as its UTF-8 bytes, returning the **new byte length** or
+## `AllocError` (Stdlib appendix §6, as for `push_str`). `strbuf::push_char` reports
+## the UTF-8 encoding width it wrote, so the new length is re-read from the buffer.
 pub push := fn(in out s : String, c : char) -> Result(usize, AllocError) {
-  strbuf::push_char(s, c)
+  strbuf::push_char(s, c)?
+  Result(usize, AllocError).Ok(s.len)
 }
 
 ## The byte length — a non-consuming scoped-reference read (`s.len()` via auto-ref;

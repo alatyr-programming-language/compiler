@@ -6912,6 +6912,12 @@ run math_sqrt 42
 ## stem/is_absolute across trailing-slash, dotless, and leading-dot cases.
 run std_path 42
 run ambient_string 42
+## #355 alloc::string::push / push_str report the NEW byte length (Stdlib appendix §6: a fallible
+## mutator with no natural result carries a usize count in its Ok arm — the new length), not the
+## number of bytes appended. Both forwarded alloc::strbuf, whose writers report what they wrote.
+## Rows cover repeated appends, an EMPTY push_str (unchanged length, not 0), the 1/2/3/4-byte UTF-8
+## char widths, a growth across a reallocation, and a char as the first append.
+run issue355_string_push_len 42
 ## alloc::vec accessors: at (bounds-checked Option read), first/last, swap_remove (O(1) unordered).
 run vec_access 42
 ## #354 alloc::vec::reserve is fallible: a request that cannot be represented in `usize` returns

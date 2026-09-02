@@ -82,6 +82,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `alloc::string::push` and `alloc::string::push_str` now report the **new byte length** of the
+  string in their `Ok` arm, as the Stdlib appendix requires, instead of the number of bytes they
+  appended: appending a 1-byte `char` to a 2-byte string answers `Ok(3)`, not `Ok(1)`, and
+  `push_str("")` answers the unchanged length rather than `Ok(0)`. `AllocError` propagation and
+  `alloc::strbuf`'s own appended-count convention are unchanged.
 - A parenthesized generic type instance now works as a `bitcast` target: `unchecked bitcast(Box(P), p)`
   keeps the instantiated layout of `Box(P)` and moves the whole equal-width image on x86_64, instead of
   erasing the target so that every field of the bound local read zero. `alatyr fmt` keeps the type-arg
