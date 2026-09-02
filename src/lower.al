@@ -55,7 +55,7 @@ ecallee_is := ast::ecallee_is
 ## the WHOLE assignment subsystem in one leaf rather than two files a lane must own together.
 ## Each is called from exactly ONE place (`emit_stmts`); the bare-name import keeps that call site
 ## unchanged and the boundary `@inline`-transparent.
-(emit_packed_load, emit_packed_load_rax, emit_packed_store_rax, emit_packed_assign, emit_struct_assign, emit_standard_value, emit_standard_copy, emit_st_field_assign, emit_st_deref_assign, emit_st_field_path_assign, emit_st_index_field_assign, emit_st_index_assign, emit_st_assign) := assign
+(emit_packed_load, emit_packed_load_rax, emit_packed_store_rax, emit_packed_assign, emit_struct_assign, emit_standard_value, emit_standard_copy, emit_st_field_assign, emit_st_deref_assign, emit_st_field_path_assign, emit_st_index_field_assign, emit_st_index_assign, emit_st_assign, aggregate_bitcast_width_bytes) := assign
 ## FN-6 CALLS THROUGH A FUNCTION VALUE (`src/lower/fnval.al`) — a CHILD module under MOD-12; the seven
 ## `FNVR_*` memo globals travelled WITH it (nothing outside the band named them). Imported by BARE NAME.
 (fnty_skip_ws, fnty_ret_span, fnval_ty_pos, ind_call_ret_span, ind_call_ret_enum, ind_call_ret_struct_words, fnfield_call_ret_span, fnfield_call_ret_enum, fnval_call_ret_float, fnval_param_fmask, emit_ecallee_call, call_has_float_param, call_param_is_float, fn_field_call_ret_float, dyn_user_arg_is_float, lam_cap_is_float, fn_field_param_fmask) := fnval
@@ -3945,6 +3945,35 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   }
   if fixed_array_ret_call(e, cx.decls, cx.src, a) {
     panic("selfhost: a fixed-array return cannot be passed as an aggregate argument yet; only a direct [u8; N] return carrier with 1 <= N <= 8 is supported")
+  }
+  ## Types §§3.4, 4.4 and Memory §5.9 — an equal-width aggregate `bitcast` used DIRECTLY as a
+  ## by-value aggregate ARGUMENT (`consume(bitcast(B3, a))`). The parser preserves a bare user-struct
+  ## target as `Expr::Bitcast` (optionally under `unchecked`) and no probe above claimed that node, so
+  ## the argument fell through to the SCALAR default at the bottom of this function: `emit_gas` pushed
+  ## the source's word 0 as a VALUE and the callee — whose aggregate parameter is by-REFERENCE —
+  ## dereferenced that word as the block address, so the source's FIRST FIELD became a pointer
+  ## (issue #370: the reproducer died with exit 139). A bitcast is the identity ON THE BLOCK, so what the callee must receive is the SOURCE
+  ## aggregate's own block: take exactly the address the same call with the bitcast removed (`f(x)`)
+  ## takes, through the one `emit_agg_base_addr` every by-ref aggregate argument in this function
+  ## already rides — a LOCAL yields `leaq` of its word 0, a by-ref PARAM the pointer it holds. The
+  ## equal bit-width contract is measured with `aggregate_bitcast_width_bytes`, the SAME decision the
+  ## binding arms use, so a `@packed` operand is compared by exact byte width; a non-VAR source or a
+  ## violated width fails LOUD rather than passing part of a value. Neutral for the self-build:
+  ## `src/` bitcasts only to scalars and pointers, never to a struct.
+  bta := bitcast_struct_target(e, cx.decls, cx.src)
+  if bta.n != 0 {
+    binner := bitcast_inner_expr(e)
+    bia := var_agg_info(binner, cx.slots, cx.src)
+    if bia.ek != 2 { panic("selfhost: an aggregate bitcast passed as a call ARGUMENT expects a struct VARIABLE source (bitcast of a call/expression result is not lowered — bind the source to a local first)") }
+    if aggregate_bitcast_width_bytes(cx.decls, cx.src, bia.s, bia.n, a) != aggregate_bitcast_width_bytes(cx.decls, cx.src, bta.s, bta.n, a) {
+      lower_show_src_line(cx.src, bta.s)
+      panic("selfhost: aggregate bitcast between structs of different bit width (bitcast requires equal bit-width)")
+    }
+    bsv := var_name_span(binner)
+    bsent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bsv.s, bsv.n)))
+    emit_agg_base_addr(bsent, sb)
+    push_str(sb, "  pushq %rax\n")
+    return
   }
   ## STRUCT/ENUM CTOR argument (a non-place `S(…)` / `E.V(…)`): materialize it into the agg-temp
   ## block (it has no frame home), then push the block's word-0 ADDRESS — by reference, exactly

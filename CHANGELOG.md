@@ -82,6 +82,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- An equal-width aggregate `bitcast` used directly as a by-value struct ARGUMENT
+  (`consume(bitcast(B, a))`) now passes the source aggregate's own block on x86_64 instead of passing
+  its first word as a scalar, which the callee dereferenced as the block address — the reproducer
+  died with a segmentation fault. An unequal bit width or a non-variable source in that position is
+  rejected with a located diagnostic, and unsupported non-x86 aggregate bitcasts stay fail-loud.
 - `alatyr fmt` now keeps the qualifier an enum-variant pattern was written with: `Result::Ok(h)` and
   `AllocError.OutOfMemory` come back qualified in both the expression- and statement-form arm
   renderers, instead of as a bare `Ok(h)` / `OutOfMemory`; a pattern written bare stays bare. The
