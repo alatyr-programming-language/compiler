@@ -82,6 +82,19 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `for x in <iterator>` now drives `next` instead of counting the iterable's first two words, so
+  `for c in chars(s)` / `for c in s.chars()` walk a string's **code points** and `for part in`
+  a `SplitIter` walks its pieces. Every spelling used to compile and run the backing view's BYTE
+  length while yielding neither the code points nor the raw bytes — `"Aé€😀"` (4 code points,
+  10 bytes) iterated 10 times and answered `65, 152, 0, 78, 0, 0, 0, 0, 0, 0` — and `next` was never
+  called. The loop drives a copy, so a named iterator variable is not advanced behind your back, and
+  the loop variable carries the payload type. A range, array, slice, `str` view, array global or
+  `Vec` keeps the counted loop unchanged. An iterator whose `next` this form cannot yet call — a
+  generic `next(K : type, …)`, as `alloc::hashmap::HashMapIter` declares, or a `next` that does not
+  return `Option(T)` — is now **refused with a located diagnostic** instead of walked as a slice;
+  drive it explicitly. One spelling is still wrong for an unrelated reason: `for c in iter(cur)`
+  binds its iterator from an overloaded call, and such a binding is typed from the wrong overload
+  (see the open follow-up), so it decodes with the wrong `next`.
 - `std::os::env` now reads the complete process environment through the same growable
   `alloc::strbuf` image `std::os::args` uses, so a present variable whose value crosses the staging
   boundary is returned in full instead of appearing absent, and an exhausted allocator or failed read
@@ -89,8 +102,6 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 - `base::str` now publishes the `chars`, `iter`, and `next` functions required to consume the
   specification's `CharIter` protocol from an external package, in the qualified, bare and UFCS
   spellings; its representation and decoding behavior are unchanged, and `char_byte` stays private.
-  The `for c in chars(s)` spelling still walks the byte length and yields garbage code points — a
-  separate lowering defect, unrelated to visibility; drive `next` explicitly until it is fixed.
 - Packed `[u8; N]` returns now extend to two machine words: a return of `N = 9..16` bytes is carried
   in two registers, indexed both after binding and directly on x86_64 and read directly on AArch64,
   and composes with fixed-array forwarding and fixed-array arguments on x86_64. `N = 1..8` keeps its

@@ -6299,6 +6299,16 @@ run_x86_trap chariter_truncated_lead 132
 ## The invalid lead is a library validity failure (`panic`/exit 1), not the architecture's direct bounds trap.
 run_x86 chariter_invalid_ff 1
 run chariter_valid_utf8 42
+# Issue #402 / Control Flow §6 + Stdlib appendix §2.4 — `for` over a type that provides
+# `next(in out self) -> Opt` must DRIVE `next`, not count the backing view. The parent walked the
+# byte length (10 for four code points) and yielded garbage; `iter_for_split` is the same class on
+# the base library's second iterator. Cross-target rows: the form is chosen once in the shared front
+# end, so every back end inherits it.
+run iter_for_chars 42
+run iter_for_split 42
+# A `next` this desugar cannot call (a GENERIC `next(K : type, …)`, `alloc::hashmap::HashMapIter`)
+# must be REFUSED, never walked as a slice: the parent built it and ran the body zero times.
+build_reject_has reject_for_generic_iter_next "carries no type arguments"
 ## Variadic print must resolve indexed values and indexed call arguments to the same concrete
 ## `print_one__T` instance in the mono pre-pass and the emit pass.
 run_x86 variadic_print_index 42
