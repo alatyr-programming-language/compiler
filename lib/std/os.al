@@ -72,6 +72,7 @@ pub free := fn(a : OsArena) -> isize {
 ## Returns the byte count read (`0` if the source could not be opened/read).
 ## Reuses the `std::io` file surface (which NUL-terminates the path internally).
 cmdline_path := fn() -> str { return "/proc/self/cmdline" }
+environ_path := fn() -> str { return "/proc/self/environ" }
 
 pub read_cmdline := fn(buf : ptr(mut u8), cap : usize) -> usize {
   path := cmdline_path()
@@ -93,9 +94,11 @@ pub read_cmdline := fn(buf : ptr(mut u8), cap : usize) -> usize {
 
 ## Read the process's environment into `buf` (up to `cap` bytes): each entry
 ## `NAME=VALUE`, **NUL-separated** (Linux `/proc/self/environ`). Returns the
-## byte count read.
+## byte count read. This is deliberately **one bounded read**, the counterpart of
+## `read_cmdline`: a caller that needs the complete image repeats reads until EOF
+## (as the allocating `env` does).
 pub read_environ := fn(buf : ptr(mut u8), cap : usize) -> usize {
-  path : str = "/proc/self/environ"
+  path := environ_path()
   of := io::open(path, 0)
   mut got : usize = 0
   match of {
@@ -206,24 +209,61 @@ pub env_lookup := fn(base : ptr(u8), len : usize, name : str) -> Option(Slice(u8
 ## (the OS image is trusted UTF-8; a checked, validating construction is additive).
 
 ## `env(allocator, name) -> Option(str)` (Stdlib §7): the value of environment
-## variable `name`, or `None`. Copies `/proc/self/environ` into the arena, scans
-## for the matching `NAME=VALUE` entry (`env_lookup`), and returns its value bytes
-## as a `str` view into the arena.
+## variable `name`, or `None`. Copies the **complete** `/proc/self/environ` image
+## into the arena, scans for the matching `NAME=VALUE` entry (`env_lookup`), and
+## returns its value bytes as a `str` view into the arena.
+##
+## `Option(str)` has no error arm, so `None` can only mean *no such variable*
+## (Stdlib §7 defines the result as the variable's value). A short read or an
+## exhausted allocator must therefore never be folded into `None`; like `args`
+## this **traps** on those (the trapping convenience; the recoverable form is
+## additive). The growable image is `alloc::strbuf`, exactly as in `args`, so the
+## grow-until-EOF decision lives in one place.
 pub env := fn(a : ptr(mut Arena), name : str) -> Option(str) {
-  cap : usize = 32768
-  ra := allocate(deref(a), u8, cap, 1)
-  mut bidx : usize = 0
-  mut ok : bool = false
-  match ra {
-    Result::Ok(h) => { bidx = h.idx; ok = true }
-    Result::Err(e) => { ok = false }
+  ## Keep the initial allocation small, but retain and grow the copied image until
+  ## the open file reports EOF. `read_environ` remains the explicit up-to-cap
+  ## low-level helper; the allocating API owns the completeness guarantee.
+  mut data := alloc::strbuf::strbuf(a, 65536)
+  path := environ_path()
+  of := io::open(path, 0)
+  match of {
+    Result::Ok(f) => {
+      mut done : bool = false
+      while not done {
+        chunk : usize = 8192
+        alloc::strbuf::reserve(data, chunk).expect("env: allocator out of memory")
+        base := unchecked bitcast(usize, alloc::strbuf::strbuf_base(data))
+        dst := unchecked bitcast(ptr(mut u8), base + data.len)
+        ## Named `rd`, not `r`: the lookup's `Option(Slice(u8))` below is a sibling-scope
+        ## local, and re-declaring one name at two nesting levels with two different enum
+        ## types currently miscompiles the later `match` (issue #406). Distinct names are
+        ## the right code here regardless; the compiler defect is tracked separately.
+        rd := io::file_read(f, dst, chunk)
+        match rd {
+          Result::Ok(nr) => {
+            if nr == 0 {
+              done = true
+            } else {
+              data.len = data.len + nr
+            }
+          }
+          Result::Err(e) => {
+            cc := io::file_close(f)
+            alloc::strbuf::strbuf_free(data)
+            assert(false)
+          }
+        }
+      }
+      cc := io::file_close(f)
+    }
+    Result::Err(e) => {
+      alloc::strbuf::strbuf_free(data)
+      assert(false)
+    }
   }
-  if not ok { return Option(str).None }
-  aa := deref(a)
-  base := get(u8, aa, Handle(u8)(idx = bidx))
-  bp := unchecked bitcast(ptr(mut u8), bitcast(usize, base))
-  n := read_environ(bp, cap)
-  rbase := unchecked bitcast(ptr(u8), bitcast(usize, bp))
+  rbase := unchecked bitcast(ptr(u8), bitcast(usize, alloc::strbuf::strbuf_base(data)))
+  n := data.len
+  alloc::strbuf::strbuf_free(data)
   r := env_lookup(rbase, n, name)
   match r {
     Some(val) => {

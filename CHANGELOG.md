@@ -82,6 +82,10 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `std::os::env` now reads the complete process environment through the same growable
+  `alloc::strbuf` image `std::os::args` uses, so a present variable whose value crosses the staging
+  boundary is returned in full instead of appearing absent, and an exhausted allocator or failed read
+  traps rather than being folded into `None`.
 - `base::str` now publishes the `chars`, `iter`, and `next` functions required to consume the
   specification's `CharIter` protocol from an external package, in the qualified, bare and UFCS
   spellings; its representation and decoding behavior are unchanged, and `char_byte` stays private.
