@@ -1762,7 +1762,6 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         pc.idx = pc.idx + 1               ## '('
         mut bdepth := 0
         mut sawptr := false               ## the target head is `ptr`
-        mut sawparen := false             ## the target text contains a `(` (not a lone ident)
         mut pps := 0                      ## pointee type-name span start (0 = none)
         mut ppl := 0
         mut hts := 0                      ## target HEAD type-name span (first depth-0 ident)
@@ -1770,7 +1769,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         mut tgt_s := cur(pc).start         ## FULL target-type span start (first target token)
         mut tgt_e := cur(pc).start         ## …and end (updated to the last token before the `,`)
         while cur(pc).kind != 0 and not (cur(pc).kind == 9 and bdepth == 0) {
-          if cur(pc).kind == 10 { bdepth = bdepth + 1; sawparen = true }
+          if cur(pc).kind == 10 { bdepth = bdepth + 1 }
           else if cur(pc).kind == 11 { bdepth = bdepth - 1 }
           else if cur(pc).kind == 1 {
             if bdepth == 0 and htl == 0 { hts = cur(pc).start; htl = cur(pc).len }
@@ -1786,12 +1785,24 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         if sawptr and scalar_width::subword_bytes(pc.src, pps, ppl) != 0 {
           return newnode(pc.arena, Expr.Bitcast(bv, pps, ppl))
         }
-        ## An aggregate→aggregate reinterpret to a bare USER type name (a struct — NOT a scalar/`str`/
-        ## `ptr(…)`/generic target): PRESERVE the target in an `Expr::Bitcast` carrying the struct-NAME
+        ## An aggregate→aggregate reinterpret to a USER type name (a struct or enum — NOT a scalar,
+        ## `str` or `ptr(…)`): PRESERVE the target in an `Expr::Bitcast` carrying the type's own NAME
         ## span, so a local bound from it (`y := bitcast(B, x)`) is typed by `B` and `y.field` resolves
         ## against `B` (identity erasure kept the SOURCE type → its fields silently read wrong words).
-        ## Scalar/`str`/`ptr`/parenthesized-generic targets stay identity-erased (str_at unaffected).
-        if not sawparen and htl != 0 and not scalar_or_str_name(pc.src, hts, htl) {
+        ## Scalar/`str` targets stay identity-erased (str_at unaffected); `ptr(…)` has its own arms.
+        ##
+        ## A GENERIC INSTANCE target (`Box(P)`, issue #372) is exactly this shape and was excluded by
+        ## the former `not sawparen` gate: the whole target was erased, so `y := bitcast(Box(P), p)`
+        ## bound `y` as a bare scalar and every `y.v.…` read ZERO — a clean-compiling wrong value,
+        ## while Types §3.4/§4.4 make a bitcast the identity on the block. What is recorded is the
+        ## BARE HEAD name (`Box`), NOT the parenthesized application: that is the SAME span shape a
+        ## generic construction `Box(P)(v = p)` records in `Expr::StructLit`, and the whole layout
+        ## side (`struct_words`/`subst_field_ty`/`field_type_span` via `typearg_at`) recovers `(P)` by
+        ## reading the source that FOLLOWS the name. Recording the full application instead resolves
+        ## no decl (`struct_decl_of("Box(P)")` = -1), which is why the nested field read must have the
+        ## head. `not sawptr` replaces `not sawparen` because a `ptr(…)` target is the only other
+        ## parenthesized form here and it is handled by its own two arms.
+        if not sawptr and htl != 0 and not scalar_or_str_name(pc.src, hts, htl) {
           return newnode(pc.arena, Expr.Bitcast(bv, hts, htl))
         }
         ## A `bitcast(ptr( [mut] <UserType>), v)` to a POINTER-to-user-type target: PRESERVE the

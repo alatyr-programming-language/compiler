@@ -82,6 +82,10 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- A parenthesized generic type instance now works as a `bitcast` target: `unchecked bitcast(Box(P), p)`
+  keeps the instantiated layout of `Box(P)` and moves the whole equal-width image on x86_64, instead of
+  erasing the target so that every field of the bound local read zero. `alatyr fmt` keeps the type-arg
+  group of such a target. Unsupported non-x86 aggregate bitcasts stay fail-loud.
 - `alloc::vec::reserve` now returns `Err(AllocError.SizeTooLarge)` for a request it cannot represent
   in `usize` instead of aborting the process: the requested count `len + additional`, the capacity
   doubling, and the byte size handed to `allocate` are each computed with an explicit wraparound

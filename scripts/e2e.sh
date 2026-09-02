@@ -6689,6 +6689,12 @@ run_x86 accept_issue371_packed_equal_width 42
 check_accept accept_issue371_packed_equal_width
 run issue373_enum_bitcast_payload 42
 check_accept issue373_enum_bitcast_payload
+## Types §3.4/§4.4 — a PARENTHESIZED generic INSTANCE as the bitcast TARGET (`bitcast(Box(P), p)`).
+## The target used to be erased whole, so the bound local kept no aggregate type and every field read
+## ZERO; now the instance's own layout is reserved and its whole image moves. Each field is checked
+## separately, so a partial or permuted copy names the word that moved wrong.
+run issue372_generic_bitcast_target 42
+check_accept issue372_generic_bitcast_target
 run_x86 slice_field_compare 42
 run qualified_value_arg 42
 run cmp_prelude 42
