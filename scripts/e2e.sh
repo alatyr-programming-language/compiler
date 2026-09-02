@@ -7123,19 +7123,39 @@ run view_ptr_deref_byte 100
 ## must be REJECTED, not read. Five spellings used to leaq the pointer's own frame slot and read the surrounding
 ## frame (0 / a neighbouring element / 95 / 80 / 104). Working spellings: deref(p), bytes(s)[i], Slice(u8)(…)[i].
 build_reject_has reject_index_scalar_ptr "indexing a SCALAR local/param"
-## BYTES bounded return ABI: `[u8; N]` with 1 <= N <= 8 is returned as one packed word and can be
+## BYTES bounded return ABI: `[u8; N]` with 1 <= N <= 16 is returned as one or two packed words and
 ## indexed both after binding and directly. The bound form remains x86-only; the direct form is also
-## covered on AArch64 by its matching x0 carrier. The wider/non-u8 direct forms below remain located rejects.
+## covered on AArch64 by its matching x0/x1 carrier. The wider/non-u8 direct forms below remain located rejects.
 run_x86 array_return_bound_u8 42
 check_accept array_return_bound_u8
 run_x86 array_return_direct_u8 42
 check_accept array_return_direct_u8
 run_a64 array_return_direct_u8 42
+## BYTES increment: the packed return carrier extends to two words for 9..16 u8 elements. The two
+## direct rows deliberately sum a HIGH-word read (index 8 / 15) with a LOW-word read (index 2, value 5)
+## to 47: the new x86 `cmpq $8, %rcx` / AArch64 `cmp x0, #8` word selector has a low branch that a
+## last-index-only fixture never enters, so a lowering that answered from the high word for every
+## index would pass. 47 is distinct from 42, from 5, from a doubled high read and from a doubled low one.
+run_x86 array_return_bound_u8_9 42
+check_accept array_return_bound_u8_9
+run_x86 array_return_bound_u8_16 42
+check_accept array_return_bound_u8_16
+run_x86 array_return_direct_u8_9 47
+check_accept array_return_direct_u8_9
+run_x86 array_return_direct_u8_16 47
+check_accept array_return_direct_u8_16
+run_a64 array_return_direct_u8_9 47
+run_a64 array_return_direct_u8_16 47
+run_x86 array_return_forward_u8_16 42
+check_accept array_return_forward_u8_16
+run_x86 array_return_arg_u8_16 42
+check_accept array_return_arg_u8_16
 ## I11 / Types §6.4 / OP-3: unsupported fixed-array RETURN shapes still reject rather than truncating a
 ## result or treating return registers as an inline array. The mutable `k` locks dynamic-index diagnostics.
-build_reject_has reject_index_call_array_return "fixed-array-returning call result directly"
-build_reject_has reject_index_call_array_return_i8_4 "fixed-array-returning call result directly"
-build_reject_has reject_index_call_array_return_u8_9 "fixed-array-returning call result directly"
+build_reject_has reject_index_call_array_return "unsupported fixed-array return shape"
+build_reject_has reject_index_call_array_return_i8_4 "unsupported fixed-array return shape"
+build_reject_has reject_index_call_array_return_u8_17 "unsupported fixed-array return shape"
+build_reject_has reject_bind_array_return_u8_17 "unsupported fixed-array return shape"
 ## `.len` of a STRUCT-element slice LOCAL read the first element's SECOND word (a silent wrong length; the slot's
 ## sns/snl hold the element TYPE span so it fell to the by-ref double-deref). Locks .len / .len() / an offset view
 ## against a scalar-element local and a Slice(Pt) PARAM.

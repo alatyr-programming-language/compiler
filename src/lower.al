@@ -3928,23 +3928,34 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   }
   ## BYTES bounded return-carrier argument — a supported `[u8; N]` call result has no frame home,
   ## while the existing fixed-array parameter ABI consumes a caller-owned data pointer. Materialize
-  ## the one packed `%rax` carrier into one aggregate-temp word, then pass that word's address. This
+  ## its one- or two-word carrier into an aggregate-temp block, then pass that block's address. This
   ## is deliberately the only return-call argument shape admitted here: array literals, wider/non-u8
   ## returns, tuples, structs and indirect calls keep their existing paths or located rejects.
   byte_ret_n := fixed_array_byte_return_len(e, cx.decls, cx.src, a)
   if byte_ret_n >= 1 and cx.agg_tmp >= 0 {
     emit_byte_array_return_value(e, sb, cx, a, nl)
     baoff := agg_alloc(cx)
-    push_str(sb, "  movq %rax, -")
-    push_int(sb, (baoff + 1) * 8)
-    push_str(sb, "(%rbp)\n")
+    if byte_ret_n <= 8 {
+      push_str(sb, "  movq %rax, -")
+      push_int(sb, (baoff + 1) * 8)
+      push_str(sb, "(%rbp)\n")
+    }
+    if byte_ret_n > 8 {
+      for k in 0..2 {
+        push_str(sb, "  movq ")
+        emit_retreg(sb, k)
+        push_str(sb, ", -")
+        push_frame_word(sb, usize(baoff), k)
+        push_str(sb, "(%rbp)\n")
+      }
+    }
     baent := SlotEntry(ns = 0, nl = 0, off = usize(baoff), sns = 0, snl = 0, ek = 5, estride = 1, eek = 8, is_ref = false)
     emit_agg_base_addr(baent, sb)
     push_str(sb, "  pushq %rax\n")
     return
   }
   if fixed_array_ret_call(e, cx.decls, cx.src, a) {
-    panic("selfhost: a fixed-array return cannot be passed as an aggregate argument yet; only a direct [u8; N] return carrier with 1 <= N <= 8 is supported")
+    panic("selfhost: a fixed-array return cannot be passed as an aggregate argument yet; only a direct [u8; N] return carrier with 1 <= N <= 16 is supported")
   }
   ## Types §§3.4, 4.4 and Memory §5.9 — an equal-width aggregate `bitcast` used DIRECTLY as a
   ## by-value aggregate ARGUMENT (`consume(bitcast(B3, a))`). The parser preserves a bare user-struct
@@ -9724,22 +9735,30 @@ struct_has_nonstr_multiword_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s :
 }
 ## BYTES return value emitter for the bounded internal `[u8; N]` ABI. The local/parameter path
 ## reads the packed byte block in the same low-address/low-byte order used by `emit_array_assign` and
-## `emit_index_addr`; a nested call already leaves its one packed word in %rax and is normalized onto
-## that same register. Other expression shapes are deliberately rejected here: adding a guessed
-## temporary or array-literal layout would widen this lane beyond the one-word ABI proof.
+## `emit_index_addr`; a nested call already leaves its one- or two-word carrier in %rax/%rdx and is
+## forwarded unchanged. Other expression shapes are deliberately rejected here: adding a guessed
+## temporary or array-literal layout would widen this lane beyond the proven carrier.
 emit_byte_array_return_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(e) {
     Expr::Var(s, n) => {
       ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
       if ent.ek != 5 or ent.eek != 8 { panic("selfhost: bounded [u8; N] return needs a packed byte-array local or parameter") }
+      mut nel := i64(ent.snl)
+      if ent.is_ref { nel = i64(ent.sns) }
       if ent.is_ref {
         push_str(sb, "  movq -")
         push_int(sb, (ent.off + 1) * 8)
-        push_str(sb, "(%rbp), %rax\n  movq (%rax), %rax\n")
+        push_str(sb, "(%rbp), %rcx\n  movq (%rcx), %rax\n")
+        if nel > 8 { push_str(sb, "  movq 8(%rcx), %rdx\n") }
       } else {
         push_str(sb, "  movq -")
         push_int(sb, ent.off * 8)
         push_str(sb, "(%rbp), %rax\n")
+        if nel > 8 {
+          push_str(sb, "  movq -")
+          push_int(sb, (ent.off - 1) * 8)
+          push_str(sb, "(%rbp), %rdx\n")
+        }
       }
     }
     Expr::Call(cs, cl, nargs, args_head) => {
@@ -11835,11 +11854,10 @@ fixed_array_return_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   if done { CSpan(s = ts, n = end - ts) } else { CSpan(s = 0, n = 0) }
 }
 
-## Is `e` a direct call returning a fixed array `[T; N]`? The array return ABI is not implemented, so
-## an index directly on that call has no frame-owned array from which `emit_index_addr` can safely
-## compute an element address. Keep this classifier separate from `slice_ret_call`: a Slice result has
-## its own `{ptr,len}` return convention and existing local/view lowering, while a fixed-array result
-## must remain a located build reject until the complete `[T; N]` return ABI lands.
+## Is `e` a direct call returning a fixed array `[T; N]`? Keep this classifier separate from
+## `slice_ret_call`: a Slice result has its own `{ptr,len}` return convention and existing local/view
+## lowering, while fixed-array shapes outside the bounded `[u8; N]`, 1 <= N <= 16 carrier remain
+## located build rejects until their ABI is specified and implemented.
 fixed_array_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
   match deref(e) {
     Expr::Call(cs, cl, nargs, args_head) => {
@@ -11853,9 +11871,9 @@ fixed_array_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
   }
 }
 
-## BYTES bounded return ABI. A `[u8; N]` result with 1 <= N <= 8 is the one fixed-array shape
-## whose already-proven packed local representation fits one internal integer return word: byte 0 is
-## the low byte at the array's data address and the whole word returns in %rax. Keep this predicate
+## BYTES bounded return ABI. A `[u8; N]` result with 1 <= N <= 16 is the one fixed-array shape
+## whose already-proven packed local representation fits one or two internal integer return words: byte
+## 0 is the low byte at the array's data address and byte 8 starts the `%rdx` word. Keep this predicate
 ## separate from `fixed_array_ret_call`: every other array (including `[i8; N]`, `[bits8; N]`, wider
 ## arrays and zero-length arrays) remains on the existing located reject path rather than guessing an
 ## ABI or silently truncating a result.
@@ -11872,7 +11890,7 @@ pub fixed_array_byte_return_len_span := fn(src : ptr(u8), ts : usize, tl : usize
   ae := array_elem_span(src, rs.s, rs.n)
   if ae.n == 0 or byte_type_eek(src, ae.s, ae.n) != 8 { return -1 }
   nel := parse_arr_len(src, rs.s, rs.n)
-  if nel == 0 or nel > 8 { return -1 }
+  if nel == 0 or nel > 16 { return -1 }
   i64(nel)
 }
 
@@ -11891,7 +11909,7 @@ pub fixed_array_byte_return_len := fn(e : ptr(Expr), decls : ptr(rt::Vec), src :
       ## A return-forwarding call can carry a parser-erased `[` head through the ordinary
       ## call-type resolver even when the name/arity classifier above cannot recover the
       ## concrete declaration at this nested consumer site. Keep this fallback typed: it
-      ## only admits the same declared `[u8; N]`, 1 <= N <= 8, carrier and otherwise returns
+      ## only admits the same declared `[u8; N]`, 1 <= N <= 16, carrier and otherwise returns
       ## to the existing fixed-array located reject.
       rt := call_ret_ty_span(e, decls, src, a)
       fixed_array_byte_return_len_span(src, rt.s, rt.n)
@@ -18051,22 +18069,46 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         push_str(sb, "  pushq %rax\n")
         return
       }
-      ## BYTES bounded DIRECT READ — a supported `[u8; N]` call result is returned as one packed
-      ## word in %rax. Keep the index on the value stack while lowering the call, then extract byte
+      ## BYTES bounded DIRECT READ — a supported `[u8; N]` call result is returned as one or two packed
+      ## words in %rax/%rdx. Keep the index on the value stack while lowering the call, then extract byte
       ## `k` from the returned little-endian word. This is intentionally a READ-only composition;
       ## `emit_index_addr` retains the old located reject for unsupported direct aggregate places and
       ## for writes, so no address/temporary ABI is invented here.
       dret_n := fixed_array_byte_return_len(base, cx.decls, cx.src, a)
       if dret_n >= 1 {
-        emit_gas(idx, sb, cx, a, nl)
-        emit_gas(base, sb, cx, a, nl)
-        push_str(sb, "  popq %rbx\n  popq %rcx\n")
-        if cx.vchk {
-          push_str(sb, "  cmpq $")
-          push_int(sb, dret_n)
-          push_str(sb, ", %rcx\n  jb 1f\n  ud2\n1:\n")
+        if dret_n <= 8 {
+          emit_gas(idx, sb, cx, a, nl)
+          emit_gas(base, sb, cx, a, nl)
+          push_str(sb, "  popq %rbx\n  popq %rcx\n")
+          if cx.vchk {
+            push_str(sb, "  cmpq $")
+            push_int(sb, dret_n)
+            push_str(sb, ", %rcx\n  jb 1f\n  ud2\n1:\n")
+          }
+          push_str(sb, "  movq %rcx, %r8\n  shlq $3, %r8\n  movq %r8, %rcx\n  shrq %cl, %rbx\n  andq $255, %rbx\n  movq %rbx, %rax\n  pushq %rax\n")
         }
-        push_str(sb, "  movq %rcx, %r8\n  shlq $3, %r8\n  movq %r8, %rcx\n  shrq %cl, %rbx\n  andq $255, %rbx\n  movq %rbx, %rax\n  pushq %rax\n")
+        if dret_n > 8 {
+          emit_gas(idx, sb, cx, a, nl)
+          emit_byte_array_return_value(base, sb, cx, a, nl)
+          push_str(sb, "  movq %rax, %rbx\n  movq %rdx, %rsi\n  popq %rcx\n")
+          if cx.vchk {
+            push_str(sb, "  cmpq $")
+            push_int(sb, dret_n)
+            push_str(sb, ", %rcx\n  jb 1f\n  ud2\n1:\n")
+          }
+          low := nl
+          done := nl + 1
+          nl += 2
+          push_str(sb, "  cmpq $8, %rcx\n  jb ")
+          emit_label(sb, low)
+          push_str(sb, "\n  subq $8, %rcx\n  movq %rsi, %rbx\n  jmp ")
+          emit_label(sb, done)
+          push_str(sb, "\n")
+          emit_label(sb, low)
+          push_str(sb, ":\n")
+          emit_label(sb, done)
+          push_str(sb, ":\n  movq %rcx, %r8\n  shlq $3, %r8\n  movq %r8, %rcx\n  shrq %cl, %rbx\n  andq $255, %rbx\n  movq %rbx, %rax\n  pushq %rax\n")
+        }
         return
       }
       ## `xs[i].N` — a TUPLE component of an ARRAY-of-tuples element (parsed `Index(Index(xs, i), N)`,

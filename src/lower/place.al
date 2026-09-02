@@ -739,7 +739,7 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
   if fixed_array_ret_call(base, cx.decls, cx.src, a) {
     cp := call_parts(base)
     if cp.is_call and cp.cs != 0 { lower_show_src_line(cx.src, cp.cs) }
-    panic("selfhost: indexing a fixed-array-returning call result directly (the source line above) is not lowered — the [T; N] return ABI is not implemented yet; do not index a call result until that ABI lands")
+    panic("selfhost: indexing an unsupported fixed-array return shape directly (the source line above) — only [u8; N] with 1 <= N <= 16 has a return ABI; do not index this call result")
   }
   ## Types §9.4 — the index base is a 2-word `{ptr, len}` VIEW FIELD (`st.v[i]` with `v : Slice(T)`),
   ## NOT an inline `[T; N]` array field: its words are a POINTER + a length, so the element address is

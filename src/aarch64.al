@@ -1587,9 +1587,9 @@ mut A64_CHK := true
 ## by emit_a64_epilogue to move the result bits x0 → d0 (the SysV float return register) before `ret`.
 ## A module global (the A64_CHK pattern) to avoid threading a param through emit_a64_stmts/match_arms.
 mut A64_RET_FLOAT := false
-## FN-return bounded BYTE ARRAY length (§8): a `[u8; N]`, 1 <= N <= 8, is returned as one packed word
-## in x0. A64 locals retain their existing one-word-per-element representation; the return path packs
-## those bytes only at the ABI boundary. Other fixed arrays stay fail-loud.
+## FN-return bounded BYTE ARRAY length (§8): a `[u8; N]`, 1 <= N <= 16, is returned as one or two
+## packed words in x0/x1. A64 locals retain their existing one-word-per-element representation; the
+## return path packs those bytes only at the ABI boundary. Other fixed arrays stay fail-loud.
 mut A64_RET_BYTE_N := 0
 ## FN-return STRUCT span (§8 piece 2, register struct-return convention): when the current fn returns an
 ## all-scalar struct of 1..8 words, holds its type name span (0/0 otherwise). Set per-fn in emit_a64_fn;
@@ -5266,16 +5266,32 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         push_str(sb, "  ldrb w0, [x2, x0]\n")
       }
       else if byte_ret_n >= 1 {
-        ## BYTES bounded direct read: the call returns a little-endian packed carrier in x0. Preserve it
-        ## across the index expression, check the static bound in checked mode, then extract byte `k`.
-        ## This is read-only; unsupported fixed-array return shapes remain on the located trap path.
-        emit_a64_expr(ibase, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-        push_str(sb, "  str x0, [sp, #-16]!\n")
-        emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-        if A64_CHK {
-          push_str(sb, "  mov x1, #") ; push_int(sb, byte_ret_n) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n")
+        if byte_ret_n <= 8 {
+          ## BYTES bounded direct read: the call returns a little-endian packed carrier in x0. Preserve it
+          ## across the index expression, check the static bound in checked mode, then extract byte `k`.
+          ## This is read-only; unsupported fixed-array return shapes remain on the located trap path.
+          emit_a64_expr(ibase, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, "  str x0, [sp, #-16]!\n")
+          emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          if A64_CHK {
+            push_str(sb, "  mov x1, #") ; push_int(sb, byte_ret_n) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n")
+          }
+          push_str(sb, "  lsl x1, x0, #3\n  ldr x2, [sp], #16\n  lsr x0, x2, x1\n  and x0, x0, #255\n")
         }
-        push_str(sb, "  lsl x1, x0, #3\n  ldr x2, [sp], #16\n  lsr x0, x2, x1\n  and x0, x0, #255\n")
+        if byte_ret_n > 8 {
+          ## The N=9..16 carrier uses x0 for bytes 0..7 and x1 for bytes 8..15. Preserve both
+          ## registers while lowering the index, then select the word before the common byte extract.
+          emit_a64_expr(ibase, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, "  str x0, [sp, #-16]!\n  str x1, [sp, #8]\n")
+          emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          if A64_CHK {
+            push_str(sb, "  mov x1, #") ; push_int(sb, byte_ret_n) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n")
+          }
+          push_str(sb, "  ldr x2, [sp]\n  ldr x3, [sp, #8]\n  add sp, sp, #16\n")
+          low := a64_next_label()
+          done := a64_next_label()
+          push_str(sb, "  cmp x0, #8\n  b.lo .Lbyte_return_low") ; push_int(sb, low) ; push_str(sb, "\n  sub x0, x0, #8\n  lsl x1, x0, #3\n  lsr x0, x3, x1\n  b .Lbyte_return_done") ; push_int(sb, done) ; push_str(sb, "\n.Lbyte_return_low") ; push_int(sb, low) ; push_str(sb, ":\n  lsl x1, x0, #3\n  lsr x0, x2, x1\n.Lbyte_return_done") ; push_int(sb, done) ; push_str(sb, ":\n  and x0, x0, #255\n")
+        }
       }
       else if tupn > 0 {
         ## `t.N` (= Index(Var(t), Num(N))) on an ALL-SCALAR tuple PARAM: the param slot (`16 + pidxI*8`)
@@ -6178,28 +6194,36 @@ emit_a64_enumsret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
   if not ok { push_str(sb, "  brk #0 // unsupported wide (SRET) enum-returning-call argument\n") }
 }
 
-## Deliver the bounded `[u8; N]` return carrier in x0. A64's existing local-array representation is
+## Deliver the bounded `[u8; N]` return carrier in x0/x1. A64's existing local-array representation is
 ## word-granular, so pack the low byte of each local element at this ABI boundary. A direct call already
-## returns the same carrier in x0 and is forwarded unchanged. This is deliberately limited to the shared
-## `[u8; N]`, 1 <= N <= 8, classifier; every other array shape remains a located trap.
+## returns the same carrier in x0/x1 and is forwarded unchanged. This is deliberately limited to the
+## shared `[u8; N]`, 1 <= N <= 16, classifier; every other array shape remains a located trap.
 emit_a64_byte_array_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, nel : i64, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
   mut done := false
   match deref(e) {
     Expr::Var(ns, nl) => {
       off := a64_local_off(body_head, src, ns, nl, pcount, a, decls)
       arrlocal := a64_is_array_local(body_head, src, ns, nl, a)
-      mut localok := nel >= 1 and nel <= 8
+      mut localok := nel >= 1 and nel <= 16
       if off < 0 { localok = false }
       if not arrlocal { localok = false }
       if localok {
         push_str(sb, "  mov x0, #0\n")
+        if nel > 8 { push_str(sb, "  mov x2, #0\n") }
         mut k := 0
         while k < nel {
           push_str(sb, "  ldr x1, [x29, #") ; push_int(sb, off + k * 8) ; push_str(sb, "]\n  and x1, x1, #255\n")
-          if k > 0 { push_str(sb, "  lsl x1, x1, #") ; push_int(sb, k * 8) ; push_str(sb, "\n") }
-          push_str(sb, "  orr x0, x0, x1\n")
+          if k < 8 {
+            if k > 0 { push_str(sb, "  lsl x1, x1, #") ; push_int(sb, k * 8) ; push_str(sb, "\n") }
+            push_str(sb, "  orr x0, x0, x1\n")
+          }
+          if k >= 8 {
+            if k > 8 { push_str(sb, "  lsl x1, x1, #") ; push_int(sb, (k - 8) * 8) ; push_str(sb, "\n") }
+            push_str(sb, "  orr x2, x2, x1\n")
+          }
           k = k + 1
         }
+        if nel > 8 { push_str(sb, "  mov x1, x2\n") }
         done = true
       }
     }

@@ -194,7 +194,8 @@ agg_value_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
     if w == 0 { w = 1 }
     return w
   }
-  if fixed_array_byte_return_len(e, decls, src, a) >= 1 { return 1 }
+  byte_ret_n := fixed_array_byte_return_len(e, decls, src, a)
+  if byte_ret_n >= 1 { return usize((byte_ret_n + 7) / 8) }
   if struct_ret_call(e, decls, src, a) or sret_ret_call(e, decls, src, a) {
     cs := call_ret_struct_span(e, decls, src, a)
     w := struct_words(decls, src, cs.s, cs.n, a)
