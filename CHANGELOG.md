@@ -82,6 +82,10 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- A parenthesized generic type instance now works as a `bitcast` target: `unchecked bitcast(Box(P), p)`
+  keeps the instantiated layout of `Box(P)` and moves the whole equal-width image on x86_64, instead of
+  erasing the target so that every field of the bound local read zero. `alatyr fmt` keeps the type-arg
+  group of such a target. Unsupported non-x86 aggregate bitcasts stay fail-loud.
 - AArch64, RISC-V64 and WebAssembly no longer destroy the neighbouring narrow field when a field of a
   fixed-array element held in a struct field is written: the array literal is materialized at the
   element's byte-precise layout instead of one machine word per field. x86_64 was already correct.

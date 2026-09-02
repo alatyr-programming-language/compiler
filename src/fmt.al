@@ -1754,7 +1754,19 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
         push_str(sb, str_at((src + pts), ptl))
         push_str(sb, ")")
       } else {
-        push_str(sb, str_at((src + pts), ptl))
+        ## An aggregate TARGET is recorded as the type's BARE NAME, so a GENERIC INSTANCE target
+        ## (`bitcast(Box(P), p)`, issue #372) keeps its type-arg group only in the SOURCE that
+        ## FOLLOWS that name — exactly like the head of a generic struct literal `Box(P)(v = …)`,
+        ## which this file already renders verbatim up to its field `(`. Re-attach the group the
+        ## same way: `Box` alone would reparse as the UN-instantiated generic (a different, narrower
+        ## layout — the equal-width check then rejects the program), so dropping it would make fmt
+        ## rewrite a working program into a broken one.
+        mut tl2 := ptl
+        if str_at(((src + pts) + ptl), 1) == "(" {
+          te := skip_balanced_group(src, pts + ptl)
+          if te > pts + ptl { tl2 = te - pts }
+        }
+        push_str(sb, str_at((src + pts), tl2))
       }
       push_str(sb, ", ")
       emit_fmt_expr(inner, sb, src, a, decls)
