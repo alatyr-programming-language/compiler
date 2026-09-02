@@ -10482,6 +10482,28 @@ bitcast_struct_target := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) 
     _ => { bitcast_struct_target_direct(v, decls, src) }
   }
 }
+## The ENUM sibling of `bitcast_struct_target`. The parser preserves a bare non-scalar bitcast TARGET
+## whatever aggregate it names, but `struct_decl_of` answers only for a struct decl, so an
+## `bitcast(<UserEnum>, e)` node returned {0,0} above and fell through to the SCALAR identity path:
+## one word — the discriminant — survived and every payload word read a neighbouring frame slot
+## (Types §3.4/§4.4 — a bitcast is the identity on the block, so the whole `1 + payload` image must
+## move). Returns the TARGET enum's name span for such a node; {0,0} otherwise, so a struct, scalar
+## or pointer target keeps its existing path. Neutral: `src/` never bitcasts to an enum.
+bitcast_enum_target_direct := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> CSpan {
+  match deref(v) {
+    Expr::Bitcast(inner, ts, tl) => {
+      if tl != 0 and enum_decl_of(decls, src, ts, tl) >= 0 { return CSpan(s = ts, n = tl) }
+      CSpan(s = 0, n = 0)
+    }
+    _ => { CSpan(s = 0, n = 0) }
+  }
+}
+bitcast_enum_target := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> CSpan {
+  match deref(v) {
+    Expr::Unchecked(inner) => { bitcast_enum_target_direct(inner, decls, src) }
+    _ => { bitcast_enum_target_direct(v, decls, src) }
+  }
+}
 ## Like `bitcast_struct_target` but for a POINTER-to-struct bitcast target: if `v` (seeing through an
 ## `unchecked` wrapper) is `bitcast(ptr(<Struct>), x)` / `bitcast(ptr(mut <Struct>), x)`, return the
 ## POINTEE struct's type span; 0/0 otherwise. Used to infer `ek = 7` for a bare

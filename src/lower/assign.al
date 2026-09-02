@@ -73,9 +73,42 @@ direct_num_float_target := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usi
 ## Aggregate bitcasts preserve the exact bit image. The ordinary word model still governs
 ## non-packed aggregates here, while a packed aggregate must be checked by its exact byte size;
 ## `struct_words` rounds both sizes up to frame words and would accept unequal packed images.
+## An ENUM's block is `1 + max-payload` words (discriminant then payload), which `struct_words`
+## cannot see at all — resolve it FIRST so the one equal-bit-width contract of Types §4.4 measures
+## an enum operand by its own instance layout instead of silently reporting zero.
 aggregate_bitcast_width_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> usize {
+  if enum_decl_of(decls, src, s, n) >= 0 { return (1 + enum_inst_words(decls, src, s, n, a)) * 8 }
   if is_packed(decls, src, s, n) { return packed_struct_bytes(decls, src, s, n, a) }
   struct_words(decls, src, s, n, a) * 8
+}
+
+## THE whole-aggregate frame-slot copy of this band, in one place. A LOCAL source keeps word k at
+## slot `off + k`; a by-REF PARAM (`is_ref`) holds a POINTER at its slot with word k at `-(k*8)(ptr)`
+## (a down-growing pointee). Every whole-value aggregate BINDING lands the same way — `x := <agg
+## var>` and both arms of the parser-preserved aggregate `bitcast` — so the decision lives here
+## rather than once per aggregate shape; a shape that copied one word fewer than its neighbour is
+## precisely the class of silent wrong value these arms exist to remove.
+emit_agg_slot_copy := fn(soff : usize, is_ref : bool, dst : i64, nw : usize, in out sb : strbuf::StrBuf) {
+  if is_ref {
+    push_str(sb, "  movq -")
+    push_int(sb, i64((soff + 1) * 8))
+    push_str(sb, "(%rbp), %rax\n")
+    for k in 0..nw {
+      push_str(sb, "  movq ")
+      push_int(sb, i64(k * 8))
+      push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
+      push_int(sb, i64((dst - k + 1) * 8))
+      push_str(sb, "(%rbp)\n")
+    }
+  } else {
+    for k in 0..nw {
+      push_str(sb, "  movq -")
+      push_frame_word(sb, soff, k)
+      push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
+      push_int(sb, i64((dst - k + 1) * 8))
+      push_str(sb, "(%rbp)\n")
+    }
+  }
 }
 
 emit_direct_num_float_assign := fn(v : ptr(Expr), target : u8, base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
@@ -2603,26 +2636,30 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     dstbc := slot_of(cx.slots, cx.src, ns, nl2)
     isvc := var_name_span(inner)
     isentc := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, isvc.s, isvc.n)))
-    if isentc.is_ref {
-      push_str(sb, "  movq -")
-      push_int(sb, i64((isentc.off + 1) * 8))
-      push_str(sb, "(%rbp), %rax\n")
-      for k in 0..nfbc {
-        push_str(sb, "  movq ")
-        push_int(sb, i64(k * 8))
-        push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-        push_int(sb, i64((dstbc - k + 1) * 8))
-        push_str(sb, "(%rbp)\n")
-      }
-    } else {
-      for k in 0..nfbc {
-        push_str(sb, "  movq -")
-        push_frame_word(sb, isentc.off, k)
-        push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
-        push_int(sb, i64((dstbc - k + 1) * 8))
-        push_str(sb, "(%rbp)\n")
-      }
+    emit_agg_slot_copy(isentc.off, isentc.is_ref, dstbc, nfbc, sb)
+  } else if bitcast_enum_target(v, cx.decls, cx.src).n != 0 {
+    ## `y := bitcast(<UserEnum>, x)` — the ENUM arm of the same parser-preserved reinterpret, and the
+    ## arm whose absence made this a silent wrong value: the node fell through to the scalar identity
+    ## store, so only word 0 (the discriminant) moved and `match y`'s payload bindings read whatever
+    ## the neighbouring frame words held. Types §3.4/§4.4 make a bitcast the identity on the block,
+    ## so copy the source enum's whole `1 + max-payload` image into `y`'s slots. `y` was reserved as
+    ## the TARGET enum by collect_slots, so the arms resolve against IT. Equal bit width is checked
+    ## with the SAME `aggregate_bitcast_width_bytes` the struct arm uses — it resolves an enum span by
+    ## its instance layout — and a violated size contract or a non-VAR source fails loud rather than
+    ## copying part of a value.
+    btec := bitcast_enum_target(v, cx.decls, cx.src)
+    einner := bitcast_inner_expr(v)
+    nwbe := 1 + enum_inst_words(cx.decls, cx.src, btec.s, btec.n, a)
+    eva := var_agg_info(einner, cx.slots, cx.src)
+    if eva.ek != 3 { panic("selfhost: bitcast to an enum expects an enum VARIABLE source (bitcast of a call/expression result to an enum is not lowered — bind the source to a local first)") }
+    if aggregate_bitcast_width_bytes(cx.decls, cx.src, eva.s, eva.n, a) != aggregate_bitcast_width_bytes(cx.decls, cx.src, btec.s, btec.n, a) {
+      lower_show_src_line(cx.src, btec.s)
+      panic("selfhost: aggregate bitcast between enums of different bit width (bitcast requires equal bit-width)")
     }
+    dstbe := slot_of(cx.slots, cx.src, ns, nl2)
+    esvc := var_name_span(einner)
+    esentc := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, esvc.s, esvc.n)))
+    emit_agg_slot_copy(esentc.off, esentc.is_ref, dstbe, nwbe, sb)
   } else if var_agg_info(v, cx.slots, cx.src).ek != 0 {
     ## `x := <struct/enum var>` — COPY the source aggregate's words into `x`'s fresh slots. A
     ## LOCAL source keeps word k at slot `off+k`; a by-REF PARAM (`is_ref`) holds a POINTER at
@@ -2635,26 +2672,7 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     dstc := slot_of(cx.slots, cx.src, ns, nl2)
     svc := var_name_span(v)
     sentc := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, svc.s, svc.n)))
-    if sentc.is_ref {
-      push_str(sb, "  movq -")
-      push_int(sb, i64((sentc.off + 1) * 8))
-      push_str(sb, "(%rbp), %rax\n")
-      for k in 0..nfc {
-        push_str(sb, "  movq ")
-        push_int(sb, i64(k * 8))
-        push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-        push_int(sb, i64((dstc - k + 1) * 8))
-        push_str(sb, "(%rbp)\n")
-      }
-    } else {
-      for k in 0..nfc {
-        push_str(sb, "  movq -")
-        push_frame_word(sb, sentc.off, k)
-        push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
-        push_int(sb, i64((dstc - k + 1) * 8))
-        push_str(sb, "(%rbp)\n")
-      }
-    }
+    emit_agg_slot_copy(sentc.off, sentc.is_ref, dstc, nfc, sb)
   } else if deref_view_span_cx(v, cx).n != 0 and view_dest_is_local(cx.slots, cx.src, ns, nl2) {
     ## CLAYOUT S3(b) — `t := deref(<pointer to a §7 VIEW>)`: the pointee IS the two-word
     ## `{ptr, len}` pair. `emit_str_pair`'s `Deref` arm reads BOTH words at the ascending

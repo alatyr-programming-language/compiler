@@ -433,6 +433,15 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## has no user-struct bitcast, so this branch never fires when self-building.
           bts := bitcast_struct_target(v, decls, src)
           bind_struct_slot(slots, src, ns, nl, bts.s, bts.n, struct_words(decls, src, bts.s, bts.n, a))
+        } else if bitcast_enum_target(v, decls, src).n != 0 {
+          ## `y := bitcast(<UserEnum>, x)` — the enum arm of the same parser-preserved reinterpret:
+          ## reserve `y` as the TARGET enum (discriminant + max-payload words) so a following
+          ## `match y` is recognized as an enum match (ek 3) and the payload words have slots to
+          ## land in. Without it the binding fell through to the SCALAR slot below and only the
+          ## discriminant survived, so the right arm was selected over a zeroed payload.
+          ## Neutral: `src/` has no enum bitcast, so this branch never fires when self-building.
+          bte := bitcast_enum_target(v, decls, src)
+          bind_enum_slot(slots, src, ns, nl, bte.s, bte.n, 1 + enum_inst_words(decls, src, bte.s, bte.n, a))
         } else if bitcast_ptrstruct_span_sub(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2, sub.gps3, sub.gpl3, sub.its3, sub.itl3).n != 0 {
           ## `vp := unchecked bitcast(ptr(Struct), addr)` (NO type annotation) — record `vp` as a
           ## pointer-to-struct (ek 7) carrying the POINTEE struct span (recovered from the bitcast
