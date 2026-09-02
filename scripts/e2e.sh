@@ -6695,6 +6695,14 @@ check_accept issue373_enum_bitcast_payload
 ## separately, so a partial or permuted copy names the word that moved wrong.
 run issue372_generic_bitcast_target 42
 check_accept issue372_generic_bitcast_target
+## Types §§3.4/§4.4 and Memory §5.9 — an equal-width aggregate bitcast used DIRECTLY as a by-value
+## struct ARGUMENT. The argument had no aggregate arm, so word 0 was passed as a VALUE and the callee
+## dereferenced it as the block address: the reproducer died with 139 on x86_64. Each field is checked
+## separately and every refusal code is distinct and based at 100, so a swapped or partly-copied image
+## names the word that moved wrong. The unequal-width sibling must stay a located reject.
+run issue370_bitcast_scalar_arg 42
+check_accept issue370_bitcast_scalar_arg
+build_reject_has reject_issue370_arg_width "bitcast requires equal bit-width"
 run_x86 slice_field_compare 42
 run qualified_value_arg 42
 run cmp_prelude 42

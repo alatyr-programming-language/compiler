@@ -76,7 +76,11 @@ direct_num_float_target := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usi
 ## An ENUM's block is `1 + max-payload` words (discriminant then payload), which `struct_words`
 ## cannot see at all — resolve it FIRST so the one equal-bit-width contract of Types §4.4 measures
 ## an enum operand by its own instance layout instead of silently reporting zero.
-aggregate_bitcast_width_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> usize {
+## `pub` because the equal-bit-width contract is now measured in TWO positions — the binding arms
+## below and `lower::emit_arg`'s aggregate-bitcast ARGUMENT arm — and the width decision must stay
+## one function: a second copy is exactly how a `@packed` operand ends up measured in words in one
+## position and in bytes in the other.
+pub aggregate_bitcast_width_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> usize {
   if enum_decl_of(decls, src, s, n) >= 0 { return (1 + enum_inst_words(decls, src, s, n, a)) * 8 }
   if is_packed(decls, src, s, n) { return packed_struct_bytes(decls, src, s, n, a) }
   struct_words(decls, src, s, n, a) * 8
