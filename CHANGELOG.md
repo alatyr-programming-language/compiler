@@ -91,6 +91,10 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   doubling, and the byte size handed to `allocate` are each computed with an explicit wraparound
   test. A wrapped count previously would have reported success for a request larger than the address
   space; a successful reserve, a no-op reserve, and a representable `OutOfMemory` are unchanged.
+- `Arena.allocate` now returns `Err(AllocError.BadAlignment)` for an invalid alignment instead of
+  accepting it: a non-power-of-two `align` used to produce a misaligned `Ok(Handle)` and `align = 0`
+  trapped on a modulo by zero before any `Result` existed. A rejection leaves the bump cursor
+  untouched; valid powers of two and the `OutOfMemory` path are unchanged.
 - AArch64, RISC-V64 and WebAssembly no longer destroy the neighbouring narrow field when a field of a
   fixed-array element held in a struct field is written: the array literal is materialized at the
   element's byte-precise layout instead of one machine word per field. x86_64 was already correct.

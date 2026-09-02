@@ -52,12 +52,33 @@ arena_over := fn(buf : ptr(mut bits8), cap : usize) -> Arena {
 close := fn(in out self : Arena) { self.off = 0 }
 
 ## `allocate` — the allocator protocol's bump allocation for the region mechanism
-## (Stdlib §5.1, typed by the mechanism → `Handle(T)`): round the cursor up to
-## `align`, return `OutOfMemory` if the request does not fit the remaining
-## capacity, else bump the cursor and return the byte offset as a `Handle(T)`.
-## `size`/`align` are the caller's `size(T)` / `align(T)`. The handle is
-## an index into the arena — never a pointer; the value is reached with `get`.
+## (Stdlib §5.1, typed by the mechanism → `Handle(T)`): VALIDATE the requested
+## alignment, round the cursor up to `align`, return `OutOfMemory` if the request
+## does not fit the remaining capacity, else bump the cursor and return the byte
+## offset as a `Handle(T)`. `size`/`align` are the caller's `size(T)` /
+## `align(T)`. The handle is an index into the arena — never a pointer; the value
+## is reached with `get`.
+##
+## The alignment check comes FIRST and is part of the protocol's error set, not a
+## precondition the caller must have satisfied: Stdlib §5.1 defines `BadAlignment`
+## as "the requested alignment is invalid or unsupported (e.g. not a power of
+## two)", so an invalid `align` is a `Result` the caller can recover from. Zero is
+## rejected before the `%` below (a modulo by zero is a trap, not a `Result`), and
+## a non-power-of-two is rejected because rounding to it yields an address that is
+## not a multiple of the requested alignment at all (`off = 0`, `align = 3` used
+## to hand back `Ok(idx = 0)`). `align & (align - 1)` is the power-of-two test;
+## `align != 0` is already established, so the `- 1` cannot underflow. A rejection
+## returns before any store, so the bump cursor is untouched and the arena stays
+## usable.
 allocate := fn(in out self : Arena, T : type, size : usize, align : usize) -> Result(Handle(T), AllocError) {
+  if align == 0 {
+    zero_align := Result(Handle(T), AllocError).Err(AllocError.BadAlignment)
+    return zero_align
+  }
+  if (align & (align - 1)) != 0 {
+    bad_align := Result(Handle(T), AllocError).Err(AllocError.BadAlignment)
+    return bad_align
+  }
   rem := self.off % align
   mut aligned : usize = self.off
   if rem != 0 {
