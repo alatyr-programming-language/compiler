@@ -6778,6 +6778,17 @@ run ambient_alloc_into_struct 42
 run ambient_alloc_attr 42
 run ambient_alloc_scalar 42
 run ambient_alloc_deref_field 42
+## issue #349 — `Arena.allocate` VALIDATES the requested alignment before the alignment
+## arithmetic (Stdlib appendix §5.1 `BadAlignment`). Pre-fix, `align = 3` over a fresh arena
+## returned `Ok(idx = 0)` (a misaligned success, exit 100 here) and `align = 0` reached
+## `self.off % 0` and trapped instead of returning a `Result` at all. Covers 0/3/5/6/7 as
+## invalid, 1/2/4/8 as still-valid, an untouched cursor after a rejection, and the unchanged
+## `OutOfMemory` path. The fixture binds the `allocate` result through an EXPLICIT
+## `Result(Handle(u8), AllocError)` annotation: `fmt` de-qualifies variant patterns (#393) and
+## the bare names only resolve when the matched type is written in the source, so the inferred
+## `r := allocate(…)` spelling fails fmt_corpus while staying fmt-idempotent. Do not
+## "simplify" that annotation away without rerunning scripts/fmt_corpus.sh.
+run issue349_arena_bad_alignment 42
 ## field read taken DIRECTLY off a pointer-returning call `f(x).field` — was a silent 0 (fell to pushq $0);
 ## now materializes the returned pointer then loads the field. Multi-word/unresolvable leaf fails loud. = 106.
 run callfield_ptr_ret 106
