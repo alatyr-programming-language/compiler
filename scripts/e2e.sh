@@ -4931,6 +4931,17 @@ fmt_test_has fmt_defer 123 "defer {"
 fmt_test_has fmt_deep_places 79 "v : Slice(u64)"
 ## §5 fmt: an enum global ARRAY initializer + a wide-enum `return W.Some(<7-word struct>)`.
 fmt_test_has fmt_enum_forms 49 "mut GE := [E.A(1), E.B(2)]"
+## issue #393 / Control Flow §5.2 + Tooling §4.3 — an enum-variant PATTERN must come back out in the
+## spelling the author wrote. `parse_pat_alt` keeps only the LAST path segment of `Result::Ok(h)` /
+## `AllocError.OutOfMemory`, and both arm emitters re-emitted that bare tail, so `fmt` DELETED every
+## qualifier. On this fixture that is fatal, not cosmetic: `cli::ambient_paths` injects the base
+## prelude by scanning the source TEXT for the bare result-type name, and the patterns hold its only
+## occurrence — the formatted output lost `Arena`/`allocate`/`AllocError` and stopped compiling, with
+## `fmt` still exiting 0. The needles pin all three spellings in BOTH emitters; the single-line arm
+## list also pins the bare arm staying bare, which the exit code alone cannot see.
+fmt_test_has_all issue393_fmt_variant_qualification 42 "Result::Ok(h) => {" \
+    "Result::Err(e) => {" "AllocError.OutOfMemory => {" "AllocError.SizeTooLarge => {" \
+    "match t { Tag::Red => 1, Tag.Green => 2, Blue => 4 }" "Tag::Blue => {" "Tag.Blue => {"
 ## §5 fmt: the PARAMETER surface — head-token-only types (`ptr(mut R)`→`ptr`, `Slice(u64)`→`Slice`,
 ## `[u64;2]`→`u64`, `fn(u64)->E`→`fn`), erased `in out`/`out` modes and erased defaults. These were the
 ## worst of the family: formatting silently turned deref_field_write 42→0 and fn_value_enum_ret 42→211.

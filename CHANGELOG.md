@@ -82,6 +82,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `alatyr fmt` now keeps the qualifier an enum-variant pattern was written with: `Result::Ok(h)` and
+  `AllocError.OutOfMemory` come back qualified in both the expression- and statement-form arm
+  renderers, instead of as a bare `Ok(h)` / `OutOfMemory`; a pattern written bare stays bare. The
+  de-qualified text could stop compiling outright — the ambient standard-library prelude is injected
+  by scanning the source for a bare `Result`, so deleting a file's last qualified spelling took
+  `Arena`, `allocate` and `AllocError` out of scope while `fmt` still exited 0.
 - A parenthesized generic type instance now works as a `bitcast` target: `unchecked bitcast(Box(P), p)`
   keeps the instantiated layout of `Box(P)` and moves the whole equal-width image on x86_64, instead of
   erasing the target so that every field of the bound local read zero. `alatyr fmt` keeps the type-arg
