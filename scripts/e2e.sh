@@ -6679,6 +6679,8 @@ build_reject_has reject_issue371_packed_width "bitcast requires equal bit-width"
 build_reject_has reject_issue371_packed_word_control "bitcast requires equal bit-width"
 run_x86 accept_issue371_packed_equal_width 42
 check_accept accept_issue371_packed_equal_width
+run issue373_enum_bitcast_payload 42
+check_accept issue373_enum_bitcast_payload
 run_x86 slice_field_compare 42
 run qualified_value_arg 42
 run cmp_prelude 42
