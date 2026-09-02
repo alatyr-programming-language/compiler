@@ -1647,6 +1647,51 @@ rm -f "$pd/target/debug/iface" "$pd/target/debug/iface.interface" "$pd/target/de
   echo "ok   interface_summary: API/layout facts + cold determinism + adversarial invalidation"
 }
 
+## Issue #363 / Stdlib §3.6 — an external package must reach CharIter through the public
+## `chars`/`iter`/`next` surface, in the qualified, bare and UFCS spellings the appendix shows.
+## The parent rejection is recorded in the fixture; this row proves the fixed package has no artifact
+## during check and runs the external consumer to 42 after build.
+## Deliberately NO `ALATYR_OSPLIT=1`: this row must exercise the DEFAULT build path, which is the one
+## #363 is about. `src/cli.al` documents the split path as tripping a self-host-lower codegen fault
+## under some allocation layouts, so a permanent gate row on it could redden for reasons unrelated to
+## CharIter; the failure-first rejection and the fixed 42 were both re-measured on the default path.
+issue363_chariter_public_test() {
+  local p="$(_fixture_tree package)/issue363_chariter_public"
+  local err="$T/issue363_chariter_public.check.err"
+  [ -f "$p/package.al" ] || { echo "MISS issue363_chariter_public: no package manifest"; fail=1; return; }
+  [ -f "$p/src/main.al" ] || { echo "MISS issue363_chariter_public: no external consumer"; fail=1; return; }
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" check package.al ) >"$T/issue363_chariter_public.check.out" 2>"$err"
+  local rc=$?
+  if [ "$rc" != 0 ] || [ -e "$p/target" ] || [ -s "$T/issue363_chariter_public.check.out" ] || [ -s "$err" ]; then
+    echo "FAIL issue363_chariter_public: check rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+    return
+  fi
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" build package.al ) >"$T/issue363_chariter_public.build.out" 2>"$T/issue363_chariter_public.build.err"
+  rc=$?
+  local bin="$p/target/debug/issue363-chariter-public"
+  if [ "$rc" != 0 ] || [ ! -x "$bin" ]; then
+    echo "FAIL issue363_chariter_public: build rc=$rc artifact=$(test -x "$bin" && echo yes || echo no) diagnostic=$(cat "$T/issue363_chariter_public.build.err" 2>/dev/null)"
+    fail=1
+    return
+  fi
+
+  _e2e_exec "$bin" >/dev/null 2>&1
+  local got=$?
+  if _e2e_runtime_failure "issue363_chariter_public" "$got"; then return; fi
+  if [ "$got" = 42 ]; then
+    echo "ok   issue363_chariter_public: external qualified/bare/UFCS chars-iter-next consumer, artifact 42"
+  else
+    echo "FAIL issue363_chariter_public: artifact exit=$got want 42"
+    fail=1
+  fi
+  rm -rf "$p/target"
+}
+
 # a flat single-file package may define its own default `_start` directly in
 # `package.al` when no source modules are present. The manifest binding is inert source data; the
 # user-defined `_start` must remain the ELF entry and must not be replaced by a `main__main` wrapper.
@@ -4773,6 +4818,7 @@ tool17_target_kind_test
 tool17_target_code_size_test
 tool17_declaration_target_when_test
 tool17_prelude_visibility_test
+issue363_chariter_public_test
 ext_test package_cli_test
 ## The toolchain-spawn regression (scripts/env_size_test.sh). An environment too large for one read used
 ## to truncate mid-entry, after which `build_envp` wrote its terminating word 8 bytes PAST its reservation

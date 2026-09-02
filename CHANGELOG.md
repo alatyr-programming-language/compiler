@@ -82,6 +82,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `base::str` now publishes the `chars`, `iter`, and `next` functions required to consume the
+  specification's `CharIter` protocol from an external package, in the qualified, bare and UFCS
+  spellings; its representation and decoding behavior are unchanged, and `char_byte` stays private.
+  The `for c in chars(s)` spelling still walks the byte length and yields garbage code points — a
+  separate lowering defect, unrelated to visibility; drive `next` explicitly until it is fixed.
 - Packed `[u8; N]` returns now extend to two machine words: a return of `N = 9..16` bytes is carried
   in two registers, indexed both after binding and directly on x86_64 and read directly on AArch64,
   and composes with fixed-array forwarding and fixed-array arguments on x86_64. `N = 1..8` keeps its
