@@ -2145,6 +2145,90 @@ pub scalar_name_is_int_conv := fn(name : str) -> bool {
   name == "u8" or name == "u16" or name == "u32" or name == "u64" or name == "usize" or name == "i8" or name == "i16" or name == "i32" or name == "i64" or name == "isize"
 }
 
+## Is the `bitcast` TARGET text `[ts, ts+tl)` a bare, representation-significant NARROW SCALAR?
+## Types §3.4 makes a bitcast the identity on the block and §4.4 requires equal bit-width, so a
+## narrow destination must present exactly the TARGET type's machine word rather than inherit the
+## source's sign-extension bits. A complete `ptr(...)` target is deliberately NOT this shape: the
+## pointer VALUE stays a word identity and only its POINTEE width reaches a deref load/store.
+##
+## All four emitters (`src/lower.al`, `src/aarch64.al`, `src/riscv64.al`, `src/wat.al`) carried a
+## byte-identical private copy of this predicate and of the narrow-name dispatch below — the `op=`
+## shape again, and the one decision the four must never disagree about, because a backend that
+## answers "no" here silently emits the un-normalized word. One home, one answer.
+pub bitcast_target_is_narrow_scalar := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  if tl >= 4 and str_at((src + ts), 4) == "ptr(" { return false }
+  scalar_width::subword_bytes(src, ts, tl) != 0
+}
+
+## The narrow bitcast target's byte width (1 / 2 / 4) keyed by NAME, or 0 when `name` is not a narrow
+## target. `scalar_width::subword_bytes` answers the same question for a source SPAN; the emitters
+## already hold the name text, so this is its name-keyed dual and lives in the same home. `bitsN`,
+## `bool`, `char` and `f32` are raw bit-pattern targets and are sized here for exactly that reason.
+pub bitcast_narrow_bytes := fn(name : str) -> usize {
+  if name == "u8" or name == "i8" or name == "bits8" or name == "bool" { return 1 }
+  if name == "u16" or name == "i16" or name == "bits16" { return 2 }
+  if name == "u32" or name == "i32" or name == "bits32" or name == "char" or name == "f32" { return 4 }
+  0
+}
+
+## Does the narrow bitcast target `name` present a SIGNED integer? Only the `iN` types do; every
+## other narrow target (`uN`, `bitsN`, `bool`, `char`, `f32`) is a raw low-N-byte pattern whose
+## destination word is the ZERO-extension — which is byte-for-byte what each backend's own unsigned
+## narrowing conversion already emits, so the emitters keep only their two encodings, not a list.
+pub bitcast_narrow_is_signed := fn(name : str) -> bool {
+  name == "i8" or name == "i16" or name == "i32"
+}
+
+## Is byte `[p]` a blank inside a TYPE text? Bounded by the caller's `[ts, ts+tl)` extent.
+type_text_blank := fn(src : ptr(u8), p : usize) -> bool {
+  c := str_at((src + p), 1)
+  c == " " or c == "\n" or c == "\t" or c == "\r"
+}
+
+## The POINTEE text of a pointer TYPE text `ptr( [mut] T )` occupying exactly `[ts, ts+tl)`, or a
+## zero length when the text is not that shape. Every read is bounded by `tl` — the caller's own
+## extent — so this never scans past the type it was handed.
+##
+## Tolerant of the token spacing the grammar permits (`ptr (mut u8)`, `ptr( mut u8 )`, `ptr( u8 )`):
+## the pointer bitcast target now reaches the lowerers as the VERBATIM source text rather than a
+## pre-extracted pointee token, so a fixed `ptr(` + `mut ` prefix test would resolve the canonical
+## spelling and silently fall back to a word-sized `deref` on the spaced ones — the same 7-byte
+## over-read this whole mechanism exists to prevent. One home for the parse: `src/wat.al` and the
+## `src/lower.al` deref-width/signedness readers all ask here.
+ptr_target_pointee := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
+  if tl < 6 { return LSpan(s = 0, n = 0) }
+  e := ts + tl
+  if str_at((src + ts), 3) != "ptr" { return LSpan(s = 0, n = 0) }
+  mut p := ts + 3
+  while p < e and type_text_blank(src, p) { p = p + 1 }
+  if p >= e or str_at((src + p), 1) != "(" { return LSpan(s = 0, n = 0) }
+  p = p + 1
+  mut q := e
+  while q > p and type_text_blank(src, q - 1) { q = q - 1 }
+  if q <= p or str_at((src + (q - 1)), 1) != ")" { return LSpan(s = 0, n = 0) }
+  q = q - 1
+  while p < q and type_text_blank(src, p) { p = p + 1 }
+  while q > p and type_text_blank(src, q - 1) { q = q - 1 }
+  ## an optional `mut` marker, separated from the pointee by at least one blank
+  if q - p > 4 and str_at((src + p), 3) == "mut" and type_text_blank(src, p + 3) {
+    p = p + 3
+    while p < q and type_text_blank(src, p) { p = p + 1 }
+  }
+  if q <= p { return LSpan(s = 0, n = 0) }
+  LSpan(s = p, n = q - p)
+}
+
+## The pointee START and LENGTH of `ptr_target_pointee`, handed back as plain words. A cross-module
+## STRUCT return truncates in the aarch64/wat emit contexts under the frozen seed (the `typearg_at`
+## landmine recorded in `src/aarch64.al`), so the shared query publishes two scalars and the private
+## helper above keeps the single parse.
+pub ptr_target_pointee_s := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
+  ptr_target_pointee(src, ts, tl).s
+}
+pub ptr_target_pointee_n := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
+  ptr_target_pointee(src, ts, tl).n
+}
+
 ## ─── The ANNOTATION SOURCE SCAN, shared by every backend ───────────────────
 ##
 ## One scan, three questions. Given a position just past a NAME in the source (a local binding's

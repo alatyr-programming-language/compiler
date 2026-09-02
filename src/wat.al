@@ -52,7 +52,7 @@ local_is_comptime := ast::binding_is_comptime
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 variant_payload_type := lower_layout::variant_payload_type
 (typearg_at, base_type_name) := lower_layout
-(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv) := lower_layout
+(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
 (param_ann_signed, param_ann_unsigned, named_param_is_float, callee_ret_is_float) := lower_layout
 (ct_kind_of_name, ct_num_kind_of_name, ct_scalar_num_kind, ct_type_kind, std_ty_aggregate, struct_plain, ty_is_scalar) := lower_layout
@@ -360,6 +360,25 @@ wat_narrow_post := fn(name : str) -> str {
   if name == "u16" { return " (i64.const 65535))" }
   if name == "u32" { return " (i64.const 4294967295))" }
   if name == "i8" or name == "i16" or name == "i32" { return ")" }
+  ""
+}
+
+## The representation wrapper for a preserved narrow scalar `bitcast`. A SIGNED target is exactly the
+## numeric conversion wrapper; every other narrow target — `uN` and the raw bit-pattern names
+## (`bitsN`, `bool`, `char`, `f32`) — retains its low bits by masking to WAT's uniform i64 value
+## representation, which is byte-for-byte what `wat_narrow_pre`/`_post` already emit for `uN`.
+## `lower_layout` owns which names those are and how wide they are.
+wat_bitcast_narrow_pre := fn(name : str) -> str {
+  if bitcast_narrow_is_signed(name) { return wat_narrow_pre(name) }
+  if bitcast_narrow_bytes(name) != 0 { return "(i64.and " }
+  ""
+}
+wat_bitcast_narrow_post := fn(name : str) -> str {
+  if bitcast_narrow_is_signed(name) { return wat_narrow_post(name) }
+  w := bitcast_narrow_bytes(name)
+  if w == 1 { return " (i64.const 255))" }
+  if w == 2 { return " (i64.const 65535))" }
+  if w == 4 { return " (i64.const 4294967295))" }
   ""
 }
 ## CHECKED narrow-width OVERFLOW check for WAT (I11 / CG-6/CG-8) — the WASM dual: the value in
@@ -2953,6 +2972,18 @@ wat_expr_start := fn(e : ptr(Expr)) -> usize {
   r
 }
 
+## Is a preserved PTR bitcast target a pointer to a sub-word scalar? Such a cast is an identity in
+## WAT, which carries every pointer as an i64 word; the pointee width matters only to native deref
+## load/store lowering. A pointer-to-aggregate and every other non-scalar target stay fail-loud.
+## The pointee is read out of the full `ptr([mut] T)` target text by `lower_layout`, the one home
+## for that parse (this file used to carry its own copy). The narrow-scalar sibling predicate is
+## `lower_layout::bitcast_target_is_narrow_scalar`.
+wat_bitcast_pointer_is_subword := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  pn_s := ptr_target_pointee_s(src, ts, tl)
+  pn_n := ptr_target_pointee_n(src, ts, tl)
+  pn_n != 0 and scalar_width::subword_bytes(src, pn_s, pn_n) != 0
+}
+
 wat_source_blank := fn(src : ptr(u8), i : usize) -> bool {
   c := bytes(str_at((src + i), 1))[0]
   c == 32 or c == 9 or c == 10 or c == 13
@@ -3104,8 +3135,15 @@ wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : ptr(mut Param),
 ## already independently type-checked and an unsupported condition still emits its own trap.
 wat_break_scalar_expr := fn(e : ptr(Expr), params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), dep : i64) -> bool {
   if dep > 24 { return false }
+  mut explicit_bitcast := false
+  match deref(e) {
+    Expr::Bitcast(_inner, ts, tl) => {
+      if bitcast_target_is_narrow_scalar(src, ts, tl) or wat_bitcast_pointer_is_subword(src, ts, tl) { explicit_bitcast = true }
+    }
+    _ => {}
+  }
   start := wat_expr_start(e)
-  if start == 0 or wat_erased_bitcast_at(src, start) { return false }
+  if start == 0 or ((not explicit_bitcast) and wat_erased_bitcast_at(src, start)) { return false }
   mut r := false
   match deref(e) {
     Expr::Num(_v, _s, _n) => { r = true }
@@ -3128,9 +3166,13 @@ wat_break_scalar_expr := fn(e : ptr(Expr), params_head : ptr(mut Param), fn_head
       if ty.n != 0 and wat_break_integer_type(src, ty.s, ty.n) { r = true }
     }
     Expr::Unchecked(inner) => { r = wat_break_scalar_expr(inner, params_head, fn_head, src, a, decls, dep + 1) }
-    ## A bitcast's source may be an integer while its TARGET is a pointer or another non-integer word.
-    ## Keep that unresolved target-type shape fail-loud until a target-span proof is available.
-    Expr::Bitcast(_inner, _ts, _tl) => {}
+    ## A preserved narrow scalar target is normalized by `emit_wat_expr`; a pointer-to-subword target
+    ## is transparent in the scalar WAT representation. All other target shapes remain fail-loud.
+    Expr::Bitcast(inner, ts, tl) => {
+      if bitcast_target_is_narrow_scalar(src, ts, tl) or wat_bitcast_pointer_is_subword(src, ts, tl) {
+        r = wat_break_scalar_expr(inner, params_head, fn_head, src, a, decls, dep + 1)
+      }
+    }
     _ => {}
   }
   r
@@ -5217,12 +5259,16 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       }
       if not ok { push_str(sb, "(unreachable) (; unsupported slice value ;)\n") }
     }
-    ## A parser-preserved sub-word pointer bitcast carries only its scalar pointee span (`u8`, `bits16`,
-    ## …); WAT's scalar representation is already word-sized, so emit the source expression directly.
-    ## Other preserved bitcasts (aggregate or pointer-to-user-type targets) remain fail-loud exactly as
-    ## before: making those transparent would silently widen WAT's unsupported surface.
+    ## A preserved bare narrow scalar bitcast restores the destination representation in WAT's uniform
+    ## i64 value model. A pointer-to-subword cast is a pointer identity here; its pointee width is used
+    ## only by native deref lowering. Other preserved bitcasts remain fail-loud.
     Expr::Bitcast(inner, ts, tl) => {
-      if scalar_width::subword_bytes(src, ts, tl) != 0 {
+      if bitcast_target_is_narrow_scalar(src, ts, tl) {
+        nm := str_at((src + ts), tl)
+        push_str(sb, wat_bitcast_narrow_pre(nm))
+        emit_wat_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        push_str(sb, wat_bitcast_narrow_post(nm))
+      } else if wat_bitcast_pointer_is_subword(src, ts, tl) {
         emit_wat_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
       } else {
         push_str(sb, "(unreachable) (; unsupported bitcast ;)\n")

@@ -1,10 +1,6 @@
-## e2e/fmt — a SUB-WORD pointee bitcast keeps the `mut` marker the source wrote. The parser preserves
-## only the POINTEE span for `bitcast(ptr(<sub-word scalar>), v)` (`p_factor`'s bitcast branch keeps
-## `u8`, not `ptr(mut u8)`), so `mut` is absent from the AST entirely and fmt re-emitted `ptr(u8)` for
-## BOTH spellings — the same program today (pointer mutability is not yet enforced) but a different
-## SOURCE, and a build break the day it is. Recovered by the same source-scan `Expr::AddrOf` already
-## uses for `ptr(mut x)` (`ast::local_is_mut` off the pointee's own span start): inside a `ptr(` the
-## only token that can precede the pointee is the `mut` marker itself, so there is no false match.
+## e2e/fmt — a SUB-WORD pointer bitcast keeps the complete target type, including the `mut` marker
+## the source wrote. The parser preserves `ptr([mut] u8)` as one target span, so formatting can emit
+## the same pointer surface and a reparse retains the pointer-specific deref width.
 ##
 ## Both spellings appear below so a fix cannot pass by simply ALWAYS writing `mut`: `wp` is written
 ## `ptr(mut u8)` and must come back with the marker, `rp` is written `ptr(u8)` and must come back

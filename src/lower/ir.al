@@ -99,7 +99,13 @@ pub ir_lower_expr := fn(e : ptr(Expr), cx : ptr(LCtx), unch : bool) -> IROperand
     Expr::BoolLit(v) => { IROperand(k = 1, v = v) }
     Expr::Var(s, n) => { IROperand(k = 3, v = i64(ir_var_vreg(cx, s, n))) }
     Expr::Unchecked(inner) => { ir_lower_expr(inner, cx, true) }
-    Expr::Bitcast(inner, _bcs, _bcl) => { ir_lower_expr(inner, cx, true) }
+    ## Narrow scalar bitcasts need a destination-width normalization that this compact IR does not
+    ## model. Reject them here so the caller selects the text emitter instead of silently erasing the
+    ## target and reintroducing the sign-extension bug; pointer/aggregate identity casts remain valid.
+    Expr::Bitcast(inner, bcs, bcl) => {
+      if bitcast_target_is_narrow_scalar(cx.src, bcs, bcl) { panic("selfhost: regalloc emit — narrow scalar bitcast requires text lowering") }
+      ir_lower_expr(inner, cx, true)
+    }
     Expr::Bin(op, l, r) => { ir_lower_bin(op, l, r, cx, unch) }
     Expr::Call(cs, cl, na, ah) => { ir_lower_call(cs, cl, na, ah, cx, unch) }
     ## a SCALAR field read of a by-ref struct param (predicate-validated) → a BARRIER: the whole `e` is
@@ -398,7 +404,10 @@ ir_neg_cc := fn(op : u8, ucmp : bool) -> usize {
 ir_lower_cond := fn(c : ptr(Expr), lfalse : usize, cx : ptr(LCtx), unch : bool) {
   match deref(c) {
     Expr::Unchecked(inner) => { ir_lower_cond(inner, lfalse, cx, true) }
-    Expr::Bitcast(inner, _bcs, _bcl) => { ir_lower_cond(inner, lfalse, cx, true) }
+    Expr::Bitcast(inner, bcs, bcl) => {
+      if bitcast_target_is_narrow_scalar(cx.src, bcs, bcl) { panic("selfhost: regalloc emit — narrow scalar bitcast requires text lowering") }
+      ir_lower_cond(inner, lfalse, cx, true)
+    }
     Expr::Bin(op, l, r) => {
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         lo := ir_to_reg(ir_lower_expr(l, cx, unch))
@@ -1308,7 +1317,12 @@ ir_check_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), unch : b
     ## uninitialized vreg). A struct-field read is the `Expr::Field` arm below.
     Expr::Var(s, n) => { if (not ir_bound_has(src, s, n)) or ir_name_is_global(decls, src, s, n) or ir_sp_idx(src, s, n) >= 0 or ir_slice_param_idx(src, s, n) >= 0 or ir_array_local_idx(src, s, n) >= 0 or ir_vec_local_idx(src, s, n) >= 0 or ir_fr_idx(src, s, n) >= 0 { IRP_OK = false } }
     Expr::Unchecked(inner) => { ir_check_expr(src, decls, inner, true) }
-    Expr::Bitcast(inner, _bcs, _bcl) => { ir_check_expr(src, decls, inner, true) }
+    ## The text emitter owns narrow scalar bitcast normalization; keep the compact IR out of this
+    ## shape rather than allowing its old transparent arm to drop the target representation.
+    Expr::Bitcast(inner, bcs, bcl) => {
+      if bitcast_target_is_narrow_scalar(src, bcs, bcl) { IRP_OK = false }
+      else { ir_check_expr(src, decls, inner, true) }
+    }
     Expr::Bin(op, l, r) => {
       if op == 16 or op == 17 or op == 18 {
         ## CHECKED `+`/`-`/`*` are now MODELLED (op + inline overflow guard), so admitted whether checked
@@ -1418,7 +1432,10 @@ ir_check_call := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize,
 ir_check_cond := fn(src : ptr(u8), decls : ptr(rt::Vec), c : ptr(Expr), unch : bool) {
   match deref(c) {
     Expr::Unchecked(inner) => { ir_check_cond(src, decls, inner, true) }
-    Expr::Bitcast(inner, _bcs, _bcl) => { ir_check_cond(src, decls, inner, true) }
+    Expr::Bitcast(inner, bcs, bcl) => {
+      if bitcast_target_is_narrow_scalar(src, bcs, bcl) { IRP_OK = false }
+      else { ir_check_cond(src, decls, inner, true) }
+    }
     Expr::Bin(op, l, r) => {
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         IRP_NBIN = IRP_NBIN + 1
