@@ -22,6 +22,37 @@ pub Token := struct { kind : u8, start : usize, len : usize }
 
 pub LocalTypeSpan := struct { s : usize, n : usize }
 
+## The byte extent of the source buffer the front end parsed. Every span in `Token`, `Decl` and `Stmt`
+## is an offset from that buffer's base, so the source-recovery helpers below scan to the real end of
+## the source instead of an arbitrary window past the name span. Zero admits NO recovery: each helper
+## answers "not found" rather than reading a byte it cannot prove is inside the buffer, which is the
+## fail-closed default for any direct or internal caller that has not published an extent. The driver
+## publishes it once per pipeline, beside the `base` pointer it hands to the parser, `sema`, `lower`,
+## `fmt` and the non-x86 back ends. Mirrors `lower::LOWER_SRC_N` and `wat::WAT_SRC_N`.
+mut AST_SRC_N : usize = 0
+
+pub set_src_extent := fn(n : usize) { AST_SRC_N = n }
+
+## The published extent, for the ONE front-end scan of this family that lives outside this module:
+## `parser::local_uninit_end`, which decides whether a `name : T` declaration has an initializer.
+## It must agree with `local_is_uninit` below, so it reads the same number rather than its own cap.
+pub src_extent := fn() -> usize { AST_SRC_N }
+
+## Length-aware primitives for the recovery below. `src` is a raw pointer, not a length-carrying `str`,
+## so every prefix and single-byte read is first proven to lie inside `[0, end)` — the shape
+## `lower::ptr_scan_has` / `ptr_scan_ws` established for the inferred-pointer recovery. A scan that
+## runs out of source stops instead of walking into whatever the allocator left past the last byte.
+ast_scan_has := fn(src : ptr(u8), end : usize, p : usize, want : str) -> bool {
+  if p > end { return false }
+  if want.len > end - p { return false }
+  (src + p).str_at(want.len) == want
+}
+ast_scan_ws := fn(src : ptr(u8), end : usize, p : usize) -> bool {
+  if p >= end { return false }
+  c := (src + p).str_at(1)
+  c == " " or c == "\n" or c == "\t" or c == "\r"
+}
+
 ## Recover a local binding's declared type from its name token in the closed source package without
 ## widening `Stmt.Assign`, whose payload shape is a bootstrap-sensitive self-host invariant. The
 ## grammar permits `:=`, `=`, or `: Type` / `: Type =` immediately after the name. A valid type
@@ -31,20 +62,12 @@ pub LocalTypeSpan := struct { s : usize, n : usize }
 ## locals.
 pub local_type_span := fn(src : ptr(u8), s : usize, n : usize) -> LocalTypeSpan {
   mut p := s + n
-  end := p + 512
-  mut c := (src + p).str_at(1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") {
-    p += 1
-    c = (src + p).str_at(1)
-  }
-  if c != ":" { return LocalTypeSpan(s = 0, n = 0) }
+  end := AST_SRC_N
+  while p < end and ast_scan_ws(src, end, p) { p += 1 }
+  if ast_scan_has(src, end, p, ":") == false { return LocalTypeSpan(s = 0, n = 0) }
   p += 1
-  if (src + p).str_at(1) == "=" { return LocalTypeSpan(s = 0, n = 0) }
-  c = (src + p).str_at(1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") {
-    p += 1
-    c = (src + p).str_at(1)
-  }
+  if ast_scan_has(src, end, p, "=") { return LocalTypeSpan(s = 0, n = 0) }
+  while p < end and ast_scan_ws(src, end, p) { p += 1 }
   ts := p
   mut terminated := false
   mut depth := 0
@@ -75,17 +98,18 @@ pub local_type_span := fn(src : ptr(u8), s : usize, n : usize) -> LocalTypeSpan 
 ## layout remains unchanged. Returns false for `:=`, plain `=`, malformed, or multiline declarations.
 pub local_is_uninit := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   mut p := s + n
-  end := p + 512
-  mut c := (src + p).str_at(1)
-  while p < end and (c == " " or c == "\t" or c == "\r") {
-    p += 1
-    c = (src + p).str_at(1)
+  end := AST_SRC_N
+  ## Deliberately NOT `ast_scan_ws`: a newline before the `:` means the declaration is not the exact
+  ## single-line no-initializer form this predicate answers for, so it must terminate the scan.
+  while p < end {
+    c0 := (src + p).str_at(1)
+    if c0 == " " or c0 == "\t" or c0 == "\r" { p += 1 } else { break }
   }
-  if c != ":" { return false }
+  if ast_scan_has(src, end, p, ":") == false { return false }
   p += 1
   mut depth := 0
   while p < end {
-    c = (src + p).str_at(1)
+    c := (src + p).str_at(1)
     if c == "(" or c == "[" { depth += 1 }
     if c == ")" or c == "]" {
       if depth > 0 { depth -= 1 }
@@ -116,15 +140,19 @@ pub local_is_uninit := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ##
 ## The SECOND byte must be `=`, so a bare `x - 50` expression statement is not mistaken for `x -= 50`,
 ## and `x == y` / `x != y` / `x <= y` are excluded by the operator set itself.
+##
+## The whitespace run between the name and the operator is unbounded in the grammar (Grammar §1 —
+## whitespace is insignificant, §3.2 — a statement is delimited by a newline or `;`), so the scan is
+## bounded by the published SOURCE EXTENT rather than by a fixed window past the name. The old
+## fixed 512-byte cap silently reclassified `x <513 spaces> += 1` as a DECLARATION, which made `sema`,
+## `lower` and `fmt` disagree about the very statement form this helper exists to keep them agreed on.
 pub compound_assign_op_at := fn(src : ptr(u8), ns : usize, nl : usize) -> str {
   mut p := ns + nl
-  end := p + 512
-  mut c := (src + p).str_at(1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") {
-    p += 1
-    c = (src + p).str_at(1)
-  }
-  if (src + p + 1).str_at(1) != "=" { return "" }
+  end := AST_SRC_N
+  while p < end and ast_scan_ws(src, end, p) { p += 1 }
+  ## Proves `p + 1 < end`, hence `p < end`, so the operator byte below is inside the source too.
+  if ast_scan_has(src, end, p + 1, "=") == false { return "" }
+  c := (src + p).str_at(1)
   if c == "+" or c == "-" or c == "*" or c == "/" { return c }
   if c == "%" or c == "&" or c == "|" or c == "^" { return c }
   ""
@@ -135,15 +163,11 @@ pub compound_assign_op_at := fn(src : ptr(u8), ns : usize, nl : usize) -> str {
 ## `Stmt::Assign`; keep the recovery in one place so sema, lower, and fmt cannot drift.
 pub assign_is_reassign := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
   mut p := ns + nl
-  end := p + 512
-  mut c := (src + p).str_at(1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") {
-    p = p + 1
-    c = (src + p).str_at(1)
-  }
-  if c == ":" { return false }
+  end := AST_SRC_N
+  while p < end and ast_scan_ws(src, end, p) { p = p + 1 }
+  if ast_scan_has(src, end, p, ":") { return false }
   if compound_assign_op_at(src, ns, nl).len != 0 { return true }
-  if c == "=" and (src + p + 1).str_at(1) != "=" { return true }
+  if ast_scan_has(src, end, p, "=") and ast_scan_has(src, end, p + 1, "=") == false { return true }
   false
 }
 

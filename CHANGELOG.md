@@ -165,6 +165,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   aggregate-as-scalar conversion.
 - Direct builtin scalar conversions of exact two-word tuple locals without an in-scope `@convert` now
   fail at compile time with the same located diagnostic instead of silently reading tuple word zero.
+- The shared `ast` source recovery (assignment form, compound operator, declared type, no-initializer
+  form) and the parser's no-initializer twin now scan to the published source extent instead of a
+  fixed 512-byte window past the name. An assignment separated from its operator by a longer
+  whitespace run stays an assignment for `sema`, `lower` and `fmt` alike and formatting preserves all
+  eight compound spellings; a typed no-initializer local keeps its declared type, so a fixed-array
+  local no longer collapses to one scalar word and read the wrong element; and a long declaration no
+  longer absorbs the following statement or refuses the file. Every read in that recovery is
+  bounds-checked against the source buffer instead of relying on allocator zero-fill.
 - `alatyr build --quiet` / `-q` now suppresses the optional success summary while preserving the
   artifact, stdout, and exit status.
 - Successful manifest-driven builds now print a deterministic profile, target and artifact summary to

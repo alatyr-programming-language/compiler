@@ -2004,6 +2004,11 @@ d_lift_lambdas := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(
 ## to flush + free.
 pub compile := fn(src : str, in out a : Arena) -> strbuf::StrBuf {
   base := unchecked bitcast(usize, src.ptr)
+  ## Publish this buffer's extent BEFORE the lexer runs, so the shared `ast` source-recovery helpers
+  ## (assignment form, compound operator, declared type, no-initializer form) and `parser`'s twin scan
+  ## to the real end of the source rather than a fixed window past a name span. Zero admits no
+  ## recovery, so a pipeline that forgets to publish fails closed instead of reading past the buffer.
+  ast::set_src_extent(src.len)
   ## --- lex: source -> rt token store (the MIGRATED lexer lexrt, off alloc::vec) ---
   ## lexrt reads via `bytes(src)[i]` and writes each token as a 3-word arena record
   ## {kind,start,len} with its handle in an `rt::Vec` (the parser reads it via `tok_at`). The
@@ -2111,6 +2116,8 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
   rt::vec_push(src_len, lsb)
   strbuf::push_str(bld, sb_src)
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
+  ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
+  ast::set_src_extent(strbuf::buf_len(bld))
   sa_off := la + lb               ## source A begins after the two names
   sb_off := la + lb + lsa         ## source B begins after source A
   ## --- module A: lex its region [sa_off, sa_off+lsa) with lexrt (base_off = sa_off → token
@@ -2200,6 +2207,8 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
     k += 1
   }
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
+  ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
+  ast::set_src_extent(strbuf::buf_len(bld))
   ## --- lex + parse each module's region into ONE rt Decl-handle Vec, threading nstr (all token
   ## records + the shared decls handle Vec + records live in `tar`, created above). ---
   ## Caps reserved from source size (rt::vec_push does not grow): decls ≤ total tokens ≤ total
@@ -3905,6 +3914,8 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     manifest_len = rt::vec_get(src_len, root_k)
   }
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
+  ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
+  ast::set_src_extent(strbuf::buf_len(bld))
   if manifest_len != 0 {
     d_manifest_scan(str_at(base + manifest_off, manifest_len), manifest_off)
     if MANIFEST_HAS {
@@ -4904,6 +4915,8 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     k += 1
   }
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
+  ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
+  ast::set_src_extent(strbuf::buf_len(bld))
   dcap := strbuf::buf_len(bld) + 16
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
   mut ev := rt::Vec(data = rt::bump(tar, dcap * 16), len = 0, cap = dcap * 2)
@@ -5201,6 +5214,8 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   push_module_name(bld, path)
   fmnl := strbuf::buf_len(bld) - fmns
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
+  ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
+  ast::set_src_extent(strbuf::buf_len(bld))
   tcap := nread + 16
   mut rt_toks := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
   zt := lexrt::lex_rt(str_at(base, nread), 0, rt_toks, tokar)
@@ -5492,6 +5507,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     manifest_len = rt::vec_get(src_len, root_k)
   }
   base := unchecked bitcast(usize, strbuf::strbuf_base(bld))
+  ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
+  ast::set_src_extent(strbuf::buf_len(bld))
   if manifest_len != 0 {
     d_manifest_scan(str_at(base + manifest_off, manifest_len), manifest_off)
     if MANIFEST_HAS {
@@ -5814,6 +5831,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
 ## prove the tree ACCEPTS a well-typed program and REJECTS an ill-typed one.
 pub check := fn(src : str, in out a : Arena) -> usize {
   base := unchecked bitcast(usize, src.ptr)
+  ## Publish this buffer's extent for the shared `ast` source recovery (`ast::set_src_extent`).
+  ast::set_src_extent(src.len)
   mut tar := rt::Arena(base = 0, off = 0, cap = 0)
   rt::arena_init(tar, 16777216)
   mut na := rt::Arena(base = 0, off = 0, cap = 0)
