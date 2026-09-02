@@ -82,6 +82,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `alloc::vec::reserve` now returns `Err(AllocError.SizeTooLarge)` for a request it cannot represent
+  in `usize` instead of aborting the process: the requested count `len + additional`, the capacity
+  doubling, and the byte size handed to `allocate` are each computed with an explicit wraparound
+  test. A wrapped count previously would have reported success for a request larger than the address
+  space; a successful reserve, a no-op reserve, and a representable `OutOfMemory` are unchanged.
 - AArch64, RISC-V64 and WebAssembly no longer destroy the neighbouring narrow field when a field of a
   fixed-array element held in a struct field is written: the array literal is materialized at the
   element's byte-precise layout instead of one machine word per field. x86_64 was already correct.

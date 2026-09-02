@@ -236,12 +236,35 @@ pub swap_remove := fn(T : type, in out v : Vec(T), i : usize) -> Option(T) {
 ## growth that exhausts the allocator surfaces `AllocError`, it does not trap.
 ## The amortized counterpart of `push`'s on-demand grow (call it before a known
 ## batch of `push`es to make each one allocation-free). An `in out` place borrow.
+##
+## Every size arithmetic step is done in an `unchecked` block with an explicit
+## wraparound test, so a request that cannot be represented in `usize` surfaces
+## `AllocError.SizeTooLarge` (Stdlib §5.1 — "overflows `usize`") instead of
+## trapping on the checked operator. Three steps can exceed `usize`:
+##   * `len + additional` — the requested element count;
+##   * the capacity doubling — the smallest power-of-two multiple of `cap` that
+##     covers `need` need not be representable;
+##   * `new_cap * size(T)` — the byte size handed to `allocate`.
+## The wraparound tests are exact: an unsigned `a + b` overflowed iff the wrapped
+## sum is below `a`, and `a * b` overflowed iff `a != 0` and the wrapped product
+## divided by `a` is not `b`. They are written without a `usize::MAX` literal so
+## they hold on a 32-bit `usize` target too.
 pub reserve := fn(T : type, in out v : Vec(T), additional : usize) -> Result(usize, AllocError) {
-  need := v.len + additional
+  need : usize = unchecked { v.len + additional }
+  if need < v.len { return Result(usize, AllocError).Err(AllocError.SizeTooLarge) }
   if need <= v.cap { return Result(usize, AllocError).Ok(v.cap) }
   mut new_cap : usize = v.cap
-  while new_cap < need { new_cap = new_cap * 2 }
-  nidx := allocate(deref(v.arena), T, new_cap * size(T), align(T))?.idx
+  while new_cap < need {
+    dbl : usize = unchecked { new_cap * 2 }
+    if dbl < new_cap { return Result(usize, AllocError).Err(AllocError.SizeTooLarge) }
+    new_cap = dbl
+  }
+  ## `new_cap >= need >= 1` here (the no-op arm above took every `need <= cap`
+  ## case), so dividing the wrapped product by `new_cap` cannot divide by zero.
+  nbytes_req : usize = unchecked { new_cap * size(T) }
+  quot : usize = unchecked { nbytes_req / new_cap }
+  if quot != size(T) { return Result(usize, AllocError).Err(AllocError.SizeTooLarge) }
+  nidx := allocate(deref(v.arena), T, nbytes_req, align(T))?.idx
   aa := deref(v.arena)
   oldp := alloc::get(T, aa, Handle(T)(idx = v.idx))
   newp := alloc::get(T, aa, Handle(T)(idx = nidx))

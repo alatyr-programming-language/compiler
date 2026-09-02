@@ -6908,6 +6908,11 @@ run std_path 42
 run ambient_string 42
 ## alloc::vec accessors: at (bounds-checked Option read), first/last, swap_remove (O(1) unordered).
 run vec_access 42
+## #354 alloc::vec::reserve is fallible: a request that cannot be represented in `usize` returns
+## Err(SizeTooLarge) instead of trapping (each of `len + additional`, the capacity doubling, and
+## `new_cap * size(T)` was a bare checked operator and aborted with SIGILL). The no-op, ordinary
+## growth, post-refusal-still-usable, and representable OutOfMemory rows are the controls.
+run issue354_vec_reserve_overflow 42
 ## alloc::deque — a double-ended queue (ring buffer): push/pop both ends, wrap-around, growth (cap 2
 ## → forced doubling + re-linearize), front/back/dq_at reads.
 run deque_ops 42
