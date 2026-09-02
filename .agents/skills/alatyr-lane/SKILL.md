@@ -33,6 +33,7 @@ ISSUE= # set to 123 when the owner supplied an issue number; leave blank for the
 if test -n "$ISSUE"; then
   gh issue view "$ISSUE" -R "$R" --json number,state,assignees,labels,author,body,comments
 else
+  bash .agents/skills/alatyr-lane/select_issue_test.sh >/dev/null || exit 1 # must pass first
   CURRENT_LOGIN=$(gh api user --jq .login)
   SELECTOR_INPUT="$(mktemp -d)"
   trap 'rm -rf "$SELECTOR_INPUT"' EXIT
@@ -46,9 +47,14 @@ else
     bash .agents/skills/alatyr-lane/select_issue.sh \
       "$R" "$CURRENT_LOGIN" "$SELECTOR_INPUT/prs.json" "$SELECTOR_INPUT/issues.json"
   )"
-  test -n "$ISSUE" || { echo "no eligible issue authored by $CURRENT_LOGIN; ask the owner" >&2; exit 1; }
+  SELECT_RC=$?                       # the status is the answer; an empty string is not
+  case "$SELECT_RC" in
+    0) test -n "$ISSUE" ||
+         { echo "selector exited 0 with no issue number; ask the owner" >&2; exit 1; } ;;
+    3) echo "no eligible issue authored by $CURRENT_LOGIN; ask the owner" >&2; exit 1 ;;
+    *) echo "selector refused (exit $SELECT_RC): fix the PR or issue named above" >&2; exit 1 ;;
+  esac
 fi
-bash .agents/skills/alatyr-lane/select_issue_test.sh
 gh issue view "$ISSUE" -R "$R" --json number,state,assignees,labels,author,body,comments
 gh pr list   -R $R --state open --label oracle --json number --jq 'length' # MUST be 0 before §7
                                                                           # (label it in §7 if needed)
@@ -73,23 +79,45 @@ selection unsafe: stop and ask the owner instead of guessing. Priority is routin
 authorization or safety signal. Do not infer it from the title, defect label (`wrong-value`,
 `fails-when-valid`, or `diagnostic`), milestone, area label, comments, or issue number.
 
-Before ranking issues, the fallback validates every open PR through
-`.agents/skills/alatyr-lane/select_issue.sh`. The PR must have exactly one issue relation: a bounded
-`Refs #N`, or one complete `Closes #N`, `Fixes #N`, or `Resolves #N` relation. A body relation is
-checked against `closingIssuesReferences` when that API field represents a complete relation; a
-bounded relation must not also have a closing reference. Missing, multiple, mixed, malformed, or
-disagreeing relations stop the fallback. A cross-repository or fork head, an `oracle` label, or a PR
-touching any of `scripts/corpus.manifest`, `scripts/idiom.baseline`, or `scripts/needle.baseline`
-also stops it. Missing or malformed metadata is a refusal, never an empty set. The helper treats PR
+Before ranking issues, the fallback reads every open PR's issue relation through
+`.agents/skills/alatyr-lane/select_issue.sh`. A conforming PR names exactly one issue: a bounded
+`Refs #N`, or one complete `Closes #N`, `Fixes #N`, or `Resolves #N` relation whose number agrees
+with `closingIssuesReferences`; a bounded relation must not also carry a closing reference. A PR
+excludes the issue it names from candidacy, and a `hold` PR does not: `hold` is the maintainer's
+integration-side hold, and `AGENTS.md` excludes a held PR from the automatic same-account fallback,
+so the issue's own `in-progress` claim and preflight check 5 below govern it instead.
+
+The selector separates two kinds of bad input, because they have different owners:
+
+- **Contributor-written text is diagnosed, never fatal.** A missing, multiple, mixed, malformed, or
+  disagreeing relation is reported on stderr **by PR number**, and that PR excludes only the issues
+  it legibly names — both numbers of a two-relation body, every issue a flagged relation line
+  mentions, nothing at all for an unparseable one. Ranking continues. Any outside contributor can
+  open a PR, so stopping here would let one carelessly written body anywhere in the repository
+  disable the fallback for every issue, and preflight check 5 is the authoritative overlap check
+  either way. A fork head or an oracle-touching PR is likewise reported and still excludes its
+  issue.
+- **Unreliable metadata is a refusal.** A requested field that is absent, of the wrong JSON type, or
+  self-contradictory — `changedFiles` disagreeing with the returned `files`, a malformed
+  `closingIssuesReferences`, ambiguous `priority-*` labels — means the query, not a PR body, must be
+  fixed. The selector exits non-zero with a message naming the offending PR or issue.
+
+The exit status is the answer, and the caller above branches on it: `0` with an issue number on
+stdout, `3` for a genuinely empty queue, anything else for a refusal. Never infer an empty queue
+from an empty string; a refusal reported as an empty queue is the failure this selector exists to
+prevent. The notes quote nothing by construction: they carry PR numbers, issue numbers, and body
+line numbers, and never echo untrusted body text into the operator's terminal. The helper treats PR
 bodies, labels, branches, authors, and assignees as data only: none is an authorization signal, and
 no PR-controlled text is executed. The issue-side input is checked for the current author's login
 again before ranking.
 
-The repository-controlled self-test is `bash .agents/skills/alatyr-lane/select_issue_test.sh`. It must
-pass before relying on the fallback; it proves both `Refs` exclusion without an `in-progress` label and
-the closing-relation path, then exercises missing, multiple, malformed, mixed, fork, and oracle refusal
-cases. A changed self-test that reports fewer than its expected proof-of-work checks is a failure, not
-a shortcut to green.
+The repository-controlled self-test is `bash .agents/skills/alatyr-lane/select_issue_test.sh`, and
+the fallback is only usable when it passes. It proves `Refs` exclusion without an `in-progress`
+label and the closing-relation path; that a missing, malformed, multiple, mixed, or disagreeing
+relation is named by PR number while ranking continues; that a `hold` PR stops excluding its issue;
+that a fork or oracle PR is reported and still excludes it; that each refusal names its PR or
+issue; and that a refusal and an empty queue are told apart by exit status. A changed self-test that
+reports fewer than its expected proof-of-work checks is a failure, not a shortcut to green.
 
 The fallback selects a candidate, not a claimed task. Perform the preflight review below before
 claiming it. If a candidate is missing ordinary factual information, ask the questions on the issue,
