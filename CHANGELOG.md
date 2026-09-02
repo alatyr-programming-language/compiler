@@ -82,6 +82,9 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- AArch64, RISC-V64 and WebAssembly no longer destroy the neighbouring narrow field when a field of a
+  fixed-array element held in a struct field is written: the array literal is materialized at the
+  element's byte-precise layout instead of one machine word per field. x86_64 was already correct.
 - `HashMap(str, V)` now compiles and keys by string CONTENT: the structural `hash` derive gained the
   `Str` case it was missing (it fell through to a scalar conversion and refused the two-word view), and
   a `str` key parameter inside a monomorphized container instance now resolves its comptime type

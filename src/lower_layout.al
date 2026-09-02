@@ -1418,6 +1418,39 @@ pub array_elem_word_reservation := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : 
   struct_words(decls, src, ts, tl, a)
 }
 
+## ─── THE ONE "WHICH WRITER MATERIALIZES THIS ARRAY LITERAL?" DECISION (CLAYOUT S4) ──────────────
+## An array literal is written by exactly one of two constructors, and picking the wrong one is how a
+## byte-tier element ends up READ at offsets nobody WROTE it at. The test each site used to spell for
+## itself is "is the first element a `StructLit`, and is its type in `std_array_elem_byte_tier`"; it
+## now lives HERE, once, and answers the ELEMENT TYPE span so the caller takes its stride from
+## `layout_elem_stride_bytes` and its slot reservation from `array_elem_word_reservation` — the same
+## two oracles every READER of that element already asks.
+##
+## The reason it had to move: the three cross-backend PAYLOAD writers (`emit_a64_store_payload_at`
+## and its riscv64/wat twins) never asked the question at all, so an array FIELD inside a struct
+## literal — `S(items = [P(a=1,b=2), P(a=3,b=4)])` — was materialized one machine WORD per field while
+## every reader of `s.items[i].f` resolved it through the byte tier. That is #263's remaining
+## cross-backend half: `s.items[1].a = 9` landed correctly and destroyed `s.items[1].b`, silently, on
+## aarch64, riscv64 and wasm alike.
+##
+## `{0,0}` means "not this tier" and is not a failure: the caller keeps its historical word-granular
+## writer and every fence it already has. A MIXED literal (a later element that is not a struct
+## literal) is still the caller's business — each one already emits its own located fail-loud there,
+## because only the caller knows how to spell a trap.
+pub array_lit_byte_elem := fn(decls : ptr(rt::Vec), src : ptr(u8), v : ptr(Expr), a : rt::Arena) -> LSpan {
+  mut r := LSpan(s = 0, n = 0)
+  if not ex_is_array_lit(v) { return r }
+  eh := ex_array_lit_ehead(v)
+  if eh == 0 { return r }
+  a0 := deref(arg_p(eh))
+  ens := ex_struct_lit_ns(a0.e)
+  enl := ex_struct_lit_nl(a0.e)
+  if enl == 0 { return r }
+  if not std_array_elem_byte_tier(decls, src, ens, enl, a) { return r }
+  r = LSpan(s = ens, n = enl)
+  r
+}
+
 ## ─── THE ARRAY-ELEMENT FENCE (CLAYOUT S3(c)) ───────────────────────────────────────────────────
 ## An ARRAY whose element is a standard byte-layout struct has no byte-precise tier yet: the element
 ## STRIDE is `struct_words * 8` while the element is written and read by two different models, so
@@ -2547,6 +2580,19 @@ pub ex_call_argh := fn(e : ptr(Expr)) -> ptr(mut Arg) { mut r := unchecked bitca
 pub ex_struct_lit_args := fn(v : ptr(Expr)) -> usize {
   mut r := 0
   match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = ah } _ => {} }
+  r
+}
+## The struct NAME span of a `StructLit`, else length 0. Two single-assignment accessors rather than
+## one struct-returning matcher: that is this module's idiom everywhere, and the frozen seed's
+## documented struct-return scar makes a multi-assignment match arm the wrong thing to introduce here.
+pub ex_struct_lit_ns := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = ss } _ => {} }
+  r
+}
+pub ex_struct_lit_nl := fn(v : ptr(Expr)) -> usize {
+  mut r := 0
+  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = sn } _ => {} }
   r
 }
 pub ex_enum_lit_args := fn(v : ptr(Expr)) -> usize {

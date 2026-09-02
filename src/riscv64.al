@@ -27,7 +27,7 @@ arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 (push_str, push_int) := rt
-(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
+(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
 (ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv) := lower_layout
@@ -4940,6 +4940,28 @@ emit_rv_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf
   ## and the following elements stay aligned. Advancing by the width each element actually reports means
   ## a heterogeneous literal (a TUPLE, which parses as an ArrayLit too) also lays out correctly.
   if ex_is_array_lit(pe) {
+    ## CLAYOUT S4 (#263) — see the aarch64 twin. A BYTE-TIER element array is an IMAGE: the loop below
+    ## writes one machine WORD per field at a `struct_words` element stride, while every reader of
+    ## `xs[i].f` resolves it through `layout_elem_stride_bytes` + `layout_field_offset_bytes`. Ask the
+    ## ONE shared decision and hand each element to the byte-precise whole-value writer instead; the
+    ## WORDS returned stay `array_elem_word_reservation` so following fields do not move.
+    abe := array_lit_byte_elem(decls, src, pe, a)
+    if abe.n != 0 {
+      bstride := rv_arr_elem_stride_bytes(src, abe.s, abe.n, a, decls)
+      bwords := i64(array_elem_word_reservation(decls, src, abe.s, abe.n, a))
+      mut bg := ex_array_lit_ehead(pe)
+      mut bo := off
+      mut btot := 0
+      while bg != 0 {
+        bga := deref(arg_p(bg))
+        if expr_is_struct_lit(bga.e) { _bw := rv_std_store_struct(bga.e, bo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        if not expr_is_struct_lit(bga.e) { push_str(sb, "  ebreak # mixed byte-tier array literal\n") }
+        bo = bo + bstride
+        btot = btot + bwords
+        bg = bga.next
+      }
+      return btot
+    }
     mut ag := ex_array_lit_ehead(pe)
     mut ao := off
     mut atot := 0
@@ -5734,10 +5756,10 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         if alitok {
           ag0 := ex_array_lit_ehead(v)
           if ag0 != 0 {
-            aga0 := deref(arg_p(ag0))
-            if expr_is_struct_lit(aga0.e) and std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(aga0.e), expr_struct_lit_nl(aga0.e), a) {
+            albe := array_lit_byte_elem(decls, src, v, a)
+            if albe.n != 0 {
               alitbyte = true
-              astrideB := i64(layout_elem_stride_bytes(decls, src, expr_struct_lit_ns(aga0.e), expr_struct_lit_nl(aga0.e), a))
+              astrideB := i64(layout_elem_stride_bytes(decls, src, albe.s, albe.n, a))
               mut abg := ag0
               mut abo := poff
               while abg != 0 {

@@ -48,7 +48,7 @@ stmt_p := ast::stmt_p
 stmt_label_span := ast::stmt_label_span
 local_is_comptime := ast::binding_is_comptime
 (push_str, push_int) := rt
-(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
+(layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 variant_payload_type := lower_layout::variant_payload_type
 (typearg_at, base_type_name) := lower_layout
@@ -4054,6 +4054,29 @@ emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb
     return 1 + i64(enum_max_arity(decls, src, en.s, en.n, a))
   }
   if ex_is_array_lit(pe) {
+    ## CLAYOUT S4 (#263) — see the aarch64 twin. A BYTE-TIER element array is an IMAGE: the loop below
+    ## writes one machine WORD per field at a `struct_words` element stride, while every reader of
+    ## `xs[i].f` resolves it through `layout_elem_stride_bytes` + `layout_field_offset_bytes`. Ask the
+    ## ONE shared decision and hand each element to the byte-precise whole-value writer instead; the
+    ## WORDS returned stay `array_elem_word_reservation` so following fields do not move.
+    abe := array_lit_byte_elem(decls, src, pe, a)
+    if abe.n != 0 {
+      bstride := wat_arr_elem_stride_bytes(src, abe.s, abe.n, a, decls)
+      bwords := i64(array_elem_word_reservation(decls, src, abe.s, abe.n, a))
+      mut bg := ex_array_lit_ehead(pe)
+      mut bo := off
+      mut btot := 0
+      while bg != 0 {
+        bga := deref(arg_p(bg))
+        bsp := expr_struct_name(bga.e)
+        if bsp.n != 0 { _bw := wat_std_store_struct(bga.e, bidx, bo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        if bsp.n == 0 { push_str(sb, "    (unreachable) (; mixed byte-tier array literal ;)\n") }
+        bo = bo + bstride
+        btot = btot + bwords
+        bg = bga.next
+      }
+      return btot
+    }
     mut ag := ex_array_lit_ehead(pe)
     mut ao := off
     mut atot := 0
