@@ -691,6 +691,16 @@ pub emit_elem_copy_in := fn(arr : ptr(Expr), idx : ptr(Expr), dst : i64, in out 
   }
 }
 pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  ## SOUNDNESS (correct-or-trap, cardinal rule): a str LITERAL base (`"abc"[i]`) is a `.rodata`
+  ## VALUE, not a place — it has no frame home for `index_base_entry` to resolve, so the generic
+  ## tail below silently addressed SLOT 0 (`leaq -8(%rbp)` + `i*8`). The READ of that form is
+  ## claimed by `emit_gas`'s `Index` arm (the literal's {ptr, len} pair + a `movzbq` byte load) and
+  ## never reaches here; any OTHER use — a WRITE `"abc"[0] = x`, an address-of — would store INTO
+  ## the caller's frame at slot 0. A literal is not assignable, so stop loud instead of corrupting
+  ## the frame. Placed first: no arm below can claim an `Expr::StrLit` base anyway.
+  if str_lit_info(base).is_s {
+    panic("selfhost: a str LITERAL is a value, not a place — `\"…\"[i]` is only supported as a byte READ; assigning to or taking the address of a literal element is not lowered")
+  }
   ## Slice LOCAL/PARAM — the element address reaches the view's backing pointer with the element's
   ## byte/word stride. Keep this before the struct-field and fixed-array paths: a Slice value is a
   ## 2-word view, not an inline frame array, so treating its slot as an array would address the view
