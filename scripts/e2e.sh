@@ -4873,6 +4873,13 @@ ext_test env_size_test
 ## regression exercises the generated 483/484-byte source-recovery boundary without adding corpus
 ## oracle rows. The script also asserts the emitted x86 load width.
 ext_test issue344_pointee_width_test
+## Issue #340: the inferred `q := <view>.ptr` byte-pointer recovery used to stop at `name_end + 512`,
+## so one extra space turned `deref(q)` from a one-byte load into an eight-byte one with `check` still
+## green — a silent wrong value. The generated fixtures pin the EXACT neighbours (507 accepted / 508
+## wrong on the parent) plus the `bytes(…)` and call-bound duals, and assert the emitted x86 load width,
+## so enlarging the constant cannot pass. Kept private: no corpus oracle row, and the asserted GAS
+## needles never appear in the fixture source.
+ext_test issue340_view_ptr_window_test
 ## Issue #342: keep the aggregate Slice parameter source-recovery boundary fixture private so the
 ## regression exercises both name/type spacing beyond the old window without adding corpus oracle rows.
 ## The helper also checks the three backend twins while preserving their existing fail-loud aggregate path.

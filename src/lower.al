@@ -11121,18 +11121,26 @@ deref_pointee_bytes := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
 ## local/param/view (`str` IS `[u8]`, appendix 160 §3.5); an `ek == 2` `Slice(u8)` value and an `ek == 5`
 ## byte-element slice are the `Slice` duals. Anything else (a `ptr(u64)`-yielding `.ptr`, an annotated
 ## binding, a non-`.ptr` RHS) → false → the unchanged word-sized `deref`.
+## The scan is bounded by the EXACT source-buffer extent `emit_program` publishes in `LOWER_SRC_N`,
+## never by a fixed byte window. §2.5 allows arbitrary whitespace between the name and `:=`, and the
+## old `name_end + 512` end turned a valid binding into a WORD-sized `deref` — a silent wrong value,
+## not a diagnostic (issue #340). For the shape `q<gap>:= s.ptr` that end admitted 507 spaces and lost
+## the pointee at 508, because the identifier walk still had to reach the `.` under the same limit.
+## `LOWER_SRC_N` is fail-closed at 0, so an unpublished extent answers false and keeps the pre-existing
+## word-sized fallback rather than reading out of bounds. Every read below is proven inside `[0, end)`:
+## the prefix tests go through `ptr_scan_has`, the whitespace tests through `ptr_scan_ws`, and the
+## identifier walk reads only under `p < end`.
 byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
   if streq(cx.src, ent.ns, ent.nl, s, n) == false { return false }
   if ent.ek != 0 { return false }
+  if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return false }
+  end := LOWER_SRC_N
   mut p := ent.ns + ent.nl
-  end := p + 512
-  mut c := str_at((cx.src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") { p = p + 1; c = str_at((cx.src + p), 1) }
-  if str_at((cx.src + p), 2) != ":=" { return false }
+  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
+  if ptr_scan_has(cx.src, end, p, ":=") == false { return false }
   p = p + 2
-  c = str_at((cx.src + p), 1)
-  while p < end and (c == " " or c == "\n" or c == "\t" or c == "\r") { p = p + 1; c = str_at((cx.src + p), 1) }
+  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
   vs := p
   mut stop := false
   while p < end and stop == false {
@@ -11142,8 +11150,9 @@ byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
     else { p = p + 1 }
   }
   if p == vs or stop == false { return false }
-  if str_at((cx.src + p), 4) != ".ptr" { return false }
+  if ptr_scan_has(cx.src, end, p, ".ptr") == false { return false }
   ## the RHS must be EXACTLY `<ident>.ptr` — a longer chain (`a.ptr.b`, `a.ptr + k`) is not this shape.
+  if p + 4 >= end { return false }
   t := str_at((cx.src + p + 4), 1)
   if t != "\n" and t != ";" and t != " " and t != "}" { return false }
   vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vs, p - vs)))
