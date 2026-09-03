@@ -18100,6 +18100,26 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
     ## `a[i]` — an element READ: compute the element address (`emit_index_addr`: base +
     ## index*8 in %rax via SIB), load the word it points at (`movq (%rax), %rax`), and push it.
     Expr::Index(base, idx) => {
+      ## `"abc"[i]` — an element READ whose base is a str LITERAL. `str` IS `[u8]` (Types §7,
+      ## appendix 160 §3.6), so the element is one BYTE of the literal's `.rodata` run, reached
+      ## through the literal's {ptr, len} pair — the same materialization the `bytes("abc")[i]`
+      ## path below uses. A literal has NO frame home, so without this arm the base matched no
+      ## recognizer and fell to the generic `emit_index_addr` tail, whose `index_base_entry`
+      ## resolves a nameless base to SLOT 0: `leaq -8(%rbp)` + `i*8` and then a WORD load, so
+      ## `u64("abc"[2])` returned 5 instead of 99 — a SILENT WRONG VALUE. Claimed FIRST: every
+      ## recognizer below keys on a `Var` / `Field` / `Index` / `Call` base and none of them can
+      ## match an `Expr::StrLit`, so no other shape changes emission.
+      ## CHECKED BOUNDS (I11 §358 / Types §6.4): the pair's len word IS the literal's byte length,
+      ## so the same `cmpq`/`jb`/`ud2` the str-LOCAL read uses traps an out-of-range index rather
+      ## than reading past the run. Dropped in an `unchecked` scope, like every other checked index.
+      if str_lit_info(base).is_s {
+        emit_str_pair(base, sb, cx, a, nl)      ## {ptr (deeper), len (top)}
+        emit_gas(idx, sb, cx, a, nl)            ## the byte index, on top
+        push_str(sb, "  popq %r8\n  popq %rbx\n  popq %rax\n")
+        if cx.vchk { push_str(sb, "  cmpq %rbx, %r8\n  jb 1f\n  ud2\n1:\n") }
+        push_str(sb, "  movzbq (%rax,%r8), %rax\n  pushq %rax\n")
+        return
+      }
       ## STANDARD BYTE TUPLE COMPONENT READ — claim `t.N[i]` before the historical array-of-tuples
       ## recognizer below. The component address is byte-granular and the load width follows the
       ## declared direct byte-array element kind.

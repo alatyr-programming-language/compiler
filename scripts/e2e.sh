@@ -4221,6 +4221,20 @@ run_x86 global_agg_enum_whole_assign 42
 run_x86 global_str 42
 run_x86 global_str_field_operand 42
 run_x86 global_const_str_index 42
+## Issue #405 — indexing a str LITERAL DIRECTLY (`"abc"[i]`). `str` IS `[u8]` (Types §7, appendix 160
+## §3.6), so the element is one BYTE at that byte offset. A literal has no frame home, so lower fell
+## through every `Index` recognizer to the generic element address (frame slot 0 + i*8) and loaded a
+## WORD: `u64("abc"[2])` ran to 5 instead of 99, a SILENT WRONG VALUE with no diagnostic. The row is
+## cross-backend: the a64/rv64/wasm scalar kernels emit their fail-loud "unsupported index" trap for
+## EVERY str index (a literal, a local, `bytes(s)`), so the sweeps see a clean trap, never a wrong exit.
+run str_literal_index 42
+## …and the checked bound that comes with it: the literal's pair carries its byte length, so an
+## out-of-range literal index traps (I11 §358) instead of reading past the `.rodata` run.
+run_x86_trap str_literal_index_oob 132
+## …and the other side of the same form: a literal is a VALUE, not a place. An address-of on a literal
+## element used to hand back a pointer into the CALLER'S FRAME (slot 0) and read a live local; it is now
+## a located reject. The fixture header deliberately does not quote the needle.
+build_reject_has str_literal_index_place_reject "only supported as a byte READ"
 check_accept smoke
 run early_return_result 42
 check_accept early_return_result

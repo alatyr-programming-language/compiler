@@ -82,6 +82,15 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Indexing a string literal directly (`"abc"[2]`) now reads the byte at that offset. The form
+  compiled cleanly and returned the contents of a frame slot instead — `u64("abc"[2])` answered `5`
+  where `99` was due, and nothing said so; indexing through a local (`s := "abc"; s[2]`) or through
+  `bytes("abc")` was always correct. An out-of-range literal index now traps like every other
+  checked index, and taking the **address** of a literal element — which used to hand back a pointer
+  into the caller's own frame — is refused with a located diagnostic instead of reading a live
+  local. `str` is `[u8]`, so the value is a BYTE and not a code point: `"\xc3\xa9"[0]` is `195`.
+  x86_64 only; the aarch64, riscv64 and wasm backends do not lower any `str` index yet and continue
+  to stop loudly on all of them.
 - `for x in <iterator>` now drives `next` instead of counting the iterable's first two words, so
   `for c in chars(s)` / `for c in s.chars()` walk a string's **code points** and `for part in`
   a `SplitIter` walks its pieces. Every spelling used to compile and run the backing view's BYTE
