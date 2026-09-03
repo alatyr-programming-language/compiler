@@ -223,6 +223,21 @@ fmt_is_no_tail := fn(e : ptr(Expr)) -> bool {
   r
 }
 
+## Is `e` an `unchecked <operand>` node? `unchecked` takes the POSTFIX expression (#410), so an
+## `Unchecked` used as a postfix BASE must keep its grouping parens: the formatter renders the node
+## as `unchecked (<operand>)`, and `(unchecked { … }).shr(63)` re-emitted without the OUTER parens
+## became `unchecked (…).shr(63)`, which re-parses with the `.shr(63)` INSIDE the scope — a different
+## tree, and fmt was no longer idempotent (`multiword_u128_add`). Same reason the `Bin` receiver
+## below keeps its parens, one precedence level up.
+fmt_is_unchecked := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Unchecked(uce) => { r = true }
+    _ => {}
+  }
+  r
+}
+
 ## `Bin` destructuring, one field per probe — a `match` nested directly inside another `match` arm
 ## mis-lowers under the seed (the landmine `fmt_var_span` / `fmt_index_base` document), so the chain
 ## renderer below cannot inline any of these.
@@ -1370,6 +1385,16 @@ emit_fmt_base := fn(base : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a :
   if isv and clen != 0 { push_str(sb, str_at((src + vs), clen)) } else { emit_fmt_expr(base, sb, src, a, decls) }
 }
 
+## Emit a postfix base through `emit_fmt_base`, adding the grouping parens an `Unchecked` base needs
+## (see `fmt_is_unchecked`). Every `.f` / `[i]` / `[lo..hi]` / `?` site goes through here so one rule
+## covers the whole postfix family rather than four copies that can drift apart.
+emit_fmt_postfix_base := fn(base : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
+  w := fmt_is_unchecked(base)
+  if w { push_str(sb, "(") }
+  emit_fmt_base(base, sb, src, a, decls)
+  if w { push_str(sb, ")") }
+}
+
 ## Pretty-print an expression in canonical form. Fail-loud on a form outside the v1 core.
 emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), reserve : usize) {
   match deref(e) {
@@ -1476,7 +1501,10 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
         da0 := deref(arg_p(ah))
         ## a `Bin` receiver (`(a + b).m()`) must keep its grouping parens — `.` binds tighter than any
         ## operator, so an unparenthesized render would re-parse as `a + b.m()`.
-        wrap := fmt_expr_prec(da0.e) < 100
+        mut wrap := fmt_expr_prec(da0.e) < 100
+        ## …and an `Unchecked` receiver for the same reason one level down (#410): the rendered
+        ## `unchecked (…)` would otherwise swallow the `.m()` into its own operand.
+        if fmt_is_unchecked(da0.e) { wrap = true }
         if wrap { push_str(sb, "(") }
         emit_fmt_base(da0.e, sb, src, a, decls)
         if wrap { push_str(sb, ")") }
@@ -1491,14 +1519,14 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
       fmt_emit_arg_list(g, "(", ")", sb, src, a, decls, reserve)
     }
     Expr::Field(base, fs, fl) => {
-      emit_fmt_base(base, sb, src, a, decls)
+      emit_fmt_postfix_base(base, sb, src, a, decls)
       push_str(sb, ".")
       push_str(sb, str_at((src + fs), fl))
     }
     Expr::Index(base, idx) => {
       ## `t.N` (a tuple component) and `xs[N]` (an array element) are the SAME node — see
       ## `fmt_sep_is_dot` for how the written separator is recovered, and why guessing corrupts.
-      emit_fmt_expr(base, sb, src, a, decls)
+      emit_fmt_postfix_base(base, sb, src, a, decls)
       if fmt_sep_is_dot(base, idx, src) {
         push_str(sb, ".")
         emit_fmt_expr(idx, sb, src, a, decls)
@@ -1671,12 +1699,13 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
         ## re-parses as `(unchecked a) + 1` — the addition is back INSIDE the checked mode and
         ## `u64 MAX + 1` traps (`unchecked_add_ovf` ran 0 -> SIGILL 132). `unchecked (a + 1)` keeps the
         ## scope and re-parses to the same tree, so the render stays idempotent.
-        ## ALWAYS parenthesized. `unchecked` is a `p_factor` PREFIX that takes a PRIMARY, so it does not
-        ## reach past a binary operator OR a postfix step: `unchecked { lo - hi }` re-emitted bare
-        ## became `(unchecked lo) - hi` (the subtraction back in CHECKED mode — SIGILL 132), and
-        ## `unchecked (x.u)` became `(unchecked x).u` (the union member read out of its scope —
-        ## `union_reinterpret` ran 42 -> 7). Parens round the whole operand cost nothing, are correct
-        ## for every operand shape, and re-parse to the same tree, so the render stays idempotent.
+        ## ALWAYS parenthesized. `unchecked` is a `p_factor` PREFIX whose operand is the POSTFIX
+        ## expression (#410), so it does not reach past a BINARY operator: `unchecked { lo - hi }`
+        ## re-emitted bare became `(unchecked lo) - hi` (the subtraction back in CHECKED mode —
+        ## SIGILL 132). The postfix half is no longer a hazard — `unchecked x.u` re-parses as
+        ## `unchecked (x.u)` since #410 — but parens round the whole operand still cost nothing, are
+        ## correct for every operand shape, and re-parse to the same tree, so the render stays
+        ## idempotent for both.
         push_str(sb, "unchecked (")
         ## The inner expression is followed by this closing `)`, then by the caller's suffix. The old
         ## zero-reserve call therefore missed exactly the mandatory list comma in a wrapped field.
@@ -1690,12 +1719,12 @@ emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a 
     }
     ## `<inner>?` — the tryable `?` operator (postfix).
     Expr::Try(inner) => {
-      emit_fmt_expr(inner, sb, src, a, decls)
+      emit_fmt_postfix_base(inner, sb, src, a, decls)
       push_str(sb, "?")
     }
     ## `base[lo..hi]` — a range-slice sub-view (str §3.5 / typed array-slice).
     Expr::Slice(base, lo, hi) => {
-      emit_fmt_expr(base, sb, src, a, decls)
+      emit_fmt_postfix_base(base, sb, src, a, decls)
       push_str(sb, "[")
       emit_fmt_expr(lo, sb, src, a, decls)
       push_str(sb, "..")

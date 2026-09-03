@@ -82,6 +82,20 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- The one-access verification mode `unchecked a[i]` now reads the element it names. The modifier
+  bound to the **base** rather than the access, so `unchecked a[i]` parsed as `(unchecked a)[i]` and
+  the read went to a frame slot instead of the array: `xs : [u64; 3] = [71, 42, 93]` answered `0`
+  where `42` was due, and nothing said so. Every base was affected — a fixed array, a `str` local, a
+  typed slice and a `str` literal alike — and `unchecked p.f` was silently taken out of its own scope
+  the same way. The braced region form `unchecked { … }` was always correct and is unchanged, which
+  is why this survived: the fixtures that exercise unchecked indexing all use it. The emitted code
+  for `unchecked a[i]` now differs from the checked `a[i]` by exactly the omitted bounds trap, which
+  is all the specification permits it to drop (Types §6.4). `unchecked` still binds looser than every
+  binary operator, so `unchecked a[i] - 1` is unchanged. On aarch64, riscv64 and wasm these shapes
+  used to stop loudly rather than answer wrongly; the array and slice bases now run there too, and a
+  `str` index still stops loudly on all three. `alatyr fmt` follows the new binding: an `unchecked`
+  operand used as a postfix base keeps its grouping parens.
+
 - Two same-named locals of **different aggregate types** in one function are now **refused with a
   located diagnostic** on x86_64 instead of silently answering the wrong value. A local declared in a
   nested block and then declared again in the enclosing scope under the same name but another enum

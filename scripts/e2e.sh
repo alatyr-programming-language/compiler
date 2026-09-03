@@ -6837,6 +6837,16 @@ run qualified_value_arg 42
 run cmp_prelude 42
 run comptime_if 42
 run unchecked_expr 42
+## #410 — the ONE-ACCESS verification mode `unchecked a[i]` scopes the ACCESS, not the base.
+## `unchecked` was a `p_factor` prefix taking a PRIMARY, so `unchecked a[i]` parsed as
+## `(unchecked a)[i]`; the index base was then a nameless `Unchecked` node, it fell to the untyped
+## tail of `emit_index_addr`, and that resolves a nameless base to frame SLOT 0 — a clean compile
+## reading unrelated memory (Types §6.4: inside an `unchecked` scope only the BOUNDS CHECK is
+## omitted, never the address computation). The scalar row covers the fixed-array and typed-slice
+## bases and runs on all four backends; the `_str` row covers the `str` local and `str` literal
+## bases, which the non-x86 backends still trap on (#405/#394). Parent: 101 and 111.
+run unchecked_index_binds_access 42
+run unchecked_index_binds_access_str 42
 run comptime_typeinfo 42
 ## CT: `comptime match typeinfo(T)` dispatch on the `Str` kind (appendix §4.1) — a `str` instance
 ## selects the `Str` arm, not the `Scalar` fall-through (Pointer/Function/Union also wired).

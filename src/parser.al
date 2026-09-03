@@ -1310,9 +1310,29 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     ## expression in `Expr.Unchecked` so the lower knows to lower it with `verify.checked` FALSE
     ## (a library operator's overflow/underflow/div-by-zero guard is then comptime-absent, leaving
     ## the raw wrapping instruction). All other passes treat the wrapper transparently.
+    ## The OPERAND IS THE POSTFIX EXPRESSION, not the primary. The specification spells the
+    ## one-access verification mode as `unchecked a[i]` (Types §6.4: "inside an `unchecked` scope the
+    ## bounds check is omitted … `unchecked a[i]` for one access, `unchecked { … }` for a region") and
+    ## the raw union-member read as `unchecked x.word` (Types §6.3), so the modifier scopes the whole
+    ## ACCESS — only the bounds check may be dropped, never the address computation. Parsing the
+    ## operand with `p_factor` bound the modifier to the BASE instead: `unchecked a[i]` became
+    ## `(unchecked a)[i]`, whose index base is a nameless `Unchecked` node that no `Index` recogniser
+    ## in lower matches, so it fell to `emit_index_addr`'s untyped tail and resolved to frame SLOT 0 —
+    ## a clean compile that read the wrong memory for EVERY base shape (fixed array, `str` local,
+    ## typed slice, `str` literal), and the same mis-binding silently took `unchecked p.f` out of its
+    ## own scope (#410). `p_field` is the postfix level (`.f`, `[i]`, `[lo..hi]`, `?`, and the
+    ## element-callee call) and consumes nothing beyond it, so every binary operator still binds
+    ## looser than `unchecked` exactly as before.
     if tok_kw(pc, "unchecked") {
       pc.idx = pc.idx + 1
-      uinner := p_factor(pc)
+      ## The BLOCK form `unchecked { … }` in value position keeps the `p_factor` path: a braced
+      ## region has no postfix step to reach for, and routing it through `p_field` unchanged would
+      ## only add a token peek. Keeping it here makes the region form byte-identical by construction.
+      if cur(pc).kind == 12 {
+        ubinner := p_factor(pc)
+        return newnode(pc.arena, Expr.Unchecked(ubinner))
+      }
+      uinner := p_field(pc)
       return newnode(pc.arena, Expr.Unchecked(uinner))
     }
     ## FN-6 — a function VALUE `fn(sig) { body }` in EXPRESSION position (grammar `fn-value ::= fn-sig
