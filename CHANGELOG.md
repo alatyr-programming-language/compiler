@@ -82,6 +82,16 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `deref` through a pointer bound from a view's data pointer (`q := s.ptr`, `q := bytes(s).ptr`, or
+  the same off a `str`-returning call) now reads **one byte** however much whitespace separates the
+  binding's name from its `:=`. The compiler recovered "this local is a `ptr(u8)`" by scanning at
+  most 512 bytes forward from the name, so a declaration spelled with more spacing than that still
+  compiled cleanly and loaded a full WORD instead: `if deref(q) == 65` took the wrong branch and the
+  read ran seven bytes past a short `str`, with no diagnostic and a green `check`. An annotated
+  pointer (`q : ptr(u8) = s.ptr`) was already correct. The shape the recovery fires on is otherwise
+  unchanged — a struct field holding a `ptr(u8)`, and longer chains such as `a.ptr + k`, keep the
+  word-sized load they had.
+
 - Two same-named locals of **different aggregate types** in one function are now **refused with a
   located diagnostic** on x86_64 instead of silently answering the wrong value. A local declared in a
   nested block and then declared again in the enclosing scope under the same name but another enum
