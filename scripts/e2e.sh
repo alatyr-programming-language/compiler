@@ -3918,6 +3918,16 @@ emit_reject_has aarch64 enum_disc_dup "two enum variants resolve to the same dis
 emit_reject_has riscv64 enum_disc_dup "two enum variants resolve to the same discriminant"
 emit_reject_has wat enum_disc_dup "two enum variants resolve to the same discriminant"
 build_reject_has enum_disc_expr_reject "enum discriminant pin must be a SINGLE integer literal"
+## Issue #406 — two same-named locals of DIFFERENT aggregate types in one function. The x86_64 slot
+## map keys a frame slot by NAME alone for the whole function and records the type of the binding it
+## saw FIRST, so the later `match` resolved its arms in the other enum's variant list, matched none of
+## them, and fell through taking NO arm — a clean compile answering the pre-`match` initializer. The
+## reject is deliberately x86_64-only: aarch64, riscv64 and WAT lower the same (Declarations §6.1
+## valid) program correctly, so no `emit_reject_has` row belongs here. The accept row next to it holds
+## the guard's radius down — one name bound to two member-identical struct decls, to two instances of
+## one generic enum, and to its own type in an inner block all still compile and answer.
+build_reject_has reject_local_name_two_aggregate_types "already bound in this function to a DIFFERENT aggregate TYPE"
+run local_name_same_aggregate_type 42
 run_x86 enum_disc_pin_bases 42
 check_located reject_enum_disc_pin_overflow 3
 ## §8 @repr(T) representability: a non-integer tag type (@repr(str)) is a compile diagnostic — the build

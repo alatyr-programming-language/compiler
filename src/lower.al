@@ -33,7 +33,7 @@
 ## resolving to rt's analogues unchanged — no per-site churn.
 strbuf := rt
 vec := alloc::vec
-(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut) := ast
+(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_decl) := ast
 (bnd_ns, bnd_nl, bnd_next) := ast
 fld_p := ast::fld_p
 param_p := ast::param_p
@@ -3083,6 +3083,97 @@ require_reservation := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize
   if slot_reserved_words(slots, usize(e)) >= need { return }
   lower_show_src_line(src, s)
   panic("selfhost: this local NAME is already bound in this function by a NARROWER binding, and this binding needs more words (the source line above). Alatyr `:=` locals are function-scoped and the slot map reuses the FIRST reservation, so the wide store would overwrite the neighbouring locals' slots while the field reads came from a slot nothing ever wrote — a stale-stack read whose result changes with the frame layout (a silent miscompile the TOOL-1 fixpoint cannot see). Give one of the two locals its own name.")
+}
+
+## I11 (correct-or-trap) — the SAME-NAME DIFFERENT-TYPE collision, the second half of the flat slot
+## map's exposure. `require_reservation` above catches only the case where the SECOND binding needs
+## MORE WORDS than the first reserved. When the two bindings need the same reservation width but name
+## DIFFERENT aggregate types, every width check passes and the miscompile moves from the addressing to
+## the TYPE: `SlotEntry.sns`/`snl` records the type span of the FIRST binding only, and every later
+## MEMBER resolution reads that stale identity —
+##
+##  - `scrut_enum_info` hands `match` the FIRST binding's enum span, so `variant_index` looks the arm
+##    names up in the wrong enum's variant list, finds none of them, and the `match` falls through
+##    taking NO arm at all — no trap, no diagnostic, the assigned variable keeps its previous value;
+##  - a field read resolves `p.f` against the FIRST binding's struct decl, so a field the two structs
+##    do not share resolves to word 0 and reads the discriminant or a neighbouring field instead.
+##
+## Both are SILENT wrong answers on a clean compile, and both are invisible to the TOOL-1 fixpoint
+## (the emitted GAS stays self-consistent). The shape that found this: an inner block binding
+## `r := Result(usize, u32).Ok(7)`, the enclosing scope then binding `r := Option(usize).Some(9)`, and
+## the later `match r { Some(v) => … None => … }` selecting neither arm so `out` kept its initializer.
+## Declarations §5/§6.1 make that program VALID — the two declarations are in two different scopes —
+## and the aarch64, riscv64 and WAT backends all lower it correctly; it is only THIS backend's
+## FUNCTION-scoped slot map that cannot represent two types under one name. Giving the inner
+## declaration its own slot needs scope-extent-aware name resolution (the map is keyed by name alone
+## and `slot_of` has no use position), so the collision is REJECTED LOUDLY rather than resolved by the
+## wrong type. The fix at the source is the same as the narrow-reservation guard's: rename one of the
+## two locals.
+##
+## Do the two aggregate decls declare the SAME member NAMES in the same order? That, not the type
+## NAME, is what the stale span actually gets wrong: `Option(u8)` and `Option(usize)` share one decl
+## and one variant list, and — the reason a name comparison cannot be used — `src/lower.al`'s `CSpan`
+## and `src/sema.al`'s `VSpan` are two distinct `{s, n}` decls that a same-named callee's return type
+## already makes one local record under both spellings, with every field read still correct. An
+## UNRESOLVABLE side (`di < 0`, e.g. a generic type parameter) agrees by construction: a missed
+## diagnostic is the safe direction, a false one is not.
+agg_members_agree := fn(decls : ptr(rt::Vec), src : ptr(u8), da : i64, db : i64) -> bool {
+  if da < 0 { return true }
+  if db < 0 { return true }
+  if da == db { return true }
+  wa := deref(decl_get(decls, usize(da)))
+  wb := deref(decl_get(decls, usize(db)))
+  mut fa := wa.fields_head
+  mut fb := wb.fields_head
+  mut agree := true
+  while fa != 0 and fb != 0 {
+    ta := deref(fld_p(fa))
+    tb := deref(fld_p(fb))
+    if streq(src, ta.ns, ta.nl, tb.ns, tb.nl) == false { agree = false }
+    fa = ta.next
+    fb = tb.next
+  }
+  if fa != 0 { agree = false }
+  if fb != 0 { agree = false }
+  agree
+}
+
+## Resolve an aggregate slot's recorded TYPE span to its decl index — `ek == 3` is an enum, every
+## other aggregate kind that records a span is a struct/union. The span may carry type ARGUMENTS
+## (`Option(usize)`), so strip them first; `enum_decl_of`/`struct_decl_of` key off the base name.
+agg_decl_of_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ek : usize, s : usize, n : usize) -> i64 {
+  bn := base_type_name(src, s, n)
+  if ek == 3 { return enum_decl_of(decls, src, bn.s, bn.n) }
+  struct_decl_of(decls, src, bn.s, bn.n)
+}
+
+## Reject a rebinding of `s`/`n` whose aggregate type disagrees with the reservation already recorded
+## for that name. A FIRST binding (`slot_of < 0`), a non-aggregate or span-less existing entry, and a
+## rebinding whose members agree are all inert, so the check never fires on an ordinary same-shape
+## rebinding.
+require_agg_type := fn(slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ek : usize, ts : usize, tl : usize) {
+  ## Only a source-level local DECLARATION (`name := v` / `name : T = v`) is checked. A `match` arm's
+  ## payload binding reuses ONE slot for the whole function too — `lib/std/os.al` binds `e` in three
+  ## `Result::Err(e)` arms over three different payload enums — and rejecting that pervasive, per-arm
+  ## shape would refuse working programs. Its uses stay inside their own arm, so the stale span is
+  ## only reachable there; a DECLARATION's uses run to the end of the function, which is the shape
+  ## that produced the silent no-arm `match`.
+  if assign_is_decl(src, s, n) == false { return }
+  e := slot_of(slots, src, s, n)
+  if e < 0 { return }
+  ent := deref(svec_at(SlotEntry, slots, usize(e)))
+  if ent.ek != 2 and ent.ek != 3 { return }
+  if ent.sns == 0 and ent.snl == 0 { return }
+  mut differs := false
+  ## A struct under an enum's name (or the reverse) is always the collision: one resolves members by
+  ## FIELD offset and the other by VARIANT discriminant, so no member agreement can make them one type.
+  if ent.ek != ek { differs = true }
+  od := agg_decl_of_span(decls, src, ent.ek, ent.sns, ent.snl)
+  nd := agg_decl_of_span(decls, src, ek, ts, tl)
+  if agg_members_agree(decls, src, od, nd) == false { differs = true }
+  if differs == false { return }
+  lower_show_src_line(src, s)
+  panic("selfhost: this local NAME is already bound in this function to a DIFFERENT aggregate TYPE (the source line above). Alatyr `:=` locals are function-scoped in this backend and the slot map reuses the FIRST reservation together with the FIRST binding's recorded TYPE, so a later `match` would resolve its arms in the wrong enum and take NO arm, and a field read would resolve against the wrong struct — a silent wrong answer on a clean compile that the TOOL-1 fixpoint cannot see. Give one of the two locals its own name.")
 }
 
 ## Add a name→slot entry **if the name is not already bound**, returning the slot count
@@ -6904,10 +6995,13 @@ arr_field_elem := fn(base : ptr(Expr), cx : ptr(LCtx)) -> ArrFieldElem {
 ## the struct's `nf` fields occupy slots `off .. off+nf` contiguously — so `nf` anonymous
 ## filler slots are reserved after the base so no later local overlaps them. Re-assignment
 ## of an already-bound struct local reuses its base slot (no new reservation).
-bind_struct_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, ss : usize, sl : usize, nf : usize) {
+bind_struct_slot := fn(in out slots : SVec, decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ss : usize, sl : usize, nf : usize) {
   ## I11: reject a rebinding whose existing reservation is NARROWER than this one needs (see
   ## `require_reservation`) — the wide store would land on the neighbouring locals' slots.
   require_reservation(ptr(slots), src, s, n, nf + 1)
+  ## I11: reject a rebinding that names a DIFFERENT aggregate type than the existing reservation
+  ## recorded (see `require_agg_type`) — the stale type span mis-resolves every later field read.
+  require_agg_type(ptr(slots), decls, src, s, n, 2, ss, sl)
   existing := slot_of(ptr(slots), src, s, n)
   if existing >= 0 { return }
   ## §4 UP-GROWING: reserve nf field FILLER slots FIRST (below the base), then the base name at the
@@ -6926,10 +7020,13 @@ bind_struct_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize,
 ## and `1 + max_arity` words (discriminant + payload) occupy slots `off .. off+1+max_arity`
 ## contiguously — `nw` anonymous filler slots are reserved after the base so no later local
 ## overlaps the payload words. Re-assignment of an already-bound enum local reuses its base.
-bind_enum_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, ss : usize, sl : usize, nw : usize) {
+bind_enum_slot := fn(in out slots : SVec, decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ss : usize, sl : usize, nw : usize) {
   ## I11: reject a rebinding whose existing reservation is NARROWER than this one needs (see
   ## `require_reservation`) — the wide store would land on the neighbouring locals' slots.
   require_reservation(ptr(slots), src, s, n, nw + 1)
+  ## I11: reject a rebinding that names a DIFFERENT aggregate type than the existing reservation
+  ## recorded (see `require_agg_type`) — the stale type span makes a later `match` take no arm.
+  require_agg_type(ptr(slots), decls, src, s, n, 3, ss, sl)
   existing := slot_of(ptr(slots), src, s, n)
   if existing >= 0 { return }
   ## §4 UP-GROWING: nw payload/disc FILLER slots FIRST, then the base name at the TOP (see bind_struct_slot).
@@ -8561,13 +8658,13 @@ bind_uninit_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize,
     }
   } else {
     if struct_decl_of(decls, src, lts.s, lts.n) >= 0 {
-      bind_struct_slot(slots, src, s, n, lts.s, lts.n, struct_words(decls, src, lts.s, lts.n, a))
+      bind_struct_slot(slots, decls, src, s, n, lts.s, lts.n, struct_words(decls, src, lts.s, lts.n, a))
     } else {
       if enum_decl_of(decls, src, lts.s, lts.n) >= 0 {
         if is_union_decl(decls, src, lts.s, lts.n) {
-          bind_struct_slot(slots, src, s, n, lts.s, lts.n, union_words(decls, src, lts.s, lts.n, a))
+          bind_struct_slot(slots, decls, src, s, n, lts.s, lts.n, union_words(decls, src, lts.s, lts.n, a))
         } else {
-          bind_enum_slot(slots, src, s, n, lts.s, lts.n, 1 + enum_inst_words(decls, src, lts.s, lts.n, a))
+          bind_enum_slot(slots, decls, src, s, n, lts.s, lts.n, 1 + enum_inst_words(decls, src, lts.s, lts.n, a))
         }
       } else {
         if str_at((src + lts.s), lts.n) == "str" {

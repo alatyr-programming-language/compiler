@@ -82,6 +82,19 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Two same-named locals of **different aggregate types** in one function are now **refused with a
+  located diagnostic** on x86_64 instead of silently answering the wrong value. A local declared in a
+  nested block and then declared again in the enclosing scope under the same name but another enum
+  type made the later `match` select **no arm at all** — no trap, no diagnostic, the assigned variable
+  kept its pre-`match` value — and the same collision over two struct types made a field read answer
+  the wrong word. The backend keys a frame slot by name alone for the whole function and recorded the
+  first binding's type, so every later member resolution used it. The program is valid
+  (Declarations §6.1) and aarch64, riscv64 and WAT already compile it correctly, so this is a
+  backend limitation made loud rather than a rule: rename one of the two locals and the program
+  compiles everywhere. One name bound to two instances of one generic enum, to two struct types that
+  declare the same members, or to its own type again is unaffected, and a `match` arm's payload
+  binding is not touched.
+
 - Raw x86_64/Linux/ELF package entries that name ordinary no-parameter `fn() -> i32` functions now
   receive a generated call/exit wrapper, so the result becomes the process status code and procedures
   exit zero; `@abi(naked)` entries remain programmer-owned. The wrapper is emitted **under the entry
