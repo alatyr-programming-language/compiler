@@ -313,6 +313,16 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   body checking or backend emission instead of silently taking scalar layout and ABI.
 - Sema diagnostics for unbound names in compound expressions now report the offending expression's
   line instead of the enclosing declaration's line.
+- Indexing a `str` element of a fixed `[str; N]` array (`arr[k][j]`) now reads the byte at offset `j`
+  of the selected element. The form compiled cleanly and returned a word of the frame prologue
+  instead: the result depended on neither the array, the outer index, nor the string bytes, so
+  `arr[0][j]` and `arr[1][j]` were byte-identical and `["abc", "XYZ"]` answered `5` for both
+  `arr[0][2]` and `arr[1][2]` where `99` and `90` were due. The same read through a typed
+  `Slice(str)` view (`s[k][j]`) is fixed with it, a non-constant outer or inner index works, and an
+  out-of-range byte index now traps against that element's runtime length like every other checked
+  index. `str` is `[u8]`, so the value is a BYTE, not a code point. x86_64 only; aarch64, riscv64 and
+  wasm do not lower this shape and continue to stop loudly on it. Indexing a string LITERAL directly
+  is a separate defect and is unchanged here.
 
 First public release in preparation. Nothing is tagged yet; the entries below start once it is.
 

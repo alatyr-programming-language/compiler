@@ -5773,6 +5773,9 @@ run_x86 checked_struct_field_array_oob 132
 run_x86 checked_byref_array_param_oob 132
 run_x86 checked_slice_oob 132
 run_x86 checked_str_oob 132
+## The inner byte index of `arr[k][j]` over a [str; N] is checked against that ELEMENT's runtime
+## len (issue #394); before the fix the shape had no bounds check at all and ran to a normal exit.
+run_x86 checked_str_array_elem_byte_oob 132
 run_x86 raw_asm_add 42
 run_x86 naked_add 42
 run_x86 raw_asm_logic 42
@@ -5861,6 +5864,13 @@ check_accept str_array
 ## §4 layout: slicing a [str; N] LOCAL — arr[lo..hi] builds a typed Slice(str) (s.len, s[i], for-loop).
 run slice_str_array_local 42
 check_accept slice_str_array_local
+## issue #394: the BYTE at index j of the str ELEMENT k of a [str; N] (and of a Slice(str) view) —
+## `arr[k][j]`. The base `Index(arr, k)` is not a Var, so it used to fall to the untyped
+## `emit_index_addr` tail and read frame SLOT 0: `arr[0][j]` and `arr[1][j]` returned the same
+## array- and content-independent word. Constant and non-constant outer/inner indices, per-element
+## checks, failure codes from 100.
+run str_array_elem_byte_index 42
+check_accept str_array_elem_byte_index
 ## §4 layout: a nested enum payload (an enum variant whose payload is another enum) — recursive
 ## construction + nested match reads the inner enum's disc/payload.
 run nested_enum_payload 42
