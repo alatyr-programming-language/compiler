@@ -307,6 +307,71 @@ mut ROOT_MOD_S : usize = 0
 mut ROOT_MOD_L : usize = 0
 pub set_root_module := fn(s : usize, l : usize) -> i64 { ROOT_MOD_S = s ; ROOT_MOD_L = l ; return 0 }
 
+## The package driver publishes the one declaration selected by a non-default raw `Target.entry`.
+## DCE must treat that declaration as a root even when it has no internal caller: the loader reaches
+## the generated entry wrapper from outside the program. Keep a separate boolean because the anonymous
+## package root is itself the `0/0` module span.
+mut ENTRY_DECL_SET : bool = false
+mut ENTRY_DECL_MS : usize = 0
+mut ENTRY_DECL_ML : usize = 0
+mut ENTRY_DECL_NS : usize = 0
+mut ENTRY_DECL_NL : usize = 0
+mut ENTRY_DECL_WRAPPED : bool = false
+mut ENTRY_DECL_BODY_RENAMED : bool = false
+pub clear_entry_decl := fn() -> i64 {
+  ENTRY_DECL_SET = false
+  ENTRY_DECL_MS = 0
+  ENTRY_DECL_ML = 0
+  ENTRY_DECL_NS = 0
+  ENTRY_DECL_NL = 0
+  ENTRY_DECL_WRAPPED = false
+  ENTRY_DECL_BODY_RENAMED = false
+  return 0
+}
+pub set_entry_decl := fn(ms : usize, ml : usize, ns : usize, nl : usize) -> i64 {
+  ENTRY_DECL_SET = true
+  ENTRY_DECL_MS = ms
+  ENTRY_DECL_ML = ml
+  ENTRY_DECL_NS = ns
+  ENTRY_DECL_NL = nl
+  return 0
+}
+pub is_selected_entry := fn(ms : usize, ml : usize, ns : usize, nl : usize) -> bool {
+  if ENTRY_DECL_SET == false { return false }
+  return ms == ENTRY_DECL_MS and ml == ENTRY_DECL_ML and ns == ENTRY_DECL_NS and nl == ENTRY_DECL_NL
+}
+
+## Tooling §2.2 — `ld -e` receives the linker symbol the entry DECLARATION emits: its §6.1 path-derived
+## spelling, or its exact `@export` (Modules §6.3). When the driver generates the ordinary call/exit
+## entry contract, that symbol therefore names the GENERATED WRAPPER, and the wrapped body must not
+## define it a second time. With an exact `@export` the two names differ, so only the exact alias moves
+## to the wrapper and the body keeps its §6.1 label (an internal call still reaches the body and
+## returns). Without one the §6.1 spelling IS the wrapper's, so the driver renames the body to the
+## reserved `__alatyr_raw_entry_body` and an internal call to that declaration enters the wrapper — the
+## process entry — exactly as the loader does. The driver decides which case applies; lower must not
+## re-derive it, so both bits arrive with `set_entry_wrap`.
+pub set_entry_wrap := fn(rename_body : bool) -> i64 {
+  ENTRY_DECL_WRAPPED = true
+  ENTRY_DECL_BODY_RENAMED = rename_body
+  return 0
+}
+## Is this declaration the wrapped entry whose exact `@export` alias the generated wrapper now owns?
+pub entry_export_moved := fn(ms : usize, ml : usize, ns : usize, nl : usize) -> bool {
+  if ENTRY_DECL_WRAPPED == false { return false }
+  return is_selected_entry(ms, ml, ns, nl)
+}
+## Is this declaration the wrapped entry whose §6.1 label the generated wrapper now owns?
+pub entry_body_renamed := fn(ms : usize, ml : usize, ns : usize, nl : usize) -> bool {
+  if ENTRY_DECL_BODY_RENAMED == false { return false }
+  return is_selected_entry(ms, ml, ns, nl)
+}
+
+## `@abi(naked)` is already a programmer-owned raw entry. The ordinary custom-entry wrapper must not
+## alter its initial stack or add a call/return edge, so expose the lower's source-scan to the driver.
+pub entry_is_naked := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
+  fn_is_naked(src, ns, nl)
+}
+
 ## Is this module span the ANONYMOUS package root? (`ROOT_MOD_L == 0` = no root module in this
 ## compile → always false → every mangling site keeps its pre-existing behaviour byte-for-byte.)
 pub is_root_mod := fn(ms : usize, ml : usize) -> bool {
@@ -328,6 +393,13 @@ emit_mod_qual := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ms : usize, ml : 
 ## Emit a mangled FUNCTION-DEFINITION label `<module>__<fn>` for a decl's module + name spans
 ## (a plain `<fn>` for a root-level declaration).
 emit_mangled_def := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ms : usize, ml : usize, ns : usize, nl : usize) {
+  ## The wrapped raw entry surrendered its §6.1 spelling to the generated wrapper (see `set_entry_wrap`).
+  ## Renaming HERE covers every definition-label site at once; call and address-of sites keep emitting the
+  ## §6.1 spelling, which is the wrapper, so the process entry is what an internal call reaches.
+  if entry_body_renamed(ms, ml, ns, nl) {
+    push_str(sb, "__alatyr_raw_entry_body")
+    return
+  }
   emit_mod_qual(sb, src, ms, ml)
   if nl == 0 {
     ## a LIFTED LAMBDA (FN-6): no source name — `ns` is its `fn`-offset id → `<module>__lam<ns>`.
@@ -24317,8 +24389,10 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## instruction (internal calls still use the mangled name; the linker sees `name`). The name is
   ## recovered from source (the attribute was consumed in the parser). Absent → 0/0 → no-op, so
   ## non-exported fns (and the whole self-host tree) are byte-identical.
+  ## Tooling §2.2: a wrapped raw entry's exact `@export` names the GENERATED WRAPPER (the driver emits
+  ## it there and passes it to `ld -e`), so emitting the alias here too would define the symbol twice.
   exn := export_name(p.src, d.name_start, d.name_len)
-  if exn.n != 0 {
+  if exn.n != 0 and entry_export_moved(d.mod_start, d.mod_len, d.name_start, d.name_len) == false {
     push_str(sb, ".global ")
     push_str(sb, str_at(p.src + exn.s, exn.n))
     push_str(sb, "\n")
@@ -26410,7 +26484,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
       ## A library has no executable root. Only public/runtime exports from PACKAGE modules form the
       ## API roots; private helpers and ambient stdlib functions arrive through the ordinary call graph.
       if library_api_root(src, d) { rb_set(rb, i, 1) }
-    } else if (test_artifact and d.kind == 5) or (d.kind == 1 and (require_lam or d.is_generic or (test_artifact == false and str_at((src + d.name_start), d.name_len) == "main") or str_at((src + d.name_start), d.name_len) == "_start" or export_name(src, d.name_start, d.name_len).n != 0)) {
+    } else if (test_artifact and d.kind == 5) or (d.kind == 1 and (require_lam or d.is_generic or is_selected_entry(d.mod_start, d.mod_len, d.name_start, d.name_len) or (test_artifact == false and str_at((src + d.name_start), d.name_len) == "main") or str_at((src + d.name_start), d.name_len) == "_start" or export_name(src, d.name_start, d.name_len).n != 0)) {
       rb_set(rb, i, 1)
     }
   }

@@ -82,6 +82,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Raw x86_64/Linux/ELF package entries that name ordinary no-parameter `fn() -> i32` functions now
+  receive a generated call/exit wrapper, so the result becomes the process status code and procedures
+  exit zero; `@abi(naked)` entries remain programmer-owned. The wrapper is emitted **under the entry
+  declaration's own linker symbol** — its exact `@export` when it has one, else its module-derived
+  spelling — so the executable's ELF entry address still resolves to the symbol the manifest's `entry`
+  names, which is what a linker script or external harness keys on. An entry with no exact `@export`
+  gives that spelling up to the wrapper and its body moves to the reserved `__alatyr_raw_entry_body`,
+  so calling such an entry from inside the program now runs it as the process entry and exits.
 - Indexing a string literal directly (`"abc"[2]`) now reads the byte at that offset. The form
   compiled cleanly and returned the contents of a frame slot instead — `u64("abc"[2])` answered `5`
   where `99` was due, and nothing said so; indexing through a local (`s := "abc"; s[2]`) or through
