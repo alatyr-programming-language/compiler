@@ -110,8 +110,8 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## later match/argument/return consumers see a struct-sized block but lose the tag semantics.
           rk := require_agg_kind(decls, src, rqa.under.s, rqa.under.n)
           rw := require_agg_words(rqa.under, decls, src, a)
-          if rk == 3 { bind_enum_slot(slots, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
-          else { bind_struct_slot(slots, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
+          if rk == 3 { bind_enum_slot(slots, decls, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
+          else { bind_struct_slot(slots, decls, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
         } else if si.is_s {
           ## Types §9.4: inside a generic INSTANCE a construction head over the callee's own type
           ## parameter (`b := Box(T)(v = x)`) resolves to the instantiation (`Box(P)`) — the raw
@@ -122,14 +122,14 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           mut sin := si.sl
           if gsi.n != 0 { sis = gsi.s ; sin = gsi.n }
           nf := struct_words(decls, src, sis, sin, a)
-          bind_struct_slot(slots, src, ns, nl, sis, sin, nf)
+          bind_struct_slot(slots, decls, src, ns, nl, sis, sin, nf)
         } else if ei.is_e and is_union_decl(decls, src, ei.es, ei.el) {
           ## RAW UNION construction `u := U.m(value)` (spec Types §6.3) — the write form parses as the SAME
           ## variant-ctor `EnumLit` as an enum. Bind a struct-LIKE slot (ek 2) carrying the union TYPE span
           ## and sized by the union's MAX member width (`union_words`, NO discriminant — untagged overlap),
           ## so a later read `u.m` resolves via the struct field path with `field_word_offset → 0` (every
           ## member at offset 0). Dormant for the self-host build (`src/`+`lib/` declare no union).
-          bind_struct_slot(slots, src, ns, nl, ei.es, ei.el, union_words(decls, src, ei.es, ei.el, a))
+          bind_struct_slot(slots, decls, src, ns, nl, ei.es, ei.el, union_words(decls, src, ei.es, ei.el, a))
         } else if ei.is_e {
           ## §8 `@niche`: `o : Option(ptr(T)) = Option.Some(p)/Option.None` is NICHE-FOLDED — ONE word
           ## (`None`=0, `Some(p)`=p), no discriminant (Types §6.2/§8, Memory §4.2). The enum LITERAL span
@@ -139,7 +139,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## Non-folded (every corpus enum local) → the byte-identical `[disc, payload]` path below.
           lts := local_type_span(src, ns, nl)
           if lts.n != 0 and is_niche_folded(src, lts.s, lts.n) {
-            bind_enum_slot(slots, src, ns, nl, lts.s, lts.n, 1)
+            bind_enum_slot(slots, decls, src, ns, nl, lts.s, lts.n, 1)
           } else {
             ## The enum LITERAL span `ei.es` is the BARE `Option` (no type-arg). When the immediate payload
             ## is itself an AGGREGATE literal (`o := Option.Some(Option.Some(42))`), that bare span loses the
@@ -169,7 +169,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
             ## as a floor for synthesized/generic contexts without changing scalar enum sizing.
             lapt := enum_lit_array_payload_words(v, decls, src, a)
             if lapt > mx { mx = lapt }
-            bind_enum_slot(slots, src, ns, nl, es2, el2, 1 + mx)
+            bind_enum_slot(slots, decls, src, ns, nl, es2, el2, 1 + mx)
           }
         } else if ti.is_s and fixed_array_byte_eek(src, ns, nl) != 0 {
           ## `local : [u8|i8|bits8; N] = embed(...)` is represented by the parser as a StrLit, but
@@ -235,12 +235,12 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## `r` as that struct so both return words are stored (the emit re-tags the same `unwrap__Rec`
           ## instance). `gen_ret_struct_span` misses it (the UFCS type-arg is the receiver Var, not a struct).
           ucsp := ufcs_ret_struct_span(v, ptr(slots), decls, src, a)
-          bind_struct_slot(slots, src, ns, nl, ucsp.s, ucsp.n, struct_words(decls, src, ucsp.s, ucsp.n, a))
+          bind_struct_slot(slots, decls, src, ns, nl, ucsp.s, ucsp.n, struct_words(decls, src, ucsp.s, ucsp.n, a))
         } else if gen_ret_struct_span(v, decls, src, a).n != 0 {
           ## a `p := id(P, …)` where a GENERIC fn returns its type param (substituted to the struct P)
           ## — reserve `p` as that struct; the instance delivers it in the return registers.
           gcsp := gen_ret_struct_span(v, decls, src, a)
-          bind_struct_slot(slots, src, ns, nl, gcsp.s, gcsp.n, struct_words(decls, src, gcsp.s, gcsp.n, a))
+          bind_struct_slot(slots, decls, src, ns, nl, gcsp.s, gcsp.n, struct_words(decls, src, gcsp.s, gcsp.n, a))
         } else if gen_ret_sret_span(v, decls, src, a).n != 0 {
           ## a `c := mk(S, …)` where a GENERIC fn returns its type param substituted to a struct TOO WIDE
           ## for the register-return budget (>= 8 words) — reserve `c` as that struct; its ADDRESS is the
@@ -248,7 +248,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## dual of the branch above, mirroring the concrete `sret_ret_call` binding). Without it `c` fell
           ## through to a bare SCALAR slot and every field read 0 (a silent miscompile).
           gssp := gen_ret_sret_span(v, decls, src, a)
-          bind_struct_slot(slots, src, ns, nl, gssp.s, gssp.n, struct_words(decls, src, gssp.s, gssp.n, a))
+          bind_struct_slot(slots, decls, src, ns, nl, gssp.s, gssp.n, struct_words(decls, src, gssp.s, gssp.n, a))
         } else if struct_ret_call(v, decls, src, a) {
           ## a `name := f(…)` binding where `f` returns a 2-word struct — reserve `name` as that
           ## struct (2 slots); the result arrives in %rax/%rdx and is stored into the two slots.
@@ -268,7 +268,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           if sub_csp.n != 0 { csp_s = sub_csp.s; csp_n = sub_csp.n }
           if gen_csp.n != 0 { csp_s = gen_csp.s; csp_n = gen_csp.n }
           nf := struct_words(decls, src, csp_s, csp_n, a)
-          bind_struct_slot(slots, src, ns, nl, csp_s, csp_n, nf)
+          bind_struct_slot(slots, decls, src, ns, nl, csp_s, csp_n, nf)
         } else if slice_ret_call(v, decls, src, a) {
           ## a `r := f(…)` binding where `f` returns `Slice(T)` BY VALUE (§7.2), the `Slice` type-decl
           ## ABSENT from `decls` (else `struct_ret_call` above owns it, byte-identically) — reserve `r`
@@ -285,7 +285,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## result straight into these slots (no register-copy after the call).
           csp := call_ret_struct_span(v, decls, src, a)
           nf := struct_words(decls, src, csp.s, csp.n, a)
-          bind_struct_slot(slots, src, ns, nl, csp.s, csp.n, nf)
+          bind_struct_slot(slots, decls, src, ns, nl, csp.s, csp.n, nf)
         } else if call_ret_ty_span(v, decls, src, a).n != 0 and is_niche_folded(src, call_ret_ty_span(v, decls, src, a).s, call_ret_ty_span(v, decls, src, a).n) {
           ## §8 `@niche`: a `o := f(…)` where `f` returns `Option(ptr(T))` — the folded return delivers ONE
           ## word in %rax (see `emit_return_value`), so bind `o` as a 1-word FOLDED slot carrying the
@@ -293,12 +293,12 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## generic/enum-return branches because a folded return is NOT recognized as an enum
           ## (`enum_decl_of` doesn't resolve the parenthesized instance) — those branches miss it.
           crt := call_ret_ty_span(v, decls, src, a)
-          bind_enum_slot(slots, src, ns, nl, crt.s, crt.n, 1)
+          bind_enum_slot(slots, decls, src, ns, nl, crt.s, crt.n, 1)
         } else if gen_ret_enum_span(v, decls, src, a).n != 0 {
           ## a `o := id(Opt, …)` where a GENERIC fn returns its type param (substituted to the enum Opt)
           ## — reserve `o` as that enum; the instance delivers disc/%rax + payload/%rdx.
           gesp := gen_ret_enum_span(v, decls, src, a)
-          bind_enum_slot(slots, src, ns, nl, gesp.s, gesp.n, 1 + enum_inst_words(decls, src, gesp.s, gesp.n, a))
+          bind_enum_slot(slots, decls, src, ns, nl, gesp.s, gesp.n, 1 + enum_inst_words(decls, src, gesp.s, gesp.n, a))
         } else if enum_ret_call_d(v, decls, src, a) {
           ## a `name := f(…)` binding where `f` returns an ENUM — reserve `name` as that enum
           ## (disc + max-payload words); the result arrives disc/%rax, payload/%rdx (the passes'
@@ -313,13 +313,13 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           mut es_n := raw_es.n
           if sub_es.n != 0 { es_s = sub_es.s; es_n = sub_es.n }
           mx := enum_inst_words(decls, src, es_s, es_n, a)
-          bind_enum_slot(slots, src, ns, nl, es_s, es_n, 1 + mx)
+          bind_enum_slot(slots, decls, src, ns, nl, es_s, es_n, 1 + mx)
         } else if try_ok_struct_span(v, decls, src, a).n != 0 {
           ## `x := <call>?` where the callee returns `Result(Struct, E)` — bind `x` as the Ok-payload
           ## STRUCT so `x.field` resolves to `x`'s base (the `?` delivers the payload word 0 there). A
           ## bare-scalar binding made `x.tag` read `base-1` (a stale slot → the type-mismatch miscompile).
           tos := try_ok_struct_span(v, decls, src, a)
-          bind_struct_slot(slots, src, ns, nl, tos.s, tos.n, struct_words(decls, src, tos.s, tos.n, a))
+          bind_struct_slot(slots, decls, src, ns, nl, tos.s, tos.n, struct_words(decls, src, tos.s, tos.n, a))
         } else if addr_struct_span(v, ptr(slots), src).n != 0 {
           ## a `p := ptr(<struct local>)` binding — record p as a pointer-to-struct (ek 7) carrying
           ## the pointee struct's type, so a later `s := deref(p)` copies the right words.
@@ -353,26 +353,26 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## (the words are copied in from the arena/pointee — the read dual of the multi-word store).
           dsp := deref_struct_span(v, ptr(slots), src)
           nf := struct_words(decls, src, dsp.s, dsp.n, a)
-          bind_struct_slot(slots, src, ns, nl, dsp.s, dsp.n, nf)
+          bind_struct_slot(slots, decls, src, ns, nl, dsp.s, dsp.n, nf)
         } else if deref_field_struct_span(v, ptr(slots), decls, src, a).n != 0 {
           ## a `ab := deref(v.arena)` binding — the deref'd struct FIELD is a `ptr(mut Struct)`;
           ## reserve `ab` as that pointee struct (the words are copied in from the pointee on emit).
           dfs := deref_field_struct_span(v, ptr(slots), decls, src, a)
           nf := struct_words(decls, src, dfs.s, dfs.n, a)
-          bind_struct_slot(slots, src, ns, nl, dfs.s, dfs.n, nf)
+          bind_struct_slot(slots, decls, src, ns, nl, dfs.s, dfs.n, nf)
         } else if deref_call_struct_span(v, decls, src, a).n != 0 {
           ## a `s := deref(get(T, …))` binding — reserve s as struct T (the call returns a pointer
           ## into the arena; the words are copied in).
           dcs := deref_call_struct_span(v, decls, src, a)
           nf := struct_words(decls, src, dcs.s, dcs.n, a)
-          bind_struct_slot(slots, src, ns, nl, dcs.s, dcs.n, nf)
+          bind_struct_slot(slots, decls, src, ns, nl, dcs.s, dcs.n, nf)
         } else if deref_call_ret_struct_span(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2).n != 0 {
           ## a `existing := deref(key_at(K, …))` binding inside a generic INSTANCE — the callee returns
           ## `ptr(mut K)`; resolve K to the concrete instance struct + reserve `existing` as it (so the
           ## eq/hash call passes it BY REFERENCE, not as a scalar). Fires only inside an instance.
           drs := deref_call_ret_struct_span(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2)
           nf := struct_words(decls, src, drs.s, drs.n, a)
-          bind_struct_slot(slots, src, ns, nl, drs.s, drs.n, nf)
+          bind_struct_slot(slots, decls, src, ns, nl, drs.s, drs.n, nf)
         } else if deref_call_pointee_unresolved(v, decls, src, a) {
           reject_deref_call_pointee(v, src)
         } else if deref_view_pointee_span(v, ptr(slots), decls, src, a, sub).n != 0 {
@@ -390,7 +390,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## copied in from the arena pointee on the emit side.
           dce := deref_call_enum_span(v, decls, src, a)
           mx := enum_inst_words(decls, src, dce.s, dce.n, a)
-          bind_enum_slot(slots, src, ns, nl, dce.s, dce.n, 1 + mx)
+          bind_enum_slot(slots, decls, src, ns, nl, dce.s, dce.n, 1 + mx)
         } else if call_ret_ptrstruct_span(v, decls, src, a).n != 0 {
           ## a `ep := node_ptr(S, …)` / `ep := decl_at(S, …)` binding — record `ep` as a
           ## pointer-to-struct (ek 7) carrying the pointee struct's type, so a later
@@ -436,7 +436,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## word-copies the source aggregate's slots (same size — bitcast's contract). Neutral: `src/`
           ## has no user-struct bitcast, so this branch never fires when self-building.
           bts := bitcast_struct_target(v, decls, src)
-          bind_struct_slot(slots, src, ns, nl, bts.s, bts.n, struct_words(decls, src, bts.s, bts.n, a))
+          bind_struct_slot(slots, decls, src, ns, nl, bts.s, bts.n, struct_words(decls, src, bts.s, bts.n, a))
         } else if bitcast_enum_target(v, decls, src).n != 0 {
           ## `y := bitcast(<UserEnum>, x)` — the enum arm of the same parser-preserved reinterpret:
           ## reserve `y` as the TARGET enum (discriminant + max-payload words) so a following
@@ -445,7 +445,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## discriminant survived, so the right arm was selected over a zeroed payload.
           ## Neutral: `src/` has no enum bitcast, so this branch never fires when self-building.
           bte := bitcast_enum_target(v, decls, src)
-          bind_enum_slot(slots, src, ns, nl, bte.s, bte.n, 1 + enum_inst_words(decls, src, bte.s, bte.n, a))
+          bind_enum_slot(slots, decls, src, ns, nl, bte.s, bte.n, 1 + enum_inst_words(decls, src, bte.s, bte.n, a))
         } else if bitcast_ptrstruct_span_sub(v, decls, src, a, sub.gps, sub.gpl, sub.its, sub.itl, sub.gps2, sub.gpl2, sub.its2, sub.itl2, sub.gps3, sub.gpl3, sub.its3, sub.itl3).n != 0 {
           ## `vp := unchecked bitcast(ptr(Struct), addr)` (NO type annotation) — record `vp` as a
           ## pointer-to-struct (ek 7) carrying the POINTEE struct span (recovered from the bitcast
@@ -462,12 +462,12 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## `x := <struct var>` — reserve `x` as that struct; the emit side word-copies the source.
           va := var_agg_info(v, ptr(slots), src)
           nf := aggregate_words(decls, src, va.s, va.n, a)
-          bind_struct_slot(slots, src, ns, nl, va.s, va.n, nf)
+          bind_struct_slot(slots, decls, src, ns, nl, va.s, va.n, nf)
         } else if var_agg_info(v, ptr(slots), src).ek == 3 {
           ## `x := <enum var>` — reserve `x` as that enum (disc + max-payload words).
           va := var_agg_info(v, ptr(slots), src)
           mx := enum_inst_words(decls, src, va.s, va.n, a)
-          bind_enum_slot(slots, src, ns, nl, va.s, va.n, 1 + mx)
+          bind_enum_slot(slots, decls, src, ns, nl, va.s, va.n, 1 + mx)
         } else if view_var_kind(v, ptr(slots), src) == 4 {
           ## Types §9.4 — `t := <str var>`: a `str` is a 2-word `{ptr, len}` VIEW, so reserve `t` as a
           ## str LOCAL (both words) exactly like a `t := "…"` / `t := sub(…)` binding. Without this it
@@ -489,11 +489,11 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## `x := s.f` where `f` is a STRUCT field — reserve `x` as that struct; the emit copies the
           ## field's words from the base struct (an aggregate-field extract, not a scalar).
           fa := field_read_agg(v, ptr(slots), decls, src, a)
-          bind_struct_slot(slots, src, ns, nl, fa.s, fa.n, struct_words(decls, src, fa.s, fa.n, a))
+          bind_struct_slot(slots, decls, src, ns, nl, fa.s, fa.n, struct_words(decls, src, fa.s, fa.n, a))
         } else if field_read_agg(v, ptr(slots), decls, src, a).kind == 3 {
           ## `x := s.f` where `f` is an ENUM field — reserve `x` as that enum (disc + max-payload).
           fa := field_read_agg(v, ptr(slots), decls, src, a)
-          bind_enum_slot(slots, src, ns, nl, fa.s, fa.n, 1 + enum_inst_words(decls, src, fa.s, fa.n, a))
+          bind_enum_slot(slots, decls, src, ns, nl, fa.s, fa.n, 1 + enum_inst_words(decls, src, fa.s, fa.n, a))
         } else if field_read_agg(v, ptr(slots), decls, src, a).kind == 4 {
           ## `x := s.f` where `f` is a `str` field — reserve `x` as a str LOCAL (ptr + len = 2 words,
           ## ek 4), so `x.len` / `x.ptr` / `x[i]` read it like any other str; the emit copies BOTH of
@@ -502,38 +502,38 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
         } else if global_field_agg(v, decls, src, a).kind == 2 {
           ## `x := STATE.f` (STATE a global struct, f a STRUCT field) — reserve x as that struct.
           ga := global_field_agg(v, decls, src, a)
-          bind_struct_slot(slots, src, ns, nl, ga.s, ga.n, struct_words(decls, src, ga.s, ga.n, a))
+          bind_struct_slot(slots, decls, src, ns, nl, ga.s, ga.n, struct_words(decls, src, ga.s, ga.n, a))
         } else if global_field_agg(v, decls, src, a).kind == 3 {
           ## `x := STATE.f` (STATE a global struct, f an ENUM field) — reserve x as that enum.
           ga := global_field_agg(v, decls, src, a)
-          bind_enum_slot(slots, src, ns, nl, ga.s, ga.n, 1 + enum_inst_words(decls, src, ga.s, ga.n, a))
+          bind_enum_slot(slots, decls, src, ns, nl, ga.s, ga.n, 1 + enum_inst_words(decls, src, ga.s, ga.n, a))
         } else if is_mut_struct_global_var(v, decls, src) {
           ## `p := STATE` — RHS is a mutable STRUCT global; reserve `p` as that struct (the emit side
           ## word-copies the CURRENT `.data` cells — a runtime snapshot, not the compile-time init).
           gsli := struct_lit_info(mut_global_value(decls, src, var_name_span(v).s, var_name_span(v).n))
-          bind_struct_slot(slots, src, ns, nl, gsli.ss, gsli.sl, struct_words(decls, src, gsli.ss, gsli.sl, a))
+          bind_struct_slot(slots, decls, src, ns, nl, gsli.ss, gsli.sl, struct_words(decls, src, gsli.ss, gsli.sl, a))
         } else if is_mut_enum_global_var(v, decls, src) {
           ## `s := STATE` — RHS is a mutable ENUM global; reserve `s` as that enum (disc + max-payload
           ## words); the emit copies its `.data` words in (a snapshot). A following `match s` then works.
           geli := enum_lit_info(mut_global_value(decls, src, var_name_span(v).s, var_name_span(v).n))
-          bind_enum_slot(slots, src, ns, nl, geli.es, geli.el, 1 + enum_inst_words(decls, src, geli.es, geli.el, a))
+          bind_enum_slot(slots, decls, src, ns, nl, geli.es, geli.el, 1 + enum_inst_words(decls, src, geli.es, geli.el, a))
         } else if bin_operator_ret_struct(v, decls, src, ptr(slots), a).n != 0 {
           ## `r := a <op> b` where `<op>` is a user operator RETURNING a struct (`@inline` or the
           ## non-inline fallback) — reserve `r` as that struct so `r.field` resolves (the routed
           ## operator delivers word 0; a 1-word struct is stored like a scalar). `src/`'s scalar Bins
           ## never match → neutral.
           brs := bin_operator_ret_struct(v, decls, src, ptr(slots), a)
-          bind_struct_slot(slots, src, ns, nl, brs.s, brs.n, struct_words(decls, src, brs.s, brs.n, a))
+          bind_struct_slot(slots, decls, src, ns, nl, brs.s, brs.n, struct_words(decls, src, brs.s, brs.n, a))
         } else {
           ## a `name := arr[i]` of an AGGREGATE-element array binds `name` as that aggregate
           ## (a whole-element READ into a struct/enum local); any other value is a scalar slot.
           ivl := index_value_layout(v, ptr(slots), src, decls, a)
           if ivl.is_agg and ivl.eek == 2 {
             nf := struct_words(decls, src, ivl.ess, ivl.esl, a)
-            bind_struct_slot(slots, src, ns, nl, ivl.ess, ivl.esl, nf)
+            bind_struct_slot(slots, decls, src, ns, nl, ivl.ess, ivl.esl, nf)
           } else if ivl.is_agg and ivl.eek == 3 {
             mx := enum_inst_words(decls, src, ivl.ess, ivl.esl, a)
-            bind_enum_slot(slots, src, ns, nl, ivl.ess, ivl.esl, 1 + mx)
+            bind_enum_slot(slots, decls, src, ns, nl, ivl.ess, ivl.esl, 1 + mx)
           } else if ivl.is_agg and ivl.eek == 4 {
             ## a `name := strs[i]` whole-element read of a str-array binds `name` as a str local
             ## (2 words); emit_elem_copy_in copies the {ptr, len} pair into its slots.
@@ -542,8 +542,8 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
             ## a `name := match/if { … => <agg/str> }` binding — size `name` by the value's kind
             ## (struct/enum/tuple/str); the Assign emit delivers each arm/branch's value into its slots.
             mak := match_if_agg_kind(v, decls, src, a)
-            if mak.kind == 2 { bind_struct_slot(slots, src, ns, nl, mak.s, mak.n, struct_words(decls, src, mak.s, mak.n, a)) } else {
-              if mak.kind == 3 { bind_enum_slot(slots, src, ns, nl, mak.s, mak.n, 1 + enum_inst_words(decls, src, mak.s, mak.n, a)) } else {
+            if mak.kind == 2 { bind_struct_slot(slots, decls, src, ns, nl, mak.s, mak.n, struct_words(decls, src, mak.s, mak.n, a)) } else {
+              if mak.kind == 3 { bind_enum_slot(slots, decls, src, ns, nl, mak.s, mak.n, 1 + enum_inst_words(decls, src, mak.s, mak.n, a)) } else {
                 if mak.kind == 5 { bind_array_slot(slots, src, ns, nl, mak.nel, arr_elem_info(mak.ehead, src, decls, a, ptr(slots))) } else {
                   bind_str_slot(slots, src, ns, nl)
                 }
@@ -670,8 +670,8 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
               if mpty.n != 0 {
                 mbh := am.binds_head
                 mpbn := base_type_name(src, mpty.s, mpty.n)
-                if struct_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_struct_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, struct_words(decls, src, mpty.s, mpty.n, a)) }
-                else if enum_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_enum_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, 1 + enum_inst_words(decls, src, mpty.s, mpty.n, a)) }
+                if struct_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_struct_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, struct_words(decls, src, mpty.s, mpty.n, a)) }
+                else if enum_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_enum_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, 1 + enum_inst_words(decls, src, mpty.s, mpty.n, a)) }
               }
             }
           }
@@ -712,8 +712,8 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
             if fse.ek == 5 and fse.eek == 4 and fse.is_ref and fse.sns == 0 { lv_str = true }
           }
         }
-        if lv_agg == 2 { bind_struct_slot(slots, src, fns, fnl, lv_es, lv_el, struct_words(decls, src, lv_es, lv_el, a)) } else {
-          if lv_agg == 3 { bind_enum_slot(slots, src, fns, fnl, lv_es, lv_el, 1 + enum_inst_words(decls, src, lv_es, lv_el, a)) } else {
+        if lv_agg == 2 { bind_struct_slot(slots, decls, src, fns, fnl, lv_es, lv_el, struct_words(decls, src, lv_es, lv_el, a)) } else {
+          if lv_agg == 3 { bind_enum_slot(slots, decls, src, fns, fnl, lv_es, lv_el, 1 + enum_inst_words(decls, src, lv_es, lv_el, a)) } else {
             if lv_str { bind_str_slot(slots, src, fns, fnl) } else {
               if lv_float { bind_float_slot(slots, src, fns, fnl) } else { bind_slot(slots, src, fns, fnl) }
             }

@@ -161,6 +161,19 @@ pub compound_assign_op_at := fn(src : ptr(u8), ns : usize, nl : usize) -> str {
 ## Whether the source at `[ns, ns+nl)` is an ASSIGNMENT (`x = v`, `x += v`) rather than a
 ## DECLARATION (`x := v`, `x : T = v`, `x : T`). The parser erases this distinction from
 ## `Stmt::Assign`; keep the recovery in one place so sema, lower, and fmt cannot drift.
+## Whether this binding-name occurrence introduces a DECLARATION — `name := v` or `name : T = v`,
+## both of which put a `:` immediately after the name. The complement of the interesting half of
+## `assign_is_reassign` below, and DELIBERATELY not its negation: that predicate answers `false` for
+## every name occurrence that is neither `:` nor `=`-followed, which lumps a real declaration together
+## with a `match` arm's payload binding (`Result::Err(e) =>`) and a `for` binding (`for i in …`). A
+## consumer that must act only on a source-level local declaration needs the positive test.
+pub assign_is_decl := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
+  mut p := ns + nl
+  end := AST_SRC_N
+  while p < end and ast_scan_ws(src, end, p) { p = p + 1 }
+  ast_scan_has(src, end, p, ":")
+}
+
 pub assign_is_reassign := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
   mut p := ns + nl
   end := AST_SRC_N
