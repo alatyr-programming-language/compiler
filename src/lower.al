@@ -18252,6 +18252,27 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         }
         return
       }
+      ## `arr[k][j]` — the BYTE at index `j` of the `str` ELEMENT `k` of a `[str; N]` local (or of a
+      ## `Slice(str)` view). The base is `Index(arr, k)`, NOT a `Var`, so every arm above declines it
+      ## and the untyped `emit_index_addr` tail below resolved the unnamed base to frame SLOT 0 and
+      ## read `-8(%rbp) + j*8` — a word of the frame prologue, independent of the array AND of the
+      ## string bytes, so `arr[0][j]` and `arr[1][j]` returned the same wrong value (issue #394).
+      ## Types §7 makes the element a two-word `{ptr, len}` view and appendix 160 §3.5 makes `str`
+      ## `[u8]`, so the correct read is: materialize the ELEMENT's pair (`emit_str_pair` already
+      ## resolves `Index(<[str; N]>, k)` and `Index(<Slice(str)>, k)` with the 2-word element stride),
+      ## then load ONE byte at `ptr + j`. This is the same byte load `bytes(s)[i]` and `byte_at` use;
+      ## the bounds check compares `j` against the element's RUNTIME len (`jb` skips on `j < len`, so a
+      ## negative/huge-unsigned index also traps) and is dropped in an `unchecked` scope like every
+      ## other view index. Keep it AHEAD of the fail-loud str-element guard below: that guard rejects a
+      ## whole `arr[k]` element reaching scalar lowering, which is a different shape from this byte read.
+      if call_arg_is_str_elem(base, cx) {
+        emit_str_pair(base, sb, cx, a, nl)   ## stack: [ptr (deep), len (top)]
+        emit_gas(idx, sb, cx, a, nl)         ## stack: [ptr, len, j (top)]
+        push_str(sb, "  popq %r8\n  popq %rbx\n  popq %rax\n")
+        if cx.vchk { push_str(sb, "  cmpq %rbx, %r8\n  jb 1f\n  ud2\n1:\n") }
+        push_str(sb, "  movzbq (%rax,%r8), %rax\n  pushq %rax\n")
+        return
+      }
       ## A str element has no scalar word representation. Its valid consumers are the pair-valued
       ## `emit_str_pair` path and the whole-element binding copier; reaching this scalar emitter means
       ## an unsupported call/operand edge (including a `Slice(str)` PARAM), so stop at the source shape
