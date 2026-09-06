@@ -6722,6 +6722,22 @@ run_x86 issue461_enum_field_assign 42
 ## wrong value — the corpus manifest records the wasm column instead.
 run_a64 issue461_enum_field_assign 133
 run_rv64 issue461_enum_field_assign 133
+## issue #449 — a struct's ENUM-typed field as a COMPARISON operand, no `match` involved. §8 delivers
+## an enum BY REFERENCE, so on wasm the field holds a POINTER to the `{disc, payload…}` block exactly
+## as an enum parameter does. The wat compare arm's aggregate guard already refuses to `i64.eq` such an
+## operand, but it scanned a bare `Var` only and its own note said a FIELD operand "already yields a
+## loaded scalar", so `h.t == Tag.Green` compared the field's block against a freshly materialised
+## literal block: every arm false, and a struct built from `Tag.Green` reported itself as no variant at
+## all. One code per outcome — 51/53/55/57 read a DIFFERENT variant, 52/54/56/58 matched NO variant,
+## 42 all four probes right. Parent 8370bd2: x86_64 42, wasmtime 52. This tree: 42 and a 134 trap.
+run issue449_enum_field_eq 42
+run_wat issue449_enum_field_eq 134
+## The CONTROL that keeps the fix honest: the SAME `h.t` read, handed to a `fn(v : Tag)` and dispatched
+## inside it, with no comparison anywhere. That shape already answered under wasmtime on the parent and
+## must go on answering — a fix that touched the field read or the enum literal instead of the one
+## operand classification would have turned this 42 into 61/62 or a trap. 42 on x86_64 AND on wasm.
+run issue449_enum_field_control 42
+run_wat issue449_enum_field_control 42
 run tuple_enum_component 42
 run nested_enum_struct_enum 42
 run enum_array_struct_payload 42

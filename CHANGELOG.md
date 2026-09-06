@@ -82,6 +82,18 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- On the **WASM** backend, comparing a struct's **enum-typed field** no longer answers a value that
+  matches no variant. Types §6 makes `h.t` read back as the enum the field holds, and §8 delivers an
+  enum by reference: on wasm a struct's enum field holds a pointer to the `{disc, payload…}` block,
+  the same as an enum parameter. The wat compare arm already refuses to compare such by-reference
+  operands with a raw integer equality — that is why `x := Tag.Green ; x == Tag.Green` is a loud trap
+  rather than a guess — but its operand test looked at bare names only, so a field read slipped past
+  it into the integer path and compared the field's block address against a freshly built literal
+  block. Two distinct addresses: `Holder(t = Tag.Green)` reported itself as neither `Red`, `Green`
+  nor `Blue`, at exit 0, on a valid module. Both spellings (`h.t == Tag.Green` and `x := h.t` first)
+  now take the same fail-loud route as every other enum comparison on wasm. x86_64, aarch64 and
+  riscv64 emission is untouched, and the field read itself is unchanged: handing `h.t` to a function
+  taking that enum and dispatching there answered correctly before and still does.
 - An **assignment to a struct's enum field** (`h.t = v`) is no longer **dropped** on x86_64. Types §6
   makes a struct field hold the enum it was given and an assignment observable at the next read of that
   place, but `mut h := Holder(t = Tag.Red) ; h.t = v` built cleanly, exited normally and read back
