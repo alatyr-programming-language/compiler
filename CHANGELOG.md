@@ -82,6 +82,22 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- An **assignment to a struct's enum field** (`h.t = v`) is no longer **dropped** on x86_64. Types §6
+  makes a struct field hold the enum it was given and an assignment observable at the next read of that
+  place, but `mut h := Holder(t = Tag.Red) ; h.t = v` built cleanly, exited normally and read back
+  **Red** — the variant the struct *literal* had written — for `v` an enum parameter and for `v` an enum
+  local alike. The whole-enum writer matched only a variant *literal*; every other value kind fell into a
+  wildcard that emitted **no instruction at all**, so the store simply never happened. That is a dropped
+  store, and it is a different defect from the aarch64/riscv64 one fixed just before it, where the store
+  did happen but wrote the §8 by-reference block pointer instead of the discriminant. A payload-carrying
+  enum lost its payload words the same way, an enum-returning call on the right-hand side was dropped
+  too, and so was an enum **variable used as an element of an array literal** (`xs := [e, Tag.Blue]`),
+  which reached the same wildcard. All of these now store the complete `{disc, payload…}` block. A
+  niche-folded `Option(ptr(T))` and a raw union are untouched — each already has its own writer — and any
+  value kind still not handled emits exactly what it emitted before, so nothing that compiled starts
+  being refused. x86_64 only: aarch64 and riscv64 refuse this shape fail-loud, and the wasm field read is
+  a separate defect. The compiler's own emitted assembly is byte-identical.
+
 - A **field read through a `ptr(str)` parameter** now reads the pointee, instead of answering **0**.
   Stdlib appendix §3.5/§3.6 make `str` the base tier's two-word `{ptr : ptr(u8), len : usize}` pair
   and Memory §4.1 makes `deref(q).len` an ordinary read through the pointer, but
