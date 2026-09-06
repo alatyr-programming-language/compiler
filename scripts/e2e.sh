@@ -7101,11 +7101,27 @@ run ambient_alloc_deref_field 42
 ## `self.off % 0` and trapped instead of returning a `Result` at all. Covers 0/3/5/6/7 as
 ## invalid, 1/2/4/8 as still-valid, an untouched cursor after a rejection, and the unchanged
 ## `OutOfMemory` path. The fixture binds the `allocate` result through an EXPLICIT
-## `Result(Handle(u8), AllocError)` annotation: `fmt` de-qualifies variant patterns (#393) and
-## the bare names only resolve when the matched type is written in the source, so the inferred
-## `r := allocate(…)` spelling fails fmt_corpus while staying fmt-idempotent. Do not
-## "simplify" that annotation away without rerunning scripts/fmt_corpus.sh.
+## `Result(Handle(u8), AllocError)` annotation. That annotation was once load-bearing for a reason
+## that has since been measured wrong twice on #393: it is not that the bare names need the matched
+## type written down, it is that `cli::ambient_paths` scans the source TEXT and the annotation kept
+## an occurrence of the result-type name in the file. The formatter no longer de-qualifies patterns
+## and the allocator surface now pulls the prelude on its own names, so the annotation is no longer
+## load-bearing here — restoring the plain `r := allocate(…)` spelling is a separate cleanup, and
+## rerunning scripts/fmt_corpus.sh plus the corpus oracle is what proves it.
 run issue349_arena_bad_alignment 42
+## issue #393 (residual) — the ambient base prelude is chosen by a TEXTUAL scan of the user source
+## (`cli::ambient_paths`), and its allocator-surface trigger used to be the bare name of the
+## fallible-result type ALONE. Control Flow §5.2 makes the bare variant spelling as legal as the
+## qualified one, so a program whose patterns are all bare can carry no occurrence of that word at
+## all: it got no prelude and every allocator name was rejected as unbound. Three rows, one per
+## trigger name, each isolated — the constructor, the arena type, the error enum — because one file
+## can only prove one of them (the first trigger it contains injects the prelude for the whole file).
+## The fourth row is the safety side: a file that declares all three names itself must keep its own
+## meanings now that it injects the shipped prelude where the parent injected nothing.
+run issue393_prelude_bare_variant 42
+run issue393_prelude_arena_type 42
+run issue393_prelude_alloc_error 42
+run issue393_prelude_user_shadow 42
 ## field read taken DIRECTLY off a pointer-returning call `f(x).field` — was a silent 0 (fell to pushq $0);
 ## now materializes the returned pointer then loads the field. Multi-word/unresolvable leaf fails loud. = 106.
 run callfield_ptr_ret 106
