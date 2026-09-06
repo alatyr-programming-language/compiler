@@ -91,6 +91,13 @@ handle_id := fn(e : ptr(Expr)) -> i64 { i64(unchecked bitcast(usize, e)) }
 ## Stage2==Stage3 safe); global across the whole file, so labels stay unique between functions too.
 ## A64 emit is dormant in the x86 self-build, so this global never advances there (x86 fixpoint neutral).
 mut A64_NL := 0
+## Did THIS program's emission reach a SIGNED `{}` hole? Set at the one call site that emits the
+## signed renderer's call, read at the very end of the program emission, which is where that renderer
+## is written — so the flag and the emitted call cannot disagree about whether the helper exists (the
+## generic-instance loop below records itself the same way). A program with no signed hole therefore
+## emits BYTE-IDENTICAL output to before this change: the helper is not a per-program tax, and no
+## code offset in an emitted artifact moves for a program that does not use it.
+mut A64_PRINT_I64 : bool = false
 a64_next_label := fn() -> i64 { r := A64_NL ; A64_NL = A64_NL + 1 ; r }
 
 ## Single-match `If` accessors — `is` + the then-branch expr. A struct-valued if-EXPRESSION
@@ -1810,7 +1817,7 @@ emit_a64_print_run := fn(in out sb : rt::StrBuf, lbl : usize, off : i64, len : i
 
 ## Emit a print template: scan the RAW format bytes tracking the DECODED offset (a simple escape = 2
 ## raw → 1 decoded byte, `\xHH` = 4 raw → 1 decoded byte); each literal run → emit_a64_print_run; each `{}` hole → evaluate the next arg into x0
-## and `bl __print_u64` (unsigned decimal). A trailing newline (println) is a final 1-byte write of
+## and `bl __print_i64`/`bl __print_u64` by the hole's static signedness. A trailing newline (println) is a final 1-byte write of
 ## `.Lprnl`. Mirrors wat.al's emit_print_template.
 emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), ss : usize, sl : usize, lbl : usize, nl : bool, ah : ptr(mut Arg), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
   raw := str_at((src + ss), sl * 4 + 16)
@@ -1825,7 +1832,13 @@ emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u
       if argp != 0 {
         ga := deref(arg_p(argp))
         emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-        push_str(sb, "  bl __print_u64\n")
+        ## The hole's STATIC TYPE picks the renderer (Functions §7.1 -> Stdlib appendix §2: base-10 with
+        ## "a leading `-` for a negative two's-complement value"). Every hole used to reach the unsigned
+        ## renderer, so `a : i64 = 0 - 128` printed 2^64-128 here while x86_64 printed -128 — a clean
+        ## compile, exit 42, wrong TEXT (#443). `a64_operand_signed` is the SAME oracle `/`, `%` and
+        ## `shr` already route on, so the renderer and the arithmetic agree about what the operand is;
+        ## anything it cannot prove signed keeps the unsigned renderer and its exact previous bytes.
+        if a64_operand_signed(ga.e, params_head, body_head, src, a) { A64_PRINT_I64 = true ; push_str(sb, "  bl __print_i64\n") } else { push_str(sb, "  bl __print_u64\n") }
         argp = ga.next
       }
       k += 2
@@ -8123,6 +8136,7 @@ a64_emit_test_runner := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
 
 pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), src_n : usize, a : rt::Arena) {
   A64_SRC_N = src_n
+  A64_PRINT_I64 = false
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any callee resolution or emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on another arch is neutered to an
   ## as-if-absent no-op here, so an arch-gated raw-`asm` body (`lib/std/thread.al`) never reaches `as`.
@@ -8249,5 +8263,36 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
       }
     }
     fdi += 1
+  }
+  ## `__print_i64`: the SIGNED twin of the renderer above (Stdlib appendix §2 — base-10, minimal
+  ## digits, a leading `-` for a negative two's-complement value). Selected by the hole's static type
+  ## in `emit_a64_print_template`; `__print_u64` is untouched, so an unsigned hole keeps its bytes.
+  ##
+  ## WHY IT IS LAST. Appending, rather than inserting next to `__print_u64` in the runtime prologue,
+  ## is what keeps every existing line number and code offset in the emitted artifact where it was.
+  ## Inserting it there instead was MEASURED: 976 corpus-manifest pairs changed — 226 `assemble`
+  ## diagnostics whose text names a line of the emitted file and 748 wasm trap backtraces that carry
+  ## a function index and a code offset — with not one program behaving differently. That is exactly
+  ## the class of mass row movement the manifest header already goes to some length to avoid, and
+  ## re-blessing a thousand rows of noise is where a real transition would hide. Emitting it at all is
+  ## then gated on the flag, because appending alone still moved 8 wasm trap backtraces: adding ANY
+  ## function grows the type/function sections and pushes the code section two bytes later. Gated, a
+  ## program with no signed hole is byte-identical to before, and the measured transition is the four
+  ## rows of the new fixture and nothing else.
+  ##
+  ## `neg x0, x0` on i64::MIN wraps back to i64::MIN, and that word read as UNSIGNED is exactly the
+  ## magnitude 2^63 — so the minimum needs no special case and no widening. Getting that wrong is the
+  ## obvious wrong fix here (it is the one `test/print_int_i64_min.al` records for the x86_64 twin).
+  ##
+  ## The sign is remembered in `.Lnumbuf[0]`, not in a register: the digits are written BACKWARD from
+  ## `.Lnumbuf+24` and are at most 20 bytes (u64::MAX), or 19 + the `-` on this path, so byte 0 is
+  ## always free. A caller's register above x8 therefore survives this helper exactly as it survives
+  ## `__print_u64`. Numeric local labels 2:/3: — the rest of this backend's emission uses only 1:.
+  if A64_PRINT_I64 {
+    push_str(sb, ".text\n__print_i64:\n  adrp x3, .Lnumbuf\n  add x3, x3, :lo12:.Lnumbuf\n  add x4, x3, #24\n  mov x5, x4\n  mov x6, #10\n  strb wzr, [x3]\n")
+    push_str(sb, "  cmp x0, #0\n  b.ge 2f\n  mov w7, #1\n  strb w7, [x3]\n  neg x0, x0\n")
+    push_str(sb, "2:\n  udiv x7, x0, x6\n  msub x8, x7, x6, x0\n  add x8, x8, #48\n  sub x5, x5, #1\n  strb w8, [x5]\n  mov x0, x7\n  cbnz x0, 2b\n")
+    push_str(sb, "  ldrb w7, [x3]\n  cbz w7, 3f\n  mov w8, #45\n  sub x5, x5, #1\n  strb w8, [x5]\n")
+    push_str(sb, "3:\n  mov x0, #1\n  mov x1, x5\n  sub x2, x4, x5\n  mov x8, #64\n  svc #0\n  ret\n")
   }
 }

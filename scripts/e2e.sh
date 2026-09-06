@@ -4895,6 +4895,22 @@ run int_literal_2p63 42
 ## overflowed in `std::io::print_int`, after the sign byte had already been written. The exact
 ## stdout golden locks both the two's-complement boundary and the successful final write result.
 run_x86_out print_int_i64_min 42
+## Issue #443 (Refs #444) — the `{}` HOLE renderer, on all FOUR backends, against the SAME bytes.
+## Functions §7.1 routes a hole through the scalar rendering layer and Stdlib appendix §2 fixes its
+## integer form as base-10 with "a leading `-` for a negative two's-complement value"; aarch64,
+## riscv64 and WAT each had one UNSIGNED-only renderer, so a negative hole printed 2^64-n there while
+## x86_64 printed -n. The program still exited 42 on every backend — the exit code was never wrong —
+## which is exactly why the exit-code cross-target sweeps are blind to it and why these rows compare
+## the TEXT. Refs #444: before this fixture no cross-backend row printed a negative number at all.
+##
+## ONE source of truth for the expected bytes: the x86_64 golden file. The three non-x86 rows take a
+## `want-out` STRING, so reading it back here is what makes "the four backends agree" a fact about one
+## set of bytes rather than four hand-copied literals that can drift apart. Command substitution
+## strips the trailing newline, which is exactly how run_{wat,a64,rv64}_out read a program's stdout.
+print_hole_signed_want="$(cat "$E2E_TEST/print_hole_signed_render.out")"
+## A missing or empty golden would make all three non-x86 rows compare "" with "" and pass vacuously.
+[ -n "$print_hole_signed_want" ] || { echo "FAIL print_hole_signed_render: the expected-output golden $E2E_TEST/print_hole_signed_render.out is missing or empty; the four-backend rows below would compare nothing"; fail=1; }
+run_x86_out print_hole_signed_render 42
 ## Functions §7.1 / I11 — a call in STATEMENT position (result discarded) whose callee's TAIL name collides
 ## with the comptime-variadic `std::fmt::print` was routed into the `{}`-template desugar, which emits
 ## NOTHING when argument 0 is not a string literal: the whole statement — call, arguments, side effects —
@@ -7729,6 +7745,8 @@ run_wat_out wasm_print_val 'val = 42' 42
 run_wat_out wasm_print_two '40 and 2' 42
 run_wat_out wasm_print_escape $'a\nb\nc' 42
 run_wat_out wasm_print_tpl_nl $'val = 42\nx' 42
+## Issue #443 — the WAT `{}` hole renderer against the x86_64 golden (see the x86 row above).
+run_wat_out print_hole_signed_render "$print_hole_signed_want" 42
 run_wat operator_compare 42
 run_wat hex_literal 42
 run_wat wasm_nested_local 45
@@ -7819,6 +7837,8 @@ run_a64_out wasm_println 'hello, wasm' 42
 run_a64_out wasm_print_multi 'abc' 42
 run_a64_out wasm_print_val 'val = 42' 42
 run_a64_out wasm_print_two '40 and 2' 42
+## Issue #443 — the aarch64 `{}` hole renderer against the x86_64 golden (see the x86 row above).
+run_a64_out print_hole_signed_render "$print_hole_signed_want" 42
 ## riscv64 backend (scalar kernel + scalar globals): cross-validate against the same
 ## expected exits as the x86_64 / WASM / aarch64 backends.
 run_rv64 smoke 42
@@ -7868,6 +7888,8 @@ run_rv64_out wasm_println 'hello, wasm' 42
 run_rv64_out wasm_print_multi 'abc' 42
 run_rv64_out wasm_print_val 'val = 42' 42
 run_rv64_out wasm_print_two '40 and 2' 42
+## Issue #443 — the riscv64 `{}` hole renderer against the x86_64 golden (see the x86 row above).
+run_rv64_out print_hole_signed_render "$print_hole_signed_want" 42
 
 ## Issue #306: axis-only coverage for mixed-width struct fields and narrow aggregate arguments.
 ## The local mixed-width, pointer-path, and narrow aggregate fixtures run on every supported backend;

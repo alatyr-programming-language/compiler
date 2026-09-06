@@ -1724,6 +1724,13 @@ wat_slice_param_scalar := fn(params_head : ptr(mut Param), src : ptr(u8), ns : u
 }
 ## The CURRENT fn's params + decls, stashed as module globals at the top of emit_wat_body (so the
 ## element-struct resolver local_struct_type, which takes no params_head, can recognize a slice PARAM base).
+## Did THIS program's emission reach a SIGNED `{}` hole? Set at the one call site that emits the
+## signed renderer's call, read at the very end of the program emission, which is where that renderer
+## is written — so the flag and the emitted call cannot disagree about whether the helper exists (the
+## generic-instance loop below records itself the same way). A program with no signed hole therefore
+## emits BYTE-IDENTICAL output to before this change: the helper is not a per-program tax, and no
+## code offset in an emitted artifact moves for a program that does not use it.
+mut WAT_PRINT_I64 : bool = false
 mut WAT_PARAMS := 0
 wat_params := fn() -> ptr(mut Param) { unchecked bitcast(ptr(mut Param), WAT_PARAMS) }
 mut WAT_DECLS := 0
@@ -4039,10 +4046,17 @@ emit_print_nl := fn(in out sb : rt::StrBuf) {
   push_str(sb, "    (i32.store (i32.const 0) (i32.const 12))\n    (i32.store (i32.const 4) (i32.const 1))\n    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))\n")
 }
 
-## Print an i64 value as decimal via the $__itoa runtime helper (writes digits at [$__istart, 40),
-## returns the length) then fd_write that range.
+## Print an i64 value as decimal via the $__itoa/$__itoa_s runtime helper (writes digits at
+## [$__istart, 40), returns the length) then fd_write that range.
+##
+## The hole's STATIC TYPE picks the helper (Functions §7.1 -> Stdlib appendix §2: base-10 with "a
+## leading `-` for a negative two's-complement value"). Every hole used to reach the unsigned $__itoa,
+## so `a : i64 = 0 - 128` printed 2^64-128 here while x86_64 printed -128 — a clean compile, exit 42,
+## wrong TEXT (#443). `wat_operand_signed` is the SAME oracle `/`, `%` and `shr` already route on, so
+## the renderer and the arithmetic agree about what the operand is; anything it cannot prove signed
+## keeps $__itoa and its exact previous bytes.
 emit_print_int := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
-  push_str(sb, "    (i32.store (i32.const 4) (call $__itoa ")
+  if wat_operand_signed(e, params_head, body_head, src, a) { WAT_PRINT_I64 = true ; push_str(sb, "    (i32.store (i32.const 4) (call $__itoa_s ") } else { push_str(sb, "    (i32.store (i32.const 4) (call $__itoa ") }
   emit_wat_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, "))\n    (i32.store (i32.const 0) (global.get $__istart))\n    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))\n")
 }
@@ -7301,6 +7315,7 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
 
 pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), src_n : usize, a : rt::Arena) {
   WAT_SRC_N = src_n
+  WAT_PRINT_I64 = false
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any import/global/func emission,
   ## exactly where x86 `lower::emit_program` runs it. A decl gated on an arch that is not this target is
   ## neutered to an as-if-absent no-op here, so an arch-gated raw-GAS `asm(…)` body never reaches WAT.
@@ -7356,7 +7371,8 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   push_str(sb, "  (global $__istart (mut i32) (i32.const 0))\n")
   push_str(sb, "  (data (i32.const 12) \"\\0a\")\n")
   ## $__itoa: render an unsigned i64 as decimal, digits written BACKWARD into [.., 40); records the
-  ## start in $__istart and returns the byte length. (Signed/negative is a follow-up.)
+  ## start in $__istart and returns the byte length. $__itoa_s — the signed twin at the END of the
+  ## module, emitted only when a signed hole reached it — is the other half.
   push_str(sb, "  (func $__itoa (param $n i64) (result i32) (local $p i32)\n")
   push_str(sb, "    (local.set $p (i32.const 40))\n")
   push_str(sb, "    (block (loop\n")
@@ -7439,5 +7455,46 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   push_str(sb, "  (func $_start\n")
   push_str(sb, "    (call $proc_exit (i32.wrap_i64 (call $main))))\n")
   push_str(sb, "  (export \"_start\" (func $_start))\n")
+  ## $__itoa_s: the SIGNED twin of $__itoa (Stdlib appendix §2 — base-10, minimal digits, a leading
+  ## `-` for a negative two's-complement value). Selected by the hole's static type in
+  ## `emit_print_int`; $__itoa is untouched, so an unsigned hole keeps its bytes exactly.
+  ##
+  ## WHY IT IS LAST. Appending, rather than inserting next to `__print_u64` in the runtime prologue,
+  ## is what keeps every existing line number and code offset in the emitted artifact where it was.
+  ## Inserting it there instead was MEASURED: 976 corpus-manifest pairs changed — 226 `assemble`
+  ## diagnostics whose text names a line of the emitted file and 748 wasm trap backtraces that carry
+  ## a function index and a code offset — with not one program behaving differently. That is exactly
+  ## the class of mass row movement the manifest header already goes to some length to avoid, and
+  ## re-blessing a thousand rows of noise is where a real transition would hide. Emitting it at all is
+  ## then gated on the flag, because appending alone still moved 8 wasm trap backtraces: adding ANY
+  ## function grows the type/function sections and pushes the code section two bytes later. Gated, a
+  ## program with no signed hole is byte-identical to before, and the measured transition is the four
+  ## rows of the new fixture and nothing else.
+  ##
+  ## `(i64.sub (i64.const 0) n)` on i64::MIN WRAPS back to i64::MIN (wasm integer arithmetic does not
+  ## trap), and that word read as UNSIGNED by div_u/rem_u is exactly the magnitude 2^63 — so the
+  ## minimum needs no special case. Getting that wrong is the obvious wrong fix here.
+  ##
+  ## Room: digits grow DOWNWARD from offset 40 and are at most 20 bytes, or 19 + the `-` on this path,
+  ## so the lowest byte written is 19 — above the newline byte at 12 and the fd_write scratch at [0,12).
+  if WAT_PRINT_I64 {
+    push_str(sb, "  (func $__itoa_s (param $n i64) (result i32) (local $p i32) (local $neg i32)\n")
+    push_str(sb, "    (local.set $neg (i32.const 0))\n")
+    push_str(sb, "    (if (i64.lt_s (local.get $n) (i64.const 0)) (then\n")
+    push_str(sb, "      (local.set $neg (i32.const 1))\n")
+    push_str(sb, "      (local.set $n (i64.sub (i64.const 0) (local.get $n)))))\n")
+    push_str(sb, "    (local.set $p (i32.const 40))\n")
+    push_str(sb, "    (block (loop\n")
+    push_str(sb, "      (local.set $p (i32.sub (local.get $p) (i32.const 1)))\n")
+    push_str(sb, "      (i32.store8 (local.get $p) (i32.wrap_i64 (i64.add (i64.const 48) (i64.rem_u (local.get $n) (i64.const 10)))))\n")
+    push_str(sb, "      (local.set $n (i64.div_u (local.get $n) (i64.const 10)))\n")
+    push_str(sb, "      (br_if 0 (i64.ne (local.get $n) (i64.const 0)))\n")
+    push_str(sb, "    ))\n")
+    push_str(sb, "    (if (i32.ne (local.get $neg) (i32.const 0)) (then\n")
+    push_str(sb, "      (local.set $p (i32.sub (local.get $p) (i32.const 1)))\n")
+    push_str(sb, "      (i32.store8 (local.get $p) (i32.const 45))))\n")
+    push_str(sb, "    (global.set $__istart (local.get $p))\n")
+    push_str(sb, "    (i32.sub (i32.const 40) (local.get $p)))\n")
+  }
   push_str(sb, ")\n")
 }
