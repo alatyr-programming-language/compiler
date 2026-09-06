@@ -112,6 +112,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   element (`u64("abc"[0])`), writing an array element (`a[i] = v`) and every other place form are
   untouched. Newly rejecting a program the specification declares invalid: the defect was accepting
   it.
+- Assigning to **any** value-expression is refused where it is written, closing the rest of the class
+  the string-literal entry above fenced one spelling of. `5 = 3`, `f() = 65`, `[1, 2, 3][0] = 65` and
+  `bytes(s)[0] = 65` all used to build with no diagnostic; the first exited **3** and the other three
+  **65**, in each case the assignment's right-hand side standing in for the declared result. The cause
+  is the same one: none of these was recognized as a statement, so the line fell to the
+  trailing-expression path, where the `=` was taken for an opening parenthesis, the right-hand side
+  for the parenthesized expression — and the **next statement** for its closing token. That last part
+  is what makes this worse than an accepted bad program: a line of real work in between simply
+  vanished. A program that declares 42 and stores through a live local between the bad assignment and
+  the result exited **12**, cleanly, silently. Memory §1.6 is normative — a store's left operand must
+  be a place-expression, and assigning to a value-expression is ill-formed — and Grammar §3.3 roots
+  every place at a name, a path or a `deref(…)`, which a literal, an array constructor and a call
+  result are not. The refusal is in the parser, so `alatyr check` and all four emission surfaces
+  (x86_64, aarch64, riscv64, wasm) agree and none leaves an artifact behind. Every legal place form is
+  untouched, in both the plain and the compound spelling: an array element, a struct field, an array
+  element of a field, a tuple component, a `deref(p)` store and a qualified `mod::G` target. Newly
+  rejecting a program the specification declares invalid: the defect was accepting it.
 
 - The unary prefixes `-` and `~` now apply to the element, field or component the source names. Both
   took their operand at the **primary** level, so a postfix step that followed applied to the prefix's
