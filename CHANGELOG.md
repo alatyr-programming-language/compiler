@@ -82,6 +82,19 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- A single-file program that reaches the ambient allocator by its **bare names** now gets the base
+  prelude. The shipped stdlib is injected by scanning the source text, and the only text that pulled
+  the allocator surface was the bare name of the fallible-result type. Control Flow §5.2 makes a bare
+  variant pattern (`Ok(h)`, `OutOfMemory`) exactly as legal as `Result::Ok(h)`, so a program that
+  spells its patterns bare could contain no occurrence of that word at all — and then `Arena`,
+  `arena_over`, `allocate` and the allocator error enum were all rejected as unbound names on a
+  program the specification calls valid. The arena type, its constructor and the error enum are now
+  triggers of their own, word-boundary matched, so `ArenaPool` or `AllocErrorKind` does not pull
+  anything. A file that declares those names itself keeps its own meanings. This is the residual half
+  of the defect first seen as `alatyr fmt` writing source that no longer compiled: the formatter stopped
+  respelling patterns earlier, but any tool that rewrites source could still change which prelude a file
+  gets, and a program that never needed rewriting was refused outright. Manifest/package builds keep the
+  narrower result-name trigger they had.
 - The **wasm** backend now answers correctly when a nested block shadows a **parameter**, as
   Declarations §6.1 allows ("an inner scope may shadow an outer name"). Its frame gives one *name* one
   slot for a whole function and its read path resolved a parameter before a local, so the shadow's

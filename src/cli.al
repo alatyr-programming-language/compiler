@@ -4687,6 +4687,23 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
         ## `Slice :=` decl vetoes it (above).
         if amb_lit_at(src, i, n, "Slice(") { needs_slice = true }
         if amb_lit_at(src, i, n, "Slice :=") { has_slice_decl = true }
+        ## The bare BASE-ALLOCATOR SURFACE — the arena type `Arena`, its constructor `arena_over`
+        ## and the allocator error enum `AllocError` (`lib/base/alloc.al`, in the same base closure
+        ## `needs_alloc` pulls). They are reached by BARE name, exactly like `Option`/`Slice(`/`u128`,
+        ## so the 3-segment scan misses them. Until now the only trigger that covered this surface was
+        ## the textual result-type name, and Control Flow §5.2 makes the BARE variant spelling
+        ## (`Ok(h)`, `OutOfMemory`) as legal as the qualified one — so a program that spells its match
+        ## patterns bare can carry no occurrence of that word at all, get no prelude, and have
+        ## `Arena`/`allocate`/`AllocError` rejected as unbound: a valid program refused because of how
+        ## its patterns were spelled, and a rewrite of the source (issue #393: `alatyr fmt`) could flip
+        ## it silently. Word-boundary-checked, so a user's `ArenaPool`/`AllocErrorKind` does not
+        ## trigger. A file that declares its OWN `Arena`/`arena_over`/`AllocError` needs no veto flag:
+        ## a user declaration already wins over the injected one (proved by
+        ## test/issue393_prelude_user_shadow.al, which declares all three and is unaffected by the
+        ## injection this trigger now performs).
+        if amb_lit_at(src, i, n, "Arena") and (i + 5 >= n or amb_idc(bytes(src)[i + 5]) == false) { needs_alloc = true }
+        if amb_lit_at(src, i, n, "arena_over") and (i + 10 >= n or amb_idc(bytes(src)[i + 10]) == false) { needs_alloc = true }
+        if amb_lit_at(src, i, n, "AllocError") and (i + 10 >= n or amb_idc(bytes(src)[i + 10]) == false) { needs_alloc = true }
         ## a `struct`/`enum` DECLARATION (word boundary) → the aggregate types that a bare aggregate
         ## comparison can lower to `base::derive::eq`/`lt` — inject `derive` (harmless when uncalled).
         if amb_lit_at(src, i, n, "struct") and (i + 6 >= n or amb_idc(bytes(src)[i + 6]) == false) { needs_derive = true }
