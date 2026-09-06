@@ -6687,6 +6687,26 @@ run enum_match_field_place 42
 ## 56 = the no-wildcard `movq $0` fallback. Parent 61ca2c2 exits 51; this tree exits 42.
 ## `run_x86`: aarch64/riscv64/wat reject an enum-typed scrutinee fail-loud (no enum-match lowering).
 run_x86 issue396_tail_match_enum_place 42
+## issue #448 — the same tail `match <enum place>` on aarch64/riscv64. Those backends DO dispatch a
+## struct local's enum FIELD on its frame words; what was wrong is what the field held. An enum PARAM is
+## passed BY REFERENCE (§8 piece 3), so its slot carries a POINTER to the caller's {disc, payload…}
+## block, and the struct-literal field store emitted that slot as one scalar word — an ADDRESS where the
+## discriminant belongs. Every arm then compared unequal and the WILDCARD won: a clean binary, a normal
+## exit, the wrong number, on a shape whose enum-LOCAL spelling is a fail-loud trap. The same one-word
+## store dropped every payload word of an enum local wider than one word. Parent 5eb6739 exits 51 on
+## aarch64 and riscv64 (the wildcard); this tree exits 42 on x86_64, aarch64 and riscv64 alike. wat has
+## no lowering for the shape at all (issue #449) and traps, which is why its row asserts the trap.
+run_x86 issue448_enum_place_match 42
+run_a64 issue448_enum_place_match 42
+run_rv64 issue448_enum_place_match 42
+run_wat issue448_enum_place_match 134
+## issue #448 CONTROL — the spelling neither backend can lower must STAY fail-loud. 133 is 128 + SIGTRAP,
+## asserted as the exact status rather than "nonzero", because a wildcard landing in a nonzero arm would
+## satisfy a nonzero-exit check and hide exactly the defect above.
+run_x86 issue448_enum_local_match_loud 42
+run_a64 issue448_enum_local_match_loud 133
+run_rv64 issue448_enum_local_match_loud 133
+run_wat issue448_enum_local_match_loud 134
 run tuple_enum_component 42
 run nested_enum_struct_enum 42
 run enum_array_struct_payload 42

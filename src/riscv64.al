@@ -4936,6 +4936,93 @@ emit_rv_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
 ## the block's ADDRESS in a0 (by-reference aggregate-argument convention, §8 piece 3). Word 0 = variant
 ## disc; payload arg k → block word k+1 (matching the enum-LOCAL construct in the Assign path). Reserves
 ## the enum's FULL width (1 + max_arity) so the callee can copy the whole block. Scalar payload only.
+
+## ISSUE #448 — the aarch64 twin's rule, in RISC-V64 registers. An enum PARAM is passed BY REFERENCE
+## (§8 piece 3), so its frame slot holds a POINTER to the caller's {disc, payload…} block. Every
+## one-word struct-field / return-register store below emitted that pointer as the field's value, so
+## `h := Holder(t = v)` wrote an ADDRESS where the discriminant belongs and the `match h.t` dispatch
+## that reads the field matched no arm and answered the WILDCARD — a silent wrong value on a shape whose
+## every other spelling is a fail-loud `ebreak`. Read word 0 through the pointer so a0 holds the
+## DISCRIMINANT. `false` = not an enum param, and the caller keeps its ordinary value emit. A name that
+## also resolves to an enum LOCAL is left alone: a local's frame slot IS the block.
+rv_emit_enum_param_disc := fn(pe : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), body_head : ptr(mut Stmt), decls : ptr(rt::Vec)) -> bool {
+  vns := ex_var_ns(pe)
+  vnl := ex_var_nl(pe)
+  if vnl == 0 { return false }
+  if rv_local_enum_nl(body_head, src, vns, vnl, a) != 0 { return false }
+  pidx := param_find(params_head, src, vns, vnl, a)
+  if pidx < 0 { return false }
+  if rv_param_enum_nl(params_head, src, vns, vnl, decls) == 0 { return false }
+  push_str(sb, "  ld a0, ") ; push_int(sb, 16 + pidx * 8) ; push_str(sb, "(s0)\n  ld a0, 0(a0)\n")
+  true
+}
+
+## ISSUE #448, the MULTI-WORD half (the aarch64 twin carries the full rationale). Copy the FULL
+## {disc, payload…} width of an enum PLACE `pe` into the frame at byte offset `off` and report the words
+## written; 0 = not an enum place, so the caller keeps its one-word fallback. An enum PARAM is read
+## through its by-reference block pointer; an enum LOCAL WIDER than one word is copied whole, because the
+## scalar fallback stored word 0 and dropped every payload word. A one-word enum LOCAL returns 0 on
+## purpose: the existing emit is already correct and its text stays byte-identical.
+rv_store_enum_place_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec)) -> i64 {
+  vns := ex_var_ns(pe)
+  vnl := ex_var_nl(pe)
+  if vnl == 0 { return 0 }
+  lenl := rv_local_enum_nl(body_head, src, vns, vnl, a)
+  if lenl != 0 {
+    loff := rv_local_off(body_head, src, vns, vnl, pcount, a, decls)
+    lw := 1 + i64(enum_max_arity(decls, src, rv_local_enum_ns(body_head, src, vns, vnl, a), lenl, a))
+    if loff < 0 or lw < 2 { return 0 }
+    mut k := 0
+    while k < lw {
+      push_str(sb, "  ld a0, ") ; push_int(sb, loff + k * 8) ; push_str(sb, "(s0)\n  sd a0, ") ; push_int(sb, off + k * 8) ; push_str(sb, "(s0)\n")
+      k = k + 1
+    }
+    return lw
+  }
+  pidx := param_find(params_head, src, vns, vnl, a)
+  penl := rv_param_enum_nl(params_head, src, vns, vnl, decls)
+  if pidx < 0 or penl == 0 { return 0 }
+  pw := 1 + i64(enum_max_arity(decls, src, rv_param_enum_ns(params_head, src, vns, vnl, decls), penl, a))
+  push_str(sb, "  ld t0, ") ; push_int(sb, 16 + pidx * 8) ; push_str(sb, "(s0)\n")
+  mut j := 0
+  while j < pw {
+    push_str(sb, "  ld a0, ") ; push_int(sb, j * 8) ; push_str(sb, "(t0)\n  sd a0, ") ; push_int(sb, off + j * 8) ; push_str(sb, "(s0)\n")
+    j = j + 1
+  }
+  pw
+}
+
+## The POINTER-relative twin of `rv_store_enum_place_at` (destination base at `0(sp)`), for the
+## element-assignment writer. t0 holds the enum param's block pointer across the per-word `0(sp)` reload.
+rv_store_enum_place_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec)) -> i64 {
+  vns := ex_var_ns(pe)
+  vnl := ex_var_nl(pe)
+  if vnl == 0 { return 0 }
+  lenl := rv_local_enum_nl(body_head, src, vns, vnl, a)
+  if lenl != 0 {
+    loff := rv_local_off(body_head, src, vns, vnl, pcount, a, decls)
+    lw := 1 + i64(enum_max_arity(decls, src, rv_local_enum_ns(body_head, src, vns, vnl, a), lenl, a))
+    if loff < 0 or lw < 2 { return 0 }
+    mut k := 0
+    while k < lw {
+      push_str(sb, "  ld a0, ") ; push_int(sb, loff + k * 8) ; push_str(sb, "(s0)\n  ld a1, 0(sp)\n  sd a0, ") ; push_int(sb, off + k * 8) ; push_str(sb, "(a1)\n")
+      k = k + 1
+    }
+    return lw
+  }
+  pidx := param_find(params_head, src, vns, vnl, a)
+  penl := rv_param_enum_nl(params_head, src, vns, vnl, decls)
+  if pidx < 0 or penl == 0 { return 0 }
+  pw := 1 + i64(enum_max_arity(decls, src, rv_param_enum_ns(params_head, src, vns, vnl, decls), penl, a))
+  push_str(sb, "  ld t0, ") ; push_int(sb, 16 + pidx * 8) ; push_str(sb, "(s0)\n")
+  mut j := 0
+  while j < pw {
+    push_str(sb, "  ld a0, ") ; push_int(sb, j * 8) ; push_str(sb, "(t0)\n  ld a1, 0(sp)\n  sd a0, ") ; push_int(sb, off + j * 8) ; push_str(sb, "(a1)\n")
+    j = j + 1
+  }
+  pw
+}
+
 ## Store ONE enum/struct payload VALUE `pe` into the frame at byte offset `off`, returning the WORDS it
 ## occupies (§8 piece 3b): scalar → 1; struct literal (all-scalar) → its fields; nested enum literal →
 ## {disc, payload…} recursively (full width); str literal → deferred loud `ebreak` (2 words reserved).
@@ -5014,6 +5101,9 @@ emit_rv_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf
     push_str(sb, "  ebreak\n")
     return 2
   }
+  ## ISSUE #448: an enum PLACE (param / wide local) reaches the frame in FULL, not as one scalar word.
+  epw := rv_store_enum_place_at(pe, off, sb, a, src, params_head, pcount, body_head, decls)
+  if epw != 0 { return epw }
   emit_rv_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, "  sd a0, ") ; push_int(sb, off) ; push_str(sb, "(s0)\n")
   return 1
@@ -5075,6 +5165,9 @@ emit_rv_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::Str
     push_str(sb, "  ebreak\n")
     return 2
   }
+  ## ISSUE #448: the pointer-relative twin of the same enum-place rule.
+  epw := rv_store_enum_place_atptr(pe, off, sb, a, src, params_head, pcount, body_head, decls)
+  if epw != 0 { return epw }
   emit_rv_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, "  ld a1, 0(sp)\n  sd a0, ") ; push_int(sb, off) ; push_str(sb, "(a1)\n")
   return 1
@@ -5143,7 +5236,9 @@ emit_rv_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
       mut k := 0
       while g != 0 {
         ga := deref(arg_p(g))
-        emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        ## ISSUE #448: an enum PARAM's slot holds the by-reference BLOCK POINTER, so its DISCRIMINANT
+        ## has to be read through it before this one-word field store.
+        if not rv_emit_enum_param_disc(ga.e, sb, a, src, params_head, body_head, decls) { emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
         k += 1
         g = ga.next
@@ -5278,7 +5373,9 @@ emit_rv_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
       mut k := 0
       while g != 0 {
         ga := deref(arg_p(g))
-        emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        ## ISSUE #448: an enum PARAM's slot holds the by-reference BLOCK POINTER, so its DISCRIMINANT
+        ## has to be read through it before this one-word field store.
+        if not rv_emit_enum_param_disc(ga.e, sb, a, src, params_head, body_head, decls) { emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         push_str(sb, "  ld t1, ") ; push_int(sb, slot) ; push_str(sb, "(s0)\n  sd a0, ") ; push_int(sb, k * 8) ; push_str(sb, "(t1)\n")
         k = k + 1
         g = ga.next
@@ -5747,7 +5844,9 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           mut k := 0
           while g != 0 {
             ga := deref(arg_p(g))
-            emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+            ## ISSUE #448: an enum PARAM's slot holds the by-reference BLOCK POINTER, so its DISCRIMINANT
+            ## has to be read through it before this one-word field store.
+            if not rv_emit_enum_param_disc(ga.e, sb, a, src, params_head, body_head, decls) { emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
             push_str(sb, "  sd a0, ") ; push_int(sb, poff + k * 8) ; push_str(sb, "(s0)\n")
             k += 1
             g = ga.next

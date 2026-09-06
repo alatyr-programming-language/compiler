@@ -150,6 +150,24 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   braced arms, was the workaround. x86_64 only: aarch64, riscv64 and wasm have no enum-match lowering
   and refuse an enum scrutinee fail-loud. A **nested** place (`o.inner.t`) is a separate, still-open
   defect — it answers the same wrong value in *every* match form, including the bound-local one.
+- **aarch64 and riscv64** no longer answer the **wildcard** for a `match` over an enum **place**. The
+  previous entry's aside — that those two backends have no enum-match lowering — is only half true, and
+  the half that is false was the defect. Both do dispatch `match <struct local>.<enum field>` on the
+  field's frame words; what was wrong is what the field held. An enum argument is passed **by
+  reference**, so an enum parameter's frame slot carries a pointer to the caller's `{discriminant,
+  payload…}` block, and the struct-literal field store wrote that slot through as one scalar word — an
+  address where the discriminant belongs. Every arm then compared unequal and the wildcard won:
+  a function whose body is `h := Holder(t = v)` followed by
+  `match h.t { Red => 11, Green => 22, Blue => 33, _ => 91 }`
+  built and linked cleanly and answered **91** for every variant, while the same program written with
+  the field bound to a local first (`x := h.t`) trapped fail-loud. One spelling loud, the other a wrong
+  number. The same one-word store dropped every **payload** word of an enum local wider than one word,
+  so a matched arm read its payload out of a slot nothing had written. Both backends now copy the
+  enum's full width into the field — through the block pointer for a parameter, whole for a wide local
+  — at the struct-literal, struct-return and element-assignment writers alike. x86_64 and wasm are
+  untouched, and the spellings neither backend can lower (`match` over a bound local, an array element,
+  a struct-field array element or a global's field) still refuse fail-loud, which is the correct
+  outcome until they gain a lowering.
 
 - A single-file program that reaches the ambient allocator by its **bare names** now gets the base
   prelude. The shipped stdlib is injected by scanning the source text, and the only text that pulled
