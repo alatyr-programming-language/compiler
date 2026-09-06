@@ -20405,6 +20405,27 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
       geg := try_global_enum_scrut(mi.scrut, sb, cx)
       if geg.is_e { si = geg }
     }
+    ## a `match s.c` / `match cs[i]` / `match xs[i].c` over an enum FIELD / enum-array ELEMENT in
+    ## TAIL position — materialize the enum words into this match's scratch and dispatch on them as a
+    ## local, exactly as the statement-match (`emit_match_stmt`) and value-`Expr::Match` paths already
+    ## do. Without these three the field/index scrutinee stayed `is_e == false` and fell into the
+    ## INTEGER path above, where an enum arm carries no scalar literal (`am.lit` is 0): every arm then
+    ## compared the scrutinee against 0, so only a variant whose discriminant is 0 could match and
+    ## every other variant reached the wildcard — or, with no wildcard, the `movq $0` no-arm fallback.
+    ## That was a SILENT wrong value (issue #396). Each helper emits only when it fires, and the
+    ## guards keep an already-resolved scrutinee from calling the next one at all.
+    if si.is_e == false {
+      feg := try_field_enum_scrut(mi.scrut, sb, cx)
+      if feg.is_e { si = feg }
+    }
+    if si.is_e == false {
+      ieg := try_index_enum_scrut(mi.scrut, sb, cx, nl)
+      if ieg.is_e { si = ieg }
+    }
+    if si.is_e == false {
+      aeg := try_arrelem_field_enum_scrut(mi.scrut, sb, cx, nl)
+      if aeg.is_e { si = aeg }
+    }
     if (si.is_e == false) and (enum_ret_call(mi.scrut, cx) == false) {
       is_str := match_is_str(mi.head, a)
       if is_str == false {

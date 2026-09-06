@@ -6632,6 +6632,15 @@ run nullary_enum_return 42
 run return_enum_lit_multiword 42
 run array_struct_enum_field 42
 run enum_match_field_place 42
+## issue #396 — an EXPRESSION-form (bare-arm) `match` in TAIL position over an enum PLACE (struct
+## field / enum-array element / struct-field array element / array-of-struct element field / mutable
+## global field). `emit_return_value` resolved only a plain enum local and a mutable enum GLOBAL, so
+## every other place fell into the INTEGER scrutinee path where an enum arm has no literal (`am.lit`
+## is 0) and every arm compared against 0 — a SILENT wrong value. The fixture reads the failure twice,
+## with its own exit code for each: 51 = no arm matched (the wildcard won), 53 = the FIRST arm won,
+## 56 = the no-wildcard `movq $0` fallback. Parent 61ca2c2 exits 51; this tree exits 42.
+## `run_x86`: aarch64/riscv64/wat reject an enum-typed scrutinee fail-loud (no enum-match lowering).
+run_x86 issue396_tail_match_enum_place 42
 run tuple_enum_component 42
 run nested_enum_struct_enum 42
 run enum_array_struct_payload 42
