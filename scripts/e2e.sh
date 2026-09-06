@@ -4399,6 +4399,31 @@ check_reject reject_p1_unknown_enum_variant
 ## Declarations §3.1 / Memory §1.6 — the types agree, but a plain `=` to an immutable local is a
 ## dedicated located diagnostic, not a type mismatch. Check and build must agree on the line and name.
 check_build_located reject_immutable_write 3 "immutable binding"
+## Issue #429 (Types §7 / Stdlib appendix §3.6 / Memory §3.3) — `str` IS the slice `[u8]`, so an
+## element store into a `str` place is refused whatever the BINDING says: the AND rule reads a
+## dereference step's permission off the POINTEE, and the writable slice spelling is `[mut T]`.
+## On the parent all four backends accepted these and disagreed at RUN time (x86_64 139/SIGSEGV
+## into `.rodata`, aarch64 and riscv64 133, wasm 134); the refusal now happens in `check`, so it
+## is one answer for four backends and `emit_reject_has` proves nothing reaches stdout either.
+## `reject_immutable_write`'s wording above is deliberately unchanged: where the FIRST failing
+## AND-step is the binding itself, that fence still owns the diagnostic.
+check_build_located reject_str_elem_immutable 13 "str element store"
+check_build_located reject_str_elem_mut_binding 11 "str element store"
+check_build_located reject_str_elem_annotated_mut 12 "str element store"
+## …and through a second NAME. The alias copies the two-word view, not the bytes, so it inherits
+## the source's pointee permission; on the parent `t := s` re-opened the SIGSEGV for every spelling
+## of `s`, INCLUDING a `str` parameter whose own direct `s[i] = v` the older fence already refused.
+check_build_located reject_str_elem_alias 13 "str element store"
+check_build_located reject_str_elem_param_alias 11 "str element store"
+emit_reject_has aarch64 reject_str_elem_immutable "str element store"
+emit_reject_has riscv64 reject_str_elem_immutable "str element store"
+emit_reject_has wat reject_str_elem_immutable "str element store"
+emit_reject_has aarch64 reject_str_elem_mut_binding "str element store"
+emit_reject_has riscv64 reject_str_elem_mut_binding "str element store"
+emit_reject_has wat reject_str_elem_mut_binding "str element store"
+## The other half of the same fence: every place the specification DOES make writable keeps
+## working, including the `str` READ that shares the indexing syntax.
+run str_elem_mutable_places 57
 check_accept check_struct_field_order
 check_reject reject_check_unknown_struct_field
 build_reject_has reject_export_mangled_collision "duplicate linker symbol at line 5"
