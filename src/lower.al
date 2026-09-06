@@ -17796,7 +17796,11 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         return
       }
       dsb := deref_struct_span(base, cx.slots, cx.src)
-      fbi := field_base_index(base)
+      ## Declarations §6.2 — this used to spell the name `fbi`, which the arm ALREADY binds far above
+      ## (the `ARR[i].field` global path); re-declaring a name already bound in the same scope is a
+      ## compile error, and `sema` now says so. Same value, own name — the sibling `s3fbi` above had
+      ## to dodge the identical collision.
+      dfbi := field_base_index(base)
       ## `arr[i].agg.leaf` — element → struct field → scalar leaf (Types §9.4). Resolved EAGERLY: the
       ## resolver returns found=false for any base that is not `Field(Index(...), agg)` (no spurious panic),
       ## and a deep shape never matches the deref-span arms below (base is a `Field`, not a `Deref`).
@@ -17928,10 +17932,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         push_str(sb, "  popq %rax\n  movq ")
         push_int(sb, fi * 8)
         push_str(sb, "(%rax), %rax\n  pushq %rax\n")
-      } else if fbi.is_ix {
+      } else if dfbi.is_ix {
         ## `a[i].f` — array-of-struct element field read: compute the field address, load it.
-        ffoff := idx_field_index(fbi.arr, fbi.idx, fs, fl, cx) * 8
-        emit_idx_field_addr(fbi.arr, fbi.idx, ffoff, sb, cx, nl)
+        ffoff := idx_field_index(dfbi.arr, dfbi.idx, fs, fl, cx) * 8
+        emit_idx_field_addr(dfbi.arr, dfbi.idx, ffoff, sb, cx, nl)
         push_str(sb, "  movq (%rax), %rax\n  pushq %rax\n")
       } else if ddif.found {
         ## `arr[i].agg.leaf` — array element → struct field → scalar leaf: element base + COMBINED field

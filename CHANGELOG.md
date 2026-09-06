@@ -82,6 +82,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Re-declaring a name **already bound in the same scope** is now a compile error, as Declarations §6.2
+  requires ("a name means one thing within its scope"). No surface enforced that for function-body
+  locals: `check` accepted the program and the four backends then disagreed. Written with two
+  different types (`r := Result(usize, u32).Ok(7)` then `r := Option(usize).Some(9)`), the `match`
+  below resolved its arms in the wrong enum and took **no** arm, so x86_64 fell through to the
+  fallback and answered `77` on a clean compile — until a lowering-side fence started refusing that
+  one spelling; aarch64, riscv64 and wasm trapped at run time instead. Written with the **same** type, all four backends accepted it
+  in silence. The refusal is now a located `check` diagnostic naming the second declaration's line, so
+  `check`, the `-o` build and the three emit-to-stdout backends refuse it identically and emit
+  nothing. Cross-scope shadowing (§6.1) is untouched and stays legal: an inner block may shadow an
+  enclosing name or a parameter, two sequential non-overlapping blocks may each bind the same name,
+  two sibling `for` bodies may each bind the same loop-local, a `match` arm's payload binding may
+  reuse one name across arms, and `x = v` after `x := v` is a write, not a second binding. `_` is a
+  discard, not a name, so repeated `_ :=` is unaffected. The one specification exception — function
+  overloading by signature (Functions §1.4 / FN-7) — is not reachable today: the lower has no local
+  overload set, and no fixture spells one.
+
 - The unary prefixes `-` and `~` now apply to the element, field or component the source names. Both
   took their operand at the **primary** level, so a postfix step that followed applied to the prefix's
   RESULT: `-a[i]` parsed as `(-a)[i]`, `~a[i]` as `(~a)[i]` and `-p.b` as `(-p).b`, and the read went

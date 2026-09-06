@@ -4496,6 +4496,34 @@ fmt_test_has_all issue268_comptime_binding 42 "comptime base : u64 = 5" "comptim
 check_accept issue268_comptime_rebind
 run issue268_comptime_rebind 26
 fmt_test_has_all issue268_comptime_rebind 26 "comptime x := 5" "x := 7"
+## Issue #414 / Declarations §6.2 — "Re-declaring a name already bound in the same scope is a compile
+## error". That is a rule about a program the SPECIFICATION calls ill-formed, so the refusal lives in
+## `check` and every build/emit surface inherits it from there — unlike `lower::require_agg_type`
+## (#406/#412), which fences an x86 slot-map limitation for a program §6.1 calls VALID. On the parent
+## all five surfaces accepted the same-type spelling (x86_64, aarch64, riscv64 and wasm each answered
+## 109), while the different-type spelling passed `check`, was refused only by that x86 lowering
+## fence, and trapped at run time on the other three (133/133/134). `check_build_located` is used
+## rather than a bare `*_reject_has` because the useful half of this diagnostic is WHICH line rebound
+## the name: the SECOND declaration, not the first.
+check_build_located same_scope_redecl_same_type 7 "cannot be re-declared"
+check_build_located same_scope_redecl_diff_type 9 "cannot be re-declared"
+## the modifier does not buy a second binding, and neither does the annotated `name : T = v` form
+check_build_located same_scope_redecl_comptime 8 "cannot be re-declared"
+check_build_located same_scope_redecl_annotated 7 "cannot be re-declared"
+## the three emit-to-stdout backends must refuse it with the SAME diagnostic and emit nothing — this
+## is the half a lowering-side fence could never have covered.
+emit_reject_has wat same_scope_redecl_same_type "cannot be re-declared"
+emit_reject_has aarch64 same_scope_redecl_same_type "cannot be re-declared"
+emit_reject_has riscv64 same_scope_redecl_same_type "cannot be re-declared"
+emit_reject_has wat same_scope_redecl_diff_type "cannot be re-declared"
+emit_reject_has aarch64 same_scope_redecl_diff_type "cannot be re-declared"
+emit_reject_has riscv64 same_scope_redecl_diff_type "cannot be re-declared"
+## The over-rejection guard, and the load-bearing half of this change: §6.1 cross-scope shadowing,
+## sequential non-overlapping blocks, sibling `for` loops, a `match` arm payload name reused across
+## arms, a shadowed parameter, `x : T` with a later `=`, an ordinary `=` write, and two `_` discards
+## all stay accepted. Runs on all four backends through the sweeps' `^run ` rows.
+check_accept same_scope_shadow_ok
+run same_scope_shadow_ok 42
 check_reject_has reject_issue268_comptime_runtime "type mismatch"
 check_reject_has reject_issue268_comptime_mut "comptime mut"
 check_reject_has reject_issue268_comptime_reassign "immutable binding"

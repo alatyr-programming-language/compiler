@@ -23,7 +23,7 @@
 ## checking (only the first payload type span is captured), generic type expressions (`Vec(T)`),
 ## and unifying a `Var` that resolves to a top-level value binding (treated as unknown).
 vec := alloc::vec
-(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_reassign, binding_is_comptime) := ast
+(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_reassign, assign_is_decl, binding_is_comptime) := ast
 (bnd_ns, bnd_nl, bnd_next) := ast
 ecallee_is := ast::ecallee_is
 fld_p := ast::fld_p
@@ -144,6 +144,13 @@ multidim_array_field_err := fn(s : usize) -> CheckErr { MULTIDIM_ARRAY_FIELD_DIA
 ## byte-identical while every public semantic entry point shares one located refusal.
 NESTED_ARRAY_PARAM_DIAG_MARKER := 6895000000000000000
 nested_array_param_err := fn(s : usize) -> CheckErr { NESTED_ARRAY_PARAM_DIAG_MARKER + s * 4 }
+## Issue #414 / Declarations §6.2 — re-declaring a name ALREADY BOUND IN THE SAME SCOPE is a compile
+## error. That is a TARGET-INDEPENDENT rule about a program the specification calls ILL-FORMED, so it
+## belongs in `check` (one refusal for all four backends), not in a backend fence. Keep this class
+## between the nested-array parameter and qualified-private-constant markers so every older CheckErr
+## range stays byte-identical; only the upper bound of the nested-array-parameter window moves.
+SAME_SCOPE_REDECL_DIAG_MARKER := 6897000000000000000
+same_scope_redecl_err := fn(s : usize) -> CheckErr { SAME_SCOPE_REDECL_DIAG_MARKER + s * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -8812,6 +8819,108 @@ stmts_bad_loop_control := fn(head : ptr(mut Stmt), in_loop : bool, a : ptr(mut r
   bad
 }
 
+## Issue #414 / Declarations §6.2 — "Re-declaring a name already bound in the same scope is a compile
+## error […] (Same-scope shadowing, as in Rust, is rejected — for clarity: a name means one thing
+## within its scope.)" §6.1 keeps CROSS-scope shadowing legal, so the whole rule turns on what "the
+## same scope" is: ONE statement list. Two source-level DECLARATIONS (`x := v` or `x : T = v`, both of
+## which put a `:` after the name — `assign_is_decl`) that are SIBLINGS in the same block collide; a
+## declaration in a nested block, in a sibling block, in a loop body or in a `match` arm body is a
+## different scope and stays accepted. Each list is therefore scanned against ITSELF only, and every
+## nested list is scanned separately by the recursion below.
+##
+## This is a FRONT-END rule and it belongs in `check`: §6.2 makes the program ILL-FORMED, so every
+## build and emit surface must refuse it from one place. That is the opposite of `lower`'s
+## `require_agg_type` fence (#406/#412), which refuses a program the spec calls VALID because the
+## x86 slot map cannot carry two aggregate types under one name — a backend limitation, correctly
+## placed in the backend. Before this, `check` accepted both spellings and the four backends
+## disagreed: x86_64 answered a silent wrong value for the different-type spelling while aarch64,
+## riscv64 and wasm trapped, and all four accepted the same-type spelling.
+##
+## Deliberately kept as a structural prepass rather than folded into `check_stmts`: the checker's
+## `locals` table is FLAT and function-scoped (a `:=` local leaks out of its block here), so it
+## cannot answer "already bound in THIS scope" without new per-block bookkeeping on that hot path.
+## The statement list is the scope, and it is already in hand.
+##
+## Returns the redeclaration's own name offset (0 = none) so the diagnostic lands on the SECOND
+## declaration, not the first.
+sema_redecl_candidate := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
+  if nl == 0 { return false }
+  ## `_` is the discard name, not a binding a later mention can resolve to (`_ := std::os::free(r)`);
+  ## two discards in one block are not two meanings of one name.
+  if nl == 1 and str_at((src + ns), 1) == "_" { return false }
+  assign_is_decl(src, ns, nl)
+}
+
+## Does one of the FIRST `upto` statements of `head` declare the same name? `ns2 != ns` skips the
+## occurrence being checked: one source declaration can reach the AST as more than one
+## `Stmt::Assign` node, and a node is never its own duplicate.
+stmts_decl_before := fn(head : ptr(mut Stmt), upto : usize, src : ptr(u8), ns : usize, nl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut cur := head
+  mut i := 0
+  mut hit := false
+  while cur != 0 and i < upto {
+    s := deref(stmt_p(Stmt, cur))
+    match s {
+      Stmt::Assign(ns2, nl2, v2, nx2) => {
+        if ns2 != ns and sema_redecl_candidate(src, ns2, nl2) and streq(src, ns2, nl2, ns, nl) { hit = true }
+      }
+      _ => { hit = hit }
+    }
+    cur = stmt_next_at(cur, a)
+    i += 1
+  }
+  hit
+}
+
+stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  mut cur := head
+  mut idx := 0
+  mut bad := 0
+  while cur != 0 {
+    s := deref(stmt_p(Stmt, cur))
+    match s {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if bad == 0 and sema_redecl_candidate(src, ns, nl) and stmts_decl_before(head, idx, src, ns, nl, a) { bad = ns }
+      }
+      Stmt::While(c, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::Loop(b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::Unchecked(b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::AllocWith(ae, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::If(c, th, el, nx) => {
+        if bad == 0 { bad = stmts_same_scope_redecl(th, src, a) }
+        if bad == 0 { bad = stmts_same_scope_redecl(el, src, a) }
+      }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm := ah
+        while arm != 0 {
+          am := deref(arm_p(arm))
+          if bad == 0 { bad = stmts_same_scope_redecl(am.body_stmts, src, a) }
+          arm = am.next
+        }
+      }
+      Stmt::CompIf(c, th, el, nx) => {
+        if bad == 0 { bad = stmts_same_scope_redecl(th, src, a) }
+        if bad == 0 { bad = stmts_same_scope_redecl(el, src, a) }
+      }
+      Stmt::CompFor(vs, vl, iv, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
+      Stmt::CompMatch(sc, ah, nx) => {
+        mut arm2 := ah
+        while arm2 != 0 {
+          am2 := deref(arm_p(arm2))
+          if bad == 0 { bad = stmts_same_scope_redecl(am2.body_stmts, src, a) }
+          arm2 = am2.next
+        }
+      }
+      _ => { bad = bad }
+    }
+    cur = stmt_next_at(cur, a)
+    idx += 1
+  }
+  bad
+}
+
 ## Issue #207 / Control Flow §§2.1–2.3: direct code-point labels share one flat function namespace with
 ## structured labels. The parser keeps
 ## their spelling in the existing statement-label side table, so this pass can collect every forward or
@@ -9590,6 +9699,13 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     if cjp != 0 { failed = true; err = cjp }
   }
   if stmts_bad_loop_control(d.body_stmts, false, a) { failed = true; err = located_err(d.name_start) }
+  ## Declarations §6.2 — a same-scope redeclaration makes the whole function ill-formed, so refuse it
+  ## before the ordinary statement walk can synthesize types against the shadowed binding. Guarded on
+  ## `failed == false` so an existing, more specific structural diagnostic stays authoritative.
+  if failed == false {
+    ssr := stmts_same_scope_redecl(d.body_stmts, src, a)
+    if ssr != 0 { failed = true; err = same_scope_redecl_err(ssr) }
+  }
   if d.ret_tl != 0 and no_tail and not (stmts_return(d.body_stmts, a) or stmts_tail_value(d.body_stmts, a)) { failed = true; err = located_err(d.name_start) }
   ## FN-6 first slice: a LIFTED LAMBDA (SENTINEL `name_len == 0`) returning a MULTI-WORD aggregate —
   ## struct (tag 3), enum (tag 4), or str (tag 6) — is not yet supported (a lambda is called only
