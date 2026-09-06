@@ -17245,16 +17245,17 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if dslf == "len" { push_str(sb, "  pushq %rdx\n") } else { push_str(sb, "  pushq %rax\n") }
         return
       }
-      ## CLAYOUT S3(d) — `deref(p).len` / `deref(p).ptr` for a folded `Some(p)` binding whose
-      ## pointee view span is carried by the eek-13 niche scalar slot marker. The ordinary str-field arm
-      ## below only recognizes an ek-4 str local and would otherwise read the neighbouring frame
-      ## slot as if `p` itself were a two-word view. Load the pointer value first, then select the
-      ## actual pointee pair word; this is deliberately gated to the niche enum-match marker, not the
-      ## pre-existing eek-6 call-derived view-pointer marker.
+      ## CLAYOUT S3(d) — `deref(p).len` / `deref(p).ptr` where `p`'s pointee VIEW span is carried by an
+      ## ek-0 scalar slot marker: the eek-13 folded `Some(p)` niche binding, or the eek-6 view pointer
+      ## (a call-derived `dq_elem(str, …)` local, or a `s : ptr(str)` PARAM — #451). The ordinary
+      ## str-field arm below only recognizes an ek-4 str local and would otherwise read the
+      ## neighbouring frame slot as if `p` itself were a two-word view. Load the pointer value first,
+      ## then select the actual pointee pair word at its ASCENDING offset (ptr at `(%rax)`, len at
+      ## `8(%rax)`) — the same layout `emit_str_pair`'s Deref arm and `ptr(<str local>)` agree on.
       dviewv := deref_var_span(base)
       if dviewv.n != 0 {
         dviewent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, dviewv.s, dviewv.n)))
-        if streq(cx.src, dviewent.ns, dviewent.nl, dviewv.s, dviewv.n) and dviewent.ek == 0 and dviewent.eek == 13 and dviewent.snl != 0 and (dslf == "len" or dslf == "ptr") {
+        if streq(cx.src, dviewent.ns, dviewent.nl, dviewv.s, dviewv.n) and dviewent.ek == 0 and (dviewent.eek == 6 or dviewent.eek == 13) and dviewent.snl != 0 and (dslf == "len" or dslf == "ptr") {
           emit_gas(deref_inner_expr(base), sb, cx, a, nl)
           push_str(sb, "  popq %rax\n")
           if dslf == "ptr" { push_str(sb, "  movq (%rax), %rax\n") }
@@ -23650,6 +23651,27 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
       ## like any scalar param.
       off := svec_len(ptr(slots))
       svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = off, sns = 0, snl = 0, ek = 8, estride = 1, eek = 0, is_ref = true))
+    } else if str_at((src + pts), ptl) == "ptr" and is_view_type(src, ppn_s, ppn_l) {
+      ## POINTER-TO-VIEW param `s : ptr(str)` / `s : ptr([T])` (Stdlib §3.5/§3.6 — a `str` is the same
+      ## two-word `{ptr, len}` pair a slice is; Memory §4.1 makes `deref(s)` an ordinary read through it).
+      ## `str` and `[T]` have no struct DECLARATION, so neither the ek-7 pointer-to-struct branch above
+      ## nor the ek-6 pointer-to-enum one matched and the param fell to the SCALAR fallback below,
+      ## losing the pointee entirely: `slot_ptr_pointee_span` then found no marker and re-derived the
+      ## pointee from the source spelling, where a PARAM's `local_type_span` scan runs past the
+      ## parameter list into the body. Every view consumer therefore saw nothing — `deref(s).len`
+      ## fell to the slot default (`movq $0`) and `ss := deref(s)` copied ONE word, so `ss.len` read a
+      ## never-written neighbouring slot. Both answered 0 on a clean compile, and `base::str::split`
+      ## (the stdlib's only `ptr(str)` entry point) returned an EMPTY `SplitIter` (#451).
+      ## The slot is the same one-word SCALAR the fallback bound (`ek = 0`, not `is_ref` — the pointer
+      ## arrives and spills exactly like any other scalar param, so the argument ABI is unchanged);
+      ## the only addition is the `eek = 6` marker plus the RESOLVED pointee span, the marker
+      ## `bind_ptrview_slot` already uses for a call-derived view pointer. `slot_ptr_pointee_span`
+      ## reads it FIRST, which is what hands the pair width to `deref_view_pointee_span` (the
+      ## `ss := deref(s)` str binding), `deref_view_span_cx` (the value / argument / `.len` reads)
+      ## and the `deref(s) = v` store. Placed AFTER the out-param branch so an `out p : ptr(str)`
+      ## keeps its by-reference ek-8 binding.
+      off := svec_len(ptr(slots))
+      svec_push(slots, SlotEntry(ns = pm.ns, nl = pm.nl, off = off, sns = ppn_s, snl = ppn_l, ek = 0, estride = 1, eek = 6, is_ref = false, tmod_s = 0, tmod_l = 0))
     } else if type_is_float(decls, src, pts, ptl) {
       ## FLOAT param `x : f64` (or a float-underlying brand `x : F`, `F := brand(f64)`) — one word
       ## (the IEEE-754 bits), tagged `ek = 9` so a `Var` read /

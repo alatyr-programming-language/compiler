@@ -82,6 +82,20 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- A **field read through a `ptr(str)` parameter** now reads the pointee, instead of answering **0**.
+  Stdlib appendix §3.5/§3.6 make `str` the base tier's two-word `{ptr : ptr(u8), len : usize}` pair
+  and Memory §4.1 makes `deref(q).len` an ordinary read through the pointer, but
+  `probe := fn(q : ptr(str)) -> usize { deref(q).len }` built cleanly and answered **0** for a
+  four-byte string; `deref(q).ptr` answered a **null** pointer, and binding the pointee first
+  (`ss := deref(q)`) copied one word, so `ss.len` read a neighbouring frame slot. The identical
+  shape over a user struct was always correct — `str` and `[T]` simply have no struct declaration,
+  so a `ptr(str)` parameter matched no pointer-to-aggregate binding and recorded no pointee at all.
+  The visible consequence was in the standard library: `base::str::split(ptr(s), sep)` — its only
+  `ptr(str)` entry point — returned a `SplitIter` whose `len` was 0, i.e. an **empty iterator**, so
+  `for part in split(ptr(s), 44)` yielded nothing. Both now answer correctly. x86_64 only: aarch64,
+  riscv64 and wasm already refused these shapes fail-loud rather than answering the wrong value. The
+  compiler's own emitted assembly is byte-identical, and no other program in the tree declares a
+  `ptr(str)` parameter.
 - The **code-point iterator** of `str` is now reachable through its **qualified** path from outside
   the standard library. Stdlib appendix §3.6 lists `chars(in self) -> CharIter` as an Iterator (§2.4),
   and §2.4 makes the returned type usable through `iter`/`next`; those two `CharIter` overloads were
