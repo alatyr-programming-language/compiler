@@ -112,6 +112,27 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   element (`u64("abc"[0])`), writing an array element (`a[i] = v`) and every other place form are
   untouched. Newly rejecting a program the specification declares invalid: the defect was accepting
   it.
+- Storing into an element of a **`str`** is refused in `check`, instead of killing the process. This is
+  the neighbour of the entry above, and it reached the fault by a different route: here the target
+  really is a place — `s` is a name, `s[i]` a legal `place` by Grammar §3.3 — so the parse is correct
+  and the parser fence never sees it. `s := "abc"` followed by `s[0] = 65` built with no diagnostic and
+  died with **SIGSEGV** (x86_64 exit 139) writing into `.rodata`; aarch64 and riscv64 reached a
+  fail-loud trap (133) and wasm aborted (134), so all four backends accepted the program and then gave
+  four different answers, none of them a message. `mut` did not help and was not supposed to: `str`
+  **is** the slice `[u8]` (Types §7, Stdlib appendix §3.6), a slice's element permission comes from its
+  pointer, and the writable spelling is `[mut T]` — so under Memory §3.3's AND rule the `mut` step
+  passes and the pointee step fails. `mut s := "abc"` and `mut s : str = "abc"` segfaulted the same way
+  and are refused the same way, as is the compound `s[0] += 1`. The refusal is in the shared semantic
+  pass, so `alatyr check`, the `-o` build and the three emit-to-stdout backends agree and none leaves
+  an artifact. What `mut` does buy is untouched: a whole-view reassignment `mut s := "abc"; s = "de"`
+  is still legal. Reading a `str` element, sub-slicing one, `mut` array element writes, `mut` struct
+  field writes and `deref(p) = v` are all untouched. An alias is covered too, and had to be: `t := s`
+  copies the two-word view and not the bytes, so it inherited the same read-only run, and on the
+  parent it re-opened the fault for every spelling of `s` — including a `str` parameter, whose own
+  direct `s[i] = v` was already refused, so a one-word edit walked around that refusal. Where the
+  FIRST failing step of the path is the binding itself — an immutable `s : str`, a `str` parameter, a module-level `G := "abc"` — the
+  established `immutable binding` diagnostic still owns the message, unchanged. Newly rejecting a
+  program the specification declares invalid: the defect was accepting it.
 - Assigning to **any** value-expression is refused where it is written, closing the rest of the class
   the string-literal entry above fenced one spelling of. `5 = 3`, `f() = 65`, `[1, 2, 3][0] = 65` and
   `bytes(s)[0] = 65` all used to build with no diagnostic; the first exited **3** and the other three

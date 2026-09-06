@@ -151,6 +151,16 @@ nested_array_param_err := fn(s : usize) -> CheckErr { NESTED_ARRAY_PARAM_DIAG_MA
 ## range stays byte-identical; only the upper bound of the nested-array-parameter window moves.
 SAME_SCOPE_REDECL_DIAG_MARKER := 6897000000000000000
 same_scope_redecl_err := fn(s : usize) -> CheckErr { SAME_SCOPE_REDECL_DIAG_MARKER + s * 4 }
+## Issue #429 / Types §7 + Stdlib appendix §3.6 + Memory §3.3 — `str` IS the slice `[u8]`: a view whose
+## element permission comes from its POINTER, and the writable spelling of a slice is `[mut T]`, which
+## `str` is not. An element store into a `str` place is therefore ill-formed whatever the BINDING says,
+## so `mut` on the binding does not buy it — the `mut` step passes and the pointee step fails. The
+## established `immutable binding` fence keeps precedence where it already fires (it names the FIRST
+## failing AND-step); this class covers exactly the step below it. Keep the marker between the
+## same-scope-redeclaration and qualified-private-constant windows so only the former's upper bound
+## moves and every other decoded CheckErr range stays byte-identical.
+STR_ELEM_WRITE_DIAG_MARKER := 6898000000000000000
+str_elem_write_err := fn(s : usize) -> CheckErr { STR_ELEM_WRITE_DIAG_MARKER + s * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -8089,6 +8099,22 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
               if sperm == 1 or sperm == 2 { bind_prov = 2 } else { bind_prov = 3 }
             }
           }
+          ## Issue #429 — record that this binding holds a STRING LITERAL's view, in the provenance byte
+          ## rather than the public type tag. `check_expr`'s `Expr::StrLit` arm is one of the LATER arms
+          ## that do not reliably dispatch under the bootstrap seed (see `lbv_lit_tag`), so `tv.tag` came
+          ## back 0 for `s := "abc"` and every write fence keyed on the recorded type saw an UNKNOWN place
+          ## — that is the hole the indexed store fell through into `.rodata`. Promoting the binding to
+          ## the public tag 6 instead would also re-type it for every arg/return/reassign check at once;
+          ## this marker changes NOTHING but the element-store fence below. `local_prov` is compared for
+          ## exact values (1, 2, 3) everywhere else, so 4 is inert there.
+          if bind_prov == 0 and lbv_lit_tag(v) == 6 { bind_prov = 4 }
+          ## …and carry it across a bare ALIAS (`t := s`), which reaches the same bytes through a second
+          ## name. The alias binding copies the two-word view, not the run it points at, so the pointee
+          ## permission it inherits is the source's: measured on the parent, `t := s` re-opened the
+          ## SIGSEGV for every spelling of `s` — the literal binding, the annotated local AND a `str`
+          ## parameter, whose own `s[i] = v` the established fence already refused. Transitive by
+          ## construction: `u := t` reads `t`'s marker the same way.
+          if bind_prov == 0 and sema_place_is_str_view(locals, cnt, src, expr_var_span(v)) { bind_prov = 4 }
           ## The binding's type NAME never comes from `tv`: `check_expr` hands its `Ty` back through the
           ## PACKED `Result(Ty, CheckErr)` carrier, which preserves only the TAG — `tv.ns`/`tv.nl` are
           ## STACK GARBAGE (the truncation the tag-5 recovery below already documents, generalized: it is
@@ -8528,7 +8554,16 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         ## Keep an established type-conformance diagnostic ahead of the mutability fence: a scalar
         ## array receiving an aggregate is a type error even when its immutable root is also unwritable.
-        if iperm == 2 or (iperm == 1 and not i_unready) { mark_failed(locals, immutable_err(iroot.s)) }
+        i_immut := iperm == 2 or (iperm == 1 and not i_unready)
+        if i_immut { mark_failed(locals, immutable_err(iroot.s)) }
+        ## Issue #429 — the AND-path's remaining step. `str` is `[u8]` (Types §7 / Stdlib appendix
+        ## §3.6): the view's pointer carries an IMMUTABLE pointee, so `s[i] = v` is ill-formed even
+        ## when the binding is `mut` — Memory §3.3 takes a dereference step's permission from the
+        ## pointee, not from the name. Ordered AFTER the binding fence and mutually exclusive with it,
+        ## so a place that already fails at its FIRST immutable step keeps its established `immutable
+        ## binding` wording and location; this arm fires exactly where that fence does not, which is
+        ## where the store used to reach `.rodata` and the process died with no diagnostic at all.
+        if not i_immut and sema_place_is_str_view(locals, cnt, src, iroot) { mark_failed(locals, str_elem_write_err(iroot.s)) }
         cur = nx
       }
       ## `a[i].f = v` — an array-of-struct element-field write. The base array, index, and
@@ -9501,6 +9536,24 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
   }
   if sema_global_name_anywhere(decls, src, root.s, root.n) and not is_mod_mut_global(decls, src, root.s, root.n) { return 2 }
   0
+}
+
+## Issue #429 / Types §7 + Stdlib appendix §3.6 — is this place root a `str` view? `str` is the slice
+## `[u8]`; the writable slice spelling is `[mut T]`, so a `str`'s bytes are never an assignable place
+## (Memory §3.3: the permission of a dereference step is the POINTEE mutability, not the binding's).
+## Two sources answer, and only these two: the recorded type tag 6 — an annotation, a `str` parameter,
+## or a declared `str` global's local view — with the `mut` bit stripped, because `mut` moves the
+## BINDING and not the bytes; and the Issue #429 provenance marker for an unannotated string-literal
+## binding, whose tag the packed `check_expr` carrier drops. Anything else is unknown and left alone,
+## so this can only ever ADD the refusal the specification already requires.
+sema_place_is_str_view := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), root : VSpan) -> bool {
+  if root.n == 0 { return false }
+  if not local_in(locals, nloc, src, root.s, root.n) { return false }
+  if local_prov(locals, nloc, src, root.s, root.n) == 4 { return true }
+  raw := local_ty(locals, nloc, src, root.s, root.n)
+  mut tag : u8 = raw.tag
+  if tag >= 128 and tag != 255 { tag = tag - 128 }
+  tag == 6
 }
 
 ## A direct field write is a first write only while its root or exact field marker remains unreadied.
