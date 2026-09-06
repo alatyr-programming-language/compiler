@@ -6614,6 +6614,19 @@ run iter_for_split 42
 # user's declarations once the base names are published. Cross-target rows follow from `run`.
 run issue363_qualified_char_protocol 42
 run issue363_str_protocol_shadow_control 42
+# Issue #451 / Stdlib appendix §3.5 + §3.6 + Memory §4.1 — a field read through a `ptr(str)`
+# PARAMETER is an ordinary read through the pointer. The parent answered ZERO for EVERY field
+# (`deref(q).len` lowered to a literal `movq $0`; the bound `ss := deref(q)` copied one word so
+# `ss.len` read a never-written slot), while the identical shape over a USER STRUCT was correct —
+# `str` has no struct declaration, so the pointer-to-struct parameter binding never matched it.
+# The first row separates "correct", "zero" and "never read" with DIFFERENT codes and carries the
+# user-struct control that is green on the parent too; the second drives `base::str::split` — the
+# stdlib's only `ptr(str)` entry point, which returned an EMPTY iterator — through the protocol's
+# `next`, which `test/iter_for_split.al` cannot do because it hand-builds its `SplitIter`.
+# Cross-target rows follow from `run`; the non-x86 backends trap on `str`, as they already do for
+# `iter_for_split`.
+run issue451_ptr_str_field 42
+run issue451_split_iterator 42
 # A `next` this desugar cannot call (a GENERIC `next(K : type, …)`, `alloc::hashmap::HashMapIter`)
 # must be REFUSED, never walked as a slice: the parent built it and ran the body zero times.
 build_reject_has reject_for_generic_iter_next "carries no type arguments"
