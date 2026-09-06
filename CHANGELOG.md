@@ -82,6 +82,21 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- A `{}` **template hole holding a negative signed integer** now prints the same text on all four
+  backends. Functions §7.1 routes a hole through the scalar rendering layer and Stdlib appendix §2
+  fixes that layer's integer form as base-10 with "a leading `-` for a negative two's-complement
+  value"; **aarch64**, **riscv64** and **wasm** each had exactly one integer renderer and it was
+  unsigned, so `a : i64 = 0 - 128` printed **18446744073709551488** on those three while x86_64
+  printed **-128**. The program compiled cleanly and exited 42 on every backend — only the text was
+  wrong, which is why the exit-code cross-target sweeps never contradicted it, and why no fixture had:
+  every cross-backend stdout row in the suite printed a non-negative number (#444). Each of the three
+  template emitters now picks a signed renderer when the hole's static type is signed, using the same
+  signedness oracle `/`, `%` and `shr` already route on; a hole that oracle does not prove signed keeps
+  the unsigned renderer and its exact previous bytes. The new signed helper is written last and only
+  when a signed hole actually reached it, so a program without one emits byte-identical output to
+  before — measured over all 1532 of `test/*.al` on all four backends, 0 differing. A hole whose signedness
+  that oracle cannot see — an un-annotated local, an array element, a call result — still renders
+  unsigned on the three backends; that residual is tracked separately.
 - The **code-point iterator** of `str` is now reachable through its **qualified** path from outside
   the standard library. Stdlib appendix §3.6 lists `chars(in self) -> CharIter` as an Iterator (§2.4),
   and §2.4 makes the returned type usable through `iter`/`next`; those two `CharIter` overloads were
