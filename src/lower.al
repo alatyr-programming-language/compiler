@@ -6191,6 +6191,35 @@ emit_array_slice_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::Str
   }
 }
 
+## ONE HOME for the CHECKED VIEW BYTE INDEX. Three `Expr::Index` read arms — a str LITERAL base
+## (`"abc"[i]`, #405), a `str` ELEMENT base (`arr[k][j]` over a `[str; N]`/`Slice(str)`, #394) and
+## the `bytes(s)[i]` view (#416) — all mean the same thing: `str` IS `[u8]` (Types §7, appendix 160
+## §3.5), so the element is ONE BYTE of the {ptr, len} view named by `pair`. Each arm had grown its
+## own byte-identical copy of the body, and the third copy was the one that silently shipped without
+## the bounds check; `src/lower_layout.al` records next to `scalar_byte_size` why three copies of one
+## decision is the shape that produces a defect. One home, one answer.
+##
+## `pair` is the expression whose {ptr, len} `emit_str_pair` materializes; it is NOT always `base`
+## (the `bytes(s)[i]` arm resolves a module-level `bytes("…")` initializer to its inner literal
+## first), which is why the pair source is a parameter rather than recovered here.
+##
+## Stack shape: `emit_str_pair` pushes ptr (deeper) then len, and `idx` lands on top; pop index →
+## %r8, len → %rbx, ptr → %rax. CHECKED BOUNDS (I11 §358 / CG-7): `cmpq %rbx, %r8` + `jb` skips on
+## `idx < len`, so a negative i64 index (huge unsigned) traps too; `cx.vchk` drops the check inside
+## an `unchecked` scope (CT-11). `movzbq` zero-extends the byte, matching `str` = `[u8]`.
+##
+## NOT folded in: the `byte_at(s, i)` BUILTIN emits the same five instructions from the `Expr::Call`
+## arm, but it is the toy grammar's deliberately UNCHECKED raw byte-scan primitive. Sharing this
+## helper would either add a check it is documented not to have or reintroduce a "checked?" flag —
+## the wart this consolidation removes. Its contract is a separate decision, not a duplicate one.
+emit_view_byte_index := fn(pair : ptr(Expr), idx : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  emit_str_pair(pair, sb, cx, a, nl)      ## {ptr (deeper), len (top)}
+  emit_gas(idx, sb, cx, a, nl)            ## the byte index, on top
+  push_str(sb, "  popq %r8\n  popq %rbx\n  popq %rax\n")
+  if cx.vchk { push_str(sb, "  cmpq %rbx, %r8\n  jb 1f\n  ud2\n1:\n") }
+  push_str(sb, "  movzbq (%rax,%r8), %rax\n  pushq %rax\n")
+}
+
 ## Is `e` a `Call` to the spec str builtin `str_at(base, len)` — the raw-bytes→str view that
 ## constructs a `str` {ptr = base, len = len} from an ABSOLUTE byte pointer + length? Like `sub`
 ## it is a str-PRODUCING call (a 2-word str value), so it must be sized + lowered as a str wherever
@@ -18287,15 +18316,11 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## `u64("abc"[2])` returned 5 instead of 99 — a SILENT WRONG VALUE. Claimed FIRST: every
       ## recognizer below keys on a `Var` / `Field` / `Index` / `Call` base and none of them can
       ## match an `Expr::StrLit`, so no other shape changes emission.
-      ## CHECKED BOUNDS (I11 §358 / Types §6.4): the pair's len word IS the literal's byte length,
-      ## so the same `cmpq`/`jb`/`ud2` the str-LOCAL read uses traps an out-of-range index rather
-      ## than reading past the run. Dropped in an `unchecked` scope, like every other checked index.
+      ## The read itself — pair, index, bounds check against the pair's len, `movzbq` — is the ONE
+      ## shared decision `emit_view_byte_index` owns; this arm only decides that a literal base means
+      ## a view byte read, and hands the literal over as the pair source.
       if str_lit_info(base).is_s {
-        emit_str_pair(base, sb, cx, a, nl)      ## {ptr (deeper), len (top)}
-        emit_gas(idx, sb, cx, a, nl)            ## the byte index, on top
-        push_str(sb, "  popq %r8\n  popq %rbx\n  popq %rax\n")
-        if cx.vchk { push_str(sb, "  cmpq %rbx, %r8\n  jb 1f\n  ud2\n1:\n") }
-        push_str(sb, "  movzbq (%rax,%r8), %rax\n  pushq %rax\n")
+        emit_view_byte_index(base, idx, sb, cx, a, nl)
         return
       }
       ## STANDARD BYTE TUPLE COMPONENT READ — claim `t.N[i]` before the historical array-of-tuples
@@ -18458,17 +18483,12 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## Types §7 makes the element a two-word `{ptr, len}` view and appendix 160 §3.5 makes `str`
       ## `[u8]`, so the correct read is: materialize the ELEMENT's pair (`emit_str_pair` already
       ## resolves `Index(<[str; N]>, k)` and `Index(<Slice(str)>, k)` with the 2-word element stride),
-      ## then load ONE byte at `ptr + j`. This is the same byte load `bytes(s)[i]` and `byte_at` use;
-      ## the bounds check compares `j` against the element's RUNTIME len (`jb` skips on `j < len`, so a
-      ## negative/huge-unsigned index also traps) and is dropped in an `unchecked` scope like every
-      ## other view index. Keep it AHEAD of the fail-loud str-element guard below: that guard rejects a
+      ## then load ONE byte at `ptr + j` — `emit_view_byte_index`, the one shared view-byte-index
+      ## decision, with the ELEMENT as the pair source, so `j` is checked against that element's
+      ## RUNTIME len. Keep it AHEAD of the fail-loud str-element guard below: that guard rejects a
       ## whole `arr[k]` element reaching scalar lowering, which is a different shape from this byte read.
       if call_arg_is_str_elem(base, cx) {
-        emit_str_pair(base, sb, cx, a, nl)   ## stack: [ptr (deep), len (top)]
-        emit_gas(idx, sb, cx, a, nl)         ## stack: [ptr, len, j (top)]
-        push_str(sb, "  popq %r8\n  popq %rbx\n  popq %rax\n")
-        if cx.vchk { push_str(sb, "  cmpq %rbx, %r8\n  jb 1f\n  ud2\n1:\n") }
-        push_str(sb, "  movzbq (%rax,%r8), %rax\n  pushq %rax\n")
+        emit_view_byte_index(base, idx, sb, cx, a, nl)
         return
       }
       ## A str element has no scalar word representation. Its valid consumers are the pair-valued
@@ -18520,10 +18540,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         return
       }
       ## `bytes(s)[i]` — the SPEC-canonical str byte access (`str` is `[u8]`, appendix 160 §3.5):
-      ## a BYTE read, not a word read. Detect a `bytes(<s>)` base and emit the byte load
-      ## (`movzbq`, reusing the `byte_at` machinery — push the str's {ptr,len} pair, lower the
-      ## index, then `movzbq (%rax,%r8)`); otherwise the ordinary array-element word read. This
-      ## is the byte primitive both Stage-0 and the self-host lower accept (no `byte_at` builtin).
+      ## a BYTE read, not a word read. Detect a `bytes(<s>)` base and hand the str it views to
+      ## `emit_view_byte_index` (the same shared decision the str-LITERAL and str-ELEMENT arms above
+      ## use, bounds check included); otherwise the ordinary array-element word read. This is the
+      ## byte primitive both Stage-0 and the self-host lower accept (no `byte_at` builtin).
       mut bv := bytes_view_arg(base, cx.src, a)
       ## `GLOBAL[i]` on a MUTABLE array global (`TABLE[i]`): load element `i` from `.data` at
       ## `LABEL + i*8`. `leaq LABEL(%rip)` (PIE-safe base), then an indexed word load. The base is a
@@ -18611,18 +18631,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           bconst := module_const_value(cx.decls, cx.src, bvn.s, bvn.n)
           if unchecked bitcast(usize, bconst) != 0 and str_lit_info(bconst).is_s { bsrc = bconst }
         }
-        emit_str_pair(bsrc, sb, cx, a, nl)
-        emit_gas(idx, sb, cx, a, nl)
-        push_str(sb, "  popq %r8\n  popq %rbx\n  popq %rax\n")
-        ## CHECKED BOUNDS (I11 §358 / CG-7) — the missing half of this arm. `bytes(s)` is a view over
-        ## the str's own {ptr, len} pair, and `emit_str_pair` has just pushed that pair, so the len
-        ## word in %rbx IS the number of readable bytes: the same `cmpq`/`jb`/`ud2` the str-LITERAL
-        ## and str-ELEMENT byte reads use applies unchanged (`jb` skips on `idx < len`, so a negative
-        ## i64 index — huge unsigned — also traps). Before this, `bytes(s)[i]` was the ONE view byte
-        ## index with no check at all: an out-of-range read ran to a normal exit carrying whatever
-        ## byte followed the run. Dropped in an `unchecked` scope like every other checked index.
-        if cx.vchk { push_str(sb, "  cmpq %rbx, %r8\n  jb 1f\n  ud2\n1:\n") }
-        push_str(sb, "  movzbq (%rax,%r8), %rax\n  pushq %rax\n")
+        emit_view_byte_index(bsrc, idx, sb, cx, a, nl)
       } else {
         emit_index_addr(base, idx, sb, cx, a, nl)
         tbread := tuple_byte_component_base(base, cx)
