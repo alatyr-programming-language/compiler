@@ -82,6 +82,20 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- The **iterator protocol of `HashMap`** is now reachable through its **qualified** path from outside
+  the standard library. Stdlib appendix §6 names `iter` in the closed v1 surface of `HashMap(K, V)`
+  and §8.5 makes the §6 alloc-tier types required content given an allocator, with §2.4 fixing the
+  protocol as `iter`/`next`; but only the map-**entry** `iter` carried `pub`. The protocol identity
+  `iter` and `next` did not, so `alloc::hashmap::iter(u64, u64, ptr(m), a)` — the already-published
+  entry point itself — was rejected with `check: invalid`, because the visibility test reports a
+  violation when any same-name, same-module declaration is invisible rather than when every candidate
+  is. Publishing those two — the only two markers in this change — makes the §6 surface reachable as
+  Modules §3 requires. Nothing changes about the map's or the iterator's representation, or about
+  iteration semantics, and no call site resolves differently: a program that declares its own `iter`,
+  `next` or `Entry` still gets its own, including through `for`. The compiler's own emitted assembly
+  is byte-identical. `SplitIter`'s half of the same defect class is not included: the pinned
+  specification does not mention `split` at all, and its qualified path is blocked by #455.
+
 - An **assignment to a struct's enum field** (`h.t = v`) is no longer **dropped** on x86_64. Types §6
   makes a struct field hold the enum it was given and an assignment observable at the next read of that
   place, but `mut h := Holder(t = Tag.Red) ; h.t = v` built cleanly, exited normally and read back

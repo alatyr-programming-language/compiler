@@ -358,14 +358,14 @@ pub iter := fn(K : type, V : type, m : ptr(HashMap(K, V)), a : Arena) -> HashMap
 
 ## A `HashMapIter` **is** the iterator — the Iterator protocol's `iter` (identity,
 ## §2.4): returns a constructor copy (a non-place aggregate), not the place `it`.
-iter := fn(K : type, V : type, it : HashMapIter(K, V)) -> HashMapIter(K, V) {
+pub iter := fn(K : type, V : type, it : HashMapIter(K, V)) -> HashMapIter(K, V) {
   HashMapIter(K, V)(base = it.base, used = it.used, keys = it.keys, vals = it.vals, cap = it.cap, i = it.i)
 }
 
 ## The next live entry, then advance past it; `None` once every occupied bucket has
 ## been yielded (§160). Skips empty (`0`) and tombstone (`2`) buckets, reading the
 ## key/value through the snapshot's raw region pointers.
-next := fn(K : type, V : type, in out it : HashMapIter(K, V)) -> Option(Entry(K, V)) {
+pub next := fn(K : type, V : type, in out it : HashMapIter(K, V)) -> Option(Entry(K, V)) {
   while it.i < it.cap {
     u := deref(unchecked bitcast(ptr(u64), it.base + it.used + it.i * 8))
     if u == 1 {
