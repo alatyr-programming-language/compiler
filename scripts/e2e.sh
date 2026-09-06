@@ -6854,6 +6854,13 @@ run unchecked_expr 42
 ## bases, which the non-x86 backends still trap on (#405/#394). Parent: 101 and 111.
 run unchecked_index_binds_access 42
 run unchecked_index_binds_access_str 42
+## #419 — the SAME mis-binding, one operator family up: the unary prefixes `-` and `~` also took
+## their operand at the PRIMARY level, so `-a[i]` parsed as `(-a)[i]` and `-p.b` as `(-p).b`, and the
+## nameless base fell to the same frame-slot-0 tail of `emit_index_addr`. Grammar §3.4 writes
+## `unary-expr ::= ( "-" | "~" | "not" ) unary-expr | postfix-expr` and §4 puts postfix at level 1
+## against the unary prefixes at level 2, so the whole postfix chain is the OPERAND. Parent: x86 101,
+## aarch64 133, riscv64 133, wat 134 — three traps and one wrong value, never a second wrong value.
+run unary_prefix_binds_postfix 42
 run comptime_typeinfo 42
 ## CT: `comptime match typeinfo(T)` dispatch on the `Str` kind (appendix §4.1) — a `str` instance
 ## selects the `Str` arm, not the `Scalar` fall-through (Pointer/Function/Union also wired).

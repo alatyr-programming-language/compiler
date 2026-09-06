@@ -1279,13 +1279,24 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     ## A leading `-` (kind 17) is UNARY negation `-x` (a negative literal `-1`, or `-expr`). The lean
     ## lexer has no negative-number token and `-` is otherwise only the BINARY subtract (which needs
     ## a left operand), so without this a leading `-` falls through and mis-parses (drifting into the
-    ## next statement). Lower it via the proven binary-subtract path: `Num(0) - <factor>` (Bin op 17).
-    ## Using `p_factor` for the operand makes unary `-` bind tighter than `*`/`+` (so `-a * b` is
-    ## `(0 - a) * b`), matching the usual precedence.
+    ## next statement). Lower it via the proven binary-subtract path: `Num(0) - <operand>` (Bin op 17).
+    ## THE OPERAND IS THE POSTFIX EXPRESSION, not the primary. Grammar §3.4 writes the unary level as
+    ## `unary-expr ::= ( "-" | "~" | "not" ) unary-expr | postfix-expr` over
+    ## `postfix-expr ::= primary { postfix }`, and §4 puts the postfix family (call `()`, index `[]`,
+    ## field `.`, UFCS `.f()`, try `?`) at level 1 and the unary prefixes at level 2 — postfix binds
+    ## TIGHTER, so `-a[i]` is `-(a[i])` and `-p.b` is `-(p.b)`. Parsing the operand with `p_factor`
+    ## bound the prefix to the BASE instead: `-a[i]` became `(-a)[i]`, whose index base is a nameless
+    ## `Unchecked` node that no `Index` recogniser in lower matches, so it fell to `emit_index_addr`'s
+    ## untyped tail and resolved to frame SLOT 0 — a clean compile reading the wrong memory (#419;
+    ## the same sink and the same shape of cause as `unchecked`'s #410). `p_field` is exactly the
+    ## postfix level and consumes nothing beyond it, so every BINARY operator still binds looser than
+    ## the prefix (`-a * b` stays `(0 - a) * b`, `-a + b` stays `(0 - a) + b`); and because `p_field`
+    ## re-enters `p_factor` for its primary, a nested prefix (`- -a`, `-~a[i]`) still parses, which is
+    ## the `unary-expr` right-recursion of the same production.
     if cur(pc).kind == 17 {
       pc.idx = pc.idx + 1
       uzero := newnode(pc.arena, Expr.Num(0, 0, 0))
-      uinner := p_factor(pc)
+      uinner := p_field(pc)
       ## Unary negation `-x` = `0 - x` is 2's-complement negation — INHERENTLY modular (a "negative
       ## literal" `-17` on a u64 is the wrap `2^64-17`), so it must NOT trap under the checked `-`
       ## underflow guard (I11 / CG-8). Wrap in `Expr.Unchecked` so the subtraction lowers guard-free;
@@ -1297,12 +1308,16 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     ## family `& | ^ ~`). Desugared to `x ^ (-1)`: XOR with the all-ones word (`Num(0 - 1)` is the
     ## i64 bit-pattern 0xFFFF…FF, the same all-ones sentinel the parser already uses) is exactly the
     ## complement, and reuses the existing bitwise-xor lowering (op 36) on EVERY backend — no new
-    ## lower op. Binds like unary `-` (via `p_factor`) so `~a & b` is `(~a) & b` and `~~x` is `x`.
+    ## lower op. Binds like unary `-` (via `p_field`) so `~a & b` is `(~a) & b` and `~~x` is `x`.
     ## XOR has no overflow/underflow guard, so (unlike unary `-`) no `Unchecked` wrapper is needed.
     ## Width follows the operand; exact for u64/usize (narrow-type masking is a follow-up).
+    ## Same operand level and same reason as unary `-` above: Grammar §3.4's `unary-expr` takes a
+    ## `postfix-expr`, and §4 level 1 (postfix) binds tighter than level 2 (unary prefix), so
+    ## `~a[i]` is `~(a[i])` and `~p.b` is `~(p.b)`. With `p_factor` here, `~a[i]` parsed as `(~a)[i]`
+    ## and indexed a nameless `Bin` base — `emit_index_addr`'s untyped tail, frame slot 0 (#419).
     if cur(pc).kind == 46 {
       pc.idx = pc.idx + 1
-      tinner := p_factor(pc)
+      tinner := p_field(pc)
       tones := newnode(pc.arena, Expr.Num(0 - 1, 0, 0))
       return newnode(pc.arena, Expr.Bin(36, tinner, tones))
     }
