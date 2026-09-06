@@ -347,6 +347,22 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
           gi = recv_redirect_generic(decls, src, gi, nargs, rcb.s, rcb.n, a)
         }
       }
+      ## GENERIC OVERLOAD SET (#472) — MIRROR the emit side exactly, so the instance this pre-pass
+      ## records is the one the emitted call names. The receiver redirect above reads arg 0, which
+      ## for an EXPLICIT generic call is a TYPE argument; redo the selection from the FIRST VALUE
+      ## argument. Gated on the set count, so every other collected instance is unchanged.
+      if gi >= 0 {
+        gv_i := generic_value_arg_idx(args_head, decls, src, a)
+        if gv_i < nargs {
+          gv_e := arg_expr_at(args_head, gv_i, a)
+          mut gv_ty := recv_full_pre(gv_e, decls, src, penv, a)
+          if gv_ty.n == 0 { gv_ty = struct_lit_type_span(gv_e) }
+          if gv_ty.n != 0 {
+            gv_bt := base_type_name(src, gv_ty.s, gv_ty.n)
+            gi = generic_sig_redirect(decls, src, gi, nargs, gv_i, gv_bt.s, gv_bt.n, a)
+          }
+        }
+      }
       ## a CONCRETE overload matching by arity+first-arg type is NOT a generic instantiation.
       if gi >= 0 {
         gat := arg_type_name_pre(args_head, penv, src, a)

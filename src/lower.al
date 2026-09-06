@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n, generic_overload_set_count) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -9713,6 +9713,21 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : ptr(
       gi = recv_redirect_generic(cx.decls, cx.src, gi, nargs, ar_bt.s, ar_bt.n, a)
     }
   }
+  ## GENERIC OVERLOAD SET (#472): the redirect above reads arg 0, which for an EXPLICIT generic call
+  ## is a TYPE argument, so it never reached the value arguments that separate two same-module generic
+  ## overloads. Redo it from the FIRST VALUE argument. Gated on the set count → neutral elsewhere.
+  if gi >= 0 {
+    gv_i := generic_value_arg_idx(args_head, cx.decls, cx.src, a)
+    if gv_i < nargs {
+      gv_e := arg_expr_at(args_head, gv_i, a)
+      mut gv_ty := recv_full_emit(gv_e, cx.decls, cx.src, a)
+      if gv_ty.n == 0 { gv_ty = struct_lit_type_span(gv_e) }
+      if gv_ty.n != 0 {
+        gv_bt := base_type_name(cx.src, gv_ty.s, gv_ty.n)
+        gi = generic_sig_redirect(cx.decls, cx.src, gi, nargs, gv_i, gv_bt.s, gv_bt.n, a)
+      }
+    }
+  }
   ## a CONCRETE overload matching by arity+first-arg type WINS over a same-name generic (see the
   ## value-position Call arm) — route it to the non-generic path.
   if gi >= 0 {
@@ -9834,6 +9849,9 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : ptr(
     push_str(sb, "  call ")
     gd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
     emit_generic_label(sb, cx.src, gd.mod_start, gd.mod_len, gd.name_start, gd.name_len, ta.s, ta.n, ta2.s, ta2.n, ta3.s, ta3.n)
+    ## …plus the per-signature suffix when `gd` is one of a GENERIC OVERLOAD SET (#472). Derived from
+    ## the RESOLVED decl, which is the same decl the mono pre-pass recorded the instance for.
+    emit_generic_sig_suffix(sb, cx.decls, cx.src, gd, deref(cx.mar))
     push_str(sb, "\n")
     emit_call_cleanup_shift(sb, nvals, sc_shift)
   } else {
@@ -13139,6 +13157,82 @@ recv_redirect_generic := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs
   best
 }
 
+## ---------------------------------------------------------------------------------------------
+## GENERIC OVERLOAD SETS (#472). A module may declare several GENERIC fns under one name, kept
+## apart by their VALUE parameters (`alloc::hashmap`'s map entry point `iter(K, V, ptr(HashMap),
+## Arena)` beside the Iterator-protocol identity `iter(K, V, HashMapIter)` — Stdlib §2.4). Their
+## instance label `<module>__<fn>__<typetag>` is built from the TYPE ARGUMENTS ALONE, so at one
+## `(K, V)` the two collapse onto ONE linker symbol, which Modules §6.7 forbids. Measured, the
+## collapse wore two faces and ARITY chose which: same-arity overloads let `generic_decl_of`'s
+## last-declared arity match answer BOTH call sites, so one body was emitted and the other call
+## silently read it (a clean compile, a wrong value); different-arity overloads let each call site
+## pick its own decl, so BOTH bodies were emitted under one `.globl` and `as` refused the file.
+## The two helpers below close both faces the way the NON-generic overload machinery already
+## does — select by the value signature, then mangle by it.
+##
+## The 0-based argument INDEX of a generic call's FIRST VALUE argument — the one that binds the
+## callee's `self` (first non-`type`) parameter. A generic call spells its type arguments FIRST
+## (`iter(u64, u64, m, a)`), so the value arguments begin after them; `leading_type_arg_count`
+## already counts exactly that prefix. An IMPLICIT-UFCS call spells no type argument, so this is 0
+## and the receiver already sits there — which is why the pre-existing arg-0 receiver redirect
+## (`recv_redirect_generic`) never reached an EXPLICIT generic call's value arguments, and why two
+## explicit-type-arg overloads were resolved by arity alone.
+generic_value_arg_idx := fn(args_head : ptr(mut Arg), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+  leading_type_arg_count(args_head, decls, src, a)
+}
+
+## A struct LITERAL's static type span — its constructor NAME `S` (the `(` sits past `cl`), the same
+## fact `expr_type_span`'s `StructLit` arm reads on the emit side. 0/0 for every other expression.
+## Split out so the mono PRE-PASS and the EMIT pass type a generic call's first value argument
+## through the SAME ladder (#472): the receiver pair `recv_full_pre`/`recv_full_emit` plus this. A
+## shape one pass can type and the other cannot is not a harmless miss — it makes the recorded
+## instance and the emitted call name different symbols, which was measured while building this fix
+## as `undefined reference to repA__pick__u64__type_A` (the emit side read a struct literal that the
+## pre-pass's Var-only resolver declined).
+struct_lit_type_span := fn(e : ptr(Expr)) -> CSpan {
+  match deref(e) {
+    Expr::StructLit(cs, cl, nf, fhead) => { return CSpan(s = cs, n = cl) }
+    _ => { return CSpan(s = 0, n = 0) }
+  }
+}
+
+## Re-select a generic `gi` within its OWN module's generic overload set to the member whose `self`
+## (first value param) base type matches the first VALUE argument's base type `vbs/vbl`. The generic
+## mirror of `recv_redirect_generic`, and NEUTRAL twice over: it returns `gi` unchanged unless the
+## (name, module) is a generic overload SET, and unless some OTHER member matches the argument that
+## the already-chosen decl does not. Same module only: a cross-module same-name generic is already
+## ranked by Modules §3 (`callee_mod_rank`) and must not be re-ranked here.
+##
+## `ltac` = how many leading type arguments the call SPELLS. Candidate arity must be viable for the
+## call, and which shapes are viable depends on it: a call that spells its type arguments (`ltac != 0`)
+## admits ONLY an exact arity match, while an implicit-UFCS call (`ltac == 0`) also admits the
+## `arity - ntpc` shape. Measured: without the `ltac` guard a three-member set whose `g(T, a : A)` and
+## `g(T, a : A, b : B)` share a `self` type let the 3-parameter member look viable for the 2-argument
+## call through the implicit shape, and the call then reported an uninferable comptime type argument.
+generic_sig_redirect := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs : usize, ltac : usize, vbs : usize, vbl : usize, a : rt::Arena) -> i64 {
+  if gi < 0 { return gi }
+  if vbl == 0 { return gi }
+  gd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
+  if generic_overload_set_count(decls, src, gd.name_start, gd.name_len, gd.mod_start, gd.mod_len) < 2 { return gi }
+  csb := self_param_base(decls, src, gi, a)
+  if streq(src, csb.s, csb.n, vbs, vbl) { return gi }
+  cnt := rt::vec_len(deref(decls))
+  mut best := gi
+  for i in 0..cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 1 and d.is_generic
+       and streq(src, d.name_start, d.name_len, gd.name_start, gd.name_len)
+       and streq(src, d.mod_start, d.mod_len, gd.mod_start, gd.mod_len) {
+      psb := self_param_base(decls, src, i64(i), a)
+      if psb.n != 0 and streq(src, psb.s, psb.n, vbs, vbl) {
+        ntpc := tparam_count(decls, i64(i), src, a)
+        if d.arity == nargs or (ltac == 0 and d.arity >= ntpc and d.arity - ntpc == nargs) { best = i64(i) }
+      }
+    }
+  }
+  best
+}
+
 ## The source-parameter INDEX of a generic fn's comptime TYPE parameter (`x : type`). Scans the
 ## decl's `Param` list for the one whose type annotation is the literal `type`; returns its 0-based
 ## position (0 if none found — the common leading-`T : type` case). Generalizes the old hard-coded
@@ -14490,6 +14584,22 @@ emit_sig_suffix := fn(in out sb : strbuf::StrBuf, src : ptr(u8), d : Decl, a : r
     emit_norm_type(sb, src, bn.s, bn.n)
     p = pm.next
   }
+}
+
+## Append the per-signature SUFFIX to a GENERIC INSTANCE label when the decl belongs to a GENERIC
+## OVERLOAD SET (#472). `emit_generic_label` alone yields `<module>__<fn>__<typetag…>`, which is the
+## SAME for every overload at one instantiation — two declarations that overload resolution keeps
+## apart then share one linker symbol, which Modules §6.7 forbids. Appending the decl's FULL
+## parameter signature (`emit_sig_suffix`, the same suffix the non-generic overload machinery emits)
+## separates them, and the DEFINITION and the CALL both derive it from the SAME resolved `Decl`, so
+## the two cannot drift. A no-op — byte-identical output — unless the (name, module) really is a
+## generic overload set, so the self-host build and every single-declaration generic are untouched.
+## A LIFTED LAMBDA (empty name span) is never suffixed, for the reason `emit_sig_suffix`'s own caller
+## gives: two empty-named fns would look like a 2-member set and only the definition would move.
+emit_generic_sig_suffix := fn(in out sb : strbuf::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), d : Decl, a : rt::Arena) {
+  if d.name_len == 0 { return }
+  if generic_overload_set_count(decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) < 2 { return }
+  emit_sig_suffix(sb, src, d, a)
 }
 
 ## Does candidate overload `d` match the call's arguments? Each argument whose type is INFERABLE
@@ -16951,6 +17061,22 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           gi = recv_redirect_generic(cx.decls, cx.src, gi, nargs, r_bt.s, r_bt.n, a)
         }
       }
+      ## GENERIC OVERLOAD SET (#472): the arg-0 redirect above cannot see an EXPLICIT generic call's
+      ## value arguments (arg 0 is a TYPE argument there), so two same-module generic overloads were
+      ## separated by ARITY alone — and a same-arity pair answered both call sites from ONE body.
+      ## Redo the selection from the FIRST VALUE argument; gated on the set count → neutral elsewhere.
+      if gi >= 0 {
+        gv_i := generic_value_arg_idx(args_head, cx.decls, cx.src, a)
+        if gv_i < nargs {
+          gv_e := arg_expr_at(args_head, gv_i, a)
+          mut gv_ty := recv_full_emit(gv_e, cx.decls, cx.src, a)
+          if gv_ty.n == 0 { gv_ty = struct_lit_type_span(gv_e) }
+          if gv_ty.n != 0 {
+            gv_bt := base_type_name(cx.src, gv_ty.s, gv_ty.n)
+            gi = generic_sig_redirect(cx.decls, cx.src, gi, nargs, gv_i, gv_bt.s, gv_bt.n, a)
+          }
+        }
+      }
       ## A CONCRETE overload matching the args by arity+first-arg type WINS over a same-name generic
       ## (`eq(u64,u64)` → `cmp::eq`, not `derive::eq(T,a,b)`) — route it to the non-generic path below.
       if gi >= 0 {
@@ -17097,6 +17223,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## no instance is defined). A qualified `mod::f` resolves to `mod`'s decl → same label.
         gd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
         emit_generic_label(sb, cx.src, gd.mod_start, gd.mod_len, gd.name_start, gd.name_len, ta.s, ta.n, ta2.s, ta2.n, ta3.s, ta3.n)
+        ## …plus the per-signature suffix when `gd` is one of a GENERIC OVERLOAD SET (#472).
+        emit_generic_sig_suffix(sb, cx.decls, cx.src, gd, deref(cx.mar))
         push_str(sb, "\n")
         emit_call_cleanup(sb, nvals)
         if callee_returns_float(cx.decls, cx.src, gi) {
@@ -24677,6 +24805,9 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
       push_int(sb, i64(di))
     } else if p.inst {
       emit_generic_label(sb, p.src, d.mod_start, d.mod_len, d.name_start, d.name_len, p.its, p.itl, p.its2, p.itl2, p.its3, p.itl3)
+      ## …plus the per-signature suffix when this instance's decl is one of a GENERIC OVERLOAD SET
+      ## (#472) — the definition twin of the two call sites, from the SAME `Decl`.
+      emit_generic_sig_suffix(sb, p.decls, p.src, d, deref(p.mar))
     } else {
       emit_mangled_def(sb, p.src, d.mod_start, d.mod_len, d.name_start, d.name_len)
       ## per-signature SUFFIX when this decl belongs to an OVERLOAD SET (matches the call side) — the

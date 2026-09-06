@@ -6866,6 +6866,28 @@ run_wat issue449_enum_field_eq 134
 ## operand classification would have turned this 42 into 61/62 or a trap. 42 on x86_64 AND on wasm.
 run issue449_enum_field_control 42
 run_wat issue449_enum_field_control 42
+## issue #472 — a GENERIC OVERLOAD SET shared ONE linker symbol, because the instance label
+## `<module>__<fn>__<typetag>` is built from the TYPE ARGUMENTS ALONE and the value parameters take no
+## part in it. Modules §6.7 requires linker-symbol uniqueness. ARITY decided which face the defect
+## wore, and both are asserted here as separate rows so neither can hide the other:
+##  * SAME arity — `generic_decl_of` answered BOTH call sites with the last-declared match, ONE body
+##    was emitted, and `pick(u64, A(…))` ran the `B` body: a clean compile with a wrong value.
+##    Parent e05d549: builds rc=0, exits 10. This tree: 42.
+##  * DIFFERENT arity — each call site picked its own decl, BOTH bodies were emitted under one
+##    `.globl`, and `as` refused the file. Parent e05d549: build rc=13. This tree: 42.
+## x86_64 rows: the three cross backends resolve a generic callee by NAME alone (`generic_gi`, last
+## match) and label the instance with no signature, so they cannot separate two overloads. On the
+## parent aarch64/riscv64 emitted duplicate labels and wasm answered 10 SILENTLY; a generic overload
+## set is now outside `lower_layout::gen_call_ok`'s shape fence, so all three fail loudly. Making
+## them CORRECT is a separate unit — they refuse an ordinary NON-generic overload set too.
+run_x86 issue472_generic_overload_same_arity 42
+run_x86 issue472_generic_overload_arity_split 42
+## …and the LIVE trigger the issue was raised from (its criterion 5): `alloc::hashmap`'s two `iter`
+## overloads of Stdlib appendix §2.4 — the map entry point and the protocol identity — used at the
+## SAME `(K, V)` in one program. Parent e05d549: build rc=13, `as` reported a duplicate
+## `alloc__hashmap__iter__u64__u64`. This tree: 42. The BARE spelling keeps this independent of the
+## `pub` markers under discussion in #404.
+run_x86 issue472_hashmap_iter_overloads 42
 run tuple_enum_component 42
 run nested_enum_struct_enum 42
 run enum_array_struct_payload 42
