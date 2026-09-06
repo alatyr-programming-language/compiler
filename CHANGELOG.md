@@ -82,6 +82,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Indexing an **array field of a mutable module-level struct** — `gg.xs[i]`, read **and** write — is
+  now bounds-checked, as Types §6.4 requires by default. The check was missing on exactly this shape,
+  on both sides. With `mut gg := G(xs = [10, 20, 30], guard = 99)`, the out-of-range read `gg.xs[3]`
+  compiled cleanly and exited **99**: the address math ran past the field and returned the struct's
+  *next field* as an ordinary value. The store `gg.xs[3] = 77` was worse in the same way — it
+  **overwrote** `guard`, so a later read of `guard` returned the value the program believed it had put
+  in the array. Both are silent wrong values, and both are hard to spot precisely because a
+  neighbouring field is a plausible-looking number rather than obvious garbage. Every adjacent shape
+  was already checked and is unchanged: the same array as a **local** struct's field, a direct mutable
+  **global** array (`TABLE[i]`), a by-reference array parameter, a slice and a str. An **immutable**
+  module-level struct's array field is a separate, already-loud case: it is refused with a "not yet
+  supported" diagnostic and stays refused. `unchecked` still drops the check on exactly these two
+  accesses (CT-11 / CG-7), including the address, which is unchanged. x86_64 only, because that is the
+  only backend that lowers the shape at all: aarch64, riscv64 and wasm emit a fail-loud `unsupported
+  index` trap for `gg.xs[i]` whether the index is in range or not, so they were never affected and are
+  untouched here.
+
 - Re-declaring a name **already bound in the same scope** is now a compile error, as Declarations §6.2
   requires ("a name means one thing within its scope"). No surface enforced that for function-body
   locals: `check` accepted the program and the four backends then disagreed. Written with two

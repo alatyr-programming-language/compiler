@@ -6431,9 +6431,9 @@ str_field_place := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> StrFld
 ## the field's WORD offset within `g`'s `.data`. Used by the `Index` arm to read `g.xs[i]` (an ARRAY
 ## field of a global struct): the element sits at `LABEL + (off + i)*8(%rip)`. Any field type (the
 ## caller applies index semantics); `found`=false ⇒ base is not a global-struct field.
-GFldOff := struct { found : bool, gs : usize, gn : usize, off : i64 }
+GFldOff := struct { found : bool, gs : usize, gn : usize, off : i64, flen : i64 }
 global_field_off := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> GFldOff {
-  mut res := GFldOff(found = false, gs = 0, gn = 0, off = 0)
+  mut res := GFldOff(found = false, gs = 0, gn = 0, off = 0, flen = 0)
   fp := field_place_parts(base)
   if unchecked bitcast(usize, fp.base) == 0 { return res }
   bv := field_base_var(fp.base)
@@ -6445,7 +6445,15 @@ global_field_off := fn(base : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> GFldO
   if not gsli.is_s { return res }
   fwo := field_word_offset(cx.decls, cx.src, gsli.ss, gsli.sl, fp.fs, fp.fl, a)
   if fwo < 0 { return res }
-  res = GFldOff(found = true, gs = bv.s, gn = bv.n, off = fwo)
+  ## The field's STATIC element count `[T; N]` -> N, for the Types 6.4 checked-default bounds check
+  ## (I11 358). Recovered from the field's declared type span exactly as the `Var`-rooted
+  ## `field_index_base` does, including a comptime-value length (`[T; <expr>]`) folded against the
+  ## struct's comptime bindings. 0 means "not a fixed array / unknown length" and leaves the caller
+  ## on its historical unchecked address path -- a non-array field is not this fix's shape.
+  fts := field_type_span(cx.decls, cx.src, gsli.ss, gsli.sl, fp.fs, fp.fl, a)
+  mut fln := i64(parse_arr_len(cx.src, fts.s, fts.n))
+  if fln == 0 { fln = i64(ct_arr_len(cx.decls, cx.src, gsli.ss, gsli.sl, fts.s, fts.n, a)) }
+  res = GFldOff(found = true, gs = bv.s, gn = bv.n, off = fwo, flen = fln)
   res
 }
 
@@ -18600,7 +18608,14 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           emit_global_label(sb, cx.decls, cx.src, gfo.gs, gfo.gn)
           push_str(sb, "+")
           push_int(sb, gfo.off * 8)
-          push_str(sb, "(%rip), %rax\n  popq %rcx\n  movq (%rax,%rcx,8), %rax\n  pushq %rax\n")
+          push_str(sb, "(%rip), %rax\n  popq %rcx\n")
+          ## CHECKED BOUNDS (Types 6.4 / I11 358) -- this arm was the one `g.xs[i]` shape with NO
+          ## check: an out-of-range index addressed `LABEL + (off + i)*8` and read the NEXT field of
+          ## the same global, returning it as a normal value (issue #421). The field's static length
+          ## is compared exactly as the direct-global-array arm above does; `jb` also traps a
+          ## negative (huge-unsigned) index. `flen == 0` (not a fixed array) keeps the old path.
+          if cx.vchk and gfo.flen > 0 { push_str(sb, "  cmpq $"); push_int(sb, gfo.flen); push_str(sb, ", %rcx\n  jb 1f\n  ud2\n1:\n") }
+          push_str(sb, "  movq (%rax,%rcx,8), %rax\n  pushq %rax\n")
           ga_done = true
         }
       }

@@ -5932,6 +5932,18 @@ run_x86 checked_array_oob 132
 run_x86 checked_agg_array_oob 132
 run_x86 checked_global_arr_read_oob 132
 run_x86 checked_global_arr_write_oob 132
+## The ARRAY FIELD of a MUTABLE MODULE-LEVEL struct (`gg.xs[i]`) -- the one `g.xs[i]` shape that had
+## NO bounds check at all (issue #421): the `global_field_off` arm addressed `LABEL + (off + i)*8`
+## and an out-of-range index read the NEXT FIELD of the same global and returned it as a normal exit.
+## It is now checked against the field's static `[T; N]` length like the direct mutable-global array
+## above. The `unchecked` companion proves CT-11 still drops the check on the same read. Both rows
+## are x86_64-only: a64/rv64/wasm fail loud on this whole shape, in range as well as out.
+run_x86 checked_global_struct_field_array_oob 132
+run_x86 unchecked_global_struct_field_array_oob 42
+## The STORE dual of the row above (issue #421): `gg.xs[i] = v` was the one arm in
+## `emit_st_index_assign` with no `cmpq`/`ud2`, so an out-of-range write OVERWROTE the global's next
+## field and the program read back the value it thought it had stored in the array.
+run_x86 checked_global_struct_field_array_write_oob 132
 run_x86 checked_struct_field_array_oob 132
 run_x86 checked_byref_array_param_oob 132
 run_x86 checked_slice_oob 132
