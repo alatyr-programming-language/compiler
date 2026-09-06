@@ -3826,6 +3826,11 @@ DIAG_MULTIDIM_ARRAY_FIELD_MARKER := 6890000000000000000
 ## Issue #324 — the bounded direct nested fixed-array parameter fence. Keep it between the field and
 ## visibility classes so check/build/emit share one located refusal without changing older ranges.
 DIAG_NESTED_ARRAY_PARAM_MARKER := 6895000000000000000
+## Issue #414 / Declarations §6.2 — the sema-side same-scope redeclaration class
+## (`sema::SAME_SCOPE_REDECL_DIAG_MARKER`). It sits between the nested-array parameter and the
+## qualified-private-constant windows, so only the former's upper bound moves and every other
+## decoded range stays byte-identical.
+DIAG_SAME_SCOPE_REDECL_MARKER := 6897000000000000000
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
 DIAG_QUALIFIED_PRIVATE_CONST_MARKER := 6900000000000000000
@@ -3936,7 +3941,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_GLOBAL_INIT_CALL_MARKER
   private_const := code >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and code < DIAG_CT_MARKER
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
-  nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
+  nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_SAME_SCOPE_REDECL_MARKER
+  same_scope_redecl := code >= DIAG_SAME_SCOPE_REDECL_MARKER and code < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
   enum_dup_disc := code >= DIAG_ENUM_DUP_DISC_MARKER and code < DIAG_MULTIDIM_ARRAY_FIELD_MARKER
   multidim_array := code >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and code < DIAG_ENUM_DUP_DISC_MARKER
   packed_array := code >= DIAG_PACKED_ARRAY_MARKER and code < DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
@@ -3982,6 +3988,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if nested_array_param {
     raw = code - DIAG_NESTED_ARRAY_PARAM_MARKER
     span = raw / 4
+  } else if same_scope_redecl {
+    raw = code - DIAG_SAME_SCOPE_REDECL_MARKER
+    span = raw / 4
   } else if private_const {
     raw = code - DIAG_QUALIFIED_PRIVATE_CONST_MARKER
     span = raw / 4
@@ -4018,7 +4027,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or private_const or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or private_const or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::push_str(db, "@limits(")
       wk1 := rt::push_str(db, limit_name(kind))
@@ -4033,6 +4042,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if enum_dup_disc { wkedd := rt::push_str(db, "two enum variants resolve to the same discriminant value — spec Types §6.2 makes that ill-formed; rejected in check rather than emitted with an ambiguous tag") }
     else if multidim_array_field { wkmda := rt::push_str(db, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if nested_array_param { wknap := rt::push_str(db, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
+    else if same_scope_redecl { wkssr := rt::push_str(db, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if multidim_array { wkmda := rt::push_str(db, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { wkv := rt::push_str(db, "qualified private constant is not visible from this module") }
     else if tuple_global { wktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
@@ -6228,7 +6238,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_GLOBAL_INIT_CALL_MARKER
   private_const := r >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and r < DIAG_CT_MARKER
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
-  nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
+  nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_SAME_SCOPE_REDECL_MARKER
+  same_scope_redecl := r >= DIAG_SAME_SCOPE_REDECL_MARKER and r < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
   enum_dup_disc := r >= DIAG_ENUM_DUP_DISC_MARKER and r < DIAG_MULTIDIM_ARRAY_FIELD_MARKER
   multidim_array := r >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and r < DIAG_ENUM_DUP_DISC_MARKER
   packed_array := r >= DIAG_PACKED_ARRAY_MARKER and r < DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
@@ -6274,6 +6285,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if nested_array_param {
     raw = r - DIAG_NESTED_ARRAY_PARAM_MARKER
     span = raw / 4
+  } else if same_scope_redecl {
+    raw = r - DIAG_SAME_SCOPE_REDECL_MARKER
+    span = raw / 4
   } else if private_const {
     raw = r - DIAG_QUALIFIED_PRIVATE_CONST_MARKER
     span = raw / 4
@@ -6311,7 +6325,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
       else {
@@ -6329,6 +6343,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if enum_dup_disc { dwkedd := rt::push_str(db, "two enum variants resolve to the same discriminant value — spec Types §6.2 makes that ill-formed; rejected in check rather than emitted with an ambiguous tag") }
     else if multidim_array_field { dwkmda := rt::push_str(db, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if nested_array_param { dwknap := rt::push_str(db, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
+    else if same_scope_redecl { dwkssr := rt::push_str(db, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if multidim_array { dwkmda := rt::push_str(db, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { dwkv := rt::push_str(db, "qualified private constant is not visible from this module") }
     else if tuple_global { dwktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }

@@ -143,7 +143,6 @@ main := fn() -> u64 {
   mut plain343 : u64 = 1
   plain343                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 = 2
   if bad == 0 and plain343 != 2 { bad = 19 }
-  mut fresh343 : u64 = 4
   fresh343                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 := 5
   if bad == 0 and fresh343 != 5 { bad = 20 }
   mut cmp343 : u64 = 2
