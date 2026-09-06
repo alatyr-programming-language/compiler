@@ -1746,7 +1746,16 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
       emit_global_label(sb, cx.decls, cx.src, gfo.gs, gfo.gn)
       push_str(sb, "+")
       push_int(sb, gfo.off * 8)
-      push_str(sb, "(%rip), %rax\n  popq %rcx\n  popq %rbx\n  movq %rbx, (%rax,%rcx,8)\n")
+      push_str(sb, "(%rip), %rax\n  popq %rcx\n  popq %rbx\n")
+      ## CHECKED BOUNDS (Types 6.4 / I11 358) -- the STORE dual of the read fix for issue #421, and
+      ## the ONE arm in this function that emitted no `cmpq`/`ud2` while every sibling global-array
+      ## store arm above already did. Without it `g.xs[i] = v` with an out-of-range `i` wrote over the
+      ## NEXT FIELD of the same global: a silent corruption of a neighbouring value, the write-side
+      ## twin of the read that returned it. Same static `[T; N]` length carried on `GFldOff.flen`,
+      ## same `jb` (a negative/huge-unsigned index traps too); `flen == 0` keeps the old path, and
+      ## `cx.vchk` keeps `unchecked` dropping it (CT-11 / CG-7).
+      if cx.vchk and gfo.flen > 0 { push_str(sb, "  cmpq $"); push_int(sb, gfo.flen); push_str(sb, ", %rcx\n  jb 1f\n  ud2\n1:\n") }
+      push_str(sb, "  movq %rbx, (%rax,%rcx,8)\n")
       iga_done = true
     }
   }
