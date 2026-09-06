@@ -344,3 +344,31 @@ pub sb_str := fn(in out s : StrBuf, x : str) -> usize {
 pub sb_flush := fn(s : StrBuf, fd : usize) -> isize {
   return sys_write(1, fd, unchecked bitcast(usize, s.data), s.len)
 }
+
+## Write `x`'s bytes STRAIGHT to file descriptor `fd` — the unbuffered counterpart of
+## `push_str` + `sb_flush`, for the driver's diagnostic renderers (issue #426).
+##
+## A diagnostic's assembled length is NOT bounded by anything the compiler controls: the ` in
+## <module>` tail is the user's file name (a package module additionally mangles its whole path
+## under `source_dir` into `a__b__c`), and a parse diagnostic QUOTES the offending lexeme, whose
+## length is bounded only by the source. Assembling such a message into a fixed `StrBuf` therefore
+## has a wall, and `sb_byte`'s overflow `panic` REPLACES the message with `rt: StrBuf overflow` —
+## the user loses the located error and gets a crashed compiler instead. Measured on the parent:
+## the 256-byte decoders printed at most 249 bytes and aborted at 250 (a 35-character module name),
+## and the 1024-byte parse decoder printed at most 1017 and aborted at 1018 (a 950-character
+## lexeme). Raising the constant only moves the wall — that is exactly what the 1024 already was.
+## Streaming the pieces has NO capacity to overflow: the same bytes in the same order, in constant
+## memory, with no arithmetic to get wrong when the next diagnostic is written.
+pub fd_str := fn(fd : usize, x : str) -> isize {
+  return sys_write(1, fd, unchecked bitcast(usize, x.ptr), x.len)
+}
+
+## Write `n` as decimal to `fd`. This one DOES use a buffer, and may: a decimal `i64` is at most
+## 20 digits plus a sign, so 64 bytes (with `sb_byte`'s 8-byte word-store slack, 56 usable) is a
+## capacity the input CANNOT exceed. That is the difference between this and a message buffer —
+## the bound is a property of the type, not a guess about how long the text will grow.
+pub fd_int := fn(fd : usize, n : i64, in out a : Arena) -> isize {
+  mut nb := strbuf(a, 64)
+  w := push_int(nb, n)
+  return sb_flush(nb, fd)
+}
