@@ -1621,17 +1621,92 @@ expr_is_struct_var := fn(e : ptr(Expr), params_head : ptr(mut Param), fn_head : 
 ## one forbidden outcome — a SILENT MISCOMPILE — so the compare arm must fail loud on all of them.
 ## `expr_is_struct_var` alone recognizes only a NAMED-struct decl, which is why a TUPLE (the parser
 ## builds one as an `ArrayLit`, so it carries no struct decl), a fixed ARRAY, a SLICE and an ENUM all
-## slipped past that guard into the scalar compare below. Var-only by construction: an INDEX/FIELD
-## operand (`xs[0] == ys[0]`, `p.x == q.x`) already yields a loaded scalar and must keep comparing.
+## slipped past that guard into the scalar compare below. Nearly Var-only by construction: an
+## INDEX/FIELD operand (`xs[0] == ys[0]`, `p.x == q.x`) normally yields a loaded SCALAR and must keep
+## comparing — ISSUE #449 is the one field type for which that is false, see `wat_field_enum_type`.
 wat_is_agg_place := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   if expr_is_struct_var(e, params_head, body_head, src, a, decls) { return true }
+  ## ISSUE #449: an ENUM-typed FIELD read (`h.t`) loads a by-reference BLOCK ADDRESS, not a scalar.
+  fe := wat_field_enum_type(e, params_head, body_head, src, a, decls)
+  if fe.n != 0 { return true }
   vn := expr_var_name(e)
   if vn.n == 0 { return false }
   et := base_enum_type(params_head, body_head, src, vn.s, vn.n, a, decls)
   if et.n != 0 { return true }
+  ## ISSUE #449: `x := h.t` carries that same block address into `x`'s slot, and `base_enum_type`
+  ## resolves only an `:=` EnumLit / enum-returning CALL init, so the bound spelling slipped past too.
+  if wat_local_enum_field_init(params_head, body_head, src, vn.s, vn.n, a, decls) { return true }
   if is_array_local(body_head, src, vn.s, vn.n, a) { return true }
   if is_slice_local(body_head, src, vn.s, vn.n, a) { return true }
   false
+}
+
+## The ENUM-type name of a FIELD read `<place>.<f>` whose declared field type names an enum decl, else
+## {0,0}. ISSUE #449: §8 delivers an enum BY REFERENCE, and on WASM a struct's enum FIELD holds a
+## POINTER to the `{disc, payload…}` block exactly as an enum PARAM does — only an enum LOCAL's slot IS
+## the block. So the word `h.t` loads is a block ADDRESS. Feeding it to the scalar `i64.eq` below
+## compared the field's block against a freshly materialised literal block: two distinct addresses,
+## every arm false, and `h.t == Tag.Green` answered the fall-through on a struct built from `Tag.Green`
+## — a valid module, a normal exit, a value no variant carries. The field read ITSELF is sound (handing
+## `h.t` to a `fn(v : Tag)` and dispatching there already answers on wasm); it is this one operand
+## classification that was wrong, which is why the fix is here and not in the field or literal emit.
+wat_field_enum_type := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+  mut rs := 0
+  mut rn := 0
+  if ex_is_field(e) {
+    bt := expr_struct_type_of(expr_field_base(e), params_head, body_head, src, a, decls)
+    if bt.n != 0 {
+      fsp := expr_field_span(e)
+      ft := struct_field_type(decls, src, bt.s, bt.n, fsp.s, fsp.n, a)
+      if ft.n != 0 {
+        if enum_decl_of(decls, src, ft.s, ft.n) >= 0 { rs = ft.s ; rn = ft.n }
+      }
+    }
+  }
+  WSpan(s = rs, n = rn)
+}
+
+## Is the LOCAL `[ns, ns+nl)` bound to an ENUM-typed FIELD read (`x := h.t`)? ISSUE #449 — its WASM
+## slot then carries the same by-reference block ADDRESS the field held, so it is an aggregate place
+## for the compare arm even though `base_enum_type` cannot name its enum (that resolver reads an `:=`
+## EnumLit or an enum-returning call, neither of which a field read is). Deliberately separate from
+## `local_enum_type`: teaching THAT one about field inits would also redirect every `match` scrutinee
+## resolution, which is a different shape and a different issue (#396/#448). The statement walk mirrors
+## `local_enum_type`'s — every carrier arm steps to `nx`, because a `_ => s = 0` there would hide every
+## local declared after an unmodelled statement.
+wat_local_enum_field_init := fn(params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+  mut s := fn_head
+  mut r := false
+  mut done := false
+  while s != 0 and (not done) {
+    stmt := deref(stmt_p(Stmt, s))
+    match stmt {
+      Stmt::Assign(ans, anl, v, nx) => {
+        if streq(src, ans, anl, ns, nl) {
+          fe := wat_field_enum_type(v, params_head, fn_head, src, a, decls)
+          if fe.n != 0 { r = true ; done = true }
+        }
+        s = nx
+      }
+      Stmt::Return(rv, nx) => { s = nx }
+      Stmt::While(c, b, nx) => { s = nx }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+      Stmt::CompIf(cc, th, el, nx) => { s = nx }
+      Stmt::Loop(lb, lnx) => { s = lnx }
+      Stmt::Unchecked(ub, unx) => { s = unx }
+      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+      Stmt::Continue(_cd, cnx) => { s = cnx }
+      Stmt::If(c, th, el, nx) => { s = nx }
+      Stmt::ExprStmt(e, nx) => { s = nx }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+      Stmt::Match(msc, mah, mnx) => { s = mnx }
+      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      _ => { s = 0 }
+    }
+  }
+  r
 }
 ## The INDEX twin: `xs[i]` over an AGGREGATE-ELEMENT array/slice/global yields the ELEMENT's base
 ## address (elements are by-reference), so `ps[0] == ps[1]` compared addresses — two field-EQUAL
@@ -4489,7 +4564,10 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## The operand test is `wat_is_agg_place`, NOT `expr_is_struct_var`: a TUPLE local (an `ArrayLit`,
         ## so no struct decl), a fixed ARRAY local, a SLICE view and an ENUM local/param carry a base
         ## address too and used to fall through to the scalar `i64.eq` below — `(5,7) == (5,9)` and
-        ## `E.A(5) == E.A(5)` (params) both answered on ADDRESSES, a silent miscompile.
+        ## `E.A(5) == E.A(5)` (params) both answered on ADDRESSES, a silent miscompile. ISSUE #449 is
+        ## the same miscompile reached through a struct's ENUM FIELD (`h.t == Tag.Green`, and the
+        ## `x := h.t` spelling that binds the field's block address to a local) — a FIELD operand is
+        ## a loaded scalar for every field type EXCEPT an enum one.
         ## Bind the glyph to a local FIRST — an inline str-returning call as a push_str arg scrambles its
         ## {ptr,len} under the seed (the documented wat-emit scar).
         gly := wat_cmp_glyph(op)
