@@ -82,6 +82,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- An **expression-form `match` in tail position** over an enum **place** now selects the right arm.
+  Control Flow §5.3 makes `match` one expression with one meaning, but the tail-value route resolved
+  only two kinds of scrutinee — a plain enum local and a mutable enum global — and sent every other
+  enum place to the *integer* compare path, where an enum pattern arm carries no scalar literal at all.
+  Every arm therefore compared the scrutinee against **0**, so only a variant whose discriminant is 0
+  could ever match: `dotted := fn(h : Holder) -> u64 { match h.t { Red => 32, Green => 64, Blue => 128 } }`
+  built cleanly and answered **0** for `Green` and `Blue`, and with a wildcard present it answered the
+  wildcard instead. Reordering the arms exposes the other half of the same mechanism — write `Green`
+  first and the **first arm** wins for every input. A struct field (`h.t`), an enum-array element
+  (`cs[i]`), a struct-field array element (`h.items[i]`), an array-of-struct element's field (`xs[i].t`)
+  and a mutable global struct's field (`G.t`) were all affected, and payload bindings through those
+  places were lost with them. All five now materialize their enum words exactly as the value-expression
+  and braced statement forms already did, which is why binding the field to a local first, or writing
+  braced arms, was the workaround. x86_64 only: aarch64, riscv64 and wasm have no enum-match lowering
+  and refuse an enum scrutinee fail-loud. A **nested** place (`o.inner.t`) is a separate, still-open
+  defect — it answers the same wrong value in *every* match form, including the bound-local one.
+
 - A single-file program that reaches the ambient allocator by its **bare names** now gets the base
   prelude. The shipped stdlib is injected by scanning the source text, and the only text that pulled
   the allocator surface was the bare name of the fallible-result type. Control Flow §5.2 makes a bare
