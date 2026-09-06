@@ -82,6 +82,21 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Assigning to an element of a **string literal** is refused where it is written, instead of quietly
+  becoming the function's result. `"abc"[0] = 65` followed by a `7` used to build with no diagnostic
+  and exit **65**: the line was not recognized as a statement at all, so it fell to the
+  trailing-expression path, where the `=` was taken for an opening parenthesis, the `65` for the
+  parenthesized expression and the `7` for its closing token. The declared result was never reached
+  and nothing said so — a silent wrong value. A literal is a value, not a storage location: its bytes
+  are emitted once into read-only data, so a store has nothing to write into (Memory §1.6; Types §7),
+  and Grammar §3.3 roots every assignable place at a name, a path or a `deref(…)`. The runtime-index
+  spelling `"abc"[i] = v` and the compound `"abc"[0] += 1` were accepted the same way and are refused
+  the same way. The refusal is in the parser, so `alatyr check` and all four emission surfaces
+  (x86_64, aarch64, riscv64, wasm) agree and none leaves an artifact behind. Reading a literal
+  element (`u64("abc"[0])`), writing an array element (`a[i] = v`) and every other place form are
+  untouched. Newly rejecting a program the specification declares invalid: the defect was accepting
+  it.
+
 - The unary prefixes `-` and `~` now apply to the element, field or component the source names. Both
   took their operand at the **primary** level, so a postfix step that followed applied to the prefix's
   RESULT: `-a[i]` parsed as `(-a)[i]`, `~a[i]` as `(~a)[i]` and `-p.b` as `(-p).b`, and the read went

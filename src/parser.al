@@ -3996,6 +3996,16 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     tix := index_parts(ttarget)
     return snode(pc.arena, Stmt.IndexAssign(tix.b, tix.i, tval, 0))
   }
+  ## `"abc"[0] = v` / `"abc"[i] += v` — the target is an element of a STRING LITERAL. A literal is a
+  ## value-expression (Memory §1.6) whose bytes are emitted once into read-only data; it owns no
+  ## storage, so there is nothing for the store to write into, and Grammar §3.3's `place` cannot derive
+  ## it. Refuse LOCATED at the literal rather than parse on: every continuation is a guess about code
+  ## the grammar does not admit. The reject sits in the PARSER, which is upstream of all four
+  ## backends — x86_64, AArch64, RISC-V64 and WAT refuse the shape identically, and `check` refuses it
+  ## before any of them.
+  if str_lit_index_assign_starts(pc) {
+    zsla := reject_here(pc, "selfhost: cannot assign to an element of a string literal - a literal is a value, not a storage location, and its bytes are read-only")
+  }
   if index_assign_starts(pc) {
     target := p_field(pc)               ## parses `arr[i]` into an `Index(base, idx)`
     ival := p_place_val(pc, target)
@@ -4158,6 +4168,11 @@ stmt_starts := fn(pc : PC) -> bool {
   ## `o.i.v = …` — a NESTED field write (≥2 `.field` levels). Distinguished from a nested field READ
   ## in the trailing return (`o.i.v + …`, no `=`) by the `=` terminator.
   if field_path_assign_starts(pc) { return true }
+  ## `"abc"[i] = …` — an assignment whose target is a STRING-LITERAL element. Not a place
+  ## (Grammar §3.3; Memory §1.6), so it is recognized as a statement head ONLY so that `p_stmt` can
+  ## refuse it where the user wrote it. Without this it reached the trailing-expression fallback and
+  ## the right-hand side silently replaced the function's result.
+  if str_lit_index_assign_starts(pc) { return true }
   ## `arr[i] = …` — an array element-write statement (distinguished from a trailing `arr[i]`
   ## READ expression by the `=` after the closing `]`).
   if index_assign_starts(pc) { return true }
@@ -4210,6 +4225,38 @@ deref_assign_starts := fn(pc : PC) -> bool {
   }
   if i >= nt { return false }
   is_assign_tok(tok_at(pc, i).kind)   ## '=' / 'op=' just after the closing ')'
+}
+
+## Is the cursor an assignment whose TARGET is a STRING-LITERAL element — `"abc"[0] = v`,
+## `"abc"[i] += v`? Grammar §3.3 roots every `place` at an ident / path / `deref(…)`, so a
+## literal-led `[…]` chain is not derivable as an assignment target at all, and Memory §1.6 says it
+## directly: a literal is a value-expression, and a store whose left operand is a value-expression is
+## ill-formed. The compiler did not merely mis-LOWER this shape — it never built a node for it.
+## `index_assign_starts` recognizes an indexed write only from a base IDENT, so a literal-led line fell
+## through `stmt_starts` to the TRAILING-EXPRESSION path, where `p_factor`'s final branch assumes an
+## unrecognized token is a `(`: it consumed the `=` as an opening paren, the right-hand side as the
+## parenthesized expression, and the FOLLOWING statement as the closing `)`. The right-hand side then
+## became the enclosing function's result (`"abc"[0] = 65` ahead of a `7` exited 65). Matched here so
+## the shape reaches `p_stmt`'s located reject instead of that fallback. Bounds-guarded against the
+## token end; the scan is the `index_assign_starts` one, keyed on a kind-4 base instead of a kind-1 one.
+str_lit_index_assign_starts := fn(pc : PC) -> bool {
+  nt := ntoks(pc)
+  if pc.idx + 1 >= nt { return false }
+  if tok_at(pc, pc.idx).kind != 4 { return false }       ## a string-literal base
+  if tok_at(pc, pc.idx + 1).kind != 14 { return false }  ## '['
+  mut i := pc.idx + 1            ## the '['
+  mut depth := 0
+  while i < nt {
+    k := tok_at(pc, i).kind
+    if k == 14 { depth = depth + 1 }
+    else if k == 15 {
+      depth = depth - 1
+      if depth == 0 { i = i + 1; break }
+    }
+    i += 1
+  }
+  if i >= nt { return false }
+  is_assign_tok(tok_at(pc, i).kind)   ## '=' / 'op=' just after the closing ']'
 }
 
 ## Is the cursor an array element-write statement `arr[i] = …` (vs a trailing `arr[i]` /

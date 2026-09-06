@@ -961,6 +961,68 @@ issue174_name_resolution_test() {
 ## directory: the five negative forms and one positive control exercise check/build without changing the
 ## per-file corpus oracle. The negative sources contain no diagnostic wording, so the needle cannot pass
 ## by matching fixture documentation.
+## Issue #411 / Memory §1.6 + Grammar §3.3 — a str LITERAL element is not an assignable place, and the
+## refusal must not widen to the writable neighbours. Both edges of the fence are proved from the gate's
+## private scratch directory, so they cost the per-file corpus oracle nothing: the runtime-index and
+## compound spellings of the same non-place target must be refused WHERE THEY ARE WRITTEN on both check
+## and build, while a legal array-element write standing next to two literal byte READS must still run.
+## The negative sources quote no diagnostic wording, so the needle cannot pass by matching fixture text.
+issue411_literal_elem_assign_test() {
+  local d="$T/issue411_literal_elem_assign"
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue411_literal_elem_assign: scratch"; fail=1; return; }
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  i := 1' \
+    '  "abc"[i] = 65' \
+    '  7' \
+    '}' > "$d/runtime_index.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  "abc"[0] += 1' \
+    '  7' \
+    '}' > "$d/compound.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  mut a : [u64; 3] = [11, 22, 33]' \
+    '  a[1] = 44' \
+    '  if a[0] != 11 { return 100 }' \
+    '  if a[1] != 44 { return 101 }' \
+    '  if a[2] != 33 { return 102 }' \
+    '  if u64("abc"[0]) != 97 { return 103 }' \
+    '  if u64("abc"[2]) != 99 { return 104 }' \
+    '  return 73' \
+    '}' > "$d/writable_neighbours.al"
+
+  issue411_reject() { # name, source line
+    local n="$1" want_line="$2" src="$d/$1.al"
+    local co="$d/$1.check.out" ce="$d/$1.check.err"
+    "$CC" check "$src" >"$co" 2>"$ce"; crc=$?
+    if [ "$crc" != 1 ] || [ -s "$co" ] || ! grep -qF "cannot assign to an element of a string literal" "$ce" || ! grep -qF "at line $want_line" "$ce"; then
+      echo "FAIL issue411/$n(check): rc=$crc or output/diagnostic mismatch [$(<"$ce")]"; fail=1; return
+    fi
+    local bo="$d/$1.bin" be="$d/$1.build.err"
+    "$CC" -o "$bo" "$src" >"$d/$1.build.out" 2>"$be"; brc=$?
+    if [ "$brc" != 1 ] || [ -e "$bo" ] || ! grep -qF "cannot assign to an element of a string literal" "$be" || ! grep -qF "at line $want_line" "$be"; then
+      echo "FAIL issue411/$n(build): rc=$brc or artifact/diagnostic mismatch [$(<"$be")]"; fail=1; return
+    fi
+    echo "ok   issue411/$n: refused at line $want_line on check and build, no artifact"
+  }
+
+  issue411_reject runtime_index 3
+  issue411_reject compound 2
+
+  local wo="$d/writable_neighbours.bin"
+  if ! "$CC" -o "$wo" "$d/writable_neighbours.al" >"$d/writable_neighbours.build.out" 2>"$d/writable_neighbours.build.err"; then
+    echo "FAIL issue411/writable_neighbours: a legal element write was rejected [$(<"$d/writable_neighbours.build.err")]"; fail=1; return
+  fi
+  "$wo" >/dev/null 2>&1; local wrc=$?
+  if [ "$wrc" != 73 ]; then
+    echo "FAIL issue411/writable_neighbours: exit $wrc want 73 - an array element write beside two literal byte reads"; fail=1; return
+  fi
+  echo "ok   issue411/writable_neighbours: array element write and literal byte reads unchanged (exit 73)"
+}
+
 issue298_immutable_places_test() {
   local d="$T/issue298_immutable_places"
   rm -rf "$d"
@@ -4154,6 +4216,7 @@ check_reject reject_call_paren_callee
 ## diagnostic; now a located parse reject. (The valid form is `Box := fn(T : type) -> type { return struct {…} }`.)
 check_located reject_struct_type_params 7
 issue174_name_resolution_test
+issue411_literal_elem_assign_test
 issue298_immutable_places_test
 issue304_place_type_test
 check_build_located reject_issue304_array_field_type 5 "type mismatch"
@@ -4245,6 +4308,19 @@ run_x86_trap str_literal_index_oob 132
 ## element used to hand back a pointer into the CALLER'S FRAME (slot 0) and read a live local; it is now
 ## a located reject. The fixture header deliberately does not quote the needle.
 build_reject_has str_literal_index_place_reject "only supported as a byte READ"
+## Issue #411 — the WRITE side of the very same literal, which reached NEITHER the lower fence above
+## NOR sema. `stmt_starts` recognizes an indexed write only from a base IDENT, so `"abc"[0] = 65` fell to
+## the trailing-expression path: `p_factor`'s final branch took the `=` for an opening parenthesis, the
+## `65` for the parenthesized expression and the NEXT statement for its closing token, so the assignment's
+## right-hand side became the function's result and the program exited 65 where 7 was declared. The parser
+## refuses it now, which is upstream of every emission surface — all four backends and `check` agree, and
+## none leaves an artifact. The build/check needles carry the module and the LINE, so a reject that lost
+## its location cannot pass; the fixture header quotes neither needle.
+build_reject_has str_literal_elem_assign_reject "not a storage location, and its bytes are read-only [module str_literal_elem_assign_reject, at line 12"
+check_reject_has str_literal_elem_assign_reject "not a storage location, and its bytes are read-only [module str_literal_elem_assign_reject, at line 12"
+emit_reject_has wat str_literal_elem_assign_reject "cannot assign to an element of a string literal"
+emit_reject_has aarch64 str_literal_elem_assign_reject "cannot assign to an element of a string literal"
+emit_reject_has riscv64 str_literal_elem_assign_reject "cannot assign to an element of a string literal"
 check_accept smoke
 run early_return_result 42
 check_accept early_return_result
