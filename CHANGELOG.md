@@ -82,6 +82,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- The **wasm** backend now answers correctly when a nested block shadows a **parameter**, as
+  Declarations §6.1 allows ("an inner scope may shadow an outer name"). Its frame gives one *name* one
+  slot for a whole function and its read path resolved a parameter before a local, so the shadow's
+  `:=` wrote a slot nobody read: `if p == 1 { p := 8 ; acc = p }` left `acc` holding the argument, and
+  the same shadow in a `while` body silently answered **6** where x86_64, aarch64 and riscv64 all
+  answered **10** — a wrong value on a clean compile. Entering a block that binds a parameter's name
+  now seeds that binding from the parameter and makes the block's reads resolve to it; leaving the
+  block puts the parameter back in scope. Reading a bare **scalar parameter** on the right of an `=`
+  or a `:=` was a second face of the same defect: a parameter's `: T` annotation was taken for a
+  struct name without confirming it named one, so `acc = p` over `p : u64` went to the whole-aggregate
+  copy path and **trapped** (134) instead of copying a word. Seven programs that used to trap on wasm
+  — `std_math`, `math_ln`, `math_sin`, `math_cos`, `math_sqrt`, `inline_stmt_body` and
+  `lambda_capture_comptime_if` — now run and answer what x86_64 answers. x86_64, aarch64 and riscv64
+  emit byte-identical assembly before and after. What the outer name means *after* the shadowing block
+  ends still differs between wasm (which restores it, per §6.1) and the three native backends (which
+  do not); that divergence is tracked separately.
+
 - Re-declaring a name **already bound in the same scope** is now a compile error, as Declarations §6.2
   requires ("a name means one thing within its scope"). No surface enforced that for function-body
   locals: `check` accepted the program and the four backends then disagreed. Written with two

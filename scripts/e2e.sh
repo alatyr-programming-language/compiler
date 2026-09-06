@@ -4652,6 +4652,17 @@ emit_reject_has riscv64 same_scope_redecl_diff_type "cannot be re-declared"
 ## all stay accepted. Runs on all four backends through the sweeps' `^run ` rows.
 check_accept same_scope_shadow_ok
 run same_scope_shadow_ok 42
+## §6.1 the other way round: the shadowed outer name is a PARAMETER. The WAT frame is flat and its
+## read path preferred a parameter over a local, so the shadow's `:=` wrote a slot nobody read —
+## `if p == 1 { p := 8 ; acc = p }` trapped with 134 on wasm and the `while` form silently answered 6
+## for 10, while x86_64/aarch64/riscv64 answered throughout. `run`, so the sweeps EXECUTE it on all
+## four backends; `run_x86` would have left the only broken backend untested. #430.
+check_accept param_shadow_block
+run param_shadow_block 42
+## …and `run_wat` on top of it, because the sweeps ACCEPT a clean wasm trap: on the parent this
+## fixture's corpus row is a legal `trap` verdict, so the sweep alone would never have gone red. This
+## row demands the wasm exit code BE 42 and is the one that fails before the fix.
+run_wat param_shadow_block 42
 check_reject_has reject_issue268_comptime_runtime "type mismatch"
 check_reject_has reject_issue268_comptime_mut "comptime mut"
 check_reject_has reject_issue268_comptime_reassign "immutable binding"

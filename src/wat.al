@@ -2030,6 +2030,112 @@ wat_bind_pop := fn(head : ptr(mut Bind)) {
   if unchecked bitcast(usize, head) != 0 { WAT_BIND_DEPTH = WAT_BIND_DEPTH - 1 }
 }
 
+## ─── §6.1 SHADOWED PARAMETERS ──────────────────────────────────────────────
+##
+## Declarations §6.1 lets an inner scope shadow an enclosing name, and a PARAMETER is such a name.
+## The WAT frame is FLAT — `local_slot_scan` gives one NAME one slot for the whole fn tree — and the
+## `Var` read path resolves a PARAM before a local, so a nested `p := 8` wrote a fresh local slot
+## while every read of `p` still reached the parameter. #430: `if p == 1 { p := 8 ; acc = p }` left
+## `acc` holding the PARAMETER (the aggregate-copy misclassification below turned that into a trap),
+## and a `while` body doing the same silently answered 6 where x86_64, aarch64 and riscv64 all
+## answered 10 — a SILENT MISCOMPILE, the one outcome this backend forbids.
+##
+## The model is lexical and costs one stack: entering a nested list that BINDS a parameter's name
+## seeds that name's slot from the parameter (so a read BEFORE the `:=`, still in the outer binding,
+## keeps the outer value) and pushes the name; while it is pushed, reads resolve to the slot; leaving
+## the list pops it, so a read AFTER the block reaches the parameter again. `while`/`for` bodies are
+## re-seeded per iteration, which is exactly the per-iteration scope the specification describes.
+##
+## Two bounds keep it narrow. A binding NESTED inside another binding of the same name is skipped
+## (see `wat_param_shadow_enter`): the flat frame gives both the SAME slot, so seeding the inner one
+## would overwrite the outer one's value. And a `for`/`comptime for` LOOP VARIABLE is not a binding
+## of the list it appears in — its scope is the loop BODY — so a loop variable shadowing a parameter
+## is untouched here and stays a separate finding.
+##
+## `emit_wat_body` runs the same entry for the fn body's OWN list and never pops it: a binding of a
+## parameter's name at the top level covers the whole body, which is what the native backends do.
+mut WAT_PSH_N : i64 = 0
+mut WAT_PSH_S : [usize; 64] = [0; 64]
+mut WAT_PSH_L : [usize; 64] = [0; 64]
+
+## Is `[ns, ns+nl)` a parameter whose shadowing block is currently open?
+wat_param_shadow_active := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
+  mut i := 0
+  mut r := false
+  while i < WAT_PSH_N {
+    if streq(src, WAT_PSH_S[i], WAT_PSH_L[i], ns, nl) { r = true }
+    i += 1
+  }
+  r
+}
+
+## Does THIS statement list bind `[ns, ns+nl)` at its OWN level? Nested lists are deliberately not
+## walked (their bindings belong to their own scope) and a `for` loop variable is deliberately not a
+## binding of this list (it belongs to the loop body).
+wat_list_binds := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8)) -> bool {
+  mut s := list
+  mut r := false
+  while s != 0 and (not r) {
+    st := deref(stmt_p(Stmt, s))
+    match st {
+      Stmt::Assign(ans, anl, av, nx) => { if (not local_is_comptime(src, ans)) and streq(src, ans, anl, ns, nl) { r = true } ; s = nx }
+      Stmt::While(wc, wb, wnx) => { s = wnx }
+      Stmt::If(ic, ith, iel, inx) => { s = inx }
+      Stmt::Match(msc, mah, mnx) => { s = mnx }
+      Stmt::For(fns, fnl, flo, fhi, fb, fnx) => { s = fnx }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, rnx) => { s = rnx }
+      Stmt::CompIf(cc, cth, cel, cnx) => { s = cnx }
+      Stmt::Loop(lb, lnx) => { s = lnx }
+      Stmt::Unchecked(ub, unx) => { s = unx }
+      Stmt::Break(_bv, _bd, bnx) => { s = bnx }
+      Stmt::Continue(_cd, cnx2) => { s = cnx2 }
+      Stmt::Return(rv, rnx) => { s = rnx }
+      Stmt::ExprStmt(ee, enx) => { s = enx }
+      Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, fanx) => { s = fanx }
+      Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+      Stmt::IndexAssign(ib, ii, iv, ianx) => { s = ianx }
+      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      _ => { s = 0 }
+    }
+  }
+  r
+}
+
+## Enter a statement list: for every PARAMETER this list binds at its own level, emit the seeding
+## `local.set` and push the name. Two names are passed over — one an ENCLOSING scope already binds
+## (see below) and one that is also a module GLOBAL, because a global name never gets a local slot and
+## `name_local_index` would have nothing to seed. The caller restores `WAT_PSH_N` on the way out; the
+## depth bound is a fail-loud boundary, not a budget.
+wat_param_shadow_enter := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, decls : ptr(rt::Vec)) {
+  mut p := params_head
+  mut pi := 0
+  while p != 0 {
+    pm := deref(param_p(p))
+    if str_at((src + pm.ts), pm.tl) == "type" {} else {
+      mut take := false
+      if wat_list_binds(list, pm.ns, pm.nl, src) { take = true }
+      ## An ENCLOSING scope already binds this name, so its slot is already the one reads resolve to.
+      ## The frame is flat — the inner binding would SHARE that slot — so re-seeding it from the
+      ## parameter would overwrite the enclosing binding's value with the argument. Leave it alone:
+      ## the inner binding writes the same slot and the reads follow it, which is what the three
+      ## native backends do for a shadow nested inside a shadow.
+      if take and wat_param_shadow_active(src, pm.ns, pm.nl) { take = false }
+      if take and is_global(decls, src, pm.ns, pm.nl, a) { take = false }
+      if take {
+        if WAT_PSH_N >= 64 { panic("wasm: shadowed-parameter scope nesting exceeds 64 levels") }
+        WAT_PSH_S[WAT_PSH_N] = pm.ns
+        WAT_PSH_L[WAT_PSH_N] = pm.nl
+        WAT_PSH_N = WAT_PSH_N + 1
+        idx := name_local_index(fn_head, src, pm.ns, pm.nl, pcount, a, decls)
+        push_str(sb, "    (local.set ") ; push_int(sb, idx)
+        push_str(sb, " (local.get ") ; push_int(sb, pi) ; push_str(sb, "))\n")
+      }
+      pi += 1
+    }
+    p = pm.next
+  }
+}
+
 ## Does the fn (its param list) have a `T : type` comptime type-param?
 wat_fn_is_generic := fn(params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena) -> bool {
   mut p := params_head
@@ -3383,6 +3489,20 @@ param_struct_type := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize,
   WSpan(s = rs, n = rn)
 }
 
+## Is the TYPE NAME `[ts, ts+tl)` a BUILTIN SCALAR — one word that IS its value, never a base address?
+## A POSITIVE test, and that is the whole point of it: `ty_is_scalar` and `std_ty_aggregate` are both
+## negative (a name they cannot resolve answers "scalar"), and the names this backend cannot resolve
+## include a monomorphized instance's leftover type-parameter (`v : T`), which stands for whatever the
+## instance was given. Answering "scalar" for one of those would alias an aggregate's base address
+## where a copy was due. Anything not on this list keeps the caller's fail-loud path.
+wat_ty_is_scalar_name := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  if tl == 0 { return false }
+  w := str_at((src + ts), tl)
+  if w == "u8" or w == "u16" or w == "u32" or w == "u64" or w == "usize" or w == "u128" { return true }
+  if w == "i8" or w == "i16" or w == "i32" or w == "i64" or w == "isize" or w == "i128" { return true }
+  w == "f32" or w == "f64" or w == "bool" or w == "char"
+}
+
 ## The struct-type name of a base place named `[ns, ns+nl)` — a struct PARAM (by annotation) or a
 ## struct LOCAL (by its StructLit init), else {0,0}.
 base_struct_type := fn(params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
@@ -3453,7 +3573,24 @@ wat_place_agg_span := fn(v : ptr(Expr), params_head : ptr(mut Param), fn_head : 
     }
   }
   vn := expr_var_name(v)
-  if vn.n != 0 { return base_struct_type(params_head, fn_head, src, vn.s, vn.n, a, decls) }
+  if vn.n != 0 {
+    bs := base_struct_type(params_head, fn_head, src, vn.s, vn.n, a, decls)
+    ## `param_struct_type` returns a PARAMETER's `: T` annotation UNCONDITIONALLY, so a SCALAR
+    ## parameter (`p : u64`) answered "this place is an aggregate" here and every `q := p` / `acc = p`
+    ## whose RHS was a bare parameter went to the whole-aggregate COPY arm, which has no struct decl
+    ## to size and emitted its located `(unreachable)` — a wasm trap for an ordinary scalar read
+    ## (#430). Confirm the span really names an aggregate before treating the place as one; this is
+    ## the same confirmation `expr_is_struct_var` already makes for the `Bin` operand guard.
+    ##
+    ## The confirmation is `wat_ty_is_scalar_name`, a POSITIVE test, and not `std_ty_aggregate` or
+    ## `ty_is_scalar`: both of those are negative, so a monomorphized instance's leftover
+    ## type-parameter (`v : T` — `test/generic_enum_ret.al` reaches here with exactly that over a
+    ## STRUCT type-arg) would answer "scalar" and this place would become a copy of the base ADDRESS,
+    ## an alias where a copy was due. Only a name that IS its own one-word value is demoted; every
+    ## other span, resolvable or not, keeps the fail-loud copy arm.
+    if bs.n != 0 and (not wat_ty_is_scalar_name(src, bs.s, bs.n)) { return bs }
+    return WSpan(s = 0, n = 0)
+  }
   return WSpan(s = 0, n = 0)
 }
 
@@ -4238,6 +4375,11 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         }
       }
       pidx := param_find(params_head, src, ns, nl, a)
+      ## §6.1: inside a block that binds this PARAMETER's name, the name means the BLOCK's binding.
+      ## The shadow's own slot is checked ahead of the parameter (and ahead of the module-global
+      ## branches, which `wat_param_shadow_enter` has already excluded), so the read sees what the
+      ## `:=` wrote rather than the argument the caller passed. #430.
+      pshadow := wat_param_shadow_active(src, ns, nl)
       if bind_blocked {
         push_str(sb, "(unreachable) (; aggregate match binding unsupported on WAT ;)\n")
       } else if wat_bound_lambda(body_head, src, ns, nl, decls) >= 0 {
@@ -4246,6 +4388,10 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## an active match-arm payload binding: load the scrutinee's payload word (bidx+1)
         push_str(sb, "(i64.load ")
         emit_wat_addr(sb, bbase, (bidx + 1) * 8)
+        push_str(sb, ")")
+      } else if pidx >= 0 and pshadow {
+        push_str(sb, "(local.get ")
+        push_int(sb, name_local_index(body_head, src, ns, nl, pcount, a, decls))
         push_str(sb, ")")
       } else if pidx >= 0 {
         push_str(sb, "(local.get ")
@@ -5583,6 +5729,12 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
   ## The FUNCTION-body list (`nested` false) is the exception — its drain belongs AFTER the tail
   ## expression is evaluated, so emit_wat_body owns it (see there).
   dscope := WAT_DEF_N
+  ## §6.1 PARAMETER SHADOW (#430): this list is a scope, so a binding here of an enclosing
+  ## PARAMETER's name is visible only until the list ends. Seed the shadow's slot from the parameter
+  ## and push the name on the way in; the restore below pops it, which puts the parameter back in
+  ## scope for everything that follows the block.
+  pshadow_n := WAT_PSH_N
+  if nested { wat_param_shadow_enter(unchecked bitcast(ptr(mut Stmt), list_head), fn_head, sb, src, params_head, pcount, a, decls) }
   mut s := list_head
   while s != 0 and s != WAT_DEF_STOP {
     st := deref(stmt_p(Stmt, s))
@@ -6781,6 +6933,8 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
     wat_defer_drain(WAT_DEF_N, dscope, sb, a, src, params_head, pcount, fn_head, decls, bind_head, bind_base)
     WAT_DEF_N = dscope
   }
+  ## §6.1: the shadowing bindings this list opened go out of scope with it.
+  WAT_PSH_N = pshadow_n
 }
 
 ## Emit a fn body: declare one `(local i64)` per DISTINCT top-level `:=` name that is NOT a global,
@@ -6799,6 +6953,7 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   WAT_LOOP_OVF = false
   WAT_DEF_STOP = 0
   WAT_BIND_DEPTH = 0
+  WAT_PSH_N = 0
   ## collect local comptime values before slot counting and emission; their names must never consume
   ## runtime locals, while source offsets preserve the same shadowing rule as the x86 lower.
   WAT_CT_N = 0
@@ -6855,6 +7010,10 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   WAT_DEF_OVF = false
   ## emit the statements; a TAIL Stmt::Match (nx==0 in the top-level list) is emitted value-yielding
   ## by emit_wat_stmts via the tail_value flag (each arm returns its tail expr).
+  ## §6.1 (#430): a binding of a PARAMETER's name at the fn body's OWN level covers everything after
+  ## it, so it is entered once here and never popped — without this the reads after it still resolved
+  ## to the argument while the three native backends had long since moved to the binding.
+  wat_param_shadow_enter(head, head, sb, src, params_head, pcount, a, decls)
   emit_wat_stmts(head, head, false, (not void) and (not has_ret), sb, a, src, params_head, pcount, decls, 0, 0)
   if (not void) and (not has_ret) {
     if ex_is_no_tail(tail) {
