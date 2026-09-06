@@ -82,6 +82,17 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `alatyr fmt` no longer **deletes the target type** of a `bitcast` it cannot see in the tree.
+  `bitcast(T, v)` is the identity on the block whenever `T` is a word-sized scalar, `str`, `type`, or
+  a pointer over one of those, so the parser drops the node and every back end stays on the identity
+  path — but the formatter reads the same tree, and with no node to read it wrote
+  `unchecked bitcast(usize, n)` back to your file as `unchecked (n)`, at exit 0. Tooling §4.3 makes
+  `fmt` semantics-preserving and the written target is what types a bare binding, so this quietly
+  replaced a conversion with whatever type the operand happened to have; formatting this compiler's
+  own sources rewrote about 1 100 such casts. The target span now survives beside the AST and comes
+  back verbatim in every position — argument, operand, initializer, postfix base — including two
+  erased levels on one expression, and the `unchecked` marker is recovered from the source rather
+  than invented. What the compiler emits is unchanged: recording is on only for `fmt`.
 - A single-file program that reaches the ambient allocator by its **bare names** now gets the base
   prelude. The shipped stdlib is injected by scanning the source text, and the only text that pulled
   the allocator surface was the bare name of the fallible-result type. Control Flow §5.2 makes a bare

@@ -2,7 +2,9 @@
 ## surfaces (`p_factor`'s bitcast branch): a sub-word pointer target `ptr(u8)`, a pointer target such
 ## as `ptr(mut S)`, and the bare TARGET TYPE of an aggregate→aggregate reinterpret `bitcast(B, x)`.
 ## fmt emits the stored target verbatim, so it cannot conflate a pointer target with an aggregate value
-## target or lose pointer mutability. A bare word-sized scalar target remains identity-erased.
+## target or lose pointer mutability. A bare word-sized scalar target is still identity-erased FROM THE
+## TREE, but no longer from the emitted text: its span is retained beside the AST
+## (`ast::bitcast_erasure_mark`) and `fmt_erased_bitcast_target` locks that half.
 ##
 ## The `unchecked` marker is recovered too, and NOT invented: the node records nothing about it, and
 ## `unchecked bitcast(B, x)` over a 2-word aggregate is a DIFFERENT program from the plain form today
