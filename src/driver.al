@@ -3145,27 +3145,30 @@ d_manifest_find_child := fn(pv : rt::Vec) -> bool {
 ## Render a Config-stage `pub` rejection.  The build path calls the same renderer and then aborts;
 ## `check` prints it and returns its normal rejection code.
 d_manifest_pub_diag := fn(in out a : rt::Arena, manifest : str) {
-  mut b := strbuf::strbuf(a, 512)
-  k0 := strbuf::push_str(b, "alatyr: config: manifest binding '")
-  k1 := strbuf::push_str(b, str_at(MANIFEST_BIND_P, MANIFEST_BIND_N))
-  k2 := strbuf::push_str(b, "' must be private; `pub` is not allowed on a Package handle in ")
-  k3 := strbuf::push_str(b, manifest)
-  k4 := strbuf::push_byte(b, 10)
-  return strbuf::sb_flush(b, 2)
+  ## issue #426 — STREAMED to fd 2, not assembled in a fixed `StrBuf`. `manifest` is the path the
+  ## user typed, so the message has no compiler-side bound; measured on the parent, a 611-character
+  ## manifest path overflowed the 512-byte buffer and `rt::sb_byte`'s `panic` printed
+  ## `rt: StrBuf overflow` in place of the config diagnostic. Same bytes, same order, no cap.
+  k0 := rt::fd_str(2, "alatyr: config: manifest binding '")
+  k1 := rt::fd_str(2, str_at(MANIFEST_BIND_P, MANIFEST_BIND_N))
+  k2 := rt::fd_str(2, "' must be private; `pub` is not allowed on a Package handle in ")
+  k3 := rt::fd_str(2, manifest)
+  return rt::fd_str(2, "\n")
 }
 
 ## Render the Semantic duplicate without pretending the child file was an AST declaration.  Both
 ## spellings are named because the source-side module table is otherwise invisible to sema.
 d_manifest_duplicate_diag := fn(in out a : rt::Arena, manifest : str) {
-  mut b := strbuf::strbuf(a, 768)
-  k0 := strbuf::push_str(b, "alatyr: check: semantic duplicate name: manifest declaration '")
-  k1 := strbuf::push_str(b, str_at(MANIFEST_BIND_P, MANIFEST_BIND_N))
-  k2 := strbuf::push_str(b, "' in ")
-  k3 := strbuf::push_str(b, manifest)
-  k4 := strbuf::push_str(b, " conflicts with child module ")
-  k5 := strbuf::push_str(b, str_at(MANIFEST_CHILD_P, MANIFEST_CHILD_N))
-  k6 := strbuf::push_byte(b, 10)
-  return strbuf::sb_flush(b, 2)
+  ## issue #426 — STREAMED to fd 2 for the same reason as `d_manifest_pub_diag`: this message names
+  ## the manifest path AND the conflicting child module's path, so two user-chosen paths decide its
+  ## length and the 768-byte buffer was a wall, not a bound.
+  k0 := rt::fd_str(2, "alatyr: check: semantic duplicate name: manifest declaration '")
+  k1 := rt::fd_str(2, str_at(MANIFEST_BIND_P, MANIFEST_BIND_N))
+  k2 := rt::fd_str(2, "' in ")
+  k3 := rt::fd_str(2, manifest)
+  k4 := rt::fd_str(2, " conflicts with child module ")
+  k5 := rt::fd_str(2, str_at(MANIFEST_CHILD_P, MANIFEST_CHILD_N))
+  return rt::fd_str(2, "\n")
 }
 
 ## Add the internal `Package { version : str }` type and one private const handle for a package-owned
@@ -3890,17 +3893,21 @@ d_limit_reject := fn(code : usize, what : str, base : usize, ft : ptr(DFileTab),
     span = raw_limit / 8
     lkind = raw_limit % 8
   }
-  mut db := rt::strbuf(a, 256)
-  w0 := rt::push_str(db, "alatyr: build: ")
+  ## issue #426 — the message is STREAMED to fd 2 piece by piece instead of being assembled in a
+  ## fixed `StrBuf`. Its length is not bounded by the compiler (the ` in <module>` tail is the
+  ## user's file name; a parse diagnostic quotes the offending lexeme), so any capacity is a wall,
+  ## and `rt::sb_byte`'s overflow `panic` REPLACED the diagnostic with `rt: StrBuf overflow` — the
+  ## located error the user needed, lost to a crash of the compiler. Same bytes, same order, no cap.
+  w0 := rt::fd_str(2, "alatyr: build: ")
   if limit {
-    if lkind == DIAG_LINKER_SYMBOL_KIND { w1 := rt::push_str(db, "duplicate linker symbol") }
+    if lkind == DIAG_LINKER_SYMBOL_KIND { w1 := rt::fd_str(2, "duplicate linker symbol") }
     else {
-      w1 := rt::push_str(db, "@limits(")
-      w2 := rt::push_str(db, limit_name(lkind))
-      w3 := rt::push_str(db, ") violation")
+      w1 := rt::fd_str(2, "@limits(")
+      w2 := rt::fd_str(2, limit_name(lkind))
+      w3 := rt::fd_str(2, ") violation")
     }
   } else {
-    w1 := rt::push_str(db, what)
+    w1 := rt::fd_str(2, what)
   }
   if span > 0 or (limit and lkind == DIAG_LINKER_SYMBOL_KIND) {
     ## Map the GLOBAL concatenated-buffer offset back to the owning file (`so[k] <= span < so[k]+sl[k]`)
@@ -3914,17 +3921,16 @@ d_limit_reject := fn(code : usize, what : str, base : usize, ft : ptr(DFileTab),
       if span >= fo and span < fo + fln { fk = fi; fbase = fo }
       fi += 1
     }
-    w4 := rt::push_str(db, " at line ")
+    w4 := rt::fd_str(2, " at line ")
     mut line := 1
     srcv := str_at(base, span)
     mut ci := fbase
     while ci < span { if bytes(srcv)[ci] == 10 { line = line + 1 } ; ci = ci + 1 }
-    w5 := rt::push_int(db, i64(line))
-    win := rt::push_str(db, " in ")
-    wm := rt::push_str(db, str_at(base + rt::vec_get(deref(ft.ns), fk), rt::vec_get(deref(ft.nl), fk)))
+    w5 := rt::fd_int(2, i64(line), a)
+    win := rt::fd_str(2, " in ")
+    wm := rt::fd_str(2, str_at(base + rt::vec_get(deref(ft.ns), fk), rt::vec_get(deref(ft.nl), fk)))
   }
-  w4 := rt::push_byte(db, 10)
-  wf := rt::sb_flush(db, 2)
+  w4 := rt::fd_str(2, "\n")
   panic("")
 }
 
@@ -4029,8 +4035,12 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     kind = raw % 4
     span = raw / 4
   }
-  mut db := rt::strbuf(a, 256)
-  w0 := rt::push_str(db, "alatyr: check: ")
+  ## issue #426 — the message is STREAMED to fd 2 piece by piece instead of being assembled in a
+  ## fixed `StrBuf`. Its length is not bounded by the compiler (the ` in <module>` tail is the
+  ## user's file name; a parse diagnostic quotes the offending lexeme), so any capacity is a wall,
+  ## and `rt::sb_byte`'s overflow `panic` REPLACED the diagnostic with `rt: StrBuf overflow` — the
+  ## located error the user needed, lost to a crash of the compiler. Same bytes, same order, no cap.
+  w0 := rt::fd_str(2, "alatyr: check: ")
   ## The KIND + SOURCE SPAN are only reliable when the failure propagated through the `CheckErr`
   ## channel (`span > 0`); many checks poison via `mark_failed`, which carries no span, so `code` is
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
@@ -4038,39 +4048,39 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## branch. Other zero-span failures remain honest unlocated messages.
   if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or str_elem_write or private_const or global_init_call or unknown_ctor or manifest_value {
     if limit {
-      wk0 := rt::push_str(db, "@limits(")
-      wk1 := rt::push_str(db, limit_name(kind))
-      wk2 := rt::push_str(db, ") violation")
-    } else if immutable { wki := rt::push_str(db, "immutable binding") }
-    else if ctcond { wkcc := rt::push_str(db, "comptime if condition must be comptime-known (runtime-dependent value)") }
-    else if ctg { wkc := rt::push_str(db, comptime_guard_name(kind)) }
-    else if gagg { wkg := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
-    else if global_init_call { wkgc := rt::push_str(db, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
-    else if enum_global_array { wkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
-    else if packed_array { wkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
-    else if enum_dup_disc { wkedd := rt::push_str(db, "two enum variants resolve to the same discriminant value — spec Types §6.2 makes that ill-formed; rejected in check rather than emitted with an ambiguous tag") }
-    else if multidim_array_field { wkmda := rt::push_str(db, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
-    else if nested_array_param { wknap := rt::push_str(db, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
-    else if same_scope_redecl { wkssr := rt::push_str(db, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
-    else if str_elem_write { wkstr := rt::push_str(db, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
-    else if multidim_array { wkmda := rt::push_str(db, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
-    else if private_const { wkv := rt::push_str(db, "qualified private constant is not visible from this module") }
-    else if tuple_global { wktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
-    else if unknown_ctor { wku := rt::push_str(db, "unknown type constructor") }
+      wk0 := rt::fd_str(2, "@limits(")
+      wk1 := rt::fd_str(2, limit_name(kind))
+      wk2 := rt::fd_str(2, ") violation")
+    } else if immutable { wki := rt::fd_str(2, "immutable binding") }
+    else if ctcond { wkcc := rt::fd_str(2, "comptime if condition must be comptime-known (runtime-dependent value)") }
+    else if ctg { wkc := rt::fd_str(2, comptime_guard_name(kind)) }
+    else if gagg { wkg := rt::fd_str(2, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
+    else if global_init_call { wkgc := rt::fd_str(2, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
+    else if enum_global_array { wkea := rt::fd_str(2, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
+    else if packed_array { wkpa := rt::fd_str(2, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
+    else if enum_dup_disc { wkedd := rt::fd_str(2, "two enum variants resolve to the same discriminant value — spec Types §6.2 makes that ill-formed; rejected in check rather than emitted with an ambiguous tag") }
+    else if multidim_array_field { wkmda := rt::fd_str(2, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
+    else if nested_array_param { wknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
+    else if same_scope_redecl { wkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
+    else if str_elem_write { wkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
+    else if multidim_array { wkmda := rt::fd_str(2, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
+    else if private_const { wkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
+    else if tuple_global { wktg := rt::fd_str(2, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
+    else if unknown_ctor { wku := rt::fd_str(2, "unknown type constructor") }
     else if manifest_value {
       if str_at(base + span, 7) == "Package" {
-        wkm := rt::push_str(db, "manifest-only structure Package cannot be constructed from ordinary source")
+        wkm := rt::fd_str(2, "manifest-only structure Package cannot be constructed from ordinary source")
       } else {
-        wkm := rt::push_str(db, "manifest-only structure Target cannot be constructed from ordinary source")
+        wkm := rt::fd_str(2, "manifest-only structure Target cannot be constructed from ordinary source")
       }
     }
-    else if agg_conv { wkac := rt::push_str(db, "builtin scalar conversion needs a scalar operand — a struct/enum operand requires a matching @convert fn(U) -> T (Types §4.6 / TYP-6)") }
-    else if conv { wksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
-    else if ambig { wk := rt::push_str(db, "ambiguous call") }
-    else if kind == 1 { wk := rt::push_str(db, "unbound name") }
-    else if kind == 2 { wk := rt::push_str(db, "type mismatch") }
-    else if kind == 3 { wk := rt::push_str(db, "duplicate name") }
-    else { wk := rt::push_str(db, "invalid") }
+    else if agg_conv { wkac := rt::fd_str(2, "builtin scalar conversion needs a scalar operand — a struct/enum operand requires a matching @convert fn(U) -> T (Types §4.6 / TYP-6)") }
+    else if conv { wksc := rt::fd_str(2, "scalar conversion requires exactly one operand (Types §4.6)") }
+    else if ambig { wk := rt::fd_str(2, "ambiguous call") }
+    else if kind == 1 { wk := rt::fd_str(2, "unbound name") }
+    else if kind == 2 { wk := rt::fd_str(2, "type mismatch") }
+    else if kind == 3 { wk := rt::fd_str(2, "duplicate name") }
+    else { wk := rt::fd_str(2, "invalid") }
     mut fk := 0
     mut fbase := 0
     mut fi := 0
@@ -4080,21 +4090,20 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
       if span >= fo and span < fo + fln { fk = fi; fbase = fo }
       fi += 1
     }
-    w1 := rt::push_str(db, " at line ")
+    w1 := rt::fd_str(2, " at line ")
     mut line := 1
     srcv := str_at(base, span)
     mut ci := fbase
     while ci < span { if bytes(srcv)[ci] == 10 { line = line + 1 } ; ci = ci + 1 }
-    w2 := rt::push_int(db, i64(line))
-    win := rt::push_str(db, " in ")
-    wm := rt::push_str(db, str_at(base + rt::vec_get(deref(ft.ns), fk), rt::vec_get(deref(ft.nl), fk)))
+    w2 := rt::fd_int(2, i64(line), a)
+    win := rt::fd_str(2, " in ")
+    wm := rt::fd_str(2, str_at(base + rt::vec_get(deref(ft.ns), fk), rt::vec_get(deref(ft.nl), fk)))
   } else if kind == 3 {
-    wd := rt::push_str(db, "duplicate name")
+    wd := rt::fd_str(2, "duplicate name")
   } else {
-    wu := rt::push_str(db, "type error (location not tracked)")
+    wu := rt::fd_str(2, "type error (location not tracked)")
   }
-  w4 := rt::push_byte(db, 10)
-  wf := rt::sb_flush(db, 2)
+  w4 := rt::fd_str(2, "\n")
   panic("")
 }
 
@@ -5926,41 +5935,44 @@ d_parse_diag := fn(base : usize, span : usize, tlen : usize, ekind : i64, modbas
   ## 1 KiB, not the 256 the inline copy used: the message quotes an arbitrarily long identifier AND a
   ## mangled module name, and `rt::sb_byte` panics on overflow — which would replace the diagnostic
   ## with "rt: StrBuf overflow". A KiB of a multi-megabyte arena buys the margin.
-  mut pdb := strbuf::strbuf(a, 1024)
-  pw0 := rt::push_str(pdb, "alatyr: parse: unexpected token")
+  ## issue #426 — the message is STREAMED to fd 2 piece by piece instead of being assembled in a
+  ## fixed `StrBuf`. Its length is not bounded by the compiler (the ` in <module>` tail is the
+  ## user's file name; a parse diagnostic quotes the offending lexeme), so any capacity is a wall,
+  ## and `rt::sb_byte`'s overflow `panic` REPLACED the diagnostic with `rt: StrBuf overflow` — the
+  ## located error the user needed, lost to a crash of the compiler. Same bytes, same order, no cap.
+  pw0 := rt::fd_str(2, "alatyr: parse: unexpected token")
   ## quote the OFFENDING lexeme (its source text) so the diagnostic names WHAT was unexpected, not
   ## just where. EOF (no lexeme) skips the quote.
   if tlen > 0 {
-    pwq0 := rt::push_str(pdb, " `")
-    pwqt := rt::push_str(pdb, str_at(base + span, tlen))
-    pwq1 := rt::push_str(pdb, "`")
+    pwq0 := rt::fd_str(2, " `")
+    pwqt := rt::fd_str(2, str_at(base + span, tlen))
+    pwq1 := rt::fd_str(2, "`")
   }
   ## render the EXPECTED kind from the `ParseErr` payload ("(expected a name)" / "(expected `:=`)")
   ## when the parser named one. An unmapped/absent kind renders nothing.
   ped := parse_expected_desc(ekind)
   if ped.len > 0 {
-    pwe0 := rt::push_str(pdb, " (expected ")
-    pwe1 := rt::push_str(pdb, ped)
-    pwe2 := rt::push_str(pdb, ")")
+    pwe0 := rt::fd_str(2, " (expected ")
+    pwe1 := rt::fd_str(2, ped)
+    pwe2 := rt::fd_str(2, ")")
   }
   ## LOCATE when there is anything to locate from: a nonzero offset, or a named module (a named
   ## module at offset 0 is line 1 of that module, which is a fact worth printing).
   mut loc := span > 0
   if mnl > 0 { loc = true }
   if loc {
-    pw1 := rt::push_str(pdb, " at line ")
+    pw1 := rt::fd_str(2, " at line ")
     mut pline := 1
     psrcv := str_at(base, span)
     mut pci := modbase
     while pci < span { if bytes(psrcv)[pci] == 10 { pline = pline + 1 } ; pci = pci + 1 }
-    pw2 := rt::push_int(pdb, i64(pline))
+    pw2 := rt::fd_int(2, i64(pline), a)
     if mnl > 0 {
-      pwin := rt::push_str(pdb, " in ")
-      pwm := rt::push_str(pdb, str_at(base + mns, mnl))
+      pwin := rt::fd_str(2, " in ")
+      pwm := rt::fd_str(2, str_at(base + mns, mnl))
     }
   }
-  pw3 := rt::push_byte(pdb, 10)
-  pwf := rt::sb_flush(pdb, 2)
+  pw3 := rt::fd_str(2, "\n")
   return 0
 }
 
@@ -6337,8 +6349,12 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     kind = raw % 4
     span = raw / 4
   }
-  mut db := strbuf::strbuf(tar, 256)
-  dw0 := rt::push_str(db, "alatyr: check: ")
+  ## issue #426 — the message is STREAMED to fd 2 piece by piece instead of being assembled in a
+  ## fixed `StrBuf`. Its length is not bounded by the compiler (the ` in <module>` tail is the
+  ## user's file name; a parse diagnostic quotes the offending lexeme), so any capacity is a wall,
+  ## and `rt::sb_byte`'s overflow `panic` REPLACED the diagnostic with `rt: StrBuf overflow` — the
+  ## located error the user needed, lost to a crash of the compiler. Same bytes, same order, no cap.
+  dw0 := rt::fd_str(2, "alatyr: check: ")
   ## The KIND + SOURCE SPAN are only reliable when the failure propagated through the `CheckErr`
   ## channel (`span > 0`); many checks poison via `mark_failed` (to avoid a lean-lower early-return
   ## gotcha), which carries no span, so `r` is then the default `unbound_err(0,0)` == 1. The
@@ -6347,42 +6363,42 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## honest unlocated messages (no misleading kind/line).
   if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or str_elem_write or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
-      if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::push_str(db, "duplicate linker symbol") }
+      if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
-        dwk0 := rt::push_str(db, "@limits(")
-        dwk1 := rt::push_str(db, limit_name(kind))
-        dwk2 := rt::push_str(db, ") violation")
+        dwk0 := rt::fd_str(2, "@limits(")
+        dwk1 := rt::fd_str(2, limit_name(kind))
+        dwk2 := rt::fd_str(2, ") violation")
       }
-    } else if immutable { dwki := rt::push_str(db, "immutable binding") }
-    else if ctcond { dwkcc := rt::push_str(db, "comptime if condition must be comptime-known (runtime-dependent value)") }
-    else if ctg { dwkc := rt::push_str(db, comptime_guard_name(kind)) }
-    else if gagg { dwkga := rt::push_str(db, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
-    else if global_init_call { dwkgc := rt::push_str(db, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
-    else if enum_global_array { dwkea := rt::push_str(db, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
-    else if packed_array { dwkpa := rt::push_str(db, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
-    else if enum_dup_disc { dwkedd := rt::push_str(db, "two enum variants resolve to the same discriminant value — spec Types §6.2 makes that ill-formed; rejected in check rather than emitted with an ambiguous tag") }
-    else if multidim_array_field { dwkmda := rt::push_str(db, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
-    else if nested_array_param { dwknap := rt::push_str(db, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
-    else if same_scope_redecl { dwkssr := rt::push_str(db, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
-    else if str_elem_write { dwkstr := rt::push_str(db, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
-    else if multidim_array { dwkmda := rt::push_str(db, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
-    else if private_const { dwkv := rt::push_str(db, "qualified private constant is not visible from this module") }
-    else if tuple_global { dwktg := rt::push_str(db, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
-    else if unknown_ctor { dwku := rt::push_str(db, "unknown type constructor") }
+    } else if immutable { dwki := rt::fd_str(2, "immutable binding") }
+    else if ctcond { dwkcc := rt::fd_str(2, "comptime if condition must be comptime-known (runtime-dependent value)") }
+    else if ctg { dwkc := rt::fd_str(2, comptime_guard_name(kind)) }
+    else if gagg { dwkga := rt::fd_str(2, "whole-value assignment of a NON-LITERAL aggregate to a mutable STRUCT global is unsupported (would silently drop words) — assign fields individually, or copy through a local") }
+    else if global_init_call { dwkgc := rt::fd_str(2, "a CONST module-level global initialized by a runtime CALL returning an aggregate is unsupported — global initializers must be compile-time constants; build the value inside a function") }
+    else if enum_global_array { dwkea := rt::fd_str(2, "an ENUM-element ARRAY GLOBAL element in a VALUE position is not supported yet (bind it first or match it directly)") }
+    else if packed_array { dwkpa := rt::fd_str(2, "an initialized local array literal whose element is a @packed struct is not supported (byte-precise array stride is a deferred slice)") }
+    else if enum_dup_disc { dwkedd := rt::fd_str(2, "two enum variants resolve to the same discriminant value — spec Types §6.2 makes that ill-formed; rejected in check rather than emitted with an ambiguous tag") }
+    else if multidim_array_field { dwkmda := rt::fd_str(2, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
+    else if nested_array_param { dwknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
+    else if same_scope_redecl { dwkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
+    else if str_elem_write { dwkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
+    else if multidim_array { dwkmda := rt::fd_str(2, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
+    else if private_const { dwkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
+    else if tuple_global { dwktg := rt::fd_str(2, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
+    else if unknown_ctor { dwku := rt::fd_str(2, "unknown type constructor") }
     else if manifest_value {
       if str_at(base + span, 7) == "Package" {
-        dwkm := rt::push_str(db, "manifest-only structure Package cannot be constructed from ordinary source")
+        dwkm := rt::fd_str(2, "manifest-only structure Package cannot be constructed from ordinary source")
       } else {
-        dwkm := rt::push_str(db, "manifest-only structure Target cannot be constructed from ordinary source")
+        dwkm := rt::fd_str(2, "manifest-only structure Target cannot be constructed from ordinary source")
       }
     }
-    else if agg_conv { dwkac := rt::push_str(db, "builtin scalar conversion needs a scalar operand — a struct/enum operand requires a matching @convert fn(U) -> T (Types §4.6 / TYP-6)") }
-    else if conv { dwksc := rt::push_str(db, "scalar conversion requires exactly one operand (Types §4.6)") }
-    else if ambig { dwk := rt::push_str(db, "ambiguous call") }
-    else if kind == 1 { dwk := rt::push_str(db, "unbound name") }
-    else if kind == 2 { dwk := rt::push_str(db, "type mismatch") }
-    else if kind == 3 { dwk := rt::push_str(db, "duplicate name") }
-    else { dwk := rt::push_str(db, "invalid") }
+    else if agg_conv { dwkac := rt::fd_str(2, "builtin scalar conversion needs a scalar operand — a struct/enum operand requires a matching @convert fn(U) -> T (Types §4.6 / TYP-6)") }
+    else if conv { dwksc := rt::fd_str(2, "scalar conversion requires exactly one operand (Types §4.6)") }
+    else if ambig { dwk := rt::fd_str(2, "ambiguous call") }
+    else if kind == 1 { dwk := rt::fd_str(2, "unbound name") }
+    else if kind == 2 { dwk := rt::fd_str(2, "type mismatch") }
+    else if kind == 3 { dwk := rt::fd_str(2, "duplicate name") }
+    else { dwk := rt::fd_str(2, "invalid") }
     ## Map the GLOBAL concatenated-buffer offset back to the OWNING file (`src_off[k] <= span <
     ## src_off[k]+src_len[k]`), so a multi-file check reports a FILE-RELATIVE line + names the module
     ## — not a line counted across every earlier file's source (§1 item 6: stable locations per file).
@@ -6395,21 +6411,20 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
       if span >= fo and span < fo + fln { fk = fi; fbase = fo }
       fi += 1
     }
-    dw1 := rt::push_str(db, " at line ")
+    dw1 := rt::fd_str(2, " at line ")
     mut line := 1
     srcv := str_at(base, span)
     mut ci := fbase
     while ci < span { if bytes(srcv)[ci] == 10 { line = line + 1 } ; ci = ci + 1 }
-    dw2 := rt::push_int(db, i64(line))
-    dwin := rt::push_str(db, " in ")
-    dwm := rt::push_str(db, str_at(base + rt::vec_get(name_start, fk), rt::vec_get(name_len, fk)))
+    dw2 := rt::fd_int(2, i64(line), tar)
+    dwin := rt::fd_str(2, " in ")
+    dwm := rt::fd_str(2, str_at(base + rt::vec_get(name_start, fk), rt::vec_get(name_len, fk)))
   } else if kind == 3 {
-    dwd := rt::push_str(db, "duplicate name")
+    dwd := rt::fd_str(2, "duplicate name")
   } else {
-    dwu := rt::push_str(db, "type error (location not tracked)")
+    dwu := rt::fd_str(2, "type error (location not tracked)")
   }
-  dw3 := rt::push_byte(db, 10)
-  dwf := rt::sb_flush(db, 2)
+  dw3 := rt::fd_str(2, "\n")
   return 1
 }
 

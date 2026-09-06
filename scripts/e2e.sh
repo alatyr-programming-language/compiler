@@ -902,6 +902,54 @@ build_reject_has() { # name, needle
   else echo "FAIL $1: rc=$got but the diagnostic is missing [$2]"; fail=1; fi
 }
 
+## Issue #426, the manifest half. `d_manifest_pub_diag` (512 bytes) and `d_manifest_duplicate_diag`
+## (768) render two Config/Semantic manifest rejections, and BOTH quote paths the user chose — the
+## manifest path, and for the duplicate the conflicting child module's path too. Measured on the
+## parent compiler, a package whose manifest sits 611 characters deep printed `rt: StrBuf overflow`
+## instead of either diagnostic. The tree is generated in this row's private scratch directory, so
+## the four-backend corpus oracle gains no row for a case whose whole point is the LENGTH of a path.
+## The `rt: StrBuf overflow` assertion is the load-bearing one: both messages also exit non-zero when
+## the compiler aborts, so only the presence of the text distinguishes a refusal from a crash.
+issue426_manifest_diag_depth_test() {
+  d="$T/issue426_manifest_diag_depth"
+  deep="$d"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    deep="$deep/dircomponent_of_forty_characters_len_$i"
+  done
+  mkdir -p "$deep/src"
+  printf '%s\n' 'main := fn() -> u64 { 0 }' > "$deep/src/main.al"
+
+  issue426_manifest_case() { # case-name, binding text, needle
+    case_name="$1"; bind="$2"; needle="$3"
+    printf '%s\n' \
+      "$bind := Package(version = \"0.1.0\", targets = [" \
+      '  Target(arch = Arch.x86_64, os = Os.linux, env = Env.gnu, container = Container.elf,' \
+      '         entry = "_start", output = "deepapp"),' \
+      '])' > "$deep/package.al"
+    err="$d/$case_name.err"; out="$d/$case_name.out"
+    ( cd "$deep" && "$CC" build "$deep/package.al" ) >"$out" 2>"$err"; rc=$?
+    if [ "$rc" = 0 ]; then
+      echo "FAIL issue426_manifest/$case_name: build accepted, want a manifest rejection"; fail=1; return
+    fi
+    if grep -qF "rt: StrBuf overflow" "$err"; then
+      echo "FAIL issue426_manifest/$case_name: rc=$rc but the compiler ABORTED instead of printing the diagnostic"; fail=1; return
+    fi
+    if ! grep -qF "$needle" "$err"; then
+      echo "FAIL issue426_manifest/$case_name: rc=$rc but the diagnostic is missing [$needle]"; fail=1; return
+    fi
+    if ! grep -qF "$deep/package.al" "$err"; then
+      echo "FAIL issue426_manifest/$case_name: rc=$rc but the ${#deep} character manifest path was not printed"; fail=1; return
+    fi
+    echo "ok   issue426_manifest/$case_name: $(wc -c < "$err") byte diagnostic printed, not an overflow abort"
+  }
+
+  ## `pub` on the Package handle — the Config rejection, and the shorter of the two buffers.
+  issue426_manifest_case pub_app "pub app" "must be private; \`pub\` is not allowed on a Package handle in"
+  ## the binding name collides with `src/main.al` — the Semantic rejection, which additionally quotes
+  ## the child module's own path, so two long paths decide the length.
+  issue426_manifest_case name_collides_with_child main "conflicts with child module"
+}
+
 # Issue #174 / Declarations §1.2 + Grammar §3.1 — every value expression is name-checked even when
 # its result is discarded, and a known struct's field name is checked on both reads and writes. The
 # sources are generated in this row's private scratch directory so the regression does not add rows to
@@ -4701,6 +4749,29 @@ emit_reject_has riscv64 same_scope_redecl_same_type "cannot be re-declared"
 emit_reject_has wat same_scope_redecl_diff_type "cannot be re-declared"
 emit_reject_has aarch64 same_scope_redecl_diff_type "cannot be re-declared"
 emit_reject_has riscv64 same_scope_redecl_diff_type "cannot be re-declared"
+## Issue #426 — a diagnostic must be PRINTED, not replaced by `rt: StrBuf overflow`. Both
+## `src/driver.al` decoders assembled their message into a `strbuf(…, 256)` and the parse decoder
+## into a `strbuf(…, 1024)`; `rt::sb_byte` panics on overflow, so the compiler ABORTED in place of
+## the located error the user was owed. Measured on the parent: the 256-byte decoders printed at
+## most 249 bytes and died at 250, the parse decoder printed at most 1017 and died at 1018 — and
+## the variable part is user-controlled (the module name is the file name; the parse message quotes
+## the offending lexeme), so a bigger constant only moves the wall. Both fixtures cross their wall
+## by their own NAME or token length, and both aborted on the parent with an EMPTY diagnostic and a
+## non-zero exit, which is why the assertions grep the message tail together with its location: a
+## bare `build_reject` cannot tell the abort from the refusal.
+##
+## `check_build_located` covers BOTH 256-byte decoders in one row — `d_sema_reject` on the `-o`
+## build path and the `check_files` decode on the `check` path are separate copies of the same
+## chain, and fixing one would have left the other able to abort.
+check_build_located issue426_long_check_diagnostic_module_name_overflow 25 "build the value inside a function"
+## the module NAME is what makes this message 267 bytes, so assert the tail that carries it
+build_reject_has issue426_long_check_diagnostic_module_name_overflow "at line 25 in issue426_long_check_diagnostic_module_name_overflow"
+## the parse decoder quotes a 1200-digit token, so its message is ~1312 bytes: the same defect the
+## 1024-byte buffer was already an instance of. The needle is the located tail, not the lexeme.
+build_reject_has issue426_parse_diagnostic_quotes_a_long_lexeme "(expected a name) at line 16 in issue426_parse_diagnostic_quotes_a_long_lexeme"
+## the two manifest renderers in the same file had the same wall at 512 and 768 bytes; generated
+## sources, so no corpus row is added for a case whose subject is the LENGTH of a path
+issue426_manifest_diag_depth_test
 ## The over-rejection guard, and the load-bearing half of this change: §6.1 cross-scope shadowing,
 ## sequential non-overlapping blocks, sibling `for` loops, a `match` arm payload name reused across
 ## arms, a shadowed parameter, `x : T` with a later `=`, an ordinary `=` write, and two `_` discards

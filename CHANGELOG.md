@@ -82,6 +82,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- A **diagnostic longer than the driver's message buffer** is now printed, instead of being replaced by
+  `rt: StrBuf overflow` and an aborted compiler. Both `alatyr: check:` decoders assembled their message
+  into a 256-byte `StrBuf` and the parse decoder into a 1024-byte one, and the runtime's overflow guard
+  is a `panic`: measured, the located message printed in full up to **249 bytes** and, at **250**, the
+  whole diagnostic was replaced by `rt: StrBuf overflow` — so a user whose program had an error got a
+  crashed compiler and no way to know which error it was. The wall was only ~34 characters of module
+  name past the longest message in the set, and a module name is a **file name**, so an ordinary
+  project's own naming could reach it; the parse message additionally quotes the offending lexeme,
+  whose length is bounded only by the source, and a 950-character token was enough to kill the 1024
+  buffer the same way; the two manifest renderers had the same wall at 512 and 768 bytes, reachable
+  with a deep enough package directory. All six now write their pieces straight to stderr, so there is
+  no capacity left to overflow — the same bytes in the same order, with no ceiling (a 20 068-byte
+  message prints in full, with the ordinary reject status). Every message that already fitted is
+  byte-identical:
+  `alatyr check` over all 1 890 tracked `test/*.al` fixtures, 431 of which emit a diagnostic, differs in
+  **0**.
+
 - A **field read through a `ptr(str)` parameter** now reads the pointee, instead of answering **0**.
   Stdlib appendix §3.5/§3.6 make `str` the base tier's two-word `{ptr : ptr(u8), len : usize}` pair
   and Memory §4.1 makes `deref(q).len` an ordinary read through the pointer, but
