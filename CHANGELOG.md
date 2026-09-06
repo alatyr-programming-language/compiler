@@ -82,6 +82,27 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Two **overloads of one generic function** in one module no longer share a linker symbol. A generic
+  instance is labelled `<module>__<fn>__<typetag>`, built from the **type arguments alone** — the value
+  parameters took no part in it — so at one instantiation two declarations that overload resolution
+  keeps apart collapsed onto one symbol, which Modules §6.7 forbids. **Arity** decided which face that
+  wore, and both are now closed. Where the overloads shared an arity the resolver answered *both* call
+  sites with the last-declared one, a single body was emitted, and the other call read it: a clean
+  compile, exit 0, and a **wrong value** — a `pick(u64, A(…))` over a one-word `A` returned the second
+  word of the `B` overload's argument. Where the arities differed each call site selected its own
+  declaration, both bodies were emitted under one `.globl`, and the build died in `as` with
+  ``symbol `…' is already defined`` — a raw assembler error with no source location. The generic path
+  now joins the per-signature overload machinery the non-generic path has had: a generic overload set is
+  **selected** by its first value argument's type and **mangled** with the resolved declaration's full
+  parameter signature, and the definition and the call derive that suffix from the *same* `Decl`, so
+  they cannot drift apart. The live consequence: `alloc::hashmap`'s two `iter` overloads of Stdlib
+  appendix §2.4 — the map entry point `iter(K, V, ptr(HashMap(K, V)), Arena)` and the Iterator-protocol
+  identity `iter(K, V, HashMapIter(K, V))` — can now both be used at the same `(K, V)` in one program.
+  Every symbol not in a generic overload set keeps the name it had: the tree contains exactly one such
+  set, the compiler never calls it, and the self-host build's assembly is byte-identical. x86_64; the
+  three cross backends can neither select nor separate two overloads — measured, they already refuse
+  an ordinary non-generic overload set — so a generic overload set is now outside their shape fence
+  and they fail loudly instead of answering wrongly; making them correct is tracked as #475.
 - The **iterator protocol of `HashMap`** is now reachable through its **qualified** path from outside
   the standard library. Stdlib appendix §6 names `iter` in the closed v1 surface of `HashMap(K, V)`
   and §8.5 makes the §6 alloc-tier types required content given an allocator, with §2.4 fixing the

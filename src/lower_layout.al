@@ -2518,14 +2518,46 @@ pub generic_gi := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize
   r
 }
 
+## Count GENERIC fn (kind 1) decls named (ns,nl) in module (ms,ml) — the generic twin of
+## `lower::overload_set_count`. `>= 2` is a GENERIC OVERLOAD SET: two declarations that overload
+## resolution keeps apart but whose instance label `<module>__<fn>__<typetag>`, built from the TYPE
+## ARGUMENTS ALONE, is identical — one linker symbol for both, which Modules §6.7 forbids (#472).
+## One copy, here, because BOTH consumers need the same answer for opposite reasons: the x86 lower
+## uses it to SELECT and MANGLE such a set correctly, and `gen_call_ok` below uses it to keep the
+## three cross backends OFF it. `src/` and `lib/` hold exactly one such set (`alloc::hashmap`'s
+## `iter`) and `src/` never calls it, so every self-host call answers < 2.
+pub generic_overload_set_count := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, ms : usize, ml : usize) -> usize {
+  cnt := rt::vec_len(deref(decls))
+  mut c := 0
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 1 and d.is_generic and streq(src, d.name_start, d.name_len, ns, nl) and streq(src, d.mod_start, d.mod_len, ms, ml) {
+      c = c + 1
+    }
+    i = i + 1
+  }
+  c
+}
+
 ## Is a call to the generic named `[cs, cs+cl)` one the cross backends can lower? 1 to 3 type
 ## parameters, and with more than one they must ALL lead. This is a SHAPE FENCE, not a target
 ## capability: the three backends agreed on it exactly, so it is the language-level limit of the
 ## current generic-instance path and belongs in one place.
+##
+## A GENERIC OVERLOAD SET is outside that limit (#472). These three backends resolve a generic callee
+## with `generic_gi` — name only, LAST match wins, no module, no arity, no signature — and label the
+## instance `<fn>__<tag>` with no signature either, so they can neither select nor separate two
+## overloads of one generic name. Measured on the parent: aarch64 and riscv64 emitted both bodies
+## under one label and the assembler refused the file, while wasm emitted ONE body, called it from
+## both sites and exited 0 with the WRONG value. AGENTS.md draws the line exactly there — a trap is
+## acceptable, a wrong value is not — so the set is fenced out and each backend takes its own
+## fail-loud path instead. The x86_64 lower, which does select and mangle by signature, is unaffected.
 pub gen_call_ok := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
   gi := generic_gi(decls, src, cs, cl)
   if gi < 0 { return false }
   gd := deref(decl_get(decls, usize(gi)))
+  if generic_overload_set_count(decls, src, gd.name_start, gd.name_len, gd.mod_start, gd.mod_len) >= 2 { return false }
   cnt := decl_tparam_count(gd, src)
   lead := decl_leading_tparam_run(gd, src)
   if cnt < 1 or cnt > 3 { return false }
