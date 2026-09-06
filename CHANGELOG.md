@@ -82,6 +82,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- The unary prefixes `-` and `~` now apply to the element, field or component the source names. Both
+  took their operand at the **primary** level, so a postfix step that followed applied to the prefix's
+  RESULT: `-a[i]` parsed as `(-a)[i]`, `~a[i]` as `(~a)[i]` and `-p.b` as `(-p).b`, and the read went
+  to a frame slot instead of the array or struct. With `xs : [u64; 4] = [71, 42, 93, 55]`,
+  `-xs[1]` negated `0` where `42` was due, `~~xs[2]` answered `5` where `93` was due, and nothing said
+  so — the frame slot holds whatever that frame keeps, so the wrong answer is not reliably `0` and can
+  look entirely plausible. Grammar §3.4 gives the unary level a `postfix-expr` operand and §4 puts the
+  whole postfix family (call, index, field, UFCS, `?`) one level TIGHTER than the prefixes, so the
+  postfix chain is part of the operand. Every base was affected the same way: a fixed array, a typed
+  slice, a struct field, a tuple component and a UFCS chain. Parenthesizing the operand
+  (`-(a[i])`) was already correct and is unchanged; parenthesizing the whole expression (`(-a[i])`)
+  was **not** a rescue and now needs none. Binary operators are untouched — `~a & b` is still
+  `(~a) & b` and `-c % d` is still `(0 - c) % d` — and `not`, which the parser takes at the comparison
+  level, already reached past its postfix chain. On aarch64, riscv64 and wasm these shapes used to
+  stop loudly rather than answer wrongly; they now run correctly there too. `alatyr fmt` needed no
+  change: it already renders the prefix operand bare, and that text now re-parses to the same tree.
+
 - The one-access verification mode `unchecked a[i]` now reads the element it names. The modifier
   bound to the **base** rather than the access, so `unchecked a[i]` parsed as `(unchecked a)[i]` and
   the read went to a frame slot instead of the array: `xs : [u64; 3] = [71, 42, 93]` answered `0`
