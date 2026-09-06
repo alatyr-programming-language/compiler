@@ -411,6 +411,61 @@ run_env_sized() { # name, value-length, fill-byte, want-status
   if [ "$got" = "$4" ]; then echo "ok   $1: complete environment value across the staging boundary"; else echo "FAIL $1: got $got want $4"; fail=1; fi
 }
 
+# `std::os::env` under an EXPLICIT environment, so ordering, an `=` inside a value, an empty value and
+# an absent name are all properties of the ROW rather than of whoever runs the gate. The entries are
+# given literally, in order, after `<filler-count>` generated `ALATYR_FILL_<i>` entries of
+# `<filler-bytes>` each: that is how a row puts a SMALL value past a staging boundary without a giant
+# argv literal, and `<filler-count> 0` gives the same fixture its no-filler control. Same `env -i` and
+# own-binary discipline as `run_env_sized`.
+run_env_entries() { # name, filler-count, filler-bytes, want-status, entry…
+  src="$E2E_TEST/$1.al"
+  [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
+  bin="$T/$1.bin"
+  rm -f "$bin"
+  "$CC" -o "$bin" "$src" >/dev/null 2>&1 || { echo "FAIL $1: compile"; fail=1; return; }
+  [ -x "$bin" ] || { echo "FAIL $1: no artifact $bin"; fail=1; return; }
+  env_label="$1"; env_fill_n="$2"; env_fill_b="$3"; env_want="$4"
+  shift 4
+  env_pad="$(awk -v n="$env_fill_b" 'BEGIN { for (i = 0; i < n; i++) printf "F" }')"
+  env_argv=()
+  env_i=0
+  while [ "$env_i" -lt "$env_fill_n" ]; do
+    env_argv+=("ALATYR_FILL_$env_i=$env_pad")
+    env_i=$((env_i + 1))
+  done
+  env_argv+=("$@")
+  _e2e_exec env -i "${env_argv[@]}" "$bin" >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure "$env_label" "$got"; then return; fi
+  if [ "$got" = "$env_want" ]; then
+    echo "ok   $env_label: lookup matrix behind $env_fill_n x $env_fill_b filler bytes"
+  else
+    echo "FAIL $env_label: got $got want $env_want (filler $env_fill_n x $env_fill_b)"; fail=1
+  fi
+}
+
+# `std::os::env` must never fold an allocator failure into `None`. The row runs the fixture under
+# `env -i` with the probe variable PRESENT, so `None` would be a wrong answer about a variable that
+# exists, and asserts BOTH the exit status and the runtime DIAGNOSTIC on stderr: a bare nonzero exit
+# is also what the fixture's own "it answered None" code produces, so the status alone would accept
+# the very outcome being ruled out. The needle is a row argument and is deliberately absent from the
+# fixture's own comments.
+run_env_loud() { # name, want-status, stderr-needle
+  src="$E2E_TEST/$1.al"
+  [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
+  bin="$T/$1.bin"; errf="$T/$1.err"
+  rm -f "$bin" "$errf"
+  "$CC" -o "$bin" "$src" >/dev/null 2>&1 || { echo "FAIL $1: compile"; fail=1; return; }
+  [ -x "$bin" ] || { echo "FAIL $1: no artifact $bin"; fail=1; return; }
+  _e2e_exec env -i "ALATYR_ENV_PROBE=present" "$bin" >/dev/null 2>"$errf"; got=$?
+  if _e2e_runtime_failure "$1" "$got"; then return; fi
+  if [ "$got" != "$2" ]; then echo "FAIL $1: got $got want $2"; fail=1; return; fi
+  if grep -qF -- "$3" "$errf"; then
+    echo "ok   $1: exhausted allocator is loud [$3] and exits $got"
+  else
+    echo "FAIL $1: exit $got but stderr does not contain [$3]"; fail=1
+  fi
+}
+
 # FFI (spec 150 §FN-9, C-ABI foreign calls): link an Alatyr program `test/ffi/<name>.al` against a
 # PURE-ARITHMETIC C stub `test/ffi/<name>.c` (no libc). The C stub compiles to an object (`cc -c`);
 # the Alatyr program emits GAS ("$CC test/ffi/<name>.al" to stdout), assembles (`as`), and BOTH
@@ -6611,6 +6666,21 @@ run_cli_args cli_run_args 42
 run_cli_args_sized issue346_args_65k 65000 c 42
 run_cli_args_sized issue346_args_long 70000 x 42 tail
 run_env_sized issue348_env_long 70000 A 42
+## Issue #348 residual — the 32 KiB defect measured AT its boundary rather than only far past it.
+## `ALATYR_ENV_PROBE` is 16 bytes, so the process image is `16 + 1 + value + 1`: 32750 makes it exactly
+## 32768 (the last size the old one-shot read got right) and 32751 makes it 32769 (the first size it got
+## wrong, answering `None` for a present variable). One byte apart, one on each side.
+run_env_sized issue348_env_at_image_cap 32750 A 42
+run_env_sized issue348_env_past_image_cap 32751 A 42
+## The same lookup matrix twice: with nothing in front of the entries, and with ~40 KB of generated
+## filler in front of them, so every entry starts past the old 32 KiB read. The second row is the SMALL
+## value the old cap also lost — the entry was whole in the process image and still invisible.
+run_env_entries issue348_env_lookup_matrix 0 0 42 "ALATYR_ENV_PROBE=probe-value" "ALATYR_ENV_EQ=a=b=c" "ALATYR_ENV_EMPTY=" "ALATYR_ENV_TAIL=tail-value"
+run_env_entries issue348_env_lookup_matrix 40 1000 42 "ALATYR_ENV_PROBE=probe-value" "ALATYR_ENV_EQ=a=b=c" "ALATYR_ENV_EMPTY=" "ALATYR_ENV_TAIL=tail-value"
+## The boundary the fix MOVED: `env` is now bounded by the caller's allocator, not by a fixed cap, and
+## crossing THAT bound must stay loud. A 4096-byte arena with the variable present aborts with the
+## allocator diagnostic; answering `None` there would be the same wrong value in a new place.
+run_env_loud issue348_env_small_arena 1 "allocator out of memory"
 run_x86 os_arena_result 42
 run size_type_arg 42
 ## Types §7 — a `[T]`/`str` VIEW is its two-word pointer+length pair wherever it appears, so `size(str)`,
