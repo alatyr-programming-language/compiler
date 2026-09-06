@@ -82,6 +82,15 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- An out-of-range `bytes(s)[i]` now **traps** instead of answering with the byte that happened to
+  follow the string. `str` is `[u8]`, and every other spelling of a view byte read — `s[i]` on a
+  `str` local, `"abc"[i]` on a literal, `arr[k][j]` on a `[str; N]` element — already compared the
+  index against the view's runtime length and stopped there. `bytes(s)[i]`, the spec-canonical
+  spelling, was the one that did not: the read completed, the program exited normally, and the value
+  was whatever byte sat past the run. Inside an `unchecked` scope the check is dropped exactly as it
+  is for every other index, so code that deliberately opts out is unaffected. This is x86_64; the
+  other three backends already stop loudly on every `str` index.
+
 - The one-access verification mode `unchecked a[i]` now reads the element it names. The modifier
   bound to the **base** rather than the access, so `unchecked a[i]` parsed as `(unchecked a)[i]` and
   the read went to a frame slot instead of the array: `xs : [u64; 3] = [71, 42, 93]` answered `0`

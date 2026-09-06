@@ -18613,7 +18613,16 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         }
         emit_str_pair(bsrc, sb, cx, a, nl)
         emit_gas(idx, sb, cx, a, nl)
-        push_str(sb, "  popq %r8\n  popq %rbx\n  popq %rax\n  movzbq (%rax,%r8), %rax\n  pushq %rax\n")
+        push_str(sb, "  popq %r8\n  popq %rbx\n  popq %rax\n")
+        ## CHECKED BOUNDS (I11 §358 / CG-7) — the missing half of this arm. `bytes(s)` is a view over
+        ## the str's own {ptr, len} pair, and `emit_str_pair` has just pushed that pair, so the len
+        ## word in %rbx IS the number of readable bytes: the same `cmpq`/`jb`/`ud2` the str-LITERAL
+        ## and str-ELEMENT byte reads use applies unchanged (`jb` skips on `idx < len`, so a negative
+        ## i64 index — huge unsigned — also traps). Before this, `bytes(s)[i]` was the ONE view byte
+        ## index with no check at all: an out-of-range read ran to a normal exit carrying whatever
+        ## byte followed the run. Dropped in an `unchecked` scope like every other checked index.
+        if cx.vchk { push_str(sb, "  cmpq %rbx, %r8\n  jb 1f\n  ud2\n1:\n") }
+        push_str(sb, "  movzbq (%rax,%r8), %rax\n  pushq %rax\n")
       } else {
         emit_index_addr(base, idx, sb, cx, a, nl)
         tbread := tuple_byte_component_base(base, cx)
