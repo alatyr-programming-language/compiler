@@ -4045,6 +4045,18 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     fpval := p_place_val(pc, place)
     return snode(pc.arena, Stmt.FieldPathAssign(place, fpval, 0))
   }
+  ## `5 = 3` / `f() = 65` / `[1,2,3][0] = 65` / `bytes(s)[0] = 65` — the store target is a
+  ## VALUE-expression. Memory §1.6 is normative ("a store's left operand MUST be a place-expression;
+  ## assigning to a value-expression is ill-formed"), and Grammar §3.3 roots every `place` at an ident,
+  ## a path or `deref(…)`, so none of these is derivable as an assignment target. Refuse LOCATED at the
+  ## target rather than parse on: every continuation is a guess about code the grammar does not admit,
+  ## and the continuation this parser used to take SWALLOWED the following statement. The reject sits
+  ## in the PARSER, upstream of all four backends — x86_64, AArch64, RISC-V64 and WAT refuse the shape
+  ## identically, and `check` refuses it before any of them. Kept LAST among the assignment forms, so a
+  ## place spelling that an earlier recognizer owns never reaches it.
+  if value_assign_starts(pc) {
+    zva := reject_here(pc, "selfhost: cannot assign to a value expression - the left side of a store must be a place: a name, a field or element of one, or a pointer dereference")
+  }
   nm := cur(pc)
   ## `var.field = <cmp>` — a struct field mutation (the `.` after the ident, an ident
   ## field name, then `=`). Recorded as a `FieldAssign` (base name span + field name span).
@@ -4178,6 +4190,11 @@ stmt_starts := fn(pc : PC) -> bool {
   if index_assign_starts(pc) { return true }
   ## `geo::G = …` / `geo::TAB[i] = …` — a QUALIFIED PLACE assignment (Modules §2).
   if qual_place_assign_head(pc) != 0 { return true }
+  ## `5 = 3` / `f() = 65` / `[1,2,3][0] = 65` / `bytes(s)[0] = 65` — an assignment whose target is a
+  ## VALUE-expression. Not a place (Memory §1.6; Grammar §3.3), so it is recognized as a statement head
+  ## ONLY so that `p_stmt` can refuse it where the user wrote it. Kept LAST, after every place form
+  ## above has had its say: it fires only on a chain the place grammar cannot derive.
+  if value_assign_starts(pc) { return true }
   ## a statement starts with a NAME: an ident (kind 1) OR a contextual kw `in`/`out` used as an
   ## identifier (the p_factor dual — `in`/`out` are usable as binding names in statement position).
   if cur(pc).kind != 1 {
@@ -4257,6 +4274,151 @@ str_lit_index_assign_starts := fn(pc : PC) -> bool {
   }
   if i >= nt { return false }
   is_assign_tok(tok_at(pc, i).kind)   ## '=' / 'op=' just after the closing ']'
+}
+
+## Skip the BALANCED group that opens at token `i0` (`open`/`close` token kinds), returning the index
+## just PAST its closer, or 0 when the group never closes before the token end. The `*_assign_starts`
+## recognizers above each inline this same loop over one bracket pair; the two scanners below need it
+## over both `(`/`)` and `[`/`]`, so it is factored out here rather than written a fourth time.
+skip_group_end := fn(pc : PC, i0 : usize, open : usize, close : usize) -> usize {
+  nt := ntoks(pc)
+  mut i := i0
+  mut depth := 0
+  while i < nt {
+    k := tok_at(pc, i).kind
+    if k == open { depth = depth + 1 }
+    else if k == close {
+      depth = depth - 1
+      if depth == 0 { return i + 1 }
+    }
+    i += 1
+  }
+  0
+}
+
+## The end of the Grammar §3.3 `place` rooted at token `i0` — the index just past the longest
+## `place ::= ident | place "." ident | place "." tuple-index | place "[" expr "]" | "deref" "(" expr ")" | path`
+## derivable there — or 0 when nothing at `i0` roots a place. A place is rooted at an identifier, a
+## `::`-qualified path, or the `deref(…)` intrinsic, and nowhere else: a literal, an array constructor
+## and a CALL RESULT are all value-expressions. A `(` after any segment therefore ends the derivation
+## (`f(…)`, `a.m(…)`, `xs[i](…)` are calls), and so does a head that is not an identifier.
+place_scan_end := fn(pc : PC, i0 : usize) -> usize {
+  nt := ntoks(pc)
+  if i0 >= nt { return 0 }
+  if tok_at(pc, i0).kind != 1 { return 0 }
+  mut i := i0
+  t0 := tok_at(pc, i0)
+  is_deref := str_eq(str_at(pc.src + t0.start, t0.len), "deref")
+  mut rooted := false
+  if is_deref {
+    if tok_at(pc, i0 + 1).kind == 10 {
+      ## `deref ( expr )` — the pointer-store root (Memory §1.6's dereference place).
+      i = skip_group_end(pc, i0 + 1, 10, 11)
+      if i == 0 { return 0 }
+      rooted = true
+    }
+  }
+  if not rooted {
+    i = i + 1
+    ## `mod::name` — a qualified path root (Modules §2); the segments chain before any postfix.
+    while tok_at(pc, i).kind == 7 and tok_at(pc, i + 1).kind == 1 { i = i + 2 }
+    if tok_at(pc, i).kind == 10 { return 0 }        ## `name(…)` is a CALL, not a place
+  }
+  mut go := true
+  while go {
+    k := tok_at(pc, i).kind
+    if k == 22 {
+      kn := tok_at(pc, i + 1).kind
+      ## `.ident` (a field) or `.digits` (a tuple index) — anything else after the `.` is not a place.
+      if kn == 1 { i = i + 2 } else if kn == 3 { i = i + 2 } else { return 0 }
+      if tok_at(pc, i).kind == 10 { return 0 }      ## `.m(…)` is a CALL, not a place
+    } else if k == 14 {
+      j := skip_group_end(pc, i, 14, 15)
+      if j == 0 { return 0 }
+      i = j
+      if tok_at(pc, i).kind == 10 { return 0 }      ## `xs[i](…)` is a CALL, not a place
+    } else { go = false }
+  }
+  i
+}
+
+## The end of the POSTFIX CHAIN rooted at token `i0` — a primary (identifier or `::` path, integer,
+## float, char or string literal, a parenthesized group, an array constructor) followed by any run of
+## `.name` / `.index` / `[expr]` / `(args)` / `?` — or 0 when `i0` begins no primary. This is the value
+## grammar, not the place grammar: it is deliberately WIDER than `place_scan_end`, and the difference
+## between the two is what `value_assign_starts` reports.
+## A `(`, `[` or `?` postfix must be ADJACENT to what it applies to. The lexer emits no newline token,
+## so adjacency is the only thing separating a postfix from a FOLLOWING statement that merely opens
+## with the same glyph (`tok_adjacent`, the rule `p_field` already uses for a call postfix). Without
+## it this scanner would run off the end of its own statement and read the next one.
+postfix_scan_end := fn(pc : PC, i0 : usize) -> usize {
+  nt := ntoks(pc)
+  if i0 >= nt { return 0 }
+  k0 := tok_at(pc, i0).kind
+  mut i := i0
+  if k0 == 1 {
+    i = i + 1
+    while tok_at(pc, i).kind == 7 and tok_at(pc, i + 1).kind == 1 { i = i + 2 }
+  } else if k0 == 3 { i = i + 1 }        ## integer literal
+  else if k0 == 39 { i = i + 1 }         ## float literal
+  else if k0 == 4 { i = i + 1 }          ## string literal
+  else if k0 == 10 {                     ## a parenthesized group
+    i = skip_group_end(pc, i0, 10, 11)
+    if i == 0 { return 0 }
+  } else if k0 == 14 {                   ## an array constructor `[a, b, c]`
+    i = skip_group_end(pc, i0, 14, 15)
+    if i == 0 { return 0 }
+  } else { return 0 }
+  mut go := true
+  while go {
+    k := tok_at(pc, i).kind
+    if k == 22 {
+      kn := tok_at(pc, i + 1).kind
+      if kn == 1 { i = i + 2 } else if kn == 3 { i = i + 2 } else { go = false }
+    } else if k == 14 {
+      if tok_adjacent(pc, i) {
+        j := skip_group_end(pc, i, 14, 15)
+        if j == 0 { return 0 }
+        i = j
+      } else { go = false }
+    } else if k == 10 {
+      if tok_adjacent(pc, i) {
+        j := skip_group_end(pc, i, 10, 11)
+        if j == 0 { return 0 }
+        i = j
+      } else { go = false }
+    } else if k == 32 {
+      if tok_adjacent(pc, i) { i = i + 1 } else { go = false }
+    } else { go = false }
+  }
+  i
+}
+
+## Is the cursor an assignment whose TARGET is a VALUE-expression — `5 = 3`, `f() = 65`,
+## `[1, 2, 3][0] = 65`, `bytes(s)[0] = 65`, and their compound-operator spellings? Memory §1.6 is
+## normative: a store's left operand MUST be a place-expression, and assigning to a value-expression
+## is ill-formed. Grammar §3.3 says the same structurally — `place` is rooted at an ident, a path or
+## `deref(…)`, so a literal-, constructor- or call-rooted chain is not derivable as an assignment
+## target at all.
+##
+## The compiler did not merely mis-lower these: it built no statement for them. None of the
+## `*_assign_starts` recognizers above matches a non-ident head or a call postfix, so the line fell
+## through `stmt_starts` to the TRAILING-EXPRESSION path, where `p_factor`'s final branch assumes an
+## unrecognized token is a `(` — it consumed the `=` as an opening parenthesis, the right-hand side as
+## the parenthesized expression, and the FOLLOWING STATEMENT as the closing one. The build then
+## succeeded, the right-hand side became the function's result, and the swallowed statement never ran
+## (measured: a program that must exit 42 exited 12, rc 0, with the intervening store gone).
+##
+## Fires only where the chain is provably NOT a place: the postfix chain and the place derivation are
+## scanned separately and must DISAGREE. A genuine place form that no recognizer above supports yet
+## keeps its current handling rather than collecting this diagnostic. The scan is structural and stops
+## at the assignment token, exactly like its siblings — it never scans forward for an `=`, so a
+## legitimate statement-position call followed by a real assignment on the next line does not match.
+value_assign_starts := fn(pc : PC) -> bool {
+  j := postfix_scan_end(pc, pc.idx)
+  if j == 0 { return false }
+  if not is_assign_tok(tok_at(pc, j).kind) { return false }
+  place_scan_end(pc, pc.idx) != j
 }
 
 ## Is the cursor an array element-write statement `arr[i] = …` (vs a trailing `arr[i]` /

@@ -4321,6 +4321,33 @@ check_reject_has str_literal_elem_assign_reject "not a storage location, and its
 emit_reject_has wat str_literal_elem_assign_reject "cannot assign to an element of a string literal"
 emit_reject_has aarch64 str_literal_elem_assign_reject "cannot assign to an element of a string literal"
 emit_reject_has riscv64 str_literal_elem_assign_reject "cannot assign to an element of a string literal"
+## Issue #428 — the ROOT the row above was one leaf of. Memory §1.6: "A store's left operand MUST be a
+## place-expression; assigning to a value-expression is ill-formed", and Grammar §3.3 roots every `place`
+## at an ident, a path or `deref(…)`. An integer literal, a call result and an array constructor are none
+## of those, and each fell through `stmt_starts` to the same `p_factor` fallback — the `=` read as an
+## opening parenthesis, the right-hand side as the parenthesized expression, the NEXT STATEMENT as its
+## closer. Measured on the parent (`d18fb3f`, x86_64): `5 = 3` before a `7` exited 3, and `f() = 65`,
+## `[1,2,3][0] = 65` and `bytes(s)[0] = 65` each exited 65, all with a clean build.
+## The FIRST fixture is the swallowed-statement regression, and it is the one that says why this ranks
+## above an accepted bad program: it exited 12 where 42 was declared because the `n = 41` between the
+## bad store and the result was consumed as the closing parenthesis and never ran. The build/check
+## needles carry the module and the LINE so a reject that lost its location cannot pass; no fixture
+## header quotes either needle.
+build_reject_has value_expr_assign_num_reject "or a pointer dereference [module value_expr_assign_num_reject, at line 23"
+check_reject_has value_expr_assign_num_reject "or a pointer dereference [module value_expr_assign_num_reject, at line 23"
+emit_reject_has wat value_expr_assign_num_reject "cannot assign to a value expression"
+emit_reject_has aarch64 value_expr_assign_num_reject "cannot assign to a value expression"
+emit_reject_has riscv64 value_expr_assign_num_reject "cannot assign to a value expression"
+build_reject_has value_expr_assign_call_reject "or a pointer dereference [module value_expr_assign_call_reject, at line 15"
+check_reject_has value_expr_assign_call_reject "or a pointer dereference [module value_expr_assign_call_reject, at line 15"
+build_reject_has value_expr_assign_array_lit_reject "or a pointer dereference [module value_expr_assign_array_lit_reject, at line 12"
+check_reject_has value_expr_assign_array_lit_reject "or a pointer dereference [module value_expr_assign_array_lit_reject, at line 12"
+build_reject_has value_expr_assign_view_byte_reject "or a pointer dereference [module value_expr_assign_view_byte_reject, at line 14"
+check_reject_has value_expr_assign_view_byte_reject "or a pointer dereference [module value_expr_assign_view_byte_reject, at line 14"
+## …and the place forms the fence must NOT catch, in both the plain and the compound spelling. The
+## qualified path target rides the existing `module_global_qualified` package row.
+run value_expr_assign_place_accept 42
+check_accept value_expr_assign_place_accept
 check_accept smoke
 run early_return_result 42
 check_accept early_return_result
