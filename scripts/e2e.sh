@@ -1875,6 +1875,49 @@ issue363_chariter_public_test() {
   rm -rf "$p/target"
 }
 
+## Issue #404 / Stdlib appendix §6 + §8.5 — an external package must reach `HashMap`'s iterator
+## protocol through the public QUALIFIED `iter`/`next` surface. §6 names `iter` in the closed v1
+## surface of `HashMap(K, V)` and §8.5 makes the §6 alloc-tier types required content given an
+## allocator; Modules §3 makes the external API exactly the pub-chain-reachable one. The parent
+## rejection is recorded in the fixture; this row proves the fixed package leaves NO artifact during
+## check and runs the external consumer to 42 after build. Default build path, no `ALATYR_OSPLIT`.
+issue404_hashmap_public_test() {
+  local p="$(_fixture_tree package)/issue404_hashmap_public"
+  local err="$T/issue404_hashmap_public.check.err"
+  [ -f "$p/package.al" ] || { echo "MISS issue404_hashmap_public: no package manifest"; fail=1; return; }
+  [ -f "$p/src/main.al" ] || { echo "MISS issue404_hashmap_public: no external consumer"; fail=1; return; }
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" check package.al ) >"$T/issue404_hashmap_public.check.out" 2>"$err"
+  local rc=$?
+  if [ "$rc" != 0 ] || [ -e "$p/target" ] || [ -s "$T/issue404_hashmap_public.check.out" ] || [ -s "$err" ]; then
+    echo "FAIL issue404_hashmap_public: check rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+    return
+  fi
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" build package.al ) >"$T/issue404_hashmap_public.build.out" 2>"$T/issue404_hashmap_public.build.err"
+  rc=$?
+  local bin="$p/target/debug/issue404-hashmap-public"
+  if [ "$rc" != 0 ] || [ ! -x "$bin" ]; then
+    echo "FAIL issue404_hashmap_public: build rc=$rc artifact=$(test -x "$bin" && echo yes || echo no) diagnostic=$(cat "$T/issue404_hashmap_public.build.err" 2>/dev/null)"
+    fail=1
+    return
+  fi
+
+  _e2e_exec "$bin" >/dev/null 2>&1
+  local got=$?
+  if _e2e_runtime_failure "issue404_hashmap_public" "$got"; then return; fi
+  if [ "$got" = 42 ]; then
+    echo "ok   issue404_hashmap_public: external qualified hashmap iter/next consumer, artifact 42"
+  else
+    echo "FAIL issue404_hashmap_public: artifact exit=$got want 42"
+    fail=1
+  fi
+  rm -rf "$p/target"
+}
+
 # a flat single-file package may define its own default `_start` directly in
 # `package.al` when no source modules are present. The manifest binding is inert source data; the
 # user-defined `_start` must remain the ELF entry and must not be replaced by a `main__main` wrapper.
@@ -5170,6 +5213,7 @@ tool17_target_code_size_test
 tool17_declaration_target_when_test
 tool17_prelude_visibility_test
 issue363_chariter_public_test
+issue404_hashmap_public_test
 ext_test package_cli_test
 ## The toolchain-spawn regression (scripts/env_size_test.sh). An environment too large for one read used
 ## to truncate mid-entry, after which `build_envp` wrote its terminating word 8 bytes PAST its reservation
@@ -6685,6 +6729,19 @@ run iter_for_split 42
 # user's declarations once the base names are published. Cross-target rows follow from `run`.
 run issue363_qualified_char_protocol 42
 run issue363_str_protocol_shadow_control 42
+# Issue #404 / Stdlib appendix §6 + §8.5 + §2.4 + Modules §3 — the same shape on the alloc tier: §6
+# names `iter` in `HashMap(K, V)`'s CLOSED v1 surface and §8.5 makes the §6 types required content
+# given an allocator, but only the map-ENTRY `iter` was `pub`. The protocol identity `iter` and `next`
+# were private, so the visibility test rejected even the published entry point (#403's "any candidate"
+# rule): the parent answered `check: invalid` at the qualified `alloc::hashmap::iter` line. The first
+# row walks an EMPTY map, a one-entry map to exhaustion and a three-entry map with each key checked on
+# its own, and exercises BOTH `iter` overloads at different instantiations (#404 criterion 4). The
+# second row is a CONTROL that is green on the parent too — a user's own `iter`/`next`/`Entry` and the
+# `for` desugar must still resolve to the user's declarations once the base names are published.
+# Cross-target rows follow from `run`; the non-x86 backends refuse the raw-syscall arena, as they
+# already do for `ambient_hashmap`.
+run issue404_qualified_hashmap_protocol 42
+run issue404_hashmap_protocol_shadow_control 42
 # Issue #451 / Stdlib appendix §3.5 + §3.6 + Memory §4.1 — a field read through a `ptr(str)`
 # PARAMETER is an ordinary read through the pointer. The parent answered ZERO for EVERY field
 # (`deref(q).len` lowered to a literal `movq $0`; the bound `ss := deref(q)` copied one word so

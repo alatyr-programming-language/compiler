@@ -82,6 +82,20 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- The **iterator protocol of `HashMap`** is now reachable through its **qualified** path from outside
+  the standard library. Stdlib appendix §6 names `iter` in the closed v1 surface of `HashMap(K, V)`
+  and §8.5 makes the §6 alloc-tier types required content given an allocator, with §2.4 fixing the
+  protocol as `iter`/`next`; but only the map-**entry** `iter` carried `pub`. The protocol identity
+  `iter` and `next` did not, so `alloc::hashmap::iter(u64, u64, ptr(m), a)` — the already-published
+  entry point itself — was rejected with `check: invalid`, because the visibility test reports a
+  violation when any same-name, same-module declaration is invisible rather than when every candidate
+  is. Publishing those two — the only two markers in this change — makes the §6 surface reachable as
+  Modules §3 requires. Nothing changes about the map's or the iterator's representation, or about
+  iteration semantics, and no call site resolves differently: a program that declares its own `iter`,
+  `next` or `Entry` still gets its own, including through `for`. The compiler's own emitted assembly
+  is byte-identical. `SplitIter`'s half of the same defect class is not included: the pinned
+  specification does not mention `split` at all, and its qualified path is blocked by #455.
+
 - On the **WASM** backend, comparing a struct's **enum-typed field** no longer answers a value that
   matches no variant. Types §6 makes `h.t` read back as the enum the field holds, and §8 delivers an
   enum by reference: on wasm a struct's enum field holds a pointer to the `{disc, payload…}` block,
