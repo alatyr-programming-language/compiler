@@ -608,13 +608,13 @@ split_piece := fn(it : SplitIter, a : usize, b : usize) -> str {
 
 ## A `SplitIter` **is** the iterator — the Iterator protocol's `iter` (identity).
 ## Returns a constructor copy (a non-place aggregate), not the place `it`.
-iter := fn(it : SplitIter) -> SplitIter {
+pub iter := fn(it : SplitIter) -> SplitIter {
   SplitIter(ptr = it.ptr, len = it.len, sep = it.sep, pos = it.pos, done = it.done)
 }
 
 ## The next piece (the bytes up to the next separator, or the remainder), then
 ## advance past the separator; `None` once the last piece has been yielded.
-next := fn(in out it : SplitIter) -> Option(str) {
+pub next := fn(in out it : SplitIter) -> Option(str) {
   if it.done {
     return Option(str).None
   }

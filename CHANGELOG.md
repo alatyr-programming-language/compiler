@@ -82,6 +82,19 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- The **code-point iterator** of `str` is now reachable through its **qualified** path from outside
+  the standard library. Stdlib appendix §3.6 lists `chars(in self) -> CharIter` as an Iterator (§2.4),
+  and §2.4 makes the returned type usable through `iter`/`next`; those two `CharIter` overloads were
+  already `pub`, but `base::str::iter(cursor)` and `base::str::next(cursor)` were still rejected with
+  `check: invalid`. The cause was the **other** pair of overloads of the same two names in the same
+  module: `SplitIter`'s `iter`/`next` were private, and the visibility test reports a violation when
+  any same-name, same-module declaration is invisible rather than when every candidate is. Publishing
+  the `SplitIter` protocol pair — the only two markers in this change — makes the §3.6 surface
+  reachable as Modules §3 requires. Nothing changes about representation, decoding or iteration
+  semantics, and no call site resolves differently: a program that declares its own `iter`, `next` or
+  `split` still gets its own, including through `for`. The compiler's own emitted assembly is
+  byte-identical.
+
 - A single-file program that reaches the ambient allocator by its **bare names** now gets the base
   prelude. The shipped stdlib is injected by scanning the source text, and the only text that pulled
   the allocator surface was the bare name of the fallible-result type. Control Flow §5.2 makes a bare

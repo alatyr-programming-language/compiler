@@ -6581,6 +6581,16 @@ run chariter_valid_utf8 42
 # end, so every back end inherits it.
 run iter_for_chars 42
 run iter_for_split 42
+# Issue #363 / Stdlib appendix §3.6 + §2.4 + Modules §3 — the code-point iterator's protocol must be
+# reachable through the QUALIFIED path from an unrelated module, not only through the unqualified
+# spelling #403 shows never applies a `pub` test. The parent published the `CharIter` overloads of
+# `iter`/`next` but kept the `SplitIter` overloads of the same two names private, and the visibility
+# test reports a violation when ANY same-name, same-module candidate is invisible: the parent rejected
+# `base::str::iter(cursor)` with `check: invalid`. The second row is a CONTROL that is green on the
+# parent too — a user's own `iter`/`next`/`split` and the `for` desugar must still resolve to the
+# user's declarations once the base names are published. Cross-target rows follow from `run`.
+run issue363_qualified_char_protocol 42
+run issue363_str_protocol_shadow_control 42
 # A `next` this desugar cannot call (a GENERIC `next(K : type, …)`, `alloc::hashmap::HashMapIter`)
 # must be REFUSED, never walked as a slice: the parent built it and ran the body zero times.
 build_reject_has reject_for_generic_iter_next "carries no type arguments"
