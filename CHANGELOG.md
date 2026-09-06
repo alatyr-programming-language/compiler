@@ -82,6 +82,17 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- `alatyr fmt` no longer **deletes the target type** of a `bitcast` it cannot see in the tree.
+  `bitcast(T, v)` is the identity on the block whenever `T` is a word-sized scalar, `str`, `type`, or
+  a pointer over one of those, so the parser drops the node and every back end stays on the identity
+  path — but the formatter reads the same tree, and with no node to read it wrote
+  `unchecked bitcast(usize, n)` back to your file as `unchecked (n)`, at exit 0. Tooling §4.3 makes
+  `fmt` semantics-preserving and the written target is what types a bare binding, so this quietly
+  replaced a conversion with whatever type the operand happened to have; formatting this compiler's
+  own sources rewrote about 1 100 such casts. The target span now survives beside the AST and comes
+  back verbatim in every position — argument, operand, initializer, postfix base — including two
+  erased levels on one expression, and the `unchecked` marker is recovered from the source rather
+  than invented. What the compiler emits is unchanged: recording is on only for `fmt`.
 - An **expression-form `match` in tail position** over an enum **place** now selects the right arm.
   Control Flow §5.3 makes `match` one expression with one meaning, but the tail-value route resolved
   only two kinds of scrutinee — a plain enum local and a mutable enum global — and sent every other

@@ -1859,6 +1859,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         if sawptr and ppl != 0 and not scalar_or_str_name(pc.src, pps, ppl) {
           return newnode(pc.arena, Expr.Bitcast(bv, tgt_s, tgt_e - tgt_s))
         }
+        ## IDENTITY-ERASED: every remaining target (a word-sized bare scalar, `str`, `type`, or a
+        ## `ptr(…)` over one of those) lowers to the value itself, so no node is built — and the target
+        ## the author wrote would vanish from the tree entirely. `alatyr fmt` reads the same tree and
+        ## rewrote `unchecked bitcast(usize, n)` as `unchecked (n)`; retain the COMPLETE target span in
+        ## the shared side table so fmt can re-emit it verbatim (`ast::bitcast_erasure_mark`, which is
+        ## a single branch unless the fmt driver turned recording on — the build path records nothing
+        ## and the emitted tree is unchanged).
+        ast::bitcast_erasure_mark(bv, tgt_s, tgt_e - tgt_s)
         return bv
       }
       ## `<width>(v)` — a primitive scalar CONVERSION (`usize(i)`, `i64(n)`, `u8(b)`, `f64(i)`, …).

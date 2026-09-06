@@ -5139,6 +5139,13 @@ fmt_test_has fmt_alloc_attr 42 "@alloc(ar) h := P(x = 30, y = 2)"
 fmt_test_has fmt_qualified_tryable 42 "Result(usize, ser::SerError).Ok(0)"
 fmt_test_has_all fmt_qualified_return 42 "alloc::strbuf::StrBuf" "return tail() + 2"
 fmt_test_has fmt_bitcast_targets 42 "y := bitcast(B, x)"
+## The targets the parser IDENTITY-ERASES have no node at all, so `run(fmt(x)) == run(x)` and
+## idempotence are both satisfied by DELETING them -- fmt rendered `unchecked bitcast(usize, n)` as
+## `unchecked (n)` and every arbiter stayed green (issue #397). Only the emitted spelling can see it,
+## so all four recovery paths are needles: an argument-position word-scalar target, two erased levels
+## on one node, a pointer over a word-sized pointee, and a `str` target whose ABSENT `unchecked`
+## marker must not be invented.
+fmt_test_has_all fmt_erased_bitcast_target 42 "arg := sink(unchecked bitcast(usize, neg1))" "wide := unchecked bitcast(u64, bitcast(usize, neg1))" "word := unchecked bitcast(ptr(usize), addr)" "text := bitcast(str, \"ok\")"
 fmt_test_has fmt_test_decl 42 "@test(\"a test with no return type at all\")"
 fmt_test_has fmt_comptime_param 42 "fn(comptime N : u64, a : w(N)"
 fmt_test_has fmt_compfor_typeinfo_arg 42 "comptime for f in typeinfo(B).fields"

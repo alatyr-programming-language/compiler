@@ -829,3 +829,89 @@ pub ecallee_is := fn(k : usize) -> bool {
   }
   false
 }
+
+## ── IDENTITY-ERASED `bitcast` TARGET SPANS ───────────────────────────────────────────────────────
+## `p_factor`'s `bitcast` branch DROPS the node whenever the target needs nothing of the lowerers that
+## the value alone does not already give them — a word-sized bare scalar (`usize`, `i64`, …), `str`,
+## `type`, or a `ptr(…)` whose pointee is one of those. It returns the VALUE expression itself, so the
+## target the author WROTE leaves no trace in the tree. That erasure is deliberate and every back end
+## depends on it (the compiler's own ~1 700 bitcasts stay on the identity path, fixpoint-neutral).
+##
+## `alatyr fmt` is a THIRD consumer of the same tree, and re-emitting the value alone rewrote
+## `unchecked bitcast(usize, n)` as `unchecked (n)` — with exit 0, over the author's own file. That is
+## not a cosmetic loss: the written target is what types a bare binding, so `a := bitcast(usize, n)`
+## and `a := n` differ for a signed `n` wherever the checker is not lenient. Tooling §4.3/§4.3.4 make
+## `fmt` semantics-preserving, so the target span is retained HERE, beside the control-label side
+## table above and for the same reason: no pass that only needs the value sees a new node or a new
+## enum field, while fmt can recover the exact spelling.
+##
+## Recording is OFF until `bitcast_erasure_begin` turns it on, and ONLY `driver::compile_file_fmt`
+## does — once before each of its two parses, which also clears the previous pass's entries (the AST
+## arena is rewound between them, so pass 2 reuses pass 1's node addresses). A BUILD therefore marks
+## nothing, pays one branch per erasure, and cannot overflow the table.
+##
+## Keyed by the returned node's ADDRESS (a source offset would not do: the node carries none, which is
+## the whole defect) through a direct-mapped table with linear probing, so the per-expression lookup
+## fmt owes on every render is a hash and a compare rather than a scan. A NESTED erasure
+## (`bitcast(A, bitcast(B, v))` marks the same node twice, inner first) keeps BOTH through `prev`, so
+## fmt re-emits the complete stack outermost-first instead of silently dropping a level.
+mut BCE_SLOT : [usize; 4096] = [0; 4096]   ## hash slot -> entry index + 1 (0 = empty)
+mut BCE_NODE : [usize; 2048] = [0; 2048]   ## entry -> the marked node's address
+mut BCE_TS : [usize; 2048] = [0; 2048]     ## entry -> target-type span start
+mut BCE_TN : [usize; 2048] = [0; 2048]     ## entry -> target-type span length
+mut BCE_PREV : [usize; 2048] = [0; 2048]   ## entry -> index + 1 of an INNER erasure on the same node
+mut BCE_USED := 0
+mut BCE_ON := 0
+
+## The slot for key `k`: its home, or the first free/matching slot after it. Terminates because the
+## table has twice as many slots as `bitcast_erasure_mark` will ever fill entries, so a free slot
+## always exists. Node addresses are 8-byte aligned, so the low three bits carry nothing.
+bce_slot_of := fn(k : usize) -> usize {
+  mut h := (k / 8) % 4096
+  mut probing := true
+  while probing {
+    e := BCE_SLOT[h]
+    if e == 0 { probing = false }
+    else if BCE_NODE[e - 1] == k { probing = false }
+    else { h = (h + 1) % 4096 }
+  }
+  h
+}
+
+## Start recording erased `bitcast` targets, discarding anything a previous parse recorded.
+pub bitcast_erasure_begin := fn() {
+  mut i := 0
+  while i < 4096 { BCE_SLOT[i] = 0 ; i = i + 1 }
+  BCE_USED = 0
+  BCE_ON = 1
+}
+
+## Record that the node at `p` was written as `bitcast(<src[s .. s+n]>, …)` and lost that target.
+pub bitcast_erasure_mark := fn(p : ptr(Expr), s : usize, n : usize) {
+  if BCE_ON == 0 { return }
+  k := unchecked bitcast(usize, p)
+  if k == 0 { return }
+  if n == 0 { return }
+  if BCE_USED >= 2048 { panic("selfhost: fmt - too many identity-erased bitcast targets (limit 2048)") }
+  h := bce_slot_of(k)
+  idx := BCE_USED
+  BCE_NODE[idx] = k
+  BCE_TS[idx] = s
+  BCE_TN[idx] = n
+  BCE_PREV[idx] = BCE_SLOT[h]
+  BCE_SLOT[h] = idx + 1
+  BCE_USED = idx + 1
+}
+
+## The OUTERMOST erased-bitcast entry recorded for the node at `p`, as an index + 1 (0 = none).
+pub bitcast_erasure_at := fn(p : ptr(Expr)) -> usize {
+  if BCE_USED == 0 { return 0 }
+  k := unchecked bitcast(usize, p)
+  if k == 0 { return 0 }
+  BCE_SLOT[bce_slot_of(k)]
+}
+
+pub bitcast_erasure_start := fn(e : usize) -> usize { BCE_TS[e - 1] }
+pub bitcast_erasure_len := fn(e : usize) -> usize { BCE_TN[e - 1] }
+## The next erasure INWARD on the same node (0 = none): `bitcast(A, bitcast(B, v))` yields A then B.
+pub bitcast_erasure_prev := fn(e : usize) -> usize { BCE_PREV[e - 1] }
