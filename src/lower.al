@@ -20110,6 +20110,77 @@ emit_union_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
   }
 }
 
+## ISSUE #461 — deliver a NON-LITERAL enum VALUE's complete `{disc, payload…}` block into the frame
+## block whose word 0 is slot `base`. `emit_enum_assign` below matches only `Expr::EnumLit`, and its
+## `_ => {}` arm emitted NO INSTRUCTION AT ALL, so every destination that asked it to write a
+## non-literal enum kept the words it already held: `mut h := Holder(t = Tag.Red) ; h.t = v` read back
+## **Red** on x86_64 — the reference backend — for `v` an enum PARAM and for `v` an enum LOCAL alike,
+## and an enum-VAR element of an array literal (`emit_array_assign`'s `ek == 3` arm) was dropped the
+## same way. That is a DROPPED STORE, and it is a different mechanism from issue #448 / PR #460, where
+## the non-x86 backends did store but stored the §8 by-reference block POINTER as if it were the
+## discriminant.
+## Two source shapes have their words addressable at this point, and they are exactly the two the enum
+## PAYLOAD writers below already know how to move:
+##   * an enum PLACE (`ek == 3`) — §8 piece 3 passes an enum BY REFERENCE, so a PARAM's slot holds a
+##     POINTER to the caller's block and word j is read through it, while a LOCAL's slot IS the block
+##     and word j is frame word j;
+##   * an enum-returning CALL, whose `1 + payload` words arrive in the return registers
+##     (`emit_enum_value` + `emit_retreg`, the same convention the enum-call PAYLOAD arm uses).
+## Word j of the destination lives at `-(base - j + 1) * 8(%rbp)` — §4 UP-GROWING, the address
+## `emit_repr_tag_store` writes word 0 to — so calling this with the payload base `base - 1 - i`
+## reproduces the payload arms' own `-(base - i - j) * 8` byte-for-byte.
+## A NICHE-FOLDED `Option(ptr(T))` and a RAW UNION are excluded: both have a width this `1 + arity`
+## count does not describe (one folded word; no discriminant word), and both already have their own
+## writer (`emit_folded_option_assign` / `emit_union_assign`). Any other value kind emits nothing, so
+## no shape that reaches here today turns into a new rejection.
+emit_enum_place_words_at := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  vai := var_agg_info(v, cx.slots, cx.src)
+  if vai.ek == 3 {
+    if is_niche_folded(cx.src, vai.s, vai.n) { return }
+    if is_union_decl(cx.decls, cx.src, vai.s, vai.n) { return }
+    pwv := 1 + enum_inst_words(cx.decls, cx.src, vai.s, vai.n, deref(cx.mar))
+    vn := var_name_span(v)
+    vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
+    if vent.is_ref {
+      ## A by-reference enum PARAM slot holds the pointer to word 0; load each pointee word before
+      ## writing the destination, the same shape the enum payload and struct payload paths use.
+      push_str(sb, "  movq -")
+      push_int(sb, i64((vent.off + 1) * 8))
+      push_str(sb, "(%rbp), %r11\n")
+      for j in 0..pwv {
+        push_str(sb, "  movq ")
+        push_int(sb, i64(j * 8))
+        push_str(sb, "(%r11), %rax\n  movq %rax, -")
+        push_int(sb, (base - i64(j) + 1) * 8)
+        push_str(sb, "(%rbp)\n")
+      }
+    } else {
+      for j in 0..pwv {
+        push_str(sb, "  movq -")
+        push_frame_word(sb, vent.off, j)
+        push_str(sb, "(%rbp), %rax\n  movq %rax, -")
+        push_int(sb, (base - i64(j) + 1) * 8)
+        push_str(sb, "(%rbp)\n")
+      }
+    }
+    return
+  }
+  if enum_ret_call_d(v, cx.decls, cx.src, a) {
+    ces := call_ret_enum_span_d(v, cx.decls, cx.src, a)
+    if ces.n == 0 { return }
+    cew := 1 + enum_inst_words(cx.decls, cx.src, ces.s, ces.n, a)
+    if cew > 7 { return }
+    emit_enum_value(v, sb, cx, a, nl)
+    for j in 0..cew {
+      push_str(sb, "  movq ")
+      emit_retreg(sb, j)
+      push_str(sb, ", -")
+      push_int(sb, (base - i64(j) + 1) * 8)
+      push_str(sb, "(%rbp)\n")
+    }
+  }
+}
+
 emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(v) {
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
@@ -20184,14 +20255,10 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
           if ces.n == 0 { panic("selfhost: an enum CALL payload has no resolvable return type") }
           cew := 1 + enum_inst_words(cx.decls, cx.src, ces.s, ces.n, a)
           if cew > 7 { panic("selfhost: an enum CALL payload wider than 7 words needs the nested SRET path") }
-          emit_enum_value(ga.e, sb, cx, a, nl)
-          for j in 0..cew {
-            push_str(sb, "  movq ")
-            emit_retreg(sb, j)
-            push_str(sb, ", -")
-            push_int(sb, (base - i - i64(j)) * 8)
-            push_str(sb, "(%rbp)\n")
-          }
+          ## ISSUE #461: the register→frame store is `emit_enum_place_words_at`'s call arm, at the
+          ## payload base `base - 1 - i` (its `-(base' - j + 1) * 8` is this arm's `-(base - i - j) * 8`).
+          ## The two width panics stay HERE: they are this payload's contract, not the shared writer's.
+          emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
           i += i64(cew)
         } else if var_agg_info(ga.e, cx.slots, cx.src).ek == 2 and struct_words(cx.decls, cx.src, var_agg_info(ga.e, cx.slots, cx.src).s, var_agg_info(ga.e, cx.slots, cx.src).n, deref(cx.mar)) > 1 {
           ## a MULTI-WORD struct VAR payload (`Some(q)` with q a struct LOCAL / by-ref param) — store ALL
@@ -20229,32 +20296,11 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
           ## A MULTI-WORD ENUM VAR payload (`Some(r)` with r an enum LOCAL/PARAM) — copy the complete
           ## inner `[disc, payload…]` block into the outer payload. This is the storage dual of the
           ## enum-returning-call path and the enum-literal recursion above.
+          ## ISSUE #461: the by-ref / frame word copy is `emit_enum_place_words_at`'s place arm, at the
+          ## payload base `base - 1 - i`; the emitted text is byte-identical to the loops that were here.
           vai := var_agg_info(ga.e, cx.slots, cx.src)
           pwv := 1 + enum_inst_words(cx.decls, cx.src, vai.s, vai.n, deref(cx.mar))
-          vn := var_name_span(ga.e)
-          vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-          if vent.is_ref {
-            ## A by-reference enum PARAM slot holds the pointer to word 0; load each pointee word
-            ## before writing the destination, matching the enum return and struct payload paths.
-            push_str(sb, "  movq -")
-            push_int(sb, i64((vent.off + 1) * 8))
-            push_str(sb, "(%rbp), %r11\n")
-            for j in 0..pwv {
-              push_str(sb, "  movq ")
-              push_int(sb, i64(j * 8))
-              push_str(sb, "(%r11), %rax\n  movq %rax, -")
-              push_int(sb, (base - i - i64(j)) * 8)
-              push_str(sb, "(%rbp)\n")
-            }
-          } else {
-            for j in 0..pwv {
-              push_str(sb, "  movq -")
-              push_frame_word(sb, vent.off, j)
-              push_str(sb, "(%rbp), %rax\n  movq %rax, -")
-              push_int(sb, (base - i - i64(j)) * 8)
-              push_str(sb, "(%rbp)\n")
-            }
-          }
+          emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
           i += i64(pwv)
         } else {
           emit_gas(ga.e, sb, cx, a, nl)
@@ -20266,7 +20312,11 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
         g = ga.next
       }
     }
-    _ => {}
+    ## ISSUE #461: NOT an `EnumLit`. This arm emitted nothing, which made `h.t = v` (an enum PARAM or
+    ## LOCAL `v`) and an enum-VAR array-literal element into SILENT DROPPED STORES on x86_64. Write the
+    ## value's complete `{disc, payload…}` block when its words are addressable; any other value kind
+    ## still emits nothing, exactly as before.
+    _ => { emit_enum_place_words_at(v, base, sb, cx, a, nl) }
   }
 }
 

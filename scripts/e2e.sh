@@ -6707,6 +6707,21 @@ run_x86 issue448_enum_local_match_loud 42
 run_a64 issue448_enum_local_match_loud 133
 run_rv64 issue448_enum_local_match_loud 133
 run_wat issue448_enum_local_match_loud 134
+## issue #461 — the ASSIGNMENT spelling of the same field: `mut h := Holder(t = Tag.Red) ; h.t = v`.
+## Here x86_64 itself was wrong, and by a DIFFERENT mechanism from #448: `emit_enum_assign` matched only
+## an `EnumLit`, so its wildcard arm emitted NO INSTRUCTION and the store was DROPPED — every later read
+## saw the variant the struct literal had written. Nothing was refused and nothing trapped. The fixture
+## gives each observable its own code (51 stale / 52 a third variant / 53 no variant / 54 a clobbered
+## following field / 65 a lost payload word / 81-84 a broken control), so the number names the half that
+## failed rather than just "not 42". Parent bd6f5fc exits 51 on x86_64; this tree exits 42.
+run_x86 issue461_enum_field_assign 42
+## issue #461 CONTROL — aarch64 and riscv64 have no lowering for the field-ASSIGNMENT shape and must STAY
+## fail-loud. 133 is 128 + SIGTRAP, asserted as the EXACT status: a wildcard landing in a nonzero arm
+## would satisfy a nonzero-exit check and hide exactly the class this fixture exists to catch. No `run_wat`
+## row: wasm answers 53 here because its enum-field READ is issue #449, and a gate row would bless that
+## wrong value — the corpus manifest records the wasm column instead.
+run_a64 issue461_enum_field_assign 133
+run_rv64 issue461_enum_field_assign 133
 run tuple_enum_component 42
 run nested_enum_struct_enum 42
 run enum_array_struct_payload 42
