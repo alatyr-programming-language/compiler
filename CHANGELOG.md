@@ -82,6 +82,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.0 — 2026-09-07
+
 - An out-of-range `bytes(s)[i]` now **traps** instead of answering with the byte that happened to
   follow the string. `str` is `[u8]`, and every other spelling of a view byte read — `s[i]` on a
   `str` local, `"abc"[i]` on a literal, `arr[k][j]` on a `[str; N]` element — already compared the

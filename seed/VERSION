@@ -37,13 +37,13 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: 01aef87ee1ca35b893edbe37559a2d926b7be6a932dcedebc085f740c69812cd
-current-seed-version: 0.1.0
+current-seed-sha256: 8bebf32afb8cc276a5be6a00fd1e471e345b33667d0bbc7908f3ddbe5d18d74d
+current-seed-version: 0.2.0
 #
-# Promoted:      2026-08-27 (the follow-up promotion; see the last entry in this file)
+# Promoted:      2026-09-07 (see the last entry in this file)
 # Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
-# GAS at promotion: 1082427 lines
-# GAS SHA-256:   40af11b885aa3b3a2a50fe551ed6536e8b6d518fcc93ff98ef6f72c9e954d45b
+# GAS at promotion: 1205397 lines
+# GAS SHA-256:   7ec0b50b257d0b4715cbfbfa138ca6be1ee350bf7d2392daa527ba7c0c0e8339
 #
 # `current-seed-version` is the `version` field of `package.al` at the moment of the promotion, and by
 # the versioning order in CHANGELOG.md the two must agree at all times: the version moves ON a
@@ -1226,3 +1226,39 @@ current-seed-version: 0.1.0
 # `seed/alatyr` is Stage2. Full gate: e2e 1893/1893 with 2652 assertions; corpus 6832/6832;
 # formatter 1708 programs + 69 modules; idiom findings=55, baseline=69, new=0; sweeps clean:
 # a64 265/310/113, rv64 254/321/113, wasm 280/400/8 (match/trap/reject), missing=0.
+
+# Self-promoted 2026-09-07 — an out-of-range `bytes(s)[i]` traps instead of answering the byte that
+# happened to follow the string (#416). `str` is `[u8]`, and every other spelling of a view byte read
+# already compared the index against the view's runtime length; `bytes(s)[i]`, the spec-canonical
+# spelling, was the one that did not, so the read completed and the program exited normally with
+# whatever byte sat past the run. Inside an `unchecked` scope the check is dropped exactly as it is for
+# every other index.
+# The old seed emitted 1202109 GAS lines; Stage1 == Stage2 == Stage3 emitted byte-identical GAS at
+# 1205397 lines.
+# The normalized seed->Stage1 delta is the cleanest a reseed on this tree has produced: 822 hunks,
+# 3288 lines ADDED and ZERO removed — exactly four lines per hunk, and exactly four distinct line
+# shapes across all of them (`cmpq %rbx, %rN`, `jb Nf`, `udN`, and the local label). Every insertion
+# sits immediately before a `movzbq (%rax,%rN), %rax` byte load, preceded by the index into a register,
+# the length popped into %rbx and the pointer into %rax — i.e. all 822 are the same bounds check on the
+# same shape, and nothing else in the compiler's emission moved. No line was changed and none removed,
+# so there is no reordering, no register-allocation drift and no frame-layout change to review.
+# For contrast, the 2026-08-27 promotion's delta was 3552 hunks with 5428 added and 4663 deleted across
+# eleven modules.
+# Stage1 == Stage2 == Stage3 GAS SHA-256:
+# 7ec0b50b257d0b4715cbfbfa138ca6be1ee350bf7d2392daa527ba7c0c0e8339.
+# Stage1 binary SHA-256: 8d108687c4c4c8fc85ca37f737bb99d2a31246f2e3b487048edae7da5e892bea.
+# Stage2 == Stage3 binary SHA-256:
+# 8bebf32afb8cc276a5be6a00fd1e471e345b33667d0bbc7908f3ddbe5d18d74d.
+# Promoted `seed/alatyr` is Stage2 — the only one of the three that reproduces itself, since Stage1 is
+# assembled from the stale seed's emission. (The prose in this file's header, in
+# `.agents/skills/alatyr-integrate/SKILL.md` and in `scripts/fixpoint.sh`'s recovery message all say
+# Stage1, contradicting this file's own dated entries and that skill's five-file table; issue #436
+# records the contradiction and the measurement that settles it.)
+# Version moves 0.1.0 -> 0.2.0. MINOR rather than PATCH by CHANGELOG.md's versioning order: the 127
+# entries released here include new surface, not only defect fixes — HashMap's iterator protocol and
+# `base::str`'s `chars`/`iter`/`next` became reachable through a qualified path, `--verbose`/`-v` and
+# `--quiet`/`-q` appeared, `Kind.shared_lib` targets build a `lib<base>.so`, WAT gained labeled
+# `continue name`, AArch64 gained nested field access through struct-array locals, and `HashMap(str, V)`
+# and a parenthesized generic `bitcast` target now compile. The newly refused programs are all ones the
+# specification declares invalid, which that order calls a PATCH and not a break. The specification pin
+# (1.0.0 plus post-tag commits to b4e7979) did not move.

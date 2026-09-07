@@ -67,7 +67,7 @@ run_help_version() {
       help_ok=0
     fi
   done
-  printf 'alatyr 0.1.0\n' >"$want"
+  printf 'alatyr 0.2.0\n' >"$want"
   version_ok=1
   for arg in --version -V version; do
     (cd "$tmp" && "$CC" "$arg") >"$out" 2>"$err"
