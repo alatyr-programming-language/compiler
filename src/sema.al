@@ -37,7 +37,7 @@ stmt_label_span := ast::stmt_label_span
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
 ## does not depend on sema → no import cycle. (`struct_decl_of`/`base_type_name`/`brand_underlying` added
 ## for the is-KIND + field-COUNT fold — they classify the resolved type exactly as the lower's own fold.)
-(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc) := lower_layout
+(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc, is_union_decl) := lower_layout
 ## §8 `@repr(T)` tag-type primitives (shared with `lower::validate_repr`) for the LOCATED @repr reject:
 ## sema classifies an enum's `@repr(T)` tag exactly as the build's `validate_repr` does (same span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
@@ -161,6 +161,27 @@ same_scope_redecl_err := fn(s : usize) -> CheckErr { SAME_SCOPE_REDECL_DIAG_MARK
 ## moves and every other decoded CheckErr range stays byte-identical.
 STR_ELEM_WRITE_DIAG_MARKER := 6898000000000000000
 str_elem_write_err := fn(s : usize) -> CheckErr { STR_ELEM_WRITE_DIAG_MARKER + s * 4 }
+## Issue #513 / Types §9.4 — an ENUM-VARIANT CONSTRUCTOR whose component count differs from the count
+## the variant DECLARES. §9.4's first bullet says the language "never zeroes an uninitialized binding
+## on the programmer's behalf", so an omitted component has NO defined value, and a surplus component
+## has no place in the payload; either spelling is an ill-formed program. That is a TARGET-INDEPENDENT
+## rule, so it belongs in `check` — one refusal for all four backends — not in a backend fence.
+## The payload uses 1024-wide slots so ONE word carries everything both renderers need to NAME the
+## variant and its expected count: the low 5 bits are the SUPPLIED count, the next 5 the DECLARED
+## count (each clamped to ENUM_VARIANT_ARITY_COUNT_CAP), and the rest the VARIANT NAME's source
+## offset (the renderer reads the identifier back out of the source buffer, exactly as the
+## manifest-value class already reads `Package`/`Target`). Keep the class between the
+## str-element-store and qualified-private-constant windows so only the former's upper bound moves
+## and every other decoded CheckErr range stays byte-identical.
+ENUM_VARIANT_ARITY_DIAG_MARKER := 6899000000000000000
+ENUM_VARIANT_ARITY_COUNT_CAP := 31
+enum_variant_arity_err := fn(s : usize, declared : usize, supplied : usize) -> CheckErr {
+  mut dcl := declared
+  mut sup := supplied
+  if dcl > ENUM_VARIANT_ARITY_COUNT_CAP { dcl = ENUM_VARIANT_ARITY_COUNT_CAP }
+  if sup > ENUM_VARIANT_ARITY_COUNT_CAP { sup = ENUM_VARIANT_ARITY_COUNT_CAP }
+  ENUM_VARIANT_ARITY_DIAG_MARKER + s * 1024 + dcl * 32 + sup
+}
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -2688,11 +2709,15 @@ sema_size_bool_niche_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
 ## variant-name validation on the bootstrap-safe pre-match path: the large `check_expr` match can skip
 ## payload-heavy `EnumLit` arms under the frozen seed, but a known enum with an unknown variant must never
 ## fall through to the lower as a `-1` discriminant.
-EnumParts := struct { is_enum : bool, es : usize, el : usize, vs : usize, vl : usize }
+## `np` is the SUPPLIED component count the parser recorded for this constructor — `E.V(a, b)` is 2,
+## `E.V()` and the parenthesis-less nullary spelling `E.V` are both 0. It is carried here (Issue #513)
+## so the variant-ARITY rule is judged on the same bootstrap-safe accessor as the variant-NAME rule,
+## rather than on a second `EnumLit` match that the frozen seed may skip for a payload-heavy node.
+EnumParts := struct { is_enum : bool, es : usize, el : usize, vs : usize, vl : usize, np : usize }
 expr_enum_parts := fn(e : ptr(Expr)) -> EnumParts {
   match deref(e) {
-    Expr::EnumLit(es, el, vs, vl, np, ah) => { EnumParts(is_enum = true, es = es, el = el, vs = vs, vl = vl) }
-    _ => { EnumParts(is_enum = false, es = 0, el = 0, vs = 0, vl = 0) }
+    Expr::EnumLit(es, el, vs, vl, np, ah) => { EnumParts(is_enum = true, es = es, el = el, vs = vs, vl = vl, np = np) }
+    _ => { EnumParts(is_enum = false, es = 0, el = 0, vs = 0, vl = 0, np = 0) }
   }
 }
 
@@ -4573,6 +4598,43 @@ sema_enum_variant_known := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
   found
 }
 
+## Issue #513 / Types §9.4 — the variant-ARITY verdict for `E.V(a0, …)`, computed from the SAME walk
+## `sema_enum_variant_known` uses: the same `upto` bound, the same `name_matches` head test and the
+## same `kind == 3` declarations, so the count is read from the very declaration whose variant list
+## already answered the name question. Two fields:
+##   * `known`  — some visible declaration of this head declares a variant `V` at all;
+##   * `fits`   — some such declaration declares `V` with EXACTLY the supplied component count;
+##   * `want`   — the FIRST matching declaration's component count, for the diagnostic's expected count.
+## `fits` is deliberately an OR across every matching declaration, so two same-named enums in
+## different modules can never make a valid constructor look wrong; the reject fires only on
+## `known and not fits`. `FieldDecl.arity` is the parser's per-payload-TYPE count — the same number
+## `enum_max_arity` already sizes a payload with — so the rule compares the constructor against its
+## own declaration and never against a fixed number.
+EnumVariantArity := struct { known : bool, fits : bool, want : usize }
+sema_enum_variant_arity := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), es : usize, el : usize, vs : usize, vl : usize, np : usize) -> EnumVariantArity {
+  mut known := false
+  mut fits := false
+  mut want := 0
+  mut i := 0
+  while i < upto {
+    d := deref(decl_get(decls, i))
+    if d.kind == 3 and name_matches(src, d.name_start, d.name_len, es, el) {
+      mut f := d.fields_head
+      while f != 0 {
+        fd := deref(fld_p(f))
+        if streq(src, fd.ns, fd.nl, vs, vl) {
+          if not known { want = fd.arity }
+          known = true
+          if fd.arity == np { fits = true }
+        }
+        f = fd.next
+      }
+    }
+    i += 1
+  }
+  EnumVariantArity(known = known, fits = fits, want = want)
+}
+
 ## The bounded scalar `comptime` slice (Comptime §2.2 / §9.1) accepts only a NULLARY user-enum
 ## value here.  A known enum variant with payload is deliberately not treated as a scalar constant:
 ## the lower's enum representation is an aggregate and the public brief keeps that design out of this
@@ -5663,6 +5725,20 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   if eparts0.is_enum and enum_decl_of(decls, src, eparts0.es, eparts0.el) >= 0 {
     if not sema_enum_variant_known(decls, upto, src, eparts0.es, eparts0.el, eparts0.vs, eparts0.vl) {
       mark_failed(locals, mismatch_err(eparts0.vs, eparts0.vl))
+    }
+    ## ENUM-CONSTRUCTOR ARITY validation (Issue #513 / Types §9.4). The variant NAME check above does
+    ## not look at the payload at all, so `Pay.B(7)` for `B(u64, u64)` compiled and the second word was
+    ## read as whatever the layout's clear left there — the implicit zero-initialization §9.4 forbids.
+    ## Judged only when the variant NAME is known and NO visible declaration of that head declares it
+    ## with the supplied count, so an unresolved or same-named-in-two-modules head stays fail-open.
+    ## RAW UNIONS are deliberately EXCLUDED: they share `kind == 3` with enums, but §6.3 makes the
+    ## constructor's own byte-clear part of that operation's canonical representation, which is a
+    ## different argument from §9.4's; the union member's arity rule is its own unit.
+    if not is_union_decl(decls, src, eparts0.es, eparts0.el) {
+      eva0 := sema_enum_variant_arity(decls, upto, src, eparts0.es, eparts0.el, eparts0.vs, eparts0.vl, eparts0.np)
+      if eva0.known and not eva0.fits {
+        mark_failed(locals, enum_variant_arity_err(eparts0.vs, eva0.want, eparts0.np))
+      }
     }
   }
   ## FN-7 / P3-DIAG: the big bound-deref match below does not reliably dispatch payload-heavy Call
