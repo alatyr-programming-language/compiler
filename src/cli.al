@@ -4670,14 +4670,36 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
         if amb_lit_at(src, i, n, "Option :=") { has_option_decl = true }
         if amb_lit_at(src, i, n, "Result") { needs_result = true }
       }
+      ## The bare OVERFLOW-POLICY family (`wrapping_`/`saturating_`/`checked_`/`overflowing_`,
+      ## Concurrency §6.3, defined for all eight integer types in `lib/base/num.al`) — a program using
+      ## them WITHOUT Option/Result must still pull the base prelude that carries num.al. This trigger
+      ## carried two faults at once (issue #514):
+      ##   * `checked_` was NAMED BY THIS COMMENT and missing from the disjunction, so a program whose
+      ##     only prelude need was `checked_*` got no prelude at all and `check: unbound name`. It
+      ##     appeared to work only when the source ALSO spelled `Option` (the family's own result type)
+      ##     and so tripped the NEIGHBOURING `Option` trigger below — the #393 class, where a program's
+      ##     meaning depends on an incidental spelling elsewhere in the file.
+      ##   * the whole trigger sat under `is_pkg == false`, so NO bare overflow op resolved in a
+      ##     manifest build, for any of the four prefixes. §6.3 makes the family "available EVERYWHERE
+      ##     (no grant)" and a package module is a user program, so the gate is dropped here; it stays
+      ##     on the single-file-only triggers below, which cover declarations (`Option`, `Slice :=`,
+      ##     `uint :=`, `struct`/`enum`) that a manifest build already owns. Measured safe for the
+      ##     TOOL-1 input set: NO `src/` source carries any of the four prefixes at a TOKEN BOUNDARY —
+      ##     every occurrence is inside a `##` comment, inside a string literal, or in the interior of
+      ##     a longer identifier (`unchecked_mode`, `rv_unchecked_init_unsigned`), and the comment and
+      ##     string skips below plus the `amb_idc` boundary guard already exclude all three. The
+      ##     self-host manifest build therefore sets nothing here and the fixpoint GAS is byte-identical.
+      ## The prefix match stays open-ended (no trailing boundary check), exactly like the three prefixes
+      ## it joins: an identifier such as `checked_total` over-triggers and injects a prelude the program
+      ## never calls, which DCE drops, whereas an under-trigger REJECTS A VALID PROGRAM.
+      if is_lib == false and (i == 0 or amb_idc(bytes(src)[i - 1]) == false) {
+        if amb_lit_at(src, i, n, "wrapping_") or amb_lit_at(src, i, n, "saturating_") or amb_lit_at(src, i, n, "checked_") or amb_lit_at(src, i, n, "overflowing_") { needs_alloc = true }
+      }
       ## The remaining bare prelude triggers retain their single-file gate. A manifest build is the
       ## self-host path today and already owns its allocator/option/aggregate declarations; widening
       ## those triggers here would make this focused Result fix silently change the TOOL-1 input set.
       if is_lib == false and is_pkg == false and (i == 0 or amb_idc(bytes(src)[i - 1]) == false) {
         if amb_lit_at(src, i, n, "Option") { needs_alloc = true }
-        ## bare overflow-policy op (`wrapping_`/`saturating_`/`checked_`/`overflowing_`, §6.3, lib/base/num.al) —
-        ## a program using them WITHOUT Option/Result must still pull the base prelude that carries num.al.
-        if amb_lit_at(src, i, n, "wrapping_") or amb_lit_at(src, i, n, "saturating_") or amb_lit_at(src, i, n, "overflowing_") { needs_alloc = true }
         ## bare `u128` at a word boundary (trailing char not an ident char) → the ambient prelude type.
         if amb_lit_at(src, i, n, "u128") and (i + 4 >= n or amb_idc(bytes(src)[i + 4]) == false) { needs_u128 = true }
         ## bare `uint(` (TYP-10) → the same prelude module; a local `uint :=` decl vetoes it (above).

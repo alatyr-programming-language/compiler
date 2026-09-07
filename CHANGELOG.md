@@ -82,6 +82,42 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **The `checked_*` overflow-policy operations are reachable at all, and the whole family is
+  reachable from a package build.** Concurrency §6.3 gives four explicit overflow-policy families —
+  `wrapping_*`, `saturating_*`, `checked_*` (→ `Option(T)`) and `overflowing_*` (→ `(T, bool)`) — and
+  says they are "available **everywhere** (no grant)", which §8.5 repeats and the stdlib appendix
+  §4.3 makes required v1 content. `lib/base/num.al` has defined all 24 `checked_*` functions since
+  the import; nothing could name them. The prelude that carries `num.al` is pulled by a literal
+  textual scan of the source bytes, and the trigger listed `wrapping_`, `saturating_` and
+  `overflowing_` while the comment printed directly beside it named `checked_` as the fourth. A
+  program whose only prelude need was `checked_*` therefore got no base prelude at all and was
+  refused with `check: unbound name` — a program the specification calls valid. It looked healthy
+  only because `checked_*` returns `Option(T)`: a source that also wrote that type out satisfied the
+  **neighbouring** trigger, so `o : Option(u64) = checked_add(a, 1)` answered 42 while the
+  byte-identical program with `b := checked_add(a, 1)` was rejected. One word of unrelated source
+  text decided whether the program compiled, which is the same property issue #393 evidences from
+  the other end — a formatter or an unrelated edit that removed that word could silently flip a
+  working program into a rejection. Separately, the entire trigger was gated to single-file
+  compilation, so in a **package** build none of the four prefixes resolved: bare `wrapping_add` in
+  `src/main.al` answered `check: unbound name` too, and so did the spelling with the result type
+  written out. Both are fixed: the fourth prefix joins the list, and the overflow trigger no longer
+  asks whether the build is a package, because §6.3's "everywhere" includes a package module. The
+  narrower single-file gate stays on the triggers next to it, which are about declarations
+  (`Option`, `Slice :=`, `uint :=`, `struct`/`enum`) that a manifest build already owns. The change
+  is confined to that one trigger and costs nothing measurable: no source in `src/` carries any of
+  the four prefixes at a token boundary — every occurrence is inside a comment, inside a string
+  literal, or in the interior of a longer identifier such as `unchecked_mode` — so the compiler's own
+  build emits byte-identical assembly, and re-deriving all 7 816 existing corpus rows across all four
+  backends with the fix in place reproduced the oracle byte-for-byte, with zero rows changed. The
+  prefix match stays open-ended, so an identifier that merely *starts* with one of the four names
+  (`checked_total`) still over-triggers and injects a prelude it never calls, which dead-code
+  elimination drops; that was already true of the three prefixes it joins, and an over-trigger costs
+  a prelude while an under-trigger refuses a valid program. x86_64 answers 42 for every shape; the
+  non-x86 surfaces trap loudly (aarch64/riscv64 133, wasm 134) on this library exactly as they
+  already did for `test/overflow_policy.al`, and the qualified `base::num::wrapping_add` spelling is
+  still refused for a different reason — the missing `pub` markers on the base tier, which is its own
+  unit.
+
 - **A comparison whose operand is a struct literal or a payload-carrying variant construction now
   compares componentwise, instead of comparing both operands as the constant zero.** Stdlib §2.6
   defines `eq(in a : T, in b : T) -> bool` with "default = componentwise field equality" derived

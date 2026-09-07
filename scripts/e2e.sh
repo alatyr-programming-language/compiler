@@ -5218,6 +5218,15 @@ root_package_test dep_lib_nested_use "T _start" "T main__main" "T d__lib__thing_
 ## Proposal #13 / STD-1 — a non-root module may instantiate the ambient Result prelude without
 ## importing std/alloc from the root; check, run, artifact exit, and module/linker boundaries are locked.
 root_package_test result_nonroot_prelude "T _start" "T main__main" "T lib__go"
+## issue #514, the package half — that same ambient overflow-policy trigger also sat under
+## `is_pkg == false`, so NO bare overflow op resolved in a MANIFEST build for ANY of the four prefixes:
+## `check`, `run` and `build` each answered `check: unbound name at line 13 in main`, rc 1, even for
+## `wrapping_add`, which worked in a single-file program, and even with the result type written out —
+## while §6.3 makes the family available EVERYWHERE (no grant). The linker-symbol assertion is the
+## non-vacuous half: it proves the base prelude actually landed and the u64 instantiation of
+## `checked_add` is in the artifact, not merely that a name resolved. The module deliberately never
+## spells the family's result type, so nothing but the overflow-prefix trigger can pull its prelude.
+root_package_test issue514_overflow_pkg "T _start" "T main__main" "T base__num__checked_add__u64_u64"
 ## Modules §3 + MOD-12 — a module global crossing a module boundary. A descendant may name an ancestor's
 ## global bare (`pub` or not); anyone may name a `pub` one through a path; a SIBLING's non-`pub` global is
 ## a located reject. Before this, a bare ancestor read silently returned 0, `TAB[2] = 30` from a submodule
@@ -6048,6 +6057,20 @@ run_x86 unchecked_narrow_shift_wrap 42
 ## boundaries. A NEUTRAL library addition (lib/base/num.al) resting on the x86_64-gated scalar
 ## operators, so run_x86 (sweep-excluded); returns 42 iff all 24 contract assertions hold.
 run_x86 overflow_policy 42
+## issue #514 — the SAME family reached by its BARE specified spelling. §6.3 makes all four prefixes
+## "available everywhere (no grant)", but the ambient prelude trigger in `src/cli.al` listed only three:
+## the comment beside it named `checked_` and the disjunction omitted it, so a program whose only prelude
+## need was `checked_*` got NO base prelude and the parent answered `check: unbound name`, rc 1. It looked
+## healthy only when the source ALSO spelled the family's result type and so tripped the neighbouring
+## trigger — the #393 class, where a program's meaning follows an incidental spelling elsewhere in the
+## file. `_bare` is the red row (it never names that type, and must not be "clarified" into naming it);
+## `_type_named` locks the spelling that used to be the only working one; `_overflow_family_bare` locks
+## the three prefixes that already worked and reads BOTH components of an `overflowing_*` pair on both
+## paths. run_x86 for the same reason `overflow_policy` is — the library rests on the x86_64-gated scalar
+## operators, so aarch64/riscv64 trap 133 and wasm 134: loud on every non-x86 surface, never a wrong value.
+run_x86 issue514_checked_bare 42
+run_x86 issue514_checked_type_named 42
+run_x86 issue514_overflow_family_bare 42
 ## Checked narrow-width overflow TRAPS for an INDEX read (I11/CG-6): `xs[i]+xs[j]` on a `[u8;N]` array
 ## overflows u8 → 132. The element type is recovered from the array's declared `[u8;N]` so the index
 ## read classifies as narrow-width (was silently native-width → no trap). Companions: the non-overflowing
