@@ -6192,6 +6192,12 @@ run_x86 checked_str_oob 132
 ## The inner byte index of `arr[k][j]` over a [str; N] is checked against that ELEMENT's runtime
 ## len (issue #394); before the fix the shape had no bounds check at all and ran to a normal exit.
 run_x86 checked_str_array_elem_byte_oob 132
+## `bytes(s)[i]` — the third view-byte-index shape, and the one that had NO bounds check at all
+## (issue #416): an out-of-range read ran to a normal exit carrying the byte past the run. It is now
+## checked against the view's runtime len like the other two. The `unchecked` companion below proves
+## CT-11 still drops it. Both rows are x86_64-only: a64/rv64/wasm fail loud on every str index.
+run_x86 checked_bytes_view_byte_oob 132
+run_x86 unchecked_bytes_view_byte_oob 42
 run_x86 raw_asm_add 42
 run_x86 naked_add 42
 run_x86 raw_asm_logic 42
