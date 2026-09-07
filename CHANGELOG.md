@@ -82,6 +82,35 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **On the wasm backend, a discarded expression statement's value no longer becomes the enclosing
+  function's result.** Declarations §5 makes a statement's value discarded — that is what
+  distinguishes it from the function's trailing expression — and the parser already models the
+  distinction: a fn body is a statement list plus an OPTIONAL trailing expression, so
+  `{ q : u64 = 7  q + 1  42 }` is the list `[q := 7, ExprStmt(q + 1)]` plus the tail `42`. The WAT
+  emitter asked a weaker question. It marked the body's statement list "tail-valued" whenever the
+  function was non-void with no top-level `return`, and on that flag it turns a **trailing**
+  expression statement into `(return …)`; since the trailing statement is the last one in the list
+  whether or not a tail expression follows it, the module read
+  `(return (i64.add (local.get 0) (i64.const 1))) (i64.const 42)` and the declared result was dead
+  code. A clean compile, a clean `wat2wasm`, a clean run, and the wrong answer: the reproducer
+  exited **8** under `wasmtime` where x86_64, aarch64 and riscv64 all exited **42**. The same flag
+  reached a trailing statement `match` as well, so `match p { A => { 5 } B => { 6 } }` followed by
+  `43` answered 5 or 6, and a `return` nested inside an `if` did not clear the flag either (wasm 8
+  against the other three backends' 40). The explicit-`return` spelling was already right, because a
+  top-level `return` cleared the flag by another route. The three native backends never needed a
+  flag: they emit the statements — letting a statement's value land in the result register — and then
+  emit the trailing expression over it, reading `ex_is_no_tail(Decl.value)` to know whether there is
+  one. WASM has to say `drop` instead, and it already knew how; `exprstmt_needs_drop` and the
+  `(drop)` arm were present and simply lost to the tail-value arm. The flag now carries the same
+  fact the other three read. The value is dropped, not skipped: an expression statement with a side
+  effect still executes, which a fixture proves by reading the module global two discarded calls
+  mutate. x86_64, aarch64 and riscv64 emission is byte-identical — all 1 954 tracked `test/*.al`
+  sources emitted with both compilers, input tree held fixed, gave 1 954 identical digests per
+  backend and no diffs. Twenty-one existing corpus sources change their WAT, all of them the same
+  shape (a trailing statement before a tail, such as `naked_add`'s `movq  addq  ret()`), and all
+  twenty-one still record the same wasm verdict, since they trap on wasm for unrelated reasons and
+  the manifest normalizes the backtrace offsets the emission shift moves.
+
 - **`.len` and `.ptr` read through a `ptr([T])` answer the slice's length and pointer, not the run's
   second element.** Types §7 makes a `[T]` binding the two-word `{ptr, len}` view itself — "the view
   *is* the value", the same pair a `str` is — and Memory §4.3 makes `ptr(x)` the address of that

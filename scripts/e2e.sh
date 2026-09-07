@@ -8630,6 +8630,33 @@ run issue513_variant_arity_nullary_control 42
 check_accept issue513_variant_arity_nullary_control
 run issue513_variant_arity_generic_control 42
 check_accept issue513_variant_arity_generic_control
+## Issue #510 / Declarations §5 — a DISCARDED expression statement's value must not become the
+## enclosing function's result. The parser gives a fn body a statement list plus an OPTIONAL trailing
+## expression, so in `{ q : u64 = 7  q + 1  42 }` the LAST statement has `nx == 0` while the value is
+## the tail; `emit_wat_body` passed `tail_value` regardless, and on that flag a trailing expression
+## statement is emitted as `(return …)`, leaving the tail as dead code. Measured on the parent, the
+## discarded-then-tail shape answered 42 on x86_64, aarch64 and riscv64 and 8 on wasm — a clean build,
+## no trap, no diagnostic. Three more shapes went the same way: a nested `return` before the discarded
+## statement (wasm 8 where the others said 40) and a trailing statement `match` (wasm 5 where the
+## others said 43); the explicit-`return` spelling already agreed at 41 and is kept as the companion
+## the issue's second criterion asks for.
+##
+## Registered with `run` (not `run_x86`) so the a64/rv64/wasm sweeps execute both fixtures, PLUS an
+## explicit `run_wat` row for each: the sweeps accept a clean trap, and this defect is a clean wrong
+## VALUE that a trap-tolerant verdict would never have gone red on.
+run issue510_exprstmt_discarded_value 42
+run_wat issue510_exprstmt_discarded_value 42
+check_accept issue510_exprstmt_discarded_value
+## The over-eagerness fence, and the reason `drop` is the right instruction rather than skipping the
+## statement: an expression statement with a real SIDE EFFECT must still execute, and the tail
+## position the fix gates on must still deliver. `bump` mutates a module global and returns its
+## ARGUMENT, so the leaked statement value (12) cannot alias the answer (42); on the parent wasm
+## answered 110, i.e. it delivered the discarded call's 12. The same global read from `main` is 42 on
+## every backend before and after, which is the proof that both `bump` calls ran, and `q + 1` written
+## as a trailing expression still answers 8.
+run issue510_exprstmt_effect_and_tail 42
+run_wat issue510_exprstmt_effect_and_tail 42
+check_accept issue510_exprstmt_effect_and_tail
 
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.

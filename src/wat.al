@@ -7335,7 +7335,15 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   ## it, so it is entered once here and never popped — without this the reads after it still resolved
   ## to the argument while the three native backends had long since moved to the binding.
   wat_param_shadow_enter(head, head, sb, src, params_head, pcount, a, decls)
-  emit_wat_stmts(head, head, false, (not void) and (not has_ret), sb, a, src, params_head, pcount, decls, 0, 0)
+  ## #510 — but ONLY when the parser left NO trailing expression. `{ q + 1 ; 42 }` parses as the
+  ## statement list [q:=7, ExprStmt(q+1)] plus Decl.value = 42, so the LAST statement has nx==0 while
+  ## the fn's value is the tail. Treating it as tail_value emitted `(return (q+1))` and made the tail
+  ## `42` dead code — a clean build answering 8. A statement's value is discarded, so with a real tail
+  ## the list is emitted statement-wise and the trailing expr-statement takes the existing `(drop)`
+  ## arm. The three native backends need no flag: they evaluate the statement into the result register
+  ## and the tail expression overwrites it (aarch64 emit_a64_fn / riscv64 emit_rv_fn: statements, then
+  ## `if (not void) and has_tail { emit …(d.value) }`).
+  emit_wat_stmts(head, head, false, (not void) and (not has_ret) and ex_is_no_tail(tail), sb, a, src, params_head, pcount, decls, 0, 0)
   if (not void) and (not has_ret) {
     if ex_is_no_tail(tail) {
       ## no tail EXPRESSION: either a tail value-match just returned in every arm (this caps the
