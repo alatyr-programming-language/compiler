@@ -1026,6 +1026,52 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
   if unchecked bitcast(usize, fpg.base) != 0 {
     panic("selfhost: indexing a struct array FIELD through a non-local root (`deref(p).cells[i]` / `a.b.cells[i]`) is not yet supported — the element-address math only composes a `Var`-rooted `s.cells[i]`; bind the inner struct to a local first")
   }
+  ## Grammar §3.4 / Types §9.4 (#422) — a RANGE SLICE used DIRECTLY as an index base,
+  ## `xs[lo..hi][i]`. `postfix-expr ::= primary { postfix }` with both `"[" expr "]"` and the range
+  ## form among the postfix ops, so this is ONE primary plus TWO postfix steps and needs no
+  ## intermediate binding; but the view it names has no frame home, so it fell to the untyped tail
+  ## below, which resolved a nameless base to frame SLOT 0 and read the caller's own frame (0 instead
+  ## of 42). #425 turned that silent read into the located refusal below; this arm is the correct
+  ## lowering the refusal was holding the place for.
+  ##
+  ## The deliverer already existed. `emit_arr_slice_pair` is the PAIR dual of
+  ## `emit_array_slice_assign` — it materializes exactly the two words the BOUND spelling stores into
+  ## a slice local's slots: word 0 = element 0's address advanced by `lo * stride` (so `lo` is
+  ## ACCOUNTED FOR, not ignored), word 1 = the runtime length `hi - lo`. Composing the element
+  ## address off that pointer with the SAME stride the bound path indexes by makes `xs[lo..hi][i]` and
+  ## `v := xs[lo..hi]; v[i]` name the same byte, which is the disagreement #422 reported. The view's
+  ## own length is in hand here, so the index is bounds-checked against `hi - lo` and an index past
+  ## the view's end TRAPS instead of reading the base array beyond `hi`.
+  ##
+  ## Narrow by measurement, not by taste. The gate is `slice_arr_stride != 0` (a `Slice` whose base is
+  ## a name-matched ARRAY local/param, `ek == 5`) AND a SCALAR WORD element (`slice_arr_eek == 0`),
+  ## because the element WIDTH is chosen by this function's CALLERS from queries that all key on a
+  ## `Var` base: `packed_byte_base_entry` (a byte element), `slice_base_is_byte`, the float/xmm path
+  ## (eek 9) and the by-reference aggregate paths (eek 2/3/4/7) every answer "no" for an `Expr::Slice`
+  ## base, so widening this arm to those element kinds would pair a correct address with a WORD load
+  ## and trade a loud refusal for a wrong value. Those element kinds keep the refusal below and stay
+  ## with #422/#494. A `str` range slice (`s[lo..hi][i]`) has `slice_arr_stride == 0` — its elements
+  ## are BYTES of a `{ptr,len}` view, a different deliverer — and also keeps the refusal (#494).
+  ##
+  ## Placed immediately above the tail rather than at the top of the function: no arm between here and
+  ## the head can claim an `Expr::Slice` base (they key on `StrLit`, `Var`, `Index`, `Call` or
+  ## `Field`), so this position is byte-identical for every other shape and keeps the new recognizer
+  ## next to the refusal that documents it.
+  sasl := slice_arr_stride(base, cx.slots, cx.src)
+  if sasl != 0 and slice_arr_eek(base, cx.slots, cx.src) == 0 {
+    emit_gas(idx, sb, cx, a, nl)                  ## the index → stack (lowered FIRST: the pair's own
+                                                  ## `lo`/`hi` lowering may clobber every register)
+    emit_arr_slice_pair(base, sb, cx, a, nl)      ## stack: [idx, ptr (deeper), len (top)]
+    push_str(sb, "  popq %rdx\n  popq %rbx\n  popq %rax\n")   ## len → %rdx, data ptr → %rbx, idx → %rax
+    ## CHECKED BOUNDS (I11 / Types §5, §358) against the VIEW's runtime length, the same `jb`/`ud2`
+    ## shape every other index uses: `jb` is unsigned, so a negative i64 index also traps. Dropped in
+    ## an `unchecked` scope (CG-7), like the bound spelling's own check.
+    if cx.vchk { push_str(sb, "  cmpq %rdx, %rax\n  jb 1f\n  ud2\n1:\n") }
+    push_str(sb, "  imulq $")
+    push_int(sb, i64(sasl) * 8)
+    push_str(sb, ", %rax\n  addq %rax, %rbx\n  movq %rbx, %rax\n")
+    return
+  }
   bslot := index_base_entry(base, cx.slots, cx.src)
   ## SOUNDNESS (correct-or-trap, I11 / Types §6.4): THE UNTYPED TAIL. Everything below composes the
   ## element address as `base + i * stride` out of `bslot`'s `SlotEntry`, and `index_base_entry`
