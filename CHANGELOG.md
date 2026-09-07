@@ -113,6 +113,41 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   by **zero** expressions in `src/` and `lib/`, and of the 1 589 existing test programs exactly one
   changes emission (a struct's enum field bound to a local, compared against a nullary variant, which
   keeps its answer and now gets it through the derive).
+- **`str_at` is published, and its first parameter is the address as a `usize` the specification
+  writes.** Stdlib appendix §3.6 enumerates five `str` operations, and §8.2 items 2 and 6 make the
+  enumerated set required v1 content; Modules §3 fixes a library's public API as exactly the
+  `pub`-chain-to-root-reachable surface. Four of the five carried the marker. `str_at` did not, so
+  `base::str::str_at(p, n)` — the raw inverse of `bytes`, a `str` view over `n` bytes at an address —
+  was refused from any module that is not a descendant of `base::str` (`check: invalid`, exit 1),
+  even though the bare and UFCS spellings resolved: the unqualified arm applies no visibility test
+  (#403), which is a separate defect and not the surface being published. The declaration also read
+  `fn(p : ptr(u8), n : usize)` while §3.6 writes `str_at(in p : usize, in n : usize) -> str` and its
+  prose fixes the one-step `usize → ptr(u8) → [u8] → str` chain; the `usize` is the point of the
+  design, because fabricating a pointer from an integer needs an `unchecked` grant (Memory §4.5) and
+  §3.6 puts that grant inside this one function instead of at every call site — the module's own doc
+  comment already described it that way. Both are corrected together, since publishing the old
+  signature would have published the divergence. `in` is the default direction, so it adds nothing.
+  Semantics, representation and every other `str` operation are untouched, and nothing is emitted
+  differently — the seed's own 1 205 559-line GAS output is byte-identical across the change, and so
+  are the two seed-built compilers.
+- Not one of the tree's `str_at` callers needed editing, and the reason is a **documented
+  compatibility rule**, not a missing check. `src/sema.al` does compare a call argument against the
+  declared parameter type — the CALL-ARG conformance block at `:5781`–`:5800` (`agg_scalar_bad`,
+  `call_arg_lit_incompatible`, and `expr_call_result_ty` against `callee_param_ty`) — and it does
+  reject: a struct passed to a same-file `fn(p : usize)` is `check: type mismatch`, measured. What
+  licenses an address in either spelling is `tag_compat` (`src/sema.al:224`–`:231`), which makes
+  int(1) and pointer(5) compatible in **both** directions, with the rationale spelled out at
+  `:216`–`:223`: the self-host models an AST or allocator handle as a bare `usize` in some signatures
+  and a typed `ptr(T)` in others and flows one into the other freely, and the lower already lowers
+  that seam identically (MEM-7/8, I11, D-usize→ptr). Measured in the position where the check does
+  fire: `ptr(u8)` into a `usize` parameter is accepted, `usize` into a `ptr(u8)` parameter is
+  accepted, and a struct in the same position is rejected. So both signatures accept both spellings
+  of the address, and the nine `str_at(x.ptr, …)` callers keep working by rule rather than by
+  accident — there is no migration owed in either direction, and this change is not a compatibility
+  gamble. For scale: of the 2 897 `str_at(` call sites in `src/` and `lib/`, 2 255 spell the first
+  argument `str_at((src + <off>), n)`, and `src : ptr(u8)` is declared 1 821 times in `src/` against
+  `src : usize` exactly once (`src/parser.al:580`) — the tree writes that address both ways, which is
+  precisely the seam `tag_compat` exists to model.
 
 - **An undeclared name used as an operand inside an `if` or `while` condition is refused, instead of
   choosing a branch by a garbage read.** Declarations §5 makes scope lexical and block-structured — a

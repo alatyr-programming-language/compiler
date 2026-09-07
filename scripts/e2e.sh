@@ -1918,6 +1918,53 @@ issue404_hashmap_public_test() {
   rm -rf "$p/target"
 }
 
+## Issue #452 / Stdlib appendix §3.6 + §8.2 — an external package must reach the FIFTH enumerated
+## `str` operation, `str_at(in p : usize, in n : usize) -> str`, through its public QUALIFIED path.
+## §8.2 items 2 and 6 make the enumerated operations required v1 content and Modules §3 fixes the
+## external API as exactly the pub-chain-reachable surface, so an unmarked declaration is not part of
+## it. The parent rejection is recorded in the fixture; this row proves the fixed package leaves NO
+## artifact during check and runs the external consumer to 42 after build. The consumer also carries
+## the bare and UFCS spellings, which resolved on the parent through the unqualified arm's missing
+## visibility test (#403) and must keep resolving. Default build path, no `ALATYR_OSPLIT`: the split
+## path is documented in `src/cli.al` as tripping a self-host-lower fault under some allocation
+## layouts, so a permanent row on it could redden for reasons unrelated to `str_at`.
+issue452_str_at_public_test() {
+  local p="$(_fixture_tree package)/issue452_str_at_public"
+  local err="$T/issue452_str_at_public.check.err"
+  [ -f "$p/package.al" ] || { echo "MISS issue452_str_at_public: no package manifest"; fail=1; return; }
+  [ -f "$p/src/main.al" ] || { echo "MISS issue452_str_at_public: no external consumer"; fail=1; return; }
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" check package.al ) >"$T/issue452_str_at_public.check.out" 2>"$err"
+  local rc=$?
+  if [ "$rc" != 0 ] || [ -e "$p/target" ] || [ -s "$T/issue452_str_at_public.check.out" ] || [ -s "$err" ]; then
+    echo "FAIL issue452_str_at_public: check rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+    return
+  fi
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" build package.al ) >"$T/issue452_str_at_public.build.out" 2>"$T/issue452_str_at_public.build.err"
+  rc=$?
+  local bin="$p/target/debug/issue452-str-at-public"
+  if [ "$rc" != 0 ] || [ ! -x "$bin" ]; then
+    echo "FAIL issue452_str_at_public: build rc=$rc artifact=$(test -x "$bin" && echo yes || echo no) diagnostic=$(cat "$T/issue452_str_at_public.build.err" 2>/dev/null)"
+    fail=1
+    return
+  fi
+
+  _e2e_exec "$bin" >/dev/null 2>&1
+  local got=$?
+  if _e2e_runtime_failure "issue452_str_at_public" "$got"; then return; fi
+  if [ "$got" = 42 ]; then
+    echo "ok   issue452_str_at_public: external qualified/bare/UFCS str_at address view, artifact 42"
+  else
+    echo "FAIL issue452_str_at_public: artifact exit=$got want 42"
+    fail=1
+  fi
+  rm -rf "$p/target"
+}
+
 # a flat single-file package may define its own default `_start` directly in
 # `package.al` when no source modules are present. The manifest binding is inert source data; the
 # user-defined `_start` must remain the ELF entry and must not be replaced by a `main__main` wrapper.
@@ -5284,6 +5331,7 @@ tool17_declaration_target_when_test
 tool17_prelude_visibility_test
 issue363_chariter_public_test
 issue404_hashmap_public_test
+issue452_str_at_public_test
 ext_test package_cli_test
 ## The toolchain-spawn regression (scripts/env_size_test.sh). An environment too large for one read used
 ## to truncate mid-entry, after which `build_envp` wrote its terminating word 8 bytes PAST its reservation
