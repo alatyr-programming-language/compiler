@@ -2229,6 +2229,122 @@ pub ptr_target_pointee_n := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   ptr_target_pointee(src, ts, tl).n
 }
 
+## Is the preserved bitcast TARGET a complete pointer type (`ptr( [mut] T )`)? The parser preserves an
+## `Expr::Bitcast` in exactly four shapes: a `ptr(<sub-word scalar>)` target (kept for the pointee
+## width a `deref` must move), a bare narrow scalar target (kept for the destination word's
+## representation), a bare USER aggregate name (kept so a local bound from it resolves its fields),
+## and a `ptr(<user type>)` target (kept so such a local is a pointer-to-struct). This predicate
+## separates the two POINTER shapes from the aggregate one, and it is the second decision the
+## emitters must never disagree about: a POINTER value is one machine word, so the node lowers to its
+## inner value unchanged (Types §4.4 — a bitcast is the identity on the bits), whereas an aggregate
+## target is not a single word and has no scalar-position lowering on the non-x86 backends.
+##
+## The parse is `ptr_target_pointee`'s, so every spelling the grammar admits answers the same —
+## `ptr(u8)`, `ptr( mut u8 )` and `ptr (mut u8)` are all pointers. A fixed `"ptr("` prefix test (which
+## is all `bitcast_target_is_narrow_scalar` needs, because it only has to answer "not a narrow
+## scalar") would call `ptr (mut u8)` an aggregate and send a pointer to the aggregate fence.
+pub bitcast_target_is_pointer := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  ptr_target_pointee_n(src, ts, tl) != 0
+}
+
+## ─── The POINTEE WIDTH a `deref` through a bitcast-made pointer must move ───
+##
+## Issue #441 — the two halves of this are ONE decision and must land together. Making a pointer
+## `bitcast` the machine-word identity on aarch64/riscv64 (above) hands those backends a pointer they
+## previously refused, and their `deref` load/store moves a full WORD unconditionally. For a
+## `ptr(<sub-word scalar>)` target — the very shape the parser preserves the node for — that is a
+## 7-byte OVER-READ on a load and a 7-byte neighbour CLOBBER on a store: a wrong value where there
+## had been a trap, which I11 forbids. Measured before this existed: `test/scalar_width_matrix.al`
+## went 133 → 1 on both backends.
+##
+## The two backends use this width for OPPOSITE decisions. The LOAD narrows: reading the right number
+## of bytes cannot corrupt anything, and it is what makes those probes answer. The STORE REFUSES (a
+## located trap in each emitter) because a narrow store makes the destination's byte image observable
+## at sub-word granularity, and neither backend lays out a `@repr(T)` enum tag to spec yet — measured,
+## a narrow store took `test/repr_tag_store.al` to 20 where x86_64 answers 42. Same width, two
+## verdicts, one home for the number.
+##
+## `src/lower.al` answers the same question for x86_64 through `deref_pointee_bytes` /
+## `deref_pointee_signed`, but its recovery hangs off `LCtx` slots the other backends do not have.
+## What those backends DO have is the AST plus `local_decl_assign`, and that is enough for the two
+## shapes a pointer bitcast produces: the node as the direct `deref` operand, and a local bound from
+## it. Anything else answers 8 / unsigned — the pre-existing word move, byte-for-byte — so this
+## narrows ONLY code the pointer identity above newly made reachable.
+##
+## The two queries publish plain scalars rather than a span: a cross-module STRUCT return truncates in
+## the aarch64/wat emit contexts under the frozen seed (the `typearg_at` landmine `ptr_target_pointee_s`
+## already exists for).
+
+## The `:=` RHS value of the local named `[ns, nl)` among `head`'s TOP-LEVEL statements, or null. A
+## local declared inside a nested block is not found, which answers "unknown" and keeps the word move.
+local_assign_value := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize) -> ptr(Expr) {
+  d := local_decl_assign(head, src, ns, nl)
+  mut r := unchecked bitcast(ptr(Expr), 0)
+  if unchecked bitcast(usize, d) != 0 {
+    st := deref(stmt_p(Stmt, d))
+    match st {
+      Stmt::Assign(ans, anl, v, nx) => { r = v }
+      _ => {}
+    }
+  }
+  r
+}
+
+## The POINTER target span of a preserved `bitcast` reached DIRECTLY from `p` (seeing through an
+## `unchecked` wrapper). A non-pointer preserved target (a bare narrow scalar, a user aggregate name)
+## answers zero: only a pointer target carries a pointee width.
+bitcast_ptr_target_here := fn(p : ptr(Expr), src : ptr(u8)) -> LSpan {
+  mut r := LSpan(s = 0, n = 0)
+  match deref(p) {
+    Expr::Unchecked(inner) => { r = bitcast_ptr_target_here(inner, src) }
+    Expr::Bitcast(inner, ts, tl) => {
+      if ptr_target_pointee_n(src, ts, tl) != 0 { r = LSpan(s = ts, n = tl) }
+    }
+    _ => {}
+  }
+  r
+}
+
+## The same span, also seeing through a LOCAL bound from such a bitcast (`p8 := bitcast(ptr(bits8), a)`
+## then `deref(p8)`). The local's RHS is resolved by `bitcast_ptr_target_here`, NOT by this function,
+## so a `q := p` chain terminates after one hop instead of walking bindings recursively.
+bitcast_ptr_target_of := fn(p : ptr(Expr), head : ptr(mut Stmt), src : ptr(u8)) -> LSpan {
+  direct := bitcast_ptr_target_here(p, src)
+  if direct.n != 0 { return direct }
+  mut vs : usize = 0
+  mut vn : usize = 0
+  match deref(p) {
+    Expr::Var(s, n) => { vs = s ; vn = n }
+    _ => {}
+  }
+  if vn == 0 { return LSpan(s = 0, n = 0) }
+  v := local_assign_value(head, src, vs, vn)
+  if unchecked bitcast(usize, v) == 0 { return LSpan(s = 0, n = 0) }
+  bitcast_ptr_target_here(v, src)
+}
+
+## The pointee BYTE WIDTH (1 / 2 / 4 / 8) a `deref` LOAD/STORE through pointer expression `p` must
+## move. 8 whenever the pointee is word-sized, an aggregate, or unrecoverable — the unchanged word move.
+pub deref_bitcast_pointee_bytes := fn(p : ptr(Expr), head : ptr(mut Stmt), src : ptr(u8)) -> usize {
+  t := bitcast_ptr_target_of(p, head, src)
+  if t.n == 0 { return 8 }
+  ps := ptr_target_pointee_s(src, t.s, t.n)
+  pn := ptr_target_pointee_n(src, t.s, t.n)
+  if pn == 0 { return 8 }
+  scalar_byte_size(src, ps, pn)
+}
+
+## Does that pointee present a SIGNED integer? Only the `iN` family; every other narrow pointee
+## (`uN`, `bitsN`, `bool`, `char`, `f32`) is a raw low-N-byte pattern whose word is the zero-extension.
+pub deref_bitcast_pointee_signed := fn(p : ptr(Expr), head : ptr(mut Stmt), src : ptr(u8)) -> bool {
+  t := bitcast_ptr_target_of(p, head, src)
+  if t.n == 0 { return false }
+  ps := ptr_target_pointee_s(src, t.s, t.n)
+  pn := ptr_target_pointee_n(src, t.s, t.n)
+  if pn == 0 { return false }
+  scalar_name_is_signed(src, ps, pn)
+}
+
 ## ─── The ANNOTATION SOURCE SCAN, shared by every backend ───────────────────
 ##
 ## One scan, three questions. Given a position just past a NAME in the source (a local binding's

@@ -8189,6 +8189,24 @@ run subword_ptr_deref 42
 ## one-byte pointee as the canonical spelling. A regressed spelling reads a full word (298) and
 ## returns its own code, so this row names which spelling widened rather than only that one did.
 run issue345_ptr_target_spacing 42
+## Issue #441: an integer→POINTER `bitcast` must LOWER on aarch64 and riscv64, not answer with a
+## fail-loud stub. The `run` row is the x86_64 verdict and the sweeps' corpus entry; the explicit
+## `run_a64`/`run_rv64` rows are what can FAIL on the parent, because a clean trap is an ACCEPTED
+## sweep verdict and a corpus row records whatever it observes — neither can turn 133 into a failure.
+## Both preserved pointer arms are covered: a sub-word pointee, and a pointer-to-user-type pointee
+## (whose file carries no wasm assertion — wasm still stubs that arm and traps, which the sweeps accept).
+run issue441_bitcast_int_to_ptr 42
+run_a64 issue441_bitcast_int_to_ptr 42
+run_rv64 issue441_bitcast_int_to_ptr 42
+run issue441_bitcast_int_to_ptr_struct 42
+run_a64 issue441_bitcast_int_to_ptr_struct 42
+run_rv64 issue441_bitcast_int_to_ptr_struct 42
+## Issue #441 (control): the third preserved non-scalar target — a bare USER TYPE name — is NOT one
+## machine word and has no aggregate-value path on aarch64/riscv64, so it must stay fail-loud there
+## rather than become a wrong value. 133 is the SIGTRAP status of that located fence, not an exit code.
+run issue441_bitcast_aggregate_target_fence 42
+run_a64 issue441_bitcast_aggregate_target_fence 133
+run_rv64 issue441_bitcast_aggregate_target_fence 133
 run ptr_ret_infer 42
 run ambient_hashmap_value 42
 run option_map 42

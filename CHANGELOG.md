@@ -82,6 +82,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An integer-to-pointer `bitcast` now lowers on aarch64 and riscv64 instead of trapping.**
+  `bitcast(ptr([mut] T), n)` had no lowering on either backend: every preserved pointer target
+  answered with an anonymous fail-loud stub (`brk #0 // unsupported bitcast`,
+  `ebreak # unsupported bitcast`), so a program x86_64 runs to completion stopped at a SIGTRAP —
+  exit 133 under qemu — on those two. A pointer value is one machine word and Types §4.4 makes a
+  bitcast the identity on the bits, so the node lowers to exactly its inner value, which is what the
+  x86_64 lower has always emitted. Both preserved pointer shapes are covered: a sub-word pointee
+  (`ptr(mut bits8)`, the arena-handle idiom) and a pointer-to-user-type pointee (`ptr(mut Node)`),
+  in every spelling the grammar admits — `ptr(u8)`, `ptr( mut u8 )` and `ptr (mut u8)` all take the
+  same path. A `deref` LOAD through such a pointer now also moves the pointee width rather than a
+  full word, so a one-byte read reads one byte instead of the seven bytes after it. Two shapes stay
+  fail-loud and are now **located** rather than anonymous: a `bitcast` to a bare user aggregate name
+  (not a single machine word — the stub names the construct and the target type), and a `deref`
+  STORE through a sub-word pointer (a narrow store would expose these backends' non-conforming
+  `@repr(T)` enum tag image, which is a separate gap). x86_64 and wasm are unchanged; with the input
+  tree held fixed the x86_64 emission of the compiler's own build is byte-identical.
+
 - **A comparison whose operand is a struct literal or a payload-carrying variant construction now
   compares componentwise, instead of comparing both operands as the constant zero.** Stdlib §2.6
   defines `eq(in a : T, in b : T) -> bool` with "default = componentwise field equality" derived

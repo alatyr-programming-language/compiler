@@ -30,7 +30,7 @@ stmt_p := ast::stmt_p
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
-(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed) := lower_layout
+(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, bitcast_target_is_pointer, deref_bitcast_pointee_bytes, deref_bitcast_pointee_signed) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
 (param_ann_signed, param_ann_unsigned, named_param_is_float, callee_ret_is_float) := lower_layout
 (callee_ret_is_signed, arrty_elem_signed, lit_arith_i64) := lower_layout
@@ -1056,6 +1056,27 @@ rv_std_load_width_a0 := fn(width : usize, signed : bool, in out sb : rt::StrBuf)
   if width == 4 and (not signed) { push_str(sb, "  lwu a0, 0(a0)\n") }
   if width == 8 { push_str(sb, "  ld a0, 0(a0)\n") }
   if width != 1 and width != 2 and width != 4 and width != 8 { push_str(sb, "  ebreak # unsupported standard scalar width at place\n") }
+}
+
+## Issue #441 — the `deref(p) = v` STORE through a pointer whose pointee width is known. `a1` holds the
+## byte address and `a0` the value; width 8 is the pre-existing `sd a0, 0(a1)`, byte-for-byte.
+##
+## A SUB-WORD pointee is a LOCATED REFUSAL, not a narrow store, and the reason is measured rather than
+## conservative. A narrow store makes the destination's byte image observable at sub-word granularity,
+## and this backend's byte images do not yet conform where the spec pins one: it has no `@repr(T)` enum
+## tag width at all (`src/lower.al` carries `emit_repr_tag_store`/`emit_repr_tag_load`; this file and
+## `src/aarch64.al` contain no `@repr` handling), so an enum local's tag occupies a whole word. With the
+## narrow store in place `test/repr_tag_store.al` answered 20 where x86_64 answers 42 — a wrong value
+## where there had been a trap, which I11 forbids. The READ side has no such hazard and IS narrowed.
+## The residual is the sub-word deref STORE on this backend pair, and it is fail-loud until the
+## `@repr` tag width lands here.
+rv_deref_store_width_a1 := fn(width : usize, in out sb : rt::StrBuf) {
+  if width == 8 { push_str(sb, "  sd a0, 0(a1)\n") }
+  else {
+    push_str(sb, "  ebreak # located: deref-store through a ")
+    push_int(sb, i64(width))
+    push_str(sb, "-byte pointee needs the @repr/sub-word byte image (riscv64)\n")
+  }
 }
 
 ## CLAYOUT S3(c) — THE ONE BYTE-PRECISE WHOLE-VALUE COPIER, riscv64's spelling. `soff` is the
@@ -3966,9 +3987,14 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
     ## `deref(<scalar ptr>)` — LOAD one word through the pointer. Pointer value → a0, then `ld a0, 0(a0)`.
     ## SCALAR only: a struct-through-pointer read is `deref(p).field` = `Field(Deref(p), …)` (Field arm);
     ## a whole-struct `deref(p)` copy is DEFERRED (multi-word). This arm never sees those.
+    ## Issue #441 — the load NARROWS to the pointee width when the pointer came from a preserved
+    ## `bitcast(ptr(<sub-word scalar>), …)`, either as this operand or through a local bound from one
+    ## (`lower_layout` owns that recovery for both non-x86 backends). Every other pointer answers 8 and
+    ## keeps the byte-identical `ld a0, 0(a0)`. Without this the pointer identity added to the `Bitcast`
+    ## arm would read EIGHT bytes where one was meant — a wrong value where there had been a trap.
     Expr::Deref(inner) => {
       emit_rv_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      push_str(sb, "  ld a0, 0(a0)\n")
+      rv_std_load_width_a0(deref_bitcast_pointee_bytes(inner, body_head, src), deref_bitcast_pointee_signed(inner, body_head, src), sb)
     }
     Expr::Bin(op, l, r) => {
       ## Stdlib §2.6 BARE AGGREGATE COMPARISON — fail loud BEFORE the operands are materialized. Each
@@ -4760,14 +4786,29 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       }
       else { push_str(sb, "  ebreak\n") }
     }
-    ## A preserved bare narrow scalar bitcast restores the target's zero/sign-extended word. Pointer
-    ## and aggregate casts retain the existing fail-loud backend path.
+    ## A preserved bare narrow scalar bitcast restores the target's zero/sign-extended word. A POINTER
+    ## target is the machine-word IDENTITY — a pointer value is one word and Types §4.4 makes a bitcast
+    ## the identity on the bits, so the node lowers to exactly its inner value, which is what
+    ## `src/lower.al`'s x86_64 arm has always emitted. Issue #441: this arm answered the pointer shape
+    ## with an anonymous `ebreak`, so `bitcast(ptr(mut bits8), n)` — an integer→pointer reinterpret that
+    ## x86_64 runs — trapped on riscv64 while x86_64 answered 42.
+    ##
+    ## An AGGREGATE target keeps a fail-loud fence, and it is now LOCATED: it names the construct and
+    ## the target type text instead of "unsupported bitcast". `bitcast(<UserType>, v)` is not a single
+    ## machine word, this backend has no aggregate-value bitcast path (`emit_rv_expr` delivers one word
+    ## in a0), and emitting the inner value here would answer `b := bitcast(B, a)` with a WRONG value
+    ## where there had been a trap — which I11 forbids. The enclosing function label above the trap
+    ## locates it in the emitted GAS.
     Expr::Bitcast(inner, ts, tl) => {
       if bitcast_target_is_narrow_scalar(src, ts, tl) {
         emit_rv_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         rv_emit_bitcast_narrow(str_at((src + ts), tl), sb)
+      } else if bitcast_target_is_pointer(src, ts, tl) {
+        emit_rv_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
       } else {
-        push_str(sb, "  ebreak # unsupported bitcast\n")
+        push_str(sb, "  ebreak # unsupported bitcast to aggregate target `")
+        push_str(sb, str_at((src + ts), tl))
+        push_str(sb, "` in value position (riscv64 has no aggregate-value bitcast path)\n")
       }
     }
     Expr::Unchecked(inner) => {
@@ -6888,7 +6929,11 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           emit_rv_expr(val, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
           emit_rv_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-          push_str(sb, "  mv a1, a0\n  ld a0, 0(sp)\n  addi sp, sp, 16\n  sd a0, 0(a1)\n")
+          push_str(sb, "  mv a1, a0\n  ld a0, 0(sp)\n  addi sp, sp, 16\n")
+          ## Issue #441 — the STORE counterpart of the narrowed load, and it decides the OTHER way: a
+          ## sub-word pointee recovered from the preserved `bitcast` is a located refusal rather than a
+          ## narrow store (see the helper for the measurement). Width 8 keeps the former `sd a0, 0(a1)`.
+          rv_deref_store_width_a1(deref_bitcast_pointee_bytes(pe, body_head, src), sb)
         }
         s = nx
       }
