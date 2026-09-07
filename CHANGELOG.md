@@ -82,6 +82,24 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A generic call with more than three comptime type parameters is refused instead of answering the
+  wrong value.** On x86_64 a call to a generic fn with **four** type parameters compiled cleanly,
+  linked, exited normally and returned `0` where 42 was due — the silent class. The arity is measured,
+  not assumed: 1, 2 and 3 type parameters answer correctly and **4 is the first bad one** (5 and 6 fail
+  the same way). The monomorphization machinery carries three type arguments in every column it has
+  (`LCtx`'s parameter bindings, the instance record's type-arg slots, the three type-tags of an
+  instance label, the three erase positions of the call-argument emitter), so with four type
+  parameters only three leading type arguments were erased: the fourth type *name* stayed in the
+  runtime argument list, was evaluated as if it were a variable, and its unwritten frame slot was
+  passed as value argument 0 while every real value argument shifted one place down. The instance
+  label kept three tags for four type arguments. aarch64, riscv64 and wasm already refused the
+  identical shape loudly — an `ld` undefined reference, a SIGTRAP, and a module `wat2wasm` rejects —
+  so x86_64 was the only wrong backend of the four, and the refusal makes them agree. Lowering four
+  type arguments correctly is a capability increment tracked on issue #476, which stays open for it;
+  the working spelling today is to carry the extra types as ordinary value parameters or to split the
+  call. A four-type-parameter generic that is *declared but never called* still builds — the fence is
+  on the call, as it already was on the three cross backends. Nothing in `src/`, `lib/` or the test
+  corpus declares such a generic, so no working program changes and no emitted byte moves.
 - **A range slice indexed directly, `xs[lo..hi][i]`, reads the view's element on x86_64.** Grammar
   §3.4 spells a postfix chain as `primary { postfix }` with both `"[" expr "]"` and the range form
   among the postfix operators, so this is one primary followed by two postfix steps and needs no

@@ -7064,6 +7064,31 @@ run_x86 issue472_generic_overload_arity_split 42
 ## `alloc__hashmap__iter__u64__u64`. This tree: 42. The BARE spelling keeps this independent of the
 ## `pub` markers under discussion in #404.
 run_x86 issue472_hashmap_iter_overloads 42
+## issue #476 — a generic call with FOUR comptime type parameters. The monomorphization machinery
+## carries THREE type arguments (`lower_layout::gen_tparam_count_supported`: `LCtx`'s gp/gp2/gp3, the
+## instance record's ts/ts2/ts3, `tparam_idx`/`idx2`/`idx3`, `emit_generic_label`'s three tags and
+## `emit_call_args`'s three erase positions). x86_64 had no fence there, so the fourth type argument
+## stayed in the runtime argument list: a type NAME was evaluated as a variable, its unwritten frame
+## slot was passed as value argument 0, and every real value argument moved down one place. Parent
+## 2abfe57 on x86_64: `pick4(u64,u64,u64,u64,42)` builds rc=0 and exits **0** where 42 was due — the
+## silent class. The other three backends already refused the identical shape through `gen_call_ok`
+## (parent: aarch64 `ld` undefined reference, riscv64 SIGTRAP 133, wasm `wat2wasm` rejects the
+## module), so x86_64 was the ONLY wrong backend and the refusal makes all four agree.
+##
+## Four rows, and the arities are MEASURED rather than assumed: 3 is correct, 4 is the first bad one.
+##  * the arity-3 CONTROL, one below the threshold, with a distinct exit code per failure mode so a
+##    shifted argument list cannot be confused with a zero or with any other wrong value;
+##  * arity 4 in VALUE position (the shape the issue reports);
+##  * arity 5, one above the threshold — the boundary is a floor, not one special case;
+##  * arity 4 in STATEMENT position with a NON-leading fourth type parameter — the other of the two
+##    places `src/lower.al` emits a generic call. Parent 2abfe57 built it rc=0 and it exited 42 by
+##    luck (the shifted argument was never read), so a value-only fixture would have called this site
+##    healthy. A `declared but never called` four-type-parameter generic still builds: the fence is a
+##    CALL fence, exactly like `gen_call_ok`.
+run issue476_generic_tparam3_ok 42
+build_reject_has issue476_generic_tparam4_reject "more than three comptime type parameters"
+build_reject_has issue476_generic_tparam5_reject "more than three comptime type parameters"
+build_reject_has issue476_generic_tparam4_stmt_reject "more than three comptime type parameters"
 run tuple_enum_component 42
 run nested_enum_struct_enum 42
 run enum_array_struct_payload 42
