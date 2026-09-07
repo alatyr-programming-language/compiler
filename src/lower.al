@@ -4864,6 +4864,81 @@ type_lit_tag := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) ->
   CSpan(s = s, n = n)
 }
 
+## The WORD SIZE of `e` IFF it is an aggregate CONSTRUCTOR EXPRESSION whose value is a MULTI-WORD
+## by-value struct (`P(x = 5, y = 7)`) or enum variant (`E.V(7)`, `Option.Some(1)`, `Option.None`) —
+## else 0. This is the LITERAL DUAL of `agg_value_var_words`, which reads a frame SLOT and therefore
+## answers non-zero only for a `Var`. That `Var`-only classification is what made the bare-comparison
+## structural routing DECLINE a constructor operand: the operand then fell to the scalar
+## fallthrough, where a multi-word aggregate in a scalar value position materializes as the CONSTANT
+## `$0` (`pushq $0` / `movq $0, %rbx` / `cmpq %rbx, %rax` / `sete`), so `P(5,7) == P(5,9)`,
+## `Option.Some(1) == Option.Some(2)` and `Option.None == Option.Some(5)` all read EQUAL, while
+## `p == P(5,7)` and `o == Option.Some(1)` compared the LOCAL's real word 0 against `$0` and read
+## NOT equal for two identical values (issue #469 — a silent wrong value in BOTH directions, on
+## structs, `Option` and payload enums alike). A payload-free variant of a payload-FREE enum
+## (`Tag.Red`) is ONE word and correctly answers 0: it materializes its discriminant, which is
+## exactly why `Tag.Red == Tag.Green` was right all along and the class went unnoticed.
+agg_value_lit_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  sli := struct_lit_info(e)
+  if sli.is_s {
+    if struct_decl_of(cx.decls, cx.src, sli.ss, sli.sl) < 0 { return 0 }
+    return struct_words(cx.decls, cx.src, sli.ss, sli.sl, a)
+  }
+  eli := enum_lit_info(e)
+  if eli.is_e {
+    if enum_decl_of(cx.decls, cx.src, eli.es, eli.el) < 0 { return 0 }
+    return 1 + enum_inst_words(cx.decls, cx.src, eli.es, eli.el, a)
+  }
+  0
+}
+## True IFF `e` is an ENUM constructor expression — the literal dual of `agg_value_var_is_enum`, so
+## the routing's ORDERING fail-loud covers `Pay.B(1) < Pay.B(2)` exactly as it already covers two
+## enum locals (`base::derive::lt`'s enum arm has no emit yet).
+agg_value_lit_is_enum := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  eli := enum_lit_info(e)
+  if eli.is_e == false { return false }
+  enum_decl_of(cx.decls, cx.src, eli.es, eli.el) >= 0
+}
+## The comparison-operand classification the structural routing gate asks: the operand's MULTI-WORD
+## by-value aggregate WIDTH, whether the operand is spelled as a `Var` (a frame slot) or as a
+## CONSTRUCTOR EXPRESSION. 0 for every other shape — a scalar, a pointer-to-aggregate (`ek == 7`,
+## `p != 0`), a single-word aggregate, a tuple/array block (its own arms above), an index read.
+agg_cmp_operand_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  w := agg_value_var_words(e, cx, a)
+  if w != 0 { return w }
+  agg_value_lit_words(e, cx, a)
+}
+## The ENUM half of that classification, for the ordering fail-loud.
+agg_cmp_operand_is_enum := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  if agg_value_var_is_enum(e, cx) { return true }
+  agg_value_lit_is_enum(e, cx)
+}
+## True IFF at least one operand of the comparison is an aggregate CONSTRUCTOR EXPRESSION, i.e. the
+## routing reaches the derive through the newly classified shape rather than the two-`Var` shape that
+## was already routed. Gates the same-type proof below so the pre-existing two-`Var` path keeps the
+## exact emission it had (fixpoint / oracle neutrality is a property of that, not an assertion).
+agg_cmp_has_lit_operand := fn(l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> bool {
+  if agg_value_lit_words(l, cx, a) > 1 { return true }
+  agg_value_lit_words(r, cx, a) > 1
+}
+## The DECL-NAME span of a comparison operand's aggregate type — a `Var`'s slot type name or a
+## constructor expression's own type name, both canonicalized through `type_lit_tag`. `base::derive`
+## is monomorphized on ONE `T` and the mono pre-pass registers the instance from the LEFT operand
+## alone, so two operands naming DIFFERENT aggregate types must never be routed: that would compare
+## through the wrong instance. 0/0 when the operand carries no resolvable aggregate type name.
+agg_cmp_operand_tag := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  sli := struct_lit_info(e)
+  if sli.is_s { return type_lit_tag(cx.decls, cx.src, sli.ss, sli.sl) }
+  eli := enum_lit_info(e)
+  if eli.is_e { return type_lit_tag(cx.decls, cx.src, eli.es, eli.el) }
+  vn := var_name_span(e)
+  if vn.n == 0 { return CSpan(s = 0, n = 0) }
+  ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
+  if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) == false { return CSpan(s = 0, n = 0) }
+  if ent.snl == 0 { return CSpan(s = 0, n = 0) }
+  bn := base_type_name(cx.src, ent.sns, ent.snl)
+  type_lit_tag(cx.decls, cx.src, bn.s, bn.n)
+}
+
 ## The arena-linked field-value (`Arg`) list head of a struct literal `S(f = v, …)`, or 0. Lets a
 ## caller read a struct literal's FIRST field value (`arg_expr_at(struct_lit_fields(e), 0, a)`) —
 ## e.g. the enum-return convention returning a struct payload's word 0. Isolated deref-match.
@@ -16057,15 +16132,39 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         if tuple_value_var_block(l, cx) or tuple_value_var_block(r, cx) {
           panic("selfhost: a bare comparison over a multi-word by-value TUPLE / ARRAY is only supported for SINGLE-WORD INTEGER components against another block of the same width (a str/float/struct/enum/nested-tuple component needs base::derive::eq, which has no type span to key on for an inferred tuple/array local); compare the components explicitly")
         }
-        if agg_value_var_words(l, cx, a) > 1 and agg_value_var_words(r, cx, a) > 1 {
+        ## OPERAND CLASSIFICATION (issue #469). `agg_value_var_words` reads a frame SLOT, so it
+        ## answers non-zero only for a `Var` — and an aggregate CONSTRUCTOR EXPRESSION (`P(x = …)`,
+        ## `E.V(…)`, `Option.Some(…)`) is not a `Var`. The gate therefore declined for it and the
+        ## operand fell through to the scalar `cmpq` below, where a multi-word aggregate in a scalar
+        ## value position materializes as the CONSTANT `$0`: `P(5,7) == P(5,9)` and
+        ## `Option.Some(1) == Option.Some(2)` read EQUAL ($0 == $0) and `p == P(5,7)` read NOT equal
+        ## (the local's word 0 against $0), on programs that compiled cleanly. `agg_cmp_operand_words`
+        ## adds the constructor shape to the SAME gate, so Stdlib §2.6 / Comptime §5.4-§5.5
+        ## componentwise equality reaches `base::derive::eq`/`lt` for it too. The already-routed
+        ## two-`Var` shape is unchanged (`agg_value_var_words` is asked first and answers first).
+        if agg_cmp_operand_words(l, cx, a) > 1 and agg_cmp_operand_words(r, cx, a) > 1 {
           use_lt := op == 24 or op == 25 or op == 26 or op == 27       ## ordering ops call `lt`; `==`/`!=` call `eq`
+          ## SAME-TYPE PROOF, for the newly classified constructor shape only. `base::derive::eq`/`lt`
+          ## is monomorphized on ONE `T` and the mono pre-pass registers the instance from the LEFT
+          ## operand alone (`collect_agg_operand_type`), so two operands naming DIFFERENT aggregate
+          ## types would be compared through the wrong instance — a wrong value, or a link failure.
+          ## Prove the two type names agree, and FAIL LOUD (a located reject) when they do not or
+          ## when either tag is unresolvable. Restricted to a comparison with a constructor operand so
+          ## the pre-existing two-`Var` emission is byte-identical.
+          if agg_cmp_has_lit_operand(l, r, cx, a) {
+            ltag := agg_cmp_operand_tag(l, cx)
+            rtag := agg_cmp_operand_tag(r, cx)
+            if ltag.n == 0 or rtag.n == 0 or streq(cx.src, ltag.s, ltag.n, rtag.s, rtag.n) == false {
+              panic("selfhost: a bare comparison with an aggregate CONSTRUCTOR operand requires both operands to name the SAME struct/enum type (the structural derive is monomorphized on one T); bind the operands to locals of that type first")
+            }
+          }
           ## ORDERING (`<`/`>`/`<=`/`>=`) over a PAYLOAD-carrying ENUM: `base::derive::lt`'s enum arm is a
           ## STATEMENT-form `comptime for v in typeinfo(T).variants { match a { … } }` whose emit is not yet
           ## implemented (the statement-form variant unroll interacts with the `comptime match typeinfo(T)`
           ## context + the >8-word `Decl`-copy landmine + nested variant matches). FAIL LOUD rather than emit
           ## an empty/garbage `lt` body → a SILENT wrong ordering. `==`/`!=` (eq) over enums work (below).
           ## `src/` makes no bare enum ordering → never fires there → fixpoint-neutral.
-          if use_lt and (agg_value_var_is_enum(l, cx) or agg_value_var_is_enum(r, cx)) {
+          if use_lt and (agg_cmp_operand_is_enum(l, cx) or agg_cmp_operand_is_enum(r, cx)) {
             panic("selfhost: ordering (< > <= >=) over a payload-carrying ENUM is not yet supported (base::derive::lt enum arm needs statement-form comptime-for-over-variants emit); compare with == / != or order the payload explicitly")
           }
           di := derive_cmp_decl(cx.decls, cx.src, use_lt)

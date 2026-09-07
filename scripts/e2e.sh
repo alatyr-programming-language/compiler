@@ -4093,6 +4093,39 @@ run issue473_hashmap_entry_unwrap 42
 ## equal). reject_agg_compare locks the classic word-1 case; agg_eq covers `==`/`!=`/`<`/`>` + nested.
 run reject_agg_compare 42
 run agg_eq 42
+# Issue #469 — those two rows compare LOCALS ONLY, and that is the whole gap. `agg_value_var_words`
+# reads a frame SLOT and answers non-zero only for a `Var`, so a bare comparison whose operand is an
+# aggregate CONSTRUCTOR EXPRESSION (`P(x = …)`, `E.V(…)`, `Option.Some(…)`) DECLINED the structural
+# routing above and fell through to the scalar comparison — where a multi-word aggregate in a scalar
+# value position materializes as the constant `$0`. The parent's GAS for `P(5,7) == P(5,9)` is
+# `pushq $0` / `movq $0, %rbx` / `cmpq %rbx, %rax` / `sete`, so it answered EQUAL; where one side was
+# a local, that side's real word 0 was compared against `$0` and answered NOT EQUAL for two identical
+# values. Both directions, on structs, `Option` and payload enums alike, on programs that compiled
+# cleanly — `Option.Some(1) == Option.Some(2)` read TRUE and `o == Option.Some(1)` read FALSE for an
+# `o` bound to that very value. No fixture in test/ bare-compared a constructor expression, so no
+# oracle row blessed any of it. Spec: Stdlib §2.6 (componentwise), Comptime §5.5 (the enum arm
+# recurses with the operator on the whole payload; a different variant is `false`).
+# EIGHTEEN defect probes plus NINE controls, each with its OWN exit code returned on the spot, so a
+# partial fix names the class it missed and a wrongly-equal answer never shares a code with a
+# wrongly-unequal one (no alias encoding). Parent 495cc51: 51 (`e == Pay.B(7,7)` answers NOT equal
+# for an `e` bound to that very value — the issue's own second measurement). This tree: 42.
+# NO `run_wat` row on purpose, and the fixture's probe ORDER is load-bearing for the same reason:
+# `wat_is_agg_place` has the same `Var`-only blind spot and silently answers `Pay.B(7,7) ==
+# Pay.B(7,7)` and `P(5,7) == P(5,7)` as NOT EQUAL by comparing two freshly allocated scratch-block
+# addresses (issue #511, measured identically on the parent and here). The fixture leads with the
+# LOCAL-against-a-construction shapes, which the wat backend already refuses, so wasm reaches its
+# `(unreachable)` before it reaches either of those. Measured on BOTH trees: aarch64 133, riscv64
+# 133, wasm 134 — all three fail loud, none records a wrong value.
+run issue469_agg_ctor_compare 42
+# The two shapes that become a LOCATED REJECT rather than an answer, both of which the parent BUILT
+# and answered wrongly. Ordering over a payload enum needs `base::derive::lt`'s statement-form
+# variant unroll, which has no emit yet — the two-LOCAL form has been refused all along, and a
+# constructor operand now reaches that same refusal instead of a silent "not less" (parent: 42).
+# A comparison between two DIFFERENT aggregate types cannot be routed at all, because the derive is
+# monomorphized on one `T` and the instance is registered from the left operand (parent: EQUAL, 51,
+# two unrelated types comparing `$0` against `$0`).
+build_reject_has reject_enum_ctor_ordering "ordering (< > <= >=) over a payload-carrying ENUM is not yet supported"
+build_reject_has reject_agg_ctor_type_mismatch "requires both operands to name the SAME struct/enum type"
 ## WHOLE-VALUE assignment to a mutable bare-STR global (`S = "…"`): the bare str-global READ path is
 ## itself broken (`.len` reads 0), so no correct observable result exists — the lower FAILS LOUD rather
 ## than emit a word-copy against a broken read. (A str FIELD of a struct global works — global_str_field_write.)

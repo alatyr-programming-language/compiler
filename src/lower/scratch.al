@@ -309,7 +309,31 @@ scan_call_agg_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stm
 pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), a : rt::Arena) -> usize {
   mut m := 0
   match deref(e) {
-    Expr::Bin(op, l, r) => { m = imax(scan_agg_arg_expr(src, decls, l, a), scan_agg_arg_expr(src, decls, r, a)) }
+    Expr::Bin(op, l, r) => {
+      deepest := imax(scan_agg_arg_expr(src, decls, l, a), scan_agg_arg_expr(src, decls, r, a))
+      ## Issue #469 — a bare COMPARISON over multi-word by-value aggregates lowers to a SYNTHESIZED
+      ## `base::derive::eq` / `lt` CALL whose two OPERANDS are its arguments (`lower::emit_gas`'s Bin
+      ## case). That call node is built at EMIT time and is nowhere in the parsed tree, so this scan —
+      ## which reserves the agg-temp pool the ABI needs — never saw its argument list. For a
+      ## CONSTRUCTOR operand (`P(x = 5, y = 7) == P(x = 5, y = 9)`), which `emit_arg` materializes
+      ## into a pool block, the single reserved block then overflowed with a loud abort. Count exactly
+      ## those two operand shapes: a struct or enum LITERAL of more than one word — the shapes
+      ## `agg_cmp_operand_words` now routes to the derive. Each needs its OWN block, or `emit_arg`
+      ## would hand the callee the same address twice (§8 aliasing — the comparison would read a value
+      ## against itself and always answer EQUAL). A `Var` operand is NOT counted: it already has a
+      ## frame home and `emit_arg` passes its address directly, taking no pool block — which is why
+      ## the two-`Var` shape that was routed before this change keeps its exact frame.
+      mut own := 0
+      if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
+        if struct_lit_info(l).is_s or enum_lit_info(l).is_e {
+          if agg_value_words(l, decls, src, a) > 1 { own = own + 1 }
+        }
+        if struct_lit_info(r).is_s or enum_lit_info(r).is_e {
+          if agg_value_words(r, decls, src, a) > 1 { own = own + 1 }
+        }
+      }
+      m = own + deepest
+    }
     Expr::If(c, t, f) => { m = imax(scan_agg_arg_expr(src, decls, c, a), imax(scan_agg_arg_expr(src, decls, t, a), scan_agg_arg_expr(src, decls, f, a))) }
     Expr::Match(scrut, head) => {
       m = scan_agg_arg_expr(src, decls, scrut, a)

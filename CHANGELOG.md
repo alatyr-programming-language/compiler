@@ -82,6 +82,38 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A comparison whose operand is a struct literal or a payload-carrying variant construction now
+  compares componentwise, instead of comparing both operands as the constant zero.** Stdlib §2.6
+  defines `eq(in a : T, in b : T) -> bool` with "default = componentwise field equality" derived
+  structurally over `typeinfo(T)`, and Comptime §5.5 gives the enum body normatively: the same
+  variant compares the whole payload by recursing with the operator, a different variant is not
+  equal. The prelude's derive was already a faithful transcription of that; what declined was the one
+  gate that decides whether a bare `==` reaches it. That gate classified an operand by reading its
+  **frame slot**, so it answered only for a plain variable — and a constructor expression has no
+  slot. The operand then fell through to the scalar comparison, where a multi-word aggregate in a
+  scalar value position materializes as the **constant zero**, and the emitted code for
+  `P(x = 5, y = 7) == P(x = 5, y = 9)` was literally `pushq $0` / `movq $0, %rbx` / `cmpq` / `sete`.
+  Both directions were wrong, on structs, `Option` and payload enums alike, on programs that compiled
+  cleanly and exited normally: `Option.Some(1) == Option.Some(2)` answered **true**,
+  `Option.None == Option.Some(5)` answered **true**, `P(5,7) == P(5,9)` answered **true**, while
+  `o == Option.Some(1)` and `p == P(x = 5, y = 7)` answered **false** for an `o` and a `p` bound to
+  exactly those values. Two shapes were right only by coincidence — two equal literals compared their
+  two zeros — and they now answer through the derive rather than by accident. Ordering was affected
+  identically and did not even reach its own refusal: `p < P(x = 5, y = 9)` answered "not less".
+  `Option` is the most-used enum in the language, which is what makes this the worst member of the
+  class; a discriminant-only enum was never affected, because a payload-free variant materializes its
+  discriminant correctly, and that is why the common case looked healthy. Two shapes that cannot be
+  answered correctly yet become **located rejects** rather than answers: ordering over a
+  payload-carrying enum (the derive's `lt` enum arm has no emit, the same refusal two enum locals
+  already got) and a comparison between two **different** aggregate types (the derive is
+  monomorphized on one type). x86_64 only: aarch64 and riscv64 fail loud on every shape here before
+  and after, and wasm still answers two of them wrongly by comparing two freshly allocated scratch
+  blocks' addresses — a separate defect, tracked on its own, and deliberately not recorded as
+  expected by any gate row. No emitted byte of the compiler's own build moves: the routing is reached
+  by **zero** expressions in `src/` and `lib/`, and of the 1 589 existing test programs exactly one
+  changes emission (a struct's enum field bound to a local, compared against a nullary variant, which
+  keeps its answer and now gets it through the derive).
+
 - **An undeclared name used as an operand inside an `if` or `while` condition is refused, instead of
   choosing a branch by a garbage read.** Declarations §5 makes scope lexical and block-structured — a
   name is visible in the scope where it is declared and in all nested scopes — and §7.2 makes a local
