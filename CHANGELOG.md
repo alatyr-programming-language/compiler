@@ -82,6 +82,24 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A field read through `deref(ptr(x))` on a by-reference `in out` struct parameter now answers the
+  field instead of `0`.** `deref(ptr(x)).b`, where `x` is an `in out` struct parameter, compiled
+  cleanly, emitted no diagnostic and produced a literal zero, so in an arithmetic context the answer
+  simply came out short — `40 + deref(ptr(x)).b` returned 40 where 101 was due. The emitter's scalar
+  field case reaches a pointee read through five span resolvers that each peel a different inner node
+  (a `Var`, a nested `Deref`, a `Call`, a `Field`, an `Index`); `Field(Deref(AddrOf(Var)))` is none of
+  them, so no arm claimed the read and it fell through to the placeholder `movq $0, %rax`. Memory §4.3
+  makes `ptr(x)` the address of the place `x`, so `deref(ptr(x))` **is** the place `x` and the read is
+  the ordinary `x.f`. The `AddrOf` is now peeled and the read routed onto the pointee arm an `ek = 7`
+  pointer local already uses, guarded on the single slot shape whose word really is a pointer to the
+  caller's struct — a by-reference struct parameter — so it emits the same instruction pair the two
+  working neighbours already emit: the direct `x.f` read on that parameter, and `deref(q).f` through a
+  `ptr(T)` callee. Both the word tier (all-`u64` fields) and the standard byte tier (mixed `u32`/`u16`/
+  `u64` widths, a sized load) are covered. The discriminator was the by-reference parameter root, not
+  the `deref(ptr(...))` spelling. The non-x86 backends fail loud on this read and are unchanged
+  (aarch64 133, riscv64 133, wasm 134, before and after); with the input tree held fixed in both
+  directions the x86_64 emission of the compiler's own build is byte-identical.
+
 - **An integer-to-pointer `bitcast` now lowers on aarch64 and riscv64 instead of trapping.**
   `bitcast(ptr([mut] T), n)` had no lowering on either backend: every preserved pointer target
   answered with an anonymous fail-loud stub (`brk #0 // unsupported bitcast`,
