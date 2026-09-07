@@ -107,6 +107,27 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   byte comparison of the emitted GAS later contradicted. Until this landed, a census claim needed
   that companion measurement to be evidence at all.
 
+- **Indexing a module-level `[str; N]` global now reads the element it names.** `G[k][j]` — the byte
+  at index `j` of the `str` element `k` — answered **5** where **90** was due, and the element used as
+  a whole `str` value was worse: `str_eq(G[k], "…")` was unconditionally **false** and
+  `bytes(G[k])[j]` trapped on a zero length. The same spellings over a `[str; N]` **local** have been
+  correct since 0.1.x, so two spellings of one read disagreed on a clean compile, and the wrong answer
+  was a real string byte rather than obvious garbage. Two defects stacked. Types §7 makes each element
+  a two-word `{ptr, len}` view, but a `str` literal has no scalar initializer value, so the global's
+  storage imaged as **one `.quad 0` per element** — a null pointer, no length word, and a one-word
+  stride — meaning no addressing could have answered correctly. On top of that every str-element
+  recognizer resolves its root through the frame-slot map, which a global has none of, so the element
+  fell to the empty-pair default and the nested byte read fell to the untyped element-address tail
+  (frame slot 0 before 0.1.x's refusal, a located refusal after it). Both `mut` and non-`mut` roots
+  are covered, the element index is bounds-checked against the array's static `N` and the byte index
+  against that element's runtime length, and a frame local that shadows the global name keeps its own
+  local path. Two shapes stay **loud** rather than becoming plausible wrong values: a whole-element
+  write `G[i] = <str>` (the only available store arm would put one word mid-element, corrupting a
+  neighbour) and an array global that mixes `str` elements with non-str ones (element 0 fixes the
+  stride). `G.len` on any array global, and `for s in G` over a `[str; N]`, are separate reads and are
+  unchanged. aarch64, riscv64 and wasm still trap on every `str` index rather than answering a wrong
+  value, exactly as they do for the local spelling. No emitted byte of the compiler's own build moves:
+  `src/` and `lib/` declare no module-level array global at all.
 
 ## 0.2.0 — 2026-09-07
 

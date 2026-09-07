@@ -6192,6 +6192,12 @@ run_x86 checked_str_oob 132
 ## The inner byte index of `arr[k][j]` over a [str; N] is checked against that ELEMENT's runtime
 ## len (issue #394); before the fix the shape had no bounds check at all and ran to a normal exit.
 run_x86 checked_str_array_elem_byte_oob 132
+## The GLOBAL twin of the row above (issue #495): the inner byte index of `G[k][j]` is checked against
+## that ELEMENT's runtime len, and the OUTER element index against the static N the `.data` image was
+## emitted with. Neither bound existed on the parent — the element pair was never materialized, so the
+## shape was refused or answered an empty view instead of reaching a runtime trap.
+run_x86 checked_global_str_array_elem_byte_oob 132
+run_x86 checked_global_str_array_elem_oob 132
 ## `bytes(s)[i]` — the third view-byte-index shape, and the one that had NO bounds check at all
 ## (issue #416): an out-of-range read ran to a normal exit carrying the byte past the run. It is now
 ## checked against the view's runtime len like the other two. The `unchecked` companion below proves
@@ -6293,6 +6299,15 @@ check_accept slice_str_array_local
 ## checks, failure codes from 100.
 run str_array_elem_byte_index 42
 check_accept str_array_elem_byte_index
+## issue #495: the GLOBAL twin of the row above — `G[k][j]` on a MODULE-LEVEL `[str; N]`. Two silent
+## defects: a str element has no scalar init value, so every element imaged as ONE `.quad 0` (null ptr,
+## no len word, a 1-word stride), and the read fell to the untyped `emit_index_addr` tail (frame slot 0
+## -- 5 where 90 was due -- before #425, a refusal after) while the element as a str VALUE fell to
+## `emit_str_pair`'s EMPTY-pair default, making `str_eq(G[k], "…")` unconditionally false. `mut` and
+## non-`mut` roots, unequal element lengths, a local shadowing the global name, and the LOCAL spelling
+## as a control; every distinguishable wrong answer carries its own code (#386).
+run global_str_array_elem_byte_index 42
+check_accept global_str_array_elem_byte_index
 ## §4 layout: a nested enum payload (an enum variant whose payload is another enum) — recursive
 ## construction + nested match reads the inner enum's disc/payload.
 run nested_enum_payload 42
@@ -8039,6 +8054,16 @@ build_reject_has reject_index_scalar_ptr "indexing a SCALAR local/param"
 ## non-x86 tails are separate code and untouched: they still emit for this shape and TRAP at runtime
 ## (a133/rv133/wasm134), which is the acceptable half of correct-or-trap, so no `emit_reject_has` row.
 build_reject_has reject_index_base_not_a_place "index BASE is not a named array/slice place"
+## Issue #495 — the two shapes the str-element array GLOBAL fix leaves as located refusals rather than
+## silent wrong values. (1) A whole-element WRITE `G[i] = <str>`: the only store arm that could claim it
+## is the scalar one, which puts ONE word at `LABEL + i*8` — element 0's LENGTH word for `G[1]` — so it
+## corrupts a neighbour and leaves the named element untouched. On the parent that corruption was masked
+## because no element read worked either; with the read correct it would surface as a plausible byte.
+## (2) A MIXED array global whose first element is a str and whose later ones are not: element 0 fixes
+## the 2-word stride, and sema accepts the mixed literal, so the emitter refuses instead of imaging two
+## widths. Both compiled with rc 0 on the parent. The non-x86 tails are separate code and untouched.
+build_reject_has reject_global_str_array_elem_write "scalar store would write one word mid-element"
+build_reject_has reject_global_str_array_mixed_elems "MIXES \`str\` elements with non-str ones"
 run_x86 index_base_tail_controls 42
 check_accept index_base_tail_controls
 ## Grammar §3.4 / Types §9.4 (#422): a RANGE SLICE used DIRECTLY as an index base, `xs[lo..hi][i]`, is
