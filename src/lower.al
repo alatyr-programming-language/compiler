@@ -11202,6 +11202,64 @@ byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
   false
 }
 
+## Is the local named `[s, n)` an INFERRED pointer bound as `q := ptr(<str local>)` — i.e. does `q`
+## hold the ADDRESS of a §7 two-word `{ptr, len}` VIEW? SOURCE-SCAN from the slot's DECLARATION name
+## span (`ent.ns`/`ent.nl`), the same anchor `byte_ptr_local` and `slot_name_is_annotated` use: the
+## next non-space bytes must be `:=`, then `ptr(`, an optional `mut `, an IDENTIFIER, `)`, and a
+## terminator — the RHS must be EXACTLY `ptr(<ident>)`, so `ptr(s) + k` or `ptr(s.f)` is not this
+## shape. The identifier's own slot decides: only a `str` LOCAL (`ek == 4`, not `is_ref`) qualifies,
+## whose frame pair is `ptr` at the slot word and `len` at the next HIGHER address — exactly the
+## ascending `(%rax)` / `8(%rax)` the pointee-view read moves.
+##
+## Why a BOOLEAN and not a `CSpan`: `str` is structural, so an `ek == 4` slot carries NO type span
+## (`bind_str_slot` leaves `sns`/`snl` zero) and the binding `q := ptr(s)` spells no type either.
+## There is therefore no `str` span in the source to hand back — but the pointee-view read does not
+## need one, it needs to know the pointee is the pair. `slot_ptr_pointee_span` (span-valued) is left
+## untouched for exactly that reason: it cannot answer this shape, and widening it would change the
+## `deref` LOAD/STORE width resolvers that share it.
+##
+## A by-ref `str` PARAM is excluded (`is_ref`): its slot holds a POINTER to the caller's pair, so
+## `ptr(s)` there is the address of that pointer word, not of the pair.
+##
+## The scan is bounded by the EXACT source-buffer extent `emit_program` publishes in `LOWER_SRC_N`
+## (fail-closed at 0, cf. issue #340); every read goes through `ptr_scan_has` / `ptr_scan_ws` or is
+## proven under `p < end`.
+addr_view_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
+  ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
+  if streq(cx.src, ent.ns, ent.nl, s, n) == false { return false }
+  if ent.ek != 0 { return false }
+  if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return false }
+  end := LOWER_SRC_N
+  mut p := ent.ns + ent.nl
+  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
+  if ptr_scan_has(cx.src, end, p, ":=") == false { return false }
+  p = p + 2
+  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
+  if ptr_scan_has(cx.src, end, p, "ptr(") == false { return false }
+  p = p + 4
+  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
+  if ptr_scan_has(cx.src, end, p, "mut ") {
+    p = p + 4
+    while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
+  }
+  vs := p
+  mut stop := false
+  while p < end and stop == false {
+    ch := str_at((cx.src + p), 1)
+    if ch == ")" { stop = true }
+    else if ch == " " or ch == "\n" or ch == "\t" or ch == "\r" or ch == ";" or ch == "}" or ch == "(" or ch == "[" or ch == "." or ch == "," { return false }
+    else { p = p + 1 }
+  }
+  if p == vs or stop == false { return false }
+  if p + 1 >= end { return false }
+  t := str_at((cx.src + p + 1), 1)
+  if t != "\n" and t != ";" and t != " " and t != "}" { return false }
+  vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vs, p - vs)))
+  if streq(cx.src, vent.ns, vent.nl, vs, p - vs) == false { return false }
+  if vent.ek == 4 and vent.is_ref == false { return true }
+  false
+}
+
 ## Is the pointee of `p` a SIGNED sub-word integer (`i8`/`i16`/`i32`) — so a `deref` LOAD must
 ## SIGN-extend (`movsbq`/`movswq`/`movslq`) instead of zero-extend? Sees through `Unchecked`; parses
 ## the pointee out of the full pointer target. Bare scalar bitcasts and word-sized/unknown targets
@@ -17388,9 +17446,23 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## then select the actual pointee pair word at its ASCENDING offset (ptr at `(%rax)`, len at
       ## `8(%rax)`) — the same layout `emit_str_pair`'s Deref arm and `ptr(<str local>)` agree on.
       dviewv := deref_var_span(base)
-      if dviewv.n != 0 {
+      if dviewv.n != 0 and (dslf == "len" or dslf == "ptr") {
         dviewent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, dviewv.s, dviewv.n)))
-        if streq(cx.src, dviewent.ns, dviewent.nl, dviewv.s, dviewv.n) and dviewent.ek == 0 and (dviewent.eek == 6 or dviewent.eek == 13) and dviewent.snl != 0 and (dslf == "len" or dslf == "ptr") {
+        ## MARKED — the eek-6/eek-13 slot marker (a call-derived view pointer, a `ptr(str)` param, a
+        ## folded `Some(p)` niche binding). Unchanged.
+        dmarked := streq(cx.src, dviewent.ns, dviewent.nl, dviewv.s, dviewv.n) and dviewent.ek == 0 and (dviewent.eek == 6 or dviewent.eek == 13) and dviewent.snl != 0
+        ## TYPED — the pointee VIEW span the emit-side resolver recovers from the pointer local's own
+        ## spelling: an ANNOTATION (`q : ptr(str) = …`) or the preserved `bitcast(ptr(str), …)` target.
+        ## `deref_view_span_cx` is the same resolver the `ss := deref(q)` binding and `io::print(deref(q))`
+        ## already consult, and it ends in `is_view_type`, so a `ptr(<struct>)` / `ptr(<scalar>)` pointer
+        ## answers {0,0} and keeps its existing arms (issue #456).
+        dtyped := deref_view_span_cx(base, cx).n != 0
+        ## INFERRED — `q := ptr(s)` over a `str` LOCAL. Neither resolver above can see this one: the
+        ## binding carries no annotation and no bitcast, and `str` is structural so the pointee has no
+        ## type span anywhere in the source. `addr_view_ptr_local` answers the only question this read
+        ## needs — is the pointee the two-word pair (issue #456).
+        dinfer := addr_view_ptr_local(cx, dviewv.s, dviewv.n)
+        if dmarked or dtyped or dinfer {
           emit_gas(deref_inner_expr(base), sb, cx, a, nl)
           push_str(sb, "  popq %rax\n")
           if dslf == "ptr" { push_str(sb, "  movq (%rax), %rax\n") }

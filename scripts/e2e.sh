@@ -6763,6 +6763,20 @@ run issue404_hashmap_protocol_shadow_control 42
 # `iter_for_split`.
 run issue451_ptr_str_field 42
 run issue451_split_iterator 42
+# Issue #456 — the LOCAL dual of #451: an INLINE `deref(q).len` / `deref(q).ptr` where `q` is a
+# `ptr(str)` LOCAL answered ZERO in all three spellings of the local (inferred `q := ptr(s)`,
+# annotated `q : ptr(str) = ptr(s)`, and `q := unchecked bitcast(ptr(str), ptr(s))`), on a compiler
+# where the #451 PARAMETER form, the BOUND form (`ss := deref(q)` then `ss.len`) on the same
+# annotated local, and the identical read over a USER STRUCT were all already correct. The
+# pointee-view Field arm keyed only on the eek-6/eek-13 SLOT MARKER, which a local carries in
+# none of the three spellings. The fixture gives every probe three codes — 50/53/56/59/62/65 zero,
+# 51/54/57/60/63/66 never actually read, 52/55/58/61/64/67 a wrong value — and two subjects of
+# DIFFERENT byte length ("a,bc" = 4, "xyzzy!" = 6) so a stale slot or a folded constant cannot
+# agree with a real read. The three controls (codes 20/68, 26-31, 32-37) are green on BOTH sides.
+# Parent c1bb614: 50. This tree: 42.
+# Cross-target rows follow from `run`; the non-x86 backends trap on `str`, exactly as they already
+# do for the two #451 rows above (measured aarch64=133, riscv64=133, wasm=134, unchanged).
+run issue456_ptr_str_local_field 42
 # A `next` this desugar cannot call (a GENERIC `next(K : type, …)`, `alloc::hashmap::HashMapIter`)
 # must be REFUSED, never walked as a slice: the parent built it and ran the body zero times.
 build_reject_has reject_for_generic_iter_next "carries no type arguments"
