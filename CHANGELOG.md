@@ -82,6 +82,28 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A struct field fed by an enum-returning call keeps the enum on wasm too** — and the field *after*
+  it stops reading a wrong number. `Lead(lead = 4, p = mkb(), n = 9)` for `mkb() -> Pay` answered
+  `l.n == 0` where 9 was due, with a clean compile, a zero exit and no trap anywhere. The entry below
+  fixed this shape on the other three backends and left wasm out on the stated grounds that a struct's
+  enum field there "traps per #449". That is only half true, and the silent half is the worse one: #449
+  is the enum-field **read**, which is loud, while this is the store's **width**, so a program that
+  never reads the enum field back — one that uses only its scalar neighbours — got a wrong answer
+  quietly. The same struct built from an enum **literal** answered correctly throughout, which is what
+  separates the two mechanisms: a read defect would have taken the literal spelling down as well. On
+  wasm an enum-returning call yields the i64 **base address** of a freshly bump-allocated
+  `{disc, payload…}` block, and the flattened aggregate writer recognises a struct literal, an enum
+  literal and an array literal — a **call** is none of those, so the field got that pointer as its
+  single word and the writer reported **one** word. The block reservation was already the flattened
+  width, so there was room; only the store was short, and every following field was written
+  `max_arity` words too early while its reader still resolved the field's real offset. The call arm now
+  parks the returned base in the whole-aggregate word-copy scratch local and copies the full
+  `1 + max_arity` words inline at the field's own offset, exactly as the enum-literal arm beside it
+  lays a literal out. Sizing is by `max_arity` and not by the called variant's arity, so the
+  one-payload-word variant of a two-word enum cannot pass by coincidence. A **payload-free** enum call
+  is one word and leaves its struct all-scalar, so it never reaches the new arm and its emitted text is
+  byte-identical. Reading a struct's enum field on wasm is still issue #449 and still refuses loudly.
+
 - **A struct field fed by an enum-returning call keeps the enum** on x86_64, aarch64 and riscv64.
   `Boxed(p = mk())` for `mk() -> Pay` answered 0 on x86_64 and 100 on the other two where 105 was due,
   while the same value bound to a local first (`e := mk()`, then `Boxed(p = e)`) answered 105

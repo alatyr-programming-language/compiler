@@ -1197,6 +1197,20 @@ callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   WSpan(s = rs, n = rn)
 }
 
+## ISSUE #488 — the ENUM TYPE NAME an expression delivers WHEN IT IS A DIRECT CALL to an
+## enum-returning callee, else {0,0}. `callee_ret_enum` above is the wasm twin of aarch64's
+## `a64_call_ret_enum_span` decl lookup; this wrapper is the ONE place that asks "does this expression
+## deliver an enum by CALL", so the flattened aggregate writer and its scalar fallback cannot disagree
+## about how many words such a field occupies. A `Var` / field / index feed is deliberately NOT matched
+## here: an enum PLACE feed is a different arm with a different delivery (no call to make).
+wat_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
+  match deref(v) {
+    Expr::Call(cs, cl, _nn, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a) }
+    _ => {}
+  }
+  WSpan(s = 0, n = 0)
+}
+
 ## The tryable ENUM type span of a WAT `?` operand. Calls use their declared enum return type; enum
 ## locals use the same PARAM/LOCAL resolver as value-position `match`. The wrappers preserve the
 ## expression's type while the emitter handles the actual early return.
@@ -4380,6 +4394,31 @@ emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb
     }
     return 1 + i64(enum_max_arity(decls, src, en.s, en.n, a))
   }
+  ## ISSUE #488 — the same enum field FED BY AN ENUM-RETURNING CALL. `mkb()` yields the i64 BASE
+  ## ADDRESS of a freshly bump-allocated `{disc, payload…}` block (the `Expr::Call` return convention
+  ## the `$__sp` region is built for), and a CALL is none of the three literal shapes above, so it fell
+  ## to the scalar fallback at the bottom: ONE `i64.store` of that POINTER, reporting ONE word. The
+  ## caller then advanced `o2` by 8 instead of `(1 + enum_max_arity) * 8`, so every field AFTER the enum
+  ## field was written `enum_max_arity` words too EARLY while its reader still resolved
+  ## `field_word_offset` — a wrong value with no trap, because nothing here is a `match` (#449 is the
+  ## unrelated READ path and is loud). The reservation was already the flattened `struct_words`, so only
+  ## the store was short.
+  ##
+  ## Deliver it the way the EnumLit arm above delivers a literal: park the returned base in the
+  ## whole-aggregate-copy scratch local (`pcount + nlocals + 2`, the third extra `(local i64)` — WASM has
+  ## no scratch register) and copy the block INLINE at the field's own offset, then report the FULL
+  ## `1 + enum_max_arity` width. `enum_max_arity`, not the called variant's arity: a `B(u64, u64)` and an
+  ## `A(u64)` occupy the same padded field, so sizing by the variant would move the next field for `A`.
+  ce := wat_call_ret_enum_span(pe, decls, src, a)
+  if ce.n != 0 {
+    cew := 1 + i64(enum_max_arity(decls, src, ce.s, ce.n, a))
+    csc := pcount + count_locals(body_head, src, a, decls) + 2
+    push_str(sb, "    (local.set ") ; push_int(sb, csc) ; push_str(sb, " ")
+    emit_wat_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+    push_str(sb, ")\n")
+    emit_wat_word_copy_at(sb, bidx, off, csc, cew)
+    return cew
+  }
   if ex_is_array_lit(pe) {
     ## CLAYOUT S4 (#263) — see the aarch64 twin. A BYTE-TIER element array is an IMAGE: the loop below
     ## writes one machine WORD per field at a `struct_words` element stride, while every reader of
@@ -4422,20 +4461,26 @@ emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb
   return 1
 }
 
-## Emit a WORD-WISE aggregate COPY of `nw` words from the address in local `srcidx` to the address in
-## local `dstidx` (both hold i64 base addresses). Ascending, word k at +k*8 — the layout every aggregate
-## place uses, so it is safe for disjoint blocks (the only kind these callers produce: a fresh `$__sp`
-## block, or an array element vs. an independently-built RHS).
-emit_wat_word_copy := fn(in out sb : rt::StrBuf, dstidx : i64, srcidx : i64, nw : i64) {
+## Emit a WORD-WISE aggregate COPY of `nw` words from the address in local `srcidx` to
+## `[<dstidx> + dstoff]` (both locals hold i64 base addresses). Ascending, word k at +k*8 — the layout
+## every aggregate place uses, so it is safe for disjoint blocks (the only kind these callers produce: a
+## fresh `$__sp` block, or an array element vs. an independently-built RHS). `dstoff` exists so a copy
+## can land on ONE FIELD of a larger block (#488) instead of only at a block's base; the zero-offset
+## wrapper below keeps every pre-existing caller's emitted text byte-identical.
+emit_wat_word_copy_at := fn(in out sb : rt::StrBuf, dstidx : i64, dstoff : i64, srcidx : i64, nw : i64) {
   mut k := 0
   while k < nw {
     push_str(sb, "    (i64.store ")
-    emit_wat_addr(sb, dstidx, k * 8)
+    emit_wat_addr(sb, dstidx, dstoff + k * 8)
     push_str(sb, " (i64.load ")
     emit_wat_addr(sb, srcidx, k * 8)
     push_str(sb, "))\n")
     k += 1
   }
+}
+
+emit_wat_word_copy := fn(in out sb : rt::StrBuf, dstidx : i64, srcidx : i64, nw : i64) {
+  emit_wat_word_copy_at(sb, dstidx, 0, srcidx, nw)
 }
 
 wat_emit_lambda_label := fn(in out sb : rt::StrBuf, src : ptr(u8), ms : usize, ml : usize, fnpos : usize) {
