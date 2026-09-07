@@ -82,6 +82,38 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`.len` and `.ptr` read through a `ptr([T])` answer the slice's length and pointer, not the run's
+  second element.** Types §7 makes a `[T]` binding the two-word `{ptr, len}` view itself — "the view
+  *is* the value", the same pair a `str` is — and Memory §4.3 makes `ptr(x)` the address of that
+  place, so `deref(ptr(v))` is `v`. Instead every read through the pointer answered **element 1 of the
+  underlying run**: with `xs := [7, 3, 9, 11, 13]` and `v := xs[0..4]`, `deref(ptr(v)).len` gave **3**
+  where **4** was due, on a program that compiled cleanly and exited normally. All five spellings the
+  language offers were affected — a `ptr([T])` parameter, a pointer local spelled inferred
+  (`q := ptr(v)`), annotated (`q : ptr([u64]) = ptr(v)`) or bitcast, and the bound form
+  (`ss := deref(q)` then `ss.len`) — and one of them had been answering **0** until the previous
+  release aligned it with the others, so the wrong answer went from obvious garbage to a
+  plausible-looking number. The cause: a slice view local's frame words hold its own pair (pointer at
+  the slot, length at the next higher address, exactly as a `str` local's do), but the slot is flagged
+  by-reference to mean "index *through* word 0", and the address-of path read that flag as "this slot
+  holds a pointer to the whole value" — so `ptr(v)` handed back the **array base** and the read's
+  `+8` landed on element 1. The `str` dual of the same shape was already correct, which is why this
+  one went unnoticed. Both the address-of path and the inferred-pointer-local recognizer now ask the
+  one predicate that already knows which locals carry their own pair, so a by-reference aggregate
+  parameter — whose slot really does hold a pointer to the caller's value — keeps the load it had.
+  The **bound** spelling needed a second answer: reserving two words is not the same as reserving the
+  right two words. `ss := deref(q)` reserved every view pointee as a `str` — two words that are
+  indexed by BYTE — because the binder was asked only "is the pointee the two-word pair", which is
+  true of `str` and `[T]` alike. A `[T]` bound that way had a correct `.len` and answered byte 1 of
+  element 0 for `ss[1]`, so `ss[1]` gave **0** where **20** was due; the same read was refused at
+  compile time on one spelling and segfaulted on the other two only because the address was also
+  wrong, which means fixing the address alone would have converted a refusal and a crash into a
+  silent zero. The binding now reserves an element-indexed slice view carrying the source view's own
+  stride, so `ss[i]`, `ss.len` and `for x in ss` all read the pointee, and a `str` pointee keeps its
+  byte-indexed binding untouched. x86_64 only: aarch64, riscv64 and wasm fail loud on a view read
+  through a pointer, before and after, rather than returning a wrong value. No emitted byte of the
+  compiler's own build moves — the new paths are reached by zero expressions in `src/` and `lib/`,
+  and by zero of the existing test programs.
+
 - **A comparison whose operand is a struct literal or a payload-carrying variant construction now
   compares componentwise, instead of comparing both operands as the constant zero.** Stdlib §2.6
   defines `eq(in a : T, in b : T) -> bool` with "default = componentwise field equality" derived
