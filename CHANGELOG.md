@@ -128,6 +128,31 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   correct value stops compiling. Rendering them needs the type layer rather than a shape-local peel and
   is tracked separately; measured over the compiler's own `src/` and `lib/`, all 1559 tracked
   `test/*.al` and the 421 remaining tracked `.al` files, nothing else reaches the refusal.
+- **A struct field fed by an enum *place* keeps the enum on wasm too** — and the field *after* it stops
+  reading a wrong number. `e := mkb()` and then `Lead(lead = 4, p = e, n = 9)` answered `l.n == 0`
+  where 9 was due, on a program that compiled cleanly, exited zero and trapped nowhere; x86_64,
+  aarch64 and riscv64 all answered correctly. This is the **third** distinct defect at that one wasm
+  aggregate writer, and the entry below is the second: that one fixed the shape whose feed is an
+  enum-returning **call**, written inline in the constructor, and its new arm matched a call and
+  nothing else — deliberately, because a **place** has no call to make and needed its own
+  materialisation. So a local or a parameter whose slot already holds the `{disc, payload…}` block was
+  still none of the writer's known shapes and fell through to the scalar fallback: one store of the
+  place's **block address**, reported as **one** word, while every reader still resolved the field's
+  real offset. All three place spellings were affected — a local initialised from a call, a local
+  initialised from an enum **literal**, and an enum **parameter** — because they are named by three
+  different halves of the same resolver, and the same feed one level down inside a nested struct
+  literal was affected too. The enum **literal** written inline in the constructor answered correctly
+  throughout, which is again what separates a store-width defect from the enum-field **read** (issue
+  #449, which is loud on wasm and unchanged). The single query that asks whether an expression delivers
+  an enum by address now answers for a place as well as for a call, so the two feeds share one width
+  decision instead of two that can drift; it reuses the parameter/local resolver that value-position
+  `match` and the wasm comparison guard already use. Two shapes are deliberately left alone: an enum
+  whose variant carries a **wide** payload, which this backend's enum machinery does not model at all,
+  and a raw **union**, whose field overlaps its members at offset 0 with no discriminant word — sizing
+  a union like an enum moved its neighbour, measured, so the union place feed keeps the behaviour it
+  had. Feeding a struct's enum **field** into another struct's enum field remains a loud refusal on
+  every backend.
+
 - **A struct field fed by an enum-returning call keeps the enum on wasm too** — and the field *after*
   it stops reading a wrong number. `Lead(lead = 4, p = mkb(), n = 9)` for `mkb() -> Pay` answered
   `l.n == 0` where 9 was due, with a clean compile, a zero exit and no trap anywhere. The entry below

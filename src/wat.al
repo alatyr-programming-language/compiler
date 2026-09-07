@@ -1197,15 +1197,43 @@ callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   WSpan(s = rs, n = rn)
 }
 
-## ISSUE #488 — the ENUM TYPE NAME an expression delivers WHEN IT IS A DIRECT CALL to an
-## enum-returning callee, else {0,0}. `callee_ret_enum` above is the wasm twin of aarch64's
-## `a64_call_ret_enum_span` decl lookup; this wrapper is the ONE place that asks "does this expression
-## deliver an enum by CALL", so the flattened aggregate writer and its scalar fallback cannot disagree
-## about how many words such a field occupies. A `Var` / field / index feed is deliberately NOT matched
-## here: an enum PLACE feed is a different arm with a different delivery (no call to make).
-wat_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
+## ISSUE #488 / ISSUE #491 — the ENUM TYPE NAME an expression delivers BY ADDRESS, else {0,0}. On WASM
+## §8 hands an enum over by reference, so both shapes that can feed a struct field give the flattened
+## aggregate writer an i64 BASE ADDRESS rather than a value: a direct CALL to an enum-returning callee
+## (`p = mkb()`, the `$__sp` bump block the callee built — #488) and an enum PLACE, which is an enum
+## PARAM or an enum LOCAL whose slot already holds such a block (`e := mkb()` / `e := Pay.B(5, 6)`,
+## then `p = e` — #491). This is the ONE place that asks the question, so the writer and its scalar
+## fallback cannot disagree about how many words such a field occupies.
+##
+## Each half reuses the resolver its own neighbouring working path already uses. `callee_ret_enum` is
+## the wasm twin of aarch64's `a64_call_ret_enum_span` decl lookup. `base_enum_type` is the PARAM/LOCAL
+## resolver that value-position `match` uses and that #468's `wat_is_agg_place` already asks to classify
+## an enum place on this backend — the same fact, so a second walk here would be a second copy to drift.
+##
+## Two gates on the PLACE half, both measured rather than reasoned to:
+##
+##   * `enum_all_scalar`, exactly as `callee_ret_enum` gates the call half. A variant with a WIDE
+##     payload (`arity == 1`, more than one word) is not modelled by this backend's enum machinery;
+##     `base_enum_type` names it anyway (a param annotation / an EnumLit init is enough for it), and
+##     widening such a store here would be a NEW wrong width, not a fix.
+##   * NOT A UNION. A raw union is carried by the same kind-3 decl shape an enum uses, so
+##     `enum_decl_of` — and therefore `param_enum_type` / `local_enum_type` — answers YES for one. But
+##     `field_words` reserves `union_words` for a union field: members OVERLAP at offset 0 and there is
+##     NO discriminant word, so a `1 + enum_max_arity` copy is both too wide and one word out of
+##     place. Measured: `Lead(lead = 4, p = u, n = 9, big = …)` over `U := union { a(u64), b(u64) }`
+##     answers 42 on wasm today (a 1-word union field and a 1-word pointer store agree by
+##     construction) and 63 — `n` reads the payload — with this arm ungated. So the union place feed
+##     is deliberately left on the scalar fallback.
+##
+## A FIELD (`h.p`) and an INDEX feed are still not matched: those already FAIL LOUD on every backend
+## (measured 134 on wasm and x86_64, 133 on aarch64 and riscv64), so there is no silent width to fix.
+wat_addr_enum_span := fn(v : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
   match deref(v) {
     Expr::Call(cs, cl, _nn, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a) }
+    Expr::Var(vs, vn) => {
+      pl := base_enum_type(params_head, body_head, src, vs, vn, a, decls)
+      if pl.n != 0 and (not lower_layout::is_union_decl(decls, src, pl.s, pl.n)) and enum_all_scalar(decls, src, pl.s, pl.n, a) { return pl }
+    }
     _ => {}
   }
   WSpan(s = 0, n = 0)
@@ -4394,22 +4422,26 @@ emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb
     }
     return 1 + i64(enum_max_arity(decls, src, en.s, en.n, a))
   }
-  ## ISSUE #488 — the same enum field FED BY AN ENUM-RETURNING CALL. `mkb()` yields the i64 BASE
-  ## ADDRESS of a freshly bump-allocated `{disc, payload…}` block (the `Expr::Call` return convention
-  ## the `$__sp` region is built for), and a CALL is none of the three literal shapes above, so it fell
-  ## to the scalar fallback at the bottom: ONE `i64.store` of that POINTER, reporting ONE word. The
-  ## caller then advanced `o2` by 8 instead of `(1 + enum_max_arity) * 8`, so every field AFTER the enum
-  ## field was written `enum_max_arity` words too EARLY while its reader still resolved
-  ## `field_word_offset` — a wrong value with no trap, because nothing here is a `match` (#449 is the
-  ## unrelated READ path and is loud). The reservation was already the flattened `struct_words`, so only
-  ## the store was short.
+  ## ISSUE #488 / ISSUE #491 — the same enum field fed by something that delivers the enum BY ADDRESS
+  ## rather than as one of the three literal shapes above: an enum-returning CALL (`p = mkb()` — #488)
+  ## or an enum PLACE, a param or a local whose slot already holds the block (`e := mkb()` or
+  ## `e := Pay.B(5, 6)`, then `p = e` — #491). Both yield the i64 BASE ADDRESS of a `{disc, payload…}`
+  ## block, and neither is a StructLit / EnumLit / ArrayLit, so both fell to the scalar fallback at the
+  ## bottom: ONE `i64.store` of that POINTER, reporting ONE word. The caller then advanced `o2` by 8
+  ## instead of `(1 + enum_max_arity) * 8`, so every field AFTER the enum field was written
+  ## `enum_max_arity` words too EARLY while its reader still resolved `field_word_offset` — a wrong
+  ## value with no trap, because nothing here is a `match` (#449 is the unrelated READ path and is
+  ## loud). The reservation was already the flattened `struct_words`, so only the store was short.
   ##
-  ## Deliver it the way the EnumLit arm above delivers a literal: park the returned base in the
+  ## Deliver it the way the EnumLit arm above delivers a literal: park the delivered base in the
   ## whole-aggregate-copy scratch local (`pcount + nlocals + 2`, the third extra `(local i64)` — WASM has
   ## no scratch register) and copy the block INLINE at the field's own offset, then report the FULL
-  ## `1 + enum_max_arity` width. `enum_max_arity`, not the called variant's arity: a `B(u64, u64)` and an
+  ## `1 + enum_max_arity` width. `enum_max_arity`, not the fed variant's arity: a `B(u64, u64)` and an
   ## `A(u64)` occupy the same padded field, so sizing by the variant would move the next field for `A`.
-  ce := wat_call_ret_enum_span(pe, decls, src, a)
+  ## The two feeds share this arm because they differ ONLY in how the base is named — `emit_wat_expr`
+  ## renders the call and the place alike (a `(call …)` / a `(local.get …)`), so the copy, the width and
+  ## the reported word count are one decision, not two that can drift.
+  ce := wat_addr_enum_span(pe, params_head, body_head, decls, src, a)
   if ce.n != 0 {
     cew := 1 + i64(enum_max_arity(decls, src, ce.s, ce.n, a))
     csc := pcount + count_locals(body_head, src, a, decls) + 2
