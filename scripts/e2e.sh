@@ -4080,6 +4080,14 @@ build_reject_has deep_field_agg_enum_reject "deep-chain str/enum FINAL field who
 ## `unwrap__Rec` instance the prefix `unwrap(Rec, o)` produces). Scalar / 1-word keeps working (ufcs_option_expect).
 run unwrap_struct_payload 42
 run unwrap_ufcs_struct 42
+## #473: the payload `T` of `unwrap`/`expect` over `Option(T)` is an instantiation of a GENERIC struct
+## (`Pair(u64, u64)`, `alloc::hashmap::Entry(K, V)`). Three source scans classified that type-arg by its
+## FULL text, which streqs no decl name: the enum-value param kept the un-substituted one-payload-word
+## layout, the effective `-> T` return was classified SCALAR, and the tail-match payload was bound as a
+## bare scalar — so `e.val` answered 0 (minimal) or the KEY (the hashmap-iterator walk) while `match`
+## over the same Option was correct. Three or more fields, plus the `match` and non-generic controls.
+run issue473_generic_struct_unwrap 42
+run issue473_hashmap_entry_unwrap 42
 ## A bare comparison (`==`/`!=`/`<`/…) over TWO multi-word by-value struct/enum values now routes to the
 ## structural `base::derive::eq`/`lt` (was a word-0-only silent miscompile: `P(5,7) == P(5,9)` wrongly
 ## equal). reject_agg_compare locks the classic word-1 case; agg_eq covers `==`/`!=`/`<`/`>` + nested.

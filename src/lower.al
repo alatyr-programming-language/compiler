@@ -8273,10 +8273,17 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
       if gpl != 0 and streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
       else if gpl2 != 0 and streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
       else if gpl3 != 0 and streq(src, rs, rn, gps3, gpl3) { rs = its3; rn = itl3 }
-      if struct_decl_of(decls, src, rs, rn) >= 0 and struct_words(decls, src, rs, rn, a) >= 2 { anywide = true }
+      ## STRIP `(…)` type-args for the struct-decl LOOKUP — the same rule `agg_words`/`struct_words`
+      ## already state. A resolved type-arg that is itself a GENERIC-STRUCT INSTANCE (`Pair(u64, u64)`,
+      ## `Entry(K, V)`) streqs the WHOLE text and missed its `Pair`/`Entry` decl, so this width test
+      ## said "not a struct", no substituted span was synthesized, and the param kept the raw
+      ## `Option(T)` layout — ONE payload word. `unwrap`/`expect` over `Option(<generic struct>)` then
+      ## delivered word 0 only and every later field read a stale word (#473). The WIDTH is still
+      ## measured on the FULL span, which `struct_words` substitutes through.
+      rbn := base_type_name(src, rs, rn)
+      if struct_decl_of(decls, src, rbn.s, rbn.n) >= 0 and struct_words(decls, src, rs, rn, a) >= 2 { anywide = true }
       if str_at((src + rs), rn) == "str" { anywide = true }
       if str_at((src + bn.s), bn.n) == "Option" {
-        rbn := base_type_name(src, rs, rn)
         if rbn.n != 0 and str_at((src + rbn.s), rbn.n) == "ptr" { anyfolded = true }
       }
       k += 1
@@ -20684,8 +20691,16 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
         mut array_estride := 1
         mut array_nel := 0
         if nbind == 1 and pty.n != 0 {
-          if struct_decl_of(cx.decls, cx.src, pty.s, pty.n) >= 0 { agg_ek = 2 }
-          else if enum_decl_of(cx.decls, cx.src, pty.s, pty.n) >= 0 { agg_ek = 3 }
+          ## Resolve the payload decl through the payload's BASE name — the third and last copy of
+          ## this three-way payload classification (the statement-match copy below and the one in
+          ## `lower::enum_match` already strip). A GENERIC-INSTANCE payload (`Some(v)` where `v` is a
+          ## `Pair(u64, u64)` / `Entry(K, V)`) streqs no decl by its full text, so this TAIL-match copy
+          ## bound it as a bare scalar: `emit_struct_value`'s Var arm then read `struct_words` of an
+          ## empty span, delivered ZERO return words, and the caller staged stale registers (#473).
+          ## The FULL span is still what lands in the slot, so every width read substitutes through it.
+          ptybn := base_type_name(cx.src, pty.s, pty.n)
+          if struct_decl_of(cx.decls, cx.src, ptybn.s, ptybn.n) >= 0 { agg_ek = 2 }
+          else if enum_decl_of(cx.decls, cx.src, ptybn.s, ptybn.n) >= 0 { agg_ek = 3 }
           else if str_at((cx.src + pty.s), pty.n) == "str" { agg_ek = 4 }   ## a str payload → 2-word {ptr, len} binding
           else {
             pae := array_elem_span(cx.src, pty.s, pty.n)
@@ -24900,8 +24915,15 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   rpsub := subst_param_enum_span(d.ret_ts, d.ret_tl, p.decls, p.src, deref(p.mar), p.mar, gps, gpl, its, itl, gps2, gpl2, its2, itl2, gps3, gpl3, its3, itl3)
   if rpsub.n != 0 { ers = rpsub.s; erl = rpsub.n }
   renum := erl != 0 and enum_decl_of(p.decls, p.src, ers, erl) >= 0
+  ## STRIP `(…)` type-args for the struct-decl LOOKUP of the EFFECTIVE return type. `ers`/`erl` is
+  ## the SUBSTITUTED span, so a generic fn declared `-> T` instantiated at a GENERIC-STRUCT instance
+  ## (`unwrap(Pair(u64, u64), o) -> Pair(u64, u64)`) presents the full text here, which streqs no decl
+  ## name — the return was classified SCALAR and delivered word 0 in %rax alone while the caller
+  ## staged the full aggregate, so every field after the first read a stale register (#473). The WORD
+  ## COUNT is still measured on the FULL span, which `struct_words` substitutes through.
+  ersbn := base_type_name(p.src, ers, erl)
   mut rstruct := false
-  if erl != 0 and struct_decl_of(p.decls, p.src, ers, erl) >= 0 {
+  if erl != 0 and struct_decl_of(p.decls, p.src, ersbn.s, ersbn.n) >= 0 {
     rsw := struct_words(p.decls, p.src, ers, erl, deref(p.mar))
     rstruct = rsw >= 1 and rsw <= 7
   }
