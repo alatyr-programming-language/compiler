@@ -32,25 +32,25 @@ pub clamp := fn(T : type, x : T, lo : T, hi : T) -> T {
 ## the body selects**: `setb` (unsigned "below") vs `setl` (signed "less"). Lowered
 ## to `cmp`+`setcc`+`movzbq`. x86_64 first (the priority arch); other arches keep
 ## the built-in comparison until their fused `cmp`+`cset` lands (a).
-@inline lt := fn(a : u64, b : u64) -> bool {
+@inline pub lt := fn(a : u64, b : u64) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.setb(out, a, b) }
   return out
 }
 
-@inline lt := fn(a : i64, b : i64) -> bool {
+@inline pub lt := fn(a : i64, b : i64) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.setl(out, a, b) }
   return out
 }
 
-@inline eq := fn(a : u64, b : u64) -> bool {
+@inline pub eq := fn(a : u64, b : u64) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.sete(out, a, b) }
   return out
 }
 
-@inline eq := fn(a : i64, b : i64) -> bool {
+@inline pub eq := fn(a : i64, b : i64) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.sete(out, a, b) }
   return out
@@ -62,25 +62,25 @@ pub clamp := fn(T : type, x : T, lo : T, hi : T) -> T {
 ## Scalar comparison routing is x86_64-gated (`routes_comparison`), so — like the
 ## 64-bit ones — only the x86_64 branch is needed; other arches keep the built-in
 ## comparison.
-@inline lt := fn(a : u32, b : u32) -> bool {
+@inline pub lt := fn(a : u32, b : u32) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.setb(out, a, b) }
   return out
 }
 
-@inline lt := fn(a : i32, b : i32) -> bool {
+@inline pub lt := fn(a : i32, b : i32) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.setl(out, a, b) }
   return out
 }
 
-@inline eq := fn(a : u32, b : u32) -> bool {
+@inline pub eq := fn(a : u32, b : u32) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.sete(out, a, b) }
   return out
 }
 
-@inline eq := fn(a : i32, b : i32) -> bool {
+@inline pub eq := fn(a : i32, b : i32) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.sete(out, a, b) }
   return out
@@ -89,42 +89,42 @@ pub clamp := fn(T : type, x : T, lo : T, hi : T) -> T {
 ## `u8`/`i8`/`u16`/`i16` comparisons — same shape (a narrow value is held
 ## sign/zero-extended in its register, so `cmpq`+`setcc` is correct); `setb`
 ## unsigned vs `setl` signed. x86_64-gated like the wider ones.
-@inline lt := fn(a : u8, b : u8) -> bool {
+@inline pub lt := fn(a : u8, b : u8) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.setb(out, a, b) }
   return out
 }
-@inline eq := fn(a : u8, b : u8) -> bool {
+@inline pub eq := fn(a : u8, b : u8) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.sete(out, a, b) }
   return out
 }
-@inline lt := fn(a : i8, b : i8) -> bool {
+@inline pub lt := fn(a : i8, b : i8) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.setl(out, a, b) }
   return out
 }
-@inline eq := fn(a : i8, b : i8) -> bool {
+@inline pub eq := fn(a : i8, b : i8) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.sete(out, a, b) }
   return out
 }
-@inline lt := fn(a : u16, b : u16) -> bool {
+@inline pub lt := fn(a : u16, b : u16) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.setb(out, a, b) }
   return out
 }
-@inline eq := fn(a : u16, b : u16) -> bool {
+@inline pub eq := fn(a : u16, b : u16) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.sete(out, a, b) }
   return out
 }
-@inline lt := fn(a : i16, b : i16) -> bool {
+@inline pub lt := fn(a : i16, b : i16) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.setl(out, a, b) }
   return out
 }
-@inline eq := fn(a : i16, b : i16) -> bool {
+@inline pub eq := fn(a : i16, b : i16) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.sete(out, a, b) }
   return out
@@ -139,22 +139,22 @@ pub clamp := fn(T : type, x : T, lo : T, hi : T) -> T {
 ## non-strict `<=`/`>=` MUST derive as `lt OR eq` (NOT the total-order shortcut
 ## `not lt(swapped)`, which would be `true` for NaN) — the compiler routes them so
 ## (§4.3a float branch). x86_64-gated like the integer comparisons.
-@inline lt := fn(a : f64, b : f64) -> bool {
+@inline pub lt := fn(a : f64, b : f64) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.fltsd(out, a, b) }
   return out
 }
-@inline eq := fn(a : f64, b : f64) -> bool {
+@inline pub eq := fn(a : f64, b : f64) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.feqsd(out, a, b) }
   return out
 }
-@inline lt := fn(a : f32, b : f32) -> bool {
+@inline pub lt := fn(a : f32, b : f32) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.fltss(out, a, b) }
   return out
 }
-@inline eq := fn(a : f32, b : f32) -> bool {
+@inline pub eq := fn(a : f32, b : f32) -> bool {
   mut out : bool = false
   comptime if target.arch == Arch.x86_64 { x86_64.feqss(out, a, b) }
   return out

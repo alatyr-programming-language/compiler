@@ -12,7 +12,7 @@
 ## unrolled arm per variant, the whole payload bound and compared with `==` (a unit
 ## variant's empty payload compares trivially equal); a scalar leaf compares
 ## directly. An aggregate recurses through the per-field/-payload `==`.
-eq := fn(T : type, a : T, b : T) -> bool {
+pub eq := fn(T : type, a : T, b : T) -> bool {
   comptime match typeinfo(T) {
     Struct(_) => {
       ## RECURSE EXPLICITLY (`eq(f.type, …)`, mirroring `hash(f.type, …)`) rather than the bare
@@ -59,7 +59,7 @@ eq := fn(T : type, a : T, b : T) -> bool {
 ## **struct**, the first field at which the two differ decides; for an **enum**,
 ## the variant **declaration order** decides, then the payload. A scalar leaf
 ## orders directly; equal ⇒ not less-than.
-lt := fn(T : type, a : T, b : T) -> bool {
+pub lt := fn(T : type, a : T, b : T) -> bool {
   comptime match typeinfo(T) {
     Struct(_) => {
       ## RECURSE EXPLICITLY (`lt(f.type, …)`) rather than the bare `a.(f) < b.(f)`: a nested aggregate
@@ -108,7 +108,7 @@ lt := fn(T : type, a : T, b : T) -> bool {
 ## variant's payload (comptime variant match); an **array** folds element
 ## hashes; a scalar leaf hashes its own value. Recurses, so padding never enters the
 ## hash. Equal values (same variant / elements) hash equally — consistent with `eq`.
-hash := fn(T : type, v : T) -> u64 {
+pub hash := fn(T : type, v : T) -> u64 {
   comptime if (match typeinfo(T) { Struct(_) => true; _ => false }) {
     mut h : u64 = 1469598103934665603
     comptime for f in typeinfo(T).fields {
@@ -167,6 +167,6 @@ str_hash := fn(s : str) -> u64 {
 
 ## Content hash for `str` (FNV-1a over the bytes) — a concrete overload of `hash`,
 ## so a `str`-keyed container hashes by content, not by the {ptr,len} struct bits.
-hash := fn(s : str) -> u64 {
+pub hash := fn(s : str) -> u64 {
   str_hash(s)
 }

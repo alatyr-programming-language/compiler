@@ -1875,6 +1875,52 @@ issue363_chariter_public_test() {
   rm -rf "$p/target"
 }
 
+## Issue #524 / Stdlib §1 + §7.1, appendix §8.6, Modules §3:90-92 — an EXTERNAL package must reach
+## the base tier through the qualified `pub`-chain surface. §8.6 makes every definition in the stdlib
+## appendix required v1 content, §3:90-92 makes the `pub` chain to the root the ONLY way out of a
+## package, and §1/§7.1 require the base tier to be reachable from any program. Seven families are
+## exercised in one artifact (num overflow policies, cmp `eq`/`lt`, derive `eq`/`lt`, u128 `uint(N)`
+## operators, the §5.1/§5.2.1 alloc surface, `assert`, `exit`); every one of them was refused with a
+## located `check` diagnostic on the parent. The parent rejection is recorded in the fixture; this
+## row proves the fixed package leaves NO artifact during check and runs the external consumer to 42
+## after build. Default build path, no `ALATYR_OSPLIT`.
+issue524_base_tier_public_test() {
+  local p="$(_fixture_tree package)/issue524_base_tier_public"
+  local err="$T/issue524_base_tier_public.check.err"
+  [ -f "$p/package.al" ] || { echo "MISS issue524_base_tier_public: no package manifest"; fail=1; return; }
+  [ -f "$p/src/main.al" ] || { echo "MISS issue524_base_tier_public: no external consumer"; fail=1; return; }
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" check package.al ) >"$T/issue524_base_tier_public.check.out" 2>"$err"
+  local rc=$?
+  if [ "$rc" != 0 ] || [ -e "$p/target" ] || [ -s "$T/issue524_base_tier_public.check.out" ] || [ -s "$err" ]; then
+    echo "FAIL issue524_base_tier_public: check rc=$rc target=$(test -e "$p/target" && echo yes || echo no) diagnostic=$(cat "$err" 2>/dev/null)"
+    fail=1
+    return
+  fi
+
+  rm -rf "$p/target"
+  ( cd "$p" && "$CC" build package.al ) >"$T/issue524_base_tier_public.build.out" 2>"$T/issue524_base_tier_public.build.err"
+  rc=$?
+  local bin="$p/target/debug/issue524-base-tier-public"
+  if [ "$rc" != 0 ] || [ ! -x "$bin" ]; then
+    echo "FAIL issue524_base_tier_public: build rc=$rc artifact=$(test -x "$bin" && echo yes || echo no) diagnostic=$(cat "$T/issue524_base_tier_public.build.err" 2>/dev/null)"
+    fail=1
+    return
+  fi
+
+  _e2e_exec "$bin" >/dev/null 2>&1
+  local got=$?
+  if _e2e_runtime_failure "issue524_base_tier_public" "$got"; then return; fi
+  if [ "$got" = 42 ]; then
+    echo "ok   issue524_base_tier_public: external qualified num/cmp/derive/u128/alloc/assert/exit consumer, artifact 42"
+  else
+    echo "FAIL issue524_base_tier_public: artifact exit=$got want 42"
+    fail=1
+  fi
+  rm -rf "$p/target"
+}
+
 ## Issue #404 / Stdlib appendix §6 + §8.5 — an external package must reach `HashMap`'s iterator
 ## protocol through the public QUALIFIED `iter`/`next` surface. §6 names `iter` in the closed v1
 ## surface of `HashMap(K, V)` and §8.5 makes the §6 alloc-tier types required content given an
@@ -5284,6 +5330,7 @@ tool17_declaration_target_when_test
 tool17_prelude_visibility_test
 issue363_chariter_public_test
 issue404_hashmap_public_test
+issue524_base_tier_public_test
 ext_test package_cli_test
 ## The toolchain-spawn regression (scripts/env_size_test.sh). An environment too large for one read used
 ## to truncate mid-entry, after which `build_envp` wrote its terminating word 8 bytes PAST its reservation
@@ -7734,6 +7781,19 @@ run ambient_alloc_into_struct 42
 run ambient_alloc_attr 42
 run ambient_alloc_scalar 42
 run ambient_alloc_deref_field 42
+## Issue #524 over-reach controls — publishing the 203 specification-enumerated base declarations
+## must not publish anything else. Each of these four rows names ONE declaration that stays private
+## and asserts BOTH `check` and `build` refuse it at exactly that line and leave no artifact. Three
+## are from the 21 genuinely-internal names of #524's exclusion list, one per owning module
+## (`split_byte` — lib/base/str.al, `sift_down` — lib/base/slice.al, `buf_push` — lib/base/alloc.al);
+## the fourth is `alloc_into`, which the #403 decision keeps private because no user source NAMES it
+## (Modules §3:73 — visibility is who may name a declaration; the `@alloc` desugar synthesizes that
+## callee span). Each fixture first calls a PUBLIC sibling from the same module, so the rejection
+## cannot be an un-injected module masquerading as a visibility refusal.
+check_build_located reject_base_private_split_byte 13 "check: invalid"
+check_build_located reject_base_private_sift_down 12 "check: invalid"
+check_build_located reject_base_private_buf_push 19 "check: invalid"
+check_build_located reject_base_private_alloc_into 26 "check: invalid"
 ## issue #349 — `Arena.allocate` VALIDATES the requested alignment before the alignment
 ## arithmetic (Stdlib appendix §5.1 `BadAlignment`). Pre-fix, `align = 3` over a fresh arena
 ## returned `Ok(idx = 0)` (a misaligned success, exit 100 here) and `align = 0` reached

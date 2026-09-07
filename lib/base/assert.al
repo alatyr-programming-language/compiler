@@ -3,6 +3,6 @@
 ## Base tier (freestanding). In a `comptime` context a false `assert` reaches
 ## `panic` during comptime evaluation, which is a **compile error** (Stdlib §4.3)
 ## — the failure is statically proven and diagnosed at build time.
-assert := fn(cond : bool) {
+pub assert := fn(cond : bool) {
   if not cond { panic("assertion failed") }
 }

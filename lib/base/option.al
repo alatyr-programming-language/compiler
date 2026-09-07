@@ -3,7 +3,7 @@
 ##
 ## Satisfies the `Tryable` protocol (success = `Some`, failure = `None`), so
 ## `x?` unwraps a `Some` or propagates a `None` (Control Flow §8.2).
-Option := fn(T : type) -> type { return enum { None, Some(T) } }
+pub Option := fn(T : type) -> type { return enum { None, Some(T) } }
 
 ## Curated operations (Stdlib §160). Unwrapping a `None` is a **defined-failure**
 ## `panic` (§4), never UB — a **named** method (CF-7/CF-9: no `!` force-unwrap).

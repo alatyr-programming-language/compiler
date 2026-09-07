@@ -12,7 +12,7 @@
 ## single-file compile that references `u128` by bare name OR instantiates a bare `uint(` (cli.al
 ## `ambient_paths`); dormant for the self-host build (`src/` never mentions either outside
 ## comments), so the TOOL-1 fixpoint is unaffected.
-uint := fn(comptime N : u64) -> type { struct { words : [u64; N/64] } }
+pub uint := fn(comptime N : u64) -> type { struct { words : [u64; N/64] } }
 
 ## `u128 ≡ uint(128)` (Types §7) — a type ALIAS as a plain value decl: the parser records the
 ## `ident(…)` RHS span in the decl's `alias_ts`/`alias_tl`, and every type-position consumer
@@ -21,14 +21,14 @@ uint := fn(comptime N : u64) -> type { struct { words : [u64; N/64] } }
 ## generic-operator route (`generic_op_decl_idx`'s operand head + `op_ct_bind`'s N binding). As a
 ## VALUE the binding is never referenced (construction and type positions resolve the alias to the
 ## struct decl), so it emits nothing; an unused value binding is inert everywhere else.
-u128 := uint(128)
+pub u128 := uint(128)
 
 ## `+` — modular per-word add with a COMPARISON-FREE carry. Per word, `s1 = a+b` (wrapping,
 ## `unchecked` — the carry must not trap under the I11/CG-8 overflow guard), the carry OUT is bit
 ## 63 of `(a&b) | ((a|b) & ~s1)` (the generate/propagate identity, no `<` anywhere), then the
 ## incoming carry is added with the SAME identity and the two carries OR-ed. `comptime for i in
 ## 0 .. N/64` folds against the site's N binding, so one operator serves every width.
-@inline + := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
+@inline pub + := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
   mut r : uint(N) = a
   mut carry : u64 = 0
   comptime for i in 0 .. N/64 {
@@ -47,7 +47,7 @@ u128 := uint(128)
 ## the final carry (1 = no borrow) is discarded. Comparison-free, like `+`. `~` MUST parenthesize
 ## its index operand — prefix `~` binds tighter than the postfix, so `~(b.words[i])`, never
 ## `~b.words[i]` (that would bitnot the whole aggregate, then index).
-@inline - := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
+@inline pub - := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
   mut r : uint(N) = a
   mut carry : u64 = 1
   comptime for i in 0 .. N/64 {
@@ -73,7 +73,7 @@ u128 := uint(128)
 ## body — a helper fn with a comptime param is not declarable (TYP-10 v1). The triangular guards
 ## `i <= k` / `i < k` are runtime ifs on the unrolled loop vars (each holds its constant); the
 ## `comptime for` bounds (`N/64`) fold against the site binding.
-@inline * := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
+@inline pub * := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
   mut r : uint(N) = a
   comptime for w in 0 .. N/64 { r.words[w] = 0 }
   mut carry : u64 = 0
@@ -114,7 +114,7 @@ u128 := uint(128)
 ## (`0 - carry`), and subtracting `b & mask` is the branchless select; the carry bit itself,
 ## shifted to the step's position, is the quotient bit. Division by zero is a checked trap (I11),
 ## matching num.al's scalar `/`.
-@inline / := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
+@inline pub / := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
   mut z : u64 = 0
   comptime for w in 0 .. N/64 { z = z | b.words[w] }
   comptime if verify.checked {
@@ -173,7 +173,7 @@ u128 := uint(128)
 
 ## `%` — remainder by the SAME comptime-unrolled shift-subtract loop, yielding the final running
 ## remainder (the quotient bits are not tracked). A checked div-by-zero trap, like `/`.
-@inline % := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
+@inline pub % := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
   mut z : u64 = 0
   comptime for w in 0 .. N/64 { z = z | b.words[w] }
   comptime if verify.checked {
@@ -230,21 +230,21 @@ u128 := uint(128)
 ## per-word `&`/`|`/`^` are the native `u64` bit ops (num.al) — no I11 guard applies to a pure bit
 ## op. src/ declares no glyph-bitwise operator fn, so these are dormant for the self-host build
 ## (the parser name-gate admits the `&`/`|`/`^` names but no src/ decl uses them) → fixpoint-neutral.
-@inline & := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
+@inline pub & := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
   mut r : uint(N) = a
   comptime for i in 0 .. N/64 {
     r.words[i] = a.words[i] & b.words[i]
   }
   return r
 }
-@inline | := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
+@inline pub | := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
   mut r : uint(N) = a
   comptime for i in 0 .. N/64 {
     r.words[i] = a.words[i] | b.words[i]
   }
   return r
 }
-@inline ^ := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
+@inline pub ^ := fn(comptime N : u64, a : uint(N), b : uint(N)) -> uint(N) {
   mut r : uint(N) = a
   comptime for i in 0 .. N/64 {
     r.words[i] = a.words[i] ^ b.words[i]
@@ -260,17 +260,17 @@ u128 := uint(128)
 ## body may use another generic operator over the same type). They yield `bool`, usable in a
 ## condition or a value position, and OVERRIDE any structural derive (which, comparing the
 ## declaration-order LOW word first, would be WRONG for a wide integer).
-@inline == := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
+@inline pub == := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
   mut d : u64 = 0
   comptime for i in 0 .. N/64 {
     d = d | (a.words[i] ^ b.words[i])
   }
   return d == 0
 }
-@inline != := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
+@inline pub != := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
   return (a == b) == false
 }
-@inline < := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
+@inline pub < := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
   mut cry : u64 = 1
   comptime for i in 0 .. N/64 {
     nb := ~(b.words[i])
@@ -282,12 +282,12 @@ u128 := uint(128)
   }
   return cry == 0
 }
-@inline > := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
+@inline pub > := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
   return b < a
 }
-@inline <= := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
+@inline pub <= := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
   return (b < a) == false
 }
-@inline >= := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
+@inline pub >= := fn(comptime N : u64, a : uint(N), b : uint(N)) -> bool {
   return (a < b) == false
 }

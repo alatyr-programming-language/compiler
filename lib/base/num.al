@@ -1,7 +1,7 @@
 ## Numeric interpretations as prelude brands over bitsN. Floating point
 ## (f32/f64); uN/iN are compiler-provided (a width-parameterized family).
-f32 := brand(bits32)
-f64 := brand(bits64)
+pub f32 := brand(bits32)
+pub f64 := brand(bits64)
 
 ## Floating-point arithmetic operators (§4) — library functions naming the
 ## scalar-FP intrinsic (x86_64 `addsd`/`subsd`/`mulsd`/`divsd` for `f64`,
@@ -10,42 +10,42 @@ f64 := brand(bits64)
 ## built-in `float_binop` did). **No overflow guard** — IEEE arithmetic is total
 ## (overflow → ±inf, `0/0` → NaN), never a trap. One-instruction bodies, so
 ## inlined (I2). x86_64-gated like the integer scalar operators.
-@inline + := fn(a : f64, b : f64) -> f64 {
+@inline pub + := fn(a : f64, b : f64) -> f64 {
   mut out : f64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.addsd(out, b) }
   return out
 }
-@inline - := fn(a : f64, b : f64) -> f64 {
+@inline pub - := fn(a : f64, b : f64) -> f64 {
   mut out : f64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.subsd(out, b) }
   return out
 }
-@inline * := fn(a : f64, b : f64) -> f64 {
+@inline pub * := fn(a : f64, b : f64) -> f64 {
   mut out : f64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.mulsd(out, b) }
   return out
 }
-@inline / := fn(a : f64, b : f64) -> f64 {
+@inline pub / := fn(a : f64, b : f64) -> f64 {
   mut out : f64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.divsd(out, b) }
   return out
 }
-@inline + := fn(a : f32, b : f32) -> f32 {
+@inline pub + := fn(a : f32, b : f32) -> f32 {
   mut out : f32 = a
   comptime if target.arch == Arch.x86_64 { x86_64.addss(out, b) }
   return out
 }
-@inline - := fn(a : f32, b : f32) -> f32 {
+@inline pub - := fn(a : f32, b : f32) -> f32 {
   mut out : f32 = a
   comptime if target.arch == Arch.x86_64 { x86_64.subss(out, b) }
   return out
 }
-@inline * := fn(a : f32, b : f32) -> f32 {
+@inline pub * := fn(a : f32, b : f32) -> f32 {
   mut out : f32 = a
   comptime if target.arch == Arch.x86_64 { x86_64.mulss(out, b) }
   return out
 }
-@inline / := fn(a : f32, b : f32) -> f32 {
+@inline pub / := fn(a : f32, b : f32) -> f32 {
   mut out : f32 = a
   comptime if target.arch == Arch.x86_64 { x86_64.divss(out, b) }
   return out
@@ -79,7 +79,7 @@ f64 := brand(bits64)
 ## operator is a library function on x86_64**. (Float **comparisons** remain
 ## built-in — the NaN-unordered `ucomisd`+parity shape — a follow-up.)
 
-@inline / := fn(a : u64, b : u64) -> u64 {
+@inline pub / := fn(a : u64, b : u64) -> u64 {
   mut out : u64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.divq(out, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.udiv(out, a, b) }
@@ -87,7 +87,7 @@ f64 := brand(bits64)
   return out
 }
 
-@inline / := fn(a : i64, b : i64) -> i64 {
+@inline pub / := fn(a : i64, b : i64) -> i64 {
   mut out : i64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.idivq(out, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.sdiv(out, a, b) }
@@ -98,7 +98,7 @@ f64 := brand(bits64)
 ## Addition / subtraction — same shape (x86_64 destination-first `addq`/`subq`;
 ## aarch64 / riscv64 3-operand `add`/`sub`). Checked overflow belongs to the
 ## operation site; these routed bodies contain only the raw instruction.
-@inline + := fn(a : u64, b : u64) -> u64 {
+@inline pub + := fn(a : u64, b : u64) -> u64 {
   mut out : u64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.addq(out, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.add(out, a, b) }
@@ -106,7 +106,7 @@ f64 := brand(bits64)
   return out
 }
 
-@inline + := fn(a : i64, b : i64) -> i64 {
+@inline pub + := fn(a : i64, b : i64) -> i64 {
   mut out : i64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.addq(out, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.add(out, a, b) }
@@ -114,7 +114,7 @@ f64 := brand(bits64)
   return out
 }
 
-@inline - := fn(a : u64, b : u64) -> u64 {
+@inline pub - := fn(a : u64, b : u64) -> u64 {
   mut out : u64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.subq(out, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.sub(out, a, b) }
@@ -122,7 +122,7 @@ f64 := brand(bits64)
   return out
 }
 
-@inline - := fn(a : i64, b : i64) -> i64 {
+@inline pub - := fn(a : i64, b : i64) -> i64 {
   mut out : i64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.subq(out, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.sub(out, a, b) }
@@ -140,7 +140,7 @@ f64 := brand(bits64)
 ## logic at 32-bit width (`u32`/`i32` comparisons). (`*`/`/`/`%` for narrower
 ## widths need a 32-bit divmod/high-multiply shape — a follow-up; they stay
 ## compiler-lowered for now.)
-@inline + := fn(a : u32, b : u32) -> u32 {
+@inline pub + := fn(a : u32, b : u32) -> u32 {
   mut out : u32 = a
   comptime if target.arch == Arch.x86_64 { x86_64.addl(out, b) }
   comptime if target.arch == Arch.i386 { i386.addl(out, b) }
@@ -151,7 +151,7 @@ f64 := brand(bits64)
   return out
 }
 
-@inline + := fn(a : i32, b : i32) -> i32 {
+@inline pub + := fn(a : i32, b : i32) -> i32 {
   mut out : i32 = a
   comptime if target.arch == Arch.x86_64 { x86_64.addl(out, b) }
   comptime if target.arch == Arch.i386 { i386.addl(out, b) }
@@ -162,7 +162,7 @@ f64 := brand(bits64)
   return out
 }
 
-@inline - := fn(a : u32, b : u32) -> u32 {
+@inline pub - := fn(a : u32, b : u32) -> u32 {
   mut out : u32 = a
   comptime if target.arch == Arch.x86_64 { x86_64.subl(out, b) }
   comptime if target.arch == Arch.i386 { i386.subl(out, b) }
@@ -173,7 +173,7 @@ f64 := brand(bits64)
   return out
 }
 
-@inline - := fn(a : i32, b : i32) -> i32 {
+@inline pub - := fn(a : i32, b : i32) -> i32 {
   mut out : i32 = a
   comptime if target.arch == Arch.x86_64 { x86_64.subl(out, b) }
   comptime if target.arch == Arch.i386 { i386.subl(out, b) }
@@ -192,7 +192,7 @@ f64 := brand(bits64)
 ## a non-negative product, all-ones `-1` for a negative one). High-half intrinsics:
 ## x86_64 synthetic `mulhiq`/`imulhiq` (1-operand `mulq`/`imulq`, capture `rdx`),
 ## aarch64 `umulh`/`smulh`, riscv64 `mulhu`/`mulh`.
-@inline * := fn(a : u64, b : u64) -> u64 {
+@inline pub * := fn(a : u64, b : u64) -> u64 {
   mut out : u64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.imulq(out, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.mul(out, a, b) }
@@ -200,7 +200,7 @@ f64 := brand(bits64)
   return out
 }
 
-@inline * := fn(a : i64, b : i64) -> i64 {
+@inline pub * := fn(a : i64, b : i64) -> i64 {
   mut out : i64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.imulq(out, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.mul(out, a, b) }
@@ -213,7 +213,7 @@ f64 := brand(bits64)
 ## riscv64: `remu`/`rem` (3-operand); aarch64 has no remainder op — compute it as
 ## `a - (a / b) * b` via `udiv`/`sdiv` + `msub` (Rd = Ra - Rn*Rm). Only an operation-site
 ## div-by-zero guard is needed (a remainder cannot overflow), like `/`, so the guard is light.
-@inline % := fn(a : u64, b : u64) -> u64 {
+@inline pub % := fn(a : u64, b : u64) -> u64 {
   mut out : u64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.remq(out, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.remu(out, a, b) }
@@ -225,7 +225,7 @@ f64 := brand(bits64)
   return out
 }
 
-@inline % := fn(a : i64, b : i64) -> i64 {
+@inline pub % := fn(a : i64, b : i64) -> i64 {
   mut out : i64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.iremq(out, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.rem(out, a, b) }
@@ -246,42 +246,42 @@ f64 := brand(bits64)
 ## `u32`/`i32` overflow conditions, then the result truncates back (wrapping under
 ## `unchecked`). (On a 32-bit target `u64` is multi-word; these stay
 ## compiler-lowered there, reached via the built-in path, not this fn.)
-@inline * := fn(a : u32, b : u32) -> u32 {
+@inline pub * := fn(a : u32, b : u32) -> u32 {
   mut full := u64(a)
   wb := u64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.imulq(full, wb) }
   return unchecked { u32(full) }
 }
 
-@inline * := fn(a : i32, b : i32) -> i32 {
+@inline pub * := fn(a : i32, b : i32) -> i32 {
   mut full := i64(a)
   wb := i64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.imulq(full, wb) }
   return unchecked { i32(full) }
 }
 
-@inline / := fn(a : u32, b : u32) -> u32 {
+@inline pub / := fn(a : u32, b : u32) -> u32 {
   mut full := u64(a)
   wb := u64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.divq(full, wb) }
   return unchecked { u32(full) }
 }
 
-@inline / := fn(a : i32, b : i32) -> i32 {
+@inline pub / := fn(a : i32, b : i32) -> i32 {
   mut full := i64(a)
   wb := i64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.idivq(full, wb) }
   return unchecked { i32(full) }
 }
 
-@inline % := fn(a : u32, b : u32) -> u32 {
+@inline pub % := fn(a : u32, b : u32) -> u32 {
   mut full := u64(a)
   wb := u64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.remq(full, wb) }
   return unchecked { u32(full) }
 }
 
-@inline % := fn(a : i32, b : i32) -> i32 {
+@inline pub % := fn(a : i32, b : i32) -> i32 {
   mut full := i64(a)
   wb := i64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.iremq(full, wb) }
@@ -292,108 +292,108 @@ f64 := brand(bits64)
 ## scheme as `u32`/`i32`: widen to 64 bits, apply the 64-bit intrinsic, range-check
 ## the narrow result, truncate. Bounds: `u8` [0,255], `u16` [0,65535], `i8`
 ## [-128,127], `i16` [-32768,32767]. Only the x86_64 branch is needed (the gate).
-@inline + := fn(a : u8, b : u8) -> u8 {
+@inline pub + := fn(a : u8, b : u8) -> u8 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.addq(full, u64(b)) }
   return unchecked { u8(full) }
 }
-@inline - := fn(a : u8, b : u8) -> u8 {
+@inline pub - := fn(a : u8, b : u8) -> u8 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.subq(full, u64(b)) }
   return unchecked { u8(full) }
 }
-@inline * := fn(a : u8, b : u8) -> u8 {
+@inline pub * := fn(a : u8, b : u8) -> u8 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.imulq(full, u64(b)) }
   return unchecked { u8(full) }
 }
-@inline / := fn(a : u8, b : u8) -> u8 {
+@inline pub / := fn(a : u8, b : u8) -> u8 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.divq(full, u64(b)) }
   return unchecked { u8(full) }
 }
-@inline % := fn(a : u8, b : u8) -> u8 {
+@inline pub % := fn(a : u8, b : u8) -> u8 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.remq(full, u64(b)) }
   return unchecked { u8(full) }
 }
 
-@inline + := fn(a : u16, b : u16) -> u16 {
+@inline pub + := fn(a : u16, b : u16) -> u16 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.addq(full, u64(b)) }
   return unchecked { u16(full) }
 }
-@inline - := fn(a : u16, b : u16) -> u16 {
+@inline pub - := fn(a : u16, b : u16) -> u16 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.subq(full, u64(b)) }
   return unchecked { u16(full) }
 }
-@inline * := fn(a : u16, b : u16) -> u16 {
+@inline pub * := fn(a : u16, b : u16) -> u16 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.imulq(full, u64(b)) }
   return unchecked { u16(full) }
 }
-@inline / := fn(a : u16, b : u16) -> u16 {
+@inline pub / := fn(a : u16, b : u16) -> u16 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.divq(full, u64(b)) }
   return unchecked { u16(full) }
 }
-@inline % := fn(a : u16, b : u16) -> u16 {
+@inline pub % := fn(a : u16, b : u16) -> u16 {
   mut full := u64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.remq(full, u64(b)) }
   return unchecked { u16(full) }
 }
 
-@inline + := fn(a : i8, b : i8) -> i8 {
+@inline pub + := fn(a : i8, b : i8) -> i8 {
   mut full := i64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.addq(full, i64(b)) }
   return unchecked { i8(full) }
 }
-@inline - := fn(a : i8, b : i8) -> i8 {
+@inline pub - := fn(a : i8, b : i8) -> i8 {
   mut full := i64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.subq(full, i64(b)) }
   return unchecked { i8(full) }
 }
-@inline * := fn(a : i8, b : i8) -> i8 {
+@inline pub * := fn(a : i8, b : i8) -> i8 {
   mut full := i64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.imulq(full, i64(b)) }
   return unchecked { i8(full) }
 }
-@inline / := fn(a : i8, b : i8) -> i8 {
+@inline pub / := fn(a : i8, b : i8) -> i8 {
   mut full := i64(a)
   wb := i64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.idivq(full, wb) }
   return unchecked { i8(full) }
 }
-@inline % := fn(a : i8, b : i8) -> i8 {
+@inline pub % := fn(a : i8, b : i8) -> i8 {
   mut full := i64(a)
   wb := i64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.iremq(full, wb) }
   return unchecked { i8(full) }
 }
 
-@inline + := fn(a : i16, b : i16) -> i16 {
+@inline pub + := fn(a : i16, b : i16) -> i16 {
   mut full := i64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.addq(full, i64(b)) }
   return unchecked { i16(full) }
 }
-@inline - := fn(a : i16, b : i16) -> i16 {
+@inline pub - := fn(a : i16, b : i16) -> i16 {
   mut full := i64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.subq(full, i64(b)) }
   return unchecked { i16(full) }
 }
-@inline * := fn(a : i16, b : i16) -> i16 {
+@inline pub * := fn(a : i16, b : i16) -> i16 {
   mut full := i64(a)
   comptime if target.arch == Arch.x86_64 { x86_64.imulq(full, i64(b)) }
   return unchecked { i16(full) }
 }
-@inline / := fn(a : i16, b : i16) -> i16 {
+@inline pub / := fn(a : i16, b : i16) -> i16 {
   mut full := i64(a)
   wb := i64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.idivq(full, wb) }
   return unchecked { i16(full) }
 }
-@inline % := fn(a : i16, b : i16) -> i16 {
+@inline pub % := fn(a : i16, b : i16) -> i16 {
   mut full := i64(a)
   wb := i64(b)
   comptime if target.arch == Arch.x86_64 { x86_64.iremq(full, wb) }
@@ -428,51 +428,51 @@ f64 := brand(bits64)
 ## other arches for parity; the routing is x86_64-gated).
 
 ## ---- u8 ----
-wrapping_add := fn(a : u8, b : u8) -> u8 { return unchecked { a + b } }
-wrapping_sub := fn(a : u8, b : u8) -> u8 { return unchecked { a - b } }
-wrapping_mul := fn(a : u8, b : u8) -> u8 { return unchecked { a * b } }
-overflowing_add := fn(a : u8, b : u8) -> (u8, bool) {
+pub wrapping_add := fn(a : u8, b : u8) -> u8 { return unchecked { a + b } }
+pub wrapping_sub := fn(a : u8, b : u8) -> u8 { return unchecked { a - b } }
+pub wrapping_mul := fn(a : u8, b : u8) -> u8 { return unchecked { a * b } }
+pub overflowing_add := fn(a : u8, b : u8) -> (u8, bool) {
   w : u8 = unchecked { a + b }
   o : bool = w < a
   return (w, o)
 }
-overflowing_sub := fn(a : u8, b : u8) -> (u8, bool) {
+pub overflowing_sub := fn(a : u8, b : u8) -> (u8, bool) {
   w : u8 = unchecked { a - b }
   o : bool = a < b
   return (w, o)
 }
-overflowing_mul := fn(a : u8, b : u8) -> (u8, bool) {
+pub overflowing_mul := fn(a : u8, b : u8) -> (u8, bool) {
   full : u64 = unchecked { u64(a) * u64(b) }
   o : bool = full > 255
   w : u8 = unchecked { u8(full) }
   return (w, o)
 }
-checked_add := fn(a : u8, b : u8) -> Option(u8) {
+pub checked_add := fn(a : u8, b : u8) -> Option(u8) {
   w : u8 = unchecked { a + b }
   if w < a { return Option(u8).None }
   return Option(u8).Some(w)
 }
-checked_sub := fn(a : u8, b : u8) -> Option(u8) {
+pub checked_sub := fn(a : u8, b : u8) -> Option(u8) {
   if a < b { return Option(u8).None }
   w : u8 = unchecked { a - b }
   return Option(u8).Some(w)
 }
-checked_mul := fn(a : u8, b : u8) -> Option(u8) {
+pub checked_mul := fn(a : u8, b : u8) -> Option(u8) {
   full : u64 = unchecked { u64(a) * u64(b) }
   if full > 255 { return Option(u8).None }
   w : u8 = unchecked { u8(full) }
   return Option(u8).Some(w)
 }
-saturating_add := fn(a : u8, b : u8) -> u8 {
+pub saturating_add := fn(a : u8, b : u8) -> u8 {
   w : u8 = unchecked { a + b }
   if w < a { return 255 }
   return w
 }
-saturating_sub := fn(a : u8, b : u8) -> u8 {
+pub saturating_sub := fn(a : u8, b : u8) -> u8 {
   if a < b { return 0 }
   return unchecked { a - b }
 }
-saturating_mul := fn(a : u8, b : u8) -> u8 {
+pub saturating_mul := fn(a : u8, b : u8) -> u8 {
   full : u64 = unchecked { u64(a) * u64(b) }
   if full > 255 { return 255 }
   w : u8 = unchecked { u8(full) }
@@ -480,51 +480,51 @@ saturating_mul := fn(a : u8, b : u8) -> u8 {
 }
 
 ## ---- u16 ----
-wrapping_add := fn(a : u16, b : u16) -> u16 { return unchecked { a + b } }
-wrapping_sub := fn(a : u16, b : u16) -> u16 { return unchecked { a - b } }
-wrapping_mul := fn(a : u16, b : u16) -> u16 { return unchecked { a * b } }
-overflowing_add := fn(a : u16, b : u16) -> (u16, bool) {
+pub wrapping_add := fn(a : u16, b : u16) -> u16 { return unchecked { a + b } }
+pub wrapping_sub := fn(a : u16, b : u16) -> u16 { return unchecked { a - b } }
+pub wrapping_mul := fn(a : u16, b : u16) -> u16 { return unchecked { a * b } }
+pub overflowing_add := fn(a : u16, b : u16) -> (u16, bool) {
   w : u16 = unchecked { a + b }
   o : bool = w < a
   return (w, o)
 }
-overflowing_sub := fn(a : u16, b : u16) -> (u16, bool) {
+pub overflowing_sub := fn(a : u16, b : u16) -> (u16, bool) {
   w : u16 = unchecked { a - b }
   o : bool = a < b
   return (w, o)
 }
-overflowing_mul := fn(a : u16, b : u16) -> (u16, bool) {
+pub overflowing_mul := fn(a : u16, b : u16) -> (u16, bool) {
   full : u64 = unchecked { u64(a) * u64(b) }
   o : bool = full > 65535
   w : u16 = unchecked { u16(full) }
   return (w, o)
 }
-checked_add := fn(a : u16, b : u16) -> Option(u16) {
+pub checked_add := fn(a : u16, b : u16) -> Option(u16) {
   w : u16 = unchecked { a + b }
   if w < a { return Option(u16).None }
   return Option(u16).Some(w)
 }
-checked_sub := fn(a : u16, b : u16) -> Option(u16) {
+pub checked_sub := fn(a : u16, b : u16) -> Option(u16) {
   if a < b { return Option(u16).None }
   w : u16 = unchecked { a - b }
   return Option(u16).Some(w)
 }
-checked_mul := fn(a : u16, b : u16) -> Option(u16) {
+pub checked_mul := fn(a : u16, b : u16) -> Option(u16) {
   full : u64 = unchecked { u64(a) * u64(b) }
   if full > 65535 { return Option(u16).None }
   w : u16 = unchecked { u16(full) }
   return Option(u16).Some(w)
 }
-saturating_add := fn(a : u16, b : u16) -> u16 {
+pub saturating_add := fn(a : u16, b : u16) -> u16 {
   w : u16 = unchecked { a + b }
   if w < a { return 65535 }
   return w
 }
-saturating_sub := fn(a : u16, b : u16) -> u16 {
+pub saturating_sub := fn(a : u16, b : u16) -> u16 {
   if a < b { return 0 }
   return unchecked { a - b }
 }
-saturating_mul := fn(a : u16, b : u16) -> u16 {
+pub saturating_mul := fn(a : u16, b : u16) -> u16 {
   full : u64 = unchecked { u64(a) * u64(b) }
   if full > 65535 { return 65535 }
   w : u16 = unchecked { u16(full) }
@@ -532,51 +532,51 @@ saturating_mul := fn(a : u16, b : u16) -> u16 {
 }
 
 ## ---- u32 ----
-wrapping_add := fn(a : u32, b : u32) -> u32 { return unchecked { a + b } }
-wrapping_sub := fn(a : u32, b : u32) -> u32 { return unchecked { a - b } }
-wrapping_mul := fn(a : u32, b : u32) -> u32 { return unchecked { a * b } }
-overflowing_add := fn(a : u32, b : u32) -> (u32, bool) {
+pub wrapping_add := fn(a : u32, b : u32) -> u32 { return unchecked { a + b } }
+pub wrapping_sub := fn(a : u32, b : u32) -> u32 { return unchecked { a - b } }
+pub wrapping_mul := fn(a : u32, b : u32) -> u32 { return unchecked { a * b } }
+pub overflowing_add := fn(a : u32, b : u32) -> (u32, bool) {
   w : u32 = unchecked { a + b }
   o : bool = w < a
   return (w, o)
 }
-overflowing_sub := fn(a : u32, b : u32) -> (u32, bool) {
+pub overflowing_sub := fn(a : u32, b : u32) -> (u32, bool) {
   w : u32 = unchecked { a - b }
   o : bool = a < b
   return (w, o)
 }
-overflowing_mul := fn(a : u32, b : u32) -> (u32, bool) {
+pub overflowing_mul := fn(a : u32, b : u32) -> (u32, bool) {
   full : u64 = unchecked { u64(a) * u64(b) }
   o : bool = full > 4294967295
   w : u32 = unchecked { u32(full) }
   return (w, o)
 }
-checked_add := fn(a : u32, b : u32) -> Option(u32) {
+pub checked_add := fn(a : u32, b : u32) -> Option(u32) {
   w : u32 = unchecked { a + b }
   if w < a { return Option(u32).None }
   return Option(u32).Some(w)
 }
-checked_sub := fn(a : u32, b : u32) -> Option(u32) {
+pub checked_sub := fn(a : u32, b : u32) -> Option(u32) {
   if a < b { return Option(u32).None }
   w : u32 = unchecked { a - b }
   return Option(u32).Some(w)
 }
-checked_mul := fn(a : u32, b : u32) -> Option(u32) {
+pub checked_mul := fn(a : u32, b : u32) -> Option(u32) {
   full : u64 = unchecked { u64(a) * u64(b) }
   if full > 4294967295 { return Option(u32).None }
   w : u32 = unchecked { u32(full) }
   return Option(u32).Some(w)
 }
-saturating_add := fn(a : u32, b : u32) -> u32 {
+pub saturating_add := fn(a : u32, b : u32) -> u32 {
   w : u32 = unchecked { a + b }
   if w < a { return 4294967295 }
   return w
 }
-saturating_sub := fn(a : u32, b : u32) -> u32 {
+pub saturating_sub := fn(a : u32, b : u32) -> u32 {
   if a < b { return 0 }
   return unchecked { a - b }
 }
-saturating_mul := fn(a : u32, b : u32) -> u32 {
+pub saturating_mul := fn(a : u32, b : u32) -> u32 {
   full : u64 = unchecked { u64(a) * u64(b) }
   if full > 4294967295 { return 4294967295 }
   w : u32 = unchecked { u32(full) }
@@ -584,20 +584,20 @@ saturating_mul := fn(a : u32, b : u32) -> u32 {
 }
 
 ## ---- u64 ---- (mul overflow via the high-half-of-product intrinsic)
-wrapping_add := fn(a : u64, b : u64) -> u64 { return unchecked { a + b } }
-wrapping_sub := fn(a : u64, b : u64) -> u64 { return unchecked { a - b } }
-wrapping_mul := fn(a : u64, b : u64) -> u64 { return unchecked { a * b } }
-overflowing_add := fn(a : u64, b : u64) -> (u64, bool) {
+pub wrapping_add := fn(a : u64, b : u64) -> u64 { return unchecked { a + b } }
+pub wrapping_sub := fn(a : u64, b : u64) -> u64 { return unchecked { a - b } }
+pub wrapping_mul := fn(a : u64, b : u64) -> u64 { return unchecked { a * b } }
+pub overflowing_add := fn(a : u64, b : u64) -> (u64, bool) {
   w : u64 = unchecked { a + b }
   o : bool = w < a
   return (w, o)
 }
-overflowing_sub := fn(a : u64, b : u64) -> (u64, bool) {
+pub overflowing_sub := fn(a : u64, b : u64) -> (u64, bool) {
   w : u64 = unchecked { a - b }
   o : bool = a < b
   return (w, o)
 }
-overflowing_mul := fn(a : u64, b : u64) -> (u64, bool) {
+pub overflowing_mul := fn(a : u64, b : u64) -> (u64, bool) {
   w : u64 = unchecked { a * b }
   mut hi : u64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.mulhiq(hi, b) }
@@ -606,17 +606,17 @@ overflowing_mul := fn(a : u64, b : u64) -> (u64, bool) {
   o : bool = hi != 0
   return (w, o)
 }
-checked_add := fn(a : u64, b : u64) -> Option(u64) {
+pub checked_add := fn(a : u64, b : u64) -> Option(u64) {
   w : u64 = unchecked { a + b }
   if w < a { return Option(u64).None }
   return Option(u64).Some(w)
 }
-checked_sub := fn(a : u64, b : u64) -> Option(u64) {
+pub checked_sub := fn(a : u64, b : u64) -> Option(u64) {
   if a < b { return Option(u64).None }
   w : u64 = unchecked { a - b }
   return Option(u64).Some(w)
 }
-checked_mul := fn(a : u64, b : u64) -> Option(u64) {
+pub checked_mul := fn(a : u64, b : u64) -> Option(u64) {
   w : u64 = unchecked { a * b }
   mut hi : u64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.mulhiq(hi, b) }
@@ -625,16 +625,16 @@ checked_mul := fn(a : u64, b : u64) -> Option(u64) {
   if hi != 0 { return Option(u64).None }
   return Option(u64).Some(w)
 }
-saturating_add := fn(a : u64, b : u64) -> u64 {
+pub saturating_add := fn(a : u64, b : u64) -> u64 {
   w : u64 = unchecked { a + b }
   if w < a { return 18446744073709551615 }
   return w
 }
-saturating_sub := fn(a : u64, b : u64) -> u64 {
+pub saturating_sub := fn(a : u64, b : u64) -> u64 {
   if a < b { return 0 }
   return unchecked { a - b }
 }
-saturating_mul := fn(a : u64, b : u64) -> u64 {
+pub saturating_mul := fn(a : u64, b : u64) -> u64 {
   w : u64 = unchecked { a * b }
   mut hi : u64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.mulhiq(hi, b) }
@@ -645,24 +645,24 @@ saturating_mul := fn(a : u64, b : u64) -> u64 {
 }
 
 ## ---- i8 ----
-wrapping_add := fn(a : i8, b : i8) -> i8 { return unchecked { a + b } }
-wrapping_sub := fn(a : i8, b : i8) -> i8 { return unchecked { a - b } }
-wrapping_mul := fn(a : i8, b : i8) -> i8 { return unchecked { a * b } }
-overflowing_add := fn(a : i8, b : i8) -> (i8, bool) {
+pub wrapping_add := fn(a : i8, b : i8) -> i8 { return unchecked { a + b } }
+pub wrapping_sub := fn(a : i8, b : i8) -> i8 { return unchecked { a - b } }
+pub wrapping_mul := fn(a : i8, b : i8) -> i8 { return unchecked { a * b } }
+pub overflowing_add := fn(a : i8, b : i8) -> (i8, bool) {
   w : i8 = unchecked { a + b }
   mut o : bool = false
   if b >= 0 and w < a { o = true }
   if b < 0 and w > a { o = true }
   return (w, o)
 }
-overflowing_sub := fn(a : i8, b : i8) -> (i8, bool) {
+pub overflowing_sub := fn(a : i8, b : i8) -> (i8, bool) {
   w : i8 = unchecked { a - b }
   mut o : bool = false
   if b > 0 and w > a { o = true }
   if b < 0 and w < a { o = true }
   return (w, o)
 }
-overflowing_mul := fn(a : i8, b : i8) -> (i8, bool) {
+pub overflowing_mul := fn(a : i8, b : i8) -> (i8, bool) {
   full : i64 = unchecked { i64(a) * i64(b) }
   mut o : bool = false
   if full > 127 { o = true }
@@ -670,38 +670,38 @@ overflowing_mul := fn(a : i8, b : i8) -> (i8, bool) {
   w : i8 = unchecked { i8(full) }
   return (w, o)
 }
-checked_add := fn(a : i8, b : i8) -> Option(i8) {
+pub checked_add := fn(a : i8, b : i8) -> Option(i8) {
   w : i8 = unchecked { a + b }
   if b >= 0 and w < a { return Option(i8).None }
   if b < 0 and w > a { return Option(i8).None }
   return Option(i8).Some(w)
 }
-checked_sub := fn(a : i8, b : i8) -> Option(i8) {
+pub checked_sub := fn(a : i8, b : i8) -> Option(i8) {
   w : i8 = unchecked { a - b }
   if b > 0 and w > a { return Option(i8).None }
   if b < 0 and w < a { return Option(i8).None }
   return Option(i8).Some(w)
 }
-checked_mul := fn(a : i8, b : i8) -> Option(i8) {
+pub checked_mul := fn(a : i8, b : i8) -> Option(i8) {
   full : i64 = unchecked { i64(a) * i64(b) }
   if full > 127 { return Option(i8).None }
   if full < (0 - 128) { return Option(i8).None }
   w : i8 = unchecked { i8(full) }
   return Option(i8).Some(w)
 }
-saturating_add := fn(a : i8, b : i8) -> i8 {
+pub saturating_add := fn(a : i8, b : i8) -> i8 {
   w : i8 = unchecked { a + b }
   if b >= 0 and w < a { return 127 }
   if b < 0 and w > a { return i8(0 - 128) }
   return w
 }
-saturating_sub := fn(a : i8, b : i8) -> i8 {
+pub saturating_sub := fn(a : i8, b : i8) -> i8 {
   w : i8 = unchecked { a - b }
   if b < 0 and w < a { return 127 }
   if b > 0 and w > a { return i8(0 - 128) }
   return w
 }
-saturating_mul := fn(a : i8, b : i8) -> i8 {
+pub saturating_mul := fn(a : i8, b : i8) -> i8 {
   full : i64 = unchecked { i64(a) * i64(b) }
   if full > 127 { return 127 }
   if full < (0 - 128) { return i8(0 - 128) }
@@ -710,24 +710,24 @@ saturating_mul := fn(a : i8, b : i8) -> i8 {
 }
 
 ## ---- i16 ----
-wrapping_add := fn(a : i16, b : i16) -> i16 { return unchecked { a + b } }
-wrapping_sub := fn(a : i16, b : i16) -> i16 { return unchecked { a - b } }
-wrapping_mul := fn(a : i16, b : i16) -> i16 { return unchecked { a * b } }
-overflowing_add := fn(a : i16, b : i16) -> (i16, bool) {
+pub wrapping_add := fn(a : i16, b : i16) -> i16 { return unchecked { a + b } }
+pub wrapping_sub := fn(a : i16, b : i16) -> i16 { return unchecked { a - b } }
+pub wrapping_mul := fn(a : i16, b : i16) -> i16 { return unchecked { a * b } }
+pub overflowing_add := fn(a : i16, b : i16) -> (i16, bool) {
   w : i16 = unchecked { a + b }
   mut o : bool = false
   if b >= 0 and w < a { o = true }
   if b < 0 and w > a { o = true }
   return (w, o)
 }
-overflowing_sub := fn(a : i16, b : i16) -> (i16, bool) {
+pub overflowing_sub := fn(a : i16, b : i16) -> (i16, bool) {
   w : i16 = unchecked { a - b }
   mut o : bool = false
   if b > 0 and w > a { o = true }
   if b < 0 and w < a { o = true }
   return (w, o)
 }
-overflowing_mul := fn(a : i16, b : i16) -> (i16, bool) {
+pub overflowing_mul := fn(a : i16, b : i16) -> (i16, bool) {
   full : i64 = unchecked { i64(a) * i64(b) }
   mut o : bool = false
   if full > 32767 { o = true }
@@ -735,38 +735,38 @@ overflowing_mul := fn(a : i16, b : i16) -> (i16, bool) {
   w : i16 = unchecked { i16(full) }
   return (w, o)
 }
-checked_add := fn(a : i16, b : i16) -> Option(i16) {
+pub checked_add := fn(a : i16, b : i16) -> Option(i16) {
   w : i16 = unchecked { a + b }
   if b >= 0 and w < a { return Option(i16).None }
   if b < 0 and w > a { return Option(i16).None }
   return Option(i16).Some(w)
 }
-checked_sub := fn(a : i16, b : i16) -> Option(i16) {
+pub checked_sub := fn(a : i16, b : i16) -> Option(i16) {
   w : i16 = unchecked { a - b }
   if b > 0 and w > a { return Option(i16).None }
   if b < 0 and w < a { return Option(i16).None }
   return Option(i16).Some(w)
 }
-checked_mul := fn(a : i16, b : i16) -> Option(i16) {
+pub checked_mul := fn(a : i16, b : i16) -> Option(i16) {
   full : i64 = unchecked { i64(a) * i64(b) }
   if full > 32767 { return Option(i16).None }
   if full < (0 - 32768) { return Option(i16).None }
   w : i16 = unchecked { i16(full) }
   return Option(i16).Some(w)
 }
-saturating_add := fn(a : i16, b : i16) -> i16 {
+pub saturating_add := fn(a : i16, b : i16) -> i16 {
   w : i16 = unchecked { a + b }
   if b >= 0 and w < a { return 32767 }
   if b < 0 and w > a { return i16(0 - 32768) }
   return w
 }
-saturating_sub := fn(a : i16, b : i16) -> i16 {
+pub saturating_sub := fn(a : i16, b : i16) -> i16 {
   w : i16 = unchecked { a - b }
   if b < 0 and w < a { return 32767 }
   if b > 0 and w > a { return i16(0 - 32768) }
   return w
 }
-saturating_mul := fn(a : i16, b : i16) -> i16 {
+pub saturating_mul := fn(a : i16, b : i16) -> i16 {
   full : i64 = unchecked { i64(a) * i64(b) }
   if full > 32767 { return 32767 }
   if full < (0 - 32768) { return i16(0 - 32768) }
@@ -775,24 +775,24 @@ saturating_mul := fn(a : i16, b : i16) -> i16 {
 }
 
 ## ---- i32 ----
-wrapping_add := fn(a : i32, b : i32) -> i32 { return unchecked { a + b } }
-wrapping_sub := fn(a : i32, b : i32) -> i32 { return unchecked { a - b } }
-wrapping_mul := fn(a : i32, b : i32) -> i32 { return unchecked { a * b } }
-overflowing_add := fn(a : i32, b : i32) -> (i32, bool) {
+pub wrapping_add := fn(a : i32, b : i32) -> i32 { return unchecked { a + b } }
+pub wrapping_sub := fn(a : i32, b : i32) -> i32 { return unchecked { a - b } }
+pub wrapping_mul := fn(a : i32, b : i32) -> i32 { return unchecked { a * b } }
+pub overflowing_add := fn(a : i32, b : i32) -> (i32, bool) {
   w : i32 = unchecked { a + b }
   mut o : bool = false
   if b >= 0 and w < a { o = true }
   if b < 0 and w > a { o = true }
   return (w, o)
 }
-overflowing_sub := fn(a : i32, b : i32) -> (i32, bool) {
+pub overflowing_sub := fn(a : i32, b : i32) -> (i32, bool) {
   w : i32 = unchecked { a - b }
   mut o : bool = false
   if b > 0 and w > a { o = true }
   if b < 0 and w < a { o = true }
   return (w, o)
 }
-overflowing_mul := fn(a : i32, b : i32) -> (i32, bool) {
+pub overflowing_mul := fn(a : i32, b : i32) -> (i32, bool) {
   full : i64 = unchecked { i64(a) * i64(b) }
   mut o : bool = false
   if full > 2147483647 { o = true }
@@ -800,38 +800,38 @@ overflowing_mul := fn(a : i32, b : i32) -> (i32, bool) {
   w : i32 = unchecked { i32(full) }
   return (w, o)
 }
-checked_add := fn(a : i32, b : i32) -> Option(i32) {
+pub checked_add := fn(a : i32, b : i32) -> Option(i32) {
   w : i32 = unchecked { a + b }
   if b >= 0 and w < a { return Option(i32).None }
   if b < 0 and w > a { return Option(i32).None }
   return Option(i32).Some(w)
 }
-checked_sub := fn(a : i32, b : i32) -> Option(i32) {
+pub checked_sub := fn(a : i32, b : i32) -> Option(i32) {
   w : i32 = unchecked { a - b }
   if b > 0 and w > a { return Option(i32).None }
   if b < 0 and w < a { return Option(i32).None }
   return Option(i32).Some(w)
 }
-checked_mul := fn(a : i32, b : i32) -> Option(i32) {
+pub checked_mul := fn(a : i32, b : i32) -> Option(i32) {
   full : i64 = unchecked { i64(a) * i64(b) }
   if full > 2147483647 { return Option(i32).None }
   if full < (0 - 2147483648) { return Option(i32).None }
   w : i32 = unchecked { i32(full) }
   return Option(i32).Some(w)
 }
-saturating_add := fn(a : i32, b : i32) -> i32 {
+pub saturating_add := fn(a : i32, b : i32) -> i32 {
   w : i32 = unchecked { a + b }
   if b >= 0 and w < a { return 2147483647 }
   if b < 0 and w > a { return i32(0 - 2147483648) }
   return w
 }
-saturating_sub := fn(a : i32, b : i32) -> i32 {
+pub saturating_sub := fn(a : i32, b : i32) -> i32 {
   w : i32 = unchecked { a - b }
   if b < 0 and w < a { return 2147483647 }
   if b > 0 and w > a { return i32(0 - 2147483648) }
   return w
 }
-saturating_mul := fn(a : i32, b : i32) -> i32 {
+pub saturating_mul := fn(a : i32, b : i32) -> i32 {
   full : i64 = unchecked { i64(a) * i64(b) }
   if full > 2147483647 { return 2147483647 }
   if full < (0 - 2147483648) { return i32(0 - 2147483648) }
@@ -840,24 +840,24 @@ saturating_mul := fn(a : i32, b : i32) -> i32 {
 }
 
 ## ---- i64 ---- (mul overflow via the signed high-half-of-product intrinsic)
-wrapping_add := fn(a : i64, b : i64) -> i64 { return unchecked { a + b } }
-wrapping_sub := fn(a : i64, b : i64) -> i64 { return unchecked { a - b } }
-wrapping_mul := fn(a : i64, b : i64) -> i64 { return unchecked { a * b } }
-overflowing_add := fn(a : i64, b : i64) -> (i64, bool) {
+pub wrapping_add := fn(a : i64, b : i64) -> i64 { return unchecked { a + b } }
+pub wrapping_sub := fn(a : i64, b : i64) -> i64 { return unchecked { a - b } }
+pub wrapping_mul := fn(a : i64, b : i64) -> i64 { return unchecked { a * b } }
+pub overflowing_add := fn(a : i64, b : i64) -> (i64, bool) {
   w : i64 = unchecked { a + b }
   mut o : bool = false
   if b >= 0 and w < a { o = true }
   if b < 0 and w > a { o = true }
   return (w, o)
 }
-overflowing_sub := fn(a : i64, b : i64) -> (i64, bool) {
+pub overflowing_sub := fn(a : i64, b : i64) -> (i64, bool) {
   w : i64 = unchecked { a - b }
   mut o : bool = false
   if b > 0 and w > a { o = true }
   if b < 0 and w < a { o = true }
   return (w, o)
 }
-overflowing_mul := fn(a : i64, b : i64) -> (i64, bool) {
+pub overflowing_mul := fn(a : i64, b : i64) -> (i64, bool) {
   w : i64 = unchecked { a * b }
   mut hi : i64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.imulhiq(hi, b) }
@@ -868,19 +868,19 @@ overflowing_mul := fn(a : i64, b : i64) -> (i64, bool) {
   if w < 0 and hi != (0 - 1) { o = true }
   return (w, o)
 }
-checked_add := fn(a : i64, b : i64) -> Option(i64) {
+pub checked_add := fn(a : i64, b : i64) -> Option(i64) {
   w : i64 = unchecked { a + b }
   if b >= 0 and w < a { return Option(i64).None }
   if b < 0 and w > a { return Option(i64).None }
   return Option(i64).Some(w)
 }
-checked_sub := fn(a : i64, b : i64) -> Option(i64) {
+pub checked_sub := fn(a : i64, b : i64) -> Option(i64) {
   w : i64 = unchecked { a - b }
   if b > 0 and w > a { return Option(i64).None }
   if b < 0 and w < a { return Option(i64).None }
   return Option(i64).Some(w)
 }
-checked_mul := fn(a : i64, b : i64) -> Option(i64) {
+pub checked_mul := fn(a : i64, b : i64) -> Option(i64) {
   w : i64 = unchecked { a * b }
   mut hi : i64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.imulhiq(hi, b) }
@@ -890,19 +890,19 @@ checked_mul := fn(a : i64, b : i64) -> Option(i64) {
   if w < 0 and hi != (0 - 1) { return Option(i64).None }
   return Option(i64).Some(w)
 }
-saturating_add := fn(a : i64, b : i64) -> i64 {
+pub saturating_add := fn(a : i64, b : i64) -> i64 {
   w : i64 = unchecked { a + b }
   if b >= 0 and w < a { return 9223372036854775807 }
   if b < 0 and w > a { return (0 - 9223372036854775807 - 1) }
   return w
 }
-saturating_sub := fn(a : i64, b : i64) -> i64 {
+pub saturating_sub := fn(a : i64, b : i64) -> i64 {
   w : i64 = unchecked { a - b }
   if b < 0 and w < a { return 9223372036854775807 }
   if b > 0 and w > a { return (0 - 9223372036854775807 - 1) }
   return w
 }
-saturating_mul := fn(a : i64, b : i64) -> i64 {
+pub saturating_mul := fn(a : i64, b : i64) -> i64 {
   w : i64 = unchecked { a * b }
   mut hi : i64 = a
   comptime if target.arch == Arch.x86_64 { x86_64.imulhiq(hi, b) }

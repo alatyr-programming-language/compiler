@@ -2,4 +2,4 @@
 ## keeps no built-in boolean type; `bool` is a prelude type over a raw byte).
 ## `true`/`false` are its values; `==`/`<`/`and`/`or`/`not` and every comparison
 ## yield it.
-bool := brand(bits8)
+pub bool := brand(bits8)

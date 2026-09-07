@@ -10,13 +10,13 @@
 ## (Stdlib §5.1). `@alloc(a)` reads it at comptime (via the `mechanism` accessor)
 ## to pick the reference representation. Further mechanisms are additive
 ##; `region` is the only one with a v1 surface.
-Mechanism := enum { region, generational, manual }
+pub Mechanism := enum { region, generational, manual }
 
 ## `AllocError` — the closed v1 error set of the allocator protocol (Stdlib §5.1).
 ## `OutOfMemory`: no capacity for the request; `BadAlignment`: the requested
 ## alignment is invalid/unsupported; `SizeTooLarge`: the size (after alignment
 ## rounding) exceeds the limit or overflows `usize`.
-AllocError := enum { OutOfMemory, BadAlignment, SizeTooLarge }
+pub AllocError := enum { OutOfMemory, BadAlignment, SizeTooLarge }
 
 ## `Handle(T)` — a region handle: an index into its arena (Stdlib §5.2.1).
 ## Just a number, so it has no lifetime problem; copyable, not owning. Distinct
@@ -24,7 +24,7 @@ AllocError := enum { OutOfMemory, BadAlignment, SizeTooLarge }
 ## System §4.1) — even though the layout (`usize`) does not mention `T`. It
 ## carries **no** region name and **no** lifetime variable (holds). A handle
 ## is **never** dereferenced (§5.6 rule 4); the value is reached via `get`.
-Handle := fn(T : type) -> type { return struct { idx : usize } }
+pub Handle := fn(T : type) -> type { return struct { idx : usize } }
 
 ## `Arena` — the region/arena allocator: a bump allocator over a caller-supplied
 ## buffer (Stdlib §5.2.1). `base` points at the buffer, `cap` is its size in
@@ -32,16 +32,16 @@ Handle := fn(T : type) -> type { return struct { idx : usize } }
 ## bulk. Over a caller buffer (`arena_over`) it holds no releasable resource, so
 ## it carries no finalize obligation (Memory §5.9 — "own forever"); an OS-backed
 ## arena (additive) makes `close` a real release and is therefore linear.
-Arena := struct { base : ptr(mut bits8), cap : usize, off : usize }
+pub Arena := struct { base : ptr(mut bits8), cap : usize, off : usize }
 
 ## `mechanism` — the comptime accessor (Stdlib §5.1): an `Arena` supplies the
 ## `region` mechanism. `@alloc(a)` evaluates this at comptime to choose the
 ## reference representation.
-mechanism := fn(self : Arena) -> Mechanism { return Mechanism.region }
+pub mechanism := fn(self : Arena) -> Mechanism { return Mechanism.region }
 
 ## `arena_over` — construct an arena over a caller-supplied buffer (`buf`, `cap`
 ## bytes); freestanding, no OS (Stdlib §5.2.1). The cursor starts at 0.
-arena_over := fn(buf : ptr(mut bits8), cap : usize) -> Arena {
+pub arena_over := fn(buf : ptr(mut bits8), cap : usize) -> Arena {
   a := Arena(base = buf, cap = cap, off = 0)
   return a
 }
@@ -49,7 +49,7 @@ arena_over := fn(buf : ptr(mut bits8), cap : usize) -> Arena {
 ## `close` — bulk reclamation (Stdlib §5.2.1): reset the cursor so the buffer is
 ## reusable. For a caller-supplied buffer this releases nothing the arena owns
 ## (the buffer is the caller's); an OS-backed arena's `close` is a real release.
-close := fn(in out self : Arena) { self.off = 0 }
+pub close := fn(in out self : Arena) { self.off = 0 }
 
 ## `allocate` — the allocator protocol's bump allocation for the region mechanism
 ## (Stdlib §5.1, typed by the mechanism → `Handle(T)`): VALIDATE the requested
@@ -70,7 +70,7 @@ close := fn(in out self : Arena) { self.off = 0 }
 ## `align != 0` is already established, so the `- 1` cannot underflow. A rejection
 ## returns before any store, so the bump cursor is untouched and the arena stays
 ## usable.
-allocate := fn(in out self : Arena, T : type, size : usize, align : usize) -> Result(Handle(T), AllocError) {
+pub allocate := fn(in out self : Arena, T : type, size : usize, align : usize) -> Result(Handle(T), AllocError) {
   if align == 0 {
     zero_align := Result(Handle(T), AllocError).Err(AllocError.BadAlignment)
     return zero_align
@@ -97,7 +97,7 @@ allocate := fn(in out self : Arena, T : type, size : usize, align : usize) -> Re
 ## `free` — a **no-op** for the region mechanism (Stdlib §5.2.1): storage is
 ## reclaimed in bulk by `close`, so an individual free reclaims nothing. Present
 ## to satisfy the allocator-protocol shape (§5.1).
-free := fn(in out self : Arena, T : type, h : Handle(T), size : usize, align : usize) {
+pub free := fn(in out self : Arena, T : type, h : Handle(T), size : usize, align : usize) {
 }
 
 ## `get` — exchange a handle + its arena for a **scoped pointer** to the value
@@ -116,7 +116,7 @@ free := fn(in out self : Arena, T : type, h : Handle(T), size : usize, align : u
 ## an owning arena is consumed exactly once. The body below deliberately escapes its own
 ## return via `unchecked` (§5.6 rule 5), forming the raw `ptr` the bounds-checked
 ## arithmetic computes.
-get := fn(T : type, a : Arena, h : Handle(T)) -> scoped ptr(mut T) {
+pub get := fn(T : type, a : Arena, h : Handle(T)) -> scoped ptr(mut T) {
   comptime if verify.checked { assert(h.idx < a.off) }
   base_int := unchecked bitcast(usize, a.base)
   elem_int := base_int + h.idx
