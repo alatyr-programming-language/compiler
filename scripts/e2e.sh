@@ -7951,6 +7951,18 @@ build_reject_has reject_index_scalar_ptr "indexing a SCALAR local/param"
 build_reject_has reject_index_base_not_a_place "index BASE is not a named array/slice place"
 run_x86 index_base_tail_controls 42
 check_accept index_base_tail_controls
+## Grammar §3.4 / Types §9.4 (#422): a RANGE SLICE used DIRECTLY as an index base, `xs[lo..hi][i]`, is
+## one primary plus two postfix steps and needs no intermediate binding. It answered frame slot 0's
+## word (`xs[1..3][0]` -> 0, not 42) until #425 made that refusal loud; the recognizer above the tail
+## now composes the element address off `emit_arr_slice_pair`'s {ptr, len}, so the direct and the bound
+## spelling name the same byte. `index_base_tail_controls` rows 16-34 pin the values — `lo > 0` so an
+## ignored offset cannot pass, and a length-1 view whose length and element differ so returning the
+## length cannot pass either. The OUT-OF-VIEW index is a separate row because it TRAPS: the view's own
+## runtime length is the bound, so index 2 of a 2-element view raises SIGILL (132) instead of reading
+## `xs[3]` = 55 past the view. Both rows are x86-only; the non-x86 tails are separate code, still emit
+## a fail-loud trap for this shape (a133 / rv133 / wasm134) and are unchanged.
+run_x86_trap arr_slice_direct_index_oob 132
+check_accept arr_slice_direct_index_oob
 ## BYTES bounded return ABI: `[u8; N]` with 1 <= N <= 16 is returned as one or two packed words and
 ## indexed both after binding and directly. The bound form remains x86-only; the direct form is also
 ## covered on AArch64 by its matching x0/x1 carrier. The wider/non-u8 direct forms below remain located rejects.

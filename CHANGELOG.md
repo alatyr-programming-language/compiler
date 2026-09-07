@@ -82,6 +82,25 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A range slice indexed directly, `xs[lo..hi][i]`, reads the view's element on x86_64.** Grammar
+  §3.4 spells a postfix chain as `primary { postfix }` with both `"[" expr "]"` and the range form
+  among the postfix operators, so this is one primary followed by two postfix steps and needs no
+  intermediate binding — yet the two spellings of the same access disagreed. `v := xs[1..3]; v[0]`
+  answered 42 while `xs[1..3][0]` answered **0**, a word read out of the caller's own frame, because
+  the view the range produces has no frame slot for the element-address path to resolve; the previous
+  entry turned that silent read into a located refusal, so the same program then failed to compile at
+  all. The offset is now honoured (`lo` is added to element 0's address with the element's own stride,
+  the same two words the bound spelling stores into a slice local), and the view's runtime length
+  becomes the bounds check, so an index past the view's end **traps** instead of reading the base
+  array beyond `hi`: `xs[1..3][2]` raises SIGILL rather than returning `xs[3]`. Scalar word elements
+  only — a byte, float, struct, enum or `str` element array, and a `str` range slice (`s[lo..hi][i]`),
+  keep the located refusal, because the element *width* on those paths is chosen by queries that only
+  recognise a named base and would pair a correct address with a word-wide load. aarch64, riscv64 and
+  wasm have their own element-address paths, are untouched, and still trap at runtime on this spelling
+  rather than returning a wrong value; the bound spelling remains correct on all four. No emitted byte
+  of the compiler's own build moves: the recognizer fires only on a range-slice base, and the
+  compiler's `src/` and `lib/` contain none.
+
 - **An index whose base is not a named place is refused instead of reading the caller's frame.** The
   generic element-address tail of the x86_64 lowering composed `base + i * stride` out of the base's
   frame slot, and the slot lookup answered *entry 0* — the first local of the enclosing frame — for
