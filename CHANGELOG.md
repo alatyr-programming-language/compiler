@@ -82,6 +82,32 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- A **`{}` hole filled by a bare unary-minus expression** now prints its value on **x86_64**, instead
+  of printing **nothing at all**. `print("a=[{}]\n", -4)` printed `a=[]` and
+  `print("c=[{}]\n", -9223372036854775808)` printed `c=[]`, on a program that compiled cleanly and
+  exited with the right code — so no gate stage that reads an exit status could see it. The same value
+  written `0 - 4` printed `-4` correctly, and after the previous entry's fix the aarch64, riscv64 and
+  wasm backends printed **both** spellings correctly, which left x86_64 as the one divergent surface
+  for this one spelling. The cause is that the parser desugars unary minus to
+  `Unchecked(Bin(17, Num(0), x))` so the negation lowers as guard-free two's-complement, and every
+  shape test in the x86_64 hole expansion reads the node's outer kind — `Expr::Unchecked`, not
+  `Expr::Bin` — so no renderer arm matched and the hole contributed zero bytes. `unchecked` is a
+  verification mode and never a type, so the hole now routes on the same `lit_arith_i64` predicate the
+  other three backends already use, and all four surfaces read one decision. The `0 - 4` spelling still
+  matches the arithmetic arm first and its emitted bytes do not move; measured with the input tree held
+  fixed over all of `test/*.al`, x86_64 emits one differing artifact (the new fixture) and aarch64,
+  riscv64 and wasm emit zero.
+- **A `{}` hole the expansion cannot type is now refused with its source line, where it used to print
+  the empty string.** This is the same silent class as above and the reason it went unnoticed: the hole
+  emitted nothing while the statement, the enclosing call and the process exit code all reported
+  success. Four spellings reached that sink and are now a located refusal on x86_64: a negated name
+  (`-x`), a negated call (`-f(3)`), a negated float literal (`-1.5`) and a negated float local. Each
+  was already printing the wrong thing — the empty string on x86_64, the unsigned 64-bit magnitude or
+  a float's bit pattern read as an integer on the other three backends — so no program that printed a
+  correct value stops compiling. Rendering them needs the type layer rather than a shape-local peel and
+  is tracked separately; measured over the compiler's own `src/` and `lib/`, all 1559 tracked
+  `test/*.al` and the 421 remaining tracked `.al` files, nothing else reaches the refusal.
+
 - A **negative `{}` hole whose operand carries no `iN` annotation** now prints with its sign on
   **aarch64**, **riscv64** and **wasm** too. The previous fix gave those three backends a signed
   renderer and selected it with the same signedness oracle `/`, `%` and `shr` route on, which proves

@@ -5043,6 +5043,25 @@ print_hole_shapes_want="$(cat "$E2E_TEST/print_hole_signed_shapes.out")"
 ## A missing or empty golden would make all three non-x86 rows compare "" with "" and pass vacuously.
 [ -n "$print_hole_shapes_want" ] || { echo "FAIL print_hole_signed_shapes: the expected-output golden $E2E_TEST/print_hole_signed_shapes.out is missing or empty; the four-backend rows below would compare nothing"; fail=1; }
 run_x86_out print_hole_signed_shapes 42
+## Issue #486 — a `{}` hole filled by a BARE UNARY-MINUS expression. The parser desugars unary minus
+## to `Unchecked(Bin(17, Num(0), x))`, whose outer node is `Expr::Unchecked`, so on x86_64 no arm of
+## the hole chain matched: `print("a=[{}]\n", -4)` emitted ZERO bytes for the hole and printed `a=[]`
+## on a clean compile that still exited 42. After #457 the three non-x86 backends already rendered
+## both spellings correctly, so x86_64 was the divergent surface for this one spelling. Same
+## one-golden discipline as the two blocks above; the exit code is 42 on all four backends BEFORE and
+## AFTER, so only the TEXT can carry the verdict.
+print_hole_minus_want="$(cat "$E2E_TEST/print_hole_unary_minus.out")"
+## A missing or empty golden would make all three non-x86 rows compare "" with "" and pass vacuously.
+[ -n "$print_hole_minus_want" ] || { echo "FAIL print_hole_unary_minus: the expected-output golden $E2E_TEST/print_hole_unary_minus.out is missing or empty; the four-backend rows below would compare nothing"; fail=1; }
+run_x86_out print_hole_unary_minus 42
+## Issue #486 / class #464 — the NON-VACUITY row for the hole chain's terminal arm. A hole no arm
+## recognises used to contribute zero bytes and render as the empty string while the statement, the
+## call and the exit code all reported success; it is now a located refusal. `-x` over an
+## un-annotated local is the cheapest argument that still reaches that arm (its operand is a NAME, so
+## no literal-leaf test accepts it and no type span is written where the expansion reads). With the
+## arm removed this program compiles, runs and exits 42 printing `v=[]`, which is what makes the row
+## non-vacuous. The needle is deliberately absent from the fixture's own `##` comments. Residual #489.
+build_reject_has print_hole_unmatched_reject 'matched no renderer'
 ## Functions §7.1 / I11 — a call in STATEMENT position (result discarded) whose callee's TAIL name collides
 ## with the comptime-variadic `std::fmt::print` was routed into the `{}`-template desugar, which emits
 ## NOTHING when argument 0 is not a string literal: the whole statement — call, arguments, side effects —
@@ -8042,6 +8061,8 @@ run_wat_out wasm_print_tpl_nl $'val = 42\nx' 42
 run_wat_out print_hole_signed_render "$print_hole_signed_want" 42
 ## Issue #457 — the same four backends against the #457 golden (see the x86 row above).
 run_wat_out print_hole_signed_shapes "$print_hole_shapes_want" 42
+## Issue #486 — the same four backends against the #486 golden (see the x86 row above).
+run_wat_out print_hole_unary_minus "$print_hole_minus_want" 42
 run_wat operator_compare 42
 run_wat hex_literal 42
 run_wat wasm_nested_local 45
@@ -8136,6 +8157,8 @@ run_a64_out wasm_print_two '40 and 2' 42
 run_a64_out print_hole_signed_render "$print_hole_signed_want" 42
 ## Issue #457 — the same four backends against the #457 golden (see the x86 row above).
 run_a64_out print_hole_signed_shapes "$print_hole_shapes_want" 42
+## Issue #486 — the same four backends against the #486 golden (see the x86 row above).
+run_a64_out print_hole_unary_minus "$print_hole_minus_want" 42
 ## riscv64 backend (scalar kernel + scalar globals): cross-validate against the same
 ## expected exits as the x86_64 / WASM / aarch64 backends.
 run_rv64 smoke 42
@@ -8189,6 +8212,8 @@ run_rv64_out wasm_print_two '40 and 2' 42
 run_rv64_out print_hole_signed_render "$print_hole_signed_want" 42
 ## Issue #457 — the same four backends against the #457 golden (see the x86 row above).
 run_rv64_out print_hole_signed_shapes "$print_hole_shapes_want" 42
+## Issue #486 — the same four backends against the #486 golden (see the x86 row above).
+run_rv64_out print_hole_unary_minus "$print_hole_minus_want" 42
 
 ## Issue #306: axis-only coverage for mixed-width struct fields and narrow aggregate arguments.
 ## The local mixed-width, pointer-path, and narrow aggregate fixtures run on every supported backend;

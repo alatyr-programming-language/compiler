@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n, generic_overload_set_count) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n, generic_overload_set_count, lit_arith_i64) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -1788,11 +1788,35 @@ emit_variadic_print := fn(args_head : ptr(mut Arg), block_head : ptr(mut Stmt), 
           ## Guarded to plain scalars: a struct/enum/array var is NOT rendered as int (it needs Display).
           emit_arg(argx, sb, cx, a, nl, cx.str_tmp)
           push_str(sb, "  popq %rdi\n  call std__fmt__print_one_int\n")
-        } else if expr_is_arith_bin(argx) {
+        } else if expr_is_arith_bin(argx) or lit_arith_i64(argx) {
           ## an ARITHMETIC EXPRESSION hole (`a + b`) — an int-valued expression with no type span;
           ## the §7.1 default numeric renderer `print_one_int`. Without this it rendered nothing.
+          ##
+          ## `lit_arith_i64` adds the ONE spelling `expr_is_arith_bin` cannot see. The parser desugars
+          ## unary minus to `Unchecked(Bin(17, Num(0), x))` (`p_factor`, so the negation is guard-free
+          ## 2's-complement), and that node's OUTER kind is `Expr::Unchecked`, not `Expr::Bin` — so
+          ## `print("{}", -4)` matched NO arm of this chain, contributed zero bytes and rendered the
+          ## EMPTY string on a clean compile that still exited correctly (#486). `unchecked` is a
+          ## VERIFICATION mode, never a type, so peeling it before the shape test is the shape-local
+          ## decision; `lower_layout::lit_arith_i64` already IS that peel, and it is the same predicate
+          ## aarch64/riscv64/wasm route this hole on, so all four surfaces now read one decision.
+          ## A bare `0 - 4` still matches `expr_is_arith_bin` FIRST, so its emitted bytes do not move.
           emit_arg(argx, sb, cx, a, nl, cx.str_tmp)
           push_str(sb, "  popq %rdi\n  call std__fmt__print_one_int\n")
+        } else {
+          ## NO arm matched. The hole then contributed ZERO bytes: it rendered as the empty string
+          ## while the statement, the call and the process exit code all reported success — the one
+          ## forbidden outcome (I11), and the one every gate stage that reads an exit code is blind
+          ## to. #486 was exactly this sink and #464 is the class. Report it the way the non-literal
+          ## template above does, LOUD and located, so the residual shapes this chain cannot type
+          ## (`-x`, `-f(x)`, a negated float) are a refusal instead of silence.
+          ##
+          ## Measured, not assumed: with this arm made to fail on entry, the compiler's own `src/` +
+          ## `lib/` self-emit, all 1559 tracked `test/*.al` and the 421 remaining tracked `.al` files
+          ## never reach it — the case set is empty on this tree, so the arm costs no emitted byte.
+          aoff := comptime_cond_src_off(argx)
+          if aoff != 0 { lower_show_src_line(cx.src, aoff) }
+          panic("selfhost: a `{}`-template `print` hole whose argument type this expansion cannot resolve (the source line above, when the argument carries a span). Functions §7.1 routes every hole through the scalar rendering layer; this one matched no renderer. Rejected rather than silently rendering the empty string.")
         }
         ai += 1
         i += 2
