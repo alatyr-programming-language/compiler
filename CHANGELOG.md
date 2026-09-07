@@ -82,6 +82,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- An **inline field read through a `ptr(str)` local** now reads the pointee, instead of answering
+  **0**. Stdlib appendix §3.5/§3.6 make `str` the base tier's two-word `{ptr : ptr(u8), len : usize}`
+  pair and Memory §4.1 makes `deref(q).len` an ordinary read through the pointer, but
+  `s := "a,bc"  q := ptr(s)  deref(q).len` built cleanly and answered **0** for a four-byte string,
+  and `deref(q).ptr` answered a **null** pointer. All three ways of spelling the local were affected
+  — inferred (`q := ptr(s)`), annotated (`q : ptr(str) = ptr(s)`) and `q := unchecked
+  bitcast(ptr(str), ptr(s))` — while the same read through a `ptr(str)` **parameter**, the same read
+  over a **user struct**, and binding the pointee first on an annotated local (`ss := deref(q)` then
+  `ss.len`) were all already correct, so two spellings of one read disagreed. The pointee-view read
+  keyed only on a slot MARKER that a parameter carries and a local carries in none of the three
+  spellings; it now also consults the pointer local's own annotation or `bitcast` target, and
+  recognises the address of a `str` local. One shape of this class is **still open** and unchanged:
+  the *bound* form on an *inferred* local (`q := ptr(s)` then `ss := deref(q)`) still copies one
+  word, because that binding recovers its pointee from a type spelling the inferred local does not
+  have. x86_64 only: aarch64, riscv64 and wasm refuse these shapes fail-loud rather than answering
+  the wrong value (measured, unchanged). The compiler's own emitted assembly is byte-identical, and
+  across all 1551 programs in `test/` no expression changed which lowering arm serves it.
 - Three more **right-hand sides of an assignment to a struct's enum field** (`h.t = <rhs>`) are no
   longer **dropped** on x86_64: an enum field of another struct (`h.t = s.t`), an enum array element
   (`h.t = xs[0]`) and a branch value (`h.t = if c { … } else { … }`, and its `match` spelling). Types §6
