@@ -389,11 +389,55 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## the source to hand it — `str` is structural, the binding spells no type and carries no
           ## `bitcast` — so the annotated and bitcast spellings bound the pair here while the
           ## inferred one fell to the SCALAR slot and `ss.len` answered 0 on a clean compile.
-          ## `deref_addr_view_ptr_local` answers the only question this binder has, as a BOOLEAN, off
-          ## the SAME source scan the inline `deref(q).len` read uses (#456/#482), so the two
-          ## spellings of one read cannot disagree. Purely ADDITIVE: every pointer the span resolver
-          ## already resolved takes the unchanged first alternative.
-          bind_str_slot(slots, src, ns, nl)
+          ## `deref_addr_view_ptr_local` answers the SHAPE question this binder has ("is the pointee
+          ## the two-word pair") off the SAME source scan the inline `deref(q).len` read uses
+          ## (#456/#482), so the two spellings of one read cannot disagree. Purely ADDITIVE: every
+          ## pointer the span resolver already resolved takes the unchanged first alternative.
+          ##
+          ## WHICH VIEW, not just how many words — issue #484. `str` and `[T]` are the same §7 pair,
+          ## so both reserve two words, but they are NOT the same slot: `bind_str_slot` reserves two
+          ## BYTE-indexed words (ek 4) while `bind_slice_slot` reserves two ELEMENT-indexed ones
+          ## (ek 5) carrying the element stride, kind and type span. Binding every view pointee as a
+          ## `str` made `ss.len` correct and `ss[1]` read BYTE 1 of element 0 — 0 on a clean compile,
+          ## and only after #484 fixed the ADDRESS: while `ptr(v)` still handed back the array base
+          ## the same `ss[1]` SEGFAULTED, so the mis-typed binding was hidden behind a crash.
+          ##
+          ## The element layout is READ, never recomputed. For the INFERRED spelling
+          ## (`q := ptr(v)`) the source scan names `v`, so `v`'s own slot supplies
+          ## `estride`/`eek`/element span — the same copy the `t := <Slice(T) var>` bind already makes.
+          ## For the ANNOTATED / BITCAST / call-derived spellings there is no source local, only the
+          ## pointee TYPE span, so the element comes out of `array_elem_span` and through
+          ## `slice_elem_layout`, the one home `slice_ret_elem` also uses. A `str` pointee has no
+          ## element span at all (`array_elem_span` answers 0/0) and keeps `bind_str_slot` unchanged.
+          avs := deref_addr_view_ptr_local_span(v, ptr(slots), src)
+          dvp := deref_view_pointee_span(v, ptr(slots), decls, src, a, sub)
+          mut vb_is_slice := false
+          mut vb_stride := 1
+          mut vb_eek : u8 = 0
+          mut vb_ess := 0
+          mut vb_esl := 0
+          if avs.n != 0 {
+            avent := deref(svec_at(SlotEntry, ptr(slots), entry_of(ptr(slots), src, avs.s, avs.n)))
+            if avent.ek == 5 {
+              vb_is_slice = true
+              vb_stride = avent.estride
+              vb_eek = avent.eek
+              vb_ess = avent.sns
+              vb_esl = avent.snl
+            }
+          } else if dvp.n != 0 {
+            aes := array_elem_span(src, dvp.s, dvp.n)
+            if aes.n != 0 {
+              sei := slice_elem_layout(decls, src, aes.s, aes.n, a)
+              vb_is_slice = true
+              vb_stride = sei.stride
+              vb_eek = sei.eek
+              vb_ess = sei.ess
+              vb_esl = sei.esl
+            }
+          }
+          if vb_is_slice { bind_slice_slot(slots, src, ns, nl, vb_stride, vb_eek, vb_ess, vb_esl) }
+          else { bind_str_slot(slots, src, ns, nl) }
         } else if deref_call_enum_span(v, decls, src, a).n != 0 {
           ## a `st := deref(node_ptr(E, …))` binding — reserve `st` as enum E (disc + max-payload
           ## words) so a following `match st` is recognized as an enum match (ek 3); the words are

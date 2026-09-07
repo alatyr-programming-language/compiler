@@ -6947,6 +6947,46 @@ run issue456_ptr_str_local_field 42
 # Cross-target rows follow from `run`; the non-x86 backends trap on `str`, exactly as the #451 and
 # #456 rows above do (measured aarch64=133, riscv64=133, wasm=134).
 run issue483_bound_deref_inferred_ptr_str 42
+# Issue #484 — the `[T]` dual of #451/#456. `[T]` is the SAME Types §7 two-word `{ptr, len}` view a
+# `str` is ("the view *is* the value"), so `deref(ptr(v)) == v`; instead every read of `.len` through
+# a `ptr([T])` answered the run's SECOND ELEMENT. `bind_slice_slot` marks a slice VIEW LOCAL
+# `is_ref` to mean "word 0 is a DATA pointer, index THROUGH it", and `emit_addr_of` read that flag as
+# "this slot holds a pointer to the whole value", so `ptr(v)` handed back the ARRAY BASE and the
+# pointee-view read's ascending `8(%rax)` landed on element 1. A str LOCAL (ek 4, not `is_ref`)
+# already took the `leaq` branch, which is why the `str` dual was correct and the `[T]` one was not.
+# The wrong answer had TWO shapes in the field — 0 before PR #482, the second element after it — and
+# an element is a plausible-looking number rather than obvious garbage, so every `.len` probe is
+# CLASSIFIED into four codes per (spelling, subject): base+0 zero, base+1 the FIRST element, base+2
+# the SECOND element, base+3 anything else; correct stays silent. Five spellings (parameter 46-57,
+# inferred local 58-69, annotated local 70-81, bitcast local 82-93, bound `ss := deref(q)` 94-105,
+# plus one `.ptr` probe each at 106-115) x three subjects of DIFFERENT length, one of them a slice of
+# LENGTH 1 whose length (1) differs from both run words under it (5 and 6) so a fix that returns an
+# element cannot pass by coincidence. Controls 20-33 and 44-45 are green on BOTH sides.
+# Two words reserved is not the RIGHT two words: a `[T]` pointee bound as a byte-indexed `str` has a
+# correct `.len` and answers BYTE 1 of element 0 for `ss[1]`, so the bound spellings are probed for
+# the ELEMENT read (17-18, 34-39) and for `for x in ss` (19, 43) as well as for `.len` (3-16, 40-41).
+# While `ptr(v)` still handed back the array base that same element read SEGFAULTED, which is what
+# hid the mis-typed binding; fixing only the address would have turned the crash into a silent 0.
+# Parent 71ea8df: 48 (= 46 + 2, "the SECOND element"). This tree: 42.
+# Cross-target rows follow from `run`; the non-x86 backends trap on a view read through a pointer,
+# exactly as they already do for the #451/#456 rows above (measured aarch64=133, riscv64=133,
+# wasm=134, before and after).
+run issue484_ptr_slice_view_field 42
+# Issue #484, second half — WHICH view the binder reserved, not just how many words. `ss := deref(q)`
+# bound EVERY §7 view pointee with `bind_str_slot` (ek 4, BYTE-indexed) because the binder was asked
+# one boolean, "is the pointee the two-word pair", which is true for `str` and for `[T]` alike. A
+# `[T]` bound that way has a correct `.len` and answers BYTE 1 of element 0 for `ss[1]` — 0 for every
+# element below 256. Kept SEPARATE from the row above on purpose: on the parent this file is REFUSED
+# (`indexing a SCALAR local/param`) for the inferred spelling, so joining them would replace that
+# row's classified 48 with a compile failure. The annotated and bitcast spellings SEGFAULT on the
+# parent instead, and with only the address fixed all three answer a silent 0 — which is why the
+# binding is typed in the same change. Codes 50-64 classify each element read into correct / the
+# byte-read shape (0) / any other wrong value; controls 20-22 keep the direct read and the `str` dual
+# (whose binding must STAY byte-indexed) green on both sides.
+# Parent 71ea8df: refused at compile time. This tree: 42.
+# Cross-target rows follow from `run`; the non-x86 backends trap on a view read through a pointer,
+# exactly as the #451/#456/#483 rows above do (measured aarch64=133, riscv64=133, wasm=134).
+run issue484_bound_slice_elem 42
 # A `next` this desugar cannot call (a GENERIC `next(K : type, …)`, `alloc::hashmap::HashMapIter`)
 # must be REFUSED, never walked as a slice: the parent built it and ran the body zero times.
 build_reject_has reject_for_generic_iter_next "carries no type arguments"

@@ -11412,49 +11412,68 @@ byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
   false
 }
 
-## Is the local named `[s, n)` an INFERRED pointer bound as `q := ptr(<str local>)` — i.e. does `q`
-## hold the ADDRESS of a §7 two-word `{ptr, len}` VIEW? SOURCE-SCAN from the slot's DECLARATION name
-## span (`ent.ns`/`ent.nl`), the same anchor `byte_ptr_local` and `slot_name_is_annotated` use: the
-## next non-space bytes must be `:=`, then `ptr(`, an optional `mut `, an IDENTIFIER, `)`, and a
+## WHICH LOCAL does the INFERRED pointer `q := ptr(<view local>)` hold the ADDRESS OF — the span of
+## that identifier, or {0,0} when `[s, n)` is not that shape? SOURCE-SCAN from the slot's DECLARATION
+## name span (`ent.ns`/`ent.nl`), the same anchor `byte_ptr_local` and `slot_name_is_annotated` use:
+## the next non-space bytes must be `:=`, then `ptr(`, an optional `mut `, an IDENTIFIER, `)`, and a
 ## terminator — the RHS must be EXACTLY `ptr(<ident>)`, so `ptr(s) + k` or `ptr(s.f)` is not this
-## shape. The identifier's own slot decides: only a `str` LOCAL (`ek == 4`, not `is_ref`) qualifies,
-## whose frame pair is `ptr` at the slot word and `len` at the next HIGHER address — exactly the
-## ascending `(%rax)` / `8(%rax)` the pointee-view read moves.
+## shape. The identifier's own slot decides whether it qualifies: `view_dest_is_local` is the existing
+## home of "do this local's frame words hold the `{ptr, len}` pair THEMSELVES" — true for a `str`
+## LOCAL (`ek 4`, not by-ref) and for a slice VIEW LOCAL (`v := xs[lo..hi]`, `bind_slice_slot`: ek 5 +
+## `is_ref` + the `snl == 1` runtime-len marker), whose pair is `ptr` at the slot word and `len` at
+## the next HIGHER address — exactly the ascending `(%rax)` / `8(%rax)` the pointee-view read moves.
+## Types §7 makes `[T]` the SAME two-word view a `str` is, so asking one predicate here rather than
+## re-testing `ek == 4` is what puts the `[T]` dual (issue #484) on the `str` dual's route (#456).
 ##
-## Why a BOOLEAN and not a `CSpan`: `str` is structural, so an `ek == 4` slot carries NO type span
-## (`bind_str_slot` leaves `sns`/`snl` zero) and the binding `q := ptr(s)` spells no type either.
-## There is therefore no `str` span in the source to hand back — but the pointee-view read does not
-## need one, it needs to know the pointee is the pair. `slot_ptr_pointee_span` (span-valued) is left
-## untouched for exactly that reason: it cannot answer this shape, and widening it would change the
-## `deref` LOAD/STORE width resolvers that share it.
+## A str/slice PARAM is excluded (`is_ref` with `sns == 1`): its slot holds a POINTER to the caller's
+## pair, so `ptr(s)` there is the address of that pointer word, not of the pair. So is an array
+## local/param, which has no len word at all.
 ##
-## A by-ref `str` PARAM is excluded (`is_ref`): its slot holds a POINTER to the caller's pair, so
-## `ptr(s)` there is the address of that pointer word, not of the pair.
+## Why a SPAN and not a BOOLEAN — and this is the correction to what the two entry points used to
+## claim. A boolean answers the inline read's whole question ("is the pointee the pair, so move it at
+## the ascending offsets"), but it does NOT answer the BOUND binding's question. `ss := deref(q)`
+## must also know WHICH view: a `str` binds two words that are BYTE-indexed (`bind_str_slot`), while a
+## `[T]` binds two words that are ELEMENT-indexed at the source view's own stride
+## (`bind_slice_slot`). Answering that with one boolean bound a `[T]` pointee as a `str`, so `ss.len`
+## was right and `ss[1]` read BYTE 1 of element 0 — 0 on a clean compile (issue #484). Handing back
+## the addressed local's span lets the binder read that local's own `estride`/`eek`/element span, so
+## no element layout is recomputed or guessed here.
+##
+## `slot_ptr_pointee_span` (span-valued over the pointee TYPE) is still left untouched: `str` is
+## structural, an `ek == 4` slot carries no type span and `q := ptr(s)` spells no type, so it cannot
+## answer this shape at all, and widening it would change the `deref` LOAD/STORE width resolvers that
+## share it. This span is the ADDRESSED LOCAL's name, not a type.
 ##
 ## The scan is bounded by the EXACT source-buffer extent `emit_program` publishes in `LOWER_SRC_N`
 ## (fail-closed at 0, cf. issue #340); every read goes through `ptr_scan_has` / `ptr_scan_ws` or is
 ## proven under `p < end`.
 ##
 ## TWO ENTRY POINTS, ONE SCAN — the `local_ptr_pointee_span` / `slot_ptr_pointee_span` pair pattern.
-## `addr_view_ptr_local` is the EMIT-side entry (it has an `LCtx`); `slot_addr_view_ptr_local` is the
-## SLOT-COLLECTION-side entry, which has only `slots` + `src` and is what the `x := deref(q)` str
-## binding consults (issue #483). The scan body is shared, so the inline read (#456) and the bound
-## read (#483) can never disagree about which pointer locals are address-of-a-view.
+## `addr_view_ptr_local` is the EMIT-side entry (it has an `LCtx`) serving the inline `deref(q).len`
+## read (#456/#484); `deref_addr_view_ptr_local` / `slot_addr_view_ptr_local_span` are the
+## SLOT-COLLECTION-side entries, which have only `slots` + `src` and serve the `x := deref(q)` binding
+## (#483/#484). What the shared body answers for both is exactly one question: WHICH pointer locals
+## are the address of a two-word view pair, and of which local. It deliberately does NOT answer "what
+## type does the binder reserve" — that is the caller's follow-up, the emit side does not need it, and
+## folding it in here is what let one boolean stand for two different questions.
 addr_view_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
   return slot_addr_view_ptr_local(cx.slots, cx.src, s, n)
 }
 slot_addr_view_ptr_local := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> bool {
+  return slot_addr_view_ptr_local_span(slots, src, s, n).n != 0
+}
+slot_addr_view_ptr_local_span := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> CSpan {
   ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
-  if streq(src, ent.ns, ent.nl, s, n) == false { return false }
-  if ent.ek != 0 { return false }
-  if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return false }
+  if streq(src, ent.ns, ent.nl, s, n) == false { return CSpan(s = 0, n = 0) }
+  if ent.ek != 0 { return CSpan(s = 0, n = 0) }
+  if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return CSpan(s = 0, n = 0) }
   end := LOWER_SRC_N
   mut p := ent.ns + ent.nl
   while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, ":=") == false { return false }
+  if ptr_scan_has(src, end, p, ":=") == false { return CSpan(s = 0, n = 0) }
   p = p + 2
   while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
-  if ptr_scan_has(src, end, p, "ptr(") == false { return false }
+  if ptr_scan_has(src, end, p, "ptr(") == false { return CSpan(s = 0, n = 0) }
   p = p + 4
   while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
   if ptr_scan_has(src, end, p, "mut ") {
@@ -11466,17 +11485,19 @@ slot_addr_view_ptr_local := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : 
   while p < end and stop == false {
     ch := str_at((src + p), 1)
     if ch == ")" { stop = true }
-    else if ch == " " or ch == "\n" or ch == "\t" or ch == "\r" or ch == ";" or ch == "}" or ch == "(" or ch == "[" or ch == "." or ch == "," { return false }
+    else if ch == " " or ch == "\n" or ch == "\t" or ch == "\r" or ch == ";" or ch == "}" or ch == "(" or ch == "[" or ch == "." or ch == "," { return CSpan(s = 0, n = 0) }
     else { p = p + 1 }
   }
-  if p == vs or stop == false { return false }
-  if p + 1 >= end { return false }
+  if p == vs or stop == false { return CSpan(s = 0, n = 0) }
+  if p + 1 >= end { return CSpan(s = 0, n = 0) }
   t := str_at((src + p + 1), 1)
-  if t != "\n" and t != ";" and t != " " and t != "}" { return false }
-  vent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, vs, p - vs)))
-  if streq(src, vent.ns, vent.nl, vs, p - vs) == false { return false }
-  if vent.ek == 4 and vent.is_ref == false { return true }
-  false
+  if t != "\n" and t != ";" and t != " " and t != "}" { return CSpan(s = 0, n = 0) }
+  ## The addressed identifier's own slot decides, through the one predicate that already knows which
+  ## locals carry their own pair (it gates the view-copy STORE in `lower::assign`), so the fact is not
+  ## recovered a second way here. Hand the identifier's SPAN back, not a boolean: the emit-side read
+  ## only needs "yes", but the bound binding also needs this slot to read its element layout off.
+  if view_dest_is_local(slots, src, vs, p - vs) { return CSpan(s = vs, n = p - vs) }
+  CSpan(s = 0, n = 0)
 }
 
 ## `x := deref(q)` where `q` is an INFERRED `q := ptr(<str local>)` — the slot-collection question
@@ -11488,17 +11509,26 @@ slot_addr_view_ptr_local := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : 
 ## correctly while the INFERRED one binds ONE scalar word and `x.len` then reads a never-written
 ## neighbouring slot — 0 on a clean compile.
 ##
-## Booleans are all this binder needs: `bind_str_slot` takes no type span (an `ek == 4` slot carries
-## none — `str` is structural), so the shape question "is the pointee the two-word pair" is exactly
-## the shape answer. `slot_ptr_pointee_span` stays untouched: it is shared with `deref_pointee_bytes`,
-## `deref_pointee_signed` and `deref_dest_pointee_span`, and it cannot answer this shape anyway.
+## A BOOLEAN is not all this binder needs, and issue #484 is where that showed. "Is the pointee the
+## two-word pair" decides HOW MANY words to reserve, but not WHICH view they are: `bind_str_slot`
+## reserves two BYTE-indexed words while `bind_slice_slot` reserves two ELEMENT-indexed ones carrying
+## the element stride, kind and type span. Both answered yes here, so a `[T]` pointee bound as a
+## `str` — `ss.len` read the right word and `ss[1]` read BYTE 1 of element 0 (0 on a clean compile).
+## `deref_addr_view_ptr_local_span` therefore hands the binder the ADDRESSED LOCAL's span, and the
+## binder reads that slot's own layout rather than recomputing one. `slot_ptr_pointee_span` stays
+## untouched: it is shared with `deref_pointee_bytes`, `deref_pointee_signed` and
+## `deref_dest_pointee_span`, and it cannot answer this shape anyway.
 ##
 ## `{Deref(Var q)}` only — a `deref(<call>)` / `deref(<bitcast>)` / nested `deref(deref(pp))` keeps
-## its own (earlier) arm, and every non-`ek == 4` pointee answers false through the shared scan.
+## its own (earlier) arm, and every pointee that is not a view LOCAL answers 0/0 through the shared
+## scan.
 deref_addr_view_ptr_local := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> bool {
+  return deref_addr_view_ptr_local_span(v, slots, src).n != 0
+}
+deref_addr_view_ptr_local_span := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan {
   dv := deref_var_span(v)
-  if dv.n == 0 { return false }
-  slot_addr_view_ptr_local(slots, src, dv.s, dv.n)
+  if dv.n == 0 { return CSpan(s = 0, n = 0) }
+  slot_addr_view_ptr_local_span(slots, src, dv.s, dv.n)
 }
 
 ## Is the pointee of `p` a SIGNED sub-word integer (`i8`/`i16`/`i32`) — so a `deref` LOAD must
@@ -12452,6 +12482,28 @@ pub fixed_array_byte_return_len := fn(e : ptr(Expr), decls : ptr(rt::Vec), src :
 ## `Slice(T)` PARAM element (struct→eek 2, enum→eek 3, str→eek 4, float→eek 9, else scalar→eek 0).
 ## `is_slice = false` when `e` is not such a call.
 SliceRetInfo := struct { is_slice : bool, eek : u8, stride : usize, ess : usize, esl : usize }
+
+## ONE HOME for "given a slice's ELEMENT type span, what does `bind_slice_slot` reserve" — the element
+## KIND and word STRIDE, classified exactly as a `Slice(T)` PARAM's element is (struct -> eek 2 at
+## `struct_words`, enum -> eek 3 at `1 + enum_inst_words`, `str` -> eek 4 at the 2-word pair, float ->
+## eek 9, anything else -> a 1-word scalar). Called by `slice_ret_elem` (a `-> Slice(T)` call's result)
+## and by the `x := deref(<pointer to a [T] view>)` binding (issue #484), so the two cannot disagree
+## about a slice's element layout. `is_slice` is always true here: the caller has already decided the
+## span IS a slice element; this answers only the layout.
+slice_elem_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, en : usize, a : rt::Arena) -> SliceRetInfo {
+  mut eek : u8 = 0
+  mut stride := 1
+  mut esdi : i64 = 0 - 1
+  mut eedi : i64 = 0 - 1
+  if en < 64 { esdi = struct_decl_of(decls, src, es, en); eedi = enum_decl_of(decls, src, es, en) }
+  esl := str_at((src + es), en)
+  if esdi >= 0 { eek = 2; stride = struct_words(decls, src, es, en, a) }
+  else if eedi >= 0 { eek = 3; stride = 1 + enum_inst_words(decls, src, es, en, a) }
+  else if esl == "str" { eek = 4; stride = 2 }
+  else if type_is_float(decls, src, es, en) { eek = 9; stride = 1 }
+  else { eek = 0; stride = 1 }
+  SliceRetInfo(is_slice = true, eek = eek, stride = stride, ess = es, esl = en)
+}
 slice_ret_elem := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, gps : usize, gpl : usize, its : usize, itl : usize, gps2 : usize, gpl2 : usize, its2 : usize, itl2 : usize) -> SliceRetInfo {
   mut res := SliceRetInfo(is_slice = false, eek = 0, stride = 1, ess = 0, esl = 0)
   match deref(e) {
@@ -12476,18 +12528,7 @@ slice_ret_elem := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt:
               ## then through the enclosing instance substitution (Slice(T) → Slice(<concrete>)).
               if gpl != 0 and streq(src, rs, rn, gps, gpl) { rs = its; rn = itl }
               else if gpl2 != 0 and streq(src, rs, rn, gps2, gpl2) { rs = its2; rn = itl2 }
-              mut eek : u8 = 0
-              mut stride := 1
-              mut esdi : i64 = 0 - 1
-              mut eedi : i64 = 0 - 1
-              if rn < 64 { esdi = struct_decl_of(decls, src, rs, rn); eedi = enum_decl_of(decls, src, rs, rn) }
-              esl := str_at((src + rs), rn)
-              if esdi >= 0 { eek = 2; stride = struct_words(decls, src, rs, rn, a) }
-              else if eedi >= 0 { eek = 3; stride = 1 + enum_inst_words(decls, src, rs, rn, a) }
-              else if esl == "str" { eek = 4; stride = 2 }
-              else if type_is_float(decls, src, rs, rn) { eek = 9; stride = 1 }
-              else { eek = 0; stride = 1 }
-              res = SliceRetInfo(is_slice = true, eek = eek, stride = stride, ess = rs, esl = rn)
+              res = slice_elem_layout(decls, src, rs, rn, a)
             }
           }
         }

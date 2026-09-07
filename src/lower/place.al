@@ -347,7 +347,24 @@ pub emit_addr_of := fn(p : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)
         return
       }
       ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
-      if ent.is_ref {
+      ## Types §7 — a `[T]` (or `str`) binding IS the two-word `{ptr, len}` pair, and Memory §4.3
+      ## makes `ptr(x)` the ADDRESS of that place, so `deref(ptr(v)) == v`. A slice VIEW LOCAL
+      ## (`v := xs[lo..hi]`, `bind_slice_slot`: ek 5, `is_ref`, `snl == 1`) carries its own pair in
+      ## its frame words — ptr at the slot, len at the next HIGHER address — exactly like a `str`
+      ## LOCAL (`bind_str_slot`, ek 4, NOT `is_ref`, which already takes the `leaq` branch below).
+      ## Its `is_ref` flag means "word 0 is a DATA pointer, index THROUGH it" (`emit_index_addr`),
+      ## NOT "this slot holds a pointer to the whole value", so the by-ref `movq` below handed back
+      ## the ARRAY BASE: the pointee-view read then took `8(%rax)` off the run and `deref(q).len`
+      ## answered ELEMENT 1 instead of the length (issue #484 — a silent wrong value, and a
+      ## plausible-looking number rather than obvious garbage). `view_dest_is_local` is the existing
+      ## home of exactly this question (it already gates the view-copy STORE in `lower::assign`), so
+      ## the fact is not recovered a second way here; a str/slice PARAM (`sns == 1`) and an array
+      ## local/param answer false and keep the branches they had.
+      if ent.is_ref and view_dest_is_local(cx.slots, cx.src, s, n) {
+        push_str(sb, "  leaq -")
+        push_int(sb, i64((ent.off + 1) * 8))
+        push_str(sb, "(%rbp), %rax\n  pushq %rax\n")
+      } else if ent.is_ref {
         ## `ptr(x)` where `x` is a BY-REFERENCE aggregate param: its slot already HOLDS a pointer
         ## to the caller's aggregate, so the address IS that stored pointer — LOAD it (`movq`), do
         ## NOT take the slot's own address (`leaq`). Without this `ptr(slots)` over an `in out S`
