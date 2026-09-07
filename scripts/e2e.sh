@@ -3772,6 +3772,158 @@ limit_scope_multi() {
   if [ "$got" = 0 ]; then echo "ok   limit_scope_multi: per-file (B not restricted by A no_comptime)"; else echo "FAIL limit_scope_multi: check rc=$got want 0"; fail=1; fi
 }
 
+## Issue #516 / Tooling §4 with Modules §3 and §6.1 — a manifest-LESS invocation makes the FIRST
+## listed file the synthesized package's ROOT module and EXCLUDES it from module-path scanning, "so it
+## is not also a module by its own stem" (spec `b4e7979`, `spec/120-tooling.md:404`-`:408`; Manifest
+## §3.8 excludes a manifest file the same way). The compiler used to name that file by its stem, which
+## made the root a SIBLING of the other listed files instead of their ancestor.
+##
+## `check a.al b.al` answers rc=0 on BOTH sides of this fix, so an aggregate exit code proves nothing
+## here. These rows measure the MECHANISM instead:
+##
+##   head    — one qualified spelling is resolved twice, once through the ROOT file's stem and once
+##             through a head that names nothing. TWO declarations of that name exist, so the resolver
+##             must CHOOSE, and the choice reveals whether the stem is a module: the parent answers 7
+##             for the root stem (it selected the root's declaration through a module named `hroot`)
+##             and 9 for the unknown head. The two must now AGREE. Written as a DIFFERENTIAL so the
+##             row keeps its meaning when the unknown-head/unqualified visibility hole (#403) closes.
+##   class   — the parent rejects the root-stem spelling with the Modules §3 visibility class
+##             (`invalid`), which a resolver reaches only after an exact module-segment match against a
+##             declaration whose module is that stem. That class must be gone.
+##   sibling — the SAME §3 rejection between two REAL sibling modules must remain. A guard row against
+##             overshoot: this fix must not switch the visibility test off. Holds on both sides.
+##   stems   — the listed files must still resolve one another by their own stems. Guard row.
+##   symbols — Modules §6.1, "A root-level declaration is unprefixed": the byte-level cause of all of
+##             the above, and the one assertion that is not an exit code. The root's declarations are
+##             bare labels, the listed file keeps `hchild__twin`, and the synthesized ELF entry calls
+##             the bare root entry.
+##   base    — TOOL-11: the artifact base is STILL the first listed file's stem. Only the module path
+##             moved; the two facts come from the same sentence and must not be conflated.
+##
+## The sources live in the gate's private scratch directory, so this adds and moves no `test/*.al`
+## corpus row. The generated headers deliberately quote none of the searched labels.
+issue516_root_module_test() {
+  local d="$T/issue516_root_module"
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue516_root_module: scratch"; fail=1; return; }
+
+  printf '%s\n' \
+    '## The FIRST listed file: the synthesized package root. Its declarations are root-level.' \
+    'base := fn() -> u64 { return 0 }' \
+    'pub twin := fn() -> u64 { return 7 }' \
+    'main := fn() -> u64 { return hchild::probe() + base() }' > "$d/hroot.al"
+  printf '%s\n' \
+    '## A listed file. Its module IS named by its stem; it is a descendant of the root.' \
+    'pub twin := fn() -> u64 { return 9 }' \
+    'pub probe := fn() -> u64 { return hroot::twin() }' > "$d/hchild.al"
+  printf '%s\n' \
+    '## The control: a head that names nothing at all, over the same two candidate declarations.' \
+    'pub twin := fn() -> u64 { return 9 }' \
+    'pub probe := fn() -> u64 { return nosuchmodule::twin() }' > "$d/hchildz.al"
+
+  printf '%s\n' \
+    '## A root with a PRIVATE declaration and no dependency of its own.' \
+    'quiet := fn() -> u64 { return 7 }' \
+    'main := fn() -> u64 { return quiet() }' > "$d/croot.al"
+  printf '%s\n' \
+    '## Spells the root private declaration through the root file stem.' \
+    'probe := fn() -> u64 { return croot::quiet() }' > "$d/cqual.al"
+
+  printf '%s\n' \
+    '## A root that reaches a listed file by that file stem.' \
+    'main := fn() -> u64 { return sib_q::probe() }' > "$d/sroot.al"
+  printf '%s\n' \
+    '## Two REAL siblings under that root: one private declaration and one exposed upward.' \
+    'secret := fn() -> u64 { return 3 }' \
+    'pub open := fn() -> u64 { return 4 }' > "$d/sib_a.al"
+  printf '%s\n' \
+    '## The sibling reference the pinned spec forbids.' \
+    'probe := fn() -> u64 { return sib_a::secret() }' > "$d/sib_b.al"
+  printf '%s\n' \
+    '## The sibling reference the pinned spec allows.' \
+    'pub probe := fn() -> u64 { return sib_a::open() }' > "$d/sib_q.al"
+
+  ## head — the root file's stem and a head that names nothing must now resolve identically.
+  local hb="$d/head.bin" zb="$d/headz.bin"
+  "$CC" -o "$hb" "$d/hroot.al" "$d/hchild.al" >/dev/null 2>&1 || {
+    echo "FAIL issue516_root_module/head: build"; fail=1; return; }
+  "$CC" -o "$zb" "$d/hroot.al" "$d/hchildz.al" >/dev/null 2>&1 || {
+    echo "FAIL issue516_root_module/head: control build"; fail=1; return; }
+  _e2e_exec "$hb" >/dev/null 2>&1; local got_head=$?
+  if _e2e_runtime_failure "issue516_root_module/head" "$got_head"; then return; fi
+  _e2e_exec "$zb" >/dev/null 2>&1; local got_zero=$?
+  if _e2e_runtime_failure "issue516_root_module/head(control)" "$got_zero"; then return; fi
+  if [ "$got_head" = "$got_zero" ] && [ "$got_head" = 9 ]; then
+    echo "ok   issue516_root_module/head: the root file's stem resolves like a head that names nothing ($got_head)"
+  else
+    echo "FAIL issue516_root_module/head: root-stem head got $got_head, unknown head got $got_zero, want both 9"
+    fail=1
+  fi
+
+  ## symbols — Modules §6.1 on the GAS the `head` build just emitted.
+  local gas="$hb.s"
+  if [ ! -s "$gas" ]; then
+    echo "FAIL issue516_root_module/symbols: no emitted GAS at $gas"; fail=1
+  else
+    local bad=0
+    grep -qE '^main:$'          "$gas" || { echo "FAIL issue516_root_module/symbols: the root entry is not a bare label"; bad=1; }
+    grep -qE '^base:$'          "$gas" || { echo "FAIL issue516_root_module/symbols: a root declaration is not a bare label"; bad=1; }
+    grep -qE '^hchild__twin:$'  "$gas" || { echo "FAIL issue516_root_module/symbols: the listed file lost its module prefix"; bad=1; }
+    if grep -qE '^hroot__' "$gas"; then
+      echo "FAIL issue516_root_module/symbols: a root declaration is still named by the file's stem"; bad=1
+    fi
+    grep -qE '^  call main$'    "$gas" || { echo "FAIL issue516_root_module/symbols: the synthesized entry does not call the bare root entry"; bad=1; }
+    if [ "$bad" = 0 ]; then
+      echo "ok   issue516_root_module/symbols: root-level declarations unprefixed, the listed file still prefixed"
+    else
+      fail=1
+    fi
+  fi
+
+  ## class — the Modules §3 visibility verdict must no longer answer for the root file's stem.
+  local ce="$d/cqual.check.err"
+  "$CC" check "$d/croot.al" "$d/cqual.al" >/dev/null 2>"$ce"; local qrc=$?
+  if [ "$qrc" = 0 ] && ! grep -q "invalid" "$ce"; then
+    echo "ok   issue516_root_module/class: no module-visibility verdict for the root file's stem"
+  else
+    echo "FAIL issue516_root_module/class: check rc=$qrc diagnostic=[$(cat "$ce" 2>/dev/null)]"
+    fail=1
+  fi
+
+  ## sibling — the SAME §3 rejection between two real siblings must remain (guard row).
+  local se="$d/sib.check.err"
+  "$CC" check "$d/sroot.al" "$d/sib_a.al" "$d/sib_q.al" "$d/sib_b.al" >/dev/null 2>"$se"; local sbrc=$?
+  if [ "$sbrc" = 1 ] && grep -q "invalid" "$se" && grep -q "sib_b" "$se"; then
+    echo "ok   issue516_root_module/sibling: a real sibling still cannot name a private declaration"
+  else
+    echo "FAIL issue516_root_module/sibling: check rc=$sbrc diagnostic=[$(cat "$se" 2>/dev/null)]"
+    fail=1
+  fi
+
+  ## stems — the listed files still resolve one another by their own stems (guard row).
+  local sb="$d/stem.bin"
+  "$CC" -o "$sb" "$d/sroot.al" "$d/sib_a.al" "$d/sib_q.al" >/dev/null 2>&1 || {
+    echo "FAIL issue516_root_module/stems: build"; fail=1; return; }
+  _e2e_exec "$sb" >/dev/null 2>&1; local got_stem=$?
+  if _e2e_runtime_failure "issue516_root_module/stems" "$got_stem"; then return; fi
+  if [ "$got_stem" = 4 ]; then
+    echo "ok   issue516_root_module/stems: listed files still resolve one another by stem ($got_stem)"
+  else
+    echo "FAIL issue516_root_module/stems: got $got_stem want 4"; fail=1
+  fi
+
+  ## base — TOOL-11: the artifact base is still the FIRST listed file's stem.
+  local bd="$d/base"
+  mkdir -p "$bd" || { echo "FAIL issue516_root_module/base: scratch"; fail=1; return; }
+  cp "$d/hroot.al" "$d/hchild.al" "$bd/" || { echo "FAIL issue516_root_module/base: copy"; fail=1; return; }
+  ( cd "$bd" && "$CC" build hroot.al hchild.al ) >/dev/null 2>&1; local brc=$?
+  if [ "$brc" = 0 ] && [ -f "$bd/target/debug/hroot" ]; then
+    echo "ok   issue516_root_module/base: TOOL-11 artifact base is still the first file's stem"
+  else
+    echo "FAIL issue516_root_module/base: build rc=$brc, target/debug/hroot missing"; fail=1
+  fi
+}
+
 ## Moved up from the fixture table: a helper must be defined ABOVE the driver's arming point
 ## or its rows cannot be scheduled (see `_e2e_check_armed`). Its CALL SITE did not move.
 check_ra_const_fold() {
@@ -6106,6 +6258,7 @@ build_reject_has reject_nested_tuple_write_deep "nested mixed-kind tuple element
 run named_args 42
 build_reject_has reject_named_arg_unknown "named call argument does not match"
 limit_scope_multi
+issue516_root_module_test
 ## SYN-4: newline-as-separator for struct fields / call args / block statements (no comma/`;`).
 run syn4_separators 42
 run_x86 raw_asm_exit 42

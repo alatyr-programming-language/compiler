@@ -377,6 +377,19 @@ mut P_MOD_BASE := 0
 ## Tell the parser where the module about to be parsed starts in the shared buffer (the driver's `soff`).
 pub set_module_base := fn(off : usize) { P_MOD_BASE = off }
 
+## Tooling §4's manifest-less ROOT module is excluded from module-path scanning, so the identity the
+## parser stamps on its declarations is deliberately unspellable (the driver uses the file's PATH) —
+## it must never reach a user-facing message. Publish that identity together with the file's DISPLAY
+## name (its stem, the same spelling `alatyr: check: … in <module>` uses) so `reject_at` can name the
+## file the way every other diagnostic does. `0/0` = no root module in this compile (#516).
+mut P_ROOT_S : usize = 0
+mut P_ROOT_L : usize = 0
+mut P_ROOT_DS : usize = 0
+mut P_ROOT_DL : usize = 0
+pub set_root_display := fn(rs : usize, rl : usize, ds : usize, dl : usize) {
+  P_ROOT_S = rs ; P_ROOT_L = rl ; P_ROOT_DS = ds ; P_ROOT_DL = dl
+}
+
 ## The 1-based SOURCE LINE of a byte offset into `pc.src`, counted by scanning the newlines before it —
 ## from the CURRENT MODULE's base (`P_MOD_BASE`), so the number is FILE-relative, matching both the
 ## module name this reject already prints and the file-relative lines `driver`'s sema/parse diagnostics
@@ -412,7 +425,12 @@ reject_at := fn(in out pc : PC, what : str, off : usize) -> usize {
   mut mb := rt::strbuf(deref(pc.arena), 512)
   k1 := rt::push_str(mb, what)
   k2 := rt::push_str(mb, " [module ")
-  k5 := rt::push_str(mb, str_at(pc.src + pc.mod_s, pc.mod_l))
+  ## An inline `mod { … }` rebinds `pc.mod_s`/`pc.mod_l`, so compare rather than assume: only the
+  ## anonymous ROOT module's own span is swapped for its display name.
+  mut dgs := pc.mod_s
+  mut dgl := pc.mod_l
+  if P_ROOT_L != 0 and pc.mod_l == P_ROOT_L and pc.mod_s == P_ROOT_S { dgs = P_ROOT_DS ; dgl = P_ROOT_DL }
+  k5 := rt::push_str(mb, str_at(pc.src + dgs, dgl))
   ## Issue #523 — a SYNTHESIZED span names no line and quotes no lexeme: `src_line_at` answers 0 and
   ## the 24-byte source excerpt below would read the AST arena (and compute `srcend - off` under a
   ## modular underflow first). Name the construct instead of a position. Still located by MODULE, which

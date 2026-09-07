@@ -5248,6 +5248,26 @@ bare_file_paths := fn(in out a : rt::Arena, cmd : str, fi : usize, n : usize) ->
   str_at(out.data, out.len)
 }
 
+## How many non-option sources the invocation lists. Tooling §4 gives a manifest-less invocation a
+## ROOT module — the first listed file — but the root/sibling relation that #516 is about is only
+## observable once a SECOND file is listed. This bounded slice therefore applies the root rule to a
+## multi-file bare list only; the single-file case is recorded residual scope on #516. Counted here
+## the same way `cli_first_input` finds the first one, so the two can never disagree.
+cli_input_n := fn(cmd : str, fi : usize, n : usize) -> usize {
+  mut c := 0
+  mut i := fi
+  while i < n {
+    x := arg_at(cmd, i)
+    if x == "--plan" or x == "--quiet" or x == "-q" or x == "--verbose" or x == "-v" { i += 1 }
+    else if x == "--release" { i += 1 }
+    else if x == "--profile" { if i + 1 < n { i += 2 } else { i += 1 } }
+    else if x == "--manifest" { if i + 1 < n { i += 2 } else { i += 1 } }
+    else if x == "--target-dir" or x == "--target" { if i + 1 < n { i += 2 } else { i += 1 } }
+    else { c += 1 ; i += 1 }
+  }
+  c
+}
+
 ## Re-read the first non-option source at the artifact boundary. Keeping this as a local span avoids
 ## relying on a mutable global index after the ambient prelude and dependency scans have advanced the
 ## caller's arena.
@@ -5880,7 +5900,22 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     root_file := cli_first_input(cmd, fi, path_n)
     root_dir := dir_of(root_file)
     if root_dir.len != 0 { module_root = root_dir }
+    ## TOOL-14's synthesized package also has a ROOT MODULE: the first listed file, which is
+    ## EXCLUDED from module-path scanning exactly as a manifest file is, so it is not also a module
+    ## by its own stem (Tooling §4, Manifest §3.8 — #516). Publish that one path; the driver gives it
+    ## the anonymous root's handling instead of a stem-named sibling module. The artifact base
+    ## (TOOL-11) is a separate fact and stays this file's stem — see `bare_target_artifact`.
+    ## BOUNDED SLICE: only a list of TWO OR MORE files, which is where the root-vs-sibling relation
+    ## #516 reports is observable. A lone bare file keeps its stem-named module for now; see the
+    ## residual scope recorded on #516.
+    if cli_input_n(cmd, fi, path_n) > 1 {
+      brp := unchecked bitcast(usize, root_file.ptr)
+      brs := driver::set_bare_root_file(brp, root_file.len)
+    }
   }
+  ## A package command's root module comes from the manifest, so the bare-list root must be cleared:
+  ## the CLI can serve more than one command in a process and a stale span would rename a module.
+  if is_pkg { brz := driver::set_bare_root_file(0, 0) }
   mrp := unchecked bitcast(usize, module_root.ptr)
   mrs := driver::set_module_root(mrp, module_root.len)
   ## AMBIENT STDLIB: prepend the `lib/` modules the program (transitively) references via a
