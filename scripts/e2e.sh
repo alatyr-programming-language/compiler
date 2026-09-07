@@ -6977,6 +6977,30 @@ run_x86 issue488_wasm_enum_call_field 42
 run_a64 issue488_wasm_enum_call_field 42
 run_rv64 issue488_wasm_enum_call_field 42
 run_wat issue488_wasm_enum_call_field 42
+## issue #491 — the THIRD distinct defect at that same writer, and the one PR #490's arm deliberately
+## left out: the feed is an enum PLACE, a local or a param whose slot already holds the `{disc,
+## payload…}` block (`e := mkb()` / `e := Pay.B(5, 6)` / an `e : Pay` param, then `p = e`). #490 matched
+## `Expr::Call` only, because a place has no call to make, so a `Var` was still none of the writer's
+## known shapes and fell to the scalar fallback: ONE `i64.store` of the place's BLOCK ADDRESS reporting
+## ONE word, while every reader still resolved `field_word_offset`. Measured on the parent WAT for
+## `Lead(lead = 4, p = e, n = 9)`: 40 bytes reserved, `p` stored at +8, `n` stored at +16, `l.n` loaded
+## from +32 — a word nothing wrote. The one query that asks "does this expression deliver an enum by
+## ADDRESS" now answers for a place too, reusing `base_enum_type` — the PARAM/LOCAL resolver that
+## value-position `match` and #468's `wat_is_agg_place` already use — and gating it on `enum_all_scalar`
+## and on NOT being a raw union, whose field reserves `union_words` with no discriminant word (ungated
+## that shape regressed from 42 to 63 on wasm, measured). EVERY observable here is a SCALAR NEIGHBOUR,
+## because reading the enum field itself is #449 and would trap the file at 134: per shape, "read 0" /
+## "read the NEXT scalar's sentinel" / "read a payload word" / "read the discriminant" / "some third
+## value" are five different numbers, plus the field BEFORE it and a second trailing scalar. All three
+## place spellings are covered, since they resolve through different halves of `base_enum_type`, and the
+## `A(u64)` variant sits next to `B(u64, u64)` so a store sized by the HELD variant cannot pass. 120-123
+## are the enum-LITERAL control, 42 on both sides. Parent 2abfe57: wasm 50, x86_64 42, aarch64 42,
+## riscv64 42; isolated per shape on that parent, wasm answered 50/61/71/81/91/97/105/111/119. This
+## tree: 42 on all four.
+run_x86 issue491_wasm_enum_place_field 42
+run_a64 issue491_wasm_enum_place_field 42
+run_rv64 issue491_wasm_enum_place_field 42
+run_wat issue491_wasm_enum_place_field 42
 ## issue #449 — a struct's ENUM-typed field as a COMPARISON operand, no `match` involved. §8 delivers
 ## an enum BY REFERENCE, so on wasm the field holds a POINTER to the `{disc, payload…}` block exactly
 ## as an enum parameter does. The wat compare arm's aggregate guard already refuses to `i64.eq` such an
