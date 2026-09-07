@@ -36,8 +36,8 @@ pub bytes := fn(s : str) -> Slice(u8) { return Slice(u8)(ptr = s.ptr, len = s.le
 ## `base + offset`) names a lexeme in **one** step instead of three. **Unchecked**: the
 ## bytes are assumed valid UTF-8 and the view aliases storage the caller keeps alive —
 ## the unsafety lives here, not at every call site. No copy; the view shares the bytes.
-str_at := fn(p : ptr(u8), n : usize) -> str {
-  sl := Slice(u8)(ptr = p, len = n)
+pub str_at := fn(p : usize, n : usize) -> str {
+  sl := Slice(u8)(ptr = unchecked bitcast(ptr(u8), p), len = n)
   unchecked bitcast(str, sl)
 }
 
