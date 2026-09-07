@@ -1276,6 +1276,88 @@ issue299_brand_identity_test() {
   if [ "$got" = 1 ]; then echo "ok   issue299/same: same brand remains accepted"; else echo "FAIL issue299/same: got $got want 1"; fail=1; fi
 }
 
+## Issue #299 / #544 stage 0 — the brand-identity CENSUS instrument in `src/sema.al` must be
+## NON-EMPTY and BEHAVIOUR-NEUTRAL, and both halves are asserted here because either one alone is
+## worthless. A census that counts nothing proves nothing about the cost of the coming refusal
+## (#507: an instrumented build can report confidently and wrongly), and a census that changed what
+## the compiler accepts would be the refusal it is explicitly not allowed to be yet.
+##
+## The instrument writes to file descriptor 99. An ordinary invocation does not have it open, so the
+## `write` fails with EBADF and nothing is emitted anywhere; a census run redirects it to a file. The
+## planted program below carries exactly one of each Types §4.2/§4.3/§5.4 class — B1 (a named raw base
+## type into a brand annotation), B1R (a brand into a raw annotation), B2 (a sibling brand at a call
+## argument), B3 (a brand over a different block), B4 (one operator over two brands) — and every one
+## of them is a program the compiler ACCEPTS today, which is the whole point of measuring before
+## refusing. Its twin declares no brand and must produce no row at all.
+issue299_brand_probe_census_test() {
+  local d="$T/issue299_brand_probe"
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue299_brand_probe: scratch"; fail=1; return; }
+  printf '%s\n' \
+    'A := brand(u64)' \
+    'B := brand(u64)' \
+    'C := brand(u8)' \
+    'takeA := fn(x : A) -> u64 { u64(x) }' \
+    'main := fn() -> u64 {' \
+    '  p : A = u64(1)' \
+    '  q : u64 = A(2)' \
+    '  r := takeA(B(3))' \
+    '  s := takeA(C(4))' \
+    '  t : u64 = A(5) + B(6)' \
+    '  return 42' \
+    '}' > "$d/all.al"
+  printf '%s\n' \
+    'main := fn() -> u64 {' \
+    '  p : u64 = 1' \
+    '  q : u64 = p + 2' \
+    '  return 42' \
+    '}' > "$d/none.al"
+
+  ## (1) the census channel CLOSED — the ordinary invocation. Nothing may appear on either stream,
+  ## and the program must still be accepted, built and run exactly as before.
+  "$CC" check "$d/all.al" >"$d/closed.out" 2>"$d/closed.err"; local crc=$?
+  if [ "$crc" != 0 ] || [ -s "$d/closed.out" ] || [ -s "$d/closed.err" ]; then
+    echo "FAIL issue299/probe(closed): rc=$crc out=$(wc -c <"$d/closed.out") err=[$(<"$d/closed.err")]"; fail=1; return
+  fi
+  echo "ok   issue299/probe: with fd 99 closed the instrument writes nothing and check still accepts"
+
+  ## (2) the census channel OPEN — one row per class, and the classes are the ones §4.2 separates.
+  "$CC" check "$d/all.al" 99>"$d/rows" >"$d/open.out" 2>"$d/open.err"; local orc=$?
+  if [ "$orc" != "$crc" ] || ! cmp -s "$d/open.out" "$d/closed.out" || ! cmp -s "$d/open.err" "$d/closed.err"; then
+    echo "FAIL issue299/probe(open): opening the census channel moved rc or a diagnostic (rc=$orc)"; fail=1; return
+  fi
+  local miss=0 k n
+  for k in B1 B1R B2 B3 B4; do
+    n=$(awk -v c="$k" '$2 == c' "$d/rows" | wc -l)
+    [ "$n" = 1 ] || { echo "FAIL issue299/probe: class $k appears $n times, want 1"; miss=1; }
+  done
+  [ "$miss" = 0 ] || { fail=1; return; }
+  if ! grep -qE '^#299 SUMMARY brands=3 prelude=0 sinks=[0-9]+ hits=5 lost=0$' "$d/rows"; then
+    echo "FAIL issue299/probe: summary line is [$(grep SUMMARY "$d/rows")]"; fail=1; return
+  fi
+  echo "ok   issue299/probe: five accepted brand crossings counted, one per §4.2 class"
+
+  ## (3) the ZERO control — a program with no brand declaration must yield no row, so a future census
+  ## reading 0 means "nothing to count", not "the instrument stopped working".
+  "$CC" check "$d/none.al" 99>"$d/none.rows" >/dev/null 2>&1; local nrc=$?
+  local nrows; nrows=$(grep -c -v ' SUMMARY ' "$d/none.rows")
+  if [ "$nrc" != 0 ] || [ "$nrows" != 0 ] || ! grep -qF '#299 SUMMARY brands=0 prelude=0 sinks=0 hits=0 lost=0' "$d/none.rows"; then
+    echo "FAIL issue299/probe(zero): rc=$nrc rows=$nrows [$(<"$d/none.rows")]"; fail=1; return
+  fi
+  echo "ok   issue299/probe: a brandless program produces zero rows"
+
+  ## (4) the accepted program still BUILDS and RUNS to its own value — the census refuses nothing.
+  local bo="$d/all.bin"
+  "$CC" -o "$bo" "$d/all.al" >/dev/null 2>"$d/all.build.err"; local brc=$?
+  if [ "$brc" != 0 ] || [ ! -x "$bo" ]; then
+    echo "FAIL issue299/probe(build): rc=$brc [$(<"$d/all.build.err")]"; fail=1; return
+  fi
+  _e2e_exec "$bo" >/dev/null 2>&1; local got=$?
+  if _e2e_runtime_failure "issue299/probe" "$got"; then return; fi
+  if [ "$got" = 42 ]; then echo "ok   issue299/probe: the counted program still builds and runs to 42"
+  else echo "FAIL issue299/probe: got $got want 42"; fail=1; fi
+}
+
 ## Issue #304 / TYP-6 + Types §§4.2–4.3 — direct field and local fixed-array-element stores must
 ## compare the value with the declared destination type before lower can emit a word-sized store.
 ## These sources live only in the gate's private scratch directory: each negative case checks both
@@ -4813,6 +4895,7 @@ check_accept accept_ann_global_conforming
 run accept_ann_call_overloaded 9
 check_accept accept_ann_brand_and_generic
 issue299_brand_identity_test
+issue299_brand_probe_census_test
 run accept_ann_str_binding 9
 run accept_ann_conforming 7
 run accept_ann_global_conforming 9
