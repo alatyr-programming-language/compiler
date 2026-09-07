@@ -82,6 +82,27 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A struct field fed by an enum-returning call keeps the enum** on x86_64, aarch64 and riscv64.
+  `Boxed(p = mk())` for `mk() -> Pay` answered 0 on x86_64 and 100 on the other two where 105 was due,
+  while the same value bound to a local first (`e := mk()`, then `Boxed(p = e)`) answered 105
+  everywhere — so this was the last row of a feed matrix whose own reference backend was wrong, which
+  is why making the non-x86 backends loud and comparing them against x86_64 could not settle it. The
+  bind-to-a-local control does settle it: it is correct on all three, before and after. Two different
+  mechanisms produced the two numbers. On x86_64 the struct-literal field loop recognises a struct
+  literal, an enum literal, a `str`, an aggregate variable and an array literal; a **call** is none of
+  those, so a multi-word enum field fell into the array branch, which matches only an array literal and
+  emitted **nothing at all** — the call was never made and the field kept whatever its frame slot held.
+  On aarch64 and riscv64 the payload writer's scalar fallback stored **one** return register and
+  reported **one** word, so the discriminant landed, every payload word was dropped, and every field
+  after the enum field was written one word too early. Types §6 and Control Flow §5.2 make the field
+  hold what the call returned, payload included. x86_64 now delegates to the same whole-enum deliverer
+  the `h.t = mk()` assignment already used; both other backends copy the call's full `1 + max_arity`
+  width out of the return registers and report it, so a following field stays aligned. A
+  **payload-free** enum call is one word, was already correct, and is declined by both new writers on
+  purpose, which leaves the emitted text byte-identical for every program that has one. The
+  pointer-relative twin — the same feed into an array element at a runtime index — is fixed with it.
+  wasm is unchanged: a struct's enum field there is issue #449's by-reference block and still refuses.
+
 - A **negative `{}` hole whose operand carries no `iN` annotation** now prints with its sign on
   **aarch64**, **riscv64** and **wasm** too. The previous fix gave those three backends a signed
   renderer and selected it with the same signedness oracle `/`, `%` and `shr` route on, which proves

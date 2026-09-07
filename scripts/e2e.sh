@@ -6904,6 +6904,39 @@ run_rv64 issue465_enum_field_rhs 133
 ## bare `build_reject`: a fail-loud accident elsewhere must not satisfy the row, and the needle appears
 ## nowhere in the fixture's own text.
 build_reject_has issue465_enum_rhs_reject "words are not addressable here"
+## issue #462 — a struct field FED BY AN ENUM-RETURNING CALL (`Boxed(p = mk())`). The last row of the
+## #448/#461/#465 feed matrix, and the one where the REFERENCE backend was wrong too, so it could not be
+## fixed by making the non-x86 backends loud and checking them against x86_64. x86_64's struct-literal
+## field loop knows a `StructLit`, an `EnumLit`, a `str`, an aggregate `Var` and an `ArrayLit`; a CALL is
+## none of those, so the field fell into the `wsz > 1` ARRAY branch whose `_ => {}` emitted NOTHING —
+## the call was never made and the field kept the frame slot's contents. aarch64/riscv64 stored ONE
+## return register and REPORTED one word, so the discriminant landed, the payload words were dropped and
+## every following field was written one word too early. What pins 42 without a correct reference
+## backend is `bound_local`: `e := mk()` then `Boxed(p = e)` already answered right on all three, before
+## and after. Codes: 61/71/82/91/101 a wrong field AFTER the enum, 81 a wrong field BEFORE it,
+## 52/62/72/83/92/102 the other variant's arm, 53/63/73/84/103 a payload word 0 of 0 (never delivered),
+## 54/64/74/85/104 a payload word 0 of some third value, 55/65/86/105 and 56/66/87/106 the same pair for
+## payload word 1, 57/67/75/88/93/107 no arm at all, 111/112 a nested literal's mis-placed fields.
+## Measured on parent 43093e5: x86_64 52, aarch64 53, riscv64 53. This tree: 42 on all three.
+run_x86 issue462_enum_call_field 42
+run_a64 issue462_enum_call_field 42
+run_rv64 issue462_enum_call_field 42
+## issue #462 — the wasm status asserted EXACTLY, not merely "nonzero": a struct's enum field on wasm is
+## issue #449's by-reference block and traps (134) on parent 43093e5 and on this tree alike. wasm is
+## outside this issue and this row exists so that stays visible.
+run_wat issue462_enum_call_field 134
+## issue #462, the POINTER-RELATIVE twin — the same feed into an ARRAY ELEMENT at a RUNTIME index
+## (`xs[i] = Boxed(p = mk(), n = 9)`), which goes through `emit_*_store_payload_atptr` instead. aarch64
+## answered a silent 31 there (the field after the enum, written one word early) while x86_64 dropped the
+## store and matched the wrong arm. Kept in its own file because riscv64 refuses this whole-element write
+## for an UNRELATED reason, before and after; folding it in would trap the fixture above at 133 there.
+## Parent 43093e5: x86_64 32, aarch64 31. This tree: 42 and 42.
+run_x86 issue462_enum_call_elem 42
+run_a64 issue462_enum_call_elem 42
+## issue #462 CONTROL — riscv64's refusal asserted EXACTLY as 133 (128 + SIGTRAP), unchanged by this
+## change, and wasm's 134, so a later widening of either path cannot become an unmeasured emission.
+run_rv64 issue462_enum_call_elem 133
+run_wat issue462_enum_call_elem 134
 ## issue #449 — a struct's ENUM-typed field as a COMPARISON operand, no `match` involved. §8 delivers
 ## an enum BY REFERENCE, so on wasm the field holds a POINTER to the `{disc, payload…}` block exactly
 ## as an enum parameter does. The wat compare arm's aggregate guard already refuses to `i64.eq` such an

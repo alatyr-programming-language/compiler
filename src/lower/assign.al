@@ -662,6 +662,12 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
         mut fdnext := 0
         mut is_str_fld := false
         mut is_folded_fld := false
+        ## ISSUE #462 — is this field's declared type an ORDINARY `[disc, payload…]` enum? Read from
+        ## the SUBSTITUTED span (`effc`), so a generic `v : T` instantiated to an enum counts while the
+        ## raw `T` does not. A niche-folded `Option(ptr(T))` and a raw union are excluded for the same
+        ## reason `emit_enum_place_words_at` excludes them: their width is not `1 + arity` and each
+        ## already has its own writer (`emit_folded_option_assign` / `emit_union_assign`).
+        mut is_enum_fld := false
         if fd != 0 {
           fdn := deref(fld_p(fd))
           ## the field's TRUE word width — struct-aware (a struct-typed field occupies its struct's
@@ -688,6 +694,9 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
           ## pair, which would spill the payload into the NEXT field's slot (its `wsz` is only 1). Gated by
           ## `is_niche_folded` → every non-folded enum field keeps the byte-identical `emit_enum_assign`.
           if is_niche_folded(cx.src, effc.s, effc.n) { is_folded_fld = true }
+          if is_folded_fld == false and is_union_decl(cx.decls, cx.src, effc.s, effc.n) == false {
+            if enum_decl_of(cx.decls, cx.src, effc.s, effc.n) >= 0 { is_enum_fld = true }
+          }
         }
         nsli := struct_lit_info(ga.e)
         if nsli.is_s {
@@ -718,6 +727,23 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
           ## branch and be dropped, since an `EnumLit` isn't an `ArrayLit`). `match s.c` reads it back
           ## via `try_field_enum_scrut`.
           emit_enum_assign(ga.e, base - off, sb, cx, a, nl)
+        } else if is_enum_fld and enum_ret_call_d(ga.e, cx.decls, cx.src, a) {
+          ## ISSUE #462 — an ENUM field fed by an enum-returning CALL (`Boxed(p = mk())`). The value is
+          ## neither a `StructLit` nor an `EnumLit` nor a `Var`, so it walked past every branch above and
+          ## landed in the `wsz > 1` ARRAY branch, whose `emit_array_assign` matches only an `ArrayLit`
+          ## and whose `_ => {}` emitted NOTHING — the call was not even made and the field kept whatever
+          ## the frame slot held (0 in the reproducer): a silent wrong value on the REFERENCE backend,
+          ## the same dropped-store mechanism as #461/#465 in a different writer.
+          ## No new arithmetic: `emit_enum_place_words_at` (#461, extended by #465) already delivers a
+          ## non-literal enum's complete `{disc, payload…}` block to the frame base whose word 0 is
+          ## `base`, and the enum-returning-call arm of it is exactly the one the `h.t = mk()` ASSIGNMENT
+          ## path already uses. A struct-literal field's word k lives at `-(base - off - k + 1)*8(%rbp)`,
+          ## which is that contract with `base - off` as the base — so the call is a delegation, not a
+          ## fourth copy. `false` means nothing was emitted; make that a located reject rather than the
+          ## dropped store this issue is about (#464's rule: the emitter REPORTS whether it fired).
+          if emit_enum_place_words_at(ga.e, base - off, sb, cx, a, nl) == false {
+            panic("selfhost: a struct field's enum-returning call has no addressable return words here")
+          }
         } else if var_agg_info(ga.e, cx.slots, cx.src).ek != 0 {
           ## a struct/enum VAR field value (`inner = s`, `p = q`) — COPY the source aggregate's `wsz`
           ## words into the field's slot. The `wsz > 1` array branch below matches only an `ArrayLit`,
