@@ -2723,12 +2723,22 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     svc := var_name_span(v)
     sentc := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, svc.s, svc.n)))
     emit_agg_slot_copy(sentc.off, sentc.is_ref, dstc, nfc, sb)
-  } else if deref_view_span_cx(v, cx).n != 0 and view_dest_is_local(cx.slots, cx.src, ns, nl2) {
+  } else if (deref_view_span_cx(v, cx).n != 0 or deref_addr_view_ptr_local(v, cx.slots, cx.src)) and view_dest_is_local(cx.slots, cx.src, ns, nl2) {
     ## CLAYOUT S3(b) — `t := deref(<pointer to a §7 VIEW>)`: the pointee IS the two-word
     ## `{ptr, len}` pair. `emit_str_pair`'s `Deref` arm reads BOTH words at the ascending
     ## pointee offsets and `emit_pair_field_store` pops them into the destination's word 0 / 1
     ## — the same landing the `t := <str var>` copy below uses. Gated on the destination being
     ## a DIRECT 2-word view local (`bind_str_slot` bound it as one).
+    ##
+    ## The bound form needs BOTH halves to agree, and issue #483 is what happens when only one
+    ## does. `collect_slots` reserves the destination's TWO words and this arm WRITES them; a
+    ## reservation without the store leaves word 1 (`len`) never written, which is the 0 the issue
+    ## measured. `deref_view_span_cx` is span-valued and answers {0,0} for an INFERRED
+    ## `q := ptr(<str local>)` — `str` is structural, so no `str` span exists in the source — so the
+    ## second alternative asks the same source scan the binder and the inline read (#456/#482) use,
+    ## as a BOOLEAN. Purely ADDITIVE: a pointer the span resolver resolves keeps the unchanged first
+    ## alternative, and the `view_dest_is_local` gate is unchanged, so a by-ref destination still
+    ## keeps its previous lowering.
     base := slot_of(cx.slots, cx.src, ns, nl2)
     emit_pair_field_store(v, base, sb, cx, a, nl)
   } else if view_var_kind(v, cx.slots, cx.src) != 0 and view_dest_is_local(cx.slots, cx.src, ns, nl2) {

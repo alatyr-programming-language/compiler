@@ -11257,40 +11257,71 @@ byte_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
 ## The scan is bounded by the EXACT source-buffer extent `emit_program` publishes in `LOWER_SRC_N`
 ## (fail-closed at 0, cf. issue #340); every read goes through `ptr_scan_has` / `ptr_scan_ws` or is
 ## proven under `p < end`.
+##
+## TWO ENTRY POINTS, ONE SCAN — the `local_ptr_pointee_span` / `slot_ptr_pointee_span` pair pattern.
+## `addr_view_ptr_local` is the EMIT-side entry (it has an `LCtx`); `slot_addr_view_ptr_local` is the
+## SLOT-COLLECTION-side entry, which has only `slots` + `src` and is what the `x := deref(q)` str
+## binding consults (issue #483). The scan body is shared, so the inline read (#456) and the bound
+## read (#483) can never disagree about which pointer locals are address-of-a-view.
 addr_view_ptr_local := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
-  ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
-  if streq(cx.src, ent.ns, ent.nl, s, n) == false { return false }
+  return slot_addr_view_ptr_local(cx.slots, cx.src, s, n)
+}
+slot_addr_view_ptr_local := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> bool {
+  ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
+  if streq(src, ent.ns, ent.nl, s, n) == false { return false }
   if ent.ek != 0 { return false }
   if ent.ns > LOWER_SRC_N or ent.nl > LOWER_SRC_N - ent.ns { return false }
   end := LOWER_SRC_N
   mut p := ent.ns + ent.nl
-  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
-  if ptr_scan_has(cx.src, end, p, ":=") == false { return false }
+  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+  if ptr_scan_has(src, end, p, ":=") == false { return false }
   p = p + 2
-  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
-  if ptr_scan_has(cx.src, end, p, "ptr(") == false { return false }
+  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+  if ptr_scan_has(src, end, p, "ptr(") == false { return false }
   p = p + 4
-  while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
-  if ptr_scan_has(cx.src, end, p, "mut ") {
+  while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
+  if ptr_scan_has(src, end, p, "mut ") {
     p = p + 4
-    while p < end and ptr_scan_ws(cx.src, end, p) { p = p + 1 }
+    while p < end and ptr_scan_ws(src, end, p) { p = p + 1 }
   }
   vs := p
   mut stop := false
   while p < end and stop == false {
-    ch := str_at((cx.src + p), 1)
+    ch := str_at((src + p), 1)
     if ch == ")" { stop = true }
     else if ch == " " or ch == "\n" or ch == "\t" or ch == "\r" or ch == ";" or ch == "}" or ch == "(" or ch == "[" or ch == "." or ch == "," { return false }
     else { p = p + 1 }
   }
   if p == vs or stop == false { return false }
   if p + 1 >= end { return false }
-  t := str_at((cx.src + p + 1), 1)
+  t := str_at((src + p + 1), 1)
   if t != "\n" and t != ";" and t != " " and t != "}" { return false }
-  vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vs, p - vs)))
-  if streq(cx.src, vent.ns, vent.nl, vs, p - vs) == false { return false }
+  vent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, vs, p - vs)))
+  if streq(src, vent.ns, vent.nl, vs, p - vs) == false { return false }
   if vent.ek == 4 and vent.is_ref == false { return true }
   false
+}
+
+## `x := deref(q)` where `q` is an INFERRED `q := ptr(<str local>)` — the slot-collection question
+## the str binding has to answer and the span-valued resolvers cannot (issue #483). The BOUND read is
+## not the inline one: `deref(q).len` is decided at EMIT time by the pointee-view Field arm, while
+## `x := deref(q)` is decided at SLOT-COLLECTION time, because it has to reserve TWO words for `x`
+## before a single instruction exists. `deref_view_pointee_span` answers that question with a SPAN,
+## which is why the annotated (`local_type_span`) and bitcast (preserved target) spellings bind
+## correctly while the INFERRED one binds ONE scalar word and `x.len` then reads a never-written
+## neighbouring slot — 0 on a clean compile.
+##
+## Booleans are all this binder needs: `bind_str_slot` takes no type span (an `ek == 4` slot carries
+## none — `str` is structural), so the shape question "is the pointee the two-word pair" is exactly
+## the shape answer. `slot_ptr_pointee_span` stays untouched: it is shared with `deref_pointee_bytes`,
+## `deref_pointee_signed` and `deref_dest_pointee_span`, and it cannot answer this shape anyway.
+##
+## `{Deref(Var q)}` only — a `deref(<call>)` / `deref(<bitcast>)` / nested `deref(deref(pp))` keeps
+## its own (earlier) arm, and every non-`ek == 4` pointee answers false through the shared scan.
+deref_addr_view_ptr_local := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> bool {
+  dv := deref_var_span(v)
+  if dv.n == 0 { return false }
+  slot_addr_view_ptr_local(slots, src, dv.s, dv.n)
 }
 
 ## Is the pointee of `p` a SIGNED sub-word integer (`i8`/`i16`/`i32`) — so a `deref` LOAD must
