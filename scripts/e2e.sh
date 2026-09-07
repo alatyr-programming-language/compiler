@@ -8458,6 +8458,35 @@ build_reject_has issue507_tail_unbound_control "check: unbound name at line 5 in
 run issue507_cond_declared_names_control 42
 check_accept issue507_cond_declared_names_control
 
+## Issue #513 / spec Types §9.4 — an ENUM-VARIANT CONSTRUCTOR whose payload count differs from the
+## count its variant DECLARES. §9.4's first bullet forbids implicit zero-initialization, so an omitted
+## payload has no value; measured on the parent, `Pay.B(7)` for `B(u64, u64)` built clean on ALL FOUR
+## backends and ran to 7 — the second word read as a zero the specification does not provide. The
+## reverse direction was equally silent (three values into a two-payload variant ran to 15, dropping
+## the third), and so were both directions on a ONE-payload variant (2 supplied ran to 7, 0 supplied
+## ran to 0) and a ZERO-payload variant given a value (ran to 9). The generic row proves the rule
+## reaches a prelude instance, whose variant-NAME rule already fired on the parent.
+##
+## Every needle names the VARIANT and the count its declaration asks for — a diagnostic that only said
+## "arity" would not tell the author which of an enum's variants was wrong or what it wanted — and the
+## refusal is `check`'s, so it is byte-identical on x86_64, aarch64, riscv64 and wasm.
+build_reject_has issue513_variant_arity_too_few "enum variant constructor arity: \`B\` declares 2 component(s), 1 supplied"
+build_reject_has issue513_variant_arity_too_many "enum variant constructor arity: \`B\` declares 2 component(s), 3 supplied"
+build_reject_has issue513_variant_arity_one_surplus "enum variant constructor arity: \`A\` declares 1 component(s), 2 supplied"
+build_reject_has issue513_variant_arity_one_empty "enum variant constructor arity: \`A\` declares 1 component(s), 0 supplied"
+build_reject_has issue513_variant_arity_nullary_surplus "enum variant constructor arity: \`N\` declares 0 component(s), 1 supplied"
+build_reject_has issue513_variant_arity_generic_too_few "enum variant constructor arity: \`Ok\` declares 1 component(s), 0 supplied"
+## The over-reach fence: the shapes that go through the new count comparison and must stay accepted —
+## three DIFFERENT declared counts (1, 2, 3) in one enum, both nullary spellings (`E.N` and `E.N()`,
+## which the parser normalizes to the same zero-payload constructor node), and the prelude's generic
+## `Result`/`Option` instances. 42 on the parent and 42 after the fix, on all four backends.
+run issue513_variant_arity_correct_control 42
+check_accept issue513_variant_arity_correct_control
+run issue513_variant_arity_nullary_control 42
+check_accept issue513_variant_arity_nullary_control
+run issue513_variant_arity_generic_control 42
+check_accept issue513_variant_arity_generic_control
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

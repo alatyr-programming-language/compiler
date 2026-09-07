@@ -107,6 +107,25 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   byte comparison of the emitted GAS later contradicted. Until this landed, a census claim needed
   that companion measurement to be evidence at all.
 
+- **An enum-variant constructor whose payload count differs from the count its variant declares is
+  refused.** Types §9.4's first bullet is that the language "never zeroes an uninitialized binding on
+  the programmer's behalf" — there is no implicit zero-initialization — so for `Pay := enum { A(u64),
+  B(u64, u64) }` the expression `Pay.B(7)` leaves the second payload word with no value at all. It
+  used to compile clean on all four backends and answer 7, which is to say it read that word as an
+  implicit zero the specification does not provide. The reverse spelling was just as quiet: three
+  values into a two-payload variant compiled and answered 15, silently dropping the argument the
+  author wrote. So were both directions on a one-payload variant, a zero-payload variant handed a
+  value, and the prelude's generic `Result`/`Option` instances. All of them are now one located
+  `check` refusal that names the offending **variant** and the count its declaration asks for, so the
+  message tells the author which variant of the enum is wrong and what it wanted; being `check`'s, it
+  is byte-identical on x86_64, aarch64, riscv64 and wasm. This can only reject, and it rejects only a
+  program the specification calls ill-formed: the expected count is read from each variant's own
+  declaration rather than compared against a fixed number or against the enum's widest variant, and
+  neither of the two nullary spellings (`E.N`, `E.N()`) nor any of the 1 937 corpus programs changes
+  verdict or diagnostic. Raw-union members are deliberately untouched — §6.3 makes their
+  constructor's byte-clear part of that operation's canonical representation, a different argument
+  from §9.4's, and their arity rule is its own unit.
+
 - **Indexing a module-level `[str; N]` global now reads the element it names.** `G[k][j]` — the byte
   at index `j` of the `str` element `k` — answered **5** where **90** was due, and the element used as
   a whole `str` value was worse: `str_eq(G[k], "…")` was unconditionally **false** and

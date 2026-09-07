@@ -3839,6 +3839,31 @@ DIAG_SAME_SCOPE_REDECL_MARKER := 6897000000000000000
 ## qualified-private-constant windows, so only the former's upper bound moves and every other decoded
 ## range stays byte-identical.
 DIAG_STR_ELEM_WRITE_MARKER := 6898000000000000000
+## Issue #513 / Types §9.4 — the sema-side ENUM-VARIANT CONSTRUCTOR ARITY class
+## (`sema::ENUM_VARIANT_ARITY_DIAG_MARKER`). Its payload is 1024-wide: the low 5 bits are the SUPPLIED
+## component count, the next 5 the DECLARED count, and the rest the VARIANT NAME's source offset. It
+## sits between the str-element-store and the qualified-private-constant windows, so only the former's
+## upper bound moves and every other decoded range stays byte-identical.
+DIAG_ENUM_VARIANT_ARITY_MARKER := 6899000000000000000
+DIAG_ENUM_VARIANT_ARITY_SLOT := 1024
+DIAG_ENUM_VARIANT_ARITY_COUNT_BASE := 32
+## The length of the identifier that STARTS at `base + s`. The enum-variant arity diagnostic locates
+## itself at the variant NAME, and its message quotes that name, so the renderer needs the name's
+## extent — the same source-scan discipline `manifest_value` uses to read `Package`/`Target` back out
+## of the buffer. A positive `[A-Za-z0-9_]` classifier (a copy of `lexrt`'s private `is_alnum`, which
+## is not exported), never the negative `d_ident_char` list: a variant name can be followed by `}` or
+## `]`, which that list admits. Bounded so a corrupt offset cannot walk the buffer.
+d_diag_ident_len := fn(base : usize, s : usize) -> usize {
+  mut n := 0
+  mut scanning := true
+  while scanning and n < 64 {
+    sv := str_at(base + s + n, 1)
+    c := usize(bytes(sv)[0])
+    alnum := (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95
+    if alnum { n = n + 1 } else { scanning = false }
+  }
+  n
+}
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
 DIAG_QUALIFIED_PRIVATE_CONST_MARKER := 6900000000000000000
@@ -3954,7 +3979,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_SAME_SCOPE_REDECL_MARKER
   same_scope_redecl := code >= DIAG_SAME_SCOPE_REDECL_MARKER and code < DIAG_STR_ELEM_WRITE_MARKER
-  str_elem_write := code >= DIAG_STR_ELEM_WRITE_MARKER and code < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
+  str_elem_write := code >= DIAG_STR_ELEM_WRITE_MARKER and code < DIAG_ENUM_VARIANT_ARITY_MARKER
+  enum_variant_arity := code >= DIAG_ENUM_VARIANT_ARITY_MARKER and code < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
   enum_dup_disc := code >= DIAG_ENUM_DUP_DISC_MARKER and code < DIAG_MULTIDIM_ARRAY_FIELD_MARKER
   multidim_array := code >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and code < DIAG_ENUM_DUP_DISC_MARKER
   packed_array := code >= DIAG_PACKED_ARRAY_MARKER and code < DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
@@ -4006,6 +4032,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if str_elem_write {
     raw = code - DIAG_STR_ELEM_WRITE_MARKER
     span = raw / 4
+  } else if enum_variant_arity {
+    raw = code - DIAG_ENUM_VARIANT_ARITY_MARKER
+    span = raw / DIAG_ENUM_VARIANT_ARITY_SLOT
   } else if private_const {
     raw = code - DIAG_QUALIFIED_PRIVATE_CONST_MARKER
     span = raw / 4
@@ -4046,7 +4075,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or str_elem_write or private_const or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::fd_str(2, "@limits(")
       wk1 := rt::fd_str(2, limit_name(kind))
@@ -4063,6 +4092,15 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if nested_array_param { wknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
     else if same_scope_redecl { wkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if str_elem_write { wkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
+    else if enum_variant_arity {
+      wkeva0 := rt::fd_str(2, "enum variant constructor arity: `")
+      wkeva1 := rt::fd_str(2, str_at(base + span, d_diag_ident_len(base, span)))
+      wkeva2 := rt::fd_str(2, "` declares ")
+      wkeva3 := rt::fd_int(2, i64((raw / DIAG_ENUM_VARIANT_ARITY_COUNT_BASE) % DIAG_ENUM_VARIANT_ARITY_COUNT_BASE), a)
+      wkeva4 := rt::fd_str(2, " component(s), ")
+      wkeva5 := rt::fd_int(2, i64(raw % DIAG_ENUM_VARIANT_ARITY_COUNT_BASE), a)
+      wkeva6 := rt::fd_str(2, " supplied — Types §9.4 gives an omitted component no value (there is no implicit zero-initialization); supply every component the variant declares")
+    }
     else if multidim_array { wkmda := rt::fd_str(2, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { wkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
     else if tuple_global { wktg := rt::fd_str(2, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
@@ -6268,7 +6306,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_SAME_SCOPE_REDECL_MARKER
   same_scope_redecl := r >= DIAG_SAME_SCOPE_REDECL_MARKER and r < DIAG_STR_ELEM_WRITE_MARKER
-  str_elem_write := r >= DIAG_STR_ELEM_WRITE_MARKER and r < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
+  str_elem_write := r >= DIAG_STR_ELEM_WRITE_MARKER and r < DIAG_ENUM_VARIANT_ARITY_MARKER
+  enum_variant_arity := r >= DIAG_ENUM_VARIANT_ARITY_MARKER and r < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
   enum_dup_disc := r >= DIAG_ENUM_DUP_DISC_MARKER and r < DIAG_MULTIDIM_ARRAY_FIELD_MARKER
   multidim_array := r >= DIAG_LOCAL_MULTIDIM_ARRAY_MARKER and r < DIAG_ENUM_DUP_DISC_MARKER
   packed_array := r >= DIAG_PACKED_ARRAY_MARKER and r < DIAG_LOCAL_MULTIDIM_ARRAY_MARKER
@@ -6320,6 +6359,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if str_elem_write {
     raw = r - DIAG_STR_ELEM_WRITE_MARKER
     span = raw / 4
+  } else if enum_variant_arity {
+    raw = r - DIAG_ENUM_VARIANT_ARITY_MARKER
+    span = raw / DIAG_ENUM_VARIANT_ARITY_SLOT
   } else if private_const {
     raw = r - DIAG_QUALIFIED_PRIVATE_CONST_MARKER
     span = raw / 4
@@ -6361,7 +6403,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or str_elem_write or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
@@ -6381,6 +6423,15 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if nested_array_param { dwknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
     else if same_scope_redecl { dwkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if str_elem_write { dwkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
+    else if enum_variant_arity {
+      dwkeva0 := rt::fd_str(2, "enum variant constructor arity: `")
+      dwkeva1 := rt::fd_str(2, str_at(base + span, d_diag_ident_len(base, span)))
+      dwkeva2 := rt::fd_str(2, "` declares ")
+      dwkeva3 := rt::fd_int(2, i64((raw / DIAG_ENUM_VARIANT_ARITY_COUNT_BASE) % DIAG_ENUM_VARIANT_ARITY_COUNT_BASE), tar)
+      dwkeva4 := rt::fd_str(2, " component(s), ")
+      dwkeva5 := rt::fd_int(2, i64(raw % DIAG_ENUM_VARIANT_ARITY_COUNT_BASE), tar)
+      dwkeva6 := rt::fd_str(2, " supplied — Types §9.4 gives an omitted component no value (there is no implicit zero-initialization); supply every component the variant declares")
+    }
     else if multidim_array { dwkmda := rt::fd_str(2, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { dwkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
     else if tuple_global { dwktg := rt::fd_str(2, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
