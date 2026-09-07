@@ -36,6 +36,30 @@ fld_p := ast::fld_p
 (dyn_user_arg_is_float, fnval_ty_pos, lam_cap_is_float) := lower::fnval
 (emit_elem_copy_in, emit_index_addr, field_place_parts, field_read_agg, resolve_idx_field_place, standard_field_path, std_idx_byte_field_eek, std_idx_leaf_is_agg, std_idx_one, std_idx_path) := lower::place
 
+## ============================================================================================
+## `Expr` FORM ENUMERATION (#464 / #544 stage 1). This band holds FIVE `match deref(v)` sites. The
+## four that ended in a silent `_ => {}` now cover every one of `Expr`'s 24 variants
+## (`ast::Expr`, `src/ast.al:317`) explicitly, so the decision each site makes about a form is
+## WRITTEN DOWN rather than absorbed by a default; the fifth (`emit_standard_value`) keeps its
+## `_ => { panic }`, which is already fail-loud. The alternatives are grouped by REASON with one
+## OR-pattern per reason (Control Flow §5.2: `p | q =>` is exactly equivalent to repeating the arm per
+## alternative, and v1 alternatives do not bind — so a group names the variants BARE, with no
+## payload pattern). `alatyr fmt` EXPANDS an OR-pattern back into one arm per alternative (it is
+## surface sugar the parser folds away), so do not expect `fmt`'s render of this file to keep the
+## groups; `scripts/fmt_corpus.sh` only requires module idempotence, which the expansion satisfies.
+##
+## READ THIS BEFORE TRUSTING IT AS A GATE. Enumerating a `match deref(v)` is DOCUMENTATION here, not
+## enforcement. `sema`'s enum-exhaustiveness check — `sv := expr_var_span(sc)` in `check_stmts`
+## (`src/sema.al:8604`) for a statement match, `msv := expr_var_span(emp.scrut)` in `check_expr`
+## (`:5845`) for a value match — fires only when the scrutinee is a bare `Var` whose local carries a
+## RESOLVED annotated enum type; `deref(v)` is not a `Var`, so the check is skipped by design
+## ("Fail-open: … non-local scrutinee … skips"). Measured on this tree: a planted 25th `Expr`
+## variant builds rc=0 both with the wildcards and with this enumeration, and rebinding the
+## scrutinee to `e : Expr = deref(v)` does not help either, because the local's annotated type is
+## recorded as tag 0 / no name span here. Until that gap is closed, adding an `Expr` variant still
+## compiles silently — these arms only make the omission visible to a reader and to `grep`.
+## ============================================================================================
+
 ## TYP-13: a direct integer Num used to initialize an explicitly typed float local must be
 ## converted to the floating value before it is stored. The generic scalar path stores the
 ## integer bits unchanged, so a later `u64(x)` interprets those bits as a tiny/zero float.
@@ -45,7 +69,18 @@ expr_num_const := fn(v : ptr(Expr)) -> bool {
   match deref(v) {
     Expr::Num(_v, _s, _n) => { ok = true }
     Expr::Bin(op, l, r) => { if (op == 16 or op == 17 or op == 18) and expr_num_const(l) and expr_num_const(r) { ok = true } }
-    _ => {}
+    ## CONSTANT, but not an integer word. TYP-13 converts the stored bits of a written INTEGER
+    ## literal; a `bool`, an already-floating literal, and the aggregate/string/function literals
+    ## have no integer image to convert, so none of them is an integer constant for this question.
+    Expr::BoolLit | Expr::FloatLit | Expr::StrLit
+      | Expr::ArrayLit | Expr::StructLit | Expr::EnumLit | Expr::FnRef => {}
+    ## NOT LITERAL-SHAPED at this point: the value is a name, a call, a place read, a branch, a
+    ## loop, or a cast/grant wrapper. TYP-13 deliberately fires only on a written integer literal
+    ## or a comptime-folded `+`/`-`/`*` tree of them; every other form keeps the generic scalar
+    ## path, which is what makes the conversion a bounded, opt-in rewrite.
+    Expr::Var | Expr::Call | Expr::Field | Expr::Index | Expr::Deref | Expr::AddrOf
+      | Expr::If | Expr::Match | Expr::Loop | Expr::Try | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Bitcast | Expr::Lambda => {}
   }
   ok
 }
@@ -65,7 +100,14 @@ direct_num_float_target := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usi
         else if lts.n == 3 and str_at((src + lts.s), lts.n) == "f32" { r = 2 }
       }
     }
-    _ => {}
+    ## The SAME two reason groups as `expr_num_const` above, and for the same reasons: this asks the
+    ## identical question (is the RHS a written integer literal, or a folded integer arithmetic tree
+    ## of them?) and must answer it identically, or the predicate and its consumer disagree.
+    Expr::BoolLit | Expr::FloatLit | Expr::StrLit
+      | Expr::ArrayLit | Expr::StructLit | Expr::EnumLit | Expr::FnRef => {}
+    Expr::Var | Expr::Call | Expr::Field | Expr::Index | Expr::Deref | Expr::AddrOf
+      | Expr::If | Expr::Match | Expr::Loop | Expr::Try | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Bitcast | Expr::Lambda => {}
   }
   r
 }
@@ -807,7 +849,27 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
         g = ga.next
       }
     }
-    _ => {}
+    ## NOT A STRUCT LITERAL. This entry point is the word-granular CONSTRUCTOR: it lays a
+    ## `StructLit`'s fields into the destination's frame words. No other value form has an image it
+    ## can lay down, so it emits nothing for any of them — and every caller that is not already
+    ## guarded by `struct_lit_info(...).is_s` treats the call as having stored the value. That is
+    ## exactly #464's dangerous conjunction (silent no-op + caller reports success), and #461/#463
+    ## is the miscompile it produced in the sibling `emit_enum_assign`.
+    ##
+    ## MEASURED at `038e8ea` before the enumeration (an instrumented build printing one line per
+    ## expression reaching this arm, cross-checked against a byte comparison of the emitted GAS per
+    ## #507): across all 1 978 tracked `test/*.al` on x86_64/aarch64/riscv64/wat — 7 912 pairs —
+    ## this function is entered 2 037 times and EVERY ONE of them is `Expr::StructLit`; on the
+    ## compiler's own build, 890 entries, again all `StructLit`. ZERO arrivals here, so enumerating
+    ## the rest is byte-neutral. The remedy #464 prescribes for the class ("never the silent path"
+    ## — a located refusal, as the sibling `emit_standard_value` above already does) is
+    ## deliberately NOT taken in this unit: this one changes only how the decision is written,
+    ## never what it is.
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match
+      | Expr::Call | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
 }
 
@@ -2136,7 +2198,17 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       cv := const_struct_field(base, fs, fl, cx.decls, cx.src, a)
       if unchecked bitcast(usize, cv) != 0 { v = cv }
     }
-    _ => {}
+    ## NOT A FIELD SELECTION, so there is no `<const struct>.<field>` to materialize and `v` is
+    ## left exactly as `const_rhs` produced it. This arm is a NORMALIZER, not an emitter: nothing
+    ## is owed here, and the classification that follows (`require_agg_parts`, `struct_lit_info`,
+    ## `enum_lit_info`, `str_lit_info`, `array_lit_info`, then the global/local store paths) is
+    ## what decides every form's lowering. A new `Expr` variant needs an entry here only if it can
+    ## name a module-level const struct field.
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match
+      | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   rqa := require_agg_parts(v, cx.decls, cx.src, a)
   ## (TYP-6) the ANNOTATED-scalar-local (`x : u64 = s`) and scalar-RE-ASSIGN (`G = s` / `x = s`)
