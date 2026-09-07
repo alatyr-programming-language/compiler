@@ -624,6 +624,14 @@ wat_int_const_expr := fn(e : ptr(Expr)) -> bool {
     Expr::Bin(op, l, rr) => {
       if (op == 16 or op == 17 or op == 18) and wat_int_const_expr(l) and wat_int_const_expr(rr) { r = true }
     }
+    ## #558 — `unchecked e` is the CG-7 verification MODE, not a different value: it drops the
+    ## checked-guard family inside its scope and "as an expression it yields the inner value"
+    ## (Grammar §3.7), never changing the wrapped expression's type or value. Without this arm
+    ## `x : f64 = unchecked 3` skipped the TYP-13 conversion and stored the integer bits, which
+    ## read back as a denormal. The grant scope is still established by the expression emitter,
+    ## which lowers the whole `Unchecked` node, so unwrapping HERE only answers the shape question.
+    ## One of FOUR copies of this predicate (x86 `expr_num_const`, a64, rv64, wat); they must agree.
+    Expr::Unchecked(inner) => { if wat_int_const_expr(inner) { r = true } }
     _ => {}
   }
   r

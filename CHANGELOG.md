@@ -95,6 +95,20 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   where the root comes from the manifest, is byte-identical. A bare list of a **single** file is not
   yet covered and keeps its stem-named module.
 
+- **`unchecked` in front of an integer constant no longer defeats the integer-to-float conversion.**
+  `x : f64 = unchecked 3` compiled cleanly, emitted no diagnostic, and read back `0` on all four
+  backends — the integer bits were stored unchanged and reinterpreted as a denormal — while the plain
+  `x : f64 = 3` was correct. `unchecked e` is a verification **mode** (Grammar §3.7, CG-7): inside its
+  scope the checked-guard family is dropped and, as an expression, it yields the inner value, so it can
+  never change the type or the value of what it wraps. The predicate that decides the TYP-13 conversion
+  exists in four independent copies, one per backend, and every one of them matched `Expr::Num` and
+  `Expr::Bin` only; `Expr::Unchecked` is a distinct node, so all four answered "not an integer
+  constant". Each now unwraps it. Covered at both widths, for the bare literal and for a folded
+  `+`/`-`/`*` tree, for a negative value and for nested grants. The grant itself is unchanged —
+  `unchecked` arithmetic still wraps and un-`unchecked` arithmetic still traps — and emission for every
+  other shape is byte-identical, measured by artifact hash over all 1 980 tracked corpus sources on all
+  four backends.
+
 - **`checked_mul` / `overflowing_mul` / `saturating_mul` no longer report overflow for every non-zero
   left operand on a target with no high-half-of-product intrinsic.** The `u64` and `i64` members of
   the overflow-policy family read the product's high word out of `mut hi := a` followed by three

@@ -69,18 +69,25 @@ expr_num_const := fn(v : ptr(Expr)) -> bool {
   match deref(v) {
     Expr::Num(_v, _s, _n) => { ok = true }
     Expr::Bin(op, l, r) => { if (op == 16 or op == 17 or op == 18) and expr_num_const(l) and expr_num_const(r) { ok = true } }
+    ## A VERIFICATION MODE, not a different value (#558). `unchecked e` is the CG-7 grant: within the
+    ## scope the checked-guard family is dropped, and "as an expression it yields the inner value"
+    ## (Grammar §3.7). It therefore never changes the TYPE or the VALUE of what it wraps, so
+    ## `x : f64 = unchecked 3` must equal `x : f64 = 3`. Unwrap and ask the same question of the inner
+    ## expression; the grant scope itself is re-established by `emit_gas`, which lowers the WHOLE
+    ## `Unchecked` node, so recursing here loses no wrapping semantics.
+    Expr::Unchecked(inner) => { if expr_num_const(inner) { ok = true } }
     ## CONSTANT, but not an integer word. TYP-13 converts the stored bits of a written INTEGER
     ## literal; a `bool`, an already-floating literal, and the aggregate/string/function literals
     ## have no integer image to convert, so none of them is an integer constant for this question.
     Expr::BoolLit | Expr::FloatLit | Expr::StrLit
       | Expr::ArrayLit | Expr::StructLit | Expr::EnumLit | Expr::FnRef => {}
     ## NOT LITERAL-SHAPED at this point: the value is a name, a call, a place read, a branch, a
-    ## loop, or a cast/grant wrapper. TYP-13 deliberately fires only on a written integer literal
+    ## loop, or a bitcast/lambda. TYP-13 deliberately fires only on a written integer literal
     ## or a comptime-folded `+`/`-`/`*` tree of them; every other form keeps the generic scalar
     ## path, which is what makes the conversion a bounded, opt-in rewrite.
     Expr::Var | Expr::Call | Expr::Field | Expr::Index | Expr::Deref | Expr::AddrOf
       | Expr::If | Expr::Match | Expr::Loop | Expr::Try | Expr::Slice | Expr::CompField
-      | Expr::Unchecked | Expr::Bitcast | Expr::Lambda => {}
+      | Expr::Bitcast | Expr::Lambda => {}
   }
   ok
 }
@@ -100,6 +107,16 @@ direct_num_float_target := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usi
         else if lts.n == 3 and str_at((src + lts.s), lts.n) == "f32" { r = 2 }
       }
     }
+    ## #558 — the same arm as `Expr::Bin`, and it MUST be: this predicate and `expr_num_const` answer
+    ## the identical question, so a form the predicate now accepts must select a target here too, or
+    ## the consumer takes the generic scalar path and stores the integer bits unchanged again.
+    Expr::Unchecked(_inner) => {
+      if expr_num_const(v) {
+        lts := local_type_span(src, ns, nl)
+        if lts.n == 3 and str_at((src + lts.s), lts.n) == "f64" { r = 1 }
+        else if lts.n == 3 and str_at((src + lts.s), lts.n) == "f32" { r = 2 }
+      }
+    }
     ## The SAME two reason groups as `expr_num_const` above, and for the same reasons: this asks the
     ## identical question (is the RHS a written integer literal, or a folded integer arithmetic tree
     ## of them?) and must answer it identically, or the predicate and its consumer disagree.
@@ -107,7 +124,7 @@ direct_num_float_target := fn(v : ptr(Expr), src : ptr(u8), ns : usize, nl : usi
       | Expr::ArrayLit | Expr::StructLit | Expr::EnumLit | Expr::FnRef => {}
     Expr::Var | Expr::Call | Expr::Field | Expr::Index | Expr::Deref | Expr::AddrOf
       | Expr::If | Expr::Match | Expr::Loop | Expr::Try | Expr::Slice | Expr::CompField
-      | Expr::Unchecked | Expr::Bitcast | Expr::Lambda => {}
+      | Expr::Bitcast | Expr::Lambda => {}
   }
   r
 }

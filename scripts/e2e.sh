@@ -4876,6 +4876,13 @@ check_accept int_literal_float_context_f32_exact
 run int_literal_float_expression 42
 run int_literal_float_context_f64 1
 run int_literal_float_runtime_f32 42
+## #558 — the CG-7 grant is a verification MODE, so `unchecked <int const>` in a float context is the
+## SAME value as the plain spelling. Registered on all four backends because the predicate that decides
+## the TYP-13 conversion exists in four copies (`expr_num_const`, `a64_int_const_expr`,
+## `rv_int_const_expr`, `wat_int_const_expr`) and every one of them answered "no" for `Expr::Unchecked`.
+## The fixture CLASSIFIES each read-back (correct / zero / truncated / other) and returns
+## `10 * case + class`, so a regression names the case and the outcome class instead of only "not 99".
+run int_literal_float_unchecked 99
 build_reject_has reject_typed_float_integer_f32 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_f64 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_u64 "check: type mismatch at line 2"
@@ -8700,6 +8707,7 @@ run_wat wasm_factorial 120
 ## cross-backend: existing scalar programs must agree x86_64 (run) == WASM (run_wat)
 run_wat smoke 42
 run_wat signed_local_divmod 42
+run_wat int_literal_float_unchecked 99
 run_wat inline_call 42
 run_wat stack_args 42
 run_wat early_return_result 42
@@ -8789,6 +8797,7 @@ run_a64 wasm_while 42
 run_a64 wasm_loop_sum 36
 run_a64 wasm_factorial 120
 run_a64 signed_local_divmod 42
+run_a64 int_literal_float_unchecked 99
 ## I11/CG-7 scoping: `unchecked` drops the aarch64 div-by-zero guard → raw `sdiv x,x,0` = 0.
 run_a64 unchecked_div_zero 0
 ## `unchecked` drops the guard, so these document HARDWARE behaviour and legitimately differ per target
@@ -8863,6 +8872,7 @@ run_rv64 wasm_while 42
 run_rv64 wasm_loop_sum 36
 run_rv64 wasm_factorial 120
 run_rv64 signed_local_divmod 42
+run_rv64 int_literal_float_unchecked 99
 run_rv64 unchecked_udiv_zero 42
 run_rv64 unchecked_rem_zero 41
 run_rv64 unchecked_div_min_neg1 41
