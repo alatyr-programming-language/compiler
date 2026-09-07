@@ -82,6 +82,27 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An index whose base is not a named place is refused instead of reading the caller's frame.** The
+  generic element-address tail of the x86_64 lowering composed `base + i * stride` out of the base's
+  frame slot, and the slot lookup answered *entry 0* — the first local of the enclosing frame — for
+  every base it could not name. Nine spellings therefore compiled with `rc 0` and returned a plausible
+  word out of the caller's own frame: `xs[lo..hi][i]` gave 0 where 42 was due, `s[lo..hi][i]` gave 6
+  where 98 was due, a store through `xs[lo..hi][i] = v` vanished, and `[a, b, c][i]`, `deref(p)[i]`,
+  `(if c { xs } else { ys })[i]`, `ptr(xs)[i]`, `Slice(T)(ptr = …, len = …)[i]` and a module-global
+  `[str; N]`'s `G[i][j]` all read the frame instead of the value. Each of the four defects fixed before
+  this one — a `str` literal base, a `[str; N]` element base, `unchecked a[i]`, and the range slice —
+  was fixed by adding one more recognizer *in front of* that tail while the tail's own default kept
+  answering wrongly, so the next unrecognized shape was another silent wrong value. The tail now names
+  the offending source line and refuses. Every base shape that legitimately reaches it was enumerated
+  by measurement, not assumed: 1161 arrivals over the 1564-program test corpus and the compiler's own
+  `src/` + `lib/`, every one a named local or parameter, so no working program changes and no emitted
+  byte moves. Grammar §3.4 makes each refused spelling well-formed, so each one's correct lowering is a
+  future recognizer above the tail rather than a wider default inside it; the range-slice base is
+  tracked as issue #422. The working spelling in every case is to bind the base to a local first
+  (`v := <base>; v[i]`), which all four backends already lower. aarch64, riscv64 and wasm have their
+  own element-address paths, are untouched, and already trap at runtime on these shapes rather than
+  returning a wrong value.
+
 - A **`{}` hole filled by a bare unary-minus expression** now prints its value on **x86_64**, instead
   of printing **nothing at all**. `print("a=[{}]\n", -4)` printed `a=[]` and
   `print("c=[{}]\n", -9223372036854775808)` printed `c=[]`, on a program that compiled cleanly and
