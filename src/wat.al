@@ -2065,6 +2065,61 @@ mut WAT_INST_TL2 : [usize; 512] = [0; 512]
 mut WAT_INST_TS3 : [usize; 512] = [0; 512]
 mut WAT_INST_TL3 : [usize; 512] = [0; 512]
 mut WAT_INST_N := 0
+## ---------------------------------------------------------------------------------------------
+## OVERLOAD LABELS (#567 — the wasm half of #475).
+## ---------------------------------------------------------------------------------------------
+## This emitter names a function by its BARE source identifier, so two members of one overload set
+## would share `$name`: a `wat2wasm` "redefinition", and — before `driver::d_ovl_pick` — a silently
+## WRONG binding, because the driver's qualified-callee resolution kept only the LAST declaration of
+## the name. When that resolution now disambiguates a set, the driver REGISTERS each resolved target's
+## NAME SPAN here and exempts the pair from `d_kept_name_clash`, so both members reach this emitter.
+##
+## The DEFINITION and the rewritten CALL then derive the same per-signature suffix from the SAME
+## `Decl`, found by exact name-span identity — the driver rewrites a resolved qualified callee to its
+## target decl's own name span, so the call site carries that decl's identity, not just its text. The
+## two labels therefore cannot drift (#475 criterion 3), and the suffix is spelled the way
+## `lower::emit_sig_suffix` spells x86_64's (`__u64_u64` / `__i64_i64`).
+##
+## Nothing is registered unless the driver actually resolved an overload set, so a single-file program
+## — every existing wasm corpus row, `test/overload_mangle.al`'s entry-module `add` pair included —
+## emits byte-identical WAT. That entry-module case is still #475's, and still unfixed here: its calls
+## are bare, so no call site carries a decl identity to name.
+##
+## The suffix itself is `__<t0>_<t1>_…` — the decl's parameter signature with the pointer-width
+## spellings normalized, the same discriminator `lower::emit_sig_suffix` puts in the x86_64 linker
+## symbol. It is emitted INLINE at each of its two sites (the definition and the call): a helper
+## taking `in out StrBuf` plus a by-value `Decl` is mis-passed by the frozen seed and SEGFAULTS the
+## emit — the same landmine the generic instance TAG below is inlined for. Each type name is bound to
+## a LOCAL before it is pushed (an inline str-returning call as a `push_str` argument scrambles its
+## {ptr,len} under the seed — the documented wat-emit scar). The two copies MUST stay identical.
+mut WAT_OVL_NS : [usize; 256] = [0; 256]
+mut WAT_OVL_N := 0
+pub wat_ovl_reset := fn() { WAT_OVL_N = 0 }
+pub wat_ovl_mark := fn(ns : usize) {
+  mut seen := false
+  mut i := 0
+  while i < WAT_OVL_N { if WAT_OVL_NS[i] == ns { seen = true } ; i = i + 1 }
+  if (not seen) and WAT_OVL_N < 256 { WAT_OVL_NS[WAT_OVL_N] = ns ; WAT_OVL_N = WAT_OVL_N + 1 }
+}
+pub wat_ovl_marked := fn(ns : usize) -> bool { wat_ovl_is_marked(ns) }
+wat_ovl_is_marked := fn(ns : usize) -> bool {
+  mut r := false
+  mut i := 0
+  while i < WAT_OVL_N { if WAT_OVL_NS[i] == ns { r = true } ; i = i + 1 }
+  r
+}
+## The kind-1 decl whose NAME SPAN is exactly `[cs,cl)` — the identity a resolved qualified call site
+## carries after the driver's rewrite. -1 for an ordinary call-site occurrence (its span is the call's
+## own source position, which is never a declaration's name position).
+wat_ovl_decl_at_span := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> i64 {
+  mut r := 0 - 1
+  cnt := rt::vec_len(deref(decls))
+  for i in 0..cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 1 and d.name_start == cs and d.name_len == cl { r = i64(i) }
+  }
+  r
+}
 ## Resolved-type-arg OUT registers (avoid returning a multi-word span from a helper — the frozen seed
 ## can truncate such a return in some call contexts). wat_resolve_typearg writes here; callers read it.
 ## S2/N2, S3/N3 = the 2nd/3rd leading type-arg of a multi-type-param call.
@@ -5137,6 +5192,28 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         push_str(sb, "(call $")
         cname := str_at((src + cs), cl)
         push_str(sb, cname)
+        ## OVERLOAD SUFFIX (#567) — the same suffix the DEFINITION emits, derived from the same decl:
+        ## a resolved qualified callee was rewritten to its target's own NAME SPAN, so the span
+        ## identifies which member of the set this call binds to.
+        if wat_ovl_is_marked(cs) {
+          covi := wat_ovl_decl_at_span(decls, src, cs, cl)
+          if covi >= 0 {
+            covd := deref(decl_get(decls, usize(covi)))
+            mut ovp := covd.params_head
+            mut ovfirst := true
+            push_str(sb, "__")
+            while ovp != 0 {
+              ovpm := deref(param_p(ovp))
+              ovbn := base_type_name(src, ovpm.ts, ovpm.tl)
+              if ovfirst { ovfirst = false } else { push_str(sb, "_") }
+              mut ovt := str_at((src + ovbn.s), ovbn.n)
+              if ovt == "usize" { ovt = "u64" }
+              if ovt == "isize" { ovt = "i64" }
+              push_str(sb, ovt)
+              ovp = ovpm.next
+            }
+          }
+        }
         mut g := args_head
         while g != 0 {
           ga := deref(arg_p(g))
@@ -7530,6 +7607,24 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   push_str(sb, "  (func $")
   fname := str_at((src + d.name_start), d.name_len)
   if d.name_len == 0 { wat_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) }
+  ## OVERLOAD SUFFIX (#567): a member of a driver-disambiguated overload set carries its parameter
+  ## signature, so the set's two definitions get distinct labels instead of one `$name`. Marked spans
+  ## only — an unregistered name is untouched, so ordinary emission is byte-identical.
+  if d.name_len != 0 and wat_ovl_is_marked(d.name_start) {
+    mut ovp := d.params_head
+    mut ovfirst := true
+    push_str(sb, "__")
+    while ovp != 0 {
+      ovpm := deref(param_p(ovp))
+      ovbn := base_type_name(src, ovpm.ts, ovpm.tl)
+      if ovfirst { ovfirst = false } else { push_str(sb, "_") }
+      mut ovt := str_at((src + ovbn.s), ovbn.n)
+      if ovt == "usize" { ovt = "u64" }
+      if ovt == "isize" { ovt = "i64" }
+      push_str(sb, ovt)
+      ovp = ovpm.next
+    }
+  }
   ## instance TYPE TAG `$<fn>__<tag>` — INLINE (a helper taking `in out StrBuf` is mis-passed by the
   ## frozen seed → segfault; the a64 landmine). Bare name verbatim; TUPLE `(T0,…)` → `Tuple_<t0>_…`;
   ## ARRAY `[E; N]` → `Array_<elem>_<N>` (`(`/`)`/`[`/`;`/space/comma are invalid WAT `$id` chars). MUST
