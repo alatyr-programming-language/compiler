@@ -7001,6 +7001,25 @@ run_x86 issue491_wasm_enum_place_field 42
 run_a64 issue491_wasm_enum_place_field 42
 run_rv64 issue491_wasm_enum_place_field 42
 run_wat issue491_wasm_enum_place_field 42
+## issue #497 — a struct field whose declared type is a RAW UNION was stored with the WRONG WORD
+## COUNT on wasm, aarch64 and riscv64, so the scalar field AFTER it read a wrong value with NO trap.
+## A DIFFERENT sizer from the enum one above: `field_words` reserves `union_words` — the members
+## overlap at OFFSET 0 and there is NO discriminant word — while a union parses into the same kind-3
+## decl and the same `EnumLit` an enum does, so every enum-shaped store arm answered YES for one and
+## wrote `1 + enum_max_arity` (one word too wide AND one out of place) or fell to a one-word
+## pointer/discriminant store. Every observable is a scalar NEIGHBOUR, because reading a union member
+## is the already-loud #449-class surface on these three backends (134 / 133) and would trap the file
+## above every code. Five feeds (literal, union-returning call, place from a literal init, place from
+## a call init, param) at BOTH widths, because a ONE-WORD union field and a one-word pointer store
+## agree by coincidence — that coincidence is exactly why the wasm column looked healthy on three of
+## the rows. 123-125 are the ENUM controls, 42 on both sides. Parent 240b8ff: x86_64 42 and
+## wasm/aarch64/riscv64 46; isolated per shape on that parent, wasm answered
+## 46/53/42/42/42/81/86/94/101/108/115/42 and aarch64 and riscv64 both answered
+## 46/53/60/67/74/81/86/93/102/109/114/42. This tree: 42 on all four, per shape and combined.
+run_x86 issue497_union_field_words 42
+run_a64 issue497_union_field_words 42
+run_rv64 issue497_union_field_words 42
+run_wat issue497_union_field_words 42
 ## issue #449 — a struct's ENUM-typed field as a COMPARISON operand, no `match` involved. §8 delivers
 ## an enum BY REFERENCE, so on wasm the field holds a POINTER to the `{disc, payload…}` block exactly
 ## as an enum parameter does. The wat compare arm's aggregate guard already refuses to `i64.eq` such an
