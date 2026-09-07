@@ -82,6 +82,21 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`unwrap` / `expect` over an `Option` whose payload is a generic struct** now deliver the whole
+  value instead of its first word. Stdlib appendix §2.3 fixes the optional shape and §4.2 makes
+  `unwrap` the present-arm extraction; Types §4 gives the binding the initializer's type, so
+  `unwrap(Pair(u64, u64), Option(Pair(u64, u64)).Some(v))` is `v`. Three source scans classified the
+  substituted type-argument by its FULL text — `Pair(u64, u64)` matches no declaration name, only
+  `Pair` does — so the generic enum-value parameter kept the un-substituted one-payload-word layout,
+  the effective `-> T` return was classified as a scalar, and the tail-`match` payload was bound as a
+  bare scalar. The program compiled cleanly and answered a wrong value: the second field read back as
+  `0` in the minimal case, and driving `alloc::hashmap::next` — whose `Entry(K, V)` is exactly such a
+  struct — through `unwrap` answered the **key** in place of the value. A `match` over the same
+  `Option` was correct throughout, which is what made the defect invisible. Nothing changes about
+  `Option`'s representation, about `match` lowering, or about `alloc::hashmap`; the non-generic
+  payload was already correct and stays byte-identical, and the compiler's own emitted assembly is
+  byte-identical, so the frozen seed still reproduces the tree.
+
 - Two **overloads of one generic function** in one module no longer share a linker symbol. A generic
   instance is labelled `<module>__<fn>__<typetag>`, built from the **type arguments alone** — the value
   parameters took no part in it — so at one instantiation two declarations that overload resolution
