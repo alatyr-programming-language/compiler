@@ -2507,6 +2507,13 @@ run_pkg_callees module_fn_ancestor module-fn-ancestor 42 +geo__helper +geo__gid_
 run_pkg_callees module_fn_shadow   module-fn-shadow   42 +geo__child__helper +geo__bump -aother__helper -aother__bump
 run_pkg_check_build_located module_fn_sibling_reject   1 geo__child
 run_pkg_check_build_located module_fn_ambiguous_reject 1 caller
+# Issue #557 / Control Flow §5.1 + Modules §1 — the same non-exhaustive `match` must be refused
+# whichever way the package's modules sort. Both packages are byte-identical apart from the enum
+# module's FILE NAME (`aenum.al` sorts before `main.al`, `zenum.al` after it); on the parent compiler
+# the second one BUILT CLEANLY, because the enum-declaration lookup walked only the name-resolution
+# prefix and so could not see a type declared in a later-sorted module.
+run_pkg_check_build_located issue557_enum_module_first 4 main "type mismatch"
+run_pkg_check_build_located issue557_enum_module_last 4 main "type mismatch"
 
 ## Modules §3 + Types §4.1 for a bare TYPE NAME — the TYPE half of the same family, and the one that
 ## still blocked the file split. `lower_layout::struct_decl_of`/`enum_decl_of` took NO naming module at

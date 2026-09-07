@@ -4755,6 +4755,45 @@ run accept_exhaustive_match 42
 check_reject reject_nonexhaustive_value_match
 check_accept accept_exhaustive_value_match
 run accept_exhaustive_value_match 42
+# Issue #557 / Control Flow §5.1 — exhaustiveness is decided from the scrutinee's TYPE, in each of the
+# six spellings a scrutinee can take, not from the one bare-`Var` spelling the check used to require.
+# Four of the six (inferred local, `deref(p)`, field, call) BUILD CLEANLY on the parent compiler and
+# run to 1; the two that already refused are kept as the anchors of the set. The needle names the line
+# so an unlocated diagnostic (the `deref` scrutinee has no span of its own) cannot pass the row.
+build_reject_has issue557_nonexh_param "type mismatch at line 7"
+check_reject issue557_nonexh_param
+build_reject_has issue557_nonexh_annot_local "type mismatch at line 6"
+check_reject issue557_nonexh_annot_local
+build_reject_has issue557_nonexh_inferred_local "type mismatch at line 8"
+check_reject issue557_nonexh_inferred_local
+build_reject_has issue557_nonexh_deref_ptr "type mismatch at line 7"
+check_reject issue557_nonexh_deref_ptr
+# A reject fixture proves only the x86 surface (AGENTS.md). The `deref(p)` shape is the compiler's
+# own idiom and the one #557 exists for, so the three non-x86 emitters are asked directly: each must
+# refuse with the same located diagnostic and emit nothing.
+emit_reject_has wat issue557_nonexh_deref_ptr "type mismatch at line 7"
+emit_reject_has aarch64 issue557_nonexh_deref_ptr "type mismatch at line 7"
+emit_reject_has riscv64 issue557_nonexh_deref_ptr "type mismatch at line 7"
+build_reject_has issue557_nonexh_field "type mismatch at line 7"
+check_reject issue557_nonexh_field
+build_reject_has issue557_nonexh_call "type mismatch at line 6"
+check_reject issue557_nonexh_call
+# §5.2 — grouping is sugar, not a wildcard: an OR-pattern arm covers each alternative, and dropping
+# one still leaves the `match` non-exhaustive.
+build_reject_has issue557_nonexh_or_pattern_deref "type mismatch at line 7"
+check_reject issue557_nonexh_or_pattern_deref
+# The three over-rejection controls: a complete `match` with no `_`, a `_` default (§5.1 makes it
+# exhaustive by construction), and OR-pattern groups — each over all six scrutinee spellings.
+check_accept issue557_exhaustive_six_shapes
+run issue557_exhaustive_six_shapes 42
+check_accept issue557_wildcard_six_shapes
+run issue557_wildcard_six_shapes 42
+check_accept issue557_or_pattern_six_shapes
+run issue557_or_pattern_six_shapes 42
+# The fail-open control: where the scrutinee's type genuinely does not resolve, skipping the check is
+# still correct. This is #557's measured residual, not a decision that the shape may stay unchecked.
+check_accept issue557_unresolved_scrutinee_open
+run issue557_unresolved_scrutinee_open 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42
