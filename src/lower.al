@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n, generic_overload_set_count, lit_arith_i64) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -9789,6 +9789,15 @@ emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : ptr(
       ta = CSpan(s = cx.it3_s, n = cx.it3_l)
     }
     ntpc := tparam_count(cx.decls, gi, cx.src, a)
+    ## #476 — REFUSE a callee above the three type arguments the monomorphization machinery carries
+    ## (`lower_layout::gen_tparam_count_supported`, which also fences the three cross backends through
+    ## `gen_call_ok`). Everything below this line is written for at most three: `ta`/`ta2`/`ta3`,
+    ## `tpi`/`tpi2`/`tpi3` and `emit_generic_label`'s three tags. Without the refusal a fourth type
+    ## argument stayed in the runtime argument list, so `emit_call_args` passed a type NAME — an
+    ## unwritten frame slot — as value argument 0 and shifted the real values down one place: a clean
+    ## compile answering `0`. AGENTS.md allows a trap, never a wrong value. `src/`+`lib/` and all 1917
+    ## `test/` fixtures declare no such generic, so this never fires on the self-host build.
+    if not gen_tparam_count_supported(i64(ntpc)) { panic("selfhost: a generic call whose callee declares more than three comptime type parameters is not supported yet - the monomorphization machinery carries three type arguments (lower_layout::gen_tparam_count_supported); spell the extra ones as ordinary value parameters or split the call") }
     mut ta2 := CSpan(s = 0, n = 0)
     mut tpi2 := -1
     if ntpc >= 2 {
@@ -17210,6 +17219,15 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## SECOND type-param (`map(T, U, …)`): read its type-arg + skip position; erase BOTH args.
         ## `skip2 = -1` for a single-type-param callee → byte-identical single-tag path.
         ntpc := tparam_count(cx.decls, gi, cx.src, a)
+        ## #476 — REFUSE a callee above the three type arguments the monomorphization machinery carries
+        ## (`lower_layout::gen_tparam_count_supported`, which also fences the three cross backends through
+        ## `gen_call_ok`). Everything below this line is written for at most three: `ta`/`ta2`/`ta3`,
+        ## `tpi`/`tpi2`/`tpi3` and `emit_generic_label`'s three tags. Without the refusal a fourth type
+        ## argument stayed in the runtime argument list, so `emit_call_args` passed a type NAME — an
+        ## unwritten frame slot — as value argument 0 and shifted the real values down one place: a clean
+        ## compile answering `0`. AGENTS.md allows a trap, never a wrong value. `src/`+`lib/` and all 1917
+        ## `test/` fixtures declare no such generic, so this never fires on the self-host build.
+        if not gen_tparam_count_supported(i64(ntpc)) { panic("selfhost: a generic call whose callee declares more than three comptime type parameters is not supported yet - the monomorphization machinery carries three type arguments (lower_layout::gen_tparam_count_supported); spell the extra ones as ordinary value parameters or split the call") }
         mut ta2 := CSpan(s = 0, n = 0)
         mut tpi2 := -1
         if ntpc >= 2 {

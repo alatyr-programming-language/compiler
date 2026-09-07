@@ -2634,6 +2634,24 @@ pub generic_overload_set_count := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : u
 ## both sites and exited 0 with the WRONG value. AGENTS.md draws the line exactly there — a trap is
 ## acceptable, a wrong value is not — so the set is fenced out and each backend takes its own
 ## fail-loud path instead. The x86_64 lower, which does select and mangle by signature, is unaffected.
+## How many comptime `: type` parameters the MONOMORPHIZATION machinery can carry. Three, and the
+## number is a property of the machinery rather than of any one target: `LCtx`'s `gp`/`gp2`/`gp3`
+## parameter bindings, the instance record's `ts`/`ts2`/`ts3` type-arg columns, `lower`'s
+## `tparam_idx`/`tparam_idx2`/`tparam_idx3`, `emit_generic_label`'s three type tags and
+## `emit_call_args`'s three erase positions all stop at the third. So the number lives here once and
+## both users read it: `gen_call_ok` below fences the three cross backends with it, and `lower`'s two
+## generic-call emission sites REFUSE with it.
+##
+## Why that refusal exists (#476). Measured on `2abfe57`, a call to a four-type-parameter generic was
+## the one shape x86_64 neither lowered nor refused: it erased three of the four leading type
+## arguments, passed the fourth type NAME as a value argument -- an unwritten frame slot, so `0` --
+## and shifted every real value argument one place down, while the instance label kept only three
+## tags. `pick4(u64, u64, u64, u64, 42)` answered `0`: a clean compile and a wrong value. The three
+## cross backends already refused the same shape loudly through `gen_call_ok` below, so the reference
+## backend was the only wrong one, and the refusal makes all four agree. `src/`, `lib/` and all 1917
+## `test/` fixtures declare ZERO generics above three type parameters -- the measured price.
+pub gen_tparam_count_supported := fn(cnt : i64) -> bool { cnt <= 3 }
+
 pub gen_call_ok := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
   gi := generic_gi(decls, src, cs, cl)
   if gi < 0 { return false }
@@ -2641,7 +2659,8 @@ pub gen_call_ok := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
   if generic_overload_set_count(decls, src, gd.name_start, gd.name_len, gd.mod_start, gd.mod_len) >= 2 { return false }
   cnt := decl_tparam_count(gd, src)
   lead := decl_leading_tparam_run(gd, src)
-  if cnt < 1 or cnt > 3 { return false }
+  if cnt < 1 { return false }
+  if not gen_tparam_count_supported(cnt) { return false }
   if cnt == 1 { return true }
   cnt == lead
 }
