@@ -278,16 +278,32 @@ pub type_mod_rank_from := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize,
 ## exists to avoid). A type-name ambiguity is rejected AT THE RESOLVER, so it cannot be bypassed by
 ## a consumer that forgot to ask.
 ll_show_src_line := fn(src : ptr(u8), off : usize) {
-  mut lo : usize = 0
-  if off > 4096 { lo = off - 4096 }
-  mut s := off
-  while s > lo and str_at((src + (s - 1)), 1) != "\n" { s = s - 1 }
-  hi := off + 4096
-  mut e := off
-  while e < hi and str_at((src + e), 1) != "\n" { e = e + 1 }
-  mut n := e - s
-  if e < hi { n = n + 1 }
-  w := rt::sys_write(1, 2, unchecked bitcast(usize, rt::addr(src, s)), n)
+  ## Issue #523 — the same refusal `lower::ctfold::lower_show_src_line` makes, for the same reason and
+  ## with the same marker line: a span a parse-time desugar SYNTHESIZED is not a source position
+  ## (`ast::span_is_synthetic`), so `src + off` re-forms an AST-arena address and there is no source
+  ## line to show. This helper is a DELIBERATE duplicate of lower's (this base module cannot import
+  ## `lower` back), so the fact it recovers has to be guarded in both copies; both keep exactly one
+  ## `sys_write`, so neither module's reviewed duplicate-decision count moves.
+  mut wbase := 0
+  mut wn := 0
+  if ast::span_is_synthetic(off) {
+    m := "<a compiler-synthesized construct: no source line>\n"
+    wbase = unchecked bitcast(usize, m.ptr)
+    wn = m.len
+  } else {
+    mut lo : usize = 0
+    if off > 4096 { lo = off - 4096 }
+    mut s := off
+    while s > lo and str_at((src + (s - 1)), 1) != "\n" { s = s - 1 }
+    hi := off + 4096
+    mut e := off
+    while e < hi and str_at((src + e), 1) != "\n" { e = e + 1 }
+    mut n := e - s
+    if e < hi { n = n + 1 }
+    wbase = unchecked bitcast(usize, rt::addr(src, s))
+    wn = n
+  }
+  w := rt::sys_write(1, 2, wbase, wn)
 }
 ll_show_span := fn(src : ptr(u8), s : usize, n : usize) {
   w := rt::sys_write(1, 2, unchecked bitcast(usize, rt::addr(src, s)), n)

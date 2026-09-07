@@ -52,82 +52,105 @@ stmt_label_span := ast::stmt_label_span
 ## The lean lower cannot yet carry a nested `CheckErr` enum reliably as generic `Result`'s error
 ## payload. The public checker returns only a scalar verdict; diagnostics can decode this code.
 pub CheckErr := usize
-unbound_err := fn(s : usize, n : usize) -> CheckErr { 1 + s * 4 }
-mismatch_err := fn(s : usize, n : usize) -> CheckErr { 2 + s * 4 }
+
+## Issue #523 — the SPAN a located `CheckErr` may carry. Every constructor below ENCODES its span by
+## multiplying it (`s * 4`, `s * 8`, `s * 1024`), and every renderer DECODES it back and then counts
+## the newlines in `src[file_base .. span]` to name a line. Both steps assume `s` is a position inside
+## the source buffer. A span a parse-time desugar synthesized is not one — `ast::span_is_synthetic`
+## documents why — and it breaks BOTH steps: the encode OVERFLOWS (a modular-underflow handle is a
+## near-`usize`-max value, so `s * 4` traps on the checked multiply: measured SIGILL/rc=132 with no
+## diagnostic at all), and a handle small enough to survive the encode makes the renderer walk far past
+## the last source byte. So a span that is PROVEN not to be a source position is dropped HERE — every
+## constructor below wraps its span in this one call, which makes "no `CheckErr` carries a non-source
+## span" a property of twenty-five readable lines rather than of the hundreds of call sites that CHOOSE a
+## span. Span 0 is the channel's existing "no location" value: the driver and the
+## `check` renderers already print the honest unlocated message for it ("Other zero-span failures remain
+## honest unlocated messages"), so declining is a behaviour these surfaces already implement.
+##
+## `ast::span_is_synthetic` answers TRUE only when the extent is KNOWN and the span is PROVEN outside
+## it, so with no extent published nothing is dropped and every location this channel renders today is
+## preserved byte-for-byte. `src/` and `lib/` contain no `@alloc` and no `defer`, so no synthesized span
+## exists while the compiler compiles itself and this is fixpoint-neutral.
+diag_span := fn(s : usize) -> usize {
+  if ast::span_is_synthetic(s) { return 0 }
+  s
+}
+unbound_err := fn(s : usize, n : usize) -> CheckErr { 1 + diag_span(s) * 4 }
+mismatch_err := fn(s : usize, n : usize) -> CheckErr { 2 + diag_span(s) * 4 }
 ## A LOCATED error of no specific kind (kind 0 → the driver renders "invalid at line N"): used for a
 ## structural rejection (a break/continue outside a loop, a missing result) that has a source
 ## location but no unbound/mismatch classification. The span `s` must be nonzero (else it reads as 0
 ## = accepted); `s * 4` keeps the kind bits clear.
-located_err := fn(s : usize) -> CheckErr { s * 4 }
+located_err := fn(s : usize) -> CheckErr { diag_span(s) * 4 }
 ## A distinct diagnostic class without widening the bootstrap-sensitive low-two-bit CheckErr layout.
 ## The high marker is stripped by both public renderers before decoding the ordinary source offset.
 ## Source buffers are necessarily far smaller than 2^62 bytes, so the marker cannot collide with an
 ## existing encoded location. This keeps every existing kind/value byte-for-byte unchanged.
-ambiguous_err := fn(s : usize) -> CheckErr { 4611686018427387904 + s * 4 }
+ambiguous_err := fn(s : usize) -> CheckErr { 4611686018427387904 + diag_span(s) * 4 }
 ## A distinct located diagnostic for a struct-construction-shaped expression whose head is neither a
 ## declared aggregate/type alias nor a declared generic type constructor. Keep it between ambiguous
 ## calls and scalar conversions so every older CheckErr range remains byte-identical.
 UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER := 5188146770730811392
-unknown_type_ctor_err := fn(s : usize) -> CheckErr { UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER + s * 4 }
+unknown_type_ctor_err := fn(s : usize) -> CheckErr { UNKNOWN_TYPE_CONSTRUCTOR_DIAG_MARKER + diag_span(s) * 4 }
 ## TOOL-17 / Tooling §2.7 — `Package` and `Target` are manifest-only structures. Keep their ordinary
 ## source-construction rejection distinct from the generic unknown-constructor class so check/build can
 ## report the configuration-prelude boundary without changing older diagnostic ranges.
 MANIFEST_VALUE_DIAG_MARKER := 5476377146882523136
-manifest_value_err := fn(s : usize) -> CheckErr { MANIFEST_VALUE_DIAG_MARKER + s * 4 }
+manifest_value_err := fn(s : usize) -> CheckErr { MANIFEST_VALUE_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for the Declarations §3.1 / Memory §1.6 rule that an existing
 ## binding must be declared `mut` before a write. Keep the marker above the comptime class and below
 ## 2^63 so the existing unsigned CheckErr representation remains bootstrap-safe; the driver strips it
 ## before decoding the ordinary source offset.
 IMMUTABLE_DIAG_MARKER := 8070450532247928832
-immutable_err := fn(s : usize) -> CheckErr { IMMUTABLE_DIAG_MARKER + s * 4 }
+immutable_err := fn(s : usize) -> CheckErr { IMMUTABLE_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct diagnostic class for the orthogonal `@limits` contract. The payload uses eight-byte
 ## slots so the low three bits carry the violated limit kind while the remaining value carries the
 ## source offset. The driver strips this marker before rendering a named limit; ordinary CheckErr
 ## values above remain byte-identical.
 LIMIT_DIAG_MARKER := 2305843009213693952
-limit_err := fn(s : usize, kind : usize) -> CheckErr { LIMIT_DIAG_MARKER + s * 8 + kind }
+limit_err := fn(s : usize, kind : usize) -> CheckErr { LIMIT_DIAG_MARKER + diag_span(s) * 8 + kind }
 ## A distinct located diagnostic for the Types §4.6 scalar/brand conversion constructor arity rule.
 ## Keep it between the existing ambiguous-call and comptime markers so every older CheckErr range
 ## remains unchanged while check/build/emit surfaces can preserve the lower's established wording.
 SCALAR_CONVERSION_DIAG_MARKER := 5764607523034234880
-scalar_conversion_err := fn(s : usize) -> CheckErr { SCALAR_CONVERSION_DIAG_MARKER + s * 4 }
+scalar_conversion_err := fn(s : usize) -> CheckErr { SCALAR_CONVERSION_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for a direct builtin scalar conversion whose operand is a named user
 ## aggregate without a matching in-scope @convert. Keep it between the arity and global-aggregate
 ## classes so existing CheckErr ranges remain byte-identical while pre-emission surfaces retain the
 ## lower's established "needs a scalar operand" wording.
 AGG_SCALAR_CONVERSION_DIAG_MARKER := 6050000000000000000
-agg_scalar_conversion_err := fn(s : usize) -> CheckErr { AGG_SCALAR_CONVERSION_DIAG_MARKER + s * 4 }
+agg_scalar_conversion_err := fn(s : usize) -> CheckErr { AGG_SCALAR_CONVERSION_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for the unsupported non-literal mutable-struct-global assignment
 ## fence. Keep it between the scalar-conversion and comptime classes so older CheckErr ranges remain
 ## byte-identical while every CLI renderer can retain the existing lower's useful wording.
 GLOBAL_AGG_DIAG_MARKER := 6341068275337658368
-global_agg_err := fn(s : usize) -> CheckErr { GLOBAL_AGG_DIAG_MARKER + s * 4 }
+global_agg_err := fn(s : usize) -> CheckErr { GLOBAL_AGG_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for a CONST module-level aggregate runtime-call initializer. Keep it
 ## between the mutable-global and standard-byte-tuple classes so older CheckErr ranges remain byte-for-
 ## byte unchanged while check/build/emit surfaces can name the same pre-emission rule.
 GLOBAL_INIT_CALL_DIAG_MARKER := 6485183463413514240
-global_init_call_err := fn(s : usize) -> CheckErr { GLOBAL_INIT_CALL_DIAG_MARKER + s * 4 }
+global_init_call_err := fn(s : usize) -> CheckErr { GLOBAL_INIT_CALL_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for the unsupported standard-byte tuple global ABI boundary. Keep it
 ## above the non-literal aggregate-global class and below comptime so every older CheckErr range stays
 ## byte-identical while check/build/emit surfaces can share the lower's established wording.
 STANDARD_TUPLE_GLOBAL_DIAG_MARKER := 6629298651489350912
-standard_tuple_global_err := fn(s : usize) -> CheckErr { STANDARD_TUPLE_GLOBAL_DIAG_MARKER + s * 4 }
+standard_tuple_global_err := fn(s : usize) -> CheckErr { STANDARD_TUPLE_GLOBAL_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for an ENUM-element ARRAY GLOBAL element consumed as a value. Keep it
 ## between the standard-tuple-global and comptime classes so every older CheckErr range remains stable
 ## while check/build/emit surfaces can reject the width-blind generic value load consistently.
 ENUM_GLOBAL_ARRAY_DIAG_MARKER := 6773413839565216384
-enum_global_array_err := fn(s : usize) -> CheckErr { ENUM_GLOBAL_ARRAY_DIAG_MARKER + s * 4 }
+enum_global_array_err := fn(s : usize) -> CheckErr { ENUM_GLOBAL_ARRAY_DIAG_MARKER + diag_span(s) * 4 }
 
 ## A distinct located diagnostic for an initialized local array literal whose element is a @packed
 ## struct. Keep it between the enum-array and comptime classes so the common sema/pre-emission path
 ## rejects the exact deferred array shape without changing any older CheckErr range.
 PACKED_ARRAY_DIAG_MARKER := 6845468423603140608
-packed_array_err := fn(s : usize) -> CheckErr { PACKED_ARRAY_DIAG_MARKER + s * 4 }
+packed_array_err := fn(s : usize) -> CheckErr { PACKED_ARRAY_DIAG_MARKER + diag_span(s) * 4 }
 ## A distinct located diagnostic for the bounded local 2D fixed-array slice. Keep it between the packed
 ## array and comptime classes so every older CheckErr range remains stable while check/build/emit surfaces
 ## share one pre-emission refusal for the exact shapes whose nested lowering is not yet safe.
 LOCAL_MULTIDIM_ARRAY_DIAG_MARKER := 6880000000000000000
-local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIAG_MARKER + s * 4 }
+local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #214 — a direct multidimensional fixed-array STRUCT FIELD has no composed nested address
 ## model in the current lower. Keep this class distinct from the bounded local-array fence so both
 ## public entry points can report the established field-specific wording and source location.
@@ -136,21 +159,21 @@ local_multidim_array_err := fn(s : usize) -> CheckErr { LOCAL_MULTIDIM_ARRAY_DIA
 ## between the local-multidim and field-multidim markers so every older CheckErr value stays
 ## byte-identical.
 ENUM_DUP_DISC_DIAG_MARKER := 6885000000000000000
-enum_dup_disc_err := fn(s : usize) -> CheckErr { ENUM_DUP_DISC_DIAG_MARKER + s * 4 }
+enum_dup_disc_err := fn(s : usize) -> CheckErr { ENUM_DUP_DISC_DIAG_MARKER + diag_span(s) * 4 }
 MULTIDIM_ARRAY_FIELD_DIAG_MARKER := 6890000000000000000
-multidim_array_field_err := fn(s : usize) -> CheckErr { MULTIDIM_ARRAY_FIELD_DIAG_MARKER + s * 4 }
+multidim_array_field_err := fn(s : usize) -> CheckErr { MULTIDIM_ARRAY_FIELD_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #324 — a direct nested fixed-array PARAMETER has no composed ABI/address model in the current
 ## lower. Keep this class between the field fence and visibility classes so older CheckErr values remain
 ## byte-identical while every public semantic entry point shares one located refusal.
 NESTED_ARRAY_PARAM_DIAG_MARKER := 6895000000000000000
-nested_array_param_err := fn(s : usize) -> CheckErr { NESTED_ARRAY_PARAM_DIAG_MARKER + s * 4 }
+nested_array_param_err := fn(s : usize) -> CheckErr { NESTED_ARRAY_PARAM_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #414 / Declarations §6.2 — re-declaring a name ALREADY BOUND IN THE SAME SCOPE is a compile
 ## error. That is a TARGET-INDEPENDENT rule about a program the specification calls ILL-FORMED, so it
 ## belongs in `check` (one refusal for all four backends), not in a backend fence. Keep this class
 ## between the nested-array parameter and qualified-private-constant markers so every older CheckErr
 ## range stays byte-identical; only the upper bound of the nested-array-parameter window moves.
 SAME_SCOPE_REDECL_DIAG_MARKER := 6897000000000000000
-same_scope_redecl_err := fn(s : usize) -> CheckErr { SAME_SCOPE_REDECL_DIAG_MARKER + s * 4 }
+same_scope_redecl_err := fn(s : usize) -> CheckErr { SAME_SCOPE_REDECL_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #429 / Types §7 + Stdlib appendix §3.6 + Memory §3.3 — `str` IS the slice `[u8]`: a view whose
 ## element permission comes from its POINTER, and the writable spelling of a slice is `[mut T]`, which
 ## `str` is not. An element store into a `str` place is therefore ill-formed whatever the BINDING says,
@@ -160,7 +183,7 @@ same_scope_redecl_err := fn(s : usize) -> CheckErr { SAME_SCOPE_REDECL_DIAG_MARK
 ## same-scope-redeclaration and qualified-private-constant windows so only the former's upper bound
 ## moves and every other decoded CheckErr range stays byte-identical.
 STR_ELEM_WRITE_DIAG_MARKER := 6898000000000000000
-str_elem_write_err := fn(s : usize) -> CheckErr { STR_ELEM_WRITE_DIAG_MARKER + s * 4 }
+str_elem_write_err := fn(s : usize) -> CheckErr { STR_ELEM_WRITE_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #513 / Types §9.4 — an ENUM-VARIANT CONSTRUCTOR whose component count differs from the count
 ## the variant DECLARES. §9.4's first bullet says the language "never zeroes an uninitialized binding
 ## on the programmer's behalf", so an omitted component has NO defined value, and a surplus component
@@ -180,7 +203,7 @@ enum_variant_arity_err := fn(s : usize, declared : usize, supplied : usize) -> C
   mut sup := supplied
   if dcl > ENUM_VARIANT_ARITY_COUNT_CAP { dcl = ENUM_VARIANT_ARITY_COUNT_CAP }
   if sup > ENUM_VARIANT_ARITY_COUNT_CAP { sup = ENUM_VARIANT_ARITY_COUNT_CAP }
-  ENUM_VARIANT_ARITY_DIAG_MARKER + s * 1024 + dcl * 32 + sup
+  ENUM_VARIANT_ARITY_DIAG_MARKER + diag_span(s) * 1024 + dcl * 32 + sup
 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
@@ -188,7 +211,7 @@ enum_variant_arity_err := fn(s : usize, declared : usize, supplied : usize) -> C
 ## older CheckErr range remains byte-identical. The raw visibility walkers carry this full code through
 ## their usize return channel; `sema_visibility_err` preserves it at their CheckErr boundaries.
 QUALIFIED_PRIVATE_CONST_DIAG_MARKER := 6900000000000000000
-qualified_private_const_err := fn(s : usize) -> CheckErr { QUALIFIED_PRIVATE_CONST_DIAG_MARKER + s * 4 }
+qualified_private_const_err := fn(s : usize) -> CheckErr { QUALIFIED_PRIVATE_CONST_DIAG_MARKER + diag_span(s) * 4 }
 sema_visibility_err := fn(s : usize) -> CheckErr {
   if s >= QUALIFIED_PRIVATE_CONST_DIAG_MARKER { return s }
   located_err(s)
@@ -198,7 +221,7 @@ sema_visibility_err := fn(s : usize) -> CheckErr {
 ## between the CT-12 guard class and immutable bindings so every older CheckErr range remains stable;
 ## the four-byte payload carries the offending local's source offset.
 COMPTIME_COND_DIAG_MARKER := 7493989779944505344
-comptime_cond_err := fn(s : usize) -> CheckErr { COMPTIME_COND_DIAG_MARKER + s * 4 }
+comptime_cond_err := fn(s : usize) -> CheckErr { COMPTIME_COND_DIAG_MARKER + diag_span(s) * 4 }
 
 ## A synthesized type: a tag (0 unknown/error, 1 int, 2 bool, 3 struct, 4 enum, 5 pointer,
 ## 6 str, 7 array, 8 direct user brand) and, for a named type, its identity name span `[ns, ns+nl)`.
@@ -6430,7 +6453,7 @@ default_lit_range_bad := fn(e : ptr(Expr)) -> bool {
 ## carry the guard kind (1 overflow, 2 division by zero, 3 shift out of range), the rest the source
 ## offset. Both public renderers strip the marker before decoding.
 CT_DIAG_MARKER := 6917529027641081856
-comptime_err := fn(s : usize, kind : usize) -> CheckErr { CT_DIAG_MARKER + s * 8 + kind }
+comptime_err := fn(s : usize, kind : usize) -> CheckErr { CT_DIAG_MARKER + diag_span(s) * 8 + kind }
 
 ## The operating WIDTH / SIGNEDNESS of a declared integer type name. An unknown name (a brand, a
 ## float, a generic instance) reads as the native 64-bit signed word — the widest, least-rejecting
@@ -7355,13 +7378,36 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
 ## The source-span start of an expression (for a `Mismatch`'s offending span): a `Var`'s /
 ## `Call`'s / `StructLit`'s / `EnumLit`'s name span start, else 0. Keep this legacy shape for
 ## callers whose diagnostic KIND depends on whether the original expression carried a direct span.
+##
+## Issue #523 — a node a parse-time desugar built carries a SYNTHESIZED name span
+## (`ast::span_is_synthetic`), which is not a source position and must never be reported as one. Declining
+## it outright would cost the diagnostic its location, so the fallback is the SURFACE CONSTRUCT that
+## produced the desugar, which is the attribution Tooling §5 wants: every argument of a desugared call
+## is the user's OWN expression, written on the line of the `@alloc` / `defer` that produced it
+## (`@alloc(A) x := init` → `alloc_into(A, init)`, so argument one is `A` at the `@alloc`;
+## `defer f(x)` → `__defer(f(x))`, so argument one is the cleanup the user wrote; a capturing HOF call
+## → `__hoflam<fnpos>(<the original call's own arguments>, …)`). So walk the argument list for the first
+## span that IS a source position. A synthesized node with NO arguments (`__deferblk()`,
+## `__deferblkend()`, and the `isize` type argument of the explicit-`T` `@alloc` form) has no surface
+## expression to borrow, and answers 0 — the channel's "no location", which `diag_span` would produce
+## anyway. No new AST field, and a real span answers exactly as before.
+s_of_arg := fn(ah : ptr(mut Arg), a : ptr(mut rt::Arena)) -> usize {
+  mut g := ah
+  mut r := 0
+  while g != 0 and r == 0 {
+    ga := deref(arg_p(g))
+    if unchecked bitcast(usize, ga.e) != 0 { r = s_of(ga.e, a) }
+    g = ga.next
+  }
+  r
+}
 s_of := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> usize {
   match deref(e) {
-    Expr::Var(vs0, vn0) => { vs0 }
-    Expr::Call(qs, ql, qn, qh) => { qs }
-    Expr::StructLit(ss, sl, sn, sh) => { ss }
-    Expr::EnumLit(es0, el0, evs, evl, enp, eph) => { es0 }
-    Expr::Field(fb, ffs, ffl) => { ffs }
+    Expr::Var(vs0, vn0) => { if ast::span_is_synthetic(vs0) { 0 } else { vs0 } }
+    Expr::Call(qs, ql, qn, qh) => { if ast::span_is_synthetic(qs) { s_of_arg(qh, a) } else { qs } }
+    Expr::StructLit(ss, sl, sn, sh) => { if ast::span_is_synthetic(ss) { s_of_arg(sh, a) } else { ss } }
+    Expr::EnumLit(es0, el0, evs, evl, enp, eph) => { if ast::span_is_synthetic(es0) { s_of_arg(eph, a) } else { es0 } }
+    Expr::Field(fb, ffs, ffl) => { if ast::span_is_synthetic(ffs) { 0 } else { ffs } }
     _ => { 0 }
   }
 }
@@ -7384,7 +7430,11 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
       if not found { found = declared(decls, rt::vec_len(deref(decls)), src, vs0, vn0) }
       if not found { found = is_register_name(src, vs0, vn0) }
       if not found { found = remembered(locals, src, vs0, vn0) }
-      if not found { vs0 } else { 0 }
+      ## Issue #523 — the Call arm below declines a SYNTHESIZED span; this is the only other arm that
+      ## returns its own. The explicit-`T` `@alloc` desugar writes a synthesized `isize` type argument
+      ## (`parser.al:3318`), and answering with that handle would beat the caller's good fallback span
+      ## and leave the diagnostic unlocated. Answer 0 and let the walk continue.
+      if not found and not ast::span_is_synthetic(vs0) { vs0 } else { 0 }
     }
     Expr::Bin(op0, left0, right0) => {
       mut r0 := expr_unbound_span(left0, decls, upto, src, a, locals, nloc)
@@ -7427,12 +7477,20 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
     Expr::Call(cs0, cl0, na0, ah1) => {
       qnm0 := str_at((src + cs0), cl0)
       if qnm0 == "resolves" or qnm0 == "compiles" { return 0 }
+      ## Issue #523 — a callee span a parse-time desugar SYNTHESIZED is not a source position
+      ## (`ast::span_is_synthetic`), so it may not be RETURNED as one: reporting it encodes a
+      ## non-position into the `CheckErr` span channel. The marker names (`alloc_into`, `__defer`,
+      ## `__deferblk`, `__deferblkend`, `__hoflam<fnpos>`) are still recovered by `(src + cs0)` above
+      ## for the name tests, which is what that handle is for. Keep walking the arguments instead: they
+      ## are the user's own expressions, so the first one with a real span locates the surface
+      ## construct that produced the desugar.
+      synth0 := ast::span_is_synthetic(cs0)
       mut callee_ok0 := callee_declared_anywhere(decls, src, cs0, cl0) or is_builtin_callee(src, cs0, cl0)
       if not callee_ok0 and nloc != 0 and local_in(locals, nloc, src, cs0, cl0) { callee_ok0 = true }
       if not callee_ok0 and na0 >= 1 and callee_is_fn_valued_field(decls, src, cs0, cl0) { callee_ok0 = true }
-      if not callee_ok0 { return cs0 }
+      if not callee_ok0 and not synth0 { return cs0 }
       gen0 := callee_is_generic(decls, upto, src, cs0, cl0)
-      if not gen0 and call_arity_match(decls, upto, src, cs0, cl0, na0, a) == 0 { return cs0 }
+      if not gen0 and not synth0 and call_arity_match(decls, upto, src, cs0, cl0, na0, a) == 0 { return cs0 }
       tb0 := callee_is_type_builtin(src, cs0, cl0)
       mut ai0 := 0
       mut g0 := ah1
@@ -9080,7 +9138,11 @@ codepoint_label_add := fn(labels : ptr(mut CodePointLabels), src : ptr(u8), s : 
   if s == 0 or n == 0 { return 0 }
   mut i := 0
   while i < labels.count {
-    if streq(src, labels.starts[i], labels.lens[i], s, n) { return 3 + s * 4 }
+    ## Issue #523 — the one CheckErr span encode that does not go through a constructor above; route it
+    ## through the same `diag_span` funnel so the invariant "no CheckErr carries a non-source span" has
+    ## no exception to remember. `s` is a statement-label span, always a real lexer token, so this is
+    ## the identity here and the emitted code for every accepted program is unchanged.
+    if streq(src, labels.starts[i], labels.lens[i], s, n) { return 3 + diag_span(s) * 4 }
     i += 1
   }
   if labels.count >= 256 { return located_err(s) }

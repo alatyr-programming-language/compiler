@@ -82,6 +82,29 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A diagnostic whose offending expression came from a parse-time desugar now names the construct
+  the programmer wrote, instead of killing the compiler with no output at all.** `defer f(x)`,
+  `@alloc(A) x := init` and a capturing higher-order call are rewritten during parsing into calls to
+  names no source file contains (`__defer`, `alloc_into`, `__hoflam<fnpos>`), and the span those
+  synthesized callees carry is not a source offset: it is the AST-arena address of the written name,
+  rebased modularly so that `(src + s)` recovers the **name**, which is the only thing it is for.
+  Every consumer that instead read `s` as a **position inside the source** was therefore reading
+  outside the buffer — and the first of them was not a renderer but the diagnostic channel's own span
+  encode, `s * 4`, which overflowed on the checked multiply and executed `ud2`. The result for a user
+  was the worst possible shape a compiler can take: `defer g(u)` where `u` is not yet assigned, a
+  program the compiler had correctly decided to refuse, killed `alatyr` with **SIGILL, exit 132 and
+  not one byte on stderr**, on `check`, on `-o`, and on all three emit surfaces. The refusal itself
+  was right; the compiler simply could not say it. All three producers behaved identically, so the
+  same silence covered a `defer`, an `@alloc` and a closure capture through `map`. Locations are now
+  classified against the published source-buffer extent before they are encoded or rendered, and a
+  synthesized one is re-attributed to the **surface construct** that produced the desugar: the
+  arguments of a desugared call are the user's own expressions, so the line named is the line of the
+  `defer`, of the `@alloc`, or of the call that captured — the same line the identical refusal already
+  named when no desugar was involved. Nothing about an ordinary diagnostic changes: of the 7 816
+  per-backend corpus rows, **not one** moves. Two markers have no argument to borrow (the
+  `defer { … }` chain's `__deferblk`/`__deferblkend`) and decline to claim a line instead; no
+  diagnostic reaches either today.
+
 - **A comparison whose operand is a struct literal or a payload-carrying variant construction now
   compares componentwise, instead of comparing both operands as the constant zero.** Stdlib §2.6
   defines `eq(in a : T, in b : T) -> bool` with "default = componentwise field equality" derived
