@@ -5197,10 +5197,13 @@ bitcast_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
 ## operands (`size(T)`) and compiler-synthesized defer markers when applied to every discarded expression.
 ## Keep this walk limited to binding/field existence; the ordinary checker remains responsible for types,
 ## arity, and all deferred/target-specific rules.
-expr_statement_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> bool {
+## `fldck` selects the FULL walk (`true` — binding existence AND the struct field-name fence, the
+## established behaviour of every existing caller) or the NAME-ONLY walk (`false`, issue #507) used for
+## a descended operand, where the field-name fence must not fire. See the `Bin` arm for why.
+expr_statement_has_unbound_m := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize, fldck : bool) -> bool {
   if unchecked bitcast(usize, e) == 0 { return false }
   ubci := bitcast_inner(e)
-  if unchecked bitcast(usize, ubci) != 0 { return expr_statement_has_unbound(ubci, decls, upto, src, a, locals, nloc) }
+  if unchecked bitcast(usize, ubci) != 0 { return expr_statement_has_unbound_m(ubci, decls, upto, src, a, locals, nloc, fldck) }
   match deref(e) {
     Expr::Num(v, s, n) => { false }
     Expr::BoolLit(v) => { false }
@@ -5214,11 +5217,32 @@ expr_statement_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usi
       if not found { found = remembered(locals, src, s, n) }
       not found
     }
-    ## Compound expressions are left to the established value checker here. Its payload-heavy
-    ## dispatch is intentionally not duplicated in this statement-only fence; direct Var/Call/Field
-    ## roots cover this issue's dropped statement values without changing existing arithmetic, match,
-    ## layout, or control-flow expression paths.
-    Expr::Bin(op, l, r) => { false }
+    ## Compound expressions are otherwise left to the established value checker here. Its
+    ## payload-heavy dispatch is intentionally not duplicated in this statement-only fence; direct
+    ## Var/Call/Field roots cover this issue's dropped statement values without changing existing
+    ## match, layout, or control-flow expression paths.
+    ##
+    ## Issue #507 — `Bin` is the ONE exception, and it must descend. Declarations §5 makes scope
+    ## lexical and block-structured and §7.2 makes a local visible only from its point of declaration
+    ## onward, so an undeclared OPERAND is ill-formed wherever it stands. This arm used to answer
+    ## `false`, which made `if vv.ek == 4 { … }` and `while vv < 3 { … }` compile clean and pick a
+    ## branch by whatever frame word the position resolved to (62 with a same-named sibling local, 73
+    ## with none — OPPOSITE branches, so a garbage read, not a stable `false`). Descending both
+    ## children covers the comparisons, `and`/`or` (ops 40/41) and `not` (op 42, whose right slot is a
+    ## synthesized `Num(0)` placeholder and answers `false`).
+    ##
+    ## An operand is descended in NAME-ONLY mode (`fldck = false`). The Field arm's field-name fence
+    ## is a separate landed check and it is NOT reliable under a struct-name collision: with
+    ## `alloc::hashmap`'s `pub Entry(K, V)` in the same compilation, a user's own
+    ## `Entry := struct { tag : u64 }` already makes `y := t.tag`, a bare `t.tag`, `return t.tag` and
+    ## `if t.tag { … }` reject as "unbound name" on the PARENT compiler too. Carrying that fence into
+    ## operands would newly reject the valid landed control
+    ## `test/issue404_hashmap_protocol_shadow_control.al`, whose only field read is inside `!=`. This
+    ## issue is about an undeclared NAME; the collision-blind field fence is its own unit.
+    Expr::Bin(op, l, r) => {
+      expr_statement_has_unbound_m(l, decls, upto, src, a, locals, nloc, false)
+        or expr_statement_has_unbound_m(r, decls, upto, src, a, locals, nloc, false)
+    }
     Expr::If(c, t, f) => { false }
     Expr::Match(scrut, head) => { false }
     Expr::Call(cs, cl, na, ah) => {
@@ -5242,7 +5266,7 @@ expr_statement_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usi
       while g != 0 {
         ga := deref(arg_p(g))
         if not tb and not (gen and callee_param_is_type(decls, upto, src, cs, cl, ai, a)) {
-          if expr_statement_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
+          if expr_statement_has_unbound_m(ga.e, decls, upto, src, a, locals, nloc, fldck) { bad = true }
         }
         ai += 1
         g = ga.next
@@ -5257,9 +5281,9 @@ expr_statement_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usi
       ## runtime read of the base name. Known user-struct fields still go through the field-name fence.
       bv := expr_var_span(base)
       if not is_prelude_ns_var(base, src) and not (bv.n != 0 and type_name_known(decls, src, bv.s, bv.n)) {
-        bad = expr_statement_has_unbound(base, decls, upto, src, a, locals, nloc)
+        bad = expr_statement_has_unbound_m(base, decls, upto, src, a, locals, nloc, fldck)
       }
-      if not bad and sema_field_name_missing(base, fs, fl, decls, upto, src, locals, nloc, a) { bad = true }
+      if fldck and not bad and sema_field_name_missing(base, fs, fl, decls, upto, src, locals, nloc, a) { bad = true }
       bad
     }
     Expr::AddrOf(p) => { false }
@@ -5269,11 +5293,16 @@ expr_statement_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usi
     Expr::Try(inner) => { false }
     Expr::Slice(base, lo, hi) => { false }
     Expr::CompField(base, idx) => { false }
-    Expr::Unchecked(inner) => { expr_statement_has_unbound(inner, decls, upto, src, a, locals, nloc) }
+    Expr::Unchecked(inner) => { expr_statement_has_unbound_m(inner, decls, upto, src, a, locals, nloc, fldck) }
     Expr::FnRef(fnpos, fms, fml) => { false }
     Expr::Lambda(fnpos, ph, rts, rtl, bh, val) => { false }
     Expr::Loop(b) => { false }
   }
+}
+
+## The established FULL walk. Every pre-existing caller keeps exactly this behaviour.
+expr_statement_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> bool {
+  expr_statement_has_unbound_m(e, decls, upto, src, a, locals, nloc, true)
 }
 
 expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> bool {
@@ -8213,6 +8242,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cur = nx
       }
       Stmt::While(c, b, nx) => {
+        ## Issue #507 — the `while` condition carried NO name-resolution prepass at all, so it was
+        ## looser than the `Stmt::If` arm below: not just an operand but a BARE undeclared name as the
+        ## whole condition compiled clean and the loop was entered on a garbage read. Run the same
+        ## walk the `if` condition runs, before the bool check, so both conditions reject one shape
+        ## with one diagnostic.
+        if expr_statement_has_unbound(c, decls, upto, src, a, locals, cnt) {
+          return Result(usize, CheckErr).Err(unbound_code(c, decls, upto, src, a, locals, cnt))
+        }
         cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
         ## the loop condition must be bool (a known non-bool is a `Mismatch`).
         if cc.tag != 0 and cc.tag != 2 { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }

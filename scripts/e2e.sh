@@ -8394,6 +8394,39 @@ run_rv64 issue306_mixed_width_local 42
 run_rv64 issue306_mixed_width_paths 42
 run_rv64 issue306_narrow_aggregate_byval 42
 
+## Issue #507 / Declarations §5 + §7.2 — an UNDECLARED name as an OPERAND inside an `if` or `while`
+## condition. `sema::check_program`'s statement-position name walk answered "clean" for every `Bin`
+## node and the `while` condition ran no name walk at all, so these programs BUILT CLEAN and the
+## branch was chosen by whatever frame word the position resolved to. The two `if` spellings are
+## separate measurements because they took OPPOSITE branches on the parent: 62 with a same-named
+## sibling local, 73 with `vv` declared nowhere. The `while` operand form entered the loop and only
+## its planted guard stopped it (99), and the bare-name `while` form — a row the issue's table did not
+## reach — was accepted too (7). The discarded-expression row is the same walk in the position it was
+## written for, where the `Bin` arm was equally blind: `vv + 1` built clean and exited 7.
+##
+## The compound rows assert the located compound class, which is what the already-landed
+## `reject_sema_line_3/4/7` rows assert for the identical `Bin`-rooted shape in `return` position;
+## a `Bin` AST node carries no source span of its own, so the located child's line is the diagnostic.
+## The four already-refused positions are CONTROLS: they were green on the parent too and must keep
+## exactly their own message class.
+build_reject_has issue507_if_cond_operand_unbound_sibling "check: invalid at line 14 in issue507_if_cond_operand_unbound_sibling"
+build_reject_has issue507_if_cond_operand_unbound_absent "check: invalid at line 10 in issue507_if_cond_operand_unbound_absent"
+build_reject_has issue507_while_cond_operand_unbound "check: invalid at line 9 in issue507_while_cond_operand_unbound"
+build_reject_has issue507_while_cond_bare_unbound "check: unbound name at line 7 in issue507_while_cond_bare_unbound"
+build_reject_has issue507_exprstmt_operand_unbound "check: invalid at line 6 in issue507_exprstmt_operand_unbound"
+build_reject_has issue507_if_cond_bare_unbound_control "check: unbound name at line 5 in issue507_if_cond_bare_unbound_control"
+build_reject_has issue507_binding_unbound_control "check: unbound name at line 5 in issue507_binding_unbound_control"
+build_reject_has issue507_return_unbound_control "check: unbound name at line 5 in issue507_return_unbound_control"
+build_reject_has issue507_tail_unbound_control "check: unbound name at line 5 in issue507_tail_unbound_control"
+## The over-reach fence: the LEGAL shapes that now pass through the operand descent — struct-field and
+## local operands, `and`/`or`/`not` chains, a nested user call as an operand, a global compared before
+## its textual declaration, the same shapes in a `while` condition, and a discarded `Bin` expression
+## statement. 42 on the parent and 42 after the fix, on all four backends. The type-builtin operand is
+## proved by the library instead (`lib/alloc/vec.al:266`, `lib/alloc/deque.al:50`): `size(T)` traps at
+## run on aarch64/riscv64/wasm on the parent too, and a cross-backend fixture must stay below 126.
+run issue507_cond_declared_names_control 42
+check_accept issue507_cond_declared_names_control
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

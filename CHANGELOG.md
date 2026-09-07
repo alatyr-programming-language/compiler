@@ -82,6 +82,31 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An undeclared name used as an operand inside an `if` or `while` condition is refused, instead of
+  choosing a branch by a garbage read.** Declarations §5 makes scope lexical and block-structured — a
+  name is visible in the scope where it is declared and in all nested scopes — and §7.2 makes a local
+  visible only from its point of declaration onward, so a name declared in a sibling function, or
+  nowhere at all, is visible in neither. The compiler already said exactly that (`check: unbound
+  name`) in binding position, in `return` position, in tail position, and for a bare name that is the
+  *whole* condition. Only the **operands inside a condition** slipped through, and the consequence was
+  not a stable `false`: `if vv.ek == 4 { … }` took the `return` branch when a same-named local existed
+  in a sibling function (exit 62) and fell through when no `vv` existed anywhere (exit 73) — two
+  spellings of one ill-formed program choosing *opposite* branches off whatever frame word the
+  position resolved to. `while vv < 3 { … }` entered the loop. The statement-position name walk
+  answered "clean" for every binary node, and the `while` condition ran no name walk at all, which is
+  why even a bare undeclared name as a whole `while` condition was accepted; a discarded `vv + 1`
+  expression statement was accepted for the same reason. All of those are now the located refusal the
+  neighbouring positions already produced, identically on x86_64, aarch64, riscv64 and wasm, because
+  `check` is one frontend. This can only *reject*: an operand is walked for name existence only, so
+  the struct field-name fence — which is not reliable when a user type's name collides with a
+  library generic — is not carried into a new position, and no valid program in the 1 925-program
+  corpus, or in the compiler's own 15 628 compound-condition lines, changes verdict or diagnostic.
+  Worth more than its size for one reason beyond the defect: it silently **corrupts measurements**.
+  An instrumented build whose predicate references a name it should not have reports confidently and
+  wrongly while the build stays green — that is how a route census produced false markers that a
+  byte comparison of the emitted GAS later contradicted. Until this landed, a census claim needed
+  that companion measurement to be evidence at all.
+
 - **Binding the pointee of an inferred `ptr(str)` local reads the pair, not one word.** Stdlib
   appendix §3.5/§3.6 fix `str` as the two-word `{ptr, len}` pair and Memory §4.1 makes `deref(q)` an
   ordinary read through the pointer, so `q := ptr(s); ss := deref(q); ss.len` must answer `s.len`. It
