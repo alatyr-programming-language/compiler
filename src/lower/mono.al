@@ -196,7 +196,54 @@ collect_variadic_print := fn(args_head : ptr(mut Arg), block_head : ptr(mut Stmt
 ## instance ONLY where the emit site (`agg_value_var_words > 1`) also routes, and `src/`'s pointer
 ## null-checks + 1-word enum compares register nothing → fixpoint-neutral. Returns the FULL type span
 ## (not the base name) so a generic instance `Pair(u64,u64)` tags identically to the emit side.
+## The instance TAG of an aggregate CONSTRUCTOR EXPRESSION operand (`P(x = …)`, `E.V(…)`,
+## `Option.Some(…)`), restricted to a MULTI-WORD aggregate — 0/0 for anything else. Such an operand
+## carries its own type NAME and has no slot and no declaring `Assign`, so the `Var` resolution in
+## `collect_agg_operand_type` can never see it; recovering it is what keeps this pre-pass in step
+## with the emit gate now that `agg_cmp_operand_words` routes the constructor shape too (issue #469).
+## Without the registration the emitted `base__derive__eq__<T>` has no body and the program
+## LINK-fails. `type_lit_tag` canonicalizes to the paren-free DECL name span — the same tag the emit
+## side's `infer_implicit_targ` derives for a literal argument — so the collected instance and the
+## emitted label agree.
+collect_agg_lit_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  sli := struct_lit_info(e)
+  if sli.is_s {
+    if struct_decl_of(decls, src, sli.ss, sli.sl) < 0 { return CSpan(s = 0, n = 0) }
+    if struct_words(decls, src, sli.ss, sli.sl, a) > 1 { return type_lit_tag(decls, src, sli.ss, sli.sl) }
+    return CSpan(s = 0, n = 0)
+  }
+  eli := enum_lit_info(e)
+  if eli.is_e {
+    if enum_decl_of(decls, src, eli.es, eli.el) < 0 { return CSpan(s = 0, n = 0) }
+    if 1 + enum_inst_words(decls, src, eli.es, eli.el, a) > 1 { return type_lit_tag(decls, src, eli.es, eli.el) }
+    return CSpan(s = 0, n = 0)
+  }
+  CSpan(s = 0, n = 0)
+}
+## True IFF `e` is a `Var` whose declared TYPE this pre-pass cannot resolve AT ALL — neither from the
+## enclosing body's declaring `Assign` (`block_decl_type`) nor from the fn's parameters. The emit
+## side reads the frame SLOT and so knows strictly more: `y := w.p` (a FIELD right-hand side) types
+## `y` as an enum in its slot while `block_decl_type` answers nothing at all. That asymmetry is what
+## made `test/issue449_enum_field_eq.al` fail to LINK (`undefined reference to
+## base__derive__eq__Pay`) the moment `y == Pay.A` started routing: the emit site called the derive
+## and this pass had registered no instance. Distinguishing "unresolvable" from "resolved, and not a
+## multi-word aggregate" is what keeps the fallback below from registering a DEAD instance for a
+## comparison the emit gate will decline anyway.
+collect_operand_type_unknown := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : usize) -> bool {
+  vn := var_name_span(e)
+  if vn.n == 0 { return false }
+  if COLLECT_BODY != 0 {
+    ltp := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
+    if ltp.n != 0 { return false }
+  }
+  pt := param_type_of(vn.s, vn.n, penv, src, a)
+  if pt.n != 0 { return false }
+  true
+}
 collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : usize) -> CSpan {
+  lt := collect_agg_lit_type(e, decls, src, a)
+  if lt.n != 0 { return lt }
+  if struct_lit_info(e).is_s or enum_lit_info(e).is_e { return CSpan(s = 0, n = 0) }
   vn := var_name_span(e)
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
   mut ts := 0
@@ -292,8 +339,17 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
       ## derives). `==`/`!=` → `eq`; the four ordering ops → `lt`. Both operands must resolve to the
       ## SAME multi-word aggregate type (mirrors the emit gate); `src/` has none → registers nothing.
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
-        lty := collect_agg_operand_type(l, decls, src, a, penv)
-        rty := collect_agg_operand_type(r, decls, src, a, penv)
+        mut lty := collect_agg_operand_type(l, decls, src, a, penv)
+        mut rty := collect_agg_operand_type(r, decls, src, a, penv)
+        ## Issue #469 — one operand is a CONSTRUCTOR literal (so its type is known exactly) and the
+        ## other is a `Var` this pass cannot type at all, but the EMIT side can, because it reads the
+        ## frame slot. The emit gate proves both operands name the SAME struct/enum type before it
+        ## routes, so the literal's tag IS the other operand's type and the instance belongs here.
+        ## Gated on `collect_operand_type_unknown`, so a `Var` that resolves to something which is
+        ## NOT a multi-word aggregate registers nothing — the emit gate declines for it and a dead
+        ## instance would be an unreferenced body in every such program.
+        if lty.n == 0 and rty.n != 0 and collect_agg_lit_type(r, decls, src, a).n != 0 and collect_operand_type_unknown(l, decls, src, a, penv) { lty = rty }
+        if rty.n == 0 and lty.n != 0 and collect_agg_lit_type(l, decls, src, a).n != 0 and collect_operand_type_unknown(r, decls, src, a, penv) { rty = lty }
         ## Skip a type that has a user / `@inline` / GENERIC comparison OPERATOR for this glyph
         ## (`operator_decl_idx >= 0` — e.g. the prelude `u128 ≡ uint(128)` OP-1 operators; it
         ## alias-resolves `u128`→`uint(128)`): the EMIT site routes such a compare through that operator
