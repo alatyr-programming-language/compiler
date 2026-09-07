@@ -38,6 +38,48 @@ pub set_src_extent := fn(n : usize) { AST_SRC_N = n }
 ## It must agree with `local_is_uninit` below, so it reads the same number rather than its own cap.
 pub src_extent := fn() -> usize { AST_SRC_N }
 
+## Issue #523 — is byte offset `off` OUTSIDE the source text, i.e. NOT a source position at all?
+## Every span the lexer records is one; a span a parse-time DESUGAR synthesizes is not.
+## `parser::synth_ident_span` and `parser::synth_hof_name` write a name no source file contains
+## (`alloc_into`, `isize`, `__deferblk`, `__deferblkend`, `__defer`, `__hoflam<fnpos>`) into the
+## persistent AST arena and REBASE its address to a `src`-relative handle (`base_abs - src`, modularly),
+## so that `(src + s)` recovers the NAME. That handle is a correct pointer rebase and a meaningless
+## source offset: the arena may sit BELOW `src`, in which case `s` is a near-`usize`-max value, and even
+## when it sits above, `s` points arbitrarily far past the last source byte. So `(src + s)` name
+## recovery stays valid, while every consumer that treats `s` as a position INSIDE the source — a
+## newline counter over `src[base .. s]`, a `show_src_line` window, an `at line N in <file>` lookup, or
+## the `s * 4` span ENCODE of a `sema::CheckErr` — reads or computes outside the buffer. This is the
+## total, cheap discriminator, and it needs no new AST field: a real span is below the published extent,
+## a synthesized one is not.
+##
+## Stated as the NEGATIVE ("is it outside?") rather than the positive ("is it inside?") on purpose. Every
+## caller is a diagnostic that renders a location TODAY and uses this to REFUSE one, so the answer at an
+## unpublished extent (`AST_SRC_N == 0`) has to be FALSE: with no extent nothing can be proven outside,
+## and answering TRUE there would silently unlocate every diagnostic in the compiler on any path that
+## forgot to publish. The positive spelling would want the opposite default — fail-closed, the
+## convention `lower::LOWER_SRC_N` follows for a new source RECOVERY, where declining to scan loses
+## nothing — so the two directions cannot share one function. Only this direction has a consumer, so
+## only this direction exists.
+##
+## The top-bit half is a separate helper because it is the half that is easy to get wrong. A relational
+## operator on a high-bit word lowers as a SIGNED comparison today — `fmt::fmt_push_uint` records the
+## same fact (`18446744073709551615 < 10` is currently true) — so a modular-underflow handle, whose top
+## bit is set, compares as a small NEGATIVE number and reads as "well inside the buffer": exactly the
+## value that must be rejected. So the top bit is not tested with a comparison at all. `shr` is a
+## LOGICAL shift for an unsigned operand, so `shr(off, 63)` IS the bit, and `== 1` compares two values
+## in {0, 1}, where the signed and unsigned readings agree. (Measured, and the reason the helper exists:
+## `unchecked bitcast(i64, off) < 0` does NOT work — the bitcast does not re-sign the comparison, the
+## lower reads the operand's declared `usize` and emits `setb`, the test was constant-false, and the
+## trap survived the first attempt at this fix.) The in-range half is left to `>=`, where both operands
+## have the top bit clear. A source buffer is never 2^63 bytes, so no real span has this bit set.
+span_high_bit := fn(off : usize) -> bool { shr(off, 63) == 1 }
+pub span_is_synthetic := fn(off : usize) -> bool {
+  n := AST_SRC_N
+  if n == 0 { return false }
+  if span_high_bit(off) { return true }
+  off >= n
+}
+
 ## Length-aware primitives for the recovery below. `src` is a raw pointer, not a length-carrying `str`,
 ## so every prefix and single-byte read is first proven to lie inside `[0, end)` — the shape
 ## `lower::ptr_scan_has` / `ptr_scan_ws` established for the inferred-pointer recovery. A scan that

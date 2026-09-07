@@ -3947,10 +3947,19 @@ d_limit_reject := fn(code : usize, what : str, base : usize, ft : ptr(DFileTab),
       fi += 1
     }
     w4 := rt::fd_str(2, " at line ")
+    ## Issue #523 — a span that is not a source position (`ast::span_is_synthetic`: a parse-time desugar
+    ## rebases an AST-arena address into a `src`-relative handle) has NO line, and the walk below would
+    ## count newlines from the file base all the way to that handle, reading past the last source byte
+    ## for the whole distance. Report line 0 — the "unknown line" value `codegen_reject` already uses
+    ## for a span outside the published file table — instead of counting one. `sema` no longer encodes
+    ## such a span at all (`sema::diag_span`); this is the second line of defence for any future located
+    ## diagnostic that reaches this renderer directly.
     mut line := 1
-    srcv := str_at(base, span)
-    mut ci := fbase
-    while ci < span { if bytes(srcv)[ci] == 10 { line = line + 1 } ; ci = ci + 1 }
+    if ast::span_is_synthetic(span) { line = 0 } else {
+      srcv := str_at(base, span)
+      mut ci := fbase
+      while ci < span { if bytes(srcv)[ci] == 10 { line = line + 1 } ; ci = ci + 1 }
+    }
     w5 := rt::fd_int(2, i64(line), a)
     win := rt::fd_str(2, " in ")
     wm := rt::fd_str(2, str_at(base + rt::vec_get(deref(ft.ns), fk), rt::vec_get(deref(ft.nl), fk)))
@@ -4129,10 +4138,19 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
       fi += 1
     }
     w1 := rt::fd_str(2, " at line ")
+    ## Issue #523 — a span that is not a source position (`ast::span_is_synthetic`: a parse-time desugar
+    ## rebases an AST-arena address into a `src`-relative handle) has NO line, and the walk below would
+    ## count newlines from the file base all the way to that handle, reading past the last source byte
+    ## for the whole distance. Report line 0 — the "unknown line" value `codegen_reject` already uses
+    ## for a span outside the published file table — instead of counting one. `sema` no longer encodes
+    ## such a span at all (`sema::diag_span`); this is the second line of defence for any future located
+    ## diagnostic that reaches this renderer directly.
     mut line := 1
-    srcv := str_at(base, span)
-    mut ci := fbase
-    while ci < span { if bytes(srcv)[ci] == 10 { line = line + 1 } ; ci = ci + 1 }
+    if ast::span_is_synthetic(span) { line = 0 } else {
+      srcv := str_at(base, span)
+      mut ci := fbase
+      while ci < span { if bytes(srcv)[ci] == 10 { line = line + 1 } ; ci = ci + 1 }
+    }
     w2 := rt::fd_int(2, i64(line), a)
     win := rt::fd_str(2, " in ")
     wm := rt::fd_str(2, str_at(base + rt::vec_get(deref(ft.ns), fk), rt::vec_get(deref(ft.nl), fk)))
@@ -6000,10 +6018,19 @@ d_parse_diag := fn(base : usize, span : usize, tlen : usize, ekind : i64, modbas
   if mnl > 0 { loc = true }
   if loc {
     pw1 := rt::fd_str(2, " at line ")
+    ## Issue #523 — a span that is not a source position (`ast::span_is_synthetic`: a parse-time desugar
+    ## rebases an AST-arena address into a `src`-relative handle) has NO line, and the walk below would
+    ## count newlines from the file base all the way to that handle, reading past the last source byte
+    ## for the whole distance. Report line 0 — the "unknown line" value `codegen_reject` already uses
+    ## for a span outside the published file table — instead of counting one. `sema` no longer encodes
+    ## such a span at all (`sema::diag_span`); this is the second line of defence for any future located
+    ## diagnostic that reaches this renderer directly.
     mut pline := 1
-    psrcv := str_at(base, span)
-    mut pci := modbase
-    while pci < span { if bytes(psrcv)[pci] == 10 { pline = pline + 1 } ; pci = pci + 1 }
+    if ast::span_is_synthetic(span) { pline = 0 } else {
+      psrcv := str_at(base, span)
+      mut pci := modbase
+      while pci < span { if bytes(psrcv)[pci] == 10 { pline = pline + 1 } ; pci = pci + 1 }
+    }
     pw2 := rt::fd_int(2, i64(pline), a)
     if mnl > 0 {
       pwin := rt::fd_str(2, " in ")
@@ -6463,10 +6490,19 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
       fi += 1
     }
     dw1 := rt::fd_str(2, " at line ")
+    ## Issue #523 — a span that is not a source position (`ast::span_is_synthetic`: a parse-time desugar
+    ## rebases an AST-arena address into a `src`-relative handle) has NO line, and the walk below would
+    ## count newlines from the file base all the way to that handle, reading past the last source byte
+    ## for the whole distance. Report line 0 — the "unknown line" value `codegen_reject` already uses
+    ## for a span outside the published file table — instead of counting one. `sema` no longer encodes
+    ## such a span at all (`sema::diag_span`); this is the second line of defence for any future located
+    ## diagnostic that reaches this renderer directly.
     mut line := 1
-    srcv := str_at(base, span)
-    mut ci := fbase
-    while ci < span { if bytes(srcv)[ci] == 10 { line = line + 1 } ; ci = ci + 1 }
+    if ast::span_is_synthetic(span) { line = 0 } else {
+      srcv := str_at(base, span)
+      mut ci := fbase
+      while ci < span { if bytes(srcv)[ci] == 10 { line = line + 1 } ; ci = ci + 1 }
+    }
     dw2 := rt::fd_int(2, i64(line), tar)
     dwin := rt::fd_str(2, " in ")
     dwm := rt::fd_str(2, str_at(base + rt::vec_get(name_start, fk), rt::vec_get(name_len, fk)))

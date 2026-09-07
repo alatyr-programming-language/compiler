@@ -8658,6 +8658,58 @@ run issue510_exprstmt_effect_and_tail 42
 run_wat issue510_exprstmt_effect_and_tail 42
 check_accept issue510_exprstmt_effect_and_tail
 
+## Issue #523 — a LOCATED diagnostic whose offending node was built by a parse-time DESUGAR, and
+## therefore carries a span that is NOT a source offset. `parser::synth_ident_span` and
+## `parser::synth_hof_name` write a name into the persistent AST arena and rebase its address into a
+## `src`-relative handle (`base_abs - src`, modularly), so `(src + s)` recovers the NAME — which is all
+## the handle is for — while `s` itself lies outside the source buffer, below it here, so it is a
+## near-`usize`-max value.
+##
+## Measured on the parent (71ea8df), all three producers: rc=132, SIGILL, and an EMPTY stderr — no
+## diagnostic at all. The trap is the span ENCODE, `s * 4` in `sema::unbound_err`, which overflows on
+## the checked multiply before any renderer runs; a handle small enough to survive the encode would
+## then have made the renderer count newlines from the file base all the way to an arena address.
+## Backtrace on the parent: `sema.unbound_err` <- `unbound_code` <- `check_expr_da_mode`, with the
+## offending span in `%rdi` as `0xffffffffdffffb00`.
+##
+## `build_reject` alone would have PASSED on that trap — it asks only for a nonzero exit — so these
+## rows use `check_build_located`, which requires rc exactly 1 from BOTH `check` and the build, the
+## named diagnostic, the exact line, and no output artifact. rc=132 fails every one of those.
+##
+## The line asserted is the line of the SURFACE CONSTRUCT — the `defer`, the `@alloc`, the capturing
+## call the programmer wrote — because the location now falls back to the desugar's own arguments,
+## which are the user's own expressions. `issue523_defer_real_span` is `issue523_defer_synth_span` with
+## the `defer ` removed and the same header length: the same refusal reached through an ordinary lexer
+## span must name the SAME line 21. That pair is the location predicate checked by BEHAVIOUR in both
+## directions — a predicate that answered "synthesized" for every span would stop the trap and
+## silently unlocate the whole compiler, and the control is what rules it out.
+##
+## The diagnostic is the front end's, so all four surfaces must produce it: `check` and `-o` here, and
+## the three emit entry points below, which have their own history of emitting code for a program `-o`
+## rejects.
+check_build_located issue523_defer_synth_span 21 "unbound name"
+check_build_located issue523_defer_real_span 21 "unbound name"
+check_build_located issue523_alloc_synth_span 23 "unbound name"
+check_build_located issue523_hof_synth_span 30 "unbound name"
+emit_reject_has wat issue523_defer_synth_span "unbound name at line 21 in issue523_defer_synth_span"
+emit_reject_has aarch64 issue523_defer_synth_span "unbound name at line 21 in issue523_defer_synth_span"
+emit_reject_has riscv64 issue523_defer_synth_span "unbound name at line 21 in issue523_defer_synth_span"
+emit_reject_has wat issue523_defer_real_span "unbound name at line 21 in issue523_defer_real_span"
+emit_reject_has aarch64 issue523_defer_real_span "unbound name at line 21 in issue523_defer_real_span"
+emit_reject_has riscv64 issue523_defer_real_span "unbound name at line 21 in issue523_defer_real_span"
+emit_reject_has wat issue523_alloc_synth_span "unbound name at line 23 in issue523_alloc_synth_span"
+emit_reject_has aarch64 issue523_alloc_synth_span "unbound name at line 23 in issue523_alloc_synth_span"
+emit_reject_has riscv64 issue523_alloc_synth_span "unbound name at line 23 in issue523_alloc_synth_span"
+emit_reject_has wat issue523_hof_synth_span "unbound name at line 30 in issue523_hof_synth_span"
+emit_reject_has aarch64 issue523_hof_synth_span "unbound name at line 30 in issue523_hof_synth_span"
+emit_reject_has riscv64 issue523_hof_synth_span "unbound name at line 30 in issue523_hof_synth_span"
+## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
+## span IS synthesized and which must keep COMPILING and answering their own values —
+## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`
+## plus `check_accept`) and `callfield_ptr_ret` (106). All four are already registered in this table
+## and all four are pinned per backend by the corpus oracle, so no row is added here: a duplicate
+## would assert nothing the existing rows do not, and the oracle is the stronger record.
+
 # ==================================================================================================
 # THE DRIVER, part 2 — self-test, schedule, execute, report.
 # ==================================================================================================

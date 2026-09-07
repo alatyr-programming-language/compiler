@@ -693,16 +693,36 @@ pub compfor_target_type := fn(cx : ptr(LCtx), vs : usize, vl : usize) -> CSpan {
 ## fail-loud here is a bare static `panic`), so the location is one `write(2, …)` straight out of the
 ## source text; the caller then panics with the reason.
 pub lower_show_src_line := fn(src : ptr(u8), off : usize) {
-  mut lo : usize = 0
-  if off > 4096 { lo = off - 4096 }
-  mut s := off
-  while s > lo and str_at((src + (s - 1)), 1) != "\n" { s = s - 1 }
-  hi := off + 4096
-  mut e := off
-  while e < hi and str_at((src + e), 1) != "\n" { e = e + 1 }
-  mut n := e - s
-  if e < hi { n = n + 1 }
-  w := rt::sys_write(1, 2, unchecked bitcast(usize, rt::addr(src, s)), n)
+  ## Issue #523 — a span a parse-time desugar SYNTHESIZED is not a position in the source buffer
+  ## (`ast::span_is_synthetic`): `src + off` re-forms an AST-ARENA address, so the window scanned below
+  ## would be arena bytes presented to the user as "the source line" — measured, with a temporarily
+  ## staged located §3 refusal on a bare callee: 588 bytes of pointers, stray names and embedded NUL
+  ## bytes — and a handle near the end of a mapping can fault on the +/-4096 scan. There is no source
+  ## line, so write a MARKER instead of one: nearly every caller's message goes on to say "the source
+  ## line above", so writing nothing would leave that sentence pointing at whatever happened to precede
+  ## it. ONE `sys_write` either way, which is also what keeps this module at its reviewed
+  ## duplicate-decision count. This is the surface a located §3 refusal on a bare callee reaches
+  ## (issue #403), so the guard belongs in the helper, not at its fifteen call sites.
+  mut wbase := 0
+  mut wn := 0
+  if ast::span_is_synthetic(off) {
+    m := "<a compiler-synthesized construct: no source line>\n"
+    wbase = unchecked bitcast(usize, m.ptr)
+    wn = m.len
+  } else {
+    mut lo : usize = 0
+    if off > 4096 { lo = off - 4096 }
+    mut s := off
+    while s > lo and str_at((src + (s - 1)), 1) != "\n" { s = s - 1 }
+    hi := off + 4096
+    mut e := off
+    while e < hi and str_at((src + e), 1) != "\n" { e = e + 1 }
+    mut n := e - s
+    if e < hi { n = n + 1 }
+    wbase = unchecked bitcast(usize, rt::addr(src, s))
+    wn = n
+  }
+  w := rt::sys_write(1, 2, wbase, wn)
 }
 
 ## Emit the first lower diagnostic that carries a real stage and source span. The driver publishes
@@ -740,6 +760,12 @@ codegen_reject := fn(src : ptr(u8), off : usize, mod_s : usize, mod_l : usize, m
   mut line_base := 0
   if found { line_base = fbase }
   if found == false and CODEGEN_FILE_N != 0 { line = 0 }
+  ## Issue #523 — a SYNTHESIZED span is not a source position at all (`ast::span_is_synthetic`), so it has
+  ## neither a line nor a meaningful byte offset to report: the walk would read past the last source
+  ## byte for the whole distance, and with NO file table published the `line = 0` branch above does not
+  ## even fire. Say the construct instead.
+  synth := ast::span_is_synthetic(off)
+  if synth { line = 0 }
   if line != 0 {
     srcv := str_at(base, off)
     mut p := line_base
@@ -751,6 +777,8 @@ codegen_reject := fn(src : ptr(u8), off : usize, mod_s : usize, mod_l : usize, m
   if line != 0 {
     z2 := rt::push_str(db, " at line ")
     z3 := rt::push_int(db, i64(line))
+  } else if synth {
+    z2s := rt::push_str(db, " in a compiler-synthesized construct (no source position)")
   } else {
     z2b := rt::push_str(db, " at byte ")
     z3b := rt::push_int(db, i64(off))

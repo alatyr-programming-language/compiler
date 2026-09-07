@@ -384,6 +384,12 @@ pub set_module_base := fn(off : usize) { P_MOD_BASE = off }
 ## reject path that is about to abort, so the O(offset) scan costs nothing on any accepted program.
 src_line_at := fn(pc : PC, off : usize) -> i64 {
   mut ln : i64 = 1
+  ## Issue #523 — a span a parse-time desugar SYNTHESIZED is not a position in the source buffer
+  ## (`ast::span_is_synthetic`), so there is no line to count: the scan below would walk from the module
+  ## base to an AST-arena handle, reading past the last source byte for the whole distance (and, for a
+  ## modular-underflow handle, essentially forever). Answer 0 — not a 1-based line — so the caller says
+  ## the construct instead of naming a position that does not exist.
+  if ast::span_is_synthetic(off) { return 0 }
   ## a base past the offset can only mean a stale/foreign base — fall back to the whole buffer rather
   ## than skipping the scan entirely (a wrong-but-old number beats no number).
   mut p := P_MOD_BASE
@@ -407,6 +413,17 @@ reject_at := fn(in out pc : PC, what : str, off : usize) -> usize {
   k1 := rt::push_str(mb, what)
   k2 := rt::push_str(mb, " [module ")
   k5 := rt::push_str(mb, str_at(pc.src + pc.mod_s, pc.mod_l))
+  ## Issue #523 — a SYNTHESIZED span names no line and quotes no lexeme: `src_line_at` answers 0 and
+  ## the 24-byte source excerpt below would read the AST arena (and compute `srcend - off` under a
+  ## modular underflow first). Name the construct instead of a position. Still located by MODULE, which
+  ## is a fact, and the diagnostic keeps its wording and its fail-loud `panic`.
+  if ast::span_is_synthetic(off) {
+    ks := rt::push_str(mb, ", in a compiler-synthesized construct (no source position)]")
+    mbsi := unchecked bitcast(usize, rt::strbuf_base(mb))
+    mbsp := unchecked bitcast(ptr(u8), mbsi)
+    panic(str_at(mbsp, rt::buf_len(mb)))
+    return 0
+  }
   k6 := rt::push_str(mb, ", at line ")
   k3 := rt::push_int(mb, src_line_at(pc, off))
   k7 := rt::push_str(mb, ", near `")
