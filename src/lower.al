@@ -11629,6 +11629,49 @@ deref_inner_expr := fn(e : ptr(Expr)) -> ptr(Expr) {
   }
 }
 
+## The inner `Var` of an `AddrOf` (`ptr(<Var>)`) expression, or 0/0 otherwise. A flat one-level
+## match, so `deref_addrof_var_span` can peel `Deref(AddrOf(Var))` without a NESTED match (the seed
+## compiler does not lower a variant `match` inside a `match` arm).
+addrof_var_span := fn(e : ptr(Expr)) -> CSpan {
+  match deref(e) {
+    Expr::AddrOf(inner) => { var_name_span(inner) }
+    _ => { CSpan(s = 0, n = 0) }
+  }
+}
+
+## The root `Var` of `deref(ptr(<Var>))` — the `Deref(AddrOf(Var))` shape — or 0/0 otherwise.
+## Memory §4.3 makes `ptr(x)` the address of the place `x`, so `deref(ptr(x))` IS the place `x`;
+## this peel is what lets the field read below reach that root (issue #506).
+deref_addrof_var_span := fn(e : ptr(Expr)) -> CSpan {
+  inner := deref_inner_expr(e)
+  if unchecked bitcast(usize, inner) == 0 { return CSpan(s = 0, n = 0) }
+  return addrof_var_span(inner)
+}
+
+## If `e` is `deref(ptr(x))` where `x` is a BY-REFERENCE aggregate STRUCT PARAM (`bind_param`'s
+## `ek = 2` + `is_ref`, the only slot kind that pairs those two — every other `ek = 2` binding is a
+## struct LOCAL with `is_ref = false`), the struct's TYPE span; 0/0 otherwise. Such a slot already
+## HOLDS a pointer to the caller's struct word 0 — which is exactly what `emit_addr_of`'s by-ref
+## `movq` branch hands back for `ptr(x)` — so the pointee-read arm below serves this root with the
+## same `movq -<slot>(%rbp), %rax` + `movq <fi>*8(%rax), %rax` pair it already emits for an `ek = 7`
+## pointer local, and the same pair the direct `x.field` read on that param emits.
+##
+## Issue #506: `Field(Deref(AddrOf(<by-ref param>)))` previously reached NO arm — `deref_var_span`
+## sees an `AddrOf`, not a `Var`, so `deref_struct_span` answered 0/0 and every other deref arm
+## (`deref_deref_struct_span`, `deref_call_struct_span`, `deref_field_ptrstruct_span`,
+## `deref_index_ptrstruct_span`) requires a different inner node — so `field_slot` fell through to
+## the placeholder and `deref(ptr(x)).b` answered a literal `0`. A SILENT wrong value: the read
+## simply contributed nothing to the surrounding arithmetic.
+deref_addrof_byref_struct_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan {
+  av := deref_addrof_var_span(e)
+  if av.n == 0 { return CSpan(s = 0, n = 0) }
+  ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, av.s, av.n)))
+  if streq(src, ent.ns, ent.nl, av.s, av.n) == false { return CSpan(s = 0, n = 0) }
+  if ent.ek != 2 { return CSpan(s = 0, n = 0) }
+  if ent.is_ref == false { return CSpan(s = 0, n = 0) }
+  CSpan(s = ent.sns, n = ent.snl)
+}
+
 ## The base-`Var` span + field-name span of `deref(<Var>.<field>)` (e.g. `ab := deref(v.arena)`).
 ## `ok` false unless `e` is exactly `Deref(Field(Var(o), f))`. Split out so each destructure is a
 ## single-level function-body match (the nested-match gotcha): `deref_inner_expr` peels the Deref,
@@ -18326,7 +18369,12 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         emit_packed_load_rax(sb, scalar_byte_size(cx.src, s3dr.ts, s3dr.tl), s3dr.tl != 0 and str_at((cx.src + s3dr.ts), 1) == "i", s3dr.bo, false)
         return
       }
-      dsb := deref_struct_span(base, cx.slots, cx.src)
+      mut dsb := deref_struct_span(base, cx.slots, cx.src)
+      ## `deref(ptr(x)).f` on a BY-REFERENCE struct PARAM (issue #506): the same pointee read, with
+      ## the pointer coming from a by-ref param slot instead of an `ek = 7` pointer local. Claimed
+      ## only when `deref_struct_span` found nothing, so every shape that already had an arm keeps it
+      ## and the emitted GAS for the existing corpus is byte-identical.
+      if dsb.n == 0 { dsb = deref_addrof_byref_struct_span(base, cx.slots, cx.src) }
       ## Declarations §6.2 — this used to spell the name `fbi`, which the arm ALREADY binds far above
       ## (the `ARR[i].field` global path); re-declaring a name already bound in the same scope is a
       ## compile error, and `sema` now says so. Same value, own name — the sibling `s3fbi` above had
@@ -18360,7 +18408,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       } else if dsb.n != 0 {
         ## `deref(p).f` — a field THROUGH a pointer-to-struct (ek 7): load p's value (the pointee
         ## word-0 address), then load the field at `fi*8(%rax)` (ascending pointee layout).
-        pv := deref_var_span(base)
+        mut pv := deref_var_span(base)
+        ## issue #506 — the `deref(ptr(x))` root: `deref_var_span` only peels `Deref(Var)`, so the
+        ## pointer-holding slot of the `Deref(AddrOf(Var))` shape is named by the AddrOf peel.
+        if pv.n == 0 { pv = deref_addrof_var_span(base) }
         pent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, pv.s, pv.n)))
         ## §8 pointer-to-@packed (ek 7 MMIO map): if the pointee struct is `@packed`, read the field at
         ## its PACKED byte offset with a correctly-SIZED load (movzbl/movzwl/movl), NOT the word offset —

@@ -7034,6 +7034,30 @@ run issue484_ptr_slice_view_field 42
 # Cross-target rows follow from `run`; the non-x86 backends trap on a view read through a pointer,
 # exactly as the #451/#456/#483 rows above do (measured aarch64=133, riscv64=133, wasm=134).
 run issue484_bound_slice_elem 42
+# Issue #506 — `deref(ptr(x)).field` where `x` is a BY-REFERENCE `in out` STRUCT PARAM answered a
+# literal ZERO: `Field(Deref(AddrOf(Var)))` matched none of the five deref span resolvers in the
+# scalar `Field` case (each peels a different inner node — Var, Deref, Call, Field, Index), so no arm
+# claimed the read and `field_slot` fell through to the placeholder `movq $0, %rax`. Clean compile,
+# no diagnostic; in the issue's own arithmetic spelling the sum simply came out 40 instead of 101,
+# which is the #421/#464 silent class. Memory §4.3 makes `ptr(x)` the address of the place `x`, so
+# `deref(ptr(x)).f` IS `x.f`; the fix peels the AddrOf and routes the read onto the SAME pointee arm
+# an `ek = 7` pointer local already uses, guarded on the one slot shape whose word really is a
+# pointer to the caller's struct (`ek == 2` AND `is_ref` — `bind_param`'s by-reference struct param,
+# and no other binding pairs those two). It emits the identical `movq -<slot>(%rbp), %rax` +
+# `movq <fi>*8(%rax), %rax` pair that both working neighbours already emit — the direct `x.f` read
+# on that param, and `deref(q).f` through a `ptr(Bag)` callee.
+# THREE fields with pairwise-distinct values whose sums collide with nothing (11/61/33), so reading
+# NOTHING (40), field `a` (51), field `c` (73) and the awaited 101 are four different exits; codes
+# 46-49/52-59/62-65 classify every probe into correct / zero / another field / garbage, and controls
+# 20-22, 23-25 and 29-31 keep the direct read and the `ptr(Bag)` callee spelling green on BOTH sides.
+# The subject is probed FIRST so the non-x86 backends reach their fail-loud trap before any control
+# can answer; the `ptr(Bag)` callee control is a pre-existing aarch64 wrong value in its own right
+# (measured identically on both sides, #553). The same spelling on a struct LOCAL root is a different
+# slot kind needing its own emission and is unchanged here (#554).
+# Parent 038e8ea: 62 (= 62 + 0, "the read contributed NOTHING"). This tree: 42.
+# Cross-target rows follow from `run`; the non-x86 backends fail loud on this read (measured
+# aarch64=133, riscv64=133, wasm=134, before and after).
+run issue506_deref_ptr_byref_field 42
 # A `next` this desugar cannot call (a GENERIC `next(K : type, …)`, `alloc::hashmap::HashMapIter`)
 # must be REFUSED, never walked as a slice: the parent built it and ran the body zero times.
 build_reject_has reject_for_generic_iter_next "carries no type arguments"
