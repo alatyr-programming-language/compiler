@@ -6937,6 +6937,27 @@ run_a64 issue462_enum_call_elem 42
 ## change, and wasm's 134, so a later widening of either path cannot become an unmeasured emission.
 run_rv64 issue462_enum_call_elem 133
 run_wat issue462_enum_call_elem 134
+## issue #488 — the WASM half of the same feed, which PR #487 left out on the stated grounds that wasm
+## "traps per #449". It does not: #449 is the enum-field READ and is loud, while this is the STORE's
+## WIDTH, and a program that never reads the enum field back therefore gets a clean exit with a wrong
+## answer. `emit_wat_store_payload_at` knew a StructLit, an EnumLit and an ArrayLit; an enum-returning
+## CALL yields the i64 BASE ADDRESS of a `{disc, payload…}` block, so it fell to the scalar fallback,
+## which stored that POINTER as ONE word and reported one word — every field AFTER the enum field was
+## written `enum_max_arity` words too early while its reader still resolved `field_word_offset`. The new
+## call arm parks the returned base in the whole-aggregate-copy scratch local and copies the full
+## `1 + enum_max_arity` words inline at the field's own offset. EVERY observable is a SCALAR NEIGHBOUR,
+## because reading the enum field itself is #449 and would trap the file at 134 and cost it every code:
+## 50/61/71/81 the field after read 0, 51/62/72/82 it read the NEXT scalar's sentinel (short by exactly
+## one word), 52/63/73/83 it read a payload word, 53/64/74/84 it read the discriminant, 54/65/75/85 some
+## third value, 60/70/80 the field BEFORE it, 76/77/86/87 the second trailing scalar, 100/101 a nested
+## literal's outer/inner tail, 110-113 the enum-LITERAL control — which answers 42 on the parent and is
+## what proves the defect is the store's width and not the read. `wide_call_a` uses the ONE-payload-word
+## variant, so a store sized by the CALLED VARIANT's arity instead of `enum_max_arity` cannot pass.
+## Measured on parent aa737b1: wasm 50, x86_64 42, aarch64 42, riscv64 42. This tree: 42 on all four.
+run_x86 issue488_wasm_enum_call_field 42
+run_a64 issue488_wasm_enum_call_field 42
+run_rv64 issue488_wasm_enum_call_field 42
+run_wat issue488_wasm_enum_call_field 42
 ## issue #449 — a struct's ENUM-typed field as a COMPARISON operand, no `match` involved. §8 delivers
 ## an enum BY REFERENCE, so on wasm the field holds a POINTER to the `{disc, payload…}` block exactly
 ## as an enum parameter does. The wat compare arm's aggregate guard already refuses to `i64.eq` such an
