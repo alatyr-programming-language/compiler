@@ -8159,8 +8159,15 @@ check_accept overload_float_arg
 run overload_scalar_agg 42
 check_accept overload_scalar_agg
 run ambient_strbuf 42
-run ambient_alloc_into 42
-run ambient_alloc_into_struct 42
+## Issue #403 — these two rows FLIPPED from accept to reject, and that is what they were kept for.
+## Each calls `alloc_into` twice: once through the `@alloc(a) x := init` desugar, whose callee span
+## the parser SYNTHESIZES, and once by writing the bare name in user source. Modules §3:73 scopes
+## visibility to who may *name* a declaration, so the desugar stays legal and the written name does
+## not — and asserting the exact LINE is what separates the two halves: a regression that refused the
+## desugar instead would move the diagnostic to the `@alloc` line and fail here. Both files ran to 42
+## on the parent (`8f74bed`), which is the measurement this pair now inverts.
+check_build_located ambient_alloc_into 39 "check: invalid"
+check_build_located ambient_alloc_into_struct 40 "check: invalid"
 run ambient_alloc_attr 42
 run ambient_alloc_scalar 42
 run ambient_alloc_deref_field 42
@@ -8177,6 +8184,16 @@ check_build_located reject_base_private_split_byte 13 "check: invalid"
 check_build_located reject_base_private_sift_down 12 "check: invalid"
 check_build_located reject_base_private_buf_push 19 "check: invalid"
 check_build_located reject_base_private_alloc_into 26 "check: invalid"
+## Issue #403 — the BARE spelling of the same rule, which `pub` did not reach at all until now: the
+## visibility test was consulted only in the qualified arm of `sema.al`'s resolver, so this file
+## BUILT and RAN to 42 on the parent (`8f74bed`) while `base::str::char_byte(cur, 0)` was refused.
+## The fixture's own first two calls are `pub` §3.6 operations reached bare, so the rejection cannot
+## be an un-injected module masquerading as a visibility refusal. This is a `check`-stage rule, so
+## the three non-x86 emission surfaces must agree with x86 rather than emit anything.
+check_build_located reject_base_private_char_byte_bare 21 "check: invalid"
+emit_reject_has wat reject_base_private_char_byte_bare "invalid at line 21 in reject_base_private_char_byte_bare"
+emit_reject_has aarch64 reject_base_private_char_byte_bare "invalid at line 21 in reject_base_private_char_byte_bare"
+emit_reject_has riscv64 reject_base_private_char_byte_bare "invalid at line 21 in reject_base_private_char_byte_bare"
 ## issue #349 — `Arena.allocate` VALIDATES the requested alignment before the alignment
 ## arithmetic (Stdlib appendix §5.1 `BadAlignment`). Pre-fix, `align = 3` over a fresh arena
 ## returned `Ok(idx = 0)` (a misaligned success, exit 100 here) and `align = 0` reached

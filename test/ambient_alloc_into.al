@@ -6,21 +6,25 @@
 ## `deref(p) = init` and the by-ref handle bridge inside `alloc_into` (an explicit `Handle(T)` literal
 ## so `get` receives it by reference — see lib/base/alloc.al). Self-contained (no `std::os`).
 ##
-## SPELLING 1 (line 33) — `@alloc(ar) hs := 40`, the language surface Memory §2.4 specifies. The
+## SPELLING 1 (line 37) — `@alloc(ar) hs := 40`, the language surface Memory §2.4 specifies. The
 ## parser desugars it to `alloc_into(isize, ar, 40)` through a SYNTHESIZED callee span, so no user
 ## source names `alloc_into`. Issue #524 keeps `alloc_into` private on exactly that ground: Modules
 ## §3 line 73 scopes visibility to who may *name* a declaration, and the Stdlib appendix defines no
 ## `alloc_into` identifier.
 ##
-## SPELLING 2 (line 35) — the BARE `alloc_into(u64, ar, 2)` call from USER source. This is an instance
-## of the #403 visibility hole living inside our own corpus: the `pub` test is consulted only in the
-## qualified arm of `sema.al`'s resolver, so an unqualified reference to a private base declaration
-## still resolves. It is kept here DELIBERATELY, not by oversight: it is the row that flips from
-## accept to reject when #403 lands, at which point this file becomes a reject fixture on the bare
-## call and its accept half is already covered by `ambient_alloc_scalar`. Do not "simplify" it away —
-## `test/reject_base_private_alloc_into.al` locks the qualified spelling, which is refused today.
+## SPELLING 2 (line 39) — the BARE `alloc_into(u64, ar, 2)` call from USER source, and the reason
+## this row is now a REJECT. It was kept here deliberately as the instance of the #403 visibility
+## hole inside our own corpus: the `pub` test used to be consulted only in the qualified arm of
+## `sema.al`'s resolver, so this unqualified reference to a private base declaration resolved, and
+## the file built and ran to 42 (= 40 + 2). #403 makes §3 a property of the declaration rather than
+## of the spelling, so the bare name is refused with the same located diagnostic the qualified
+## spelling already produced. The accept half is covered by `ambient_alloc_scalar`, and
+## `test/reject_base_private_alloc_into.al` locks the qualified spelling.
 ##
-## 42 = 40 (the `@alloc` handle) + 2 (the bare-call handle). Either store failing misses 42.
+## SPELLING 1 remains the load-bearing half of THIS row: the `@alloc` desugar must NOT be refused.
+## Modules §3 line 73 scopes visibility to who may *name* a declaration, and the desugar's callee span
+## is synthesized, so it names nothing. If that exemption regressed, the diagnostic would move to the
+## `@alloc` line instead — which is why this fixture asserts the exact line of the refusal.
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 
 main := fn() -> u64 {

@@ -2523,6 +2523,27 @@ run_pkg_exit   module_type_shadow   module-type-shadow   42
 run_pkg_check_build_located module_type_sibling_reject       1 geo__child
 run_pkg_check_build_located module_type_enum_ambiguous_reject 1 user
 
+## Issue #403 — Modules §3 on the BARE spelling, in all three shapes that had no visibility test at
+## all. The rule was applied only in the QUALIFIED arm of `sema.al`'s resolver, so one declaration
+## answered two ways depending on nothing but how the caller wrote its name: measured on `8f74bed`,
+## all three of these packages built rc=0 and their artifacts exited 42, while the same references
+## spelled `base::str::char_byte(…)` / `hid::Secret(…)` / `hid::secret` were already refused.
+##   * `..._reject` is the issue's own reproducer: a private standard-library helper reached from an
+##     EXTERNAL package (§3:90-92 — the `pub` chain to the root is the only way out of a package);
+##   * `..._type_reject` is the same rule for a bare TYPE head — `sema_type_ambiguous` rejected only
+##     an AMBIGUOUS bare name (`hits > 1`), never a private one;
+##   * `..._fnvalue_reject` is a private function used as a VALUE, the one spelling with no other
+##     guard: it is not a call, and `sema_global_ref_bad` excludes `is_fn` declarations.
+run_pkg_check_build_located issue403_bare_private_reject         9 main
+run_pkg_check_build_located issue403_bare_private_type_reject    3 main
+run_pkg_check_build_located issue403_bare_private_fnvalue_reject 4 main
+## The over-tightening control, and the reason this is a fixture rather than a line in the PR: a
+## §3 test on the bare spelling can only be wrong in one direction. Every legal shape is exercised
+## with its OWN rejection code — a `pub` base-tier name reached bare (Stdlib §1 injects the base
+## prelude unqualified), a module naming its own private helper, a DESCENDANT naming its ancestor's
+## private helper (§3:80-85), and a parse-time desugar whose callee span nobody wrote.
+run_pkg_exit issue403_bare_private_legal issue403-bare-private-legal 42
+
 run_tool15_manifest_handle
 
 # The gate-of-the-gate. `scripts/callee_module_check.sh` is the ONLY check that can see a call bound to
