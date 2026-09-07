@@ -82,6 +82,19 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **In a manifest-less invocation of two or more files, the first listed file is now the package's
+  root module instead of a sibling of the others.** Tooling §4 makes that file the synthesized
+  package's root and excludes it from module-path scanning, "so it is not also a module by its own
+  stem"; the compiler named it by its stem anyway. Two things follow. Its declarations now emit
+  **unprefixed** linker symbols (Modules §6.1) — `alatyr build a.al b.al` writes `main` and `aa`
+  where it used to write `a__main` and `a__aa`, while the other listed files keep their
+  `<stem>__<name>` form. And its stem is no longer a module path: `a::aa` used to select the root's
+  own declaration, and used to be refused with the Modules §3 visibility verdict when that
+  declaration was not `pub`; it is now treated exactly like a module head that names nothing. The
+  artifact base (TOOL-11) is unchanged — still the first file's stem — and a build with a manifest,
+  where the root comes from the manifest, is byte-identical. A bare list of a **single** file is not
+  yet covered and keeps its stem-named module.
+
 - **An integer-to-pointer `bitcast` now lowers on aarch64 and riscv64 instead of trapping.**
   `bitcast(ptr([mut] T), n)` had no lowering on either backend: every preserved pointer target
   answered with an anonymous fail-loud stub (`brk #0 // unsupported bitcast`,

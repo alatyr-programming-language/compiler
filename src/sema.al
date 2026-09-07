@@ -12058,9 +12058,22 @@ sema_mod_seg_eq := fn(src : ptr(u8), as_ : usize, al : usize, bs : usize, bl : u
   ok
 }
 
-## `package.al` is the anonymous package-root module.  The driver publishes that fact only to lower;
-## sema sees the same module stem in every Decl, so keep the root rule local and explicit here.
+## `package.al` is the anonymous package-root module.  A manifest-LESS invocation has a root module
+## too: Tooling §4 makes the FIRST listed file the synthesized package's root and excludes it from
+## module-path scanning, so it is not also a module by its own stem (#516).  Its stem is arbitrary, so
+## the name test alone cannot see it — the driver publishes the root module's name span, the same span
+## it already gives `lower::set_root_module`.  The `package` name test is retained so every path that
+## reaches sema without a published span keeps its exact previous verdict.
+mut SEMA_ROOT_MOD_S : usize = 0
+mut SEMA_ROOT_MOD_L : usize = 0
+pub set_root_module := fn(s : usize, l : usize) -> i64 {
+  SEMA_ROOT_MOD_S = s
+  SEMA_ROOT_MOD_L = l
+  0
+}
+
 sema_is_root_mod := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
+  if SEMA_ROOT_MOD_L != 0 and ml == SEMA_ROOT_MOD_L and ms == SEMA_ROOT_MOD_S { return true }
   ml == 7 and str_at((src + ms), ml) == "package"
 }
 

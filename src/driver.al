@@ -2833,6 +2833,30 @@ pub set_module_root := fn(p : usize, n : usize) -> i64 {
   0
 }
 
+## Tooling §4 (spec `b4e7979`, `spec/120-tooling.md:404`-`:408`) — a manifest-LESS invocation
+## synthesizes the default `Package` with **the first listed file as the root module**, and that root
+## file is **excluded from module-path scanning, exactly as a manifest file is (Manifest §3.8), so it
+## is not also a module by its own stem**. Without this the root file was named by its stem, which made
+## it a SIBLING of the other listed files instead of their ancestor: a listed file's legal down-tree
+## use of a root declaration was not a down-tree use (Modules §3), and the root's declarations were
+## addressable through a module path that must not exist (#516). The CLI publishes that one path here;
+## `d_is_bare_root_path` is the driver-side twin of the `package.al` predicate `d_is_root_path`, so both
+## root spellings reach the SAME anonymous-root handling. Empty for every package command, so a
+## manifest build is untouched. TOOL-11's artifact base is a separate fact and still the file's stem.
+mut BARE_ROOT_P : usize = 0
+mut BARE_ROOT_N : usize = 0
+pub set_bare_root_file := fn(p : usize, n : usize) -> i64 {
+  BARE_ROOT_P = p
+  BARE_ROOT_N = n
+  0
+}
+
+d_is_bare_root_path := fn(p : str) -> bool {
+  if BARE_ROOT_N == 0 { return false }
+  if p.len != BARE_ROOT_N { return false }
+  return str_at(unchecked bitcast(usize, p.ptr), p.len) == str_at(BARE_ROOT_P, BARE_ROOT_N)
+}
+
 ## TOOL-6 — the lower's span order is the order of declaration-module ranges, not the raw CLI path
 ## order: a package root, manifest-owned synthetic declarations, and a manifest-triggered ambient module
 ## can all add ranges of their own. Publish the exact newline-joined path for each range so the CLI does
@@ -4469,6 +4493,8 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   mut bld := strbuf::strbuf(tar, 16777216)
   mut name_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut name_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
+  mut mod_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
+  mut mod_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_off := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   ## --- append all module NAMES (filename stems) first ---
@@ -4481,11 +4507,33 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   mut k := 0
   while k < n {
     p := rt::svec_str_get(pv, k)
-    if d_is_root_path(p) { root_k = k }
     rt::vec_push(name_start, strbuf::buf_len(bld))
     before := strbuf::buf_len(bld)
     push_module_name(bld, p)                 ## stem, OR a `/lib/` path's mangled name (std__io)
-    rt::vec_push(name_len, strbuf::buf_len(bld) - before)
+    nl := strbuf::buf_len(bld) - before
+    rt::vec_push(name_len, nl)
+    ## `name_*` stays the file's DIAGNOSTIC name (`… at line N in <module>`) for every file. `mod_*`
+    ## is the module IDENTITY the parser stamps on each Decl. The two differ for exactly one file — the
+    ## manifest-less ROOT (Tooling §4), which is excluded from module-path scanning so that it is not
+    ## also a module named by its own stem (#516). `package.al` keeps its `package` stem, the anonymous
+    ## root spelling every manifest helper already joins on.
+    if d_is_root_path(p) or d_is_bare_root_path(p) { root_k = k }
+    if d_is_bare_root_path(p) and d_is_root_path(p) == false {
+      ## The root file's module identity is its own PATH, appended here as a second span. A source
+      ## module path is an identifier run joined by `::`, and a path is not — it carries `/` and the
+      ## `.al` suffix — so NO spelled module head can name this module at any resolver in the tree.
+      ## That is Tooling §4's "excluded from module-path scanning … not also a module by its own
+      ## stem" enforced once, in the identity itself, instead of at every head-matching site. An
+      ## EMPTY identity would not do: a zero-length span compares equal to every other zero-length
+      ## span, and the tree already uses `0/0` to mean "no module context".
+      rt::vec_push(mod_start, strbuf::buf_len(bld))
+      pbefore := strbuf::buf_len(bld)
+      krp := strbuf::push_str(bld, p)
+      rt::vec_push(mod_len, strbuf::buf_len(bld) - pbefore)
+    } else {
+      rt::vec_push(mod_start, rt::vec_get(name_start, k))
+      rt::vec_push(mod_len, nl)
+    }
     k += 1
   }
   ## --- then append all module SOURCES, read off disk into the shared buffer ---
@@ -4526,10 +4574,17 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## Publish the ANONYMOUS package-ROOT module to the lower (Modules §6.1 / Manifest §6) — its
   ## declarations emit UNPREFIXED linker symbols. Always published, `0/0` when there is no root file
   ## in the compile list, so the setting can never leak in from an earlier compile in this process.
+  ## Modules §3 needs the SAME fact: a non-`pub` declaration of the root module is visible to every
+  ## module nested within it (its descendants). `sema` cannot call `lower` (that would be a cycle), so
+  ## publish the identical span to its own located twin. `0/0` clears it, exactly as above.
   if root_k < n {
-    krs := lower::set_root_module(rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k))
+    krs := lower::set_root_module(rt::vec_get(mod_start, root_k), rt::vec_get(mod_len, root_k))
+    krs2 := sema::set_root_module(rt::vec_get(mod_start, root_k), rt::vec_get(mod_len, root_k))
+    parser::set_root_display(rt::vec_get(mod_start, root_k), rt::vec_get(mod_len, root_k), rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k))
   } else {
     krn := lower::set_root_module(0, 0)
+    krn2 := sema::set_root_module(0, 0)
+    parser::set_root_display(0, 0, 0, 0)
   }
   ## --- lex + parse each module's region into ONE rt Decl-handle Vec, threading nstr (all token
   ## records + the shared decls handle Vec + records live in `tar`, created above). ---
@@ -4555,7 +4610,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     tokar.off = 0
     mut rt_toks := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
     zt := lexrt::lex_rt(str_at(base + soff, slen), soff, rt_toks, tokar)
-    mut pc := PC(toks = ptr(rt_toks), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(name_start, k), mod_l = rt::vec_get(name_len, k), enums = unchecked bitcast(ptr(rt::Vec), 0))
+    mut pc := PC(toks = ptr(rt_toks), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(mod_start, k), mod_l = rt::vec_get(mod_len, k), enums = unchecked bitcast(ptr(rt::Vec), 0))
     ## tell the parser where THIS module starts in the shared buffer, so a parser-level located reject
     ## counts its line from the MODULE base, not from the base of a buffer that holds every ambient
     ## stdlib module ahead of it (parser.al `src_line_at` / `P_MOD_BASE`).
@@ -4588,7 +4643,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     tokar.off = 0                              ## reuse `tokar` for THIS module's tokens (prev module's are dead)
     mut rt_toks := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
     zt := lexrt::lex_rt(str_at(base + soff, slen), soff, rt_toks, tokar)
-    mut pc := PC(toks = ptr(rt_toks), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(name_start, k), mod_l = rt::vec_get(name_len, k), enums = ptr(ev))
+    mut pc := PC(toks = ptr(rt_toks), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(mod_start, k), mod_l = rt::vec_get(mod_len, k), enums = ptr(ev))
     ## tell the parser where THIS module starts in the shared buffer, so a parser-level located reject
     ## counts its line from the MODULE base, not from the base of a buffer that holds every ambient
     ## stdlib module ahead of it (parser.al `src_line_at` / `P_MOD_BASE`).
@@ -4606,7 +4661,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## TOOL-6 — lower groups the final declaration vector, including manifest/synthetic declarations, by
   ## module-name run. Publish that exact run-to-file mapping before any emission so the split linker and
   ## its manifest can name every span independently of the original CLI path order.
-  emission_paths := d_emission_paths(decls, pv, name_start, name_len, base, tar)
+  emission_paths := d_emission_paths(decls, pv, mod_start, mod_len, base, tar)
   EMISSION_PATHS_P = unchecked bitcast(usize, emission_paths.ptr)
   EMISSION_PATHS_N = emission_paths.len
   d_manifest_set_sema_modules(pv, name_start, name_len, tar)
@@ -4915,12 +4970,12 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
       strbuf::push_str(gas, entry)
       strbuf::push_str(gas, ":\n  call ")
       if n > 0 {
-        mut es := rt::vec_get(name_start, n - 1)
-        mut el := rt::vec_get(name_len, n - 1)
+        mut es := rt::vec_get(mod_start, n - 1)
+        mut el := rt::vec_get(mod_len, n - 1)
         mut mi := 0
         while mi < n {
-          ms := rt::vec_get(name_start, mi)
-          ml := rt::vec_get(name_len, mi)
+          ms := rt::vec_get(mod_start, mi)
+          ml := rt::vec_get(mod_len, mi)
           if str_at(base + ms, ml) == "main" { es = ms; el = ml }
           mi += 1
         }
@@ -5531,17 +5586,54 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   mut bld := strbuf::strbuf(tar, 16777216)
   mut name_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut name_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
+  mut mod_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
+  mut mod_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_off := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   ## --- module NAMES (filename stems, or a `/lib/` path's mangled name `std__math`) ---
+  ## The same Tooling §4 root rule the x86 front end applies (#516), so the three non-x86 backends
+  ## agree with x86_64 about which declarations are root-level — all three mangle through
+  ## `lower::is_root_mod`. Deliberately keyed on the PUBLISHED bare root ALONE, not on `d_is_root_path`:
+  ## this entry point also serves the three single-file emit surfaces (`alatyr wat|aarch64|riscv64 F`),
+  ## which publish no bare root, and recognising a lone `package.al` here would unprefix its
+  ## declarations on those three backends — a real §6.1 gap, but a different one from this issue, and
+  ## it moves a corpus row (`test/package/mod8_root_duplicate_names/root_legal_controls`).
+  mut root_k := n
   mut k := 0
   while k < n {
     p := rt::svec_str_get(pv, k)
     rt::vec_push(name_start, strbuf::buf_len(bld))
     before := strbuf::buf_len(bld)
     push_module_name(bld, p)
-    rt::vec_push(name_len, strbuf::buf_len(bld) - before)
+    nl := strbuf::buf_len(bld) - before
+    rt::vec_push(name_len, nl)
+    if d_is_bare_root_path(p) and d_is_root_path(p) == false {
+      ## The root file's module identity is its own PATH, appended here as a second span. A source
+      ## module path is an identifier run joined by `::`, and a path is not — it carries `/` and the
+      ## `.al` suffix — so NO spelled module head can name this module at any resolver in the tree.
+      ## That is Tooling §4's "excluded from module-path scanning … not also a module by its own
+      ## stem" enforced once, in the identity itself, instead of at every head-matching site. An
+      ## EMPTY identity would not do: a zero-length span compares equal to every other zero-length
+      ## span, and the tree already uses `0/0` to mean "no module context".
+      root_k = k
+      rt::vec_push(mod_start, strbuf::buf_len(bld))
+      pbefore := strbuf::buf_len(bld)
+      krp := strbuf::push_str(bld, p)
+      rt::vec_push(mod_len, strbuf::buf_len(bld) - pbefore)
+    } else {
+      rt::vec_push(mod_start, rt::vec_get(name_start, k))
+      rt::vec_push(mod_len, nl)
+    }
     k += 1
+  }
+  ## Modules §6.1 — the anonymous root's declarations emit UNPREFIXED on every backend. `0/0` clears
+  ## a previous compile in the same process, exactly as the x86 path does.
+  if root_k < n {
+    mrs := lower::set_root_module(rt::vec_get(mod_start, root_k), rt::vec_get(mod_len, root_k))
+    parser::set_root_display(rt::vec_get(mod_start, root_k), rt::vec_get(mod_len, root_k), rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k))
+  } else {
+    mrn := lower::set_root_module(0, 0)
+    parser::set_root_display(0, 0, 0, 0)
   }
   ## --- then all module SOURCES, read off disk into the shared buffer ---
   k = 0
@@ -5570,7 +5662,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     tokar.off = 0
     mut rt_toks := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
     zt := lexrt::lex_rt(str_at(base + soff, slen), soff, rt_toks, tokar)
-    mut pc := PC(toks = ptr(rt_toks), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(name_start, k), mod_l = rt::vec_get(name_len, k), enums = unchecked bitcast(ptr(rt::Vec), 0))
+    mut pc := PC(toks = ptr(rt_toks), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(mod_start, k), mod_l = rt::vec_get(mod_len, k), enums = unchecked bitcast(ptr(rt::Vec), 0))
     ## tell the parser where THIS module starts in the shared buffer, so a parser-level located reject
     ## counts its line from the MODULE base, not from the base of a buffer that holds every ambient
     ## stdlib module ahead of it (parser.al `src_line_at` / `P_MOD_BASE`).
@@ -5602,7 +5694,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     tokar.off = 0
     mut rt_toks2 := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
     zt2 := lexrt::lex_rt(str_at(base + soff, slen), soff, rt_toks2, tokar)
-    mut pc2 := PC(toks = ptr(rt_toks2), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(name_start, k), mod_l = rt::vec_get(name_len, k), enums = ptr(ev))
+    mut pc2 := PC(toks = ptr(rt_toks2), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(mod_start, k), mod_l = rt::vec_get(mod_len, k), enums = ptr(ev))
     ## tell the parser where THIS module starts in the shared buffer, so a parser-level located reject
     ## counts its line from the MODULE base, not from the base of a buffer that holds every ambient
     ## stdlib module ahead of it (parser.al `src_line_at` / `P_MOD_BASE`).
@@ -5626,8 +5718,8 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## it: there is no qualified callee to resolve and nothing to prune.
   mut ed := decls
   if n > 1 {
-    ems := rt::vec_get(name_start, n - 1)
-    eml := rt::vec_get(name_len, n - 1)
+    ems := rt::vec_get(mod_start, n - 1)
+    eml := rt::vec_get(mod_len, n - 1)
     D_EMS = ems
     D_EML = eml
     ## WAT AGGREGATE-COMPARE GUARD (see its note): retry WITHOUT the ambient closure, reproducing the
@@ -6135,17 +6227,41 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   mut bld := strbuf::strbuf(tar, 16777216)
   mut name_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut name_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
+  mut mod_start := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
+  mut mod_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_off := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut root_k := n
   mut k := 0
   while k < n {
     p := rt::svec_str_get(pv, k)
-    if d_is_root_path(p) { root_k = k }
     rt::vec_push(name_start, strbuf::buf_len(bld))
     before := strbuf::buf_len(bld)
     push_module_name(bld, p)                 ## stem, OR a `/lib/` path's mangled name (std__io)
-    rt::vec_push(name_len, strbuf::buf_len(bld) - before)
+    nl := strbuf::buf_len(bld) - before
+    rt::vec_push(name_len, nl)
+    ## `name_*` stays the file's DIAGNOSTIC name (`… at line N in <module>`) for every file. `mod_*`
+    ## is the module IDENTITY the parser stamps on each Decl. The two differ for exactly one file — the
+    ## manifest-less ROOT (Tooling §4), which is excluded from module-path scanning so that it is not
+    ## also a module named by its own stem (#516). `package.al` keeps its `package` stem, the anonymous
+    ## root spelling every manifest helper already joins on.
+    if d_is_root_path(p) or d_is_bare_root_path(p) { root_k = k }
+    if d_is_bare_root_path(p) and d_is_root_path(p) == false {
+      ## The root file's module identity is its own PATH, appended here as a second span. A source
+      ## module path is an identifier run joined by `::`, and a path is not — it carries `/` and the
+      ## `.al` suffix — so NO spelled module head can name this module at any resolver in the tree.
+      ## That is Tooling §4's "excluded from module-path scanning … not also a module by its own
+      ## stem" enforced once, in the identity itself, instead of at every head-matching site. An
+      ## EMPTY identity would not do: a zero-length span compares equal to every other zero-length
+      ## span, and the tree already uses `0/0` to mean "no module context".
+      rt::vec_push(mod_start, strbuf::buf_len(bld))
+      pbefore := strbuf::buf_len(bld)
+      krp := strbuf::push_str(bld, p)
+      rt::vec_push(mod_len, strbuf::buf_len(bld) - pbefore)
+    } else {
+      rt::vec_push(mod_start, rt::vec_get(name_start, k))
+      rt::vec_push(mod_len, nl)
+    }
     k += 1
   }
   k = 0
@@ -6180,6 +6296,18 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
       d_manifest_type_source(bld)
     }
   }
+  ## Publish the ANONYMOUS package-ROOT module to sema (Modules §3 / §6.1, Manifest §6): a non-`pub`
+  ## root declaration is visible to every module nested within the root — its descendants — which for a
+  ## manifest-less invocation is every other listed file (Tooling §4). `check` has no lower phase, so
+  ## this is the only publication on this path. `0/0` when the compile list holds no root file, so the
+  ## setting cannot leak in from an earlier check in the same process.
+  if root_k < n {
+    krs2 := sema::set_root_module(rt::vec_get(mod_start, root_k), rt::vec_get(mod_len, root_k))
+    parser::set_root_display(rt::vec_get(mod_start, root_k), rt::vec_get(mod_len, root_k), rt::vec_get(name_start, root_k), rt::vec_get(name_len, root_k))
+  } else {
+    krn2 := sema::set_root_module(0, 0)
+    parser::set_root_display(0, 0, 0, 0)
+  }
   dcap := strbuf::buf_len(bld) + n * 8 + 64
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
   ## The parser's by-name struct-construction table is a PASS-1 product, just like the enum-name table.
@@ -6213,7 +6341,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     tokar.off = 0
     mut rt_toks := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
     zt := lexrt::lex_rt(str_at(base + soff, slen), soff, rt_toks, tokar)
-    mut pc := PC(toks = ptr(rt_toks), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(name_start, k), mod_l = rt::vec_get(name_len, k), enums = unchecked bitcast(ptr(rt::Vec), 0))
+    mut pc := PC(toks = ptr(rt_toks), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(mod_start, k), mod_l = rt::vec_get(mod_len, k), enums = unchecked bitcast(ptr(rt::Vec), 0))
     ## tell the parser where THIS module starts in the shared buffer, so a parser-level located reject
     ## counts its line from the MODULE base, not from the base of a buffer that holds every ambient
     ## stdlib module ahead of it (parser.al `src_line_at` / `P_MOD_BASE`).
@@ -6285,7 +6413,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     tokar.off = 0
     mut rt_toks2 := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
     zt2 := lexrt::lex_rt(str_at(base + soff, slen), soff, rt_toks2, tokar)
-    mut pc2 := PC(toks = ptr(rt_toks2), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(name_start, k), mod_l = rt::vec_get(name_len, k), enums = ptr(ev))
+    mut pc2 := PC(toks = ptr(rt_toks2), src = base, idx = 0, arena = ptr(na), nstr = nstr, mod_s = rt::vec_get(mod_start, k), mod_l = rt::vec_get(mod_len, k), enums = ptr(ev))
     ## tell the parser where THIS module starts in the shared buffer, so a parser-level located reject
     ## counts its line from the MODULE base, not from the base of a buffer that holds every ambient
     ## stdlib module ahead of it (parser.al `src_line_at` / `P_MOD_BASE`).
