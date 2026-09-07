@@ -2363,6 +2363,87 @@ pub callee_ret_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
   r
 }
 
+## ─── The `{}` HOLE's static type where NO annotation names it (#457) ────────
+##
+## Three source facts the non-x86 `{}`-hole renderers need and their operand oracle cannot supply.
+## They are shared here rather than copied into `aarch64`/`riscv64`/`wat` because they are pure
+## language decisions — the same three facts x86_64 already recovers in `lower::emit_variadic_print`
+## through `expr_type_span` + `variadic_hole_type_span` + the §7.1 default. Each is PROOF-ONLY: it
+## says "yes, signed" or "no evidence", never "unsigned", so a caller layering it on top of its own
+## oracle can only move a hole unsigned -> signed and never the reverse.
+##
+## They are deliberately NOT reachable from `*_operand_signed`: that predicate is what `/`, `%` and
+## `shr` route on, and widening it moves arithmetic selection on three backends (measured: one extra
+## `Expr::Index` arm turned `arr[0] / 2` from `udiv` into `sdiv` and `shr(arr[0], 1)` from `lsr` into
+## `asr`). Rendering gets its own layer; the arithmetic oracle is untouched.
+
+## Is the declared RETURN type of the fn named `[cs, cs+cl)` a SIGNED integer? The twin of
+## `callee_ret_is_float` above, and sticky-true across same-named declarations for the same reason:
+## the answer must not depend on declaration order. x86_64 reads the same fact via
+## `lower::call_ret_ty_span`.
+pub callee_ret_is_signed := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  mut r := false
+  while i < cnt {
+    d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
+    if d.is_fn and d.name_len != 0 { if streq(src, d.name_start, d.name_len, cs, cl) { if scalar_name_is_signed(src, d.ret_ts, d.ret_tl) { r = true } } }
+    i += 1
+  }
+  r
+}
+
+## Is the ELEMENT type of the ARRAY type span `[T; N]` a SIGNED integer? An `arr[i]` hole carries no
+## annotation of its own, so the element type of the base local's DECLARED array type is the only
+## place its signedness is written — the same span `lower::variadic_hole_type_span` reads for the
+## `print_one__T` instance on x86_64. `false` for a non-array span, a non-scalar element, or `{0,0}`.
+pub arrty_elem_signed := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  es := arr_field_elem_span(src, ts, tl)
+  if es.n == 0 { return false }
+  scalar_name_is_signed(src, es.s, es.n)
+}
+
+## An INTEGER-LITERAL leaf for `lit_arith_i64` below: a `Num`, an arithmetic combination of them, or
+## either inside an `unchecked` scope (a VERIFICATION mode, never a type — and the shape the parser
+## gives unary minus, `Unchecked(Bin(17, Num(0), x))`). Comparisons are excluded: they yield `bool`,
+## not an operand type. Structural on the AST tree, so it terminates without a depth cap.
+lit_arith_leaf := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Num(nv, nrs, nrn) => { r = true }
+    Expr::Unchecked(inner) => { r = lit_arith_leaf(inner) }
+    Expr::Bin(op, bl, br) => {
+      if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 {
+        if lit_arith_leaf(bl) and lit_arith_leaf(br) { r = true }
+      }
+    }
+    _ => {}
+  }
+  r
+}
+
+## Is `e` an ARITHMETIC EXPRESSION over integer literals (`0 - 4`, `-5`, `0 - 9223372036854775807 - 1`)?
+## Nothing in such an expression carries a type, so Functions §7.1's DEFAULT numeric type `i64` IS its
+## static type and Stdlib appendix §2 then requires the leading `-`. x86_64 routes exactly this shape
+## to the non-generic `print_one_int`, whose parameter is that `i64`.
+##
+## A BARE literal is deliberately NOT this shape — only an arithmetic EXPRESSION is. That keeps the
+## predicate to the operand class #457 names and leaves a bare `print("{}", 18446744073709551615)`
+## rendering the bytes it already renders on these backends.
+pub lit_arith_i64 := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Unchecked(inner) => { r = lit_arith_i64(inner) }
+    Expr::Bin(op, bl, br) => {
+      if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 {
+        if lit_arith_leaf(bl) and lit_arith_leaf(br) { r = true }
+      }
+    }
+    _ => {}
+  }
+  r
+}
+
 ## ─── The TYPE-CLASSIFICATION tables, shared by every backend ────────────────
 ##
 ## Seven questions about what KIND of thing a type name denotes, each answered identically by all

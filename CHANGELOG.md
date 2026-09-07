@@ -82,6 +82,28 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- A **negative `{}` hole whose operand carries no `iN` annotation** now prints with its sign on
+  **aarch64**, **riscv64** and **wasm** too. The previous fix gave those three backends a signed
+  renderer and selected it with the same signedness oracle `/`, `%` and `shr` route on, which proves
+  an annotated `iN` param or local, an `iN(x)` conversion and a shift over one of those — and nothing
+  else. Four ordinary shapes carry no annotation anywhere for that scan to read: an un-annotated local
+  initialised from arithmetic (`inferred := 0 - 5`), an element of an `[i64; N]`, a call whose declared
+  return type is `i64`, and a bare literal-arithmetic hole (`0 - 4`). All four still printed the
+  unsigned 64-bit magnitude — `18446744073709551611` where x86_64 printed `-5` — with a clean compile
+  and the correct exit code, which is why the exit-code cross-target sweeps stayed silent. Functions
+  §7.1 routes every hole through the scalar rendering layer and gives a hole with no other type the
+  default numeric type `i64`; Stdlib appendix §2 then requires "a leading `-` for a negative
+  two's-complement value" on every surface. The three backends now recover the same three source facts
+  x86_64 already recovers — an array type's declared element type, a callee's declared return type,
+  and §7.1's `i64` default for literal arithmetic — in a predicate **layered on top of** the arithmetic
+  oracle rather than folded into it: widening that oracle would move division and shift selection on
+  three backends, which was measured, not assumed (one extra `Expr::Index` arm turned `arr[0] / 2` from
+  `udiv` into `sdiv` and `shr(arr[0], 1)` from `lsr` into `asr`). The unsigned oracle is still asked
+  first and still wins, so a `: u64` local, a `[u64; N]` element and a `u64`-returning call keep the
+  unsigned renderer and their exact previous bytes — measured with the input tree held fixed over all
+  of `test/*.al`: x86_64 1175 emitted artifacts and 0 differing, aarch64 1229 / riscv64 1229 / wasm
+  1231 with exactly one differing each, the new fixture. Float, `str` and aggregate holes still reach
+  the one integer renderer on those backends and remain a separate defect.
 - **A `match` on a nested enum place (`o.inner.t`) now takes the right arm** on x86_64, in every
   `match` form. Control Flow §5.3 makes `match` one expression with one meaning — the arms are tested
   top to bottom and the first matching arm wins, whatever the scrutinee expression is — but a

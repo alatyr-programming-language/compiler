@@ -40,6 +40,7 @@ stmt_p := ast::stmt_p
 (ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
 (param_ann_signed, param_ann_unsigned, named_param_is_float, callee_ret_is_float) := lower_layout
+(callee_ret_is_signed, arrty_elem_signed, lit_arith_i64) := lower_layout
 (ct_kind_of_name, ct_num_kind_of_name, ct_scalar_num_kind, ct_type_kind, std_ty_aggregate, struct_plain, ty_is_scalar) := lower_layout
 (decl_tparam_count, decl_tparam_pos, decl_leading_tparam_run, generic_gi, gen_call_ok, param_tuple_open_at, param_tuple_allscalar_n, arrty_semi, arg_list_count) := lower_layout
 (ex_is_index, ex_index_base, ex_index_idx, ex_is_field, ex_is_num_lit, ex_is_zero_lit) := lower_layout
@@ -1817,7 +1818,8 @@ emit_a64_print_run := fn(in out sb : rt::StrBuf, lbl : usize, off : i64, len : i
 
 ## Emit a print template: scan the RAW format bytes tracking the DECODED offset (a simple escape = 2
 ## raw → 1 decoded byte, `\xHH` = 4 raw → 1 decoded byte); each literal run → emit_a64_print_run; each `{}` hole → evaluate the next arg into x0
-## and `bl __print_i64`/`bl __print_u64` by the hole's static signedness. A trailing newline (println) is a final 1-byte write of
+## and `bl __print_i64`/`bl __print_u64` by the hole's static signedness (`a64_hole_signed`). A trailing
+## newline (println) is a final 1-byte write of
 ## `.Lprnl`. Mirrors wat.al's emit_print_template.
 emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), ss : usize, sl : usize, lbl : usize, nl : bool, ah : ptr(mut Arg), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
   raw := str_at((src + ss), sl * 4 + 16)
@@ -1835,10 +1837,12 @@ emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u
         ## The hole's STATIC TYPE picks the renderer (Functions §7.1 -> Stdlib appendix §2: base-10 with
         ## "a leading `-` for a negative two's-complement value"). Every hole used to reach the unsigned
         ## renderer, so `a : i64 = 0 - 128` printed 2^64-128 here while x86_64 printed -128 — a clean
-        ## compile, exit 42, wrong TEXT (#443). `a64_operand_signed` is the SAME oracle `/`, `%` and
-        ## `shr` already route on, so the renderer and the arithmetic agree about what the operand is;
-        ## anything it cannot prove signed keeps the unsigned renderer and its exact previous bytes.
-        if a64_operand_signed(ga.e, params_head, body_head, src, a) { A64_PRINT_I64 = true ; push_str(sb, "  bl __print_i64\n") } else { push_str(sb, "  bl __print_u64\n") }
+        ## compile, exit 42, wrong TEXT (#443). `a64_hole_signed` asks `a64_operand_signed` — the SAME
+        ## oracle `/`, `%` and `shr` route on, so the renderer and the arithmetic agree about what the
+        ## operand is — and then, ONLY for rendering, the three shapes that oracle cannot prove and must
+        ## not be taught (#457: an `[i64; N]` element, a declared `i64` return, literal arithmetic).
+        ## Anything neither layer proves signed keeps the unsigned renderer and its exact previous bytes.
+        if a64_hole_signed(ga.e, params_head, body_head, decls, src, a) { A64_PRINT_I64 = true ; push_str(sb, "  bl __print_i64\n") } else { push_str(sb, "  bl __print_u64\n") }
         argp = ga.next
       }
       k += 2
@@ -3529,6 +3533,62 @@ a64_operand_unsigned := fn(e : ptr(Expr), params_head : ptr(mut Param), body_hea
     }
     _ => {}
   }
+  r
+}
+
+## ─── The `{}` HOLE's PRINT-SITE signedness (#457) ─────────────────────────
+##
+## LAYERED ON TOP of `a64_operand_signed`, never folded into it. That predicate is the oracle `/`, `%` and
+## `shr` route on, so widening IT moves ARITHMETIC selection, not just rendering: adding a single
+## `Expr::Index` arm to it was MEASURED to turn `arr[0] / 2` from `udiv` into `sdiv`, `arr[0] % 3` into the signed
+## remainder and `shr(arr[0], 1)` from `lsr` into `asr`.
+## Rendering must not buy its type recovery at that price, so the extra recovery lives here and is
+## read at the ONE call site that chooses `__print_i64` vs `__print_u64`.
+##
+## The three recovered shapes are exactly the ones x86_64 already recovers for the same hole and a
+## source scan of annotations cannot see (#443 left them as its recorded residual, #457):
+##
+##   • `arr[0]`         — the DECLARED ELEMENT type of the base local's array type
+##                        (x86_64: `lower::variadic_hole_type_span`)
+##   • `f(x)`           — the callee's DECLARED RETURN type (x86_64: `lower::call_ret_ty_span`)
+##   • `n := 0 - 5`, `0 - 4` — literal arithmetic, whose static type is Functions §7.1's DEFAULT
+##                        numeric type `i64` (x86_64: the `print_one_int` arms of `emit_variadic_print`)
+##
+## ONE-DIRECTIONAL, and in the opposite direction from `a64_operand_unsigned`: it can only move a hole
+## unsigned → signed, and the UNSIGNED oracle is asked FIRST and wins. So every operand that oracle
+## proves — a `: u64` local, a `[u64; N]` element under it, a `u64` arithmetic expression — keeps the
+## unsigned renderer and its exact previous bytes, and so does every hole none of the three shapes
+## matches: float, `str` and aggregate holes still reach the one integer renderer here, unchanged and
+## still out of scope.
+a64_hole_signed := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+  if a64_operand_signed(e, params_head, body_head, src, a) { return true }
+  if a64_operand_unsigned(e, params_head, body_head, src, a) { return false }
+  mut r := false
+  if lit_arith_i64(e) { r = true }
+  match deref(e) {
+    Expr::Index(bse, ix) => { if a64_hole_index_signed(bse, body_head, src, a) { r = true } }
+    Expr::Call(cs, cl, na, ah) => { if callee_ret_is_signed(decls, src, cs, cl) { r = true } }
+    Expr::Var(vs, vn) => { if a64_hole_local_init_signed(body_head, src, vs, vn, a) { r = true } }
+    _ => {}
+  }
+  r
+}
+## `arr[0]` — the base local's DECLARED array type, then that type's element name: `arr : [i64; 3]`
+## → `i64` → signed. A non-Var base, an un-annotated array local, or a non-scalar element answers no.
+a64_hole_index_signed := fn(bse : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+  bs := ex_var_ns(bse)
+  bn := ex_var_nl(bse)
+  mut r := false
+  if bn != 0 { an := a64_local_arrty_span(body_head, src, bs, bn, a) ; if arrty_elem_signed(src, an.s, an.n) { r = true } }
+  r
+}
+## `inferred := 0 - 5` — an UN-ANNOTATED local, whose `:=` initialiser is the only type evidence
+## there is; literal arithmetic there is §7.1's default `i64`. An ANNOTATED local never reaches here:
+## the two operand oracles above answer it first, in whichever direction its annotation says.
+a64_hole_local_init_signed := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+  rhs := a64_local_rhs(body_head, src, ns, nl, a)
+  mut r := false
+  if unchecked bitcast(usize, rhs) != 0 { if lit_arith_i64(rhs) { r = true } }
   r
 }
 ## An ORDERING comparison (`<`/`>`/`<=`/`>=`) is PROVABLY UNSIGNED iff BOTH operands are provably

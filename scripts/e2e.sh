@@ -5033,6 +5033,16 @@ print_hole_signed_want="$(cat "$E2E_TEST/print_hole_signed_render.out")"
 ## A missing or empty golden would make all three non-x86 rows compare "" with "" and pass vacuously.
 [ -n "$print_hole_signed_want" ] || { echo "FAIL print_hole_signed_render: the expected-output golden $E2E_TEST/print_hole_signed_render.out is missing or empty; the four-backend rows below would compare nothing"; fail=1; }
 run_x86_out print_hole_signed_render 42
+## Issue #457 — the four `{}`-hole shapes the backends' operand oracle cannot prove signed (an
+## un-annotated local from literal arithmetic, an `[i64; N]` element, a call with a declared `i64`
+## return, a bare literal-arithmetic hole), each at `i64::MIN` too, plus three UNSIGNED controls that
+## must not move. Same one-golden discipline as the #443 rows above: the x86_64 file IS the expected
+## bytes and the three non-x86 rows read it back, so "the four backends agree" stays a fact about one
+## set of bytes. The exit code is 42 on every backend BEFORE and AFTER the fix — only the text moves.
+print_hole_shapes_want="$(cat "$E2E_TEST/print_hole_signed_shapes.out")"
+## A missing or empty golden would make all three non-x86 rows compare "" with "" and pass vacuously.
+[ -n "$print_hole_shapes_want" ] || { echo "FAIL print_hole_signed_shapes: the expected-output golden $E2E_TEST/print_hole_signed_shapes.out is missing or empty; the four-backend rows below would compare nothing"; fail=1; }
+run_x86_out print_hole_signed_shapes 42
 ## Functions §7.1 / I11 — a call in STATEMENT position (result discarded) whose callee's TAIL name collides
 ## with the comptime-variadic `std::fmt::print` was routed into the `{}`-template desugar, which emits
 ## NOTHING when argument 0 is not a string literal: the whole statement — call, arguments, side effects —
@@ -8016,6 +8026,8 @@ run_wat_out wasm_print_escape $'a\nb\nc' 42
 run_wat_out wasm_print_tpl_nl $'val = 42\nx' 42
 ## Issue #443 — the WAT `{}` hole renderer against the x86_64 golden (see the x86 row above).
 run_wat_out print_hole_signed_render "$print_hole_signed_want" 42
+## Issue #457 — the same four backends against the #457 golden (see the x86 row above).
+run_wat_out print_hole_signed_shapes "$print_hole_shapes_want" 42
 run_wat operator_compare 42
 run_wat hex_literal 42
 run_wat wasm_nested_local 45
@@ -8108,6 +8120,8 @@ run_a64_out wasm_print_val 'val = 42' 42
 run_a64_out wasm_print_two '40 and 2' 42
 ## Issue #443 — the aarch64 `{}` hole renderer against the x86_64 golden (see the x86 row above).
 run_a64_out print_hole_signed_render "$print_hole_signed_want" 42
+## Issue #457 — the same four backends against the #457 golden (see the x86 row above).
+run_a64_out print_hole_signed_shapes "$print_hole_shapes_want" 42
 ## riscv64 backend (scalar kernel + scalar globals): cross-validate against the same
 ## expected exits as the x86_64 / WASM / aarch64 backends.
 run_rv64 smoke 42
@@ -8159,6 +8173,8 @@ run_rv64_out wasm_print_val 'val = 42' 42
 run_rv64_out wasm_print_two '40 and 2' 42
 ## Issue #443 — the riscv64 `{}` hole renderer against the x86_64 golden (see the x86 row above).
 run_rv64_out print_hole_signed_render "$print_hole_signed_want" 42
+## Issue #457 — the same four backends against the #457 golden (see the x86 row above).
+run_rv64_out print_hole_signed_shapes "$print_hole_shapes_want" 42
 
 ## Issue #306: axis-only coverage for mixed-width struct fields and narrow aggregate arguments.
 ## The local mixed-width, pointer-path, and narrow aggregate fixtures run on every supported backend;
