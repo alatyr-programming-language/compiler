@@ -82,6 +82,24 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A `match` on a nested enum place (`o.inner.t`) now takes the right arm** on x86_64, in every
+  `match` form. Control Flow §5.3 makes `match` one expression with one meaning — the arms are tested
+  top to bottom and the first matching arm wins, whatever the scrutinee expression is — but a
+  scrutinee whose base was ITSELF a field was never recognised as an enum at all. It fell into the
+  integer-scrutinee path, where an enum pattern arm carries no scalar literal, so every arm compared
+  the value against 0 and **no arm matched**: the wildcard won, or the no-arm fallback answered 0.
+  The program built cleanly and returned that number. Unlike the one-level case fixed earlier, this
+  hit all four spellings — tail expression, value expression, braced statement, and the usual
+  workaround of binding the field to a local first. That last one failed for a second reason: the
+  binding `x := o.inner.t` reserved a plain scalar slot, so only word 0 — the discriminant — was
+  copied. Its being the *right* discriminant is exactly why `x == Tag.Green` kept answering correctly
+  and made the defect look like a `match` bug alone; a payload-carrying enum bound that way lost its
+  payload words outright. Both halves now resolve the whole chain through one walk that accumulates
+  the word offset, so a field at any depth reaches the same materialisation a one-level field does.
+  A struct **parameter** arrives by reference, and reading a multi-word leaf through that pointer
+  stays the located reject it already was. x86_64 only: aarch64, riscv64 and wasm have no enum-match
+  lowering and trap fail-loud on this shape, before and after. The compiler's own emitted assembly is
+  byte-identical in both directions with the input tree held fixed.
 - Three more **right-hand sides of an assignment to a struct's enum field** (`h.t = <rhs>`) are no
   longer **dropped** on x86_64: an enum field of another struct (`h.t = s.t`), an enum array element
   (`h.t = xs[0]`) and a branch value (`h.t = if c { … } else { … }`, and its `match` spelling). Types §6

@@ -31,7 +31,7 @@ fld_p := ast::fld_p
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
-(emit_index_addr, field_place_parts) := lower::place
+(emit_index_addr, field_place_parts, field_read_agg) := lower::place
 
 ## Whether `deref(p)` is a `Var`, and (if so) its name span — a function-body `match` over a
 ## pointer param (the lowerable shape, mirroring `enum_lit_info`/`struct_lit_info`), so
@@ -189,7 +189,36 @@ pub try_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
   }
   ## a struct-field enum scrutinee of a LOCAL / by-ref param struct (its base has a frame slot).
   fe := field_var_scrut(scrut)
-  if fe.ok == false { return z }
+  ## #447 — a NESTED enum place (`o.inner.t`). `field_var_scrut` recognises only `Field(Var, f)`, so a
+  ## chain whose base is itself a field never reached the depth-1 branch below; the scrutinee stayed
+  ## unresolved and fell into the INTEGER path, where an enum pattern arm carries no scalar literal
+  ## (`am.lit` is 0) — EVERY arm compared against 0, so no arm matched and the wildcard (or the no-arm
+  ## `movq $0` fallback) won, in all four `match` forms. `field_read_agg` resolves the whole chain to
+  ## the SAME (root slot, cumulative word offset, by-ref) triple the depth-1 branch materializes from,
+  ## so the copy loop below is that branch's loop with `efp.off + j*8` replaced by `(fwo + j)*8` — the
+  ## `isr` case is free because `emit_agg_base_addr` already answers both root forms. The one-level and
+  ## global chains keep their existing routes; a niche-folded `Option(ptr(T))` FIELD is NOT claimed
+  ## here (`enum_decl_of` cannot resolve the parenthesized generic instance), so it keeps its behaviour.
+  if fe.ok == false {
+    nfa := field_read_agg(scrut, cx.slots, cx.decls, cx.src, a)
+    if nfa.kind != 3 { return z }
+    nrv := field_root_var(scrut)
+    if nrv.n == 0 { return z }
+    nrent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, nrv.s, nrv.n)))
+    nnw := 1 + enum_inst_words(cx.decls, cx.src, nfa.s, nfa.n, a)
+    ntb := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
+    emit_agg_base_addr(nrent, sb)                    ## ROOT struct word-0 address → %rax
+    mut nj := 0
+    while nj < nnw {
+      push_str(sb, "  movq ")
+      push_int(sb, nfa.fwo * 8 + i64(nj) * 8)
+      push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
+      push_int(sb, i64((ntb - nj + 1) * 8))
+      push_str(sb, "(%rbp)\n")
+      nj += 1
+    }
+    return ScrutInfo(is_e = true, base = ntb, es = nfa.s, el = nfa.n, is_ref = false, tmod_s = 0, tmod_l = 0)
+  }
   bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fe.bs, fe.bn)))
   ## the base struct's type span (a plain-Var struct local/param records it in sns/snl).
   if bent.snl == 0 { return z }

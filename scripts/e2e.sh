@@ -6895,6 +6895,31 @@ run_wat issue449_enum_field_eq 134
 ## must go on answering — a fix that touched the field read or the enum literal instead of the one
 ## operand classification would have turned this 42 into 61/62 or a trap. 42 on x86_64 AND on wasm.
 run issue449_enum_field_control 42
+## issue #447 — a NESTED enum place (`o.inner.t`) as a `match` scrutinee. `field_var_scrut` recognised
+## only `Field(Var, f)`, so a chain whose base is ITSELF a field never resolved and fell into the
+## INTEGER path where an enum pattern arm carries no scalar literal: EVERY arm compared against 0, so
+## NO arm matched. That hit all four `match` forms, including the usual workaround — binding the field
+## to a local — because `field_read_agg` was depth-1 too and `x := o.inner.t` reserved a SCALAR slot
+## whose word 0 (the discriminant) was right, which is exactly why `x == Tag.Green` kept answering.
+## Every outcome carries its own code — 50/54/58/60/63/66/69 the FIRST arm won, 51/55/61/64/67/70 the
+## wildcard won, 57 the no-wildcard `movq $0` fallback, 52/71 the cumulative word offset was dropped
+## and `Outer.lead` was read, 76/79 the first arm over a payload, 77/80 a payload that never moved,
+## 82-84 a broken control, 85-90 a dispatch right for one discriminant only. Measured on parent
+## 7ed9ffd: builds rc 0 and exits 51 (no arm matched). This tree: 42.
+run_x86 issue447_nested_enum_place_match 42
+## issue #447 CONTROL — the EXACT non-x86 status, not merely "nonzero": aarch64/riscv64 trap fail-loud
+## (SIGTRAP, 133) and wasm aborts (134) for an enum-typed scrutinee, BEFORE and AFTER, because those
+## backends have no enum-match lowering at all. A wildcard landing in some nonzero arm would satisfy a
+## bare non-zero check and hide the class.
+run_a64 issue447_nested_enum_place_match 133
+run_rv64 issue447_nested_enum_place_match 133
+run_wat issue447_nested_enum_place_match 134
+## issue #447 FENCE — the shape this slice deliberately did NOT claim. A struct PARAMETER arrives by
+## reference, so `o.inner.t` inside it is a multi-word leaf read through a POINTER, which
+## `resolve_nested_ptr_field` refuses out loud. Same located reject on parent 7ed9ffd and on this tree;
+## the row exists so a future widening of `word_field_path` cannot silently turn it into an unmeasured
+## emission. `_has`, not a bare `build_reject`, and the needle appears nowhere in the fixture's text.
+build_reject_has issue447_nested_enum_place_byref_reject "leaf of a nested field through a pointer"
 run_wat issue449_enum_field_control 42
 ## issue #472 — a GENERIC OVERLOAD SET shared ONE linker symbol, because the instance label
 ## `<module>__<fn>__<typetag>` is built from the TYPE ARGUMENTS ALONE and the value parameters take no

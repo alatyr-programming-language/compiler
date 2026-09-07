@@ -40,7 +40,7 @@ strbuf := rt
 Expr := ast::Expr
 (push_str, push_int) := strbuf
 (LCtx, SVec, arg_expr_at, num_lit_value, var_name_span) := lower_ctx
-(enum_decl_of, field_word_offset, field_words, is_packed, is_union_decl, layout_elem_stride_bytes, layout_field_offset_bytes, layout_kind, layout_kind_is_byte, standard_field_byte_offset, std_array_elem_byte_tier, std_copy_image_bytes, std_copy_kind, std_struct_has_byte_layout, std_struct_is_word_granular, struct_decl_of, struct_words) := lower_layout
+(enum_decl_of, field_word_offset, field_words, is_packed, is_union_decl, layout_elem_stride_bytes, layout_field_offset_bytes, layout_kind, layout_kind_is_byte, layout_kind_is_packed, standard_field_byte_offset, std_array_elem_byte_tier, std_copy_image_bytes, std_copy_kind, std_struct_has_byte_layout, std_struct_is_word_granular, struct_decl_of, struct_words) := lower_layout
 ## SIBLING children, reached by an explicit qualified path (Modules §4) — never by a bare name.
 (index_plain_scalar_struct) := lower::ir
 (lower_show_src_line) := lower::ctfold
@@ -456,6 +456,63 @@ pub emit_addr_of := fn(p : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)
     _ => { push_str(sb, "  pushq $0\n") }
   }
 }
+## The AGGREGATE KIND of a resolved place's terminal type, in the one order every consumer in this
+## band already used: a raw UNION and a STRUCT are both word-copied aggregates (2), an ENUM is
+## discriminant + payload (3), a `str` is the 2-word `{ptr, len}` view (4), and anything else is a
+## scalar leaf this band does not claim (0). It was spelled twice inside `field_read_agg` and a third
+## copy would be a third place to change when a kind is added, so the decision lives here once.
+pub agg_leaf_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> u8 {
+  tb := base_type_name(src, ts, tl)
+  if is_union_decl(decls, src, tb.s, tb.n) { return 2 }
+  if struct_decl_of(decls, src, tb.s, tb.n) >= 0 { return 2 }
+  if enum_decl_of(decls, src, tb.s, tb.n) >= 0 { return 3 }
+  if str_at((src + ts), tl) == "str" { return 4 }
+  0
+}
+
+## Is the aggregate `[s, s+n)` written in the WORD tier — neither `@packed` nor standard-BYTE? Those
+## two tiers have their own byte-precise place resolvers (`field_byte_place`, `standard_field_path`)
+## and reading them at word offsets is a wrong value, so the word walk below refuses them per hop.
+word_tier_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
+  lk := layout_kind(decls, src, s, n, a)
+  not layout_kind_is_packed(lk) and not layout_kind_is_byte(lk)
+}
+
+## THE WORD-TIER TWIN of `standard_field_path`: resolve a field path of ANY DEPTH rooted at an INLINE
+## struct LOCAL. `boff` is the root's frame slot (word 0, exactly as `emit_agg_base_addr` reads it) and
+## `fwo` the CUMULATIVE word offset from it — the same pair every word-tier consumer already spells, so
+## `o.inner.t` reaches them through the arithmetic `o.t` already uses instead of a second model.
+## `kind` is `agg_leaf_kind` of the TERMINAL type; 0 means the path is not a word-tier aggregate place.
+##
+## A BY-REFERENCE root (`ent.is_ref`, a struct PARAM whose slot holds a POINTER) is deliberately NOT
+## claimed, so `resolve_nested_ptr_field`'s located reject for a multi-word leaf through a pointer
+## stands unchanged — `test/issue447_nested_enum_place_byref_reject.al` holds that fence in place.
+## Lifting it is a separate measurement, not a side effect of this one.
+##
+## Written as expression-valued match arms with no mid-arm early return (the lean-lower gotcha), like
+## `standard_field_path`, so the recursion lowers under the frozen seed.
+pub word_field_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> FieldAgg {
+  z := FieldAgg(kind = 0, s = 0, n = 0, boff = 0, fwo = 0, isr = false)
+  match deref(e) {
+    Expr::Var(s, n) => {
+      ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, s, n)))
+      if ent.ek == 2 and not ent.is_ref and streq(src, ent.ns, ent.nl, s, n) and ent.snl != 0 and word_tier_agg(decls, src, ent.sns, ent.snl, a) {
+        FieldAgg(kind = 2, s = ent.sns, n = ent.snl, boff = ent.off, fwo = 0, isr = false)
+      } else { z }
+    }
+    Expr::Field(base, fs, fl) => {
+      p := word_field_path(base, slots, decls, src, a)
+      if p.kind == 2 and word_tier_agg(decls, src, p.s, p.n, a) {
+        ft := field_type_span(decls, src, p.s, p.n, fs, fl, a)
+        fwo := field_word_offset(decls, src, p.s, p.n, fs, fl, a)
+        if ft.n != 0 and fwo >= 0 {
+          FieldAgg(kind = agg_leaf_kind(decls, src, ft.s, ft.n), s = ft.s, n = ft.n, boff = p.boff, fwo = p.fwo + fwo, isr = p.isr)
+        } else { z }
+      } else { z }
+    }
+    _ => { z }
+  }
+}
 pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> FieldAgg {
   mut r := FieldAgg(kind = 0, s = 0, n = 0, boff = 0, fwo = 0, isr = false)
   ## A standard-byte root has a compressed field before the aggregate, so the old word offset is
@@ -465,11 +522,7 @@ pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
   mut s3fstd := false
   if s3fra.ok {
     s3ftb := base_type_name(src, s3fra.ts, s3fra.tl)
-    mut s3fkind : u8 = 0
-    if is_union_decl(decls, src, s3ftb.s, s3ftb.n) { s3fkind = 2 }
-    else if struct_decl_of(decls, src, s3ftb.s, s3ftb.n) >= 0 { s3fkind = 2 }
-    else if enum_decl_of(decls, src, s3ftb.s, s3ftb.n) >= 0 { s3fkind = 3 }
-    else if str_at((src + s3fra.ts), s3fra.tl) == "str" { s3fkind = 4 }
+    s3fkind := agg_leaf_kind(decls, src, s3fra.ts, s3fra.tl)
     ## CLAYOUT S3(b)/S3(c) — THE WORD EXTRACT NEEDS A WORD-GRANULAR CHILD; EVERYTHING ELSE IS THE
     ## COPIER'S. S3(b) made a sub-word child CONSTRUCTIBLE (`struct { data : [u8;8], inner : struct
     ## { a : u16, b : u16 } }` now has one byte-precise image on all four backends), which exposed
@@ -509,17 +562,14 @@ pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
         if bent.ek == 2 and streq(src, bent.ns, bent.nl, bvn.s, bvn.n) and bent.snl != 0 {
           ft := field_type_span(decls, src, bent.sns, bent.snl, fs, fl, a)
           if ft.n != 0 {
-            ftb := base_type_name(src, ft.s, ft.n)
+            ## Types §9.4 — a `str` FIELD is a 2-word `{ptr, len}` sub-aggregate (Memory §3.5), so
+            ## `c := b.v` must reserve `c` as a str LOCAL and copy BOTH words. It reported kind 0, so
+            ## the binding fell to the scalar default and the emit stored word 0 only — `c.len` then
+            ## read an uninitialized slot (0): a SILENT MISCOMPILE. kind 4 = str (2 words).
             fwo := field_word_offset(decls, src, bent.sns, bent.snl, fs, fl, a)
-            if fwo >= 0 {
-              if is_union_decl(decls, src, ftb.s, ftb.n) { r = FieldAgg(kind = 2, s = ft.s, n = ft.n, boff = bent.off, fwo = fwo, isr = bent.is_ref) }
-              else if struct_decl_of(decls, src, ftb.s, ftb.n) >= 0 { r = FieldAgg(kind = 2, s = ft.s, n = ft.n, boff = bent.off, fwo = fwo, isr = bent.is_ref) }
-              else if enum_decl_of(decls, src, ftb.s, ftb.n) >= 0 { r = FieldAgg(kind = 3, s = ft.s, n = ft.n, boff = bent.off, fwo = fwo, isr = bent.is_ref) }
-              ## Types §9.4 — a `str` FIELD is a 2-word `{ptr, len}` sub-aggregate (Memory §3.5), so
-              ## `c := b.v` must reserve `c` as a str LOCAL and copy BOTH words. It reported kind 0, so
-              ## the binding fell to the scalar default and the emit stored word 0 only — `c.len` then
-              ## read an uninitialized slot (0): a SILENT MISCOMPILE. kind 4 = str (2 words).
-              else if str_at((src + ft.s), ft.n) == "str" { r = FieldAgg(kind = 4, s = ft.s, n = ft.n, boff = bent.off, fwo = fwo, isr = bent.is_ref) }
+            fkind := agg_leaf_kind(decls, src, ft.s, ft.n)
+            if fwo >= 0 and fkind != 0 {
+              r = FieldAgg(kind = fkind, s = ft.s, n = ft.n, boff = bent.off, fwo = fwo, isr = bent.is_ref)
             }
           }
         }
@@ -527,6 +577,25 @@ pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
     }
     _ => {}
   } }
+  ## #447 — a NESTED aggregate place (`o.inner.t`). The depth-1 arm above sees only `Field(Var, f)`, so
+  ## a chain whose base is ITSELF a field reported kind 0: `x := o.inner.t` fell to the SCALAR slot and
+  ## kept word 0 alone (an enum's discriminant survived, its payload did not), and every
+  ## `match o.inner.t` fell to the INTEGER scrutinee path where an enum pattern arm carries no scalar
+  ## literal — so NO arm matched. `word_field_path` answers the same (root slot, cumulative word
+  ## offset, by-ref) triple this resolver already returns, so BOTH consumers — the slot reservation in
+  ## `lower::collect_slots` and the word-copy loop in `lower::assign` — work unchanged. Claimed only
+  ## when the depth-1 arm and the byte-tier walk both declined, so no existing shape changes route.
+  if r.kind == 0 and not s3fstd {
+    nfp := field_place_parts(v)
+    if unchecked bitcast(usize, nfp.base) != 0 {
+      if unchecked bitcast(usize, field_place_parts(nfp.base).base) != 0 {
+        nwp := word_field_path(v, slots, decls, src, a)
+        ## ONLY the ENUM leaf — issue #447's exact shape. A nested STRUCT or `str` leaf keeps its own
+        ## existing routes and located rejects; widening this claim is a separate measurement.
+        if nwp.kind == 3 { r = nwp }
+      }
+    }
+  }
   r
 }
 ## Emit a WHOLE-ELEMENT copy of an aggregate array element `arr[i]` into a LOCAL aggregate's
