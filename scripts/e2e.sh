@@ -6166,6 +6166,18 @@ run_x86 overflow_policy 42
 run_x86 issue514_checked_bare 42
 run_x86 issue514_checked_type_named 42
 run_x86 issue514_overflow_family_bare 42
+## issue #532 — the mul half of that same family kept the LEFT OPERAND as its high word wherever no
+## `comptime if target.arch == Arch.{x86_64,aarch64,riscv64}` arm applies. `Arch` names no wasm variant
+## (Manifest §3.2 / Assembly §10; WASM is additive, FND-6), so on the wat emitter every arm folded false,
+## `hi` stayed `a`, and `checked_mul(7, 6)` answered `None` — a clean compile with the wrong answer, the
+## silent half of #488. `lib/base/num.al` now carries a portable division-based fall-through under the
+## complementary predicate, so the six bodies are correct on a target with no high-half intrinsic.
+## The fixture reaches the library through `base::num::…` inside `when target.arch != Arch.x86_64`
+## declarations (see its header for why that spelling, and only that spelling, is reachable on wasm):
+## x86_64 drops them and returns 42, aarch64/riscv64 keep them and trap LOUD on the still-undefined
+## callee (133, recorded by the corpus), wasm both keeps and resolves them. Parent wasm answered 2.
+run issue532_wasm_mul_family 42
+run_wat issue532_wasm_mul_family 42
 ## Checked narrow-width overflow TRAPS for an INDEX read (I11/CG-6): `xs[i]+xs[j]` on a `[u8;N]` array
 ## overflows u8 → 132. The element type is recovered from the array's declared `[u8;N]` so the index
 ## read classifies as narrow-width (was silently native-width → no trap). Companions: the non-overflowing

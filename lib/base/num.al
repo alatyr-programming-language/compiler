@@ -603,6 +603,11 @@ pub overflowing_mul := fn(a : u64, b : u64) -> (u64, bool) {
   comptime if target.arch == Arch.x86_64 { x86_64.mulhiq(hi, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.umulh(hi, a, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.mulhu(hi, a, b) }
+  comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 {
+    hi = b
+    if a != 0 { hi = unchecked { w / a } }
+    if hi != b { hi = 1 } else { hi = 0 }
+  }
   o : bool = hi != 0
   return (w, o)
 }
@@ -622,6 +627,11 @@ pub checked_mul := fn(a : u64, b : u64) -> Option(u64) {
   comptime if target.arch == Arch.x86_64 { x86_64.mulhiq(hi, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.umulh(hi, a, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.mulhu(hi, a, b) }
+  comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 {
+    hi = b
+    if a != 0 { hi = unchecked { w / a } }
+    if hi != b { hi = 1 } else { hi = 0 }
+  }
   if hi != 0 { return Option(u64).None }
   return Option(u64).Some(w)
 }
@@ -640,6 +650,11 @@ pub saturating_mul := fn(a : u64, b : u64) -> u64 {
   comptime if target.arch == Arch.x86_64 { x86_64.mulhiq(hi, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.umulh(hi, a, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.mulhu(hi, a, b) }
+  comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 {
+    hi = b
+    if a != 0 { hi = unchecked { w / a } }
+    if hi != b { hi = 1 } else { hi = 0 }
+  }
   if hi != 0 { return 18446744073709551615 }
   return w
 }
@@ -863,6 +878,18 @@ pub overflowing_mul := fn(a : i64, b : i64) -> (i64, bool) {
   comptime if target.arch == Arch.x86_64 { x86_64.imulhiq(hi, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.smulh(hi, a, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.mulh(hi, a, b) }
+  comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 {
+    hi = b
+    if a != 0 and a != (0 - 1) { hi = unchecked { w / a } }
+    if a == (0 - 1) and b == (0 - 9223372036854775807 - 1) { hi = 0 }
+    if hi != b {
+      hi = 1
+      if w < 0 { hi = 0 }
+    } else {
+      hi = 0
+      if w < 0 { hi = 0 - 1 }
+    }
+  }
   mut o : bool = false
   if w >= 0 and hi != 0 { o = true }
   if w < 0 and hi != (0 - 1) { o = true }
@@ -886,6 +913,18 @@ pub checked_mul := fn(a : i64, b : i64) -> Option(i64) {
   comptime if target.arch == Arch.x86_64 { x86_64.imulhiq(hi, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.smulh(hi, a, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.mulh(hi, a, b) }
+  comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 {
+    hi = b
+    if a != 0 and a != (0 - 1) { hi = unchecked { w / a } }
+    if a == (0 - 1) and b == (0 - 9223372036854775807 - 1) { hi = 0 }
+    if hi != b {
+      hi = 1
+      if w < 0 { hi = 0 }
+    } else {
+      hi = 0
+      if w < 0 { hi = 0 - 1 }
+    }
+  }
   if w >= 0 and hi != 0 { return Option(i64).None }
   if w < 0 and hi != (0 - 1) { return Option(i64).None }
   return Option(i64).Some(w)
@@ -908,6 +947,18 @@ pub saturating_mul := fn(a : i64, b : i64) -> i64 {
   comptime if target.arch == Arch.x86_64 { x86_64.imulhiq(hi, b) }
   comptime if target.arch == Arch.aarch64 { aarch64.smulh(hi, a, b) }
   comptime if target.arch == Arch.riscv64 { riscv64.mulh(hi, a, b) }
+  comptime if target.arch != Arch.x86_64 and target.arch != Arch.aarch64 and target.arch != Arch.riscv64 {
+    hi = b
+    if a != 0 and a != (0 - 1) { hi = unchecked { w / a } }
+    if a == (0 - 1) and b == (0 - 9223372036854775807 - 1) { hi = 0 }
+    if hi != b {
+      hi = 1
+      if w < 0 { hi = 0 }
+    } else {
+      hi = 0
+      if w < 0 { hi = 0 - 1 }
+    }
+  }
   mut ovf : bool = false
   if w >= 0 and hi != 0 { ovf = true }
   if w < 0 and hi != (0 - 1) { ovf = true }

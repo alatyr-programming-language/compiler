@@ -82,6 +82,18 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`checked_mul` / `overflowing_mul` / `saturating_mul` no longer report overflow for every non-zero
+  left operand on a target with no high-half-of-product intrinsic.** The `u64` and `i64` members of
+  the overflow-policy family read the product's high word out of `mut hi := a` followed by three
+  `comptime if target.arch == Arch.{x86_64,aarch64,riscv64}` arms naming `mulhiq`/`umulh`/`mulhu`
+  (and their signed twins). `Arch` names no wasm variant — Manifest §3.2 and Assembly §10 enumerate
+  six machines and WASM is an additive backend (FND-6) — so on the wat emitter every arm folds false,
+  `hi` kept the value of `a`, and `checked_mul(7, 6)` answered `None`: a clean compile with the wrong
+  answer, on the one target where the library was reachable at all. The six bodies now carry a
+  portable division-based fall-through under the complementary predicate, so a target that names no
+  high-half intrinsic computes the same answer the three intrinsic arms do, including at i64 MIN and
+  for the `MIN * -1` product that does not fit. x86_64, aarch64 and riscv64 emission is byte-identical.
+
 - **An integer-to-pointer `bitcast` now lowers on aarch64 and riscv64 instead of trapping.**
   `bitcast(ptr([mut] T), n)` had no lowering on either backend: every preserved pointer target
   answered with an anonymous fail-loud stub (`brk #0 // unsupported bitcast`,
