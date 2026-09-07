@@ -759,6 +759,35 @@ pub emit_elem_copy_in := fn(arr : ptr(Expr), idx : ptr(Expr), dst : i64, in out 
     push_str(sb, "(%rbp)\n")
   }
 }
+## The source offset to BLAME when `emit_index_addr`'s element-address tail refuses a base it cannot
+## resolve (see the guard at the end of this file's tail). `panic` carries no span of its own, so the
+## LOCATED half of that diagnostic is one `lower_show_src_line` on this offset; `0` means no offset
+## was recoverable and the message stands alone, which is what the neighbouring tail guards already do.
+## Peels the postfix / pointer wrappers that can sit between the `[i]` and the name the author wrote —
+## a range slice, a nested index, a deref / address-of, `unchecked`, a bitcast, a comptime field — so
+## `xs[lo..hi][i]` blames `xs`'s line and `arr[0][1..4][i]` blames `arr`'s. A shape that carries a name
+## span of its own (a field, a str literal, a struct literal, a call, a fn reference) blames that name;
+## `ArrayLit` / `If` / `Match` / `Bin` have no span in the AST at all and fall through to 0.
+index_base_blame_off := fn(base : ptr(Expr)) -> usize {
+  mut res : usize = 0
+  match deref(base) {
+    Expr::Var(vs, vn) => { res = vs }
+    Expr::Field(fb, ffs, ffl) => { res = ffs }
+    Expr::StrLit(ls, ll, lbl, lps, lpn) => { res = ls }
+    Expr::StructLit(ss, sl, snf, sah) => { res = ss }
+    Expr::Call(cs, cl, cn, cah) => { res = cs }
+    Expr::FnRef(rs, rl, rk) => { res = rs }
+    Expr::Slice(qb, qlo, qhi) => { res = index_base_blame_off(qb) }
+    Expr::Index(xb, xi) => { res = index_base_blame_off(xb) }
+    Expr::Deref(di) => { res = index_base_blame_off(di) }
+    Expr::AddrOf(ai) => { res = index_base_blame_off(ai) }
+    Expr::Unchecked(ui) => { res = index_base_blame_off(ui) }
+    Expr::Bitcast(bi, bts, btl) => { res = index_base_blame_off(bi) }
+    Expr::CompField(cb, ci) => { res = index_base_blame_off(cb) }
+    _ => {}
+  }
+  res
+}
 pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## SOUNDNESS (correct-or-trap, cardinal rule): a str LITERAL base (`"abc"[i]`) is a `.rodata`
   ## VALUE, not a place — it has no frame home for `index_base_entry` to resolve, so the generic
@@ -998,7 +1027,42 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
     panic("selfhost: indexing a struct array FIELD through a non-local root (`deref(p).cells[i]` / `a.b.cells[i]`) is not yet supported — the element-address math only composes a `Var`-rooted `s.cells[i]`; bind the inner struct to a local first")
   }
   bslot := index_base_entry(base, cx.slots, cx.src)
+  ## SOUNDNESS (correct-or-trap, I11 / Types §6.4): THE UNTYPED TAIL. Everything below composes the
+  ## element address as `base + i * stride` out of `bslot`'s `SlotEntry`, and `index_base_entry`
+  ## answers `0` — entry 0, the FIRST slot of the frame — for every base it cannot resolve: any
+  ## non-`Var` shape, and a `Var` whose name `entry_of` did not find. Defaulting there is not a
+  ## conservative answer, it is the WRONG address: the body emitted was `leaq -8(%rbp)` + `imulq
+  ## stride`, so the program compiled clean and returned a plausible word out of the CALLER's frame.
+  ## That default is the sink behind #394, #405, #410 and #422 — each was fixed by adding one more
+  ## recognizer ABOVE this line while the default itself kept answering wrongly. Refuse instead
+  ## (#425); a shape that turns out to be valid gets its own recognizer above, never a wider default
+  ## here.
+  ##
+  ## Measured on this tree BEFORE the guard, with a probe on these two lines: 1161 bases reach here —
+  ## 1144 over `test/*.al` (1169 of 1564 fixtures build on x86; the other 395 are intended rejects,
+  ## non-x86 or multi-file rows) and 17 over `package.al`'s own `src/` + `lib/` — and EVERY one is a
+  ## name-matched `Var`. Zero non-`Var` arrivals, zero name-missed `Var`s. Every non-`Var` arrival
+  ## found by hand was already a silent wrong value: `xs[lo..hi][i]` → 0 not 42 (#422), `s[lo..hi][i]`
+  ## → 6 not 98, `xs[lo..hi][i] = v` → the store vanished, `[a, b, c][i]` → 0, `deref(p)[i]` → 0,
+  ## `(if c { xs } else { ys })[i]` → 0, `ptr(xs)[i]` → 0, `Slice(T)(ptr = …, len = …)[i]` → 0, and a
+  ## module-global `[str; N]`'s `G[i][j]` → 5 not 90. So the refusal costs no working form and moves
+  ## no corpus row; it converts nine silent miscompiles into a located diagnostic.
+  ##
+  ## The `Var` test comes FIRST so a non-`Var` base never reads entry 0 at all (a frame with no slots
+  ## would make that `svec_at` an out-of-range read). Every other `index_base_entry` caller is a
+  ## CLASSIFIER that re-checks the recovered `ek`/`eek`/`snl` and falls back to "not found"; the only
+  ## ones that go on to compose an ADDRESS route through this function, `emit_elem_copy_in` included.
+  ibtv := var_name_span(base)
+  if ibtv.n == 0 {
+    blm := index_base_blame_off(base)
+    if blm != 0 { lower_show_src_line(cx.src, blm) }
+    panic("selfhost: this index BASE is not a named array/slice place — the element-address tail composes `base + i * stride` out of a bound local's or parameter's frame slot, and this base has none, so it used to resolve to frame slot 0 and read the caller's own frame. Bind the base to a local first (`v := <base>; v[i]`), the spelling every backend already lowers. Known unresolved shapes: a range slice used directly as a base (`xs[lo..hi][i]` / `s[lo..hi][i]`, issue #422), an array literal, a `deref`/`ptr` compound, an `if`/`match` value, a `Slice(T)` constructor, and a module-global `[str; N]`'s nested index")
+  }
   ent := deref(svec_at(SlotEntry, cx.slots, bslot))
+  if not streq(cx.src, ent.ns, ent.nl, ibtv.s, ibtv.n) {
+    lower_show_src_line(cx.src, ibtv.s)
+    panic("selfhost: this index BASE names no bound local or parameter — `entry_of` did not find it in the frame's slot map, so the element-address tail used to fall back to frame slot 0 and read an unrelated local. Declare or bind the name before indexing it")
+  }
   boff := i64(ent.off)
   ## STANDARD BYTE TUPLE COMPONENT — the tuple index selects a component whose address is computed
   ## from the declared standard byte layout. Scalar components use the same address and the ordinary

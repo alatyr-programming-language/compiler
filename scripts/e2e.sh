@@ -7938,6 +7938,19 @@ run view_ptr_deref_byte 100
 ## must be REJECTED, not read. Five spellings used to leaq the pointer's own frame slot and read the surrounding
 ## frame (0 / a neighbouring element / 95 / 80 / 104). Working spellings: deref(p), bytes(s)[i], Slice(u8)(…)[i].
 build_reject_has reject_index_scalar_ptr "indexing a SCALAR local/param"
+## Types §6.4 / Grammar §3.4 (#425): the untyped element-address TAIL of `emit_index_addr` used to
+## resolve a base it could not name to frame slot 0 and read the caller's own frame. Nine spellings were
+## silent wrong values (`xs[lo..hi][i]` 0 not 42, `s[lo..hi][i]` 6 not 98, an array-slice store lost,
+## `[a,b,c][i]` 0, `deref(p)[i]` 0, `(if c {xs} else {ys})[i]` 0, `ptr(xs)[i]` 0, `Slice(T)(…)[i]` 0, a
+## global `[str; N]`'s `G[i][j]` 5 not 90); the tail now refuses and names the line. A census on the
+## parent measured 1161 arrivals at that tail (1144 over `test/*.al`, 17 over `src/` + `lib/`), every one
+## a name-matched `Var`, so no working shape moves — `index_base_tail_controls` pins fifteen of them,
+## nine reaching the tail and six claimed by a recognizer above it, each with its own failure code. The
+## non-x86 tails are separate code and untouched: they still emit for this shape and TRAP at runtime
+## (a133/rv133/wasm134), which is the acceptable half of correct-or-trap, so no `emit_reject_has` row.
+build_reject_has reject_index_base_not_a_place "index BASE is not a named array/slice place"
+run_x86 index_base_tail_controls 42
+check_accept index_base_tail_controls
 ## BYTES bounded return ABI: `[u8; N]` with 1 <= N <= 16 is returned as one or two packed words and
 ## indexed both after binding and directly. The bound form remains x86-only; the direct form is also
 ## covered on AArch64 by its matching x0/x1 carrier. The wider/non-u8 direct forms below remain located rejects.
