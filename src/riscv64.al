@@ -5082,6 +5082,54 @@ rv_store_enum_place_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
   pw
 }
 
+## ISSUE #462 — `pe` is a CALL whose declared return type is an enum. §8 piece 3 delivers such a call's
+## `1 + max_arity` words in the RETURN REGISTERS (word 0 = discriminant in a0, payload word k in a(k+1)),
+## exactly as the enum-returning-call LOCAL bind below already reads them. The scalar fallback of
+## `emit_rv_store_payload_at` stored ONE of them, so `Boxed(p = mk())` kept the right discriminant and read
+## every PAYLOAD word out of a slot nothing wrote — 100 where 105 was due, while `e := mk() ; Boxed(p = e)`
+## (an enum PLACE, #448/PR #460) answered 105. Returns the words written, 0 when `pe` is not such a call,
+## so every other value keeps the byte-identical one-word emit. `rv_call_ret_enum_span` is already gated to
+## the `1 <= w <= 8` register budget; a WIDER enum reports 0/0 there and keeps its existing SRET route.
+rv_store_enum_call_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+  cre := rv_call_ret_enum_span(pe, decls, src, a)
+  if cre.n == 0 { return 0 }
+  cw := 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a))
+  ## A PAYLOAD-FREE enum call is ONE word, which the scalar fallback below already stores correctly
+  ## (`Holder(t = green())` answered right on both backends before this change). Decline it, exactly as
+  ## `rv_store_enum_place_at` declines a one-word enum LOCAL, so the emitted text stays byte-identical
+  ## for every program that has one and only the dropped payload words are a change.
+  if cw < 2 { return 0 }
+  emit_rv_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+  mut k := 0
+  while k < cw {
+    push_str(sb, "  sd a") ; push_int(sb, k) ; push_str(sb, ", ") ; push_int(sb, off + k * 8) ; push_str(sb, "(s0)\n")
+    k = k + 1
+  }
+  cw
+}
+
+## The POINTER-relative twin of `rv_store_enum_call_at`. The destination base is at `0(sp)`, but a0..a(w-1)
+## still hold the call's result here, so the base goes to t0 — NOT the a1 the surrounding writer uses, which
+## is payload word 0 in this case — and is kept for the whole block: the stores in between touch no register.
+rv_store_enum_call_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+  cre := rv_call_ret_enum_span(pe, decls, src, a)
+  if cre.n == 0 { return 0 }
+  cw := 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a))
+  ## A PAYLOAD-FREE enum call is ONE word, which the scalar fallback below already stores correctly
+  ## (`Holder(t = green())` answered right on both backends before this change). Decline it, exactly as
+  ## `rv_store_enum_place_at` declines a one-word enum LOCAL, so the emitted text stays byte-identical
+  ## for every program that has one and only the dropped payload words are a change.
+  if cw < 2 { return 0 }
+  emit_rv_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+  push_str(sb, "  ld t0, 0(sp)\n")
+  mut k := 0
+  while k < cw {
+    push_str(sb, "  sd a") ; push_int(sb, k) ; push_str(sb, ", ") ; push_int(sb, off + k * 8) ; push_str(sb, "(t0)\n")
+    k = k + 1
+  }
+  cw
+}
+
 ## Store ONE enum/struct payload VALUE `pe` into the frame at byte offset `off`, returning the WORDS it
 ## occupies (§8 piece 3b): scalar → 1; struct literal (all-scalar) → its fields; nested enum literal →
 ## {disc, payload…} recursively (full width); str literal → deferred loud `ebreak` (2 words reserved).
@@ -5163,6 +5211,9 @@ emit_rv_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf
   ## ISSUE #448: an enum PLACE (param / wide local) reaches the frame in FULL, not as one scalar word.
   epw := rv_store_enum_place_at(pe, off, sb, a, src, params_head, pcount, body_head, decls)
   if epw != 0 { return epw }
+  ## ISSUE #462: an enum-returning CALL arrives in the RETURN REGISTERS, also in FULL.
+  ecw := rv_store_enum_call_at(pe, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+  if ecw != 0 { return ecw }
   emit_rv_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, "  sd a0, ") ; push_int(sb, off) ; push_str(sb, "(s0)\n")
   return 1
@@ -5227,6 +5278,9 @@ emit_rv_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::Str
   ## ISSUE #448: the pointer-relative twin of the same enum-place rule.
   epw := rv_store_enum_place_atptr(pe, off, sb, a, src, params_head, pcount, body_head, decls)
   if epw != 0 { return epw }
+  ## ISSUE #462: the pointer-relative twin of the same enum-returning-CALL rule.
+  ecw := rv_store_enum_call_atptr(pe, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+  if ecw != 0 { return ecw }
   emit_rv_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, "  ld a1, 0(sp)\n  sd a0, ") ; push_int(sb, off) ; push_str(sb, "(a1)\n")
   return 1
