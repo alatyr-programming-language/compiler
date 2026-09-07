@@ -82,6 +82,26 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- Three more **right-hand sides of an assignment to a struct's enum field** (`h.t = <rhs>`) are no
+  longer **dropped** on x86_64: an enum field of another struct (`h.t = s.t`), an enum array element
+  (`h.t = xs[0]`) and a branch value (`h.t = if c { … } else { … }`, and its `match` spelling). Types §6
+  makes the assignment observable at the next read of that place, but each of these built cleanly, ran
+  normally and read back the variant the struct **literal** had written. The previous fix taught the
+  whole-enum writer an enum place and an enum-returning call; every other value kind still fell into a
+  wildcard that emitted **no instruction at all** while the caller reported the store as done. A
+  payload-carrying enum lost its payload words the same way, and an enum tuple component was dropped
+  too. All of these now store the complete `{disc, payload…}` block, reusing the deliverers the
+  corresponding `x := <rhs>` local binding already used, so a shape that binds correctly assigns
+  correctly.
+- **A right-hand side the writer cannot address is now refused, not silently ignored.** That wildcard
+  is the reason this class kept recurring: emitting nothing looks like success to every caller, so the
+  program answers stale with exit status 0. It now reports whether it wrote anything, and a shape it
+  cannot deliver — a mutable-global enum source, a `deref` of an enum pointer — is a located
+  diagnostic naming the right-hand sides that do work. Those two programs previously compiled and
+  answered a stale field. No program in this repository, its standard library or the compiler's own
+  source reaches that refusal, and the compiler's emitted assembly is byte-identical. x86_64 only:
+  aarch64 and riscv64 refuse this shape fail-loud, and the wasm field read is a separate defect.
+
 - Two **overloads of one generic function** in one module no longer share a linker symbol. A generic
   instance is labelled `<module>__<fn>__<typetag>`, built from the **type arguments alone** — the value
   parameters took no part in it — so at one instantiation two declarations that overload resolution
