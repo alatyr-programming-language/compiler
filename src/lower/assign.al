@@ -1745,6 +1745,17 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         ## %rbp store — a SILENT no-op. Reached by a global→global element copy (`GS[i] = GT[j]`),
         ## a by-ref var, a wide-SRET call, and an if/match-expression RHS. Bind to a local first.
         panic("selfhost: `ARR[i] = <aggregate>` into a module-level struct-element array GLOBAL from this RHS kind (a global/element read, a by-ref var, a wide-SRET call, or an if/match expression) is not yet supported — bind it to a local first (`t := <rhs>; ARR[i] = t`). [fail-loud guard: never a silent dropped store]")
+      } else if global_arr_str(gaiv, a).is_s {
+        ## FAIL-LOUD terminal for a `str`-element array GLOBAL (issue #495). Every element is a
+        ## two-word `{ptr, len}` cell at the 2-word stride `global_arr_str` fixes, so the scalar arm
+        ## below — the only one that could still claim this shape — would store ONE word at
+        ## `LABEL + i*8`, i.e. inside element `i/2`: for `G[1] = "…"` that is element 0's LENGTH word,
+        ## which silently corrupts a neighbouring element and leaves the written one untouched.
+        ## Before the READ was implemented that corruption was masked (every element read answered an
+        ## empty view or refused); with the read correct it would surface as a plausible wrong byte,
+        ## the exact hazard #421 names. I11 permits a deterministic reject where this lowerer has no
+        ## correct store, and #495 is a READ unit — the whole-element WRITE keeps its own follow-up.
+        panic("selfhost: `G[i] = <str>` into a module-level `[str; N]` array GLOBAL is not yet supported — each element is a two-word `{ptr, len}` cell and the scalar store would write one word mid-element, corrupting a neighbouring element. Build the array in a LOCAL and index that. [fail-loud guard: never a silent mid-element store]")
       } else if gaes.is_s == false and gbyte == 0 {
         ## a SCALAR-element array global — store one word at `LABEL + i*8`.
         emit_gas(iv, sb, cx, a, nl)                 ## value on the stack

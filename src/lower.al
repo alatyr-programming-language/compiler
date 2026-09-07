@@ -2584,6 +2584,26 @@ global_arr_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), gv : ptr(Expr), a : r
   if ei.is_e == false { return z }
   GAEnum(is_e = true, es = ei.es, el = ei.el, stride = 1 + enum_inst_words(decls, src, ei.es, ei.el, a), nel = ali.nel)
 }
+## The STR-ELEMENT shape of a module-level ARRAY global, read off its INITIALIZER value expr `gv`
+## (`G := ["abc", "XYZ"]` / `mut G : [str; N] = […]`): `nel` = the element count. Types §7 makes each
+## element a two-word `{ptr, len}` view and appendix 160 §3.5 makes `str` a `[u8]`, so the element
+## STRIDE is fixed at 2 words — the same stride a `[str; N]` LOCAL uses, which is why it is a constant
+## here rather than a computed field. Like `global_arr_enum` this is the ONE place the sides of a
+## str-element array global agree on its layout: the `.data`/`.rodata` image (a `{ptr, len}` cell per
+## element) and the element PAIR read (`emit_str_pair`'s global-root arm). Takes the already-resolved
+## value pointer (never a name) so no caller pays a decl scan for it.
+GAStr := struct { is_s : bool, nel : usize }
+global_arr_str := fn(gv : ptr(Expr), a : rt::Arena) -> GAStr {
+  z := GAStr(is_s = false, nel = 0)
+  if unchecked bitcast(usize, gv) == 0 { return z }
+  ali := array_lit_info(gv)
+  if ali.is_a == false { return z }
+  if ali.nel == 0 { return z }
+  e0 := arg_expr_at(ali.ehead, 0, a)
+  if unchecked bitcast(usize, e0) == 0 { return z }
+  if str_lit_info(e0).is_s == false { return z }
+  GAStr(is_s = true, nel = ali.nel)
+}
 ## The `.data` INITIALIZER value expr of a module-level ARRAY global named `[s, n)` — a `mut` global
 ## first, then a CONST array (`NAME := […]`, which also gets `.data` storage, read-only). Null when the
 ## name is a FRAME local (tested first, so a local array never pays the const decl SCAN — the `mut`
@@ -4616,6 +4636,29 @@ call_arg_is_str_elem := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
   }
 }
 
+## `G[k]` where `G` names a module-level `[str; N]` GLOBAL — the GLOBAL twin of the `[str; N]` LOCAL
+## element that `call_arg_is_str_elem` claims (issue #495, the global spelling of #394). Every
+## name-keyed str-element query above resolves the base through the frame slot map: a global has no
+## frame slot, so `entry_of` misses, `index_base_entry` answers entry 0, and `eek == 4` is false — the
+## element then fell to `emit_str_pair`'s empty-pair default (`str_eq(G[k], …)` always false) or, for
+## the nested byte read `G[k][j]`, to the untyped `emit_index_addr` tail (a silent frame-slot-0 read
+## before #425, a located refusal after it). Resolve the root through the module-global rules instead:
+## `global_arr_value` covers a `mut` global AND a const array (both get storage) and returns null when
+## a FRAME LOCAL shadows the name, so a local `[str; N]` keeps its own path. Returns the layout query
+## (`nel`) rather than a bare bool so the pair deliverer bounds-checks `k` against the same N the
+## `.data` image was emitted with.
+global_str_elem := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> GAStr {
+  z := GAStr(is_s = false, nel = 0)
+  match deref(e) {
+    Expr::Index(base, idx) => {
+      gvn := var_name_span(base)
+      if gvn.n == 0 { return z }
+      global_arr_str(global_arr_value(cx.slots, cx.decls, cx.src, gvn.s, gvn.n), a)
+    }
+    _ => { z }
+  }
+}
+
 reject_scalar_str_elem_arg := fn(e : ptr(Expr), cx : ptr(LCtx), cidx : i64, pidx : usize) {
   if callee_param_is_scalar_value(cx.decls, cx.src, cidx, pidx) and call_arg_is_str_elem(e, cx) {
     match deref(e) {
@@ -6030,9 +6073,39 @@ emit_str_pair := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a
       if call_arg_is_str_elem(e, cx) {
         emit_index_addr(ibase, iidx, sb, cx, a, nl)
         push_str(sb, "  movq (%rax), %rbx\n  pushq %rbx\n  movq 8(%rax), %rbx\n  pushq %rbx\n")
-      } else {
-        push_str(sb, "  pushq $0\n  pushq $0\n")
+        return
       }
+      ## `G[k]` on a module-level `[str; N]` GLOBAL (issue #495) — the same element pair, addressed off
+      ## the global's own storage instead of a frame slot. `emit_index_addr` cannot serve this base: it
+      ## composes `base + i * stride` out of a `SlotEntry`, and a global has none, so the arm above
+      ## declined and the element fell to the empty-pair default below — a null `{0, 0}` view, which
+      ## made `str_eq(G[k], "…")` unconditionally false, `bytes(G[k])[j]` trap on a zero length, and the
+      ## nested byte read `G[k][j]` reach the untyped tail (frame slot 0 before #425, refused after).
+      ##
+      ## The layout is the one `global_arr_str` fixes for both sides: element `k`'s `{ptr, len}` cell at
+      ## `LABEL + k*16`, ASCENDING, so the ptr word is at `+0` and the len word at `+8` — the same
+      ## ascending order `emit_str_pair`'s str-GLOBAL, str-FIELD and `deref`-of-view arms already read,
+      ## and the order the `.data`/`.rodata` image emits. The INDEX is lowered FIRST (its own lowering
+      ## may clobber every register, exactly as the struct/enum-element global-array copy does), and in
+      ## checked mode `k` is compared against the STATIC element count `nel` from that same query, so an
+      ## out-of-range element traps instead of reading the next global (I11 / Types §5, §358); the check
+      ## is dropped in an `unchecked` scope (CG-7) like every other index.
+      gse := global_str_elem(e, cx, a)
+      if gse.is_s {
+        gsen := var_name_span(ibase)
+        emit_gas(iidx, sb, cx, a, nl)                  ## the element index → stack
+        push_str(sb, "  leaq ")
+        emit_global_label(sb, cx.decls, cx.src, gsen.s, gsen.n)
+        push_str(sb, "(%rip), %rax\n  popq %rcx\n")
+        if cx.vchk {
+          push_str(sb, "  cmpq $")
+          push_int(sb, i64(gse.nel))
+          push_str(sb, ", %rcx\n  jb 1f\n  ud2\n1:\n")
+        }
+        push_str(sb, "  imulq $16, %rcx\n  addq %rcx, %rax\n  movq (%rax), %rbx\n  pushq %rbx\n  movq 8(%rax), %rbx\n  pushq %rbx\n")
+        return
+      }
+      push_str(sb, "  pushq $0\n  pushq $0\n")
     }
     ## The default is still reached by the implicit (dead) TAIL of every `-> str` fn whose body ends
     ## in an explicit `return`: the parser's `Num(-1)` sentinel reaches the trailing return emitter,
@@ -18784,6 +18857,19 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         emit_view_byte_index(base, idx, sb, cx, a, nl)
         return
       }
+      ## `G[k][j]` — the same byte read where the `[str; N]` root is a module-level GLOBAL instead of a
+      ## local (issue #495, the global twin of #394). The base `Index(G, k)` is not a `Var` either, so
+      ## every arm above declines it; on the parent it reached the untyped `emit_index_addr` tail, which
+      ## before #425 resolved the unnamed base to frame SLOT 0 and answered a plausible frame word (the
+      ## issue measured 5 where 90 was due) and after #425 refuses. The deliverer is the SAME one the
+      ## local root uses — `emit_view_byte_index` over `emit_str_pair`'s element pair, whose global-root
+      ## arm addresses element `k`'s `{ptr, len}` at `LABEL + k*16` — so `j` is bounds-checked against
+      ## that element's RUNTIME len and the two spellings name the same byte by construction. No new
+      ## stride, width or layout decision is introduced here.
+      if global_str_elem(base, cx, a).is_s {
+        emit_view_byte_index(base, idx, sb, cx, a, nl)
+        return
+      }
       ## A str element has no scalar word representation. Its valid consumers are the pair-valued
       ## `emit_str_pair` path and the whole-element binding copier; reaching this scalar emitter means
       ## an unsupported call/operand edge (including a `Slice(str)` PARAM), so stop at the source shape
@@ -27427,11 +27513,28 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
           ## stride `1 + enum_inst_words` fixed by element 0 (`global_arr_enum` — the same helper the
           ## strided read / `match` / write use, so all four agree by construction).
           gaen := global_arr_enum(decls, src, d.value, a)
+          ## A `str`-ELEMENT array global (`G := ["abc", "XYZ"]` / `mut G : [str; N] = […]`, issue #495)
+          ## images each element as its two-word `{ptr, len}` cell — the `.rodata` bytes label then the
+          ## byte length — at the 2-word element stride `global_arr_str` fixes, ASCENDING, so element `k`
+          ## really is at `LABEL + k*16` and its ptr/len words are at `+0`/`+8`. A str literal has no
+          ## scalar init value, so it used to fall to the `.quad global_init_value(…)` default below and
+          ## image as ONE `.quad 0` per element: a null pointer, no length word, and a 1-word stride —
+          ## every element read answered an empty view no matter how the address was composed.
+          gastr := global_arr_str(d.value, a)
           mut k := 0
           while k < ali.nel {
             ekx := arg_expr_at(ali.ehead, k, a)
             eksli := struct_lit_info(ekx)
-            if gaen.is_e {
+            if gastr.is_s {
+              ## Element 0 fixed the 2-word stride, so a non-str element here would image at a DIFFERENT
+              ## width and shift every later element — the `.data` picture and the strided read would
+              ## disagree. Sema accepts a mixed array literal (`G := [1, "a"]` compiles), so guard it
+              ## here rather than assume it cannot arrive. Fail-loud: never a mis-strided image.
+              if str_lit_info(ekx).is_s == false {
+                panic("selfhost: a module-level ARRAY global MIXES `str` elements with non-str ones — every element must be a str (they share one 2-word `.data` stride). [fail-loud guard: never a mis-strided image]")
+              }
+              emit_global_data_cells(ekx, sb, decls, src, a)
+            } else if gaen.is_e {
               ## ENUM element `k`: its variant INDEX as the discriminant word, then its payload words,
               ## then zero padding out to the array's element stride — so a NULLARY variant and a
               ## narrower-payload variant both occupy exactly `stride` words and element `i` really is
