@@ -20266,13 +20266,30 @@ emit_union_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
 ## reproduces the payload arms' own `-(base - i - j) * 8` byte-for-byte.
 ## A NICHE-FOLDED `Option(ptr(T))` and a RAW UNION are excluded: both have a width this `1 + arity`
 ## count does not describe (one folded word; no discriminant word), and both already have their own
-## writer (`emit_folded_option_assign` / `emit_union_assign`). Any other value kind emits nothing, so
-## no shape that reaches here today turns into a new rejection.
-emit_enum_place_words_at := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+## writer (`emit_folded_option_assign` / `emit_union_assign`).
+## ISSUE #465 — three more right-hand sides reached the same silent wildcard and kept the destination's
+## previous words on x86_64: `h.t = s.t` (an enum FIELD of another struct), `h.t = xs[0]` (an enum
+## ARRAY ELEMENT) and `h.t = if c { … } else { … }` (a BRANCH value). #461 recorded them as addressable
+## by "neither a slot lookup nor the return registers", which is true of THIS writer but not of the
+## compiler: each of the three already has a reviewed deliverer that lands an aggregate at a frame
+## base, used by the `x := <rhs>` LOCAL-BIND path a few lines away in `src/lower/assign.al`, and the
+## destination here is the same kind of frame base. So all three delegate rather than open a fourth
+## copy of the arithmetic:
+##   * an enum FIELD — `field_read_agg` (kind 3) resolves the base struct's slot + the field's word
+##     offset for a frame-local AND a by-reference struct; the two loops are the bind path's, verbatim;
+##   * an enum ARRAY ELEMENT — `index_value_layout` (eek 3) + `emit_elem_copy_in`, which already copies
+##     `estride` words out of a frame array, a `.data` global array, a slice VALUE and an array FIELD;
+##   * a BRANCH value — `emit_val_if_to_local` / `emit_val_match_to_local`, the same pair
+##     `emit_local_field_agg_store` already routes a multi-word STRUCT field's `if`/`match` RHS to. The
+##     branch bodies are classified by `emit_arm_val_store`, so an enum destination is the caller's
+##     contract here and no `agg_kind_of` re-classification is needed.
+## `false` means NOTHING was emitted; `emit_enum_assign`'s wildcard turns that into a located reject
+## rather than a dropped store (issue #464's structural remedy: the emitter REPORTS whether it fired).
+emit_enum_place_words_at := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) -> bool {
   vai := var_agg_info(v, cx.slots, cx.src)
   if vai.ek == 3 {
-    if is_niche_folded(cx.src, vai.s, vai.n) { return }
-    if is_union_decl(cx.decls, cx.src, vai.s, vai.n) { return }
+    if is_niche_folded(cx.src, vai.s, vai.n) { return false }
+    if is_union_decl(cx.decls, cx.src, vai.s, vai.n) { return false }
     pwv := 1 + enum_inst_words(cx.decls, cx.src, vai.s, vai.n, deref(cx.mar))
     vn := var_name_span(v)
     vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
@@ -20298,13 +20315,13 @@ emit_enum_place_words_at := fn(v : ptr(Expr), base : i64, in out sb : strbuf::St
         push_str(sb, "(%rbp)\n")
       }
     }
-    return
+    return true
   }
   if enum_ret_call_d(v, cx.decls, cx.src, a) {
     ces := call_ret_enum_span_d(v, cx.decls, cx.src, a)
-    if ces.n == 0 { return }
+    if ces.n == 0 { return false }
     cew := 1 + enum_inst_words(cx.decls, cx.src, ces.s, ces.n, a)
-    if cew > 7 { return }
+    if cew > 7 { return false }
     emit_enum_value(v, sb, cx, a, nl)
     for j in 0..cew {
       push_str(sb, "  movq ")
@@ -20313,7 +20330,72 @@ emit_enum_place_words_at := fn(v : ptr(Expr), base : i64, in out sb : strbuf::St
       push_int(sb, (base - i64(j) + 1) * 8)
       push_str(sb, "(%rbp)\n")
     }
+    return true
   }
+  ## ISSUE #465 (a) — an enum FIELD of another struct (`h.t = s.t`). `field_read_agg` reports kind 3
+  ## with the base struct's word-0 slot (`boff`), the field's word offset inside it (`fwo`) and whether
+  ## that base is a BY-REFERENCE param (`isr`). The two loops below are the `x := s.t` LOCAL-BIND
+  ## path's own loops (`src/lower/assign.al`, the `field_read_agg(...).kind != 0` arm) with the
+  ## destination changed from that bind's fresh slot to `base`; nothing about the source addressing
+  ## differs, so a shape that binds correctly today assigns correctly now. A niche-folded
+  ## `Option(ptr(T))` field never reaches here: `enum_decl_of` cannot resolve the parenthesized
+  ## generic instance, so `field_read_agg` reports kind 0 and this arm declines.
+  fra465 := field_read_agg(v, cx.slots, cx.decls, cx.src, a)
+  if fra465.kind == 3 {
+    nfr := 1 + enum_inst_words(cx.decls, cx.src, fra465.s, fra465.n, a)
+    if fra465.isr {
+      ## a BY-REFERENCE struct base: the slot holds a POINTER to the caller's word 0 and the pointee's
+      ## words ASCEND, so the field's word k is at `(fwo + k) * 8(%rax)`.
+      push_str(sb, "  movq -")
+      push_int(sb, i64((fra465.boff + 1) * 8))
+      push_str(sb, "(%rbp), %rax\n")
+      for k in 0..nfr {
+        push_str(sb, "  movq ")
+        push_int(sb, (fra465.fwo + i64(k)) * 8)
+        push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
+        push_int(sb, (base - i64(k) + 1) * 8)
+        push_str(sb, "(%rbp)\n")
+      }
+    } else {
+      for k in 0..nfr {
+        push_str(sb, "  movq -")
+        push_int(sb, (i64(fra465.boff) - fra465.fwo - i64(k) + 1) * 8)
+        push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
+        push_int(sb, (base - i64(k) + 1) * 8)
+        push_str(sb, "(%rbp)\n")
+      }
+    }
+    return true
+  }
+  ## ISSUE #465 (b) — an enum ARRAY ELEMENT (`h.t = xs[0]`). `index_value_layout` classifies the
+  ## element kind (`eek 3` = enum) and `emit_elem_copy_in` copies the element's `estride` words —
+  ## `1 + max arity` for an enum element, so the payload travels with the discriminant — into the
+  ## slots at a frame base. It is the SAME call the `x := xs[i]` LOCAL-BIND path makes, and it already
+  ## covers a frame array, a `.data` array global, a slice VALUE and an array FIELD base.
+  ivl465 := index_value_layout(v, cx.slots, cx.src, cx.decls, a)
+  if ivl465.is_agg and ivl465.eek == 3 {
+    emit_elem_copy_in(ivl465.arr, ivl465.idx, base, sb, cx, nl)
+    return true
+  }
+  ## ISSUE #465 (c) — a BRANCH value (`h.t = if c { … } else { … }`, and the `match` spelling). An
+  ## `if`/`match` in value position never materializes an aggregate on the stack, so there is no value
+  ## for a copy loop to move; each BRANCH stores its own value into the destination instead. That is
+  ## exactly `emit_val_if_to_local` / `emit_val_match_to_local`, which `emit_local_field_agg_store`
+  ## already uses for a multi-word STRUCT field's `if`/`match` right-hand side — this arm gives the
+  ## ENUM field the same deliverer. The destination's enum-ness is the caller's contract (only an enum
+  ## destination calls `emit_enum_assign`), so the branch bodies are classified by `emit_arm_val_store`
+  ## and an unsupported body shape stays that function's located panic, never a silent word-0 store.
+  mif465 := match_info(v)
+  if mif465.is_m {
+    emit_val_match_to_local(mif465.scrut, mif465.head, base, sb, cx, a, nl)
+    return true
+  }
+  iif465 := if_info(v)
+  if iif465.is_if {
+    emit_val_if_to_local(iif465.cond, iif465.then_e, iif465.else_e, base, sb, cx, a, nl)
+    return true
+  }
+  false
 }
 
 emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
@@ -20393,7 +20475,10 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
           ## ISSUE #461: the register→frame store is `emit_enum_place_words_at`'s call arm, at the
           ## payload base `base - 1 - i` (its `-(base' - j + 1) * 8` is this arm's `-(base - i - j) * 8`).
           ## The two width panics stay HERE: they are this payload's contract, not the shared writer's.
-          emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
+          ## The result is not asserted HERE: this arm's own guards (`enum_ret_call_d` + the two
+          ## width panics above) already established the shape, so the writer's call arm fires.
+          cwok := emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
+          if cwok == false { panic("selfhost: an enum CALL payload passed its own width guards but the shared enum-words writer declined it") }
           i += i64(cew)
         } else if var_agg_info(ga.e, cx.slots, cx.src).ek == 2 and struct_words(cx.decls, cx.src, var_agg_info(ga.e, cx.slots, cx.src).s, var_agg_info(ga.e, cx.slots, cx.src).n, deref(cx.mar)) > 1 {
           ## a MULTI-WORD struct VAR payload (`Some(q)` with q a struct LOCAL / by-ref param) — store ALL
@@ -20435,7 +20520,8 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
           ## payload base `base - 1 - i`; the emitted text is byte-identical to the loops that were here.
           vai := var_agg_info(ga.e, cx.slots, cx.src)
           pwv := 1 + enum_inst_words(cx.decls, cx.src, vai.s, vai.n, deref(cx.mar))
-          emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
+          pwok := emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
+          if pwok == false { panic("selfhost: a multi-word enum VAR payload passed its own `ek == 3` guard but the shared enum-words writer declined it") }
           i += i64(pwv)
         } else {
           emit_gas(ga.e, sb, cx, a, nl)
@@ -20449,9 +20535,21 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
     }
     ## ISSUE #461: NOT an `EnumLit`. This arm emitted nothing, which made `h.t = v` (an enum PARAM or
     ## LOCAL `v`) and an enum-VAR array-literal element into SILENT DROPPED STORES on x86_64. Write the
-    ## value's complete `{disc, payload…}` block when its words are addressable; any other value kind
-    ## still emits nothing, exactly as before.
-    _ => { emit_enum_place_words_at(v, base, sb, cx, a, nl) }
+    ## value's complete `{disc, payload…}` block when its words are addressable.
+    ## ISSUE #465: and when they are NOT, STOP. Emitting nothing here is the worst available outcome —
+    ## every caller of this writer treats the store as done, so the destination silently keeps the words
+    ## it already held and the program answers stale with exit status 0. `emit_enum_place_words_at` now
+    ## REPORTS whether it fired, so the residual is a located reject instead (AGENTS.md: a trap is
+    ## acceptable, a wrong value is not). Measured before the residual was made loud: the complete gate
+    ## — fixpoint, 3188 e2e rows, the 7596-row corpus manifest over 1899 sources on four backends, the
+    ## fmt arbiter, the idiom gate and all three cross-target sweeps — is GREEN with this arm panicking
+    ## on every unhandled shape, so no program in this repository, its standard library or its own
+    ## source reaches it.
+    _ => {
+      if emit_enum_place_words_at(v, base, sb, cx, a, nl) == false {
+        panic("selfhost: assigning this value into an enum destination is not lowered — its `{disc, payload…}` words are not addressable here. Supported right-hand sides are a variant literal, an enum local or by-reference param, an enum-returning call, an enum field of a struct, an enum array element, and an `if`/`match` whose branches yield one of those. Bind the value to an enum local first and assign that local.")
+      }
+    }
   }
 }
 
@@ -21021,10 +21119,19 @@ emit_arm_val_store := fn(body : ptr(Expr), base : i64, in out sb : strbuf::StrBu
         push_str(sb, "(%rbp)\n")
       }
       else {
+        ## ISSUE #465 — a branch whose value is an enum PLACE (`if c { g } else { b }` with `g`/`b`
+        ## enum locals or by-reference params), an enum-returning CALL, an enum FIELD, an enum ARRAY
+        ## ELEMENT or a nested `if`/`match`. The shared writer above delivers exactly those into a
+        ## frame base and REPORTS whether it fired, so asking it first turns the whole `h.t = if c
+        ## { … } else { … }` family into a real store instead of a reject; a shape it declines still
+        ## falls to the panic below. Nothing in the tree reached this panic (the gate is green), so
+        ## this can only convert a reject into a correct store, never change a working emission.
+        if emit_enum_place_words_at(body, base, sb, cx, a, nl) == false {
         ## An aggregate `if`/`match` branch VALUE of a shape this deliverer does not lower — a wide
-        ## (>7-word SRET) struct-returning call, or an enum/tuple-returning call. FAIL LOUD (never a
+        ## (>7-word SRET) struct-returning call, or a tuple-returning call. FAIL LOUD (never a
         ## silent word-0 store): bind such a branch to a local first, then read that local.
-        panic("selfhost: an aggregate `if`/`match` branch value of an unsupported shape — only a struct/enum/array literal, a str value, or a small-struct-returning call deliver into the binding's slots (a wide-struct / enum / tuple-returning call branch is not yet lowered; bind it to a local first)")
+        panic("selfhost: an aggregate `if`/`match` branch value of an unsupported shape — only a struct/enum/array literal, a str value, a small-struct-returning call, or an enum place/call/field/element deliver into the binding's slots (a wide-struct / tuple-returning call branch is not yet lowered; bind it to a local first)")
+        }
       }
     }
   }

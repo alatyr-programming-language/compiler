@@ -6858,6 +6858,28 @@ run_x86 issue461_enum_field_assign 42
 ## wrong value — the corpus manifest records the wasm column instead.
 run_a64 issue461_enum_field_assign 133
 run_rv64 issue461_enum_field_assign 133
+## issue #465 — the three right-hand sides PR #463 left in the same wildcard: an enum FIELD of another
+## struct (`h.t = s.t`), an enum ARRAY ELEMENT (`h.t = xs[0]`) and a BRANCH value
+## (`h.t = if c { … } else { … }`, and its `match` spelling). All three reached `emit_enum_assign`'s
+## `_ => {}` arm, which emitted NO INSTRUCTION while `emit_local_field_agg_store` reported the store as
+## done, so the field kept the struct literal's variant: a clean compile answering stale. The fixture
+## gives every observable its own code — 51/55/61/65/69/73/77/85/89/93 stale, …/52/… a third variant,
+## …/53/… no variant, …/54/… a clobbered following field, 59/60/97/98/99 a lost PAYLOAD word, 81-84 a
+## broken control — so the number names the half that failed. Measured on parent c1bb614, ONE FORM PER
+## PROGRAM: 51, 55, 61, 65, 69, 73, 77, 85, 89, 93 (ten distinct stale answers) and 42 on all four
+## controls; this tree answers 42 for every one. Whole fixture: parent 51, this tree 42.
+run_x86 issue465_enum_field_rhs 42
+## issue #465 CONTROL — the non-x86 status, asserted EXACTLY for the same reason the #461 rows are:
+## a wildcard that landed in some nonzero arm would satisfy a "non-zero" check and hide the class.
+run_a64 issue465_enum_field_rhs 133
+run_rv64 issue465_enum_field_rhs 133
+## issue #465 RESIDUAL — a mutable-GLOBAL enum right-hand side has no frame slot and no return
+## register, so the words writer still has no addressing for it. It is now a LOCATED REJECT instead of
+## a dropped store: AGENTS.md's "a trap is acceptable; a wrong value is not". On parent c1bb614 this
+## same program BUILDS (rc 0, artifact produced) and answers 1 — the silent stale field. `_has`, not a
+## bare `build_reject`: a fail-loud accident elsewhere must not satisfy the row, and the needle appears
+## nowhere in the fixture's own text.
+build_reject_has issue465_enum_rhs_reject "words are not addressable here"
 ## issue #449 — a struct's ENUM-typed field as a COMPARISON operand, no `match` involved. §8 delivers
 ## an enum BY REFERENCE, so on wasm the field holds a POINTER to the `{disc, payload…}` block exactly
 ## as an enum parameter does. The wat compare arm's aggregate guard already refuses to `i64.eq` such an
