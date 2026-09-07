@@ -82,6 +82,25 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **Binding the pointee of an inferred `ptr(str)` local reads the pair, not one word.** Stdlib
+  appendix §3.5/§3.6 fix `str` as the two-word `{ptr, len}` pair and Memory §4.1 makes `deref(q)` an
+  ordinary read through the pointer, so `q := ptr(s); ss := deref(q); ss.len` must answer `s.len`. It
+  answered **0**, while the same binding on an annotated (`q : ptr(str) = ptr(s)`) or bitcast local
+  answered the pointee, and so did the *inline* `deref(q).len` on the very same inferred local — two
+  spellings of one read disagreeing on a clean compile. A binding is decided twice: the frame-slot
+  collector has to reserve two words for `ss` and the assign emit has to write both. Both gates asked
+  for the pointee's *type span*, which the annotated and bitcast spellings carry in their own source
+  text and the inferred one cannot — `str` is structural, so no `str` span exists anywhere in the
+  source to hand back. The reservation fell to one scalar word and the store wrote only the pointer
+  word, so `ss.len` read a never-written neighbouring slot (`ss.ptr` was accidentally right, because
+  word 0 of the pair *is* the pointer). Both gates now also accept the boolean source scan the inline
+  read already uses, so the two spellings answer from one shared fact and cannot drift apart again.
+  The span-valued resolver is deliberately left alone: it is shared with the `deref` load/store width
+  queries and cannot answer this shape anyway. Purely additive — every pointer whose pointee type was
+  already recoverable keeps its exact previous lowering, `ptr(<struct>)` and `ptr(<scalar>)` locals
+  are untouched, and no emitted byte of the compiler's own build moves, because `src/` and `lib/` bind
+  no `deref` of an inferred pointer-to-view local. aarch64, riscv64 and wasm still trap on `str`
+  behind a pointer rather than answering a wrong value, exactly as they did before.
 - **A struct field whose type is a raw `union` is stored at its own width on wasm, aarch64 and
   riscv64, so the field after it no longer reads a wrong number.** Types §6.3 sizes a union as the
   widest member with the members overlapping at offset 0 and **no** discriminant word, which is a

@@ -6806,6 +6806,22 @@ run issue451_split_iterator 42
 # Cross-target rows follow from `run`; the non-x86 backends trap on `str`, exactly as they already
 # do for the two #451 rows above (measured aarch64=133, riscv64=133, wasm=134, unchanged).
 run issue456_ptr_str_local_field 42
+## The BOUND dual of that read on an INFERRED pointer local: `q := ptr(s)`, `ss := deref(q)`, `ss.len`
+# answered 0 while the ANNOTATED and BITCAST spellings of the same binding answered the pointee, and
+# so did the INLINE read on the very same local after #482 — two spellings of one read disagreeing on
+# a clean compile (#483). The binding is decided TWICE and both halves asked a SPAN-valued question
+# `str` cannot answer (it is structural, so no `str` span exists in the source): `collect_slots`
+# reserved ONE word instead of two, and the assign emit stored only the ptr word, so `ss.len` read a
+# never-written neighbouring slot. Both halves now consult the SAME boolean source scan the inline
+# read uses. Three codes per probe — 60/63/66/70 zero, 61/64/67/71 never actually read,
+# 62/65/68/72 a wrong value — over FOUR subjects of four different lengths (4, 6, 5, 7), so no stale
+# slot can hold a value that happens to be right. The five controls (25/75, 30-35, 36-41, 44-49,
+# 50-55) are green on BOTH sides; 50-55 is the #482 inline read on the SAME inferred locals the
+# subjects use, so it also proves the widened guard did not move the inline route.
+# Parent d256330: 60 (also 60 on 240b8ff, this branch's first base). This tree: 42.
+# Cross-target rows follow from `run`; the non-x86 backends trap on `str`, exactly as the #451 and
+# #456 rows above do (measured aarch64=133, riscv64=133, wasm=134).
+run issue483_bound_deref_inferred_ptr_str 42
 # A `next` this desugar cannot call (a GENERIC `next(K : type, …)`, `alloc::hashmap::HashMapIter`)
 # must be REFUSED, never walked as a slice: the parent built it and ran the body zero times.
 build_reject_has reject_for_generic_iter_next "carries no type arguments"

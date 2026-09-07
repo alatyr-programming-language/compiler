@@ -375,7 +375,7 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           bind_struct_slot(slots, decls, src, ns, nl, drs.s, drs.n, nf)
         } else if deref_call_pointee_unresolved(v, decls, src, a) {
           reject_deref_call_pointee(v, src)
-        } else if deref_view_pointee_span(v, ptr(slots), decls, src, a, sub).n != 0 {
+        } else if deref_view_pointee_span(v, ptr(slots), decls, src, a, sub).n != 0 or deref_addr_view_ptr_local(v, ptr(slots), src) {
           ## CLAYOUT S3(b) — `v := deref(<pointer to a §7 VIEW>)`: the pointee IS the two-word
           ## `{ptr, len}` pair, so `v` is a str LOCAL (2 words), exactly like `v := <str var>`. The
           ## pointer may be a bitcast local, a `ptr(mut str)` annotation, an eek-6 call-derived
@@ -383,6 +383,16 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## pointee is recovered by TYPE-PARAMETER POSITION, never by name. Before this the binding
           ## fell to the SCALAR slot below: one word survived, so `v.len` read the neighbouring slot
           ## and `str_eq(v, …)` compared against a garbage length — a silent wrong value (I11).
+          ##
+          ## The second alternative is the INFERRED pointer local `q := ptr(<str local>)` (issue
+          ## #483). `deref_view_pointee_span` is SPAN-valued and there is no `str` span anywhere in
+          ## the source to hand it — `str` is structural, the binding spells no type and carries no
+          ## `bitcast` — so the annotated and bitcast spellings bound the pair here while the
+          ## inferred one fell to the SCALAR slot and `ss.len` answered 0 on a clean compile.
+          ## `deref_addr_view_ptr_local` answers the only question this binder has, as a BOOLEAN, off
+          ## the SAME source scan the inline `deref(q).len` read uses (#456/#482), so the two
+          ## spellings of one read cannot disagree. Purely ADDITIVE: every pointer the span resolver
+          ## already resolved takes the unchanged first alternative.
           bind_str_slot(slots, src, ns, nl)
         } else if deref_call_enum_span(v, decls, src, a).n != 0 {
           ## a `st := deref(node_ptr(E, …))` binding — reserve `st` as enum E (disc + max-payload
