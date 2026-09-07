@@ -9,7 +9,7 @@
 ## indexing `self[i]`, sub-slicing `self[a..b]`, `first` / `last`, `iter`, and
 ## in-place `sort` on `[mut T]` — are the next increments (they need
 ## pointer-based, runtime-bounds-checked element addressing in the backends).
-Slice := fn(T : type) -> type { return struct { ptr : ptr(T), len : usize } }
+pub Slice := fn(T : type) -> type { return struct { ptr : ptr(T), len : usize } }
 
 ## `len` — the element count (Stdlib §3.5). Generic over `Slice(T)`, with `T`
 ## inferred from the slice argument at the call (the underlying `len` field is

@@ -4,7 +4,7 @@
 ## Satisfies the `Tryable` protocol (success = `Ok`, failure = `Err`), so `x?`
 ## unwraps an `Ok` or propagates an `Err` (Control Flow §8.2). The propagated
 ## error keeps its type unless a declared `OutErr` conversion applies.
-Result := fn(T : type, E : type) -> type { return enum { Ok(T), Err(E) } }
+pub Result := fn(T : type, E : type) -> type { return enum { Ok(T), Err(E) } }
 
 ## Curated operations (Stdlib §160). Unwrapping an `Err` is a **defined-failure**
 ## `panic` (§4), never UB — and a **named** method (CF-7/CF-9: there is no `!`

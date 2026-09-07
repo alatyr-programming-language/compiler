@@ -82,6 +82,37 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **The base prelude tier is now reachable by its qualified specification spelling from outside a
+  package: 203 specification-enumerated declarations in `lib/base/` carry a `pub` marker.** Modules
+  §3 lines 90-92 make the `pub` chain to the root the **only** way anything leaves a package — "a
+  library's public API is exactly the `pub`-chain-to-root-reachable surface" — and Stdlib §1 / §7.1
+  require the base tier to be reachable, unqualified, from any program. The Stdlib appendix §8.6
+  makes every definition it lists **required v1 content**. The tree satisfied none of that for the
+  base tier: `lib/base/num.al` had 146 declarations and **zero** markers, and across `lib/base/`
+  227 declarations were unmarked. So `base::num::wrapping_add(a, 2)`, `base::alloc::arena_over(…)`,
+  `base::cmp::eq(…)`, `base::derive::eq(…)`, `base::assert::assert(…)`, `base::process::exit(…)`
+  and the `base::u128::u128` operator surface were each refused with a located `check` diagnostic
+  for an ordinary user package, and the same operations were reachable in their bare spelling only
+  through an unrelated visibility hole. This is a conformance fix, not a new API: the overflow
+  family is fixed by rule (appendix §4.3 plus Concurrency §6.3/§8.5 — four policy prefixes over the
+  checked-overflow operations over the integer interpretations) and the tree's 96 functions are a
+  strict **subset** of what that rule requires, while everything named in a §3.1-§3.6 / §4.2 / §5.1
+  / §5.2.1 code block is enumerated literally, one identifier per line.
+  Nothing else became reachable. The 21 genuinely internal helpers stay private — `sys_exit_group`,
+  `char_byte`, `is_ascii_ws`, `split_byte`, `split_piece`, `sift_down`, `sift_down_by`, `bytes_eq`,
+  `slice_eq`, `slice_cmp`, `hash_bytes`, `str_hash`, and the whole `Buf`/`buf_*` set — and so does
+  `alloc_into`, because Modules §3 line 73 scopes visibility to who may **name** a declaration and
+  no user source names it: the `@alloc(a) x := init` desugar synthesizes that callee span, and the
+  appendix defines no `alloc_into` identifier. `to_char` stays private as the unnamed `@convert`
+  behind §3.2's `char(n)`.
+  **No emitted byte moves.** Visibility is distinct from linker-symbol emission (Modules §3:73-76,
+  and §6.4's table makes the `pub`-chain API "not exported" for `kind = executable`). The two
+  emission-affecting readers of the `pub` predicate are `library_api_root`, which excludes the
+  `base__`/`alloc__`/`std__` tier modules outright, and `mangled_symbol_is_global`, which is
+  unconditionally true for an executable and for a library artifact can only mark a tier symbol the
+  artifact already contains — and no `base__` symbol reaches the GAS of any library-kind fixture in
+  the corpus. The compiler reproduces itself byte-for-byte.
+
 - **A diagnostic whose offending expression came from a parse-time desugar now names the construct
   the programmer wrote, instead of killing the compiler with no output at all.** `defer f(x)`,
   `@alloc(A) x := init` and a capturing higher-order call are rewritten during parsing into calls to

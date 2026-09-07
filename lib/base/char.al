@@ -1,7 +1,7 @@
 ## `char` — a Unicode code point, a **brand** over `u32` (the kernel keeps
 ## no built-in code-point type; `char` is a prelude type over a raw block). `u32(c)`
 ## and `char(n)` cross between them; `==`/`<` lower as the unsigned `u32` compares.
-char := brand(u32)
+pub char := brand(u32)
 
 ## `char(n)` — checked code-point construction (Stdlib 3.2, I11): `n` must be a valid
 ## Unicode scalar value (at most 0x10FFFF and not a surrogate 0xD800..=0xDFFF), else a

@@ -13,6 +13,6 @@
 ## internal and is reached only through the guarded wrapper.
 sys_exit_group := @abi(syscall) fn(num : usize, code : usize) -> Never
 
-exit := fn(code : usize) -> Never when target.arch == Arch.x86_64 and target.os == Os.linux {
+pub exit := fn(code : usize) -> Never when target.arch == Arch.x86_64 and target.os == Os.linux {
   unchecked sys_exit_group(231, code)
 }
