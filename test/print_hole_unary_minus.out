@@ -1,0 +1,8 @@
+neg -4
+neg_min -9223372036854775808
+neg_zero 0
+neg_nested 4
+unchecked_bin 5
+ctl_bin -4
+ctl_pos 7
+ctl_min_bin -9223372036854775808
