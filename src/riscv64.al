@@ -5029,7 +5029,24 @@ rv_store_enum_place_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, 
   lenl := rv_local_enum_nl(body_head, src, vns, vnl, a)
   if lenl != 0 {
     loff := rv_local_off(body_head, src, vns, vnl, pcount, a, decls)
-    lw := 1 + i64(enum_max_arity(decls, src, rv_local_enum_ns(body_head, src, vns, vnl, a), lenl, a))
+    lens := rv_local_enum_ns(body_head, src, vns, vnl, a)
+    ## ISSUE #497 — a RAW UNION LOCAL. This backend represents a union VALUE the way it represents an
+    ## enum value: the local's slot IS a `{disc, payload…}` block `1 + enum_max_arity` words wide (its
+    ## bind arm writes a discriminant at word 0, measured). The struct FIELD it feeds is `field_words` =
+    ## `union_words` PAYLOAD words at offset 0 with NO discriminant (spec Types §6.3), so the copy starts
+    ## at block word 1 and moves exactly `union_words` words. A ONE-WORD union must fire too — the scalar
+    ## fallback would store the block's DISCRIMINANT, not the payload — so there is no `lw < 2` decline.
+    if lower_layout::is_union_decl(decls, src, lens, lenl) {
+      if loff < 0 { return 0 }
+      ulw := i64(lower_layout::union_words(decls, src, lens, lenl, a))
+      mut uk := 0
+      while uk < ulw {
+        push_str(sb, "  ld a0, ") ; push_int(sb, loff + 8 + uk * 8) ; push_str(sb, "(s0)\n  sd a0, ") ; push_int(sb, off + uk * 8) ; push_str(sb, "(s0)\n")
+        uk = uk + 1
+      }
+      return ulw
+    }
+    lw := 1 + i64(enum_max_arity(decls, src, lens, lenl, a))
     if loff < 0 or lw < 2 { return 0 }
     mut k := 0
     while k < lw {
@@ -5041,7 +5058,21 @@ rv_store_enum_place_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, 
   pidx := param_find(params_head, src, vns, vnl, a)
   penl := rv_param_enum_nl(params_head, src, vns, vnl, decls)
   if pidx < 0 or penl == 0 { return 0 }
-  pw := 1 + i64(enum_max_arity(decls, src, rv_param_enum_ns(params_head, src, vns, vnl, decls), penl, a))
+  pens := rv_param_enum_ns(params_head, src, vns, vnl, decls)
+  ## ISSUE #497 — a RAW UNION PARAM. Its slot holds the by-reference block pointer, and the block is the
+  ## same `{disc, payload…}` shape the caller's argument materialization builds, so the field's
+  ## `union_words` payload words start at block word 1. Same single decision as the local above.
+  if lower_layout::is_union_decl(decls, src, pens, penl) {
+    upw := i64(lower_layout::union_words(decls, src, pens, penl, a))
+    push_str(sb, "  ld t0, ") ; push_int(sb, 16 + pidx * 8) ; push_str(sb, "(s0)\n")
+    mut uj := 0
+    while uj < upw {
+      push_str(sb, "  ld a0, ") ; push_int(sb, 8 + uj * 8) ; push_str(sb, "(t0)\n  sd a0, ") ; push_int(sb, off + uj * 8) ; push_str(sb, "(s0)\n")
+      uj = uj + 1
+    }
+    return upw
+  }
+  pw := 1 + i64(enum_max_arity(decls, src, pens, penl, a))
   push_str(sb, "  ld t0, ") ; push_int(sb, 16 + pidx * 8) ; push_str(sb, "(s0)\n")
   mut j := 0
   while j < pw {
@@ -5060,7 +5091,19 @@ rv_store_enum_place_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
   lenl := rv_local_enum_nl(body_head, src, vns, vnl, a)
   if lenl != 0 {
     loff := rv_local_off(body_head, src, vns, vnl, pcount, a, decls)
-    lw := 1 + i64(enum_max_arity(decls, src, rv_local_enum_ns(body_head, src, vns, vnl, a), lenl, a))
+    lens := rv_local_enum_ns(body_head, src, vns, vnl, a)
+    ## ISSUE #497, the POINTER-relative twin of the raw-union local arm in `rv_store_enum_place_at`.
+    if lower_layout::is_union_decl(decls, src, lens, lenl) {
+      if loff < 0 { return 0 }
+      ulw := i64(lower_layout::union_words(decls, src, lens, lenl, a))
+      mut uk := 0
+      while uk < ulw {
+        push_str(sb, "  ld a0, ") ; push_int(sb, loff + 8 + uk * 8) ; push_str(sb, "(s0)\n  ld a1, 0(sp)\n  sd a0, ") ; push_int(sb, off + uk * 8) ; push_str(sb, "(a1)\n")
+        uk = uk + 1
+      }
+      return ulw
+    }
+    lw := 1 + i64(enum_max_arity(decls, src, lens, lenl, a))
     if loff < 0 or lw < 2 { return 0 }
     mut k := 0
     while k < lw {
@@ -5072,7 +5115,19 @@ rv_store_enum_place_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
   pidx := param_find(params_head, src, vns, vnl, a)
   penl := rv_param_enum_nl(params_head, src, vns, vnl, decls)
   if pidx < 0 or penl == 0 { return 0 }
-  pw := 1 + i64(enum_max_arity(decls, src, rv_param_enum_ns(params_head, src, vns, vnl, decls), penl, a))
+  pens := rv_param_enum_ns(params_head, src, vns, vnl, decls)
+  ## ISSUE #497, the POINTER-relative twin of the raw-union param arm in `rv_store_enum_place_at`.
+  if lower_layout::is_union_decl(decls, src, pens, penl) {
+    upw := i64(lower_layout::union_words(decls, src, pens, penl, a))
+    push_str(sb, "  ld t0, ") ; push_int(sb, 16 + pidx * 8) ; push_str(sb, "(s0)\n")
+    mut uj := 0
+    while uj < upw {
+      push_str(sb, "  ld a0, ") ; push_int(sb, 8 + uj * 8) ; push_str(sb, "(t0)\n  ld a1, 0(sp)\n  sd a0, ") ; push_int(sb, off + uj * 8) ; push_str(sb, "(a1)\n")
+      uj = uj + 1
+    }
+    return upw
+  }
+  pw := 1 + i64(enum_max_arity(decls, src, pens, penl, a))
   push_str(sb, "  ld t0, ") ; push_int(sb, 16 + pidx * 8) ; push_str(sb, "(s0)\n")
   mut j := 0
   while j < pw {
@@ -5093,6 +5148,22 @@ rv_store_enum_place_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
 rv_store_enum_call_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
   cre := rv_call_ret_enum_span(pe, decls, src, a)
   if cre.n == 0 { return 0 }
+  ## ISSUE #497 — a RAW-UNION-returning CALL. §8 delivers such a call the same way it delivers an enum:
+  ## word 0 = discriminant in a0, payload word k in a(k+1) (measured — a union return builds the same
+  ## `{disc, payload…}` block). The struct FIELD is `field_words` = `union_words` PAYLOAD words at offset
+  ## 0 with NO discriminant (spec Types §6.3), so the field takes a1..a(union_words) and the enum count
+  ## below is one word too wide AND one word out of place — silently, in the field AFTER it. A ONE-WORD
+  ## union must fire too: the scalar fallback would store a0, the DISCRIMINANT, not the payload.
+  if lower_layout::is_union_decl(decls, src, cre.s, cre.n) {
+    ucw := i64(lower_layout::union_words(decls, src, cre.s, cre.n, a))
+    emit_rv_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+    mut uk := 0
+    while uk < ucw {
+      push_str(sb, "  sd a") ; push_int(sb, uk + 1) ; push_str(sb, ", ") ; push_int(sb, off + uk * 8) ; push_str(sb, "(s0)\n")
+      uk = uk + 1
+    }
+    return ucw
+  }
   cw := 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a))
   ## A PAYLOAD-FREE enum call is ONE word, which the scalar fallback below already stores correctly
   ## (`Holder(t = green())` answered right on both backends before this change). Decline it, exactly as
@@ -5114,6 +5185,18 @@ rv_store_enum_call_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a
 rv_store_enum_call_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
   cre := rv_call_ret_enum_span(pe, decls, src, a)
   if cre.n == 0 { return 0 }
+  ## ISSUE #497, the POINTER-relative twin of the raw-union call arm in `rv_store_enum_call_at`.
+  if lower_layout::is_union_decl(decls, src, cre.s, cre.n) {
+    ucw := i64(lower_layout::union_words(decls, src, cre.s, cre.n, a))
+    emit_rv_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+    push_str(sb, "  ld t0, 0(sp)\n")
+    mut uk := 0
+    while uk < ucw {
+      push_str(sb, "  sd a") ; push_int(sb, uk + 1) ; push_str(sb, ", ") ; push_int(sb, off + uk * 8) ; push_str(sb, "(t0)\n")
+      uk = uk + 1
+    }
+    return ucw
+  }
   cw := 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a))
   ## A PAYLOAD-FREE enum call is ONE word, which the scalar fallback below already stores correctly
   ## (`Holder(t = green())` answered right on both backends before this change). Decline it, exactly as
@@ -5153,6 +5236,31 @@ emit_rv_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf
   if expr_is_enum_lit(pe) {
     pens := expr_enum_lit_ns(pe)
     penl := expr_enum_lit_nl(pe)
+    ## ISSUE #497 — a RAW UNION (spec Types §6.3) parses into the SAME kind-3 decl and the same `EnumLit`
+    ## construction an enum uses, so `enum_decl_of` — and every arm here that keys on it — answers YES for
+    ## one. But `field_words` reserves `union_words` for a union-typed field: the members OVERLAP AT
+    ## OFFSET 0 and there is NO discriminant word. The enum arm below is therefore one word too wide AND
+    ## one word out of place, SILENTLY: every reader still resolves `field_word_offset`, so the wrong
+    ## value surfaces in the field AFTER the union field. Write it the way x86_64's `emit_union_assign`
+    ## writes it — the single member payload at word 0 — and report `union_words`. A member that is not
+    ## single-payload has no §6.3 layout (multi-payload is additive and undefined; a nullary member
+    ## carries no value): a LOUD `ebreak` plus the reserved width, never a silent short store. Gated on
+    ## `is_union_decl` → every enum keeps the byte-identical emit (fixpoint-neutral).
+    if lower_layout::is_union_decl(decls, src, pens, penl) {
+      ulw := i64(lower_layout::union_words(decls, src, pens, penl, a))
+      ug := ex_enum_lit_args(pe)
+      if ug == 0 {
+        push_str(sb, "  ebreak # a payload-free raw-union member has no field layout\n")
+        return ulw
+      }
+      uga := deref(arg_p(ug))
+      if uga.next != 0 {
+        push_str(sb, "  ebreak # a multi-payload raw-union member has no field layout\n")
+        return ulw
+      }
+      _upw := emit_rv_store_payload_at(uga.e, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      return ulw
+    }
     pvidx := variant_index(decls, src, pens, penl, expr_enum_variant_ns(pe), expr_enum_variant_nl(pe), a)
     push_str(sb, "  li a0, ") ; push_int(sb, pvidx) ; push_str(sb, "\n  sd a0, ") ; push_int(sb, off) ; push_str(sb, "(s0)\n")
     mut g := ex_enum_lit_args(pe)
@@ -5244,6 +5352,24 @@ emit_rv_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::Str
   if expr_is_enum_lit(pe) {
     pens := expr_enum_lit_ns(pe)
     penl := expr_enum_lit_nl(pe)
+    ## ISSUE #497, the POINTER-relative twin of the raw-union arm in `emit_rv_store_payload_at`. Same
+    ## decision (payload at word 0, `union_words` wide, no discriminant), same loud refusal for a member
+    ## that is not single-payload; only the destination base differs.
+    if lower_layout::is_union_decl(decls, src, pens, penl) {
+      ulw := i64(lower_layout::union_words(decls, src, pens, penl, a))
+      ug := ex_enum_lit_args(pe)
+      if ug == 0 {
+        push_str(sb, "  ebreak # a payload-free raw-union member has no field layout\n")
+        return ulw
+      }
+      uga := deref(arg_p(ug))
+      if uga.next != 0 {
+        push_str(sb, "  ebreak # a multi-payload raw-union member has no field layout\n")
+        return ulw
+      }
+      _upw := emit_rv_store_payload_atptr(uga.e, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+      return ulw
+    }
     pvidx := variant_index(decls, src, pens, penl, expr_enum_variant_ns(pe), expr_enum_variant_nl(pe), a)
     push_str(sb, "  li a0, ") ; push_int(sb, pvidx) ; push_str(sb, "\n  ld a1, 0(sp)\n  sd a0, ") ; push_int(sb, off) ; push_str(sb, "(a1)\n")
     mut g := ex_enum_lit_args(pe)

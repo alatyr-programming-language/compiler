@@ -82,6 +82,28 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A struct field whose type is a raw `union` is stored at its own width on wasm, aarch64 and
+  riscv64, so the field after it no longer reads a wrong number.** Types §6.3 sizes a union as the
+  widest member with the members overlapping at offset 0 and **no** discriminant word, which is a
+  different layout from an `enum`'s `{disc, payload…}` — but a `union { m(T), … }` parses into the
+  same declaration and the same `U.m(v)` construction an enum does, so every enum-shaped store on
+  those three backends claimed it: each one wrote `1 + max-arity` words with a tag at word 0 (one
+  word too wide *and* one word out of place) or fell back to storing a single pointer/discriminant
+  word where the field reserved more. The field itself was never where the wrong value showed up:
+  every reader still resolved the field's real offset, so the corruption landed in the **neighbour**.
+  `Lead(lead = 4, p = u, n = 9, big = …)` over `union { a(u64), b(u64) }` read `l.n` as the union's
+  payload instead of 9 — a clean compile, exit 0, no trap. All five ways a union value can feed such
+  a field are fixed: the constructor literal, a union-returning call, a local bound to either of
+  those, and a union parameter. Three of them *appeared* correct on wasm before, and that was a
+  coincidence worth naming: a one-word union field and a one-word pointer store agree by
+  construction, and the same programs over a union with a two-word member answered wrongly on all
+  three backends. A member that is not single-payload (multi-payload, which §6.3 leaves undefined,
+  or a payload-free member) now **traps** at that store instead of writing a short one. x86_64 was
+  already correct on every one of these shapes and is untouched, as is every `enum` field — the
+  union arms are gated on the declaration actually being a union, so no emitted byte of the
+  compiler's own build moves. Reading a union *member* back (`u.m`, `s.p.m`) remains a loud refusal
+  on the three non-x86 backends and is a separate gap.
+
 - **A generic call with more than three comptime type parameters is refused instead of answering the
   wrong value.** On x86_64 a call to a generic fn with **four** type parameters compiled cleanly,
   linked, exited normally and returned `0` where 42 was due — the silent class. The arity is measured,

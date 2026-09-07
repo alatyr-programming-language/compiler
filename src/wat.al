@@ -1167,7 +1167,7 @@ enum_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
 ## enum decl WITH ALL-SCALAR PAYLOADS, else {0,0}. Mirrors `callee_ret_struct`: the value's i64 base
 ## address is built in the `$__sp` bump region (survives the return), so a local bound to such a call
 ## is an enum local. A wide-payload enum stays unresolved → its `match` falls through to fail-loud.
-callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : ptr(mut Arg), a : rt::Arena) -> WSpan {
+callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, args_head : ptr(mut Arg), a : rt::Arena, allow_union : bool) -> WSpan {
   cnt := rt::vec_len(deref(decls))
   mut i := 0
   mut rs := 0
@@ -1190,7 +1190,14 @@ callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
           }
         }
       }
-      if enum_decl_of(decls, src, ebs, ebn) >= 0 and enum_all_scalar(decls, src, ebs, ebn, a) { rs = ebs ; rn = ebn }
+      ## ISSUE #497 — `enum_all_scalar` is the ENUM machinery's payload-width gate: a wide payload is not
+      ## modelled by the match/binding arms, so such an enum must stay unresolved and fail loud. A RAW
+      ## UNION is sized by `union_words` and delivered by a width-driven word COPY, so that gate does not
+      ## apply to it — but the shared consumers of this resolver (`wat_try_enum_type`, the match-scrutinee
+      ## resolvers) must not start seeing unions they did not see before. `allow_union` is therefore opt-in:
+      ## `false` at every pre-existing call site reproduces the old predicate exactly, and only the raw-union
+      ## FIELD writer passes `true`.
+      if enum_decl_of(decls, src, ebs, ebn) >= 0 and (enum_all_scalar(decls, src, ebs, ebn, a) or (allow_union and lower_layout::is_union_decl(decls, src, ebs, ebn))) { rs = ebs ; rn = ebn }
     }
     i += 1
   }
@@ -1229,9 +1236,9 @@ callee_ret_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usiz
 ## (measured 134 on wasm and x86_64, 133 on aarch64 and riscv64), so there is no silent width to fix.
 wat_addr_enum_span := fn(v : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
   match deref(v) {
-    Expr::Call(cs, cl, _nn, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a) }
+    Expr::Call(cs, cl, _nn, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a, false) }
     Expr::Var(vs, vn) => {
-      pl := base_enum_type(params_head, body_head, src, vs, vn, a, decls)
+      pl := base_enum_type(params_head, body_head, src, vs, vn, a, decls, false)
       if pl.n != 0 and (not lower_layout::is_union_decl(decls, src, pl.s, pl.n)) and enum_all_scalar(decls, src, pl.s, pl.n, a) { return pl }
     }
     _ => {}
@@ -1244,8 +1251,8 @@ wat_addr_enum_span := fn(v : ptr(Expr), params_head : ptr(mut Param), body_head 
 ## expression's type while the emitter handles the actual early return.
 wat_try_enum_type := fn(inner : ptr(Expr), params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
   match deref(inner) {
-    Expr::Var(vs, vn) => { return base_enum_type(params_head, fn_head, src, vs, vn, a, decls) }
-    Expr::Call(cs, cl, nargs, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a) }
+    Expr::Var(vs, vn) => { return base_enum_type(params_head, fn_head, src, vs, vn, a, decls, false) }
+    Expr::Call(cs, cl, nargs, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a, false) }
     Expr::Unchecked(x) => { return wat_try_enum_type(x, params_head, fn_head, src, a, decls) }
     Expr::Bitcast(x, _ts, _tl) => { return wat_try_enum_type(x, params_head, fn_head, src, a, decls) }
     _ => {}
@@ -1544,7 +1551,7 @@ expr_enum_variant := fn(v : ptr(Expr)) -> WSpan {
 
 ## The enum-type name of the LOCAL `[ns, ns+nl)` — from its `:=` EnumLit init (`e := E.V(…)`), else
 ## {0,0}. Lets a `match e { … }` resolve the scrutinee's variant discriminants.
-local_enum_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+local_enum_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> WSpan {
   mut s := fn_head
   mut rs := 0
   mut rn := 0
@@ -1561,7 +1568,7 @@ local_enum_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
           if en.n == 0 {
             cn := expr_call_name(v)
             if cn.n != 0 {
-              cr := callee_ret_enum(decls, src, cn.s, cn.n, ex_call_argh(v), a)
+              cr := callee_ret_enum(decls, src, cn.s, cn.n, ex_call_argh(v), a, allow_union)
               if cr.n != 0 { rs = cr.s ; rn = cr.n ; done = true }
             }
           }
@@ -1730,7 +1737,7 @@ wat_is_agg_place := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : 
   if fe.n != 0 { return true }
   vn := expr_var_name(e)
   if vn.n == 0 { return false }
-  et := base_enum_type(params_head, body_head, src, vn.s, vn.n, a, decls)
+  et := base_enum_type(params_head, body_head, src, vn.s, vn.n, a, decls, false)
   if et.n != 0 { return true }
   ## ISSUE #449: `x := h.t` carries that same block address into `x`'s slot, and `base_enum_type`
   ## resolves only an `:=` EnumLit / enum-returning CALL init, so the bound spelling slipped past too.
@@ -3805,10 +3812,10 @@ param_enum_type := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, n
 
 ## The enum-type name of a scrutinee place `[ns, ns+nl)` — an enum PARAM (by annotation) or an enum
 ## LOCAL (by its EnumLit init), else {0,0}.
-base_enum_type := fn(params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> WSpan {
+base_enum_type := fn(params_head : ptr(mut Param), fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec), allow_union : bool) -> WSpan {
   pe := param_enum_type(params_head, src, ns, nl, a, decls)
   if pe.n != 0 { return pe }
-  return local_enum_type(fn_head, src, ns, nl, a, decls)
+  return local_enum_type(fn_head, src, ns, nl, a, decls, allow_union)
 }
 
 ## Are ALL fields of struct `[s, s+n)` single-word scalars? Only scalar-field structs are laid out in
@@ -4406,6 +4413,18 @@ emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb
     }
     return i64(struct_words(decls, src, sn.s, sn.n, a))
   }
+  ## ISSUE #497 — a struct field whose declared type is a RAW UNION (spec Types §6.3). Every arm of this
+  ## writer keys on `enum_decl_of`, and a `union { m(T), … }` parses into the SAME kind-3 decl and the
+  ## same `EnumLit` construction an enum uses, so all of them answer YES for a union — but the FIELD it
+  ## must fill is `field_words` = `union_words` wide: the members OVERLAP AT OFFSET 0 and there is NO
+  ## discriminant word. So the EnumLit arm below writes a disc where the payload belongs and reports
+  ## `1 + enum_max_arity`, and the scalar fallback at the bottom reports ONE word where `union_words`
+  ## are due. Both are SILENT: every reader still resolves `field_word_offset`, so the wrong value
+  ## surfaces in the field AFTER the union field, never in the union field itself.
+  ## Answered BEFORE the enum arms, so a union never reaches an enum-shaped store. `emit_wat_store_union_at`
+  ## returns 0 for every non-union value → every enum/struct/scalar program is byte-identical here.
+  uw497 := emit_wat_store_union_at(pe, bidx, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+  if uw497 != 0 { return uw497 }
   en := expr_enum_name(pe)
   if en.n != 0 {
     ev := expr_enum_variant(pe)
@@ -4491,6 +4510,80 @@ emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb
   emit_wat_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, ")\n")
   return 1
+}
+
+## ISSUE #497 — the RAW UNION type a struct-field VALUE carries, else {0,0}. Reuses the resolvers the
+## enum arms already use rather than opening a second walk of the same decls/statements: a union is a
+## kind-3 decl, so `base_enum_type` (a `u : U` PARAM annotation, or a `u := U.m(v)` LOCAL init) and
+## `callee_ret_enum` (a `-> U` annotation) both name one; `is_union_decl` is what separates it from an
+## enum. `callee_ret_enum` keeps its own `enum_all_scalar` gate — deliberately not relaxed here, because
+## it also feeds `local_enum_type`, `wat_try_enum_type` and the match-scrutinee resolvers, and widening a
+## shared enum resolver for unions is exactly what regressed the union place feed while #491 was fixed.
+## The consequence is recorded on the issue: a WIDE-member union delivered by a CALL (`q = mkw()`, and a
+## local bound to one) is not named here and keeps its parent behaviour.
+wat_store_union_span := fn(pe : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> WSpan {
+  match deref(pe) {
+    Expr::Call(cs, cl, _nn, ah) => {
+      cr := callee_ret_enum(decls, src, cs, cl, ah, a, true)
+      if cr.n != 0 and lower_layout::is_union_decl(decls, src, cr.s, cr.n) { return cr }
+    }
+    Expr::Var(vs, vn) => {
+      pl := base_enum_type(params_head, body_head, src, vs, vn, a, decls, true)
+      if pl.n != 0 and lower_layout::is_union_decl(decls, src, pl.s, pl.n) { return pl }
+    }
+    _ => {}
+  }
+  WSpan(s = 0, n = 0)
+}
+
+## ISSUE #497 — write a RAW UNION field's value at byte offset `off` of the block `bidx` and report
+## `union_words`, the width `field_words` reserved for it. Returns 0 when `pe` is not a union value, so
+## the caller's enum/struct/scalar arms stay byte-identical. Two feeds, one decision about the width:
+##
+##   * the union LITERAL `p = U.m(v)`. §6.3 is UNTAGGED: the member's payload goes at word 0 with no
+##     discriminant, exactly as x86_64's `emit_union_assign` writes it and as `union_member_ty`-based
+##     reads expect. The payload is handed back to this writer, so a STRUCT-literal member lands in
+##     full. A member that is not single-payload has no §6.3 field layout at all (multi-payload is
+##     additive and undefined; a nullary member carries no value): that is a LOUD `(unreachable)` and
+##     the reserved width, never a silent short store.
+##   * a union PLACE (a `u : U` param, a `u := U.m(v)` local) or a union-returning CALL. This backend
+##     represents a union VALUE the way it represents an enum value — the i64 BASE ADDRESS of a
+##     `{disc, payload…}` block, measured for all three spellings — while the FIELD is `union_words`
+##     PAYLOAD words at offset 0. So the copy starts at block word 1: the delivered discriminant word
+##     is dropped, and exactly `union_words` words land at the field's own offset. The base is parked in
+##     the whole-aggregate-copy scratch local (`pcount + nlocals + 2`, the third extra `(local i64)`)
+##     because WASM has no scratch register, the same local the #488/#491 enum arm uses.
+##
+## Reading a union member back is a separate, already-LOUD surface on this backend (measured 134 for
+## `u.m` and for `s.p.m`), so this fix is observable through the NEIGHBOURING field, which is where the
+## corruption was.
+emit_wat_store_union_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+  uen := expr_enum_name(pe)
+  if uen.n != 0 {
+    if not lower_layout::is_union_decl(decls, src, uen.s, uen.n) { return 0 }
+    ulw := i64(lower_layout::union_words(decls, src, uen.s, uen.n, a))
+    ug := ex_enum_lit_args(pe)
+    if ug == 0 {
+      push_str(sb, "    (unreachable) (; a payload-free raw-union member has no field layout ;)\n")
+      return ulw
+    }
+    uga := deref(arg_p(ug))
+    if uga.next != 0 {
+      push_str(sb, "    (unreachable) (; a multi-payload raw-union member has no field layout ;)\n")
+      return ulw
+    }
+    _upw := emit_wat_store_payload_at(uga.e, bidx, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+    return ulw
+  }
+  ue := wat_store_union_span(pe, params_head, body_head, decls, src, a)
+  if ue.n == 0 { return 0 }
+  ucw := i64(lower_layout::union_words(decls, src, ue.s, ue.n, a))
+  usc := pcount + count_locals(body_head, src, a, decls) + 2
+  push_str(sb, "    (local.set ") ; push_int(sb, usc) ; push_str(sb, " (i64.add ")
+  emit_wat_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+  push_str(sb, " (i64.const 8)))\n")
+  emit_wat_word_copy_at(sb, bidx, off, usc, ucw)
+  ucw
 }
 
 ## Emit a WORD-WISE aggregate COPY of `nw` words from the address in local `srcidx` to
@@ -5238,7 +5331,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       ## arm is emitted, including through a nested match. Unsupported aggregate bindings stay loud.
       sn := expr_var_name(scrut)
       agg := agg_global_base(decls, src, sn.s, sn.n, a)
-      etype := base_enum_type(params_head, body_head, src, sn.s, sn.n, a, decls)
+      etype := base_enum_type(params_head, body_head, src, sn.s, sn.n, a, decls, false)
       spidx := param_find(params_head, src, sn.s, sn.n, a)
       isloc := is_toplevel_local(body_head, sn.s, sn.n, src, a)
       if agg >= 0 {
@@ -6702,7 +6795,7 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         vy := tail_value and nx == 0
         sn := expr_var_name(scrut)
         agg := agg_global_base(decls, src, sn.s, sn.n, a)
-        etype0 := base_enum_type(params_head, fn_head, src, sn.s, sn.n, a, decls)
+        etype0 := base_enum_type(params_head, fn_head, src, sn.s, sn.n, a, decls, false)
         ## GENERICS (§8): a `match v` where `v : T` is an enum PARAM in a mono instance — resolve the
         ## instance enum type (T → E) so the comptime-variant unroll has a concrete enum. Only kicks in
         ## when the raw annotation didn't already name an enum (byte-identical for a non-generic match).
