@@ -131,7 +131,10 @@ fi
 echo "DIFFER: seed=$(wc -l<target/gas_seed.s) gas1=$(wc -l<target/gas1.s) gas2=$(wc -l<target/gas2.s)"
 echo "  (seed != Stage1 means the committed seed/alatyr is STALE vs src/. The recovery is a SELF-PROMOTE,"
 echo "   not a rebuild from the frozen Rust ancestor — that ancestor can no longer parse the current src/."
-echo "   Build Stage1, let it build Stage2 and Stage3, require Stage1 == Stage2 == Stage3 in both the GAS"
-echo "   and the binary, read the seed->Stage1 GAS delta line by line, then copy Stage1 over seed/alatyr and"
-echo "   append the evidence to seed/VERSION. Normalize .L<N> and .Lra<N>_<k> before reading that delta.)"
+echo "   Build Stage1, let it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in the emitted GAS,"
+echo "   normalizing .L<N> and .Lra<N>_<k> first. In the BINARY require only Stage2 == Stage3: Stage1 was"
+echo "   assembled by the stale seed, so its binary differs by construction. Read that normalized"
+echo "   seed->Stage1 delta line by line, copy STAGE2 — not Stage1 — over seed/alatyr, append the evidence"
+echo "   to seed/VERSION, and re-run this script on the promoted tree. Why Stage2, and what a readable"
+echo "   delta looks like: AGENTS.md's Reproducibility section and alatyr-integrate SKILL.md section 3.)"
 exit 4
