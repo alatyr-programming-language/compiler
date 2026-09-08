@@ -5274,6 +5274,12 @@ run int_literal_float_unchecked 99
 ## only the x86 one saw a resolved constant. Two of the nine cases are OVER-EAGERNESS controls — an
 ## integer-annotated local fed by the same constant and field must keep the integer.
 run int_literal_float_module_const 99
+## #589 / Declarations §5+§6.1: a bind, parameter or local named like a module CONSTANT shadows it.
+## x86_64 resolved the constant on NAME alone in `emit_st_assign`'s opening `const_rhs` and answered
+## the constant; the other three already answered the shadowing binding, so x86_64 was the wrong
+## column and the sweeps' own reference was the defect. Registered on all four backends (11 on
+## x86_64, 99 elsewhere at 31ab74f) — four of the eleven cases are ORDER/over-eagerness controls.
+run module_const_shadowed_name 99
 build_reject_has reject_typed_float_integer_f32 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_f64 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_u64 "check: type mismatch at line 2"
@@ -9193,6 +9199,7 @@ run_wat smoke 42
 run_wat signed_local_divmod 42
 run_wat int_literal_float_unchecked 99
 run_wat int_literal_float_module_const 99
+run_wat module_const_shadowed_name 99
 run_wat inline_call 42
 run_wat stack_args 42
 run_wat early_return_result 42
@@ -9284,6 +9291,7 @@ run_a64 wasm_factorial 120
 run_a64 signed_local_divmod 42
 run_a64 int_literal_float_unchecked 99
 run_a64 int_literal_float_module_const 99
+run_a64 module_const_shadowed_name 99
 ## I11/CG-7 scoping: `unchecked` drops the aarch64 div-by-zero guard → raw `sdiv x,x,0` = 0.
 run_a64 unchecked_div_zero 0
 ## `unchecked` drops the guard, so these document HARDWARE behaviour and legitimately differ per target
@@ -9360,6 +9368,7 @@ run_rv64 wasm_factorial 120
 run_rv64 signed_local_divmod 42
 run_rv64 int_literal_float_unchecked 99
 run_rv64 int_literal_float_module_const 99
+run_rv64 module_const_shadowed_name 99
 run_rv64 unchecked_udiv_zero 42
 run_rv64 unchecked_rem_zero 41
 run_rv64 unchecked_div_min_neg1 41

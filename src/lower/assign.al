@@ -2189,6 +2189,71 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
     push_str(sb, "  popq %rbx\n  movq %rbx, (%rax)\n")
   }
 }
+## ─── The SHADOWED module constant (#589) ───────────────────────────────────
+##
+## `lower::const_rhs` resolves a `Var` that names a module-level CONSTANT to that constant's value
+## expression on NAME alone. It filters the DECLARATION (non-`fn`, `kind == 0`, `ret_tl == 0`,
+## `arity == 0`, not `mut`) but never asks whether the function being emitted has a bind, a parameter
+## or a local of that name — and `emit_st_assign` calls it as its FIRST act, before any other
+## question about the right-hand side. So with `K := 3` at module level, `f := fn(K : f64)` called
+## with 41.5 stored the constant's **3**: a clean compile, exit 0, no diagnostic. Declarations §5
+## makes a function (its parameters and its body) an inner scope of the module and §6.1 gives the
+## inner name the win, so 41 is the specified answer. x86_64 was the ONLY backend answering 3 — the
+## other three already answered 41 — which is why the cross-target sweeps could not see it: they
+## compare against x86_64, so a defect in the baseline is invisible to the comparison by
+## construction.
+##
+## The question asked below is the one `emit_gas`' own `Expr::Var` arm asks before it will consider a
+## module constant at all: first the comptime side table (`comptime_slot_is`), then `slot_of`. Asking
+## the reader's own question is what makes the normalizer and the read agree by construction instead
+## of by coincidence. `entry_of` is NOT that predicate and must not be used here — it returns index
+## 0 for an unbound name (indistinguishable from the first real slot) and fail-loud rejects on the
+## way; that is the same trap `is_toplevel_local` vs `name_local_index` was on wasm in #574, where
+## the fallback predicate never answers "not a local" and silently disabled the whole resolution.
+## `slot_of` itself answers for the WHOLE function, so `slot_declared_before` restricts it to the
+## bindings the use can see (Declarations §7.2): `a : u64 = K` followed by a LATER local `K` keeps
+## reading the constant, which is what all four backends already answer.
+##
+## Deliberately narrowed to a SCALAR constant value — `Num`, `BoolLit`, `FloatLit`. Refusing the
+## resolution is sound only while it cannot change the frame-slot SHAPE that `collect_slots` reserved
+## from its OWN `const_rhs` call: a scalar constant and a scalar `Var` are one word either way, so
+## the two agree without a second edit there. A shadowed `str`, struct, array or enum constant needs
+## the slot sizing decided together with it, and on the other three backends those shapes already
+## trap or diverge, so every one of them keeps exactly the path it takes today — filed as #598. The
+## `Expr::Field` const-struct-field arm below is likewise untouched: `var_name_span` of a `Field` is
+## empty, so the guard declines it, and that shape answers the constant on ALL FOUR backends today
+## (#597 — one agreed defect, not an x86 divergence, so fixing only x86 would hand the sweeps three
+## fresh disagreements).
+const_rhs_unshadowed := fn(v : ptr(Expr), cx : ptr(LCtx), use_s : usize) -> ptr(Expr) {
+  r := const_rhs(v, cx.decls, cx.src)
+  ## Nothing was resolved (not a `Var`, or a `Var` that is not a module constant): no question to ask.
+  if unchecked bitcast(usize, r) == unchecked bitcast(usize, v) { return v }
+  if const_scalar_lit(r) == false { return r }
+  vn := var_name_span(v)
+  if comptime_slot_is(cx.ctslots, cx.src, vn.s, vn.n, use_s) { return v }
+  if slot_declared_before(cx.slots, cx.src, vn.s, vn.n, use_s) { return v }
+  r
+}
+
+## The three `Expr` forms a module-level SCALAR constant's value expression can be, each a ONE-WORD
+## value whatever the target. This is not a general shape classifier: it exists so the shadow guard
+## above fires only where declining the resolution cannot move a frame-slot size. The remaining
+## variants are spelled out rather than absorbed by a `_` default, the way this band's other
+## `match deref(...)` sites are — a new `Expr` variant then has to be placed here by hand.
+const_scalar_lit := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Num | Expr::BoolLit | Expr::FloatLit => { r = true }
+    ## Not a one-word scalar literal: an aggregate/`str`/array constant (slot SHAPE), a name or a
+    ## computed form (`const_rhs` never returns one for a scalar constant), or a form a module-level
+    ## constant's value cannot be at all. The guard declines, so the resolution stands as before.
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Field | Expr::Index | Expr::Try | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
 ## The `Stmt::Assign` arm of `emit_stmts`, moved out verbatim (Step 4.1) — the largest arm, and it
 ## touches NO module global. Covers `name := e` / `name = e` in every RHS shape. The
 ## uninitialised-declaration fast path used `s = nx ; continue`; here it is a bare `return`, and
@@ -2205,7 +2270,9 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
   }
   ## resolve a module-CONSTANT Var RHS to its value (`p := ORIGIN` / `s := MSG`) so the copy
   ## rides the existing struct-lit / str-lit / scalar emit — matching collect_slots' binding.
-  mut v := const_rhs(v, cx.decls, cx.src)
+  ## #589 — but a bind, parameter or local of the same name SHADOWS the constant (Declarations §6.1),
+  ## and that question is asked BEFORE the resolution: see `const_rhs_unshadowed` above.
+  mut v := const_rhs_unshadowed(v, cx, ns)
   ## A module-level const STRUCT field is a compile-time value, but it is not a bare Var for
   ## const_rhs to resolve. Materialize the selected field before slot/value classification so a
   ## `str` field (for example TOOL-15's `app.version`) takes the existing two-word emit_str_assign

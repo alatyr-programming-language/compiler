@@ -82,6 +82,26 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A parameter, a local or a `comptime` binding named like a module constant now wins on x86_64
+  too.** Declarations §5 makes scope lexical and block-structured and a function — its parameters and
+  its body — an inner scope of the module, and §6.1 gives the inner name the win for the extent of
+  that scope. On x86_64 it did not: the assignment lowering resolved a right-hand-side name to a
+  module constant's value on the NAME alone, before it asked anything else about the statement, so
+  `K := 3` at module level with `f := fn(K : f64)` called with 41.5 stored **3** — a clean compile,
+  exit 0, no diagnostic. aarch64, riscv64 and wasm already answered the shadowing binding, so this is
+  the rarer and more dangerous arrangement: the wrong column was the one the cross-target sweeps
+  compare everything else against, which is why nothing caught it until a fix on the other three
+  backends needed a shadow guard to avoid reproducing it. All four backends now answer the inner
+  binding, for an annotated local, an unannotated bind and a `comptime` binding, from either a
+  parameter or a local home. Declarations §7.2 is preserved in both directions: a declaration's own
+  initializer (`K : u64 = K`) and a read placed before a later local of that name still mean the
+  constant, because the guard asks about bindings declared BEFORE the statement rather than anywhere
+  in the function. Nothing else moves — an unshadowed constant still resolves, including the float
+  arrival the previous release had just made agree across backends, and all 8 076 tracked
+  (fixture x backend) artifacts are byte-identical. A shadowed `str`, struct, array or enum constant
+  is deliberately untouched and stays as it is today (#598), as is a shadowed const-STRUCT-FIELD
+  base, which answers the constant on all four backends rather than only on x86_64 (#597).
+
 - **A `brand` now carries the identity Types §5.4 gives it: a sibling brand, the raw type it brands
   and a brand over another block no longer convert into it implicitly.** §5.4 makes branding "the
   primitive that grants a distinct nominal identity over a shared layout", §4.2 classes every brand

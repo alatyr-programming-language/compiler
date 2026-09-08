@@ -2984,6 +2984,34 @@ slot_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> i64 {
   res
 }
 
+## The SHADOWING half of `slot_of` (#589): does the name `[s, s+n)` have a frame slot — a bind, a
+## parameter or a local — declared STRICTLY BEFORE source offset `use_s`? `slot_of` answers "is this
+## name a slot" for the WHOLE function, which is exactly what `emit_gas`' `Expr::Var` arm asks before
+## it will consider a module constant at all; this is that same question restricted to the bindings a
+## use at `use_s` can actually SEE (Declarations §7.2 — a local is visible from its point of
+## declaration onward). The strict `<` is what keeps a DECLARATION's own initializer reading the
+## outer name: for `K : u64 = K` over a module constant `K`, the slot's recorded `ns` IS that
+## statement's own name offset, so it is not "before" it. A PARAMETER's `ns` lies in the parameter
+## list, textually ahead of every body statement, so a parameter always answers true.
+slot_declared_before := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize, use_s : usize) -> bool {
+  if n == 0 { return false }
+  cnt := svec_len(slots)
+  st := svec_stride()
+  base := deref(slots).base
+  mut res := false
+  mut i := 0
+  while i < cnt {
+    e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
+    ## The same inline length pre-check `slot_of` uses, and `streq` is the same arbiter; only the
+    ## position test and the bool result differ.
+    if deref(e).nl == n and deref(e).ns < use_s {
+      if streq(src, deref(e).ns, n, s, n) { res = true }
+    }
+    i += 1
+  }
+  res
+}
+
 ## COMPTIME scalar locals have no frame slot. `collect_slots` records binding events in this separate
 ## per-function table, and the emitter/condition folder consults it by source name plus use position.
 ## `ek == 255` is a comptime expression and `ek == 254` is a tombstone for a later ordinary binding;
