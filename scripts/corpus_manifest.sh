@@ -48,10 +48,27 @@
 #   • detector self-test — one row's exit field is flipped in a copy of the baseline and the comparison
 #     must report exactly that one differing row, which is what proves the compare path is live and the
 #     baseline is neither empty nor silently absent;
+#   • re-observation self-test — the serial re-observation of a timed-out source (see `reobserve_timeouts`)
+#     is driven in BOTH directions with a stubbed worker: a child that times out again must stay a
+#     reported failure, and a child that comes back inside the ceiling must return to its observed phase.
+#     A mechanism that only ever un-fails rows is not a re-measurement, it is an eraser;
 #   • provenance — the compiler under test is named with its sha256, a `target/debug/alatyr` older than the
 #     newest `src/`/`lib/` file is refused, and a compiler supplied via `ALATYR_CORPUS_CC` that differs
 #     from this checkout's own is refused unless the caller says so out loud;
 #   • a missing cross tool is exit 2, never a partial green.
+#
+# ## A `*_timeout` row is re-observed, never guessed (issue #537)
+#
+# `rc == 124 after N seconds` cannot tell a LOOPING compiler from a starved one, and the walk used to
+# fold the answer it did not have into `NO-LONGER-RUNS — a REGRESSION` while printing, in the same run,
+# a warning that a timeout row is the one kind it cannot call reproducible. No value of TIMEOUT_SECS
+# fixes that: wall-clock time on a shared machine has no upper bound, so a ceiling only sets the load at
+# which the false red returns (it was raised from 10 s to 30 s once already, and came back at load 28,
+# 33 and 42 on 12 cores). The fine fact is cheap and was never asked — *does this child still fail to
+# finish when nothing else of ours is running?* — so every source that produced a `*_timeout` row is
+# observed again, ONE AT A TIME, after the parallel walk has finished, and the SECOND observation is the
+# one that is classified. A row that breaches the ceiling twice, the second time alone, is reported as
+# its own `TIMED-OUT` class instead of a regression class it does not belong to.
 #
 # ## Usage
 #
@@ -60,14 +77,19 @@
 #     --write            overwrite scripts/corpus.manifest (an intentional behaviour change owns this)
 #     --explain A B      read two manifests JOINED on (backend, path), grouped by severity class.
 #                        A regeneration's commit message carries this output verbatim.
-#     --self-test        run the detector, normalization and frame-layout self-tests only; never walk
-#                        the corpus or write scripts/corpus.manifest
+#     --self-test        run the detector, classifier, normalization, stream-separation, re-observation
+#                        and frame-layout self-tests only; never walk the corpus or write
+#                        scripts/corpus.manifest
 #
 #   ALATYR_CORPUS_CC        absolute compiler to exercise (default: this checkout's target/debug/alatyr)
 #   ALATYR_CORPUS_TIMEOUT   seconds per child process, build phases included (default: 30)
 #   ALATYR_CORPUS_JOBS      sources in flight (default: min(nproc, 8); 1 = serial)
 #   ALATYR_CORPUS_KEEP=1    keep every artifact for inspection instead of freeing it per source
 #   ALATYR_CORPUS_ALLOW_FOREIGN_CC=1   permit an ALATYR_CORPUS_CC that is not this checkout's compiler
+#   ALATYR_CORPUS_REOBSERVE=0          do NOT re-observe a timed-out source serially before classifying
+#                                      it. An EVIDENCE knob: it reproduces the pre-#537 behaviour in
+#                                      which one starved child was reported as a NO-LONGER-RUNS
+#                                      regression. A gate never sets it.
 set -u
 export LC_ALL=C
 ulimit -c 0 2>/dev/null || true
@@ -266,12 +288,20 @@ fi
 
 MODE=check
 MANIFEST="$ROOT/scripts/corpus.manifest"
-## 30 s, not 10: the slowest single child in the corpus is `alatyr -o … test/uint256.al` at 2.2 s
-## unloaded (it assembles and links; the other three backends only emit GAS, ≤0.03 s each), and with
+## 30 s, not 10: the ceiling exists to stop a LOOPING compiler, not to police compile time, and with
 ## eight sources in flight a 10 s ceiling left a margin small enough that a busy machine could turn a
-## spurious `compile_timeout` into a RED gate — the worst failure mode for a committed baseline. The
-## ceiling exists to stop a LOOPING compiler, not to police compile time.
+## spurious `compile_timeout` into a RED gate — the worst failure mode for a committed baseline.
+##
+## The margin, RE-MEASURED on this tree rather than carried forward: `alatyr -o … test/uint256.al` is
+## 6.78 s unloaded and `test/u128_div.al` is 2.55 s, while EVERY other (source × backend) pair of the
+## 8 000 is ≤ 0.11 s — uint256 itself is 25 ms to `check` and ~50 ms to emit aarch64/riscv64/wat GAS, so
+## the whole cost is the x86_64 assemble-and-link. Two pairs out of 8 000 therefore carry the entire
+## timeout exposure, at a 4.4× and an 11.8× margin. The note this replaces claimed 2.2 s and a 13×
+## margin; that measurement aged out, which is exactly why the SAME file breached the ceiling twice in
+## issue #537. Raising the number again would age out too. The answer is not the ceiling but the
+## re-observation below: a row that hits it is TESTED for looping instead of assumed to be looping.
 TIMEOUT_SECS="${ALATYR_CORPUS_TIMEOUT:-30}"
+REOBSERVE="${ALATYR_CORPUS_REOBSERVE:-1}"
 KEEP="${ALATYR_CORPUS_KEEP:-0}"
 JOBS="${ALATYR_CORPUS_JOBS:-}"
 if [ -z "$JOBS" ]; then
@@ -447,14 +477,21 @@ END {
     if (o[k] == n[k]) continue
     split(o[k], a, "/"); split(n[k], b, "/")
     orun = (a[1] == "run"); nrun = (b[1] == "run")
-    if (orun && !nrun)            cls[k] = "NO-LONGER-RUNS"
+    ## A `*_timeout` in the FRESH run gets its own class, ahead of every other test. It is not a
+    ## regression class: `rc == 124 after the ceiling` says the child did not finish, and nothing about
+    ## it says the compiler refused the program. Folding it into NO-LONGER-RUNS reported a conclusion
+    ## the stage had disclaimed in the same output (issue #537); the walk now re-observes such a row
+    ## serially first, so one that reaches here has breached the ceiling twice.
+    if (b[1] ~ /_timeout$/)       cls[k] = "TIMED-OUT"
+    else if (orun && !nrun)       cls[k] = "NO-LONGER-RUNS"
     else if (!orun && nrun)       cls[k] = "NOW-RUNS"
     else if (orun && a[2] != b[2]) cls[k] = "EXIT-CHANGED"
     else if (orun)                cls[k] = "OUTPUT-CHANGED"
     else if (a[1] != b[1])        cls[k] = "PHASE-CHANGED"
     else                          cls[k] = "DETAIL-CHANGED"
   }
-  nc = split("NO-LONGER-RUNS EXIT-CHANGED REMOVED PHASE-CHANGED DETAIL-CHANGED OUTPUT-CHANGED NOW-RUNS ADDED", ord, " ")
+  nc = split("TIMED-OUT NO-LONGER-RUNS EXIT-CHANGED REMOVED PHASE-CHANGED DETAIL-CHANGED OUTPUT-CHANGED NOW-RUNS ADDED", ord, " ")
+  desc["TIMED-OUT"]      = "did not finish inside the per-child ceiling — a HANG, or a machine loaded from outside this gate"
   desc["NO-LONGER-RUNS"] = "was running, now refused by an earlier phase — a REGRESSION"
   desc["EXIT-CHANGED"]   = "ran before and after, different exit — a VALUE change"
   desc["REMOVED"]        = "the pair is gone from the fresh run — coverage lost"
@@ -553,23 +590,27 @@ selftest() { # manifest-file
 ## to be reported under its own heading with the right count. Needs no compiler.
 selftest_classes() { # manifest-file
   local src="$1" a="$WORK/cls.a" b="$WORK/cls.b" out="$WORK/cls.out" c want got
-  awk -F'\t' 'NF==6 && $3=="run"{print; n++} n>=4{exit}' "$src" > "$a"
-  if [ "$(grep -c '' "$a")" -lt 4 ]; then
-    echo "corpus manifest: classifier self-test FAILED — fewer than 4 running rows to plant into" >&2
+  awk -F'\t' 'NF==6 && $3=="run"{print; n++} n>=5{exit}' "$src" > "$a"
+  if [ "$(grep -c '' "$a")" -lt 5 ]; then
+    echo "corpus manifest: classifier self-test FAILED — fewer than 5 running rows to plant into" >&2
     return 1
   fi
+  ## Rows 1 and 5 are the pair that matters most: both are `run -> not-run`, and only the one whose new
+  ## phase ends in `_timeout` may be classified TIMED-OUT. If the new class ever widened to swallow the
+  ## other, NO-LONGER-RUNS would drop to 0 here and this self-test would fail — which is the point.
   awk -F'\t' 'BEGIN{OFS="\t"}
     NR==1 { $3="assemble"; $4=1; print; next }              # -> NO-LONGER-RUNS
     NR==2 { $4=$4+1;       print; next }                    # -> EXIT-CHANGED
     NR==3 { $5="fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"; print; next }  # -> OUTPUT-CHANGED
     NR==4 { next }                                          # -> REMOVED
+    NR==5 { $3="compile_timeout"; $4=124; print; next }      # -> TIMED-OUT
     {print}
     END { print "wasm\ttest/_classifier_selftest.al\trun\t42\t" \
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\t" \
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }  # -> ADDED
   ' "$a" > "$b"
   explain_manifest "$a" "$b" > "$out" 2>&1 || true
-  for c in NO-LONGER-RUNS:1 EXIT-CHANGED:1 OUTPUT-CHANGED:1 REMOVED:1 ADDED:1; do
+  for c in TIMED-OUT:1 NO-LONGER-RUNS:1 EXIT-CHANGED:1 OUTPUT-CHANGED:1 REMOVED:1 ADDED:1; do
     want="${c#*:}"; c="${c%%:*}"
     got="$(sed -n "s/^  ${c} *\([0-9][0-9]*\) pair(s).*/\1/p" "$out")"
     if [ "${got:-0}" != "$want" ]; then
@@ -584,6 +625,160 @@ selftest_classes() { # manifest-file
     return 1
   fi
   echo "corpus manifest: classifier self-test ok (one planted row per class, each reported under its own heading)"
+  return 0
+}
+
+## ---------------------------------------------------------------------------------------------------
+## Serial re-observation of a timed-out source (issue #537).
+##
+## The production re-run of one source. Factored out under its own name so the self-test below can
+## shadow it and drive the classification and accounting without a compiler — the same idiom the stream
+## separation self-test uses for `timeout`.
+reobserve_worker() { # id rel
+  bash "$SELF" --worker "$(printf '%s\t%s' "$1" "$2")"
+}
+
+## The indices of every source that produced at least one `*_timeout` row, one per line, ascending.
+timed_out_ids() { # rows-dir
+  local d="$1"
+  ## `find`, not a `"$d"/*` glob: an EMPTY rows directory would hand awk the literal pattern.
+  find "$d" -maxdepth 1 -type f -exec awk -F'\t' '$3 ~ /_timeout$/ {print FILENAME}' {} + 2>/dev/null |
+    sed 's|.*/||' | sort -u
+}
+
+loadavg_now() {
+  if [ -r /proc/loadavg ]; then cut -d' ' -f1-3 /proc/loadavg; else printf 'unavailable'; fi
+}
+
+## Re-observe, ONE AT A TIME and with the parallel walk finished, every source that timed out, then
+## classify on the second observation. Sets REOBS_SOURCES / REOBS_RECOVERED / REOBS_PERSISTED and
+## prints one line per originally-timed-out row. Returns nonzero only when the mechanism itself broke.
+##
+## The whole SOURCE is re-observed, not just the timed-out pair: the worker's unit of work is one
+## source's four backends and it writes that source's row file as a whole. A row of the same source that
+## did NOT time out is therefore re-observed too — an equally valid fresh observation of the same
+## compiler — and the exposure stays bounded to sources that timed out at all.
+reobserve_timeouts() { # rows-dir jobfile
+  local rowsdir="$1" jobfile="$2" ids id rel rc n=0 tstart verdict backend path before after
+  REOBS_SOURCES=0; REOBS_RECOVERED=0; REOBS_PERSISTED=0
+  ids="$(timed_out_ids "$rowsdir")"
+  [ -n "$ids" ] || return 0
+  REOBS_SOURCES="$(printf '%s\n' "$ids" | grep -c '')"
+  mkdir -p "$WORK/rows-first" || return 1
+  echo "corpus manifest: re-observation — $REOBS_SOURCES source(s) produced a '*_timeout' row in the parallel walk."
+  echo "corpus manifest: re-observation   The ceiling catches a LOOPING compiler; it does not measure the machine's"
+  echo "corpus manifest: re-observation   load. Each one is observed again ONE AT A TIME now that the walk is done,"
+  echo "corpus manifest: re-observation   and the second observation is the one that gets classified."
+  echo "corpus manifest: re-observation   (load average now: $(loadavg_now))"
+  tstart=$SECONDS
+  for id in $ids; do
+    rel="$(awk -F'\t' -v want="$id" '$1==want{print $2; exit}' "$jobfile")"
+    if [ -z "$rel" ]; then
+      echo "corpus manifest: re-observation FAILED — no corpus source carries index $id" >&2
+      return 1
+    fi
+    cp "$rowsdir/$id" "$WORK/rows-first/$id" || return 1
+    n=$((n + 1))
+    echo "corpus manifest: re-observation   [$n/$REOBS_SOURCES] $rel, serially…"
+    reobserve_worker "$id" "$rel"; rc=$?
+    if [ "$rc" != 0 ]; then
+      echo "corpus manifest: re-observation FAILED — the serial worker for $rel exited $rc" >&2
+      return 1
+    fi
+    if [ ! -s "$rowsdir/$id" ]; then
+      echo "corpus manifest: re-observation FAILED — the serial worker for $rel produced no rows" >&2
+      return 1
+    fi
+    ## Join the two observations of THIS source on (backend, path) and report only the rows whose first
+    ## observation was a timeout. `< <(…)` and not a pipe: the counters must survive the loop.
+    while IFS=$'\t' read -r verdict backend path before after; do
+      printf 'corpus manifest: re-observation   %-8s %-52s %s -> %s   %s\n' \
+        "$backend" "$path" "$before" "$after" "$verdict"
+      case "$verdict" in
+        RECOVERED) REOBS_RECOVERED=$((REOBS_RECOVERED + 1)) ;;
+        *)         REOBS_PERSISTED=$((REOBS_PERSISTED + 1)) ;;
+      esac
+    done < <(awk -F'\t' 'BEGIN{OFS="\t"}
+        FNR==NR { if (NF==6 && $3 ~ /_timeout$/) first[$1 SUBSEP $2] = $3 "/" $4; next }
+        NF==6 && (($1 SUBSEP $2) in first) {
+          print (($3 ~ /_timeout$/) ? "STILL-AT-THE-CEILING" : "RECOVERED"), \
+                $1, $2, first[$1 SUBSEP $2], $3 "/" $4
+        }' "$WORK/rows-first/$id" "$rowsdir/$id")
+  done
+  echo "corpus manifest: re-observation — $REOBS_RECOVERED row(s) recovered, $REOBS_PERSISTED still at the ceiling ($((SECONDS - tstart))s)"
+  return 0
+}
+
+## The re-observation's own gate of the gate, in BOTH directions, with the worker stubbed so it needs no
+## compiler and costs no ceiling. A mechanism that only ever un-fails a row is an eraser, not a
+## measurement, so the genuine-hang direction is asserted first.
+reobservation_selftest() {
+  ## One name per `local`: bash expands ALL the words of a `local` command before it assigns any of
+  ## them, so `local d=… rowsdir="$d/rows"` reads `$d` while `d` is already a fresh unset local, which
+  ## under `set -u` aborts the script.
+  local d="$WORK/reobs-selftest"
+  local rowsdir="$d/rows"
+  local jobfile="$d/jobs"
+  local hash1=1111111111111111111111111111111111111111111111111111111111111111
+  local hash2=2222222222222222222222222222222222222222222222222222222222222222
+  rm -rf "$d"
+  mkdir -p "$rowsdir" || return 1
+  printf '%s\t%s\n' 000000 test/_reobs_selftest.al > "$jobfile"
+
+  ## An empty rows directory and a walk with no timeout must both cost exactly nothing.
+  (
+    REOBS_SOURCES=unset
+    reobserve_worker() { echo "corpus manifest: re-observation self-test FAILED — worker ran with no timeout row" >&2; return 1; }
+    reobserve_timeouts "$rowsdir" "$jobfile" >/dev/null || exit 1
+    [ "$REOBS_SOURCES" = 0 ] || { echo "corpus manifest: re-observation self-test FAILED — empty rows dir reported $REOBS_SOURCES source(s)" >&2; exit 1; }
+    printf 'x86_64\ttest/_reobs_selftest.al\trun\t42\t%s\t%s\n' "$hash1" "$hash2" > "$rowsdir/000000"
+    reobserve_timeouts "$rowsdir" "$jobfile" >/dev/null || exit 1
+    [ "$REOBS_SOURCES" = 0 ] || { echo "corpus manifest: re-observation self-test FAILED — a walk with no timeout row re-observed $REOBS_SOURCES source(s)" >&2; exit 1; }
+  ) || return 1
+
+  ## Direction 1 — a GENUINE hang: the child breaches the ceiling on the serial re-run too. The row must
+  ## stay a `*_timeout`, be counted as persisted, and NOT be counted as recovered.
+  (
+    printf 'x86_64\ttest/_reobs_selftest.al\tcompile_timeout\t124\t%s\t%s\n' "$hash1" "$hash2" > "$rowsdir/000000"
+    reobserve_worker() {
+      printf 'x86_64\ttest/_reobs_selftest.al\tcompile_timeout\t124\t%s\t%s\n' "$hash1" "$hash2" > "$rowsdir/$1"
+    }
+    reobserve_timeouts "$rowsdir" "$jobfile" > "$d/hang.out" || exit 1
+    if [ "$REOBS_SOURCES" != 1 ] || [ "$REOBS_PERSISTED" != 1 ] || [ "$REOBS_RECOVERED" != 0 ]; then
+      echo "corpus manifest: re-observation self-test FAILED — a child that times out TWICE was accounted" >&2
+      echo "  sources=$REOBS_SOURCES persisted=$REOBS_PERSISTED recovered=$REOBS_RECOVERED, want 1/1/0" >&2
+      exit 1
+    fi
+    if [ "$(awk -F'\t' '$3 ~ /_timeout$/ {n++} END{print n+0}' "$rowsdir/000000")" != 1 ]; then
+      echo "corpus manifest: re-observation self-test FAILED — the re-run erased a genuine hang's timeout row" >&2
+      exit 1
+    fi
+    grep -q 'STILL-AT-THE-CEILING' "$d/hang.out" || {
+      echo "corpus manifest: re-observation self-test FAILED — a genuine hang was not reported" >&2; exit 1; }
+  ) || return 1
+
+  ## Direction 2 — STARVATION: the same child finishes inside the ceiling once nothing else is in
+  ## flight. Its row must return to the phase the second observation saw, and be counted as recovered.
+  (
+    printf 'x86_64\ttest/_reobs_selftest.al\tcompile_timeout\t124\t%s\t%s\n' "$hash1" "$hash2" > "$rowsdir/000000"
+    reobserve_worker() {
+      printf 'x86_64\ttest/_reobs_selftest.al\trun\t42\t%s\t%s\n' "$hash1" "$hash2" > "$rowsdir/$1"
+    }
+    reobserve_timeouts "$rowsdir" "$jobfile" > "$d/starve.out" || exit 1
+    if [ "$REOBS_SOURCES" != 1 ] || [ "$REOBS_RECOVERED" != 1 ] || [ "$REOBS_PERSISTED" != 0 ]; then
+      echo "corpus manifest: re-observation self-test FAILED — a child that recovers when run alone was accounted" >&2
+      echo "  sources=$REOBS_SOURCES recovered=$REOBS_RECOVERED persisted=$REOBS_PERSISTED, want 1/1/0" >&2
+      exit 1
+    fi
+    if [ "$(awk -F'\t' '{print $3 "/" $4}' "$rowsdir/000000")" != "run/42" ]; then
+      echo "corpus manifest: re-observation self-test FAILED — the recovered row is not the second observation" >&2
+      exit 1
+    fi
+    grep -q 'RECOVERED' "$d/starve.out" || {
+      echo "corpus manifest: re-observation self-test FAILED — a recovery was not reported" >&2; exit 1; }
+  ) || return 1
+
+  echo "corpus manifest: re-observation self-test ok (a twice-timing-out child stays a reported failure; one that finishes when run alone returns to its second observation)"
   return 0
 }
 
@@ -746,6 +941,7 @@ stream_separation_selftest() {
   return 0
 }
 stream_separation_selftest || exit 2
+reobservation_selftest || exit 2
 
 ## The corpus's own source tree has one particular compiler layout. A manifest can therefore remain
 ## green while a compiler change breaks a second layout that no tracked fixture reaches. Exercise that
@@ -903,6 +1099,20 @@ wait "$xpid"; xrc=$?
 elapsed=$((SECONDS - start))
 [ "$xrc" = 0 ] || die "a corpus worker failed (xargs exit $xrc) — the manifest is incomplete"
 
+# --- re-observe the timed-out sources SERIALLY, before anything is classified (issue #537) ----------
+## Cost when nothing timed out: `timed_out_ids` over the row files, and nothing else. Cost when one
+## source timed out: that one source's four backends, once, with nothing else of this gate's in flight.
+REOBS_SOURCES=0; REOBS_RECOVERED=0; REOBS_PERSISTED=0
+if [ "$REOBSERVE" = 0 ]; then
+  if [ -n "$(timed_out_ids "$WORK/rows")" ]; then
+    echo "corpus manifest: ALATYR_CORPUS_REOBSERVE=0 — a '*_timeout' row is being classified from ONE" >&2
+    echo "  observation taken under the parallel walk's own load. That is the pre-#537 behaviour and it" >&2
+    echo "  cannot distinguish a hang from starvation; the verdict below is not a gate verdict." >&2
+  fi
+else
+  reobserve_timeouts "$WORK/rows" "$JOBFILE" || die "the serial re-observation of a timed-out source failed"
+fi
+
 # --- assemble the body, asserting per source that its rows exist ------------------------------------
 : > "$BODY"
 fail=0
@@ -952,12 +1162,29 @@ for b in x86_64 aarch64 riscv64 wasm; do
 done
 [ "$vac" = 0 ] || exit 2
 ## A `*_timeout` row is the one observation that can move because the MACHINE was busy rather than
-## because the compiler changed, so it is never silent.
+## because the compiler changed, so it is never silent. What is reported now is the SECOND observation:
+## a row that reaches here breached the ceiling in the parallel walk AND again on its own, so the stage
+## is willing to stand behind it — which is the difference between reporting a measurement and
+## reporting the absence of one.
 TIMEOUTS="$(awk -F'\t' '$3 ~ /_timeout$/ {n++} END{print n+0}' "$BODY")"
 if [ "$TIMEOUTS" != 0 ]; then
-  echo "corpus manifest: WARNING — $TIMEOUTS row(s) hit the ${TIMEOUT_SECS}s ceiling and are recorded as" >&2
-  echo "  a '*_timeout' phase. That is either a hang or a machine too busy to finish in time; a timeout" >&2
-  echo "  row is the one kind this oracle cannot call reproducible." >&2
+  echo "corpus manifest: WARNING — $TIMEOUTS row(s) are recorded as a '*_timeout' phase." >&2
+  if [ "$REOBSERVE" = 0 ]; then
+    echo "  The serial re-observation was switched off (ALATYR_CORPUS_REOBSERVE=0), so this is ONE" >&2
+    echo "  observation taken under the walk's own load and it cannot tell a hang from starvation." >&2
+  else
+    echo "  Each one breached the ${TIMEOUT_SECS}s ceiling in the parallel walk AND again on a serial" >&2
+    echo "  re-observation with nothing else of this gate's in flight. Two independent observations is" >&2
+    echo "  what this stage is willing to report, so the rows stand: either the compiler loops on that" >&2
+    echo "  input, or the machine was loaded from OUTSIDE this gate for the whole run. They are" >&2
+    echo "  classified TIMED-OUT, never NO-LONGER-RUNS." >&2
+  fi
+  echo "  Do NOT regenerate the oracle to absorb one: its committed value is the correct one, and" >&2
+  echo "  absorbing a timeout row would freeze a contention artifact into the baseline. Re-run this" >&2
+  echo "  stage alone on a quiet machine and report the re-measurement." >&2
+elif [ "$REOBS_RECOVERED" != 0 ]; then
+  echo "corpus manifest: re-observation — $REOBS_RECOVERED row(s) hit the ${TIMEOUT_SECS}s ceiling under the parallel" \
+       "walk and finished inside it when re-observed alone; the manifest holds no '*_timeout' row."
 fi
 echo "corpus manifest: rows=$ROWS  phase run / distinct exits:" \
      "x86_64=${RUN_x86_64:-0}/${EXIT_x86_64:-0}" "aarch64=${RUN_aarch64:-0}/${EXIT_aarch64:-0}" \

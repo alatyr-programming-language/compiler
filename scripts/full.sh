@@ -101,7 +101,7 @@ grep -q "\*\*\* e2e: all green \*\*\*" "$E2E_LOG" || { echo "  FAILURES:"; grep 
 echo "### CORPUS MANIFEST ###"
 bash scripts/corpus_manifest.sh --check > "$CM_LOG" 2>&1
 cm_rc=$?
-grep -E "^corpus manifest: (  sha256|detector|rows=|match|MISMATCH|WROTE)" "$CM_LOG"
+grep -E "^corpus manifest: (  sha256|detector|re-observation|WARNING|rows=|match|MISMATCH|WROTE)" "$CM_LOG"
 cm_cover="$(grep -E "^corpus manifest: rows=" "$CM_LOG" | tail -1 | sed 's/^corpus manifest: //')"
 if [ "$cm_rc" != 0 ]; then
   echo "  FAILURES (tail of $CM_LOG):"; tail -30 "$CM_LOG" | sed 's/^/    /'
