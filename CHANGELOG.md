@@ -143,6 +143,24 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   other shape is byte-identical, measured by artifact hash over all 1 980 tracked corpus sources on all
   four backends.
 
+- **A module constant or a const-struct field initializing a float local is now converted to the
+  floating value on aarch64, riscv64 and wasm too, not only on x86_64.** `K := 3` with
+  `a : f64 = K`, and `C := S(k = 3)` with `a : f64 = C.k`, compiled cleanly, emitted no diagnostic and
+  answered **3 on x86_64 and 0 on the other three backends** — the integer bits were stored unchanged
+  and read back as a denormal. Types §9.1 accepts an integer literal in a floating-point context when
+  the value is exactly representable, and a constant the compiler itself resolves to that literal is
+  the same initializer, so the four backends must not disagree about its value. The cause was
+  structural rather than a missed case: the x86_64 lower normalizes the assignment's right-hand side
+  through its module-constant resolver before it asks the conversion question, so its predicate saw an
+  already-resolved integer literal, while the three other emitters never had that resolution step at
+  all — they were an unmeasured column, not a correct one. All three now resolve exactly the one level
+  x86_64 resolves and then ask their own unchanged predicate, so a `mut` global, a deeper field chain,
+  an arithmetic tree over a constant, and an integer-annotated local keep the path they already took.
+  Covered at both `f32` and `f64`. A name shadowed by a parameter, a local or a match binding is
+  deliberately left alone, because there the expression does not denote the constant. Emission for
+  every other shape is byte-identical, measured by artifact hash over all 2 014 tracked corpus sources
+  on all four backends.
+
 - **`checked_mul` / `overflowing_mul` / `saturating_mul` no longer report overflow for every non-zero
   left operand on a target with no high-half-of-product intrinsic.** The `u64` and `i64` members of
   the overflow-policy family read the product's high word out of `mut hi := a` followed by three
