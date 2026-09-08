@@ -6,9 +6,13 @@
 ##     bound by monomorphization at the call (Functions §1.3) — conforming for every `T`;
 ##   - an OVERLOAD SET (`f(u64)` + `f(str)` given `f("ok")`): sema does not resolve overloads, so a
 ##     parameter type read off "one of them" would reject the other one's legal call;
-##   - a BRAND parameter (`Meters`) and a GENERIC-INSTANCE parameter (`Option(u64)`): `resolve_ty`
-##     leaves both UNKNOWN, and the whitelist never rejects on an unknown sink — brand identity is
-##     always explicit (Types §4.2), and generic-payload conformance is not judged here;
+##   - a GENERIC-INSTANCE parameter (`Option(u64)`): `resolve_ty` leaves it UNKNOWN and the whitelist
+##     never rejects on an unknown sink, so generic-payload conformance is not judged here;
+##   - a BRAND parameter (`Meters`): this half is no longer a refusal to judge. #310 gave a direct
+##     `brand(U)` name a nominal identity and #299 made the Types §4.2/§4.3 lattice a refusal, so
+##     `branded(Meters(3))` is accepted because `Meters(3)` is the EXPLICIT constructor form §4.2
+##     requires — not because the sink is unknown. Passing a sibling brand or a bare `u64` here is now
+##     rejected; see `test/reject_brand_sibling_sink.al`;
 ##   - a `ptr(T)` parameter fed the MEM-7/8 `usize`↔`ptr` seam;
 ##   - a comptime-VARIADIC `...` rest and a DEFAULTED parameter: the positional argument index is not
 ##     a parameter index there (Functions §5.1/§7.2);

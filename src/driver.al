@@ -3853,6 +3853,11 @@ DIAG_MULTIDIM_ARRAY_FIELD_MARKER := 6890000000000000000
 ## Issue #324 — the bounded direct nested fixed-array parameter fence. Keep it between the field and
 ## visibility classes so check/build/emit share one located refusal without changing older ranges.
 DIAG_NESTED_ARRAY_PARAM_MARKER := 6895000000000000000
+## Issue #299 / Types §4.2-§4.3 + §5.4 — the sema-side IMPLICIT BRAND CONVERSION class
+## (`sema::BRAND_CONVERSION_DIAG_MARKER`). It sits between the nested-array-parameter and
+## same-scope-redeclaration windows, so only the former's upper bound moves and every other decoded
+## range stays byte-identical.
+DIAG_BRAND_CONVERSION_MARKER := 6896000000000000000
 ## Issue #414 / Declarations §6.2 — the sema-side same-scope redeclaration class
 ## (`sema::SAME_SCOPE_REDECL_DIAG_MARKER`). It sits between the nested-array parameter and the
 ## qualified-private-constant windows, so only the former's upper bound moves and every other
@@ -4010,7 +4015,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_GLOBAL_INIT_CALL_MARKER
   private_const := code >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and code < DIAG_CT_MARKER
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
-  nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_SAME_SCOPE_REDECL_MARKER
+  nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_BRAND_CONVERSION_MARKER
+  brand_conv := code >= DIAG_BRAND_CONVERSION_MARKER and code < DIAG_SAME_SCOPE_REDECL_MARKER
   same_scope_redecl := code >= DIAG_SAME_SCOPE_REDECL_MARKER and code < DIAG_STR_ELEM_WRITE_MARKER
   str_elem_write := code >= DIAG_STR_ELEM_WRITE_MARKER and code < DIAG_ENUM_VARIANT_ARITY_MARKER
   enum_variant_arity := code >= DIAG_ENUM_VARIANT_ARITY_MARKER and code < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
@@ -4058,6 +4064,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     span = raw / 4
   } else if nested_array_param {
     raw = code - DIAG_NESTED_ARRAY_PARAM_MARKER
+    span = raw / 4
+  } else if brand_conv {
+    raw = code - DIAG_BRAND_CONVERSION_MARKER
     span = raw / 4
   } else if same_scope_redecl {
     raw = code - DIAG_SAME_SCOPE_REDECL_MARKER
@@ -4108,7 +4117,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::fd_str(2, "@limits(")
       wk1 := rt::fd_str(2, limit_name(kind))
@@ -4123,6 +4132,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if enum_dup_disc { wkedd := rt::fd_str(2, "two enum variants resolve to the same discriminant value — spec Types §6.2 makes that ill-formed; rejected in check rather than emitted with an ambiguous tag") }
     else if multidim_array_field { wkmda := rt::fd_str(2, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if nested_array_param { wknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
+    else if brand_conv { wkbc := rt::fd_str(2, "implicit brand conversion: a brand has a distinct nominal identity and every brand conversion is explicit (Types §4.2/§4.3) — write the constructor form `T(v)`; two SIBLING brands do not convert into each other at all (§5.4), so route one through the block they share, as `A(u64(b))`") }
     else if same_scope_redecl { wkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if str_elem_write { wkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
     else if enum_variant_arity {
@@ -6677,7 +6687,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_GLOBAL_INIT_CALL_MARKER
   private_const := r >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and r < DIAG_CT_MARKER
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
-  nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_SAME_SCOPE_REDECL_MARKER
+  nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_BRAND_CONVERSION_MARKER
+  brand_conv := r >= DIAG_BRAND_CONVERSION_MARKER and r < DIAG_SAME_SCOPE_REDECL_MARKER
   same_scope_redecl := r >= DIAG_SAME_SCOPE_REDECL_MARKER and r < DIAG_STR_ELEM_WRITE_MARKER
   str_elem_write := r >= DIAG_STR_ELEM_WRITE_MARKER and r < DIAG_ENUM_VARIANT_ARITY_MARKER
   enum_variant_arity := r >= DIAG_ENUM_VARIANT_ARITY_MARKER and r < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
@@ -6725,6 +6736,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     span = raw / 4
   } else if nested_array_param {
     raw = r - DIAG_NESTED_ARRAY_PARAM_MARKER
+    span = raw / 4
+  } else if brand_conv {
+    raw = r - DIAG_BRAND_CONVERSION_MARKER
     span = raw / 4
   } else if same_scope_redecl {
     raw = r - DIAG_SAME_SCOPE_REDECL_MARKER
@@ -6776,7 +6790,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
@@ -6794,6 +6808,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if enum_dup_disc { dwkedd := rt::fd_str(2, "two enum variants resolve to the same discriminant value — spec Types §6.2 makes that ill-formed; rejected in check rather than emitted with an ambiguous tag") }
     else if multidim_array_field { dwkmda := rt::fd_str(2, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if nested_array_param { dwknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
+    else if brand_conv { dwkbc := rt::fd_str(2, "implicit brand conversion: a brand has a distinct nominal identity and every brand conversion is explicit (Types §4.2/§4.3) — write the constructor form `T(v)`; two SIBLING brands do not convert into each other at all (§5.4), so route one through the block they share, as `A(u64(b))`") }
     else if same_scope_redecl { dwkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if str_elem_write { dwkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
     else if enum_variant_arity {
