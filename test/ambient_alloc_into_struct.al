@@ -8,18 +8,22 @@
 ## `deref(get(…)).x` — still needs the ptr-to-struct ek7 binding for a generic-return pointer; the
 ## whole-struct copy here is the working idiom.) Self-contained, like `ambient_strbuf`.
 ##
-## SPELLING 1 (line 34) — `@alloc(ar) ha := P(x = 30, y = 2)`, the Memory §2.4 storage attribute. The
+## SPELLING 1 (line 38) — `@alloc(ar) ha := P(x = 30, y = 2)`, the Memory §2.4 storage attribute. The
 ## parser desugars it through a SYNTHESIZED `alloc_into` callee span, so no user source names
 ## `alloc_into`; issue #524 keeps it private on exactly that ground (Modules §3 line 73 scopes
 ## visibility to who may *name* a declaration).
 ##
-## SPELLING 2 (line 36) — the BARE `alloc_into(P, ar, …)` call from USER source: an instance of the
-## #403 visibility hole inside our own corpus, since the `pub` test is consulted only in the
-## qualified arm of `sema.al`'s resolver. Kept DELIBERATELY as the row that flips from accept to
-## reject when #403 lands, at which point this file becomes a reject fixture on the bare call and its
-## accept half is already covered by `ambient_alloc_attr`. Do not "simplify" it away.
+## SPELLING 2 (line 40) — the BARE `alloc_into(P, ar, …)` call from USER source, and the reason this
+## row is now a REJECT. It was kept deliberately as the instance of the #403 visibility hole inside
+## our own corpus: the `pub` test used to be consulted only in the qualified arm of `sema.al`'s
+## resolver, so this unqualified reference to a private base declaration resolved and the file built
+## and ran to 42 (= (30 + 2) + (8 + 2)). #403 makes §3 a property of the declaration rather than of
+## the spelling, so the bare name is refused. The accept half is covered by `ambient_alloc_attr`.
 ##
-## 42 = (30 + 2) + (8 + 2). Either struct store dropping a word misses 42.
+## SPELLING 1 remains the load-bearing half of THIS row: the `@alloc` desugar must NOT be refused —
+## Modules §3 line 73 scopes visibility to who may *name* a declaration, and a synthesized callee span
+## names nothing. A regression there would move the diagnostic to the `@alloc` line, which is why this
+## fixture asserts the exact line of the refusal.
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 
 P := struct { x : u64, y : u64 }

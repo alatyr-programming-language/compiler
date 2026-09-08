@@ -12643,12 +12643,34 @@ sema_vis_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, c
   sema_vis_pair(decls, src, g.ms, g.ml, g.ns, g.nl, cs, cl, k1, k2)
 }
 
-sema_vis_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, cs : usize, cl : usize) -> usize {
+## #403 — a generic declaration's TYPE PARAMETER is a name, not a nominal type reference. `Result`'s
+## `T`/`E` and `derive::eq`'s `T` are spelled in the SAME type positions a nominal name occupies, and a
+## user package that happens to declare a private `T := struct {…}` would otherwise make the LIBRARY's
+## own signature a §3 violation (measured: 27 corpus fixtures). `sema_signature_type_head_unknown`
+## already carries this exemption as `sema_fn_type_param_name`; this is the same test against a param
+## list the caller passes explicitly, so the body walk (which has no enclosing declaration) can pass 0.
+sema_param_type_name := fn(ph : ptr(mut Param), src : ptr(u8), s : usize, n : usize) -> bool {
+  mut pp := ph
+  while pp != 0 {
+    pm := deref(param_p(pp))
+    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, s, n) { return true }
+    pp = pm.next
+  }
+  false
+}
+
+sema_vis_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, cs : usize, cl : usize, ph : ptr(mut Param)) -> usize {
   if tl == 0 { return 0 }
   bn := base_type_name(src, ts, tl)
   if bn.n == 0 { return 0 }
   r0 := sema_vis_qual(decls, src, bn.s, bn.n, cs, cl, 2, 3)
   if r0 != 0 { return r0 }
+  ## #403 — the bare spelling of a private type is the same §3 violation as the qualified one, except
+  ## for the enclosing declaration's own type parameters, which are names and not references.
+  if sema_param_type_name(ph, src, bn.s, bn.n) == false {
+    r1 := sema_bare_private(decls, src, bn.s, bn.n, cs, cl, 2, 3)
+    if r1 != 0 { return r1 }
+  }
   sema_type_ambiguous(decls, src, bn.s, bn.n, cs, cl)
 }
 
@@ -12854,6 +12876,52 @@ sema_callee_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   0
 }
 
+## Issue #403 — Modules §3 on the BARE spelling. `pub` was enforced only on a QUALIFIED path
+## (`sema_vis_qual` → `sema_vis_pair`), so one declaration answered two different ways depending only
+## on how the caller wrote its name: `base::str::char_byte(cur, 0)` was rejected from an external
+## package while bare `char_byte(cur, 0)` resolved, built and ran. §3:73 makes visibility a property of
+## the DECLARATION and the naming module — "who may NAME a declaration" — never of the spelling, and
+## §3:80-85/90-92 put an unrelated module outside a non-`pub` declaration's visibility in both forms.
+##
+## The predicate fires only when EVERY same-name candidate of the requested kinds is BOTH off the
+## caller's own/ancestor chain AND non-`pub`, so each accepted shape keeps its existing answer:
+##   * a `pub` candidate keeps the historical unique-name fallback that Stdlib §1's UNQUALIFIED base
+##     prelude rides on (`chars`, `next`, `byte_len`, the §4.3 overflow family, …);
+##   * `sema_mod_anc_rank >= 0` keeps §3:80-85 — a module sees its own and its ancestors' non-`pub`
+##     items, which is the whole down-tree case;
+##   * `sema_mod_head_matches` keeps lower's last-segment ambient leniency (`strbuf` → `alloc__strbuf`);
+##   * `sema_binding_resolves` keeps the §4.1/§4.1.1 alias/projection escape hatch.
+## Which candidate a tie-break would have picked is irrelevant when every candidate is private to a
+## module the caller may not name, so unlike `sema_callee_ambiguous` this does not require `hits > 1`
+## and does not exempt a generic candidate.
+##
+## A SYNTHESIZED span is exempt, on §3:73's own words: `@alloc(ar) h := …` desugars to a bare
+## `alloc_into` callee span (`parser::synth_ident_span`), and `defer` / `__hoflam` do the same — NOBODY
+## NAMED those declarations, the user wrote an attribute. Scoping §3 to names WRITTEN IN SOURCE is the
+## recorded decision on #403 and is why `alloc_into` stays correctly private. `diag_span` (#523) would
+## also drop such a span, but declining HERE keeps the rule readable instead of relying on an encoder.
+sema_bare_private := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, cs : usize, cl : usize, k1 : u8, k2 : u8) -> usize {
+  if n == 0 { return 0 }
+  if ast::span_is_synthetic(s) { return 0 }
+  if sema_gref_split(src, s, n).qual { return 0 }
+  cnt := rt::vec_len(deref(decls))
+  mut hits := 0
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if (d.kind == k1 or d.kind == k2) and d.name_len != 0 and streq(src, d.name_start, d.name_len, s, n) {
+      if sema_mod_head_matches(src, d.mod_start, d.mod_len, cs, cl)
+         or sema_mod_anc_rank(src, d.mod_start, d.mod_len, cs, cl) >= 0
+         or decl_is_pub(src, d.name_start) { return 0 }
+      hits += 1
+    }
+    i += 1
+  }
+  if hits == 0 { return 0 }
+  if sema_binding_resolves(decls, src, s, n, cs, cl, k1, k2) { return 0 }
+  s
+}
+
 ## A `pub` alias/projection is a re-export, not a private down-tree use.  Preserve that separate
 ## Modules §4.3 rule while returning the same located CheckErr shape as §3.
 sema_vis_reexport := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize, ns : usize, nl : usize) -> usize {
@@ -12913,18 +12981,18 @@ sema_vis_declared := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
     mut pp := d.params_head
     while pp != 0 {
       pm := deref(param_p(pp))
-      r0 := sema_vis_type_span(decls, src, pm.ts, pm.tl, d.mod_start, d.mod_len)
+      r0 := sema_vis_type_span(decls, src, pm.ts, pm.tl, d.mod_start, d.mod_len, d.params_head)
       if r0 != 0 { return r0 }
       pp = pm.next
     }
     if d.is_fn and d.ret_tl != 0 {
-      r1 := sema_vis_type_span(decls, src, d.ret_ts, d.ret_tl, d.mod_start, d.mod_len)
+      r1 := sema_vis_type_span(decls, src, d.ret_ts, d.ret_tl, d.mod_start, d.mod_len, d.params_head)
       if r1 != 0 { return r1 }
     }
     mut f := d.fields_head
     while f != 0 {
       fd := deref(fld_p(f))
-      r2 := sema_vis_type_span(decls, src, fd.ts, fd.tl, d.mod_start, d.mod_len)
+      r2 := sema_vis_type_span(decls, src, fd.ts, fd.tl, d.mod_start, d.mod_len, d.params_head)
       if r2 != 0 { return r2 }
       f = fd.next
     }
@@ -13490,6 +13558,11 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
     if nloc != 0 and local_in(locals, nloc, src, ev0.s, ev0.n) { return 0 }
     tv0 := sema_type_ambiguous(decls, src, ev0.s, ev0.n, cs, cl)
     if tv0 != 0 { return tv0 }
+    ## #403 — a bare private FUNCTION used as a VALUE (`f := secret`) reaches neither the callee
+    ## check below nor `sema_global_ref_bad` (which excludes `is_fn` declarations), so it is the one
+    ## §3 spelling with no other guard at all.
+    pv0 := sema_bare_private(decls, src, ev0.s, ev0.n, cs, cl, 1, 4)
+    if pv0 != 0 { return pv0 }
     return sema_global_ref_bad(decls, src, ev0.s, ev0.n, cs, cl)
   }
   ec0 := expr_call_callee_span(e)
@@ -13499,6 +13572,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
     if cr0 == 0 { cr0 = sema_vis_qual(decls, src, ec0.s, ec0.n, cs, cl, 2, 3) }
     if cr0 == 0 and (nloc == 0 or not local_in(locals, nloc, src, ec0.s, ec0.n)) {
       cr0 = sema_callee_ambiguous(decls, src, ec0.s, ec0.n, cs, cl)
+      if cr0 == 0 { cr0 = sema_bare_private(decls, src, ec0.s, ec0.n, cs, cl, 1, 4) }
     }
     mut cg0 := expr_call_args_head(e)
     if cr0 == 0 and callee_is_type_builtin(src, ec0.s, ec0.n) {
@@ -13519,12 +13593,15 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       if nloc != 0 and local_in(locals, nloc, src, s, n) { return 0 }
       tv := sema_type_ambiguous(decls, src, s, n, cs, cl)
       if tv != 0 { return tv }
+      pv := sema_bare_private(decls, src, s, n, cs, cl, 1, 4)
+      if pv != 0 { return pv }
       sema_global_ref_bad(decls, src, s, n, cs, cl)
     }
     Expr::Call(ss, sl, na, ah) => {
       mut r := sema_vis_qual(decls, src, ss, sl, cs, cl, 1, 4)
       if r == 0 { r = sema_vis_qual(decls, src, ss, sl, cs, cl, 2, 3) }
       if r == 0 { r = sema_callee_ambiguous(decls, src, ss, sl, cs, cl) }
+      if r == 0 { r = sema_bare_private(decls, src, ss, sl, cs, cl, 1, 4) }
       mut g := ah
       while g != 0 and r == 0 {
         ga := deref(arg_p(g))
@@ -13534,7 +13611,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       r
     }
     Expr::StructLit(ss, sl, nf, fh) => {
-      mut r := sema_vis_type_span(decls, src, ss, sl, cs, cl)
+      mut r := sema_vis_type_span(decls, src, ss, sl, cs, cl, 0)
       mut g := fh
       while g != 0 and r == 0 {
         ga := deref(arg_p(g))
@@ -13544,7 +13621,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       r
     }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
-      mut r := sema_vis_type_span(decls, src, es, el, cs, cl)
+      mut r := sema_vis_type_span(decls, src, es, el, cs, cl, 0)
       mut g := ph
       while g != 0 and r == 0 {
         ga := deref(arg_p(g))

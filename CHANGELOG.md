@@ -82,6 +82,20 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A non-`pub` declaration is now refused for its BARE spelling too, not only its qualified one.**
+  Modules §3 line 73 defines visibility as who may *name* a declaration, and lines 80-85/90-92 put an
+  unrelated module outside a non-`pub` declaration in every spelling; the compiler applied the test
+  only in the qualified arm of its resolver, so one declaration answered two different ways depending
+  on nothing but how the caller wrote its name. Measured: from an external package,
+  `base::str::char_byte(cur, 0)` was refused while bare `char_byte(cur, 0)` built and ran. Three
+  spellings are affected — a bare CALL, a bare TYPE head, and a private function used as a VALUE
+  (`f := secret; f()`), which had no visibility test at all. Everything §3 makes legal is unchanged: a
+  `pub` name stays reachable bare (Stdlib §1 injects the base prelude unqualified), a module still
+  names its own private helpers, a descendant still names its ancestors' (§3:80-85), and a name a
+  parse-time desugar synthesized — `@alloc`'s `alloc_into`, `defer`, the cloned `__hoflam` closure —
+  is exempt, because nobody named it. Emission is unchanged: this is a `check`-stage rule, and a
+  program that compiled before compiles to the same bytes.
+
 - **A non-exhaustive `match` is now refused whatever the scrutinee looks like, and whatever order a
   package's modules sort in.** Control Flow §5.1 requires every `match` to cover every variant or
   carry a `_` default, and calls a non-exhaustive one a compile error. The compiler enforced that for
