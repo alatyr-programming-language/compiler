@@ -25,10 +25,24 @@ step-by-step procedures live in `.agents/skills/`.
   reproducible.
 - `seed/alatyr` is a frozen static bootstrap. The unpublished Rust ancestor is not a build input and is
   never a recovery path.
-- If the frozen seed cannot reproduce a source change, the integrator owes a self-promotion: Stage1 →
-  Stage2 → Stage3 must match byte-for-byte in GAS and the binary, with full e2e and sweeps; inspect the
-  normalized seed-to-Stage1 delta, promote Stage2, append evidence to `seed/VERSION`, and re-run the
-  post-promotion fixpoint. A lane never promotes the seed.
+- If the frozen seed cannot reproduce a source change, the integrator owes a self-promotion: Stage1
+  → Stage2 → Stage3 must emit byte-identical GAS once the `.L<N>` and `.Lra<N>_<k>` label families
+  are normalized, and the Stage2 and Stage3 **binaries** must match, with full e2e and sweeps; read
+  the normalized seed-to-Stage1 delta, promote **Stage2**, append evidence to `seed/VERSION`, and
+  re-run the post-promotion fixpoint. A lane never promotes the seed.
+- Stage1's binary is expected to differ, and requiring all three of them to match asks for something
+  no version-releasing promotion can deliver: the 0.1.0 → 0.2.0 promotion left `seed/alatyr`
+  differing from the Stage1 it then builds by exactly 35 bytes, every one of them `'1' → '2'` — the
+  version digit compiled into the binary. Read literally, that criterion scores a successful
+  promotion as a failed one. Stage2 is the artifact to freeze because it is assembled from the *new*
+  emission and therefore carries the change in its own code, which Stage1, assembled from the stale
+  seed's emission, does not.
+- Reading the delta has a pass condition of its own: the delta must be describable in one sentence.
+  That promotion's was 822 hunks, 3288 lines added and none removed — four lines per hunk, four
+  distinguishable line shapes, every insertion immediately before a byte load whose index, length
+  and pointer the three preceding lines set up. One recognizable pattern, repeated, is a reviewable
+  delta. A delta that resists a one-sentence characterization is the signal to stop, not to promote
+  and hope the next reseed explains it.
 - A promotion is also a version release. `package.al`'s `version` moves on a seed promotion and only on
   one, `seed/VERSION`'s CURRENT SEED block records the promoted hash and that version, and
   `scripts/fixpoint.sh` refuses a tree where the two disagree — in either direction. The complete file

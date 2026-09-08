@@ -265,10 +265,30 @@ branch-cleanup check and remains available if any pre-acceptance step fails.
 
 If a reseed is owed, it is committed **onto `M` before the gate runs**, so that the fixpoint that is
 verified is the fixpoint that ships: land the `src/` change → seed builds Stage1 → Stage1 builds
-Stage2 → Stage2 builds Stage3 → require `Stage1 == Stage2 == Stage3` byte-identical → read the
-seed→Stage1 GAS delta line by line with both label families normalized (**this is the best place to
-find the compiler miscompiling itself** — one reseed surfaced four latent bugs) → copy Stage1 over
-`seed/alatyr` and append the evidence to `seed/VERSION`.
+Stage2 → Stage2 builds Stage3 → require `Stage1 == Stage2 == Stage3` in the **emitted GAS**,
+byte-identical once the `.L<N>` and `.Lra<N>_<k>` label families are normalized, and
+`Stage2 == Stage3` in the **binary** → read the seed→Stage1 GAS delta line by line with both label
+families normalized (**this is the best place to find the compiler miscompiling itself** — one
+reseed surfaced four latent bugs) → copy **Stage2** over `seed/alatyr` and append the evidence to
+`seed/VERSION` → re-run `scripts/fixpoint.sh` on the promoted tree, which is the proof, not the
+label.
+
+Stage2, and the binary clause stops at `Stage2 == Stage3`, for two separate reasons. Stage1 is
+assembled from the **stale** seed's emission, so it implements the change for everything it compiles
+without carrying it in its own code, while Stage2 is assembled from the new emission and does;
+promoting Stage1 would ship that gap and let the next reseed carry it in silently, attributed to
+whatever change triggered that promotion. And Stage1's binary cannot be made to match in the first
+place: a promotion also releases a version, so the promoted seed carries a version string the Stage1
+it builds from the same tree cannot carry until the next release. The 0.1.0 → 0.2.0 promotion
+measured that as exactly 35 bytes, sizes equal, every one of them `'1' → '2'`. An integrator who
+required all three binaries to match would have scored that successful promotion as a failed one.
+
+"Read the delta line by line" has a pass condition of its own: the delta must be describable in one
+sentence. That promotion's was 822 hunks, 3288 lines added and zero removed — four lines per hunk,
+four distinguishable line shapes, every insertion immediately before a byte load whose index, length
+and pointer the three preceding lines set up. One recognizable pattern, repeated, is what a
+reviewable delta looks like. A delta that resists a one-sentence characterization is the signal to
+stop and find out why, not to promote and let the next reseed inherit the question.
 
 A self-promote also **releases a version**, in the same commit that replaces the seed. `version` in the
 repository's own `package.al` is the compiler's identity: it is part of the input tree, so it stays
