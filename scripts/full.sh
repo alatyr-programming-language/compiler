@@ -130,7 +130,10 @@ echo "### FMT CORPUS (fmt arbiter: test/ programs + src/ & lib/ modules) ###"
 FC_LOG="$LOGDIR/full_fmt_corpus.log"
 ALATYR="$ROOT/target/e2e/cc/bin/alatyr" bash scripts/fmt_corpus.sh --jobs 8 > "$FC_LOG" 2>&1
 fc_rc=$?
-grep -E "^(fmt corpus walk=|\*\*\* fmt corpus)" "$FC_LOG"
+# `fmt corpus selftest` is surfaced beside the coverage lines for the same reason the sweeps surface
+# theirs: it is the non-vacuity check on the two wall-clock ceilings and the ALLOW deciders, and a
+# gate that hides whether its own self-test ran cannot be told apart from one that skipped it.
+grep -E "^(fmt corpus selftest|fmt corpus walk=|\*\*\* fmt corpus)" "$FC_LOG"
 fc_cover="$(grep -cE "^fmt corpus walk=" "$FC_LOG")"
 fc_line="$(grep -E "^fmt corpus walk=" "$FC_LOG" | tr '\n' '|' | sed 's/|$//')"
 if [ "$fc_rc" != 0 ]; then
