@@ -1286,9 +1286,17 @@ issue299_brand_identity_test() {
 ## `write` fails with EBADF and nothing is emitted anywhere; a census run redirects it to a file. The
 ## planted program below carries exactly one of each Types §4.2/§4.3/§5.4 class — B1 (a named raw base
 ## type into a brand annotation), B1R (a brand into a raw annotation), B2 (a sibling brand at a call
-## argument), B3 (a brand over a different block), B4 (one operator over two brands) — and every one
-## of them is a program the compiler ACCEPTS today, which is the whole point of measuring before
-## refusing. Its twin declares no brand and must produce no row at all.
+## argument), B3 (a brand over a different block), B4 (one operator over two brands). Its twin
+## declares no brand and must produce no row at all.
+##
+## UPDATED when the REFUSAL landed. When this row was written every one of those five crossings was
+## ACCEPTED, and asserting that was the whole point: the cost of refusing had to be measured before it
+## could be paid. The census answered zero over the tree, the refusal followed, and the same planted
+## program is now REJECTED — so the assertions move from "counted and still runs" to "counted AND
+## refused", and the run/accept half is carried by an EXPLICIT twin instead. The instrument itself is
+## unchanged and still classifies every crossing; that is what these rows still prove, and it is why
+## the rows are asserted at all: a classifier that stopped seeing a crossing would make the next
+## census read zero for the wrong reason.
 issue299_brand_probe_census_test() {
   local d="$T/issue299_brand_probe"
   rm -rf "$d"
@@ -1313,13 +1321,18 @@ issue299_brand_probe_census_test() {
     '  return 42' \
     '}' > "$d/none.al"
 
-  ## (1) the census channel CLOSED — the ordinary invocation. Nothing may appear on either stream,
-  ## and the program must still be accepted, built and run exactly as before.
+  ## (1) the census channel CLOSED — the ordinary invocation. Not one census row may reach a stream
+  ## the caller can see, and the verdict must be the refusal's own: rc 1, empty stdout, the brand
+  ## class on stderr. That the instrument is silent is the load-bearing half; the row would also pass
+  ## on a compiler that printed rows to stderr if only the exit status were checked.
   "$CC" check "$d/all.al" >"$d/closed.out" 2>"$d/closed.err"; local crc=$?
-  if [ "$crc" != 0 ] || [ -s "$d/closed.out" ] || [ -s "$d/closed.err" ]; then
+  if [ "$crc" = 0 ] || [ -s "$d/closed.out" ] || ! grep -qF "implicit brand conversion" "$d/closed.err"; then
     echo "FAIL issue299/probe(closed): rc=$crc out=$(wc -c <"$d/closed.out") err=[$(<"$d/closed.err")]"; fail=1; return
   fi
-  echo "ok   issue299/probe: with fd 99 closed the instrument writes nothing and check still accepts"
+  if grep -qF "#299 " "$d/closed.err"; then
+    echo "FAIL issue299/probe(closed): a census row reached stderr [$(grep -F '#299 ' "$d/closed.err")]"; fail=1; return
+  fi
+  echo "ok   issue299/probe: with fd 99 closed the instrument writes nothing and the sinks are refused"
 
   ## (2) the census channel OPEN — one row per class, and the classes are the ones §4.2 separates.
   "$CC" check "$d/all.al" 99>"$d/rows" >"$d/open.out" 2>"$d/open.err"; local orc=$?
@@ -1332,10 +1345,13 @@ issue299_brand_probe_census_test() {
     [ "$n" = 1 ] || { echo "FAIL issue299/probe: class $k appears $n times, want 1"; miss=1; }
   done
   [ "$miss" = 0 ] || { fail=1; return; }
-  if ! grep -qE '^#299 SUMMARY brands=3 prelude=0 sinks=[0-9]+ hits=5 lost=0$' "$d/rows"; then
-    echo "FAIL issue299/probe: summary line is [$(grep SUMMARY "$d/rows")]"; fail=1; return
+  ## and NO summary: `brand_probe_summary` sits on `check_program`'s accepting exit, so a run that
+  ## prints rows but no SUMMARY is a run that was refused before the walk ended — which is exactly
+  ## what a counted-and-refused crossing looks like, and is the receipt the instrument was given.
+  if grep -qF ' SUMMARY ' "$d/rows"; then
+    echo "FAIL issue299/probe: the refused program still reached the accepting exit [$(grep SUMMARY "$d/rows")]"; fail=1; return
   fi
-  echo "ok   issue299/probe: five accepted brand crossings counted, one per §4.2 class"
+  echo "ok   issue299/probe: five refused brand crossings still counted, one per §4.2 class, and no accepting receipt"
 
   ## (3) the ZERO control — a program with no brand declaration must yield no row, so a future census
   ## reading 0 means "nothing to count", not "the instrument stopped working".
@@ -1346,16 +1362,330 @@ issue299_brand_probe_census_test() {
   fi
   echo "ok   issue299/probe: a brandless program produces zero rows"
 
-  ## (4) the accepted program still BUILDS and RUNS to its own value — the census refuses nothing.
-  local bo="$d/all.bin"
-  "$CC" -o "$bo" "$d/all.al" >/dev/null 2>"$d/all.build.err"; local brc=$?
+  ## (4) the EXPLICIT twin: the same five crossings written the way §4.2 requires. It must build,
+  ## run to 42, and produce ZERO census rows — the instrument agreeing with the refusal on both
+  ## sides is what makes "the cost of the refusal is zero" a measurement rather than a hope.
+  printf '%s\n' \
+    'A := brand(u64)' \
+    'B := brand(u64)' \
+    'C := brand(u8)' \
+    'takeA := fn(x : A) -> u64 { u64(x) }' \
+    'main := fn() -> u64 {' \
+    '  p : A = A(u64(1))' \
+    '  q : u64 = u64(A(2))' \
+    '  r := takeA(A(u64(B(3))))' \
+    '  s := takeA(A(u64(u8(C(4)))))' \
+    '  t : u64 = u64(A(5)) + u64(B(6))' \
+    '  return 42' \
+    '}' > "$d/explicit.al"
+  local bo="$d/explicit.bin"
+  "$CC" -o "$bo" "$d/explicit.al" >/dev/null 2>"$d/explicit.build.err"; local brc=$?
   if [ "$brc" != 0 ] || [ ! -x "$bo" ]; then
-    echo "FAIL issue299/probe(build): rc=$brc [$(<"$d/all.build.err")]"; fail=1; return
+    echo "FAIL issue299/probe(explicit-build): rc=$brc [$(<"$d/explicit.build.err")]"; fail=1; return
+  fi
+  "$CC" check "$d/explicit.al" 99>"$d/explicit.rows" >/dev/null 2>&1
+  local erows; erows=$(grep -c -v ' SUMMARY ' "$d/explicit.rows")
+  if [ "$erows" != 0 ] || ! grep -qF '#299 SUMMARY brands=3 prelude=0' "$d/explicit.rows"; then
+    echo "FAIL issue299/probe(explicit-census): rows=$erows [$(<"$d/explicit.rows")]"; fail=1; return
   fi
   _e2e_exec "$bo" >/dev/null 2>&1; local got=$?
   if _e2e_runtime_failure "issue299/probe" "$got"; then return; fi
-  if [ "$got" = 42 ]; then echo "ok   issue299/probe: the counted program still builds and runs to 42"
-  else echo "FAIL issue299/probe: got $got want 42"; fail=1; fi
+  if [ "$got" = 42 ]; then echo "ok   issue299/probe: the EXPLICIT twin of all five classes counts zero rows, builds and runs to 42"
+  else echo "FAIL issue299/probe: explicit twin got $got want 42"; fail=1; fi
+}
+
+## Issue #299 — the REFUSAL matrix. #561 counted the Types §4.2/§4.3/§5.4 brand crossings and refused
+## nothing; the census came back ZERO over `src/`, `lib/` and every tracked fixture, so the refusal
+## follows with no tree-preparation stage between them. This row is where the refusal's COVERAGE is
+## stated: one case per (class × sink), each asserted on BOTH semantic entry points, with the located
+## line, plus the controls that prove it is not over-reach.
+##
+## Every value is built with `A(1)`/`B(2)`/`C(3)`, never as an annotated integer literal. Written the
+## way #299's own table wrote them (`b : B = 2`), five of its six rows come back refused by a
+## DIFFERENT defect (#563) that fires before the sink is judged and masks it — the `lit_mask` row
+## below asserts that mask is still #563's and not this refusal's.
+##
+## The programs live in this row's private scratch directory, so the four-backend corpus oracle gains
+## no row for a matrix whose whole point is one `check`-level verdict per shape. The tracked
+## `reject_brand_sibling_sink` / `accept_brand_*` fixtures carry the four-backend witness.
+issue299_brand_refusal_matrix_test() {
+  local d="$T/issue299_brand_refusal"
+  local nfail=0 nok=0
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue299_brand_refusal: scratch"; fail=1; return; }
+
+  ## the shared prologue every case is written against. Three brands over two blocks, and one
+  ## consumer of each of `A` and raw `u64`, so both directions of §4.2's brand class have a sink.
+  local pro='A := brand(u64)
+B := brand(u64)
+C := brand(u8)
+take_a := fn(x : A) -> u64 { u64(x) }
+take_r := fn(x : u64) -> u64 { x }'
+
+  ## REFUSED: `check` and `-o` must both exit non-zero, write the brand diagnostic located at
+  ## `$3`, leave stdout empty and produce no artifact. The needle is the diagnostic's own class
+  ## wording; a bare non-zero exit is also what a crash gives, which is why the text is asserted.
+  ## `$4` names the diagnostic CLASS expected; it defaults to this refusal's own. Two sinks are
+  ## refused by an OLDER fence that runs first — `expr_has_unbound`'s per-argument tag compare, whose
+  ## wording ("unbound name") names nothing unbound, a diagnostic-quality defect of the #563 family.
+  ## Those rows pass the older needle explicitly rather than being left out: the VERDICT is correct
+  ## there, only the class wording is wrong, and asserting it pins today's behaviour so a later
+  ## re-classification is a decision somebody makes rather than a silent drift.
+  _brand_reject() { # case, body, want-line [, needle]
+    local n="$1" body="$2" line="$3" ndl="${4:-implicit brand conversion}"
+    local src="$d/$n.al" co="$d/$n.co" ce="$d/$n.ce" bo="$d/$n.bin" be="$d/$n.be"
+    printf '%s\n%s\n' "$pro" "$body" > "$src"
+    "$CC" check "$src" >"$co" 2>"$ce"; local crc=$?
+    "$CC" -o "$bo" "$src" >/dev/null 2>"$be"; local brc=$?
+    if [ "$crc" = 0 ] || [ "$brc" = 0 ] || [ -s "$co" ] || [ -e "$bo" ]; then
+      echo "FAIL issue299/refuse/$n: check=$crc build=$brc out=$(wc -c <"$co") artifact=$([ -e "$bo" ] && echo yes || echo no)"
+      nfail=$((nfail+1)); return
+    fi
+    if ! grep -qF "$ndl" "$ce" || ! grep -qF "$ndl" "$be"; then
+      echo "FAIL issue299/refuse/$n: rejected, but not by [$ndl]: [$(head -c 120 "$ce")]"
+      nfail=$((nfail+1)); return
+    fi
+    if ! grep -qF "at line $line in" "$ce" || ! grep -qF "at line $line in" "$be"; then
+      echo "FAIL issue299/refuse/$n: unlocated or wrong line, want $line [$(head -c 200 "$ce")]"
+      nfail=$((nfail+1)); return
+    fi
+    nok=$((nok+1))
+  }
+
+  ## ACCEPTED: both entry points accept, the artifact runs, and it returns `$3`.
+  _brand_accept() { # case, body, want-exit
+    local n="$1" body="$2" want="$3"
+    local src="$d/$n.al" bo="$d/$n.bin"
+    printf '%s\n%s\n' "$pro" "$body" > "$src"
+    "$CC" check "$src" >/dev/null 2>"$d/$n.ce"; local crc=$?
+    "$CC" -o "$bo" "$src" >/dev/null 2>"$d/$n.be"; local brc=$?
+    if [ "$crc" != 0 ] || [ "$brc" != 0 ] || [ ! -x "$bo" ]; then
+      echo "FAIL issue299/accept/$n: check=$crc build=$brc [$(head -c 200 "$d/$n.ce")$(head -c 200 "$d/$n.be")]"
+      nfail=$((nfail+1)); return
+    fi
+    _e2e_exec "$bo" >/dev/null 2>&1; local got=$?
+    if _e2e_runtime_failure "issue299/accept/$n" "$got"; then nfail=$((nfail+1)); return; fi
+    if [ "$got" != "$want" ]; then
+      echo "FAIL issue299/accept/$n: got $got want $want"; nfail=$((nfail+1)); return
+    fi
+    nok=$((nok+1))
+  }
+
+  ## ---- B2, a SIBLING brand (§5.4: siblings share only the block, never each other) --------------
+  _brand_reject sibling_bind 'main := fn() -> u64 {
+  b : B = B(2)
+  a : A = b
+  return u64(a)
+}' 8
+  _brand_reject sibling_reassign 'main := fn() -> u64 {
+  mut a : A = A(1)
+  b : B = B(2)
+  a = b
+  return u64(a)
+}' 9
+  _brand_reject sibling_arg 'main := fn() -> u64 {
+  b : B = B(2)
+  return take_a(b)
+}' 8
+  _brand_reject sibling_ufcs 'main := fn() -> u64 {
+  b : B = B(2)
+  return b.take_a()
+}' 8
+  _brand_reject sibling_tail_result 'mk := fn() -> A {
+  b : B = B(2)
+  b
+}
+main := fn() -> u64 { return u64(mk()) }' 8
+  _brand_reject sibling_early_return 'mk := fn(f : u64) -> A {
+  b : B = B(2)
+  if f == 1 { return b }
+  A(1)
+}
+main := fn() -> u64 { return u64(mk(1)) }' 8
+  _brand_reject sibling_struct_field 'S := struct { x : A }
+main := fn() -> u64 {
+  b : B = B(2)
+  s := S(x = b)
+  return u64(s.x)
+}' 9
+  _brand_reject sibling_nested_struct_field 'T := struct { y : A }
+S := struct { t : T }
+main := fn() -> u64 {
+  b : B = B(2)
+  s := S(t = T(y = b))
+  return u64(s.t.y)
+}' 10
+  _brand_reject sibling_ctor_arg 'main := fn() -> u64 {
+  b : B = B(2)
+  a : A = A(b)
+  return u64(a)
+}' 8
+
+  ## ---- B1 / B1R, the two directions of §4.2's brand class (always explicit) ---------------------
+  _brand_reject raw_into_brand_bind 'main := fn() -> u64 {
+  r : u64 = 3
+  a : A = r
+  return u64(a)
+}' 8
+  _brand_reject raw_into_brand_arg 'main := fn() -> u64 {
+  r : u64 = 3
+  return take_a(r)
+}' 8
+  _brand_reject brand_into_raw_bind 'main := fn() -> u64 {
+  a : A = A(1)
+  r : u64 = a
+  return r
+}' 8
+  ## the same B1R crossing at a CALL ARGUMENT, and a sibling laundered through the constructor at
+  ## one: both are refused, by the older per-argument fence that runs first (see `_brand_reject`).
+  _brand_reject brand_into_raw_arg 'main := fn() -> u64 {
+  a : A = A(1)
+  return take_r(a)
+}' 8 'unbound name'
+  _brand_reject sibling_ctor_arg_in_call 'main := fn() -> u64 {
+  b : B = B(2)
+  return take_a(A(b))
+}' 8 'unbound name'
+  _brand_reject raw_into_brand_tail_result 'mk := fn() -> A {
+  r : u64 = 3
+  r
+}
+main := fn() -> u64 { return u64(mk()) }' 8
+
+  ## ---- B3, a brand over a DIFFERENT block — not even a brand conversion ------------------------
+  _brand_reject cross_domain_bind 'main := fn() -> u64 {
+  c : C = C(3)
+  a : A = c
+  return u64(a)
+}' 8
+  _brand_reject cross_domain_arg 'main := fn() -> u64 {
+  c : C = C(3)
+  return take_a(c)
+}' 8
+  _brand_reject cross_domain_ctor_arg 'main := fn() -> u64 {
+  c : C = C(3)
+  a : A = A(c)
+  return u64(a)
+}' 8
+
+  ## ---- B4, one operator over two brands (§5.4 gives each brand its own operation set) ----------
+  _brand_reject sibling_add 'main := fn() -> u64 {
+  a : A = A(1)
+  b : B = B(2)
+  s := a + b
+  return u64(s)
+}' 9
+  _brand_reject sibling_compare_stmt 'main := fn() -> u64 {
+  a : A = A(1)
+  b : B = B(2)
+  if a == b { return 1 }
+  return 0
+}' 9
+  _brand_reject sibling_compare_tail_if 'main := fn() -> u64 {
+  a : A = A(1)
+  b : B = B(2)
+  if a == b { 1 } else { 0 }
+}' 9
+  _brand_reject sibling_while_cond 'main := fn() -> u64 {
+  a : A = A(1)
+  b : B = B(2)
+  while a == b { return 1 }
+  return 0
+}' 9
+
+  ## ---- CONTROL 1: the explicit spelling of every class is accepted and CORRECT -----------------
+  _brand_accept explicit_every_class 'main := fn() -> u64 {
+  r : u64 = 3
+  b : B = B(4)
+  c : C = C(5)
+  a : A = A(r)
+  if take_a(A(r)) != 3 { return 1 }
+  if take_r(u64(a)) != 3 { return 2 }
+  if take_a(A(u64(b))) != 4 { return 3 }
+  if take_a(A(u64(u8(c)))) != 5 { return 4 }
+  if u64(a) + u64(b) != 7 { return 5 }
+  return 42
+}' 42
+  _brand_accept same_brand_is_self_consistent 'main := fn() -> u64 {
+  a : A = A(20)
+  a2 : A = a
+  if take_a(a2) != 20 { return 1 }
+  if u64(a + a2) != 40 { return 2 }
+  if u64(A(a)) != 20 { return 3 }
+  return 42
+}' 42
+
+  ## ---- CONTROL 2: WIDEN stays IMPLICIT (§4.3's only implicit class), with the fence ARMED ------
+  ## The program declares brands, so `SEMA_BRAND_DECLS` is non-zero and every sink is live; the
+  ## widen crossings must still pass. A brandless twin would prove nothing about the fence.
+  _brand_accept widen_stays_implicit 'wide := fn(v : u64) -> u64 { v }
+mk := fn() -> u64 {
+  n : u32 = 9
+  n
+}
+main := fn() -> u64 {
+  a : A = A(1)
+  n : u32 = 7
+  w : u64 = n
+  if w != 7 { return 1 }
+  if wide(n) != 7 { return 2 }
+  if mk() != 9 { return 3 }
+  if u64(a) != 1 { return 4 }
+  return 42
+}' 42
+
+  ## ---- CONTROL 3: a Types §8.1 `@require(pred) U` contract is NOT judged by brand rules --------
+  ## `resolve_ty` records a contract with the SAME nominal marker as a brand (#562), and §8.1 gives
+  ## it a DIFFERENT identity (underlying type + predicate identity + comptime captures). Both
+  ## crossings below are invalid under §8.1/§4.3 and are accepted today: that is #562's defect, and
+  ## this refusal must leave it alone rather than replace no verdict with a wrong one. A brand is
+  ## declared in the same program, so the gate is armed while these pass.
+  _brand_accept require_contract_untouched 'is_nonzero := fn(v : u64) -> bool { return v != 0 }
+is_pos := fn(v : u64) -> bool { return v > 0 }
+NonZero := @require(is_nonzero) u64
+Positive := @require(is_pos) u64
+take_nz := fn(x : NonZero) -> u64 { return u64(x) }
+cross := fn(p : Positive) -> u64 { return take_nz(p) }
+raw_in := fn(r : u64) -> u64 { return take_nz(r) }
+main := fn() -> u64 {
+  a : A = A(1)
+  if u64(a) != 1 { return 1 }
+  return 42
+}' 42
+
+  ## ---- CONTROL 4: the #563 MASK is still #563's ------------------------------------------------
+  ## `a : A = 41` is an integer literal meeting its own annotation, which Types §9.1/§9.2 make one of
+  ## the two forms that GIVE a literal its type — not a conversion between two typed values. It is
+  ## refused today by a different defect (#563). This row asserts the refusal is NOT this class: if
+  ## the brand fence ever starts claiming that sink, #299 will have absorbed #563's bug and the
+  ## measurement of every row above becomes unattributable.
+  local ls="$d/lit_mask.al" lc="$d/lit_mask.ce"
+  printf '%s\n%s\n' "$pro" 'main := fn() -> u64 {
+  a : A = 41
+  return u64(a)
+}' > "$ls"
+  "$CC" check "$ls" >/dev/null 2>"$lc"; local lrc=$?
+  if [ "$lrc" = 0 ]; then
+    echo "FAIL issue299/lit_mask: \`a : A = 41\` is accepted — #563 changed; re-read this row"
+    nfail=$((nfail+1))
+  elif grep -qF "implicit brand conversion" "$lc"; then
+    echo "FAIL issue299/lit_mask: the literal sink is refused by the BRAND class; §9.1/§9.2 make it a"
+    echo "     literal taking its annotated type, and #563 owns that refusal, not #299"
+    nfail=$((nfail+1))
+  else
+    nok=$((nok+1))
+  fi
+  ## …and the constructor spelling of the same literal is accepted, which is what removes the mask.
+  _brand_accept literal_through_constructor 'main := fn() -> u64 {
+  a : A = A(41)
+  return u64(a) + 1
+}' 42
+
+  if [ "$nfail" = 0 ]; then
+    echo "ok   issue299/refusal-matrix: $nok cases — every class at every reachable sink refuses, and the explicit, widen, @require and literal controls hold"
+  else
+    echo "FAIL issue299/refusal-matrix: $nfail of $((nfail+nok)) cases wrong"; fail=1
+  fi
 }
 
 ## Issue #304 / TYP-6 + Types §§4.2–4.3 — direct field and local fixed-array-element stores must
@@ -5094,6 +5424,21 @@ run accept_ann_call_overloaded 9
 check_accept accept_ann_brand_and_generic
 issue299_brand_identity_test
 issue299_brand_probe_census_test
+issue299_brand_refusal_matrix_test
+## Issue #299 — the four-backend witnesses for the refusal. The matrix row above is `check`-level and
+## lives in a private scratch directory; these four tracked sources give the per-file corpus oracle and
+## the cross-target sweeps a row each, because a reject fixture on its own does not prove that the
+## non-x86 emit surfaces refuse too — hence the three `emit_reject_has` rows beside the `-o` one.
+build_reject_has reject_brand_sibling_sink "implicit brand conversion"
+emit_reject_has wat reject_brand_sibling_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_sibling_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_sibling_sink "implicit brand conversion"
+check_accept accept_brand_explicit_conversions
+run accept_brand_explicit_conversions 42
+check_accept accept_brand_require_identity
+run accept_brand_require_identity 42
+check_accept accept_brand_unrefused_sinks
+run accept_brand_unrefused_sinks 42
 run accept_ann_str_binding 9
 run accept_ann_conforming 7
 run accept_ann_global_conforming 9

@@ -82,6 +82,32 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A `brand` now carries the identity Types §5.4 gives it: a sibling brand, the raw type it brands
+  and a brand over another block no longer convert into it implicitly.** §5.4 makes branding "the
+  primitive that grants a distinct nominal identity over a shared layout", §4.2 classes every brand
+  crossing as the constructor form `T(v)`, "always explicit", §4.3 makes **widen** the only implicit
+  conversion class, and §5.4 adds that two *sibling* brands over one block do not convert into each
+  other at all — "Sibling interpretations are not each other's underlying type; only the block they
+  share is." The compiler enforced none of it: `Meters` and `Seconds` were interchangeable, a bare
+  `u64` passed for either, and even a `brand(u8)` was accepted where a `brand(u64)` was declared.
+  Refused now at every value sink the checker reaches — an annotated binding, a `=` re-assignment, a
+  direct or UFCS call argument, a declared result, an early `return`, a binary operator (an
+  `if`-expression's condition included), a struct-literal field, and a brand constructor handed
+  another brand — with a diagnostic of its own that names the remedy: write `A(v)` / `u64(a)`, or for
+  a sibling route through the shared block as `A(u64(b))`. **This newly rejects programs the
+  specification declares invalid**, so by this file's versioning policy it is a defect fixed and not a
+  break; code that stops compiling was relying on the check being absent, and the explicit spelling
+  it needs exists for every class. Nothing else moves: widen stays implicit, the same brand stays
+  self-consistent, a Types §8.1 `@require(pred) U` validity contract keeps its own (currently
+  unenforced) identity rather than acquiring brand rules, and an integer literal meeting its own brand
+  annotation is untouched — §9.1/§9.2 make an annotation one of the two forms that *give* a literal
+  its type. Emission is unchanged for every program that still compiles: this is a `check`-stage rule,
+  and all 2 014 tracked fixtures produce byte-identical diagnostics and byte-identical GAS. Five
+  sinks are still not reached — a module-level value declaration, an array-literal element, an
+  enum-variant payload, a struct-field store, and the brand-to-raw direction through a field read —
+  and `test/accept_brand_unrefused_sinks.al` records each with its reason so the gap cannot be
+  mistaken for coverage.
+
 - **A non-`pub` declaration is now refused for its BARE spelling too, not only its qualified one.**
   Modules §3 line 73 defines visibility as who may *name* a declaration, and lines 80-85/90-92 put an
   unrelated module outside a non-`pub` declaration in every spelling; the compiler applied the test

@@ -167,6 +167,17 @@ multidim_array_field_err := fn(s : usize) -> CheckErr { MULTIDIM_ARRAY_FIELD_DIA
 ## byte-identical while every public semantic entry point shares one located refusal.
 NESTED_ARRAY_PARAM_DIAG_MARKER := 6895000000000000000
 nested_array_param_err := fn(s : usize) -> CheckErr { NESTED_ARRAY_PARAM_DIAG_MARKER + diag_span(s) * 4 }
+## Issue #299 / Types §4.2-§4.3 + §5.4 — an IMPLICIT brand conversion at a concrete value sink. §4.2
+## classes every brand crossing as `T(v)`, "always explicit"; §4.3 makes **widen** the only implicit
+## class; and §5.4 says two SIBLING brands over one block do not convert into each other at all. That
+## is a TARGET-INDEPENDENT rule about an ill-formed program, so it belongs in `check` — one refusal for
+## all four backends — and it deserves its own wording rather than a bare "type mismatch", because the
+## remedy differs per class (write the explicit `A(v)`/`u64(a)`, or route a sibling through the shared
+## block as `A(u64(b))`). Keep this class between the nested-array-parameter and same-scope-redeclaration
+## markers so only the former's upper bound moves and every other decoded CheckErr range stays
+## byte-identical.
+BRAND_CONVERSION_DIAG_MARKER := 6896000000000000000
+brand_conversion_err := fn(s : usize) -> CheckErr { BRAND_CONVERSION_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #414 / Declarations §6.2 — re-declaring a name ALREADY BOUND IN THE SAME SCOPE is a compile
 ## error. That is a TARGET-INDEPENDENT rule about a program the specification calls ILL-FORMED, so it
 ## belongs in `check` (one refusal for all four backends), not in a backend fence. Keep this class
@@ -2070,13 +2081,17 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
   r
 }
 ## ---------------------------------------------------------------------------
-## Issue #299 / #544 stage 0 — the brand-identity MEASUREMENT instrument.
+## Issue #299 / #544 stage 0 — the brand-identity MEASUREMENT instrument, and (below it) the REFUSAL
+## the measurement authorized. #561 counted the crossings and refused nothing, because the price of
+## refusing was unknown; the census answered ZERO over `src/`, `lib/` and every tracked fixture, so
+## the refusal follows directly with no tree-preparation stage in between. The instrument STAYS: it
+## classifies each crossing (one decision, two consumers — `sema_brand_class`), and a census run still
+## records a row for a crossing that is now also refused.
 ##
 ## `brand` is transparent today. Types §4.2 classes a brand crossing as `T(v)`-explicit, §4.3 makes
 ## **widen** the only implicit class, and §5.4:395-400 says two SIBLING brands over one block do not
-## convert into each other at all. Making that a refusal would refuse programs that compile today, so
-## a refusal is deliberately NOT what this block does: it COUNTS, and it changes nothing else. Every
-## row goes to file descriptor 99, which an ordinary invocation does not have open, so the `write`
+## convert into each other at all. The refusal below enforces exactly that; THIS block only counts.
+## Every row goes to file descriptor 99, which an ordinary invocation does not have open, so the `write`
 ## fails with EBADF, no byte reaches any stream the caller can see, and the exit status, the
 ## diagnostics and the emitted GAS are the ones the uninstrumented compiler produces. A census run is
 ## the same command with the channel opened: `alatyr check f.al 99>census.txt`. There is no
@@ -2121,11 +2136,11 @@ brand_probe_fd := fn() -> usize { 99 }
 ## Number of DIRECT user brand declarations in the program under check. Zero for `src/` and `lib/`,
 ## and the first thing every hook tests: a brandless program pays one O(decls) scan per
 ## `check_program` and nothing per sink, so neither the self-build's time nor its output can move.
-mut BRAND_PROBE_DECLS : usize = 0
+mut SEMA_BRAND_DECLS : usize = 0
 ## The PRELUDE brand declarations (`bool`, `char`, `f32`, `f64`) the same scan sees, reported beside
 ## the user count so a `brands=0` census cannot be read as "the scan never saw the standard library":
 ## `prelude=4` on the self-build is the positive control for the scan's own reach into `lib/`.
-mut BRAND_PROBE_PRELUDE : usize = 0
+mut SEMA_BRAND_PRELUDE : usize = 0
 ## Census rows the channel did not accept in full. A short or failed `write` to fd 99 is exactly the
 ## way a census silently under-reports, so the flush result is READ and counted rather than bound and
 ## forgotten, and the count rides on the SUMMARY line: `lost=0` is part of the verdict.
@@ -2195,9 +2210,9 @@ brand_probe_summary := fn() {
     mut pa := rt::Arena(base = 0, off = 0, cap = 0)
     mut sb := brand_probe_buf(pa)
     w0 := rt::push_str(sb, "#299 SUMMARY brands=")
-    w1 := rt::push_int(sb, i64(BRAND_PROBE_DECLS))
+    w1 := rt::push_int(sb, i64(SEMA_BRAND_DECLS))
     p0 := rt::push_str(sb, " prelude=")
-    p1 := rt::push_int(sb, i64(BRAND_PROBE_PRELUDE))
+    p1 := rt::push_int(sb, i64(SEMA_BRAND_PRELUDE))
     w2 := rt::push_str(sb, " sinks=")
     w3 := rt::push_int(sb, i64(BRAND_PROBE_SINKS))
     w4 := rt::push_str(sb, " hits=")
@@ -2215,7 +2230,7 @@ brand_probe_summary := fn() {
 ## source spelling is what separates them, so the instrument reads it. `resolve_ty`'s own `is_brand`
 ## test has the same over-match and therefore hands a `@require` type a nominal brand identity today —
 ## invisible while `tag_compat` treats every tag 8 alike, and a separate unit to fix, not this one.
-brand_probe_is_brand_decl := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+sema_brand_is_decl := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   mut p := s + n
   mut scanning := true
   while scanning {
@@ -2232,7 +2247,7 @@ brand_probe_is_brand_decl := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   str_at((src + p), 6) == "brand("
 }
 ## Is [s, s+n) one of the four prelude interpretation brands `resolve_ty` keeps out of tag 8?
-brand_probe_is_prelude := fn(src : ptr(u8), s : usize, n : usize) -> bool {
+sema_brand_is_prelude := fn(src : ptr(u8), s : usize, n : usize) -> bool {
   nm := str_at((src + s), n)
   nm == "bool" or nm == "char" or nm == "f32" or nm == "f64"
 }
@@ -2240,43 +2255,43 @@ brand_probe_is_prelude := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ## repeats `resolve_ty`'s own scan instead of calling `lower_layout::brand_underlying`, whose ranked
 ## index is built by LOWERING and is empty in the standalone semantic pass — the documented reason
 ## `resolve_ty` scans directly here too.
-brand_probe_underlying := fn(decls : ptr(rt::Vec), ncnt : usize, src : ptr(u8), s : usize, n : usize) -> VSpan {
+sema_brand_underlying := fn(decls : ptr(rt::Vec), ncnt : usize, src : ptr(u8), s : usize, n : usize) -> VSpan {
   mut r := VSpan(s = 0, n = 0)
   for i in 0..ncnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 1 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, s, n) {
-      if brand_probe_is_brand_decl(src, d.name_start, d.name_len) { r = VSpan(s = d.ret_ts, n = d.ret_tl) }
+      if sema_brand_is_decl(src, d.name_start, d.name_len) { r = VSpan(s = d.ret_ts, n = d.ret_tl) }
     }
   }
   r
 }
 ## How many DIRECT user brand declarations does this program have? The prelude four are subtracted by
 ## name, so a program that declares no brand of its own answers 0 and every hook below is inert.
-brand_probe_decl_count := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
+sema_brand_decl_count := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
   cnt := rt::vec_len(deref(decls))
   mut k := 0
   mut pk := 0
   for i in 0..cnt {
     d := deref(decl_get(decls, i))
-    if d.is_fn == false and d.kind == 0 and d.arity == 1 and d.ret_tl != 0 and brand_probe_is_brand_decl(src, d.name_start, d.name_len) {
-      if brand_probe_is_prelude(src, d.name_start, d.name_len) { pk = pk + 1 }
+    if d.is_fn == false and d.kind == 0 and d.arity == 1 and d.ret_tl != 0 and sema_brand_is_decl(src, d.name_start, d.name_len) {
+      if sema_brand_is_prelude(src, d.name_start, d.name_len) { pk = pk + 1 }
       else { k = k + 1 }
     }
   }
-  BRAND_PROBE_PRELUDE = pk
+  SEMA_BRAND_PRELUDE = pk
   k
 }
 ## The brand identity of a VALUE expression, from the three sources sema already records reliably:
 ## a direct brand or kernel-integer conversion constructor (`A(v)` / `u64(v)`), an unambiguous fn
 ## call's DECLARED return type, and an annotated local or parameter's recorded type. An inferred
 ## `x := A(7)` is none of these and stays unknown — that is the BLIND class, counted separately.
-brand_probe_ctor_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> Ty {
+sema_brand_ctor_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> Ty {
   mut r := Ty(tag = 0, ns = 0, nl = 0)
   if unchecked bitcast(usize, v) == 0 { return r }
   cs := expr_call_callee_span(v)
   if cs.n == 0 { return r }
-  if expr_call_arity(v) == 1 and brand_probe_is_prelude(src, cs.s, cs.n) == false {
-    if brand_probe_underlying(decls, upto, src, cs.s, cs.n).n != 0 { return Ty(tag = 8, ns = cs.s, nl = cs.n) }
+  if expr_call_arity(v) == 1 and sema_brand_is_prelude(src, cs.s, cs.n) == false {
+    if sema_brand_underlying(decls, upto, src, cs.s, cs.n).n != 0 { return Ty(tag = 8, ns = cs.s, nl = cs.n) }
     nm := str_at((src + cs.s), cs.n)
     if nm == "u64" or nm == "usize" or nm == "i64" or nm == "i32" or nm == "u32" or nm == "u8" or nm == "isize" {
       return Ty(tag = 1, ns = cs.s, nl = cs.n)
@@ -2284,8 +2299,8 @@ brand_probe_ctor_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src
   }
   sole_fn_ret_ty(v, decls, upto, src)
 }
-brand_probe_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Ty {
-  ct := brand_probe_ctor_ty(v, decls, upto, src)
+sema_brand_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Ty {
+  ct := sema_brand_ctor_ty(v, decls, upto, src)
   if ct.tag != 0 { return ct }
   mut r := Ty(tag = 0, ns = 0, nl = 0)
   if unchecked bitcast(usize, v) == 0 { return r }
@@ -2303,13 +2318,13 @@ brand_probe_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, sr
   r
 }
 ## §4.2's class for the pair (declared sink, actual value). 0 = nothing to report.
-brand_probe_class := fn(dst : Ty, act : Ty, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> usize {
+sema_brand_class := fn(dst : Ty, act : Ty, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> usize {
   if dst.tag == 8 and act.tag == 8 {
     if dst.nl == 0 { return 0 }
     if act.nl == 0 { return 0 }
     if streq(src, dst.ns, dst.nl, act.ns, act.nl) { return 0 }
-    du := brand_probe_underlying(decls, upto, src, dst.ns, dst.nl)
-    au := brand_probe_underlying(decls, upto, src, act.ns, act.nl)
+    du := sema_brand_underlying(decls, upto, src, dst.ns, dst.nl)
+    au := sema_brand_underlying(decls, upto, src, act.ns, act.nl)
     if du.n != 0 and au.n != 0 and streq(src, du.s, du.n, au.s, au.n) == false { return 3 }
     return 2
   }
@@ -2343,33 +2358,36 @@ brand_probe_class_name := fn(c : usize) -> str {
 ## `S(x = B(7))` struct-literal field and a call through the big-match arm both reported zero. The
 ## STRUCT-LITERAL FIELD sink is therefore outside this census, and so is any argument whose callee is
 ## not an unambiguous ordinary fn declaration. That is a limit of the instrument, not evidence that
-## those sinks are clean; a refusal built on the same live paths would be equally unable to see them.
+## those sinks are clean. The REFUSAL does not inherit that limit: `sema_brand_struct_field_err` walks
+## the field list through a small PRE-MATCH accessor and does reach the struct-literal field sink, and
+## the declared-result refusal is handed `locals` where this census hook has none. The argument of an
+## overloaded, generic or qualified callee stays unreachable in both — sema resolves no overload set.
 brand_probe_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) {
-  if BRAND_PROBE_DECLS == 0 { return }
+  if SEMA_BRAND_DECLS == 0 { return }
   if dst.tag != 8 and dst.tag != 1 { return }
   BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
-  act := brand_probe_value_ty(v, decls, upto, src, locals, nloc)
+  act := sema_brand_value_ty(v, decls, upto, src, locals, nloc)
   if act.tag != 8 and dst.tag != 8 { return }
-  c := brand_probe_class(dst, act, decls, upto, src)
+  c := sema_brand_class(dst, act, decls, upto, src)
   if c != 0 { brand_probe_row(brand_probe_class_name(c), off, src) }
 }
 ## The same sink at DECL level (a function's declared result), where no locals table exists: the
 ## identity comes from the constructor / declared-callee sources only.
 brand_probe_sink_decl := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) {
-  if BRAND_PROBE_DECLS == 0 { return }
+  if SEMA_BRAND_DECLS == 0 { return }
   if dst.tag != 8 and dst.tag != 1 { return }
   BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
-  act := brand_probe_ctor_ty(v, decls, upto, src)
+  act := sema_brand_ctor_ty(v, decls, upto, src)
   if act.tag != 8 and dst.tag != 8 { return }
-  c := brand_probe_class(dst, act, decls, upto, src)
+  c := sema_brand_class(dst, act, decls, upto, src)
   if c != 0 { brand_probe_row(brand_probe_class_name(c), off, src) }
 }
 ## One binary operator whose two operands are two DIFFERENT brands (§5.4: no shared operation set).
 brand_probe_binop := fn(l : ptr(Expr), r : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) {
-  if BRAND_PROBE_DECLS == 0 { return }
-  tl := brand_probe_value_ty(l, decls, upto, src, locals, nloc)
+  if SEMA_BRAND_DECLS == 0 { return }
+  tl := sema_brand_value_ty(l, decls, upto, src, locals, nloc)
   if tl.tag != 8 { return }
-  tr := brand_probe_value_ty(r, decls, upto, src, locals, nloc)
+  tr := sema_brand_value_ty(r, decls, upto, src, locals, nloc)
   if tr.tag != 8 { return }
   if tl.nl == 0 { return }
   if tr.nl == 0 { return }
@@ -2379,14 +2397,147 @@ brand_probe_binop := fn(l : ptr(Expr), r : ptr(Expr), off : usize, decls : ptr(r
 ## An INFERRED binding (`x := A(7)`) whose brand identity the recorded local type drops. Every sink
 ## this name later reaches is outside the classes above, so the row is the census's own blind spot.
 brand_probe_blind := fn(v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) {
-  if BRAND_PROBE_DECLS == 0 { return }
+  if SEMA_BRAND_DECLS == 0 { return }
   if unchecked bitcast(usize, v) == 0 { return }
   cs := expr_call_callee_span(v)
   if cs.n == 0 { return }
   if expr_call_arity(v) != 1 { return }
-  if brand_probe_is_prelude(src, cs.s, cs.n) { return }
-  if brand_probe_underlying(decls, upto, src, cs.s, cs.n).n == 0 { return }
+  if sema_brand_is_prelude(src, cs.s, cs.n) { return }
+  if sema_brand_underlying(decls, upto, src, cs.s, cs.n).n == 0 { return }
   brand_probe_row("BLIND", off, src)
+}
+
+## ---------------------------------------------------------------------------
+## Issue #299 — the REFUSAL. Same classifier as the census above (one decision, two consumers), with
+## two deliberate narrowings and one located diagnostic per finding.
+##
+## Class 5 (B1U — an UNNAMED int at a brand sink: a literal, or an arithmetic result) is NEVER
+## refused. Types §9.1 makes an integer literal a compile-time number whose "type is inferred from
+## context" and §9.2 says a literal's type is refined "by the constructor form `T(v)` … or by an
+## annotation", so `a : A = 41` is a literal TAKING its annotated type, not a conversion between two
+## typed values. That sink belongs to #563 (which today refuses it for the wrong reason and MASKS
+## every row of #299's own table); refusing it here would turn one defect into two.
+##
+## BOTH tag-8 sides must be a genuine `Name := brand(U)` declaration, read from the source spelling
+## by `sema_brand_is_decl`. `resolve_ty` records a Types §8.1 validity contract
+## `Name := @require(pred) U` with the SAME nominal marker (kind 0, arity 1, a return-type span) —
+## that is #562 — and §8.1 gives such a contract an identity of its OWN, "identified by the immediate
+## underlying type `U`, the identity of `pred`, and every comptime capture value specializing `pred`".
+## That is a different composition from a brand's (underlying type + declared name), so brand rules
+## must not be applied to it: doing so would replace "no verdict" with a WRONG verdict on the 22
+## crossings across the 18 tracked `require_*`/`fmt_decl_*` fixtures. #562 owns giving those types
+## their own identity; this unit owes only that it does not pretend they are brands.
+sema_brand_refuse_class := fn(dst : Ty, act : Ty, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> usize {
+  if dst.tag == 8 and sema_brand_underlying(decls, upto, src, dst.ns, dst.nl).n == 0 { return 0 }
+  if act.tag == 8 and sema_brand_underlying(decls, upto, src, act.ns, act.nl).n == 0 { return 0 }
+  c := sema_brand_class(dst, act, decls, upto, src)
+  if c == 5 { return 0 }
+  c
+}
+## One concrete VALUE sink, as a CheckErr (0 = nothing proven). `dst` is the sink's declared type as
+## `resolve_ty` gives it and `v` the value expression, so the identity recovery can see a constructor
+## the packed `Result(Ty, CheckErr)` carrier has already flattened to unknown. Located at `off`, the
+## offending value's own source offset (Tooling §5: a diagnostic carries a span).
+sema_brand_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  if SEMA_BRAND_DECLS == 0 { return 0 }
+  if dst.tag != 8 and dst.tag != 1 { return 0 }
+  act := sema_brand_value_ty(v, decls, upto, src, locals, nloc)
+  if act.tag != 8 and dst.tag != 8 { return 0 }
+  if sema_brand_refuse_class(dst, act, decls, upto, src) == 0 { return 0 }
+  brand_conversion_err(off)
+}
+## The same judgement for one binary operator whose two operands are two DIFFERENT brands. §5.4 gives
+## a brand "the applicable operation set" of its own, so two siblings share none; the explicit form is
+## `u64(a) + u64(b)`, through the block they share. Operator mixing between a brand and its OWN
+## underlying type is deliberately NOT judged here: which operators a user brand inherits from the
+## type it brands is the open design question #299's own probe comment records, and this unit must not
+## answer it by refusing.
+sema_brand_binop_err := fn(l : ptr(Expr), r : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  if SEMA_BRAND_DECLS == 0 { return 0 }
+  tl := sema_brand_value_ty(l, decls, upto, src, locals, nloc)
+  if tl.tag != 8 { return 0 }
+  tr := sema_brand_value_ty(r, decls, upto, src, locals, nloc)
+  if tr.tag != 8 { return 0 }
+  if sema_brand_refuse_class(tl, tr, decls, upto, src) == 0 { return 0 }
+  brand_conversion_err(off)
+}
+## A brand CONSTRUCTOR whose operand is a DIFFERENT brand: `A(b)` for a sibling `b : B`, or `A(c)` for
+## a `c : C` over another block. §4.2's brand class converts between a brand and "the type it DIRECTLY
+## brands"; a sibling is not that type (§5.4: "Sibling interpretations are not each other's underlying
+## type; only the block they share is"), so `A(b)` is not a brand conversion at all and the explicit
+## form is `A(u64(b))`. This closes the hole that would otherwise make every other refusal below
+## cosmetic: `take_a(A(b))` must not be the way around `take_a(b)`.
+##
+## Restricted to a different GENUINE brand operand on purpose. `A(a)` (the same brand) stays accepted
+## as an identity, `A(41)` is §9.2's literal-refining constructor form, `A(r)` for a raw `r` is exactly
+## the explicit conversion §4.2 prescribes, and `u64(c)` for `C := brand(u8)` — brand removal composed
+## with a numeric conversion in ONE `T(v)` — is left alone: the pin does not say whether a single
+## constructor may do both, and this unit does not infer that from behaviour.
+sema_brand_ctor_arg_err := fn(e : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  if SEMA_BRAND_DECLS == 0 { return 0 }
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 { return 0 }
+  if expr_call_arity(e) != 1 { return 0 }
+  if sema_brand_is_prelude(src, cs.s, cs.n) { return 0 }
+  if sema_brand_underlying(decls, upto, src, cs.s, cs.n).n == 0 { return 0 }
+  ah := expr_call_args_head(e)
+  if ah == 0 { return 0 }
+  arg := deref(arg_p(ah))
+  at := sema_brand_value_ty(arg.e, decls, upto, src, locals, nloc)
+  if at.tag != 8 { return 0 }
+  dst := Ty(tag = 8, ns = cs.s, nl = cs.n)
+  if sema_brand_refuse_class(dst, at, decls, upto, src) == 0 { return 0 }
+  brand_conversion_err(off)
+}
+## The located offset a brand refusal reports: the offending VALUE's own source span when the AST
+## records one, else the sink's. Tooling §5 requires a span on a source-level diagnostic, and `s_of`
+## answers 0 for the shapes it does not model (a synthesized span, a `Bin`, an `Index`) — a zero span
+## renders as an UNLOCATED message, so the fallback is part of the rule, not a convenience.
+sema_brand_span := fn(prim : usize, fallback : usize) -> usize {
+  if prim != 0 { return prim }
+  fallback
+}
+## The EARLY-`return` sink: `[rts, rtl)` is the enclosing fn's declared return-type span, which
+## `check_stmts`' own return check does not carry (it threads a bare `ret_tag`), so the judgement lives
+## in the return walker that does have it.
+sema_brand_ret_err := fn(rts : usize, rtl : usize, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  if SEMA_BRAND_DECLS == 0 { return 0 }
+  if rtl == 0 { return 0 }
+  dst := resolve_ty(src, rts, rtl, decls, upto)
+  sema_brand_sink_err(dst, v, off, decls, upto, src, locals, nloc)
+}
+## A STRUCT-LITERAL field sink, which is the one #561's census could not reach: `check_expr`'s big
+## `match deref(e)` does NOT dispatch its `Expr::StructLit` arm under the bootstrap seed (scar #2), so
+## the arm's own `ty_compat` field conformance never runs — measured INDEPENDENTLY of the brand
+## question, `S(x = true)` and even `S(x = "hi")` into an `x : u64` field are accepted today. A hook in
+## that arm counts nothing, and a refusal placed there would refuse nothing. This walk therefore runs
+## in `check_expr`'s PRE-MATCH region, where the field-arg list is recovered through a small
+## single-focus accessor (`expr_struct_lit_head`, the `expr_var_span`/`expr_agg_lit` idiom) that does
+## dispatch. It recurses into a field value that is itself a struct literal, because the nested node is
+## never handed to `check_expr` at all for the same reason.
+sema_brand_struct_field_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  if SEMA_BRAND_DECLS == 0 { return 0 }
+  al := expr_struct_lit_name(e)
+  if al.n == 0 { return 0 }
+  di := type_decl_index(decls, upto, src, al.s, al.n)
+  if di == 0 { return 0 }
+  mut fld := (deref(decl_at(Decl, rt::vec_get(deref(decls), di - 1)))).fields_head
+  mut g := expr_struct_lit_head(e)
+  mut err : CheckErr = 0
+  while g != 0 {
+    sa := deref(arg_p(g))
+    if fld != 0 {
+      fd := deref(fld_p(fld))
+      ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
+      fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc)
+      if fe != 0 and err == 0 { err = fe }
+      ne := sema_brand_struct_field_err(sa.e, decls, upto, src, a, locals, nloc)
+      if ne != 0 and err == 0 { err = ne }
+      fld = fd.next
+    }
+    g = sa.next
+  }
+  err
 }
 
 ## Issue #557 — an ENUM type annotation that names a type declared in a LATER-sorted module. Every
@@ -3195,6 +3346,24 @@ expr_agg_lit := fn(e : ptr(Expr)) -> AggLit {
     Expr::StructLit(scs, scl, snf, sfh) => { AggLit(is_agg = true, s = scs, n = scl) }
     Expr::EnumLit(ets, etl, evs, evl, enp, eph) => { AggLit(is_agg = true, s = ets, n = etl) }
     _ => { AggLit(is_agg = false, s = 0, n = 0) }
+  }
+}
+## The FIELD-ARGUMENT list head of a `StructLit` value expression (0 otherwise), and its TYPE-NAME
+## span. Same scar #2 idiom as `expr_agg_lit` and `expr_var_span`: `check_expr`'s big bound-deref match
+## does not dispatch the payload-heavy `StructLit` arm under the bootstrap seed, so the arm's own field
+## conformance never runs and anything that must judge a field sink has to recover the list here. Kept
+## separate from `expr_agg_lit` because that accessor also answers for an `EnumLit`, whose payload types
+## the parser does not record per component (a distinct, deferred sink).
+expr_struct_lit_head := fn(e : ptr(Expr)) -> usize {
+  match deref(e) {
+    Expr::StructLit(scs, scl, snf, sfh) => { sfh }
+    _ => { 0 }
+  }
+}
+expr_struct_lit_name := fn(e : ptr(Expr)) -> VSpan {
+  match deref(e) {
+    Expr::StructLit(scs, scl, snf, sfh) => { VSpan(s = scs, n = scl) }
+    _ => { VSpan(s = 0, n = 0) }
   }
 }
 ## True only for the parser's generic-construction shape `Name(type-args)(field = value, …)`.
@@ -4777,25 +4946,49 @@ sema_standard_tuple_global_bad := fn(d : Decl, src : ptr(u8)) -> bool {
 ## Recurses into nested control-flow blocks so a return in an if/while/for/match branch is covered. This
 ## is the float/char-aware complement to `check_stmts`' tag-only `ret_tag` return check (which already
 ## covers int/bool/struct/enum). Poison-tolerant.
-ret_agg_bad := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
+## The verdict this walker reports for the aggregate/representability clash it has always reported.
+## `1` is the unlocated default `CheckErr` (`unbound_err(0, 0)`), which is exactly what the previous
+## `bool` result carried into `mark_failed`: the CALLER supplies the location (the enclosing fn's own
+## name), because a clash between a declared return type and an aggregate value has no single
+## offending sub-expression to point at. Issue #299's brand class DOES have one, so it travels as its
+## own located code through the same channel rather than through a second copy of this recursion.
+RET_SINK_AGG : CheckErr = 1
+ret_sink_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   mut cur := head
-  mut res := false
+  mut res : CheckErr = 0
   while cur != 0 {
     st := deref(stmt_p(Stmt, cur))
     match st {
       ## …and Types §9.1 REPRESENTABILITY in the DECLARED RETURN type, which is likewise the context
       ## the returned literal takes its type from (Declarations §3.4): `g := fn() -> u8 { return 300 }`
       ## was accepted in silence. Same walker, same span — `[rts, rtl)` IS the return type name.
-      Stmt::Return(rv, nx) => { if agg_scalar_bad(rts, rtl, rv, decls, upto, src, locals, nloc) or ann_lit_range_bad(src, rts, rtl, rv) { res = true } }
-      Stmt::If(c, th, el, nx) => { if ret_agg_bad(th, rts, rtl, decls, upto, src, locals, nloc, a) or ret_agg_bad(el, rts, rtl, decls, upto, src, locals, nloc, a) { res = true } }
-      Stmt::While(c, b, nx) => { if ret_agg_bad(b, rts, rtl, decls, upto, src, locals, nloc, a) { res = true } }
-      Stmt::Loop(b, nx) => { if ret_agg_bad(b, rts, rtl, decls, upto, src, locals, nloc, a) { res = true } }
-      Stmt::Unchecked(b, nx) => { if ret_agg_bad(b, rts, rtl, decls, upto, src, locals, nloc, a) { res = true } }
-      Stmt::AllocWith(ae, b, nx) => { if ret_agg_bad(b, rts, rtl, decls, upto, src, locals, nloc, a) { res = true } }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if ret_agg_bad(b, rts, rtl, decls, upto, src, locals, nloc, a) { res = true } }
+      ## Issue #299 rides here too: an early `return <value>` is a concrete value sink, and this is the
+      ## only walker that has BOTH the declared return-type span and the nested-block recursion (a
+      ## `return` inside an `if`/`while`/`for`/`match` arm), which `check_stmts`' bare `ret_tag` lacks.
+      Stmt::Return(rv, nx) => {
+        if agg_scalar_bad(rts, rtl, rv, decls, upto, src, locals, nloc) or ann_lit_range_bad(src, rts, rtl, rv) { res = RET_SINK_AGG }
+        rbe := sema_brand_ret_err(rts, rtl, rv, sema_brand_span(s_of(rv, a), rts), decls, upto, src, locals, nloc)
+        if rbe != 0 and res == 0 { res = rbe }
+      }
+      Stmt::If(c, th, el, nx) => {
+        te := ret_sink_err(th, rts, rtl, decls, upto, src, locals, nloc, a)
+        ee := ret_sink_err(el, rts, rtl, decls, upto, src, locals, nloc, a)
+        if te != 0 and res == 0 { res = te }
+        if ee != 0 and res == 0 { res = ee }
+      }
+      Stmt::While(c, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
+      Stmt::Loop(b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
+      Stmt::Unchecked(b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
+      Stmt::AllocWith(ae, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
       Stmt::Match(sc, ah, nx) => {
         mut arm := ah
-        while arm != 0 { am := deref(arm_p(arm)); if ret_agg_bad(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a) { res = true }; arm = am.next }
+        while arm != 0 {
+          am := deref(arm_p(arm))
+          ae2 := ret_sink_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
+          if ae2 != 0 and res == 0 { res = ae2 }
+          arm = am.next
+        }
       }
       _ => {}
     }
@@ -6059,6 +6252,32 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## under the bootstrap seed, so a hook placed there counts nothing and would report a false zero.
   bpp := expr_bin_parts(e)
   if bpp.is_bin { brand_probe_binop(bpp.left, bpp.right, s_of(bpp.left, a), decls, upto, src, locals, nloc) }
+  ## Issue #299 — the REFUSAL, on the same PRE-MATCH path and deliberately AFTER the census hook above,
+  ## so a census run still records the crossing it now also refuses. Three sinks live here: a binary
+  ## operator over two different brands, a brand constructor fed another brand, and a struct-literal
+  ## field. The last two are reachable ONLY here: the big match's `Expr::Call` and `Expr::StructLit`
+  ## arms are not dispatched under the bootstrap seed (scar #2), which is why #561's census could not
+  ## see the struct-literal field sink at all.
+  if bpp.is_bin {
+    bbe := sema_brand_binop_err(bpp.left, bpp.right, sema_brand_span(s_of(bpp.left, a), s_of(e, a)), decls, upto, src, locals, nloc)
+    if bbe != 0 { return Result(Ty, CheckErr).Err(bbe) }
+  }
+  bce := sema_brand_ctor_arg_err(e, s_of(e, a), decls, upto, src, locals, nloc)
+  if bce != 0 { return Result(Ty, CheckErr).Err(bce) }
+  bsf := sema_brand_struct_field_err(e, decls, upto, src, a, locals, nloc)
+  if bsf != 0 { return Result(Ty, CheckErr).Err(bsf) }
+  ## …and the CONDITION of an `if`-as-EXPRESSION, the one sub-expression that path never hands to
+  ## `check_expr` at all: measured, `if a == b { 7 } else { 1 }` in TAIL position reached no hook,
+  ## while the same comparison as a statement, as a binding initializer and as a `while` condition
+  ## each did. Only the condition is judged here; the branch JOIN remains #310's own narrow fence.
+  ipc := expr_if_parts(e)
+  if ipc.is_if {
+    cbp := expr_bin_parts(ipc.cond)
+    if cbp.is_bin {
+      ibe := sema_brand_binop_err(cbp.left, cbp.right, sema_brand_span(s_of(cbp.left, a), s_of(e, a)), decls, upto, src, locals, nloc)
+      if ibe != 0 { return Result(Ty, CheckErr).Err(ibe) }
+    }
+  }
   if sema_is_direct_jmp(e, src) {
     jcs := expr_call_callee_span(e)
     return Result(Ty, CheckErr).Err(located_err(jcs.s))
@@ -6316,6 +6535,10 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## #299 census hook (no refusal): this argument's declared parameter type against the value's
       ## recovered brand identity. Inert unless the program declares a brand of its own.
       brand_probe_sink(pty0, ca.e, s_of(ca.e, a), decls, upto, src, locals, nloc)
+      ## …and the refusal at the same sink (Issue #299). Poisons rather than returning: the argument
+      ## walk must finish so every offending argument of the call is counted by the census beside it.
+      cbe := sema_brand_sink_err(pty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc)
+      if cbe != 0 { mark_failed(locals, cbe) }
       if crt0.tag != 0 and not (crt0.tag == 5 and pty0.tag == 3) {
         if pty0.tag != 0 and not ty_compat(crt0, pty0, src) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
       }
@@ -8669,6 +8892,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           if xtag == 10 { xtag = 4 }
           xt := Ty(tag = xtag, ns = raw.ns, nl = raw.nl)
           if not tag_compat(xt.tag, tv.tag) { mark_failed(locals, mismatch_err(ns, 0)) }
+          ## Issue #299 — a `=` write to an existing local is the same value sink as its `:=` binding:
+          ## `mut a : A = A(1) ; a = b` must not launder a sibling brand through the slot. `tag_compat`
+          ## above cannot see it (every tag 8 is compatible with every other), and the recorded local
+          ## type is where this sink's declared identity lives.
+          rbe := sema_brand_sink_err(xt, v, sema_brand_span(s_of(v, a), ns), decls, upto, src, locals, cnt)
+          if rbe != 0 { mark_failed(locals, rbe) }
         } else {
           mut bad_decl := false
           if ann.n != 0 { bad_decl = not tag_compat(dt.tag, tv.tag) }
@@ -8676,6 +8905,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## binding from a brand constructor is the identity the recorded local type drops.
           if ann.n != 0 { brand_probe_sink(dt, v, ns, decls, upto, src, locals, cnt) }
           if ann.n == 0 { brand_probe_blind(v, ns, decls, upto, src) }
+          ## Issue #299 — the refusal at the annotated-binding sink. Located at the initializer when the
+          ## AST records its span, else at the binding name, which is where this statement's other
+          ## annotation diagnostics already point.
+          if ann.n != 0 {
+            abe := sema_brand_sink_err(dt, v, sema_brand_span(s_of(v, a), ns), decls, upto, src, locals, cnt)
+            if abe != 0 { mark_failed(locals, abe) }
+          }
           ## Issue #269 — an annotated local is another value sink, not an implicit unwrap boundary.
           ## Keep this beside the ordinary declaration conformance checks so `check`, build, and every
           ## emit-to-stdout backend reject the same direct-call/inferred-local wrapper forms before
@@ -10467,6 +10703,11 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         ## #299 census hook (no refusal) — the declared result is a value sink; `locals` is not in
         ## scope at the decl level, so the recovery uses the constructor/callee sources only.
         brand_probe_sink_decl(rett, d.value, s_of(d.value, a), decls, upto, src)
+        ## …and the refusal (Issue #299). Unlike the census hook above this one is handed `locals`, so a
+        ## tail expression that is a plain annotated LOCAL (`fn() -> A { b }` for a `b : B`) is judged
+        ## too: #561's decl-level hook saw only constructors and declared callees and reported 0 there.
+        tbe := sema_brand_sink_err(rett, d.value, sema_brand_span(s_of(d.value, a), d.name_start), decls, upto, src, ptr(locals), nloc)
+        if tbe != 0 { err = tbe; failed = true }
         if not ty_compat(tail_ty, rett, src) { err = mismatch_err(s_of(d.value, a), 0); failed = true }
         ## The same literal fallback is needed for a tail expression: `fn() -> u64 { "x" }` has no
         ## explicit Stmt::Return for the ordinary tag check to see, while `lbv_lit_tag` knows the exact
@@ -10482,7 +10723,9 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   ## adds the float/char-aware sweep over every `return <v>` (nested branches too) + the tail value,
   ## consulting the return type NAME so an `-> f64`/`-> char` scalar sink is covered. Poison-tolerant.
   if d.ret_tl != 0 {
-    if ret_agg_bad(d.body_stmts, d.ret_ts, d.ret_tl, decls, upto, src, ptr(locals), nloc, a) { mark_failed(ptr(locals), located_err(d.name_start)) }
+    rse := ret_sink_err(d.body_stmts, d.ret_ts, d.ret_tl, decls, upto, src, ptr(locals), nloc, a)
+    if rse == RET_SINK_AGG { mark_failed(ptr(locals), located_err(d.name_start)) }
+    else if rse != 0 { mark_failed(ptr(locals), rse) }
     ## CT-12 / Comptime §2.6 — a checked constant expression returned from a function is evaluated
     ## in the declared `-> T` integer context. Preserve its operation span instead of collapsing the
     ## failure to the function name; runtime returns and `unchecked` expressions remain untouched.
@@ -13746,7 +13989,7 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   ## #299 census bookkeeping. One O(decls) scan decides whether the instrument has anything to look
   ## at; `src/` and `lib/` declare no brand of their own, so this answers 0 and every hook returns
   ## immediately — the self-build pays one scan and emits the same bytes.
-  BRAND_PROBE_DECLS = brand_probe_decl_count(decls, src)
+  SEMA_BRAND_DECLS = sema_brand_decl_count(decls, src)
   BRAND_PROBE_SINKS = 0
   BRAND_PROBE_HITS = 0
   BRAND_PROBE_LOST = 0
