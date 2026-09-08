@@ -82,6 +82,26 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A non-exhaustive `match` is now refused whatever the scrutinee looks like, and whatever order a
+  package's modules sort in.** Control Flow §5.1 requires every `match` to cover every variant or
+  carry a `_` default, and calls a non-exhaustive one a compile error. The compiler enforced that for
+  exactly ONE scrutinee spelling — a bare identifier naming a local whose annotated type resolved to
+  an enum — and silently accepted every other. Measured over one three-variant enum with only the
+  scrutinee's spelling varied: a by-value parameter and an annotated local were refused, while an
+  inferred `c := C.R` binding, `deref(p)` through a `ptr(C)`, a struct field read and a call result
+  all compiled. Exhaustiveness is now decided from the scrutinee's TYPE however that type was
+  obtained, so all six are refused, with the diagnostic located on the scrutinee. A second, unrelated
+  half: the enum-declaration lookup walked only the name-resolution prefix, so the identical
+  two-module program was refused when the enum's file sorted first and accepted when it sorted last;
+  the verdict no longer depends on a file name. **This newly rejects programs the specification
+  declares invalid** — a defect fixed, not a break, in the sense this file's versioning policy spells
+  out: code that stops compiling for this reason was relying on the check being absent, and the fix
+  is to cover the missing variant or write the `_` the specification already allows. A `match` with a
+  `_` default, one that covers every variant, and OR-pattern groups are all accepted exactly as
+  before, and where the scrutinee's type genuinely cannot be resolved the check still fails open.
+  The compiler's own sources needed four `match deref(e)` sites over `ast::Expr` completed to keep
+  building; nothing a user of the toolchain can observe changed about what it emits.
+
 - **In a manifest-less invocation of two or more files, the first listed file is now the package's
   root module instead of a sibling of the others.** Tooling §4 makes that file the synthesized
   package's root and excludes it from module-path scanning, "so it is not also a module by its own

@@ -26482,6 +26482,16 @@ mark_op_body_helpers := fn(op : i64, rb : usize, decls : ptr(rt::Vec), src : ptr
 mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
   match deref(e) {
     Expr::Num(v, s, n) => {}
+    ## Issue #557 — the four forms this walk used to leave off the arm list. None of them can name a
+    ## declaration, so the reachability walk has nothing to mark and each is deliberately EMPTY rather
+    ## than a `_` (#544 stage 1's rule). `BoolLit`/`FloatLit` are leaves. `CompField` is rewritten to a
+    ## plain `Field`/element access by the `comptime for` unroll, and `Lambda` is lifted to `FnRef` by
+    ## the driver's pass, both BEFORE lower runs — so neither reaches here; the arms exist so this
+    ## `match` covers all of `ast::Expr` and its exhaustiveness is decidable.
+    Expr::BoolLit(bv) => {}
+    Expr::FloatLit(fs, fnl) => {}
+    Expr::CompField(cfb, cfi) => {}
+    Expr::Lambda(lfp, lps, lrs, lrn, lbs, lval) => {}
     ## a bare identifier in value position may be a fn-VALUE (a function used as a value, e.g.
     ## `apply(add1, …)` / `sort_by(xs, cmp)`) — mark any fn of that name reachable so DCE keeps it.
     ## (A non-fn local name matches no fn decl → harmless.)

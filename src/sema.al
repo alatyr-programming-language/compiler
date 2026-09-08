@@ -2389,6 +2389,29 @@ brand_probe_blind := fn(v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto :
   brand_probe_row("BLIND", off, src)
 }
 
+## Issue #557 — an ENUM type annotation that names a type declared in a LATER-sorted module. Every
+## local/parameter records its type through `resolve_ty` under the `upto` NAME-RESOLUTION prefix, so
+## `c : C` recorded NOTHING when `C`'s declaration sorted after the consuming module, and the `match`
+## exhaustiveness check then had no type to work from: the identical two-module program was refused
+## when the enum's file sorted first and accepted when it sorted last. Module membership is a set, not
+## a sequence, so a type's identity cannot depend on a file NAME.
+##
+## Deliberately NARROW: it answers only for an annotation the prefix resolve already failed on, only
+## when the FULL declaration list resolves it to an ENUM, and the caller records the result under the
+## existing HIDDEN enum tag 10 — the tag `check_expr`'s `Var` resolution does not surface, so the
+## overload-naive argument/parameter comparisons stay exactly as tolerant as before and only
+## `value_agg_ty`'s consumers (the exhaustiveness check among them) can see it.
+late_enum_ann_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), upto : usize) -> Ty {
+  unknown := Ty(tag = 0, ns = 0, nl = 0)
+  if tl == 0 { return unknown }
+  ncnt := rt::vec_len(deref(decls))
+  if ncnt <= upto { return unknown }
+  if resolve_ty(src, ts, tl, decls, upto).tag != 0 { return unknown }
+  full := resolve_ty(src, ts, tl, decls, ncnt)
+  if full.tag == 4 and full.nl != 0 { return full }
+  unknown
+}
+
 ## True if `e` is a `Var` naming a PRELUDE namespace / enum type used in `.variant` / `.field` position
 ## (`Ordering.acquire`, `Arch.x86_64`, `target.arch`, `verify.checked`). Such a base is a type/namespace,
 ## not a bindable value — so a `base.f` field access on it must NOT be checked as a value read (else
@@ -2846,6 +2869,15 @@ expr_field_span := fn(e : ptr(Expr)) -> VSpan {
 expr_addr_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::AddrOf(inner) => { inner }
+    _ => { unchecked bitcast(ptr(Expr), 0) }
+  }
+}
+## The POINTEE expression of a `deref(p)` place (null otherwise). A small single-focus match, for the
+## same reason `expr_var_span` is one: `check_expr`'s big bound-deref match does not dispatch the
+## payload-heavy arms under the seed. Issue #557 needs it to type the `match deref(v)` scrutinee.
+expr_deref_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
+  match deref(e) {
+    Expr::Deref(inner) => { inner }
     _ => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
@@ -4916,6 +4948,128 @@ sema_builtin_str_integer_cast_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   lbv_lit_tag(ga.e) == 6
 }
 
+## §5.1 (CF-1) — the enum `Ty` (tag 4 + the enum's type-NAME span) of a `match` SCRUTINEE, resolved
+## from the scrutinee's TYPE however that type was obtained, else tag 0 (fail-open). Issue #557: the
+## two exhaustiveness sites used to open with `expr_var_span(scrutinee)` + `local_ty`, so the check
+## fired only for a bare `Var` naming a local whose ANNOTATED type resolved to an enum. Every other
+## spelling — an inferred `c := C.R` binding (recorded under the HIDDEN aggregate tag 10), the
+## `match deref(v)` idiom this compiler itself writes 497 times, a struct field read, a call result —
+## silently skipped the check, so a non-exhaustive `match` compiled. Each branch below reuses an
+## EXISTING resolver rather than inventing type flow, and every one of them stays poison-tolerant:
+##   * `value_agg_ty`         — an `EnumLit`, a nullary `E.V` variant, and a `Var` local recorded as an
+##                              aggregate (tags 4 and the hidden 10 alike).
+##   * `Deref(Var)`           — the pointer local's `Ty` (tag 5) carries its POINTEE type-name span.
+##   * `Field(base, f)`       — the owner struct via `sema_struct_owner_span`, then the field's own
+##                              declared type annotation.
+##   * a direct/UFCS `Call`   — the callee's declared return type.
+## The declaration scan is the FULL `decls` length, not the `upto` name-resolution prefix: exhaustiveness
+## is a property of the enum's declaration, not of where the enum happens to sort among the package's
+## modules, and the prefix made the same program compile or not depending on a file NAME (#557's
+## two-module reproducer). Widening it here cannot admit a new NAME — `upto` still governs every name
+## check — it only lets the check see an enum that is declared in a later-sorted module.
+match_scrut_enum_ty := fn(sc : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> Ty {
+  unknown := Ty(tag = 0, ns = 0, nl = 0)
+  if unchecked bitcast(usize, sc) == 0 { return unknown }
+  ncnt := rt::vec_len(deref(decls))
+  ## (1) literal / nullary-variant / recorded local aggregate.
+  va := value_agg_ty(sc, decls, ncnt, src, locals, nloc)
+  if va.tag == 4 and va.nl != 0 { return Ty(tag = 4, ns = va.ns, nl = va.nl) }
+  ## (2) `deref(p)` where `p` is a local `ptr(E)` — the compiler's own `match deref(v)` idiom.
+  di := expr_deref_inner(sc)
+  if unchecked bitcast(usize, di) != 0 {
+    dv := expr_var_span(di)
+    if dv.n != 0 and nloc != 0 and local_in(locals, nloc, src, dv.s, dv.n) {
+      dt := local_ty(locals, nloc, src, dv.s, dv.n)
+      mut dtag : u8 = dt.tag
+      if dtag >= 128 and dtag != 255 { dtag = dtag - 128 }
+      if dtag == 5 and dt.nl != 0 {
+        pt := resolve_ty(src, dt.ns, dt.nl, decls, ncnt)
+        if pt.tag == 4 and pt.nl != 0 { return Ty(tag = 4, ns = pt.ns, nl = pt.nl) }
+      }
+    }
+    return unknown
+  }
+  ## (3) a struct FIELD read whose declared type is an enum.
+  fsp := expr_field_span(sc)
+  if fsp.n != 0 {
+    fbase := expr_field_base(sc)
+    if unchecked bitcast(usize, fbase) != 0 {
+      owner := sema_struct_owner_span(fbase, decls, ncnt, src, locals, nloc, a)
+      if owner.n != 0 {
+        fann := sema_field_ann_span(decls, ncnt, src, owner.s, owner.n, fsp.s, fsp.n, a)
+        if fann.n != 0 {
+          ft := resolve_ty(src, fann.s, fann.n, decls, ncnt)
+          if ft.tag == 4 and ft.nl != 0 { return Ty(tag = 4, ns = ft.ns, nl = ft.nl) }
+        }
+      }
+    }
+    return unknown
+  }
+  ## (4) a direct/UFCS call whose declared result is an enum.
+  ct := expr_call_result_ty(sc, decls, ncnt, src)
+  if ct.tag == 4 and ct.nl != 0 { return Ty(tag = 4, ns = ct.ns, nl = ct.nl) }
+  unknown
+}
+
+## Does the arm list leave a variant of enum [ens,enl) uncovered? ALL-PLAIN arms only (a `_` wildcard,
+## comptime, literal or range arm makes the `match` exhaustive by §5.1's `_` clause and is handled by
+## the caller). The enum declaration is looked up over the FULL `decls` length — see the note above.
+## `false` when the enum declaration is not found at all: fail-open is still correct where the type
+## genuinely does not resolve; it simply must not be the normal case.
+enum_coverage_gap := fn(head : ptr(mut Arm), decls : ptr(rt::Vec), src : ptr(u8), ens : usize, enl : usize) -> bool {
+  ncnt := rt::vec_len(deref(decls))
+  mut edi : i64 = 0 - 1
+  mut di := 0
+  while di < ncnt {
+    d := deref(decl_get(decls, di))
+    if d.kind == 3 and streq(src, d.name_start, d.name_len, ens, enl) { edi = i64(di) }
+    di += 1
+  }
+  if edi < 0 { return false }
+  ed := deref(decl_get(decls, usize(edi)))
+  mut fv := ed.fields_head
+  mut uncovered := false
+  while fv != 0 {
+    fdc := deref(fld_p(fv))
+    mut covered := false
+    mut a3 := head
+    while a3 != 0 {
+      am3 := deref(arm_p(a3))
+      if streq(src, am3.vs, am3.vl, fdc.ns, fdc.nl) { covered = true }
+      a3 = am3.next
+    }
+    if not covered { uncovered = true }
+    fv = fdc.next
+  }
+  uncovered
+}
+
+## The LOCATED source span of a `match` scrutinee for the exhaustiveness diagnostic. `s_of` answers 0
+## for a `Deref` (it has no name span of its own), and the `match deref(v)` idiom is exactly the shape
+## issue #557 newly checks — an unlocated `check: type mismatch` names no line at all. Peel the `deref`
+## and locate on the pointer expression instead. Kept local to this check rather than widened into
+## `s_of`, whose 0 is relied on by other diagnostics' fallback chains.
+match_scrut_span := fn(sc : ptr(Expr), a : ptr(mut rt::Arena)) -> usize {
+  s0 := s_of(sc, a)
+  if s0 != 0 { return s0 }
+  inner := expr_deref_inner(sc)
+  if unchecked bitcast(usize, inner) != 0 { return s_of(inner, a) }
+  0
+}
+
+## Are ALL of a `match`'s arms plain variant patterns (no `_` wildcard / comptime / literal / range)?
+## §5.1 makes a `_` default exhaustive by construction, so only an all-plain arm list is checked.
+arms_all_plain := fn(head : ptr(mut Arm)) -> bool {
+  mut all_plain := true
+  mut a2 := head
+  while a2 != 0 {
+    am2 := deref(arm_p(a2))
+    if am2.wild != 0 { all_plain = false }
+    a2 = am2.next
+  }
+  all_plain
+}
+
 ## A known enum/union variant name must be present in the declaration's field list. An unresolved type
 ## stays fail-open: this helper is only a check for `E.Zzz` after `E` itself has resolved, so it never
 ## guesses about qualified/generic types that the current sema cannot identify.
@@ -5609,6 +5763,11 @@ expr_statement_has_unbound_m := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
   ubci := bitcast_inner(e)
   if unchecked bitcast(usize, ubci) != 0 { return expr_statement_has_unbound_m(ubci, decls, upto, src, a, locals, nloc, fldck) }
   match deref(e) {
+    ## UNREACHABLE by construction — the `bitcast_inner` pre-match above already returned the inner's
+    ## verdict for every `Bitcast`. Written out rather than left implicit so this `match` covers all of
+    ## `ast::Expr` and issue #557's exhaustiveness check does not have to fail open on it; the answer is
+    ## the same one the pre-match gives, so no behaviour depends on the arm being taken.
+    Expr::Bitcast(bci, bcs, bcl) => { expr_statement_has_unbound_m(bci, decls, upto, src, a, locals, nloc, fldck) }
     Expr::Num(v, s, n) => { false }
     Expr::BoolLit(v) => { false }
     Expr::FloatLit(s, n) => { false }
@@ -5716,6 +5875,10 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
   ubci := bitcast_inner(e)
   if unchecked bitcast(usize, ubci) != 0 { return expr_has_unbound(ubci, decls, upto, src, a, locals, nloc) }
   match deref(e) {
+    ## UNREACHABLE — the `bitcast_inner` pre-match immediately above already answered for a `Bitcast`
+    ## (that is exactly what the comment there says it is for). Spelled out so the `match` covers every
+    ## `ast::Expr` form; the arm repeats the pre-match's own answer, so it changes nothing if taken.
+    Expr::Bitcast(bci, bcs, bcl) => { expr_has_unbound(bci, decls, upto, src, a, locals, nloc) }
     Expr::Num(v, s, n) => { false }
     Expr::BoolLit(v) => { false }
     Expr::FloatLit(s, n) => { false }
@@ -6163,53 +6326,26 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## EXHAUSTIVENESS for a VALUE match (§60/CF-1) — the dual of the `check_stmts` statement-match check.
   ## Done here (BEFORE the big `match deref(e)`) as a side-effect + fall-through, because the big match's
   ## payload-heavy `Expr::Match` arm is not dispatched under the seed (scar #2, same as `Var`); poison
-  ## via `mark_failed` (surfaces through the sticky failure word — verified). Resolve the scrutinee's
-  ## enum type via `local_ty` DIRECTLY (its by-value `Ty` preserves the name span ns/nl; `check_expr`'s
-  ## `Result(Ty, CheckErr)` payload truncates them). Fail-open: a local enum scrutinee, all-plain arms
-  ## (no `_`/comptime/lit), decl found, a variant provably uncovered → else skip.
+  ## via `mark_failed` (surfaces through the sticky failure word — verified). The scrutinee's enum type
+  ## comes from `match_scrut_enum_ty`, which resolves it from the EXPRESSION (parameter, annotated or
+  ## inferred local, `deref(p)`, a field read, a call result) rather than from the single bare-`Var`
+  ## spelling this site used to understand. Fail-open: a resolved enum scrutinee, all-plain arms (no
+  ## `_`/comptime/lit — §5.1 makes a `_` default exhaustive), a variant provably uncovered → else skip.
   emp := expr_match_parts(e)
   if emp.is_match {
+    ## Issue #557 — the scrutinee's enum type is resolved from the EXPRESSION, not from the one bare-`Var`
+    ## spelling the old code understood; `match_scrut_enum_ty` documents the branches and stays fail-open.
+    mety := match_scrut_enum_ty(emp.scrut, decls, upto, src, locals, nloc, a)
+    if mety.tag == 4 and mety.nl != 0 and arms_all_plain(emp.head) {
+      if enum_coverage_gap(emp.head, decls, src, mety.ns, mety.nl) {
+        mark_failed(locals, mismatch_err(match_scrut_span(emp.scrut, a), 0))
+      }
+    }
     msv := expr_var_span(emp.scrut)
     if msv.n != 0 and nloc != 0 and local_in(locals, nloc, src, msv.s, msv.n) {
       msty := local_ty(locals, nloc, src, msv.s, msv.n)
       mut mstag : u8 = msty.tag
       if mstag >= 128 and mstag != 255 { mstag = mstag - 128 }
-      if mstag == 4 and msty.nl != 0 {
-        mut mall_plain := true
-        mut ma2 := emp.head
-        while ma2 != 0 {
-          mam2 := deref(arm_p(ma2))
-          if mam2.wild != 0 { mall_plain = false }
-          ma2 = mam2.next
-        }
-        if mall_plain {
-          mut medi : i64 = 0 - 1
-          mut mdi := 0
-          while mdi < upto {
-            md := deref(decl_get(decls, mdi))
-            if md.kind == 3 and streq(src, md.name_start, md.name_len, msty.ns, msty.nl) { medi = i64(mdi) }
-            mdi += 1
-          }
-          if medi >= 0 {
-            med := deref(decl_get(decls, usize(medi)))
-            mut mfv := med.fields_head
-            mut muncovered := false
-            while mfv != 0 {
-              mfdc := deref(fld_p(mfv))
-              mut mcovered := false
-              mut ma3 := emp.head
-              while ma3 != 0 {
-                mam3 := deref(arm_p(ma3))
-                if streq(src, mam3.vs, mam3.vl, mfdc.ns, mfdc.nl) { mcovered = true }
-                ma3 = mam3.next
-              }
-              if not mcovered { muncovered = true }
-              mfv = mfdc.next
-            }
-            if muncovered { mark_failed(locals, mismatch_err(s_of(emp.scrut, a), 0)) }
-          }
-        }
-      }
       ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` value-match must cover its finite
       ## domain (else poison the check). Fail-open for anything else (see scalar_coverage_gap).
       if (mstag == 1 or mstag == 2) and scalar_coverage_gap(emp.head, mstag, msty.ns, msty.nl, src) {
@@ -7747,6 +7883,9 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
   ubci := bitcast_inner(e)
   if unchecked bitcast(usize, ubci) != 0 { return expr_unbound_span(ubci, decls, upto, src, a, locals, nloc) }
   match deref(e) {
+    ## UNREACHABLE — the `bitcast_inner` pre-match immediately above already answered for a `Bitcast`.
+    ## Spelled out so the `match` covers every `ast::Expr` form (issue #557); it repeats that answer.
+    Expr::Bitcast(bci, bcs, bcl) => { expr_unbound_span(bci, decls, upto, src, a, locals, nloc) }
     Expr::Num(v, ns0, nn0) => { 0 }
     Expr::BoolLit(b0) => { 0 }
     Expr::FloatLit(fs0, fn0) => { 0 }
@@ -8667,6 +8806,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             }
           }
           if dt.tag != 0 { bind_tag = dt.tag; bind_ns = dt.ns; bind_nl = dt.nl }
+          ## Issue #557 — the same late-declared enum annotation, on an annotated local binding.
+          if dt.tag == 0 and ann.n != 0 {
+            lae := late_enum_ann_ty(src, ann.s, ann.n, decls, upto)
+            if lae.tag == 4 { bind_tag = 10; bind_ns = lae.ns; bind_nl = lae.nl }
+          }
           ## RELIABLE aggregate recording (scar #2: StructLit/EnumLit don't dispatch check_expr's big
           ## match, so `tv.tag` came back 0). Recover the aggregate type NAME + tag straight from the
           ## literal, so a later use of this local (return / annotated-local / call-arg / field / array-
@@ -8926,53 +9070,26 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         ## EXHAUSTIVENESS (§60/CF-1): a `match` on a KNOWN enum whose arms are ALL plain variant patterns
         ## (no `_` wildcard / comptime / lit arm — `wild != 0`) must cover EVERY variant; an uncovered
-        ## variant is a `Mismatch`. Resolve the scrutinee's enum type by calling `local_ty` DIRECTLY on
-        ## the scrutinee `Var` (its by-value `Ty` return preserves the type-NAME span ns/nl — verified),
-        ## NOT via `cs` (check_expr's `Result(Ty, CheckErr)` payload truncates ns/nl to just the tag).
-        ## Fail-open: fires only for a local enum scrutinee whose decl is found AND a variant is provably
-        ## uncovered; a wildcard/special arm, non-local scrutinee, or unresolved type skips. The parser
+        ## variant is a `Mismatch`. The scrutinee's enum type comes from `match_scrut_enum_ty`, which
+        ## resolves it from the EXPRESSION — a parameter or annotated local (`local_ty`, whose by-value
+        ## `Ty` preserves the type-NAME span ns/nl, unlike `cs`, whose `Result(Ty, CheckErr)` payload
+        ## truncates it to the tag), an inferred enum-literal binding, `deref(p)`, a field read, or a
+        ## call result. Fail-open: fires only when the enum type AND its declaration are found AND a
+        ## variant is provably uncovered; a wildcard arm or an unresolved type still skips. The parser
         ## normalizes `Col::R` → `vs/vl = "R"`, so `streq` vs the bare variant name is correct.
+        ## Issue #557 — the scrutinee's enum type is resolved from the EXPRESSION, not from the one
+        ## bare-`Var` spelling the old code understood; `match_scrut_enum_ty` documents the branches.
+        ety := match_scrut_enum_ty(sc, decls, upto, src, locals, cnt, a)
+        if ety.tag == 4 and ety.nl != 0 and arms_all_plain(ah) {
+          if enum_coverage_gap(ah, decls, src, ety.ns, ety.nl) {
+            return Result(usize, CheckErr).Err(mismatch_err(match_scrut_span(sc, a), 0))
+          }
+        }
         sv := expr_var_span(sc)
         if sv.n != 0 and cnt != 0 and local_in(locals, cnt, src, sv.s, sv.n) {
           sty := local_ty(locals, cnt, src, sv.s, sv.n)
           mut stag : u8 = sty.tag
           if stag >= 128 and stag != 255 { stag = stag - 128 }
-          if stag == 4 and sty.nl != 0 {
-            mut all_plain := true
-            mut a2 := ah
-            while a2 != 0 {
-              am2 := deref(arm_p(a2))
-              if am2.wild != 0 { all_plain = false }
-              a2 = am2.next
-            }
-            if all_plain {
-              mut edi : i64 = 0 - 1
-              mut di := 0
-              while di < upto {
-                d := deref(decl_get(decls, di))
-                if d.kind == 3 and streq(src, d.name_start, d.name_len, sty.ns, sty.nl) { edi = i64(di) }
-                di += 1
-              }
-              if edi >= 0 {
-                ed := deref(decl_get(decls, usize(edi)))
-                mut fv := ed.fields_head
-                mut uncovered := false
-                while fv != 0 {
-                  fdc := deref(fld_p(fv))
-                  mut covered := false
-                  mut a3 := ah
-                  while a3 != 0 {
-                    am3 := deref(arm_p(a3))
-                    if streq(src, am3.vs, am3.vl, fdc.ns, fdc.nl) { covered = true }
-                    a3 = am3.next
-                  }
-                  if not covered { uncovered = true }
-                  fv = fdc.next
-                }
-                if uncovered { return Result(usize, CheckErr).Err(mismatch_err(s_of(sc, a), 0)) }
-              }
-            }
-          }
           ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` scalar match must cover its
           ## finite domain (else a compile error). Fail-open for anything else (see scalar_coverage_gap).
           if (stag == 1 or stag == 2) and scalar_coverage_gap(ah, stag, sty.ns, sty.nl, src) {
@@ -10222,8 +10339,12 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   mut pp := d.params_head
   while pp != 0 {
     pm := deref(param_p(pp))
-    pt := resolve_ty(src, pm.ts, pm.tl, decls, upto)
+    mut pt := resolve_ty(src, pm.ts, pm.tl, decls, upto)
     mut ptag : u8 = pt.tag
+    ## Issue #557 — an enum parameter whose type is declared in a later-sorted module; recorded under
+    ## the hidden enum tag 10 so only `value_agg_ty`'s consumers see it (see `late_enum_ann_ty`).
+    lpe := late_enum_ann_ty(src, pm.ts, pm.tl, decls, upto)
+    if ptag == 0 and lpe.tag == 4 { ptag = 10; pt = lpe }
     if pm.pmode == 2 { ptag = ptag + 128 }
     ## Fixed-array parameters are already caller-backed places in the existing ABI (pmode 1); keep
     ## their element writes compatible with the pre-existing aggregate-parameter contract. Scalar
