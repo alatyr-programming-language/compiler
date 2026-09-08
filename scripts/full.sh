@@ -11,7 +11,7 @@
 # NOT a passed sweep: this script reads sweeps.sh's `STATUS=` line and says so in the verdict, so a
 # GREEN gate can never be mistaken for one that exercised the non-x86 backends. Run this in the
 # integration worktree before merging; a green result is the bar for landing a source change. For a
-# reseed (seed != Stage1 expected), verify Stage2 == Stage3 separately (see "Reseed discipline" in AGENTS.md).
+# reseed (seed != Stage1 expected), verify Stage2 == Stage3 separately (see "Reproducibility" in AGENTS.md).
 #
 # Usage (inside `nix develop`):  bash scripts/full.sh [--force-sweeps] [<base-ref>]
 #                                bash scripts/full.sh --self-test
@@ -86,7 +86,7 @@ FP_LOG="$LOGDIR/full_fp.log"; E2E_LOG="$LOGDIR/full_e2e.log"; CM_LOG="$LOGDIR/fu
 echo "### FIXPOINT ###"
 bash scripts/fixpoint.sh > "$FP_LOG" 2>&1
 grep -iE "TOOL-1 FIXPOINT|FAIL" "$FP_LOG"
-grep -q "TOOL-1 FIXPOINT: seed == Stage1 == Stage2" "$FP_LOG" || { echo "  (fixpoint NOT green — a reseed change needs the 3-stage check; see \"Reseed discipline\" in AGENTS.md)"; fail=1; }
+grep -q "TOOL-1 FIXPOINT: seed == Stage1 == Stage2" "$FP_LOG" || { echo "  (fixpoint NOT green — a reseed change needs the 3-stage check; see \"Reproducibility\" in AGENTS.md)"; fail=1; }
 
 echo "### E2E ###"
 bash scripts/e2e.sh > "$E2E_LOG" 2>&1
