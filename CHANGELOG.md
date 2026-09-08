@@ -82,6 +82,41 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An integer literal that does not fit its target type is now refused through the conversion
+  constructor `T(v)` too, not only through an annotation.** Types §9.1 makes an integer literal's
+  type "inferred from context" and its representability in that type "checked at compile time — a
+  literal outside the target type's range is a compile error (I11), never a silent wrap", and §9.2
+  names `T(v)` as one of the two forms that *refine* a literal's type. Only the annotation form was
+  checked: `n : u8 = 300` was refused, while `n : u8 = u8(300)`, `n := u8(300)` and `N(300)` for
+  `N := brand(u8)` compiled clean on all four backends and **ran to 44** — the literal wrapped into
+  the byte — and `N(1000)` ran to 232. Refused now wherever the constructor is written: a binding
+  with or without an annotation, a module-level binding, a `return` or tail value, a call argument, a
+  struct-literal field, an array element, an operand of an operator, and nested inside another
+  constructor; the diagnostic is the same located `type mismatch` the annotation form already gave.
+  **This newly rejects programs the specification declares invalid**, so by this file's versioning
+  policy it is a defect fixed and not a break, and the spelling that keeps the old behaviour is the
+  one §4.2 already prescribes: `unchecked u8(300)` still truncates (CG-7). Three things are
+  deliberately untouched: a representable literal (`u8(255)`, `i8(-1)`, and the largest `u64`), a
+  **non-literal** operand — `u8(x)` for a run-time `x` is §4.2's checked-narrow case, whose value is
+  not a compile-time fact and which still truncates — and the neighbouring constructors `char(n)`
+  (whose own §8.1 `@convert` guard is a separate gap) and `f64(n)`. A written NEGATIVE literal below a
+  signed type's bound (`i8(-129)`, and `n : i8 = -129` alike) is still accepted and still wraps: the
+  parser represents it as an `unchecked` subtraction rather than a literal, so both spellings share
+  that hole and neither path is worse than the other. Emission is unchanged for every program that
+  still compiles: this is a `check`-stage rule, and all 2 019 pre-existing tracked fixtures produce
+  byte-identical exit statuses, byte-identical diagnostics and byte-identical GAS. Three of them had
+  to be rewritten first, and that is worth stating plainly: `conv_narrow`, `conv_signed` and
+  `int_narrow_conv` are §8 backend-breadth rows that asserted **42** for `u8(810)`, `i8(200) + 98`,
+  `u16(70000)` and `u32(4294967338)` — the silent wrap itself, frozen into the corpus oracle as
+  expected behaviour. Their subject (that a narrowing conversion exists and wraps on every backend) is
+  legitimate and is preserved exactly: each operand is now a value in the next wider type
+  (`u8(u16(810))`, `i8(u8(200))`), every literal is representable in its own target type, the emitted
+  narrowing instruction is unchanged (one movzbq/uxtb/andi/i64.and; three movsbq/sxtb/slli+srai and one
+  i64.extend8_s), and all three still run to 42 on all four backends. The refused spellings are not
+  lost: they become `reject_conv_narrow_literal`, `reject_conv_signed_literal` and
+  `reject_int_narrow_conv_literal`, each asserted on the build path and the three emit-to-stdout
+  surfaces.
+
 - **A `brand` now carries the identity Types §5.4 gives it: a sibling brand, the raw type it brands
   and a brand over another block no longer convert into it implicitly.** §5.4 makes branding "the
   primitive that grants a distinct nominal identity over a shared layout", §4.2 classes every brand

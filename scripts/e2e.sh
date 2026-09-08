@@ -1740,6 +1740,253 @@ main := fn() -> u64 {
   fi
 }
 
+## Issue #564 — the Types §9.1 CONSTRUCTOR-literal refusal matrix. §9.1 makes an integer literal's
+## representability in its context type a COMPILE-TIME judgement ("a literal outside the target type's
+## range is a compile error (I11), never a silent wrap"), and §9.2 names `T(v)` as one of the two forms
+## that refine a literal's type — so `u8(300)` is that clause's case. Measured on the parent, the
+## ANNOTATION spelling of the same literal (`n : u8 = 300`) was already refused while `n : u8 = u8(300)`,
+## `n := u8(300)` and `N(300)`/`N(1000)` for `N := brand(u8)` all compiled clean on all four backends and
+## ran to 44 / 232. This row is where the refusal's COVERAGE and its BOUNDARIES are stated: each shape on
+## BOTH semantic entry points with its located line, every boundary at and past the bound, and the three
+## controls that prove it is not over-reach.
+##
+## The programs live in this row's private scratch directory, so the four-backend corpus oracle gains no
+## row for a matrix whose point is one `check`-level verdict per shape; `reject_ctor_literal_range` and
+## `accept_ctor_literal_range` carry the four-backend witness.
+issue564_ctor_literal_range_test() {
+  local d="$T/issue564_ctor_literal_range"
+  local nfail=0 nok=0
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue564_ctor_literal_range: scratch"; fail=1; return; }
+
+  ## REFUSED: `check` and `-o` must both exit non-zero with the located diagnostic, leave stdout empty
+  ## and produce no artifact. The located line is asserted because a bare non-zero exit is also what a
+  ## crash gives, and the whole defect was a CLEAN compile — so "it failed somehow" is not the claim.
+  _ctor_reject() { # case, program, want-line
+    local n="$1" body="$2" line="$3"
+    local src="$d/$n.al" co="$d/$n.co" ce="$d/$n.ce" bo="$d/$n.bin" be="$d/$n.be"
+    printf '%s\n' "$body" > "$src"
+    "$CC" check "$src" >"$co" 2>"$ce"; local crc=$?
+    "$CC" -o "$bo" "$src" >/dev/null 2>"$be"; local brc=$?
+    if [ "$crc" = 0 ] || [ "$brc" = 0 ] || [ -s "$co" ] || [ -e "$bo" ]; then
+      echo "FAIL issue564/refuse/$n: check=$crc build=$brc out=$(wc -c <"$co") artifact=$([ -e "$bo" ] && echo yes || echo no)"
+      nfail=$((nfail+1)); return
+    fi
+    if ! grep -qF "at line $line in" "$ce" || ! grep -qF "at line $line in" "$be"; then
+      echo "FAIL issue564/refuse/$n: unlocated or wrong line, want $line [$(head -c 200 "$ce")]"
+      nfail=$((nfail+1)); return
+    fi
+    nok=$((nok+1))
+  }
+
+  ## ACCEPTED: both entry points accept, the artifact runs, and it returns `$3`. Every accepted case
+  ## below asserts a VALUE, because the defect this row exists for was an accepted program with a
+  ## wrong one.
+  _ctor_accept() { # case, program, want-exit
+    local n="$1" body="$2" want="$3"
+    local src="$d/$n.al" bo="$d/$n.bin" ce="$d/$n.ce" be="$d/$n.be"
+    printf '%s\n' "$body" > "$src"
+    "$CC" check "$src" >/dev/null 2>"$ce"; local crc=$?
+    "$CC" -o "$bo" "$src" >/dev/null 2>"$be"; local brc=$?
+    if [ "$crc" != 0 ] || [ "$brc" != 0 ] || [ ! -x "$bo" ]; then
+      echo "FAIL issue564/accept/$n: check=$crc build=$brc [$(head -c 160 "$ce")][$(head -c 160 "$be")]"
+      nfail=$((nfail+1)); return
+    fi
+    _e2e_exec "$bo" >/dev/null 2>&1; local got=$?
+    if [ "$got" != "$want" ]; then
+      echo "FAIL issue564/accept/$n: got $got want $want"; nfail=$((nfail+1)); return
+    fi
+    nok=$((nok+1))
+  }
+
+  ## ---- the issue's own table: the four ACCEPTED rows, each of which ran to a wrapped byte ------
+  _ctor_reject annotated_ctor 'main := fn() -> u64 {
+  n : u8 = u8(300)
+  u64(n)
+}' 2
+  _ctor_reject inferred_ctor 'main := fn() -> u64 {
+  n := u8(300)
+  u64(n)
+}' 2
+  _ctor_reject brand_annotated_ctor 'N := brand(u8)
+main := fn() -> u64 {
+  n : N = N(300)
+  u64(unchecked bitcast(u8, n))
+}' 3
+  _ctor_reject brand_inferred_ctor 'N := brand(u8)
+main := fn() -> u64 {
+  n := N(1000)
+  u64(unchecked bitcast(u8, n))
+}' 3
+
+  ## …and row 1 of the same table, the ANNOTATION spelling that was ALREADY refused. It is asserted
+  ## here so the asymmetry this unit closed cannot silently re-open from the other side.
+  _ctor_reject annotation_still_refused 'main := fn() -> u64 {
+  n : u8 = 300
+  u64(n)
+}' 2
+
+  ## ---- the refusal reaches every expression position, not only a binding --------------------
+  _ctor_reject return_sink 'main := fn() -> u64 {
+  return u64(u8(300))
+}' 2
+  _ctor_reject tail_sink 'f := fn() -> u8 {
+  u8(300)
+}
+main := fn() -> u64 { u64(f()) }' 2
+  _ctor_reject call_arg_sink 'take := fn(x : u8) -> u64 { u64(x) }
+main := fn() -> u64 {
+  take(u8(300))
+}' 3
+  _ctor_reject struct_field_sink 'S := struct { f : u8 }
+main := fn() -> u64 {
+  s := S(f = u8(300))
+  u64(s.f)
+}' 3
+  _ctor_reject array_element_sink 'main := fn() -> u64 {
+  a : [u8; 2] = [u8(1), u8(300)]
+  u64(a[1])
+}' 2
+  _ctor_reject binop_sink 'main := fn() -> u64 {
+  u64(u8(300)) + 1
+}' 2
+  _ctor_reject module_binding_sink 'G : u8 = u8(300)
+main := fn() -> u64 { u64(G) }' 1
+  _ctor_reject nested_ctor_sink 'main := fn() -> u64 {
+  u64(u8(u16(70000)))
+}' 2
+
+  ## ---- the BOUNDARIES: the last representable literal and the first that is not ---------------
+  ## Both halves are asserted per type. A rule that refused 256 and also refused 255 would pass a
+  ## reject-only matrix while breaking every in-range conversion in the tree.
+  _ctor_accept bound_u8_max 'main := fn() -> u64 { u64(u8(255)) }' 255
+  _ctor_reject bound_u8_over 'main := fn() -> u64 { u64(u8(256)) }' 1
+  _ctor_accept bound_u16_max 'main := fn() -> u64 { u64(u16(65535)) % 100 }' 35
+  _ctor_reject bound_u16_over 'main := fn() -> u64 { u64(u16(65536)) }' 1
+  _ctor_accept bound_u32_max 'main := fn() -> u64 { u64(u32(4294967295)) % 100 }' 95
+  _ctor_reject bound_u32_over 'main := fn() -> u64 { u64(u32(4294967296)) }' 1
+  _ctor_accept bound_i8_max 'main := fn() -> u64 { v := i8(127) ; u64(i64(v)) }' 127
+  _ctor_reject bound_i8_over 'main := fn() -> u64 { v := i8(128) ; u64(i64(v)) }' 1
+  _ctor_accept bound_i16_max 'main := fn() -> u64 { v := i16(32767) ; u64(i64(v)) % 100 }' 67
+  _ctor_reject bound_i16_over 'main := fn() -> u64 { v := i16(32768) ; u64(i64(v)) }' 1
+  ## u64/usize hold every 64-bit pattern, so no written literal is out of range for them — and the
+  ## largest one must stay accepted rather than be caught by a sign test.
+  _ctor_accept bound_u64_max 'main := fn() -> u64 { u64(18446744073709551615) % 100 }' 15
+  ## the SIGNED negative bound, asserted as a VALUE: -128 is representable in i8 and must convert.
+  _ctor_accept bound_i8_min 'main := fn() -> u64 {
+  v := i8(0 - 128)
+  if i64(v) != 0 - 128 { return 7 }
+  u64(0 - i64(v))
+}' 128
+
+  ## ---- the four literals the §8 breadth fixtures used to assert a VALUE for ------------------
+  ## `conv_narrow`, `conv_signed` and `int_narrow_conv` wrote these four spellings and asserted 42 for
+  ## each. Under §9.1 all four are compile errors, so those rows were asserting the silent wrap this
+  ## refusal forbids — the #527 class, and the first measured instance of it that had already reached
+  ## the corpus oracle rather than being caught before landing. The rows are rewritten onto operands
+  ## representable in their own target type, and the refused spellings are asserted here and kept as
+  ## tracked reject fixtures so nothing is lost.
+  _ctor_reject legacy_u8_810 'main := fn() -> u64 { return u8(810) }' 1
+  _ctor_reject legacy_i8_200 'main := fn() -> u64 { return i8(200) + 98 }' 1
+  _ctor_reject legacy_u16_70000 'main := fn() -> u64 { return u64(u16(70000)) / 1488 }' 1
+  _ctor_reject legacy_u32_4294967338 'main := fn() -> u64 { return u64(u32(4294967338)) / 42 }' 1
+
+  ## ---- CONTROL 1: CG-7 — an `unchecked` scope keeps TRUNCATING -------------------------------
+  ## §4.2 puts narrowing inside an `unchecked` scope on the truncating path, so `unchecked u8(300)`
+  ## is specified behaviour and this refusal must not reach it. Both the expression prefix and the
+  ## `unchecked { … }` statement form are asserted, and each asserts the truncated VALUE.
+  _ctor_accept unchecked_expr_truncates 'main := fn() -> u64 {
+  a := unchecked u8(300)
+  if u64(a) != 44 { return 11 }
+  b := unchecked u8(1000)
+  if u64(b) != 232 { return 12 }
+  42
+}' 42
+  _ctor_accept unchecked_block_truncates 'main := fn() -> u64 {
+  mut r : u64 = 0
+  unchecked {
+    a := u8(300)
+    r = u64(a)
+  }
+  if r != 44 { return 11 }
+  42
+}' 42
+  _ctor_accept unchecked_brand_truncates 'N := brand(u8)
+main := fn() -> u64 {
+  n := unchecked N(300)
+  if u64(unchecked bitcast(u8, n)) != 44 { return 11 }
+  42
+}' 42
+
+  ## ---- CONTROL 2: a REPRESENTABLE literal through a constructor still works -------------------
+  _ctor_accept representable_ctor 'N := brand(u8)
+main := fn() -> u64 {
+  if u64(u8(200)) != 200 { return 11 }
+  if u64(u8(0)) != 0 { return 12 }
+  n : N = N(200)
+  if u64(unchecked bitcast(u8, n)) != 200 { return 13 }
+  if u64(u16(1000)) != 1000 { return 14 }
+  if i64(i8(0 - 1)) != 0 - 1 { return 15 }
+  42
+}' 42
+
+  ## ---- CONTROL 3: a NON-LITERAL operand is §4.2's RUN-TIME narrowing, not §9.1's --------------
+  ## §9.1 speaks about a literal, whose value is a compile-time fact. `u8(x)` for a run-time `x` is
+  ## the conversion table's own checked-narrow case, and this unit deliberately does not touch it:
+  ## it still truncates today (that residual is #564's `Out of scope` line, not this refusal's).
+  ## The row asserts the truncated VALUE, so a later checked-narrow trap changes this row on purpose.
+  _ctor_accept runtime_operand_untouched 'narrow := fn(x : u64) -> u8 { u8(x) }
+main := fn() -> u64 {
+  v : u64 = 810
+  if u64(u8(v)) != 42 { return 11 }
+  if u64(narrow(300)) != 44 { return 12 }
+  s : u64 = 200
+  if i64(i8(s)) != 0 - 56 { return 13 }
+  42
+}' 42
+  ## …and a NAMED module constant is a `Var`, not a `Num`, so it is the same run-time class here.
+  _ctor_accept named_constant_untouched 'K : u64 = 300
+main := fn() -> u64 {
+  if u64(u8(K)) != 44 { return 11 }
+  42
+}' 42
+
+  ## ---- CONTROL 4: the neighbouring constructors this rule must NOT claim ----------------------
+  ## A float target is judged by `int_lit_into_float_bad`, and a brand over a NON-integer block is
+  ## not an integer conversion at all: both stay outside this rule and keep building and running.
+  _ctor_accept neighbouring_ctors_untouched 'F := brand(f64)
+main := fn() -> u64 {
+  x := f64(2)
+  if x != 2.0 { return 12 }
+  y : F = F(3)
+  if unchecked bitcast(f64, y) != 3.0 { return 13 }
+  42
+}' 42
+  ## `char(n)` has its own §8.1 `@convert` validity guard, which #364 records as never reached — so an
+  ## out-of-Unicode codepoint is accepted today and this rule must not be the one that starts refusing
+  ## it. Asserted on `check` ONLY: measured on the parent and on this tree alike, `char(65)` fails to
+  ## LINK ("undefined reference to `<mod>__char`"), a separate pre-existing defect that a build/run row
+  ## would attribute to this refusal.
+  local cs="$d/char_untouched.al" cc0="$d/char_untouched.ce"
+  printf '%s\n' 'main := fn() -> u64 {
+  c := char(1114112)
+  u64(u32(c))
+}' > "$cs"
+  "$CC" check "$cs" >/dev/null 2>"$cc0"; local crc0=$?
+  if [ "$crc0" != 0 ]; then
+    echo "FAIL issue564/accept/char_untouched: check=$crc0 — the §9.1 integer rule claimed a char() codepoint, which is #364's guard [$(head -c 160 "$cc0")]"
+    nfail=$((nfail+1))
+  else
+    nok=$((nok+1))
+  fi
+
+  if [ "$nfail" = 0 ]; then
+    echo "ok   issue564/ctor-literal-range: $nok cases — every sink refuses the unrepresentable literal, every boundary and the unchecked, representable, run-time and neighbouring-constructor controls hold"
+  else
+    echo "FAIL issue564/ctor-literal-range: $nfail of $((nfail+nok)) cases wrong"; fail=1
+  fi
+}
+
 ## Issue #304 / TYP-6 + Types §§4.2–4.3 — direct field and local fixed-array-element stores must
 ## compare the value with the declared destination type before lower can emit a word-sized store.
 ## These sources live only in the gate's private scratch directory: each negative case checks both
@@ -5486,6 +5733,35 @@ check_accept accept_ann_brand_and_generic
 issue299_brand_identity_test
 issue299_brand_probe_census_test
 issue299_brand_refusal_matrix_test
+issue564_ctor_literal_range_test
+## Issue #564 — the four-backend witnesses for the constructor-literal refusal. The matrix row above is
+## `check`-level and lives in a private scratch directory; these two tracked sources give the per-file
+## corpus oracle and the cross-target sweeps a row each, because a reject fixture on its own does not
+## prove that the non-x86 EMIT surfaces refuse too — hence the three `emit_reject_has` rows beside the
+## `-o` one. The accept row carries the three controls with their asserted values, negatives included.
+build_reject_has reject_ctor_literal_range "type mismatch at line 7 in reject_ctor_literal_range"
+## …and the three §8-breadth spellings this refusal took away from `conv_narrow`, `conv_signed` and
+## `int_narrow_conv`. Each ran to 42 on all four backends on the parent — the exact number its origin
+## row asserted — so each is kept here as its own four-surface reject rather than deleted with the
+## rewrite (#527: a fixture asserting success on a shape another ticket obliges the compiler to refuse
+## freezes the defect into a contract, and these three had already reached the oracle).
+build_reject_has reject_conv_narrow_literal "type mismatch at line 7 in reject_conv_narrow_literal"
+emit_reject_has wat reject_conv_narrow_literal "type mismatch at line 7 in reject_conv_narrow_literal"
+emit_reject_has aarch64 reject_conv_narrow_literal "type mismatch at line 7 in reject_conv_narrow_literal"
+emit_reject_has riscv64 reject_conv_narrow_literal "type mismatch at line 7 in reject_conv_narrow_literal"
+build_reject_has reject_conv_signed_literal "type mismatch at line 6 in reject_conv_signed_literal"
+emit_reject_has wat reject_conv_signed_literal "type mismatch at line 6 in reject_conv_signed_literal"
+emit_reject_has aarch64 reject_conv_signed_literal "type mismatch at line 6 in reject_conv_signed_literal"
+emit_reject_has riscv64 reject_conv_signed_literal "type mismatch at line 6 in reject_conv_signed_literal"
+build_reject_has reject_int_narrow_conv_literal "type mismatch at line 9 in reject_int_narrow_conv_literal"
+emit_reject_has wat reject_int_narrow_conv_literal "type mismatch at line 9 in reject_int_narrow_conv_literal"
+emit_reject_has aarch64 reject_int_narrow_conv_literal "type mismatch at line 9 in reject_int_narrow_conv_literal"
+emit_reject_has riscv64 reject_int_narrow_conv_literal "type mismatch at line 9 in reject_int_narrow_conv_literal"
+emit_reject_has wat reject_ctor_literal_range "type mismatch at line 7 in reject_ctor_literal_range"
+emit_reject_has aarch64 reject_ctor_literal_range "type mismatch at line 7 in reject_ctor_literal_range"
+emit_reject_has riscv64 reject_ctor_literal_range "type mismatch at line 7 in reject_ctor_literal_range"
+check_accept accept_ctor_literal_range
+run accept_ctor_literal_range 42
 ## Issue #299 — the four-backend witnesses for the refusal. The matrix row above is `check`-level and
 ## lives in a private scratch directory; these four tracked sources give the per-file corpus oracle and
 ## the cross-target sweeps a row each, because a reject fixture on its own does not prove that the

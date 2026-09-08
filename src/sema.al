@@ -7110,6 +7110,246 @@ default_lit_range_bad := fn(e : ptr(Expr)) -> bool {
   expr_num_lit_val(e) < 0
 }
 
+## ── Types §9.1 through the CONVERSION-CONSTRUCTOR spelling `T(v)` (issue #564) ───────────────────
+##
+## §9.2 names `T(v)` as one of the two forms that REFINE a literal's type, so `u8(300)` is §9.1's
+## literal-in-context case and its representability is a COMPILE-TIME judgement: "a literal outside
+## the target type's range is a compile error (I11), never a silent wrap." §4.2's conversion table
+## reaches the same verdict from the other side — narrow is "checked by default (traps if out of
+## range)" — and the two readings differ only in WHEN: for a literal, whose value is certain with no
+## inference and no run-time operand, §9.1 is the applicable clause and its answer is the compile
+## error. The run-time narrowing of a VALUE is §4.2's own case and is deliberately untouched here.
+##
+## Measured on the parent (#564): `n : u8 = u8(300)`, `n := u8(300)`, and `N(300)`/`N(1000)` for
+## `N := brand(u8)` all compiled clean on all four backends and ran to 44 / 232 — the literal wrapped
+## into the byte — while the ANNOTATION spelling of the same literal (`n : u8 = 300`) was already
+## refused by `ann_lit_range_bad` above. That asymmetry WAS the defect: the §9.1 test existed and the
+## constructor path never reached it, because a `u8(300)` initializer arrives at the binding as an
+## `Expr::Call` and `expr_is_num_lit` therefore answers no for the whole value.
+##
+## CG-7 is preserved: `chk` is the verification mode in force and an `unchecked` expression or
+## statement flips it off for its subtree, exactly as `ct_check` does for CT-12. `unchecked u8(300)`
+## still truncates — specified behaviour, not this defect.
+
+## The integer type NAME a one-argument conversion constructor gives its literal argument, else
+## {0,0}. A kernel integer name answers directly; a DIRECT user brand answers with the name it
+## brands (`N := brand(u8)` → `u8`), following at most 8 links so a malformed or self-referential
+## brand chain cannot loop. The PRELUDE brands (`bool`, `char`, `f32`, `f64`) are excluded by name:
+## `char(n)`'s own `@convert` validity guard is #364's rule, not this one, and a float target is
+## `int_lit_into_float_bad`'s. `u64`/`usize` are in the whitelist but hold every 64-bit pattern, so
+## `num_lit_out_of_range` never judges them out of range — they are listed only to stop the brand
+## scan early. The brand hop is skipped entirely when the program declares no user brand.
+ctor_int_target_name := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize) -> VSpan {
+  mut cs := s
+  mut cn := n
+  mut hops : usize = 0
+  while hops < 8 {
+    nm := str_at((src + cs), cn)
+    if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" or nm == "usize" { return VSpan(s = cs, n = cn) }
+    if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" or nm == "isize" { return VSpan(s = cs, n = cn) }
+    if SEMA_BRAND_DECLS == 0 { return VSpan(s = 0, n = 0) }
+    if sema_brand_is_prelude(src, cs, cn) { return VSpan(s = 0, n = 0) }
+    bu := sema_brand_underlying(decls, upto, src, cs, cn)
+    if bu.n == 0 { return VSpan(s = 0, n = 0) }
+    cs = bu.s
+    cn = bu.n
+    hops += 1
+  }
+  VSpan(s = 0, n = 0)
+}
+
+## The §9.1 verdict for ONE expression node: a direct, unqualified, one-argument conversion
+## constructor over an integer type whose single argument is a bare `Num` LITERAL outside that
+## type's range. A UFCS or `::`-qualified callee, any other arity, and every non-literal argument
+## are left to the other rules — a non-literal operand is §4.2's run-time narrowing, whose value is
+## not known here.
+ctor_lit_range_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> bool {
+  if unchecked bitcast(usize, e) == 0 { return false }
+  if expr_call_arity(e) != 1 { return false }
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 { return false }
+  ah := expr_call_args_head(e)
+  if ah == 0 { return false }
+  arg := deref(arg_p(ah))
+  if expr_is_num_lit(arg.e) == false { return false }
+  if sema_direct_call_name(src, cs.s, cs.n) == false { return false }
+  w := ctor_int_target_name(decls, upto, src, cs.s, cs.n)
+  if w.n == 0 { return false }
+  num_lit_out_of_range(str_at((src + w.s), w.n), expr_num_lit_val(arg.e))
+}
+
+## The argument/field/element list companion of the walk below.
+ctor_lit_args_span := fn(h : usize, chk : bool, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  mut g := h
+  mut res : usize = 0
+  while g != 0 and res == 0 {
+    ga := deref(arg_p(g))
+    res = ctor_lit_expr_span(ga.e, chk, decls, upto, src, a)
+    g = ga.next
+  }
+  res
+}
+
+## The located §9.1 constructor walk over an EXPRESSION tree: 0 = accepted, else the offending
+## constructor's own callee offset (a real source position for a real call, so the diagnostic is
+## never unlocated). The arm list is EXHAUSTIVE and in DECLARATION order — the shape documented
+## above `lbv_lit_tag` as the one that dispatches reliably under the bootstrap seed. This is
+## deliberately NOT a `check_expr` hook: that big match does not dispatch its `Expr::Call` arm under
+## the seed (scar #2), and its pre-match path carries no `unchecked` mode to thread, so a refusal
+## placed there would also refuse `unchecked u8(300)` and break CG-7.
+ctor_lit_expr_span := fn(e : ptr(Expr), chk : bool, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  if unchecked bitcast(usize, e) == 0 { return 0 }
+  if chk and ctor_lit_range_bad(e, decls, upto, src) { return expr_call_callee_span(e).s }
+  mut res : usize = 0
+  match deref(e) {
+    Expr::Num(_nv, _ns, _nn) => {}
+    Expr::BoolLit(_bv) => {}
+    Expr::Var(_vs, _vl) => {}
+    Expr::Bin(_op, l, r) => {
+      res = ctor_lit_expr_span(l, chk, decls, upto, src, a)
+      if res == 0 { res = ctor_lit_expr_span(r, chk, decls, upto, src, a) }
+    }
+    Expr::If(c, t, f) => {
+      res = ctor_lit_expr_span(c, chk, decls, upto, src, a)
+      if res == 0 { res = ctor_lit_expr_span(t, chk, decls, upto, src, a) }
+      if res == 0 { res = ctor_lit_expr_span(f, chk, decls, upto, src, a) }
+    }
+    Expr::Match(sc, mah) => {
+      res = ctor_lit_expr_span(sc, chk, decls, upto, src, a)
+      mut arm := mah
+      while arm != 0 and res == 0 {
+        am := deref(arm_p(arm))
+        res = ctor_lit_expr_span(am.body, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_stmts_span(am.body_stmts, chk, decls, upto, src, a) }
+        arm = am.next
+      }
+    }
+    Expr::Call(_cs, _cl, _na, cah) => { res = ctor_lit_args_span(cah, chk, decls, upto, src, a) }
+    Expr::StructLit(_ss, _sl, _nf, sah) => { res = ctor_lit_args_span(sah, chk, decls, upto, src, a) }
+    Expr::Field(fb, _fs, _fl) => { res = ctor_lit_expr_span(fb, chk, decls, upto, src, a) }
+    Expr::EnumLit(_es, _el, _evs, _evl, _np, eah) => { res = ctor_lit_args_span(eah, chk, decls, upto, src, a) }
+    Expr::AddrOf(ap) => { res = ctor_lit_expr_span(ap, chk, decls, upto, src, a) }
+    Expr::Deref(dp) => { res = ctor_lit_expr_span(dp, chk, decls, upto, src, a) }
+    Expr::StrLit(_ls, _ln, _llbl, _lps, _lpn) => {}
+    Expr::ArrayLit(_ane, aeh) => { res = ctor_lit_args_span(aeh, chk, decls, upto, src, a) }
+    Expr::Index(ib, ii) => {
+      res = ctor_lit_expr_span(ib, chk, decls, upto, src, a)
+      if res == 0 { res = ctor_lit_expr_span(ii, chk, decls, upto, src, a) }
+    }
+    Expr::Try(tin) => { res = ctor_lit_expr_span(tin, chk, decls, upto, src, a) }
+    Expr::FloatLit(_fs, _fn) => {}
+    Expr::Slice(sb, slo, shi) => {
+      res = ctor_lit_expr_span(sb, chk, decls, upto, src, a)
+      if res == 0 { res = ctor_lit_expr_span(slo, chk, decls, upto, src, a) }
+      if res == 0 { res = ctor_lit_expr_span(shi, chk, decls, upto, src, a) }
+    }
+    Expr::CompField(cfb, cfi) => {
+      res = ctor_lit_expr_span(cfb, chk, decls, upto, src, a)
+      if res == 0 { res = ctor_lit_expr_span(cfi, chk, decls, upto, src, a) }
+    }
+    ## CG-7 — the whole subtree drops the §9.1 judgement, exactly as `ct_check` drops CT-12's.
+    Expr::Unchecked(uin) => { res = ctor_lit_expr_span(uin, false, decls, upto, src, a) }
+    Expr::Lambda(_lpos, _lph, _lrts, _lrtl, lbh, lval) => {
+      res = ctor_lit_stmts_span(lbh, chk, decls, upto, src, a)
+      if res == 0 { res = ctor_lit_expr_span(lval, chk, decls, upto, src, a) }
+    }
+    Expr::FnRef(_rp, _rms, _rml) => {}
+    Expr::Bitcast(bin, _bts, _btl) => { res = ctor_lit_expr_span(bin, chk, decls, upto, src, a) }
+    Expr::Loop(lb) => { res = ctor_lit_stmts_span(lb, chk, decls, upto, src, a) }
+  }
+  res
+}
+
+## Statement companion: EXHAUSTIVE and in `Stmt`'s DECLARATION order, so every expression position a
+## body can hold is judged from one hook per function — a binding or re-assignment value, a place
+## expression, a loop bound, a condition, a discarded call, a `break` value and every nested block.
+## `Stmt::Unchecked` flips the mode off for its block (CG-7).
+ctor_lit_stmts_span := fn(head : ptr(mut Stmt), chk : bool, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  mut cur := head
+  mut res : usize = 0
+  while cur != 0 and res == 0 {
+    s := deref(stmt_p(Stmt, cur))
+    match s {
+      Stmt::Assign(_ans, _anl, av, _anx) => { res = ctor_lit_expr_span(av, chk, decls, upto, src, a) }
+      Stmt::While(wc, wb, _wnx) => {
+        res = ctor_lit_expr_span(wc, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_stmts_span(wb, chk, decls, upto, src, a) }
+      }
+      Stmt::FieldAssign(_fbs, _fbl, _ffs, _ffl, fv, _fnx) => { res = ctor_lit_expr_span(fv, chk, decls, upto, src, a) }
+      Stmt::Return(rv, _rnx) => { res = ctor_lit_expr_span(rv, chk, decls, upto, src, a) }
+      Stmt::If(ic, ith, iel, _inx) => {
+        res = ctor_lit_expr_span(ic, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_stmts_span(ith, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_stmts_span(iel, chk, decls, upto, src, a) }
+      }
+      Stmt::Match(msc, mah, _mnx) => {
+        res = ctor_lit_expr_span(msc, chk, decls, upto, src, a)
+        mut arm := mah
+        while arm != 0 and res == 0 {
+          am := deref(arm_p(arm))
+          res = ctor_lit_expr_span(am.body, chk, decls, upto, src, a)
+          if res == 0 { res = ctor_lit_stmts_span(am.body_stmts, chk, decls, upto, src, a) }
+          arm = am.next
+        }
+      }
+      Stmt::For(_fns, _fnl, flo, fhi, fb, _ffnx) => {
+        res = ctor_lit_expr_span(flo, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(fhi, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_stmts_span(fb, chk, decls, upto, src, a) }
+      }
+      Stmt::DerefAssign(dp, dv, _dnx) => {
+        res = ctor_lit_expr_span(dp, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(dv, chk, decls, upto, src, a) }
+      }
+      Stmt::IndexAssign(xb, xi, xv, _xnx) => {
+        res = ctor_lit_expr_span(xb, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(xi, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_expr_span(xv, chk, decls, upto, src, a) }
+      }
+      Stmt::IndexFieldAssign(yb, yi, _yfs, _yfl, yv, _ynx) => {
+        res = ctor_lit_expr_span(yb, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(yi, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_expr_span(yv, chk, decls, upto, src, a) }
+      }
+      Stmt::FieldPathAssign(pp, pv, _pnx) => {
+        res = ctor_lit_expr_span(pp, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(pv, chk, decls, upto, src, a) }
+      }
+      Stmt::Loop(lb, _lnx) => { res = ctor_lit_stmts_span(lb, chk, decls, upto, src, a) }
+      Stmt::Break(bv, _bd, _bnx) => { res = ctor_lit_expr_span(bv, chk, decls, upto, src, a) }
+      Stmt::Continue(_cd, _cnx) => {}
+      Stmt::ExprStmt(ev, _enx) => { res = ctor_lit_expr_span(ev, chk, decls, upto, src, a) }
+      Stmt::CompIf(cc, cth, cel, _cnx2) => {
+        res = ctor_lit_expr_span(cc, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_stmts_span(cth, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_stmts_span(cel, chk, decls, upto, src, a) }
+      }
+      Stmt::CompFor(_cvs, _cvl, _civ, cfb, _cfnx) => { res = ctor_lit_stmts_span(cfb, chk, decls, upto, src, a) }
+      Stmt::CompMatch(cmsc, cmah, _cmnx) => {
+        res = ctor_lit_expr_span(cmsc, chk, decls, upto, src, a)
+        mut carm := cmah
+        while carm != 0 and res == 0 {
+          cam := deref(arm_p(carm))
+          res = ctor_lit_stmts_span(cam.body_stmts, chk, decls, upto, src, a)
+          carm = cam.next
+        }
+      }
+      Stmt::CompForRange(_rvs, _rvl, rlo, rhi, rb, _rnx2) => {
+        res = ctor_lit_expr_span(rlo, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_expr_span(rhi, chk, decls, upto, src, a) }
+        if res == 0 { res = ctor_lit_stmts_span(rb, chk, decls, upto, src, a) }
+      }
+      Stmt::Unchecked(ub, _unx) => { res = ctor_lit_stmts_span(ub, false, decls, upto, src, a) }
+      Stmt::AllocWith(ae, ab, _anx2) => {
+        res = ctor_lit_expr_span(ae, chk, decls, upto, src, a)
+        if res == 0 { res = ctor_lit_stmts_span(ab, chk, decls, upto, src, a) }
+      }
+    }
+    cur = stmt_next_at(cur, a)
+  }
+  res
+}
+
 ## ── CT-12 — a failed CHECKED GUARD during COMPTIME evaluation is a LOCATED diagnostic ───────────
 ##
 ## Comptime §2.6: "The evaluator runs the same checked-guard family as run time, but it has no
@@ -10615,6 +10855,15 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     if cjp != 0 { failed = true; err = cjp }
   }
   if stmts_bad_loop_control(d.body_stmts, false, a) { failed = true; err = located_err(d.name_start) }
+  ## Types §9.1 through the CONVERSION-CONSTRUCTOR spelling (#564) — the whole body plus the tail
+  ## value in ONE walk that threads the `unchecked` mode, so `u8(300)` is refused wherever it is
+  ## written while `unchecked u8(300)` keeps CG-7's truncation. Guarded on `failed == false` so an
+  ## existing, more specific structural diagnostic stays authoritative.
+  if failed == false {
+    mut clr := ctor_lit_stmts_span(d.body_stmts, true, decls, upto, src, a)
+    if clr == 0 and no_tail == false { clr = ctor_lit_expr_span(d.value, true, decls, upto, src, a) }
+    if clr != 0 { failed = true; err = mismatch_err(clr, 0) }
+  }
   ## Declarations §6.2 — a same-scope redeclaration makes the whole function ill-formed, so refuse it
   ## before the ordinary statement walk can synthesize types against the shadowed binding. Guarded on
   ## `failed == false` so an existing, more specific structural diagnostic stays authoritative.
@@ -10799,6 +11048,10 @@ check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a 
       ## A module-level `name := literal` has the same no-context default as a local binding.
       if default_lit_range_bad(d.value) { mark_failed(ptr(none), mismatch_err(d.name_start, 0)) }
     }
+    ## Types §9.1 CONSTRUCTOR spelling at MODULE scope (#564) — the same walk a fn body gets, so
+    ## `G : u8 = u8(300)` and `G := u8(300)` are refused where a local already was.
+    gclr := ctor_lit_expr_span(d.value, true, decls, upto, src, a)
+    if gclr != 0 { mark_failed(ptr(none), mismatch_err(gclr, 0)) }
     ## CT-12 / Comptime §2.6 — the MODULE-SCOPE mirror: `K : u64 = 18446744073709551615 + 1` is
     ## rejected where it is written, not left to trap when some run-time path reaches it.
     gcte := ct_guard_err(src, gts.s, gts.n, d.value, d.name_start, decls, upto)
