@@ -69,6 +69,11 @@
 #   ALATYR_E2E_FILTER=<sub>    run only rows whose command contains <sub> (iteration; NOT the gate)
 #   ALATYR_E2E_REBUILD=stale   rebuild Stage1 only when older than src//lib/ (iteration)
 #   ALATYR_E2E_TEST_DIR=<dir>  fixture root (default `test/`; used by the self-test)
+#   ALATYR_E2E_RUNTIME_TIMEOUT=<dur>  per-attempt deadline for a child this runner EXECUTES
+#                                     (default `10s`; a `timeout` duration, so `1s`/`500ms` are legal)
+#   ALATYR_E2E_RUNTIME_RETRIES=<n>    extra observations of a child that breaches that deadline
+#                                     (default 1). `0` reproduces the pre-#537 one-observation
+#                                     behaviour on purpose and says so; a gate never sets it.
 set -u
 # AGENTS.md: "Run everything with `ulimit -c 0` — fail-loud traps drop 8 MB core dumps." Several
 # fixtures trap ON PURPOSE (that IS the assertion), so the suite must set this itself rather than
@@ -153,11 +158,56 @@ fail=0
 # timeout's status alone: a legal target exit of 124 (or 137) must remain a target result, not become
 # a false timeout.  The one-second kill grace bounds a child that ignores TERM without touching the
 # longer-running external scripts below.
-E2E_RUNTIME_TIMEOUT=10s
+#
+# The ceiling is there to bound a child that does not terminate.  It is NOT a stopwatch on the machine,
+# and on a shared machine wall-clock time has no upper bound: `fmt_large_input` failed this row with
+# `runtime timeout after 10s` at load average 33.8 while another gate was running, and passed alone on
+# both trees under test (issue #537).  Measured on this tree, the row's timed child — `alatyr run` over
+# the 1.2 MB generated source — is 1.77 s unloaded, so the margin is 5.6x, the tightest in the gate.
+# Raising the number only moves the load at which the false failure returns, so a child that hits the
+# ceiling is RE-OBSERVED instead: the deadline still bounds every attempt, and only a child that
+# breaches it on every attempt is reported.  Cost when nothing breaches: zero.  Cost for a genuine hang:
+# one extra ceiling, once, per affected row.
+#
+# The re-observation is safe because it only ever repeats a child that was KILLED part-way: whatever
+# that child had done is already half-done, so repeating it cannot lose an observation that was
+# completed.  Every caller runs either a produced program or a fresh `alatyr` invocation, both of which
+# rebuild what they need.
+E2E_RUNTIME_TIMEOUT="${ALATYR_E2E_RUNTIME_TIMEOUT:-10s}"
 E2E_RUNTIME_KILL_AFTER=1s
+E2E_RUNTIME_RETRIES="${ALATYR_E2E_RUNTIME_RETRIES:-1}"
+case "$E2E_RUNTIME_RETRIES" in
+  ''|*[!0-9]*) echo "FAIL: ALATYR_E2E_RUNTIME_RETRIES must be a non-negative integer, got '$E2E_RUNTIME_RETRIES'"; exit 1 ;;
+esac
 E2E_RUNTIME_STATE=not-run
+E2E_RUNTIME_ATTEMPTS=0
+## The deadline that was ACTUALLY applied to the last child. `_e2e_runtime_failure` used to print
+## `$E2E_RUNTIME_TIMEOUT` instead, which is only right for a caller that took the default: the
+## self-test's own bounded probes name a different duration, and a verdict must state the number it
+## was measured against.
+E2E_RUNTIME_DEADLINE=none
 
+## Re-observe a ceiling breach up to $E2E_RUNTIME_RETRIES times and report the LAST observation.  Rows
+## run in subshells, so the accounting cannot be a variable: each breach appends one line to a file the
+## driver reads back after the suite.
 _e2e_exec_timed() { # duration, command ...
+  local _e2e_duration="$1"
+  shift
+  local _e2e_try=0 _e2e_rc
+  E2E_RUNTIME_DEADLINE="$_e2e_duration"
+  while : ; do
+    _e2e_exec_once "$_e2e_duration" "$@"
+    _e2e_rc=$?
+    E2E_RUNTIME_ATTEMPTS=$((_e2e_try + 1))
+    [ "$E2E_RUNTIME_STATE" = timeout ] || return "$_e2e_rc"
+    [ "$_e2e_try" -lt "$E2E_RUNTIME_RETRIES" ] || return "$_e2e_rc"
+    _e2e_try=$((_e2e_try + 1))
+    printf '%s\t%s\t%s\t%s\n' "${T##*/}" "$_e2e_duration" "$_e2e_try" "$1" \
+      >> "$WORK/runtime-reobserved" 2>/dev/null || true
+  done
+}
+
+_e2e_exec_once() { # duration, command ...
   local _e2e_duration="$1" _e2e_marker _e2e_timeout_rc _e2e_child_rc
   shift
   _e2e_marker="$T/.runtime-${BASHPID}-${RANDOM}"
@@ -233,7 +283,9 @@ _e2e_runtime_failure() { # label, observed-status
   local _e2e_label="$1" _e2e_rc="$2" _e2e_state="${3:-$E2E_RUNTIME_STATE}"
   case "$_e2e_state" in
     timeout)
-      echo "FAIL $_e2e_label: runtime timeout after $E2E_RUNTIME_TIMEOUT"
+      ## The attempt count is part of the verdict: `after 10s` alone reads as a stopwatch reading, and
+      ## the reader cannot tell it from the starvation this row used to report (issue #537).
+      echo "FAIL $_e2e_label: runtime timeout after $E2E_RUNTIME_DEADLINE on each of $E2E_RUNTIME_ATTEMPTS attempt(s)"
       fail=1
       return 0
       ;;
@@ -9207,13 +9259,14 @@ _row_exec() { # idx
 _e2e_runtime_timeout_probe() {
   _e2e_exec_timed 0.1s sleep 30 >/dev/null 2>&1
   local _e2e_rc=$?
-  if [ "$E2E_RUNTIME_STATE" = timeout ]; then
-    echo "FAIL e2e_timeout_probe: runtime timeout after 0.1s"
-    fail=1
-  else
-    echo "FAIL e2e_timeout_probe: child returned rc=$_e2e_rc state=$E2E_RUNTIME_STATE"
-    fail=1
-  fi
+  ## Drive the REAL reporting helper — the one every row calls — and not a private copy of its
+  ## decision. The first cut of this probe wrote its own FAIL line and set `fail` itself, which left
+  ## `_e2e_runtime_failure` (the function that decides whether a ceiling breach is a failure AT ALL)
+  ## with no self-test: measured on this tree, turning its `timeout` arm into a note kept the entire
+  ## suite green. That is the #470 shape inside the detector itself.
+  if _e2e_runtime_failure "e2e_timeout_probe" "$_e2e_rc"; then return; fi
+  echo "FAIL e2e_timeout_probe: child returned rc=$_e2e_rc state=$E2E_RUNTIME_STATE"
+  fail=1
 }
 
 ## THE GATE OF THE GATE (AGENTS.md: "an invariant nobody has seen fail is decoration").
@@ -9260,6 +9313,37 @@ _e2e_selftest() {
   else
     echo "FAIL e2e_selftest(runtime_timeout): timeout row was not concrete"
     bad=1
+  fi
+  # 5a. … and it was RE-OBSERVED before being reported. A mechanism that gave up after the first
+  #     attempt would produce exactly the row above, so the count is what separates the two.
+  if [ "$E2E_RUNTIME_ATTEMPTS" = "$((E2E_RUNTIME_RETRIES + 1))" ]; then
+    echo "ok   e2e_selftest(runtime_reobserve_hang): a hanging child was observed $E2E_RUNTIME_ATTEMPTS time(s) and still failed"
+  else
+    echo "FAIL e2e_selftest(runtime_reobserve_hang): a hanging child was observed $E2E_RUNTIME_ATTEMPTS time(s), want $((E2E_RUNTIME_RETRIES + 1))"
+    bad=1
+  fi
+  # 5b. THE OTHER DIRECTION. A child that breaches the ceiling once and then finishes must NOT be
+  #     reported, and the caller must see the SECOND observation's status — not 124, and not a
+  #     fabricated success. Without this row, an "eraser" that swallowed every timeout would pass 5
+  #     and 5a as long as it swallowed nothing that hangs forever. The first attempt drops a marker
+  #     and sleeps past the deadline; the second finds the marker and exits 42.
+  local starve_mark="$d/runtime_starve.mark" starve_rc starve_state
+  if [ "$E2E_RUNTIME_RETRIES" -ge 1 ]; then
+    rm -f "$starve_mark"
+    _e2e_exec_timed 0.3s bash -c 'if [ -e "$1" ]; then exit 42; fi; : > "$1"; sleep 30' _ "$starve_mark" >/dev/null 2>&1
+    starve_rc=$?; starve_state="$E2E_RUNTIME_STATE"
+    if [ "$starve_state" = exited ] && [ "$starve_rc" = 42 ] && [ "$E2E_RUNTIME_ATTEMPTS" = 2 ]; then
+      echo "ok   e2e_selftest(runtime_reobserve_starved): a one-off ceiling breach is re-observed and its second status reported"
+    else
+      echo "FAIL e2e_selftest(runtime_reobserve_starved): rc=$starve_rc state=$starve_state attempts=$E2E_RUNTIME_ATTEMPTS, want 42/exited/2"
+      bad=1
+    fi
+  else
+    ## The knob exists to REPRODUCE the pre-#537 behaviour on purpose, so it must be impossible to
+    ## mistake such a run for a gate verdict. `***` so the console summary carries it.
+    echo "*** e2e: ALATYR_E2E_RUNTIME_RETRIES=0 — a ceiling breach is reported from ONE observation, taken"
+    echo "         under whatever load the machine happened to carry. That is the pre-#537 behaviour and it"
+    echo "         cannot tell a hang from starvation; this run is NOT a gate verdict. ***"
   fi
   # 6. a legal timeout-looking child status is preserved when the completion marker is present.
   local status_124 status_137 state_124 state_137 capture_status capture_state capture_output
@@ -9415,6 +9499,9 @@ if [ -n "$FILTER" ]; then
   echo "=== e2e: FILTERED run (ALATYR_E2E_FILTER='$FILTER') — this is NOT the gate ==="
 fi
 _e2e_selftest || exit 1
+## The self-test's own probes deliberately breach the ceiling (rows 5 and 5b), so the re-observation
+## ledger starts empty for the SUITE. Otherwise every run would report two breaches it manufactured.
+: > "$WORK/runtime-reobserved"
 
 # Apply the filter, if any, by dropping unselected rows from the recorded table. The gate never sets
 # one; the iteration front end (scripts/e2e_fast.sh) does.
@@ -9453,6 +9540,17 @@ if [ -z "$FILTER" ] && [ "$E2E_N" != "$E2E_RECORDED" ]; then
   echo "FAIL: the table recorded $E2E_RECORDED rows but only $E2E_N were selected, with no filter set"
   fail=1
 fi
-echo "*** e2e: rows=$E2E_N recorded=$E2E_RECORDED executed=$E2E_EXECUTED lost=$E2E_LOST assertions=$E2E_ASSERTIONS skipped=$E2E_SKIPPED missing=$E2E_MISSING failed=$E2E_FAILED jobs=$JOBS filter='$FILTER' ***"
+# Ceiling breaches that were RE-OBSERVED instead of reported (issue #537). Zero is the normal number.
+# Anything else is the only evidence a run leaves that it was contending with something for the machine,
+# so it goes on the console and into the summary line rather than into a log nobody opens.
+## `awk END{NR}`, not `grep -c ''`: grep returns 1 for an EMPTY file, so `|| echo 0` fired on top of
+## grep's own `0` and the count became the two-line string "0\n0" — which then compared unequal to 0
+## and printed the "busy machine" banner on every green run.
+E2E_REOBSERVED=$(awk 'END{print NR+0}' "$WORK/runtime-reobserved" 2>/dev/null || echo 0)
+if [ "${E2E_REOBSERVED:-0}" != 0 ]; then
+  echo "*** e2e: $E2E_REOBSERVED runtime ceiling breach(es) were re-observed before being judged (a breach is measured twice; only a child that breaches every attempt is reported) ***"
+  awk -F'\t' '{printf "     re-observed: row %s, attempt %s, ceiling %s, child %s\n", $1, $3, $2, $4}' "$WORK/runtime-reobserved"
+fi
+echo "*** e2e: rows=$E2E_N recorded=$E2E_RECORDED executed=$E2E_EXECUTED lost=$E2E_LOST assertions=$E2E_ASSERTIONS skipped=$E2E_SKIPPED missing=$E2E_MISSING failed=$E2E_FAILED reobserved=${E2E_REOBSERVED:-0} jobs=$JOBS filter='$FILTER' ***"
 [ "$fail" = 0 ] && echo "*** e2e: all green ***" || echo "*** e2e: FAILURES ***"
 exit "$fail"
