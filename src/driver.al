@@ -5091,6 +5091,200 @@ d_one_reexport_module := fn(src : ptr(u8), hs : usize, hl : usize, decls : rt::V
   CSpan(s = 0, n = 0)
 }
 
+## ---------------------------------------------------------------------------------------------
+## QUALIFIED-CALLEE OVERLOAD RESOLUTION (#567 — the measured wasm instance of #475).
+## ---------------------------------------------------------------------------------------------
+## The declaration scans below match a callee by (module, tail NAME) alone and keep the LAST hit, so
+## every member of an overload set collapses onto the last-DECLARED one. `base::num` declares each
+## overflow-policy family eight times, in the order u8 u16 u32 u64 i8 i16 i32 i64, so
+## `base::num::checked_sub(a, b)` with `u64` arguments bound to the **i64** body: a clean compile, a
+## clean run, and a SIGNED answer for an UNSIGNED call (`checked_sub(1, 2)` answered `Some(-1)` where
+## `None` was due). Measured on the parent for all three module-unaware backends — aarch64, riscv64
+## and wasm alike — because this resolution is theirs in COMMON; x86_64 never reaches here (it has its
+## own per-signature machinery, `lower::emit_overload_suffix`, and `d_resolve_and_prune` runs only
+## from `d_compile_file_multi`).
+##
+## The fix mirrors x86_64: when the resolved (module, name) really IS an overload set, pick the member
+## whose PARAMETER signature matches the call's arguments. An argument's type is recovered from the
+## enclosing function's parameter list or from an annotated local binding (`a : u64 = …`); an argument
+## whose type cannot be recovered matches any parameter, exactly as `lower::overload_args_match` treats
+## an uninferable one. Exactly one matching candidate wins — zero or several leave the pre-existing
+## last-wins pick untouched. So a callee with ONE declaration (every callee in `src/` and `lib/` outside
+## these families) resolves to the same decl as before and emission stays byte-identical.
+mut D_QUAL_PH : usize = 0        ## enclosing fn's `params_head`, while its body is walked
+mut D_QUAL_BODY : usize = 0      ## enclosing fn's `body_stmts`, for the annotated-local lookup
+mut D_QUAL_NA : usize = 0        ## the node arena those statements live in
+mut D_QUAL_ARGS : usize = 0      ## the `Arg` list of the call currently being resolved
+
+## The BASE type name of a declared-type span (`Option(u64)` → `Option`, `u64` → `u64`), with the
+## pointer-width spellings normalized the way `lower::norm_type_str` normalizes them, so a `usize`
+## argument and a `u64` parameter are the same type.
+d_ovl_norm_type := fn(src : ptr(u8), s : usize, n : usize) -> str {
+  mut e := 0
+  while e < n and str_at((src + s + e), 1) != "(" { e = e + 1 }
+  while e > 0 and str_at((src + s + e - 1), 1) == " " { e = e - 1 }
+  t := str_at((src + s), e)
+  if t == "usize" { return "u64" }
+  if t == "isize" { return "i64" }
+  t
+}
+
+## The declared-type span of an annotated local `name : T = …` bound anywhere in `head` (recursing
+## into block bodies). 0/0 when the name is not bound there or carries no annotation.
+d_ovl_local_type := fn(head : usize, vs : usize, vl : usize, na : ptr(mut rt::Arena), src : ptr(u8)) -> CSpan {
+  mut r := CSpan(s = 0, n = 0)
+  mut st := head
+  while st != 0 {
+    x := deref(stmt_p(Stmt, st))
+    match x {
+      Stmt::Assign(ns, nl, v, nx) => {
+        if nl == vl and streq(src, ns, nl, vs, vl) {
+          at := local_type_span(src, ns, nl)
+          if at.n != 0 { r = CSpan(s = at.s, n = at.n) }
+        }
+      }
+      Stmt::If(c, th, el, nx) => { ri := d_ovl_local_type(th, vs, vl, na, src) ; if ri.n != 0 { r = ri } else { re := d_ovl_local_type(el, vs, vl, na, src) ; if re.n != 0 { r = re } } }
+      Stmt::While(c, b, nx) => { rw := d_ovl_local_type(b, vs, vl, na, src) ; if rw.n != 0 { r = rw } }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { rf := d_ovl_local_type(b, vs, vl, na, src) ; if rf.n != 0 { r = rf } }
+      Stmt::Loop(b, nx) => { rl := d_ovl_local_type(b, vs, vl, na, src) ; if rl.n != 0 { r = rl } }
+      Stmt::Unchecked(b, nx) => { ru := d_ovl_local_type(b, vs, vl, na, src) ; if ru.n != 0 { r = ru } }
+      Stmt::AllocWith(ae, b, nx) => { ra := d_ovl_local_type(b, vs, vl, na, src) ; if ra.n != 0 { r = ra } }
+      Stmt::CompIf(c, th, el, nx) => { rc := d_ovl_local_type(th, vs, vl, na, src) ; if rc.n != 0 { r = rc } else { rd := d_ovl_local_type(el, vs, vl, na, src) ; if rd.n != 0 { r = rd } } }
+      _ => {}
+    }
+    st = d_next_stmt(st, na)
+  }
+  r
+}
+
+## The declared type span of one call ARGUMENT — an enclosing PARAMETER's type, else an annotated
+## local's. 0/0 means "not recoverable", and such an argument matches any parameter.
+d_ovl_arg_type := fn(e : ptr(Expr), na : ptr(mut rt::Arena), src : ptr(u8)) -> CSpan {
+  vs := d_var_span(e)
+  if vs.n == 0 { return CSpan(s = 0, n = 0) }
+  mut r := CSpan(s = 0, n = 0)
+  mut p := unchecked bitcast(ptr(mut Param), D_QUAL_PH)
+  while p != 0 {
+    pm := deref(param_p(p))
+    if pm.tl != 0 and streq(src, pm.ns, pm.nl, vs.s, vs.n) { r = CSpan(s = pm.ts, n = pm.tl) }
+    p = pm.next
+  }
+  if r.n != 0 { return r }
+  d_ovl_local_type(D_QUAL_BODY, vs.s, vs.n, na, src)
+}
+
+## Do decls `i` and the reference decl `cd` belong to the SAME overload set — same kind-1 fn name in
+## the same module?
+d_ovl_same_set := fn(d : Decl, cd : Decl, src : ptr(u8)) -> bool {
+  if d.kind != 1 { return false }
+  if d.name_len != cd.name_len { return false }
+  if streq(src, d.name_start, d.name_len, cd.name_start, cd.name_len) == false { return false }
+  d_mod_seg_eq(src, d.mod_start, d.mod_len, cd.mod_start, cd.mod_len)
+}
+
+## Refine a (module, name)-resolved callee index `di` (1-based) to the overload whose PARAMETER
+## signature matches the current call's arguments. Returns `di` unchanged whenever the set has fewer
+## than two members, or when zero / several members match — the pre-existing pick, so nothing that
+## resolved before resolves differently now.
+d_ovl_pick := fn(decls : rt::Vec, src : ptr(u8), di : usize) -> usize {
+  if di == 0 { return 0 }
+  cd := deref(decl_at(Decl, rt::vec_get(decls, di - 1)))
+  if cd.kind != 1 or cd.name_len == 0 { return di }
+  na := unchecked bitcast(ptr(mut rt::Arena), D_QUAL_NA)
+  cnt := rt::vec_len(decls)
+  mut nset := 0
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d_ovl_same_set(d, cd, src) { nset = nset + 1 }
+    i = i + 1
+  }
+  if nset < 2 { return di }
+  mut nargs := 0
+  mut g := unchecked bitcast(ptr(mut Arg), D_QUAL_ARGS)
+  while g != 0 { ga := deref(arg_p(g)) ; nargs = nargs + 1 ; g = ga.next }
+  mut hit := 0
+  mut nhit := 0
+  i = 0
+  while i < cnt {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d_ovl_same_set(d, cd, src) {
+      mut np := 0
+      mut p := d.params_head
+      while p != 0 { pm := deref(param_p(p)) ; np = np + 1 ; p = pm.next }
+      mut ok := np == nargs
+      if ok {
+        mut pp := d.params_head
+        mut gg := unchecked bitcast(ptr(mut Arg), D_QUAL_ARGS)
+        while pp != 0 and gg != 0 {
+          pm2 := deref(param_p(pp))
+          ga2 := deref(arg_p(gg))
+          at := d_ovl_arg_type(ga2.e, na, src)
+          if at.n != 0 and pm2.tl != 0 {
+            if d_ovl_norm_type(src, at.s, at.n) != d_ovl_norm_type(src, pm2.ts, pm2.tl) { ok = false }
+          }
+          pp = pm2.next
+          gg = ga2.next
+        }
+      }
+      if ok { nhit = nhit + 1 ; hit = i + 1 }
+    }
+    i = i + 1
+  }
+  if nhit == 1 { return hit }
+  di
+}
+
+## How many declarations share decl `cd`'s exact (module, name)?
+d_ovl_set_size := fn(decls : rt::Vec, src : ptr(u8), cd : Decl) -> usize {
+  mut n := 0
+  mut i := 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d_ovl_same_set(d, cd, src) { n = n + 1 }
+    i = i + 1
+  }
+  n
+}
+
+## Do two decls have the SAME parameter signature (arity + each parameter's normalized base type)?
+## Two members of an overload set differ here by construction; a genuine DUPLICATE declaration does
+## not, and must stay a label clash.
+d_ovl_sig_eq := fn(da : Decl, db : Decl, src : ptr(u8)) -> bool {
+  mut pa := da.params_head
+  mut pb := db.params_head
+  mut ok := true
+  while pa != 0 and pb != 0 {
+    ma := deref(param_p(pa))
+    mb := deref(param_p(pb))
+    if d_ovl_norm_type(src, ma.ts, ma.tl) != d_ovl_norm_type(src, mb.ts, mb.tl) { ok = false }
+    pa = ma.next
+    pb = mb.next
+  }
+  if pa != 0 or pb != 0 { ok = false }
+  ok
+}
+
+## Can the WAT backend keep BOTH of these same-named decls, because it labels them apart? Only for a
+## driver-disambiguated overload set: two kind-1 fns of one INJECTED module (never the entry module,
+## whose calls are bare and therefore carry no decl identity for `wat.al` to name) whose parameter
+## signatures differ. `d_qual_expr` registers the resolved targets with `wat::wat_ovl_mark`, and
+## `wat.al` suffixes exactly those spans. Any other pair is still the label collision it always was.
+d_ovl_wat_separable := fn(da : Decl, db : Decl, src : ptr(u8)) -> bool {
+  if D_BACKEND != 0 { return false }
+  if da.kind != 1 or db.kind != 1 { return false }
+  ## BOTH members must have been reached by a QUALIFIED call, so both call sites carry a decl
+  ## identity and `wat.al` will suffix both definitions AND both calls. A member reached only by a
+  ## BARE call is unregistered: leaving it in would emit two `$name` definitions and a `$name` call
+  ## that names neither — so such a set still drops the injected closure, exactly as before.
+  if wat::wat_ovl_marked(da.name_start) == false { return false }
+  if wat::wat_ovl_marked(db.name_start) == false { return false }
+  if d_mod_seg_eq(src, da.mod_start, da.mod_len, db.mod_start, db.mod_len) == false { return false }
+  if d_mod_seg_eq(src, da.mod_start, da.mod_len, D_EMS, D_EML) { return false }
+  if d_ovl_sig_eq(da, db, src) { return false }
+  true
+}
+
 ## The decl index + 1 of the fn a QUALIFIED callee span `[cs,cl)` names, as seen from the module
 ## `[ms,ml)` that contains the call — else 0. Three bounded forms resolve:
 ##   • FULL path (`alloc::vec::push`) — `d_find_fn_decl` already matches tail-name + mangled module head.
@@ -5106,7 +5300,7 @@ d_qual_target := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
   cp := d_colon_pos(src, cs, cl)
   if cp < 0 { return 0 }
   direct := d_find_fn_decl(cs, cl, decls, src)
-  if direct != 0 { return direct }
+  if direct != 0 { return d_ovl_pick(decls, src, direct) }
   hl := usize(cp)                    ## module-head length (source form)
   ts := cs + hl + 2                  ## tail fn-name span (past the `::`)
   tl := cl - hl - 2
@@ -5146,7 +5340,7 @@ d_qual_target := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
     }
     i += 1
   }
-  r
+  d_ovl_pick(decls, src, r)
 }
 
 ## GENERIC GATE (bounded, target-specific). A resolved injected generic is still reported as
@@ -5201,6 +5395,17 @@ d_mark_callee := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
     di := d_qual_target_ok(cs, cl, ms, ml, decls, src)
     if di != 0 {
       if rt::rec_get(kb, di - 1) == 0 { rt::rec_set(kb, di - 1, 1) ; D_KEEP_CHANGED = 1 }
+      ## OVERLOAD LABELS (#567). A QUALIFIED call resolves to ONE member, and `d_qual_expr`'s rewrite
+      ## replaces the callee with that member's own NAME SPAN — so the call site carries the decl's
+      ## identity and `wat.al` can name it. Register the span here, in the MARKING sweep, so
+      ## `d_kept_name_clash` (which runs after this fixpoint and before the rewrite) can see which
+      ## same-named pairs the wat emitter is able to label apart. A BARE callee marks every candidate
+      ## below and registers NOTHING: its call site carries no decl identity, so such a set stays the
+      ## label collision it always was and still drops the injected closure.
+      if D_BACKEND == 0 {
+        td := deref(decl_at(Decl, rt::vec_get(decls, di - 1)))
+        if d_ovl_set_size(decls, src, td) > 1 { wat::wat_ovl_mark(td.name_start) }
+      }
     }
     return
   }
@@ -5244,8 +5449,12 @@ d_qual_expr := fn(e : ptr(Expr), ms : usize, ml : usize, decls : rt::Vec, na : p
         d_qual_expr(ga.e, ms, ml, decls, na, src)
         g = ga.next
       }
+      ## The ARG list of THIS call, for `d_ovl_pick`'s signature match. Set AFTER the recursion
+      ## above so a nested call in an argument has already consumed (and restored) its own.
+      D_QUAL_ARGS = unchecked bitcast(usize, ah)
       d_mark_callee(cs, cl, ms, ml, decls, src)
       if D_QUAL_RW != 0 {
+        D_QUAL_ARGS = unchecked bitcast(usize, ah)
         di := d_qual_target_ok(cs, cl, ms, ml, decls, src)
         if di != 0 {
           td := deref(decl_at(Decl, rt::vec_get(decls, di - 1)))
@@ -5296,8 +5505,14 @@ d_qual_sweep := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8), keep
         prev_generic_walk := D_GENERIC_WALK
         D_GENERIC_WALK = 0
         if d.is_generic { D_GENERIC_WALK = 1 }
+        ## the enclosing signature + body an argument's type is recovered from (`d_ovl_arg_type`)
+        D_QUAL_PH = unchecked bitcast(usize, d.params_head)
+        D_QUAL_BODY = unchecked bitcast(usize, d.body_stmts)
+        D_QUAL_NA = unchecked bitcast(usize, na)
         d_qual_stmts(d.body_stmts, d.mod_start, d.mod_len, decls, na, src)
         if unchecked bitcast(usize, d.value) != 0 { d_qual_expr(d.value, d.mod_start, d.mod_len, decls, na, src) }
+        D_QUAL_PH = 0
+        D_QUAL_BODY = 0
         D_GENERIC_WALK = prev_generic_walk
       }
     }
@@ -5328,7 +5543,9 @@ d_kept_name_clash := fn(decls : rt::Vec, src : ptr(u8), keep : usize) -> bool {
           if rt::rec_get(kb, j) != 0 {
             dj := deref(decl_at(Decl, rt::vec_get(decls, j)))
             if dj.name_len == di.name_len and d_emits_bare_label(dj) {
-              if str_at((src + dj.name_start), dj.name_len) == str_at((src + di.name_start), di.name_len) { return true }
+              if str_at((src + dj.name_start), dj.name_len) == str_at((src + di.name_start), di.name_len) {
+                if d_ovl_wat_separable(di, dj, src) == false { return true }
+              }
             }
           }
           j += 1
@@ -5357,6 +5574,7 @@ d_kept_name_clash := fn(decls : rt::Vec, src : ptr(u8), keep : usize) -> bool {
 ##      compiled before still compiles the same way, and nothing is ever bound to the wrong function;
 ##   4. otherwise rewrite the qualified callees to their target's bare name and emit the kept set.
 d_resolve_and_prune := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8), ems : usize, eml : usize, tar : ptr(mut rt::Arena)) -> rt::Vec {
+  wat::wat_ovl_reset()
   cnt := rt::vec_len(decls)
   kb := rt::bump(deref(tar), cnt * 8 + 8)
   mut i := 0

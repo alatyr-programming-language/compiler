@@ -124,6 +124,26 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   the `deref(ptr(...))` spelling. The non-x86 backends fail loud on this read and are unchanged
   (aarch64 133, riscv64 133, wasm 134, before and after); with the input tree held fixed in both
   directions the x86_64 emission of the compiler's own build is byte-identical.
+- **A qualified call to an overloaded `base::` declaration no longer runs the last-declared overload's
+  body on aarch64, riscv64 and wasm.** The three module-unaware backends resolve a `mod::fn` callee
+  through `driver::d_qual_target`, which matched by (module, tail NAME) alone and kept the LAST hit.
+  `base::num` declares each overflow-policy family eight times, in the order u8 u16 u32 u64 i8 i16 i32
+  i64, so every `u64` call bound to the **i64** body: `base::num::checked_sub(1u64, 2u64)` answered
+  `Some(-1)` where `None` was due, and `saturating_sub(1u64, 2u64)` answered 18446744073709551615
+  where 0 was due — a clean compile, a clean run and a signed answer for an unsigned call. That
+  resolution now picks the member whose PARAMETER signature matches the call's arguments, the way
+  x86_64's own per-signature machinery already does; an argument's type is read from the enclosing
+  function's parameter list or from an annotated local, and an argument whose type cannot be read
+  matches any parameter. A callee with one declaration — every callee in `src/` and `lib/` outside
+  these families — resolves to the same decl as before, so emission is byte-identical for it, and
+  x86_64 never runs this code at all.
+  Because both members of one name can now be reached in one program, the wat emitter labels a
+  driver-disambiguated overload set by the decl's parameter signature (`$saturating_sub__u64_u64` vs
+  `$saturating_sub__i64_i64`), taking the suffix at the definition and at the rewritten call site from
+  the SAME `Decl`, so the two cannot drift. aarch64 and riscv64 still label a definition with no
+  signature, so such a set keeps dropping the injected closure there and traps LOUD (exit 133) where
+  the parent answered wrongly — #475's remaining half. A set reached by a BARE call registers nothing
+  and is unchanged: its call site carries no declaration identity to name.
 
 - **An integer-to-pointer `bitcast` now lowers on aarch64 and riscv64 instead of trapping.**
   `bitcast(ptr([mut] T), n)` had no lowering on either backend: every preserved pointer target

@@ -6414,6 +6414,28 @@ run_x86 issue514_overflow_family_bare 42
 ## callee (133, recorded by the corpus), wasm both keeps and resolves them. Parent wasm answered 2.
 run issue532_wasm_mul_family 42
 run_wat issue532_wasm_mul_family 42
+## issue #567 — a QUALIFIED call to an overloaded `base::num` declaration bound to the LAST-DECLARED
+## overload instead of the one its arguments select. `driver::d_qual_target` matched a callee by
+## (module, tail NAME) alone and kept the last hit, and `base::num` declares each family eight times in
+## the order u8 u16 u32 u64 i8 i16 i32 i64 — so every `u64` call ran the **i64** body. Clean compile,
+## clean run, SIGNED answer for an UNSIGNED call. The resolution belongs to all three module-unaware
+## backends in common, so the parent answered wrongly on aarch64 and riscv64 too, not only on wasm.
+## `_signedness` uses each NAME at one overload and now answers 42 on ALL FOUR backends (parent: 42, 2,
+## 2, 2). `_wasm_overload_pair` calls BOTH members of one name, which additionally needs the
+## per-signature label `wat.al` now gives a driver-disambiguated set: wasm 42 where the parent answered
+## 20, while aarch64/riscv64 — which still label a definition with no signature — now trap LOUD at 133
+## where the parent answered that same wrong 20 (#475's remaining half), so they carry no row here and
+## the corpus records them. `_x86_bare_control` is the CONTROL: x86_64 reaches the same numbers through
+## the BARE spelling and its own per-signature mangling, unchanged by this fix; it is a separate file
+## because a bare spelling anywhere in a file un-resolves the qualified ones (#569), and `run_x86` for
+## the same reason `overflow_policy` is.
+run issue567_overload_signedness 42
+run_a64 issue567_overload_signedness 42
+run_rv64 issue567_overload_signedness 42
+run_wat issue567_overload_signedness 42
+run issue567_wasm_overload_pair 42
+run_wat issue567_wasm_overload_pair 42
+run_x86 issue567_x86_bare_control 42
 ## Checked narrow-width overflow TRAPS for an INDEX read (I11/CG-6): `xs[i]+xs[j]` on a `[u8;N]` array
 ## overflows u8 → 132. The element type is recovered from the array's declared `[u8;N]` so the index
 ## read classifies as narrow-width (was silently native-width → no trap). Companions: the non-overflowing
