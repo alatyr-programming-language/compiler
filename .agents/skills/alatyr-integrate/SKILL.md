@@ -121,13 +121,16 @@ bounded relations, a fork head, a `hold` label, an oracle file, or a linked issu
 `priority-N` labels or any malformed `priority-*` label stops automatic selection rather than guessing;
 an API/read uncertainty does the same. The later §2 review repeats and strengthens these checks.
 
-Among the remaining candidates, rank the linked issue's explicit `priority-N` label by lower `N`, then
-oldest PR `createdAt`, then PR number; no priority is lowest. Valid equal priorities therefore remain
-deterministic: two valid `priority-0` candidates are resolved by age and then number. The fallback
-selects one candidate and stops; it never drains the queue. A foreign PR may be processed only when the
-owner explicitly supplies its number, and it still receives the full §2 audit. Serialize the **gate**:
-only one selected PR is gated at a time because the gate takes ~6 minutes and needs the checkout to
-itself.
+Among the remaining candidates, rank the linked issue's explicit `priority-N` label by lower `N`,
+then oldest PR `createdAt`, then PR number; no priority is lowest. Valid equal priorities therefore
+remain deterministic: two valid `priority-0` candidates are resolved by age and then number. The
+fallback selects one candidate and stops; it never drains the queue. A foreign PR may be processed
+only when the owner explicitly supplies its number, and it still receives the full §2 audit.
+Serialize the **gate**: one checkout runs one gate at a time, because the gate takes ~6 minutes and
+needs `target/` to itself. That is a limit on concurrency, not on membership — the owner may name
+several PRs for one gated object, and the batch rules in §3 then govern all of them, each still
+receiving its own §2 audit. The fallback never assembles a batch by itself: it selects at most one
+candidate.
 
 For example, if PR #401 targets issue #80 with `priority-1` and was created at 10:00, while PR #402
 targets issue #81 with `priority-0` and was created at 11:00, #402 is selected because issue priority
@@ -263,12 +266,91 @@ status and residual scope are recorded in the acceptance comment, not silently c
 Do not delete or prune `PR_SNAPSHOT_REF` here: the same selected snapshot is needed by the accepted
 branch-cleanup check and remains available if any pre-acceptance step fails.
 
+### Several independent PRs in one gated object
+
+One unit of work is one PR; one gate is not. The rule that generates this whole procedure is that
+the object which was gated is the object that lands, and an object holding several merged PRs
+satisfies it exactly as one holding a single PR does. The gate is the expensive step — the fixpoint
+re-emits ~1.2 M lines, e2e runs ~2280 rows and ~3260 assertions, the corpus walk covers ~7800 rows
+over ~1950 sources across four backends, then two formatter walks, the idiom gate and three sweeps
+over a ~750-program corpus — so *n* serial landings cost *n* gates and the queue grows faster than
+it drains. Five batches over thirteen PRs have landed on one gate each.
+
+What licenses reading one gate as *n* verdicts is not the merge but one number: **`0 CHANGED` on the
+joined corpus check, against per-PR predictions made in advance.** With the predictions in hand the
+check stops asking "did anything change?" and starts asking "is the changed set identical to the
+predicted union?" The three-PR batch #518 + #520 + #525 predicted 20 + 36 + 12 rows and measured
+`ADDED 68` as its **only** class, with zero `EXIT-CHANGED`, `OUTPUT-CHANGED`, `DETAIL-CHANGED`,
+`REMOVED` and `NO-LONGER-RUNS`. That is strictly more evidence than serial integration produces,
+which never asks whether PR *j* would have reclassified PR *i*'s rows. Without the advance
+predictions the same zero proves much less: a reclassification that happens to land in the same
+class is invisible.
+
+The screening is where the safety lives, and all of it happens before anything is merged:
+
+1. No candidate touches an oracle file, and each carries exactly one line-initial relation marker.
+   Every candidate still receives its own full §2 review — batching is not a shared authorization.
+2. Run `git merge-tree` pairwise across the candidates, then merge them one at a time into the
+   dedicated integration worktree in a fixed order, stopping at the first conflict rather than
+   resolving it.
+3. Resolve **only additive** conflicts — `CHANGELOG.md`'s `## Unreleased`, fixture registration in
+   `scripts/e2e.sh` and `scripts/package_cli_test.sh` — and only where the two sides do not overlap
+   line for line.
+4. Gate once on the composed object. One oracle commit per oracle **file** covers the whole batch,
+   followed by a complete green gate on the resulting object; push exactly that object.
+5. Publish one acceptance per PR, each naming the batch membership and carrying the same joined
+   transition counts, so that every PR's record is complete on its own.
+
+`scripts/land.sh` takes a single PR number, so a batch uses the manual merge above and the §4 gate;
+it does not inherit the script's phase separation and must keep the push its own leased statement.
+
+Three boundaries bound this, and each of them was measured rather than imagined:
+
+- **A PR with intentional `CHANGED` rows is gated alone.** #548, #575 and #579 each moved existing
+  rows deliberately. Batching one of them would have destroyed the `0 CHANGED` licence for every
+  other PR in the object, because an expected `CHANGED` class cannot then be told apart from an
+  unexpected one.
+- **A conflict means the PRs are not independent.** #501 and #505 conflicted in `src/lower.al`; both
+  were individually correct, individually gated and individually accurate in their predictions, and
+  the naive resolution produced a **new silent wrong value** on a shape absent from both fixture
+  sets, which no gate on the merged object could have caught. That case is #528, with a method for
+  naming the shapes to measure — the cross product of the two PRs' input forms over the shared
+  decision point. A conflict in `src/` or `lib/` therefore stops the batch and goes back to an
+  author: that resolution encodes a semantic decision the integrator does not own.
+- **File disjointness is not behavioral independence.** #533 and #531 shared no file beyond the
+  additive anchors and still interacted: #533's fixture spells `base::num::wrapping_add` with no
+  `Option` in its text, and #531 had just taken that prelude trigger out from under its own
+  single-file gate. The interaction turned out inert — 24 `ADDED` held exactly — but it was noticed
+  only because a token boundary happened to be visible in the fixture's text, which is not a
+  repeatable way to notice anything. **Re-derive each PR's prediction on the merged object; never
+  carry it over.**
+
 If a reseed is owed, it is committed **onto `M` before the gate runs**, so that the fixpoint that is
 verified is the fixpoint that ships: land the `src/` change → seed builds Stage1 → Stage1 builds
-Stage2 → Stage2 builds Stage3 → require `Stage1 == Stage2 == Stage3` byte-identical → read the
-seed→Stage1 GAS delta line by line with both label families normalized (**this is the best place to
-find the compiler miscompiling itself** — one reseed surfaced four latent bugs) → copy Stage1 over
-`seed/alatyr` and append the evidence to `seed/VERSION`.
+Stage2 → Stage2 builds Stage3 → require `Stage1 == Stage2 == Stage3` in the **emitted GAS**,
+byte-identical once the `.L<N>` and `.Lra<N>_<k>` label families are normalized, and
+`Stage2 == Stage3` in the **binary** → read the seed→Stage1 GAS delta line by line with both label
+families normalized (**this is the best place to find the compiler miscompiling itself** — one
+reseed surfaced four latent bugs) → copy **Stage2** over `seed/alatyr` and append the evidence to
+`seed/VERSION` → re-run `scripts/fixpoint.sh` on the promoted tree, which is the proof, not the
+label.
+
+Stage2, and the binary clause stops at `Stage2 == Stage3`, for two separate reasons. Stage1 is
+assembled from the **stale** seed's emission, so it implements the change for everything it compiles
+without carrying it in its own code, while Stage2 is assembled from the new emission and does;
+promoting Stage1 would ship that gap and let the next reseed carry it in silently, attributed to
+whatever change triggered that promotion. And Stage1's binary cannot be made to match in the first
+place: a promotion also releases a version, so the promoted seed carries a version string the Stage1
+it builds from the same tree cannot carry until the next release. The 0.1.0 → 0.2.0 promotion
+measured that as exactly 35 bytes, sizes equal, every one of them `'1' → '2'`. An integrator who
+required all three binaries to match would have scored that successful promotion as a failed one.
+
+"Read the delta line by line" has a pass condition of its own: the delta must be describable in one
+sentence. That promotion's was 822 hunks, 3288 lines added and zero removed — four lines per hunk,
+four distinguishable line shapes, every insertion immediately before a byte load whose index, length
+and pointer the three preceding lines set up. One recognizable pattern, repeated, is what a
+reviewable delta looks like. A delta that resists a one-sentence characterization is the signal to
+stop and find out why, not to promote and let the next reseed inherit the question.
 
 A self-promote also **releases a version**, in the same commit that replaces the seed. `version` in the
 repository's own `package.al` is the compiler's identity: it is part of the input tree, so it stays
@@ -576,6 +658,8 @@ Accepted and landed by the maintainer.
 
 - gated main object: $M
 - authoritative gate: GREEN (sweeps RAN)
+- batch membership: <this PR alone, or every PR merged into the gated object>
+- joined corpus transitions: <the classes and counts observed, against the per-PR predictions made in advance>
 - oracle changes: <none, or the separately gated oracle commit(s)>
 - local main: $MAIN_REF_OUTCOME
 - feature branch: $BRANCH $BRANCH_OUTCOME
@@ -586,11 +670,13 @@ EOF
 ```
 
 Read the comment back with `gh pr view "$PR" -R "$R" --json comments` and confirm that the gated
-object, branch outcome, worker-claim outcome, and selected-snapshot lifecycle note are present. Keep the
-comment limited to public commit IDs, gate results, issue linkage, branch outcome, claim outcome, and
-the public snapshot lifecycle; redact secrets, private host details, environment data, and raw suspicious
-payloads. If the comment cannot be published, the landing is incomplete: do not silently replace it with
-a local report.
+object, batch membership, joined transition counts, branch outcome, worker-claim outcome, and
+selected-snapshot lifecycle note are present. The membership and the counts are required, not
+decorative: they are what makes a batched landing auditable after the fact, since the object itself
+no longer distinguishes which PR each row came from. Keep the comment limited to public commit IDs,
+gate results, issue linkage, branch outcome, claim outcome, and the public snapshot lifecycle;
+redact secrets, private host details, environment data, and raw suspicious payloads. If the comment
+cannot be published, the landing is incomplete: do not silently replace it with a local report.
 
 Only after the acceptance comment has been read back successfully may the selected local PR snapshot be
 removed. This cleanup is independent of feature-branch cleanup: a dirty, diverged, or otherwise retained

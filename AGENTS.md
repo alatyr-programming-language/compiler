@@ -25,10 +25,24 @@ step-by-step procedures live in `.agents/skills/`.
   reproducible.
 - `seed/alatyr` is a frozen static bootstrap. The unpublished Rust ancestor is not a build input and is
   never a recovery path.
-- If the frozen seed cannot reproduce a source change, the integrator owes a self-promotion: Stage1 →
-  Stage2 → Stage3 must match byte-for-byte in GAS and the binary, with full e2e and sweeps; inspect the
-  normalized seed-to-Stage1 delta, promote Stage2, append evidence to `seed/VERSION`, and re-run the
-  post-promotion fixpoint. A lane never promotes the seed.
+- If the frozen seed cannot reproduce a source change, the integrator owes a self-promotion: Stage1
+  → Stage2 → Stage3 must emit byte-identical GAS once the `.L<N>` and `.Lra<N>_<k>` label families
+  are normalized, and the Stage2 and Stage3 **binaries** must match, with full e2e and sweeps; read
+  the normalized seed-to-Stage1 delta, promote **Stage2**, append evidence to `seed/VERSION`, and
+  re-run the post-promotion fixpoint. A lane never promotes the seed.
+- Stage1's binary is expected to differ, and requiring all three of them to match asks for something
+  no version-releasing promotion can deliver: the 0.1.0 → 0.2.0 promotion left `seed/alatyr`
+  differing from the Stage1 it then builds by exactly 35 bytes, every one of them `'1' → '2'` — the
+  version digit compiled into the binary. Read literally, that criterion scores a successful
+  promotion as a failed one. Stage2 is the artifact to freeze because it is assembled from the *new*
+  emission and therefore carries the change in its own code, which Stage1, assembled from the stale
+  seed's emission, does not.
+- Reading the delta has a pass condition of its own: the delta must be describable in one sentence.
+  That promotion's was 822 hunks, 3288 lines added and none removed — four lines per hunk, four
+  distinguishable line shapes, every insertion immediately before a byte load whose index, length
+  and pointer the three preceding lines set up. One recognizable pattern, repeated, is a reviewable
+  delta. A delta that resists a one-sentence characterization is the signal to stop, not to promote
+  and hope the next reseed explains it.
 - A promotion is also a version release. `package.al`'s `version` moves on a seed promotion and only on
   one, `seed/VERSION`'s CURRENT SEED block records the promoted hash and that version, and
   `scripts/fixpoint.sh` refuses a tree where the two disagree — in either direction. The complete file
@@ -54,6 +68,33 @@ local merge and authoritative gate → push the exact gated object → the issue
 when the PR completes it. A bounded slice uses an explicit `Refs #N` relation, records its residual
 scope, and leaves the issue open for a later owner-selected unit. The GitHub merge button is not used;
 an approval is not a landing.
+
+One unit of work is one PR; one gate is not. Several independent PRs may be merged locally into one
+object and gated **once**, and what makes that sound is not the merge but the evidence:
+**`0 CHANGED` on the joined corpus check, against per-PR predictions made in advance.** The check
+then stops asking "did anything change?" and starts asking "is the changed set identical to the
+predicted union?" Without the advance predictions the same zero proves much less, because a
+reclassification that lands in the same class is invisible. Five batches over thirteen PRs have
+landed this way, on one gate each instead of thirteen. The screening is where the safety lives: no
+candidate touches an oracle, each carries exactly one line-initial relation marker, the candidates
+are checked pairwise with `git merge-tree` before anything is merged, and only **additive**
+conflicts are resolved — `CHANGELOG.md`'s `## Unreleased`, fixture registration in `scripts/e2e.sh`
+and `scripts/package_cli_test.sh` — and only where the two sides do not overlap line for line. One
+oracle commit per oracle **file** covers the whole batch, and one acceptance per PR carries the
+batch verdict so that each PR's record stands alone.
+
+Three boundaries bound batching, and each was measured rather than imagined. **A PR with intentional
+`CHANGED` rows is gated alone**: #548, #575 and #579 each moved existing rows deliberately, and
+batching one of them would have destroyed the `0 CHANGED` licence for every other PR in the object.
+**A conflict means the PRs are not independent**: #501 and #505 conflicted in `src/lower.al` while
+both were individually correct, individually gated and individually accurate in their predictions,
+and the naive resolution of that conflict produced a **new silent wrong value** on a shape absent
+from both fixture sets, which no gate on the merged object could have caught — that case is #528. A
+conflict in compiler source therefore stops the batch and goes back to an author, because the
+resolution is a semantic decision the integrator does not own. And **file disjointness is not
+behavioral independence**: #533 and #531 shared no file beyond the additive anchors and still
+interacted, inertly, noticed only because a token boundary happened to be visible in a fixture's
+text. So re-derive each PR's prediction on the merged object rather than carrying it over.
 
 Maintainer triage is an owner-controlled control-plane operation, not an automatic agent queue. The
 owner (or a maintainer explicitly delegated by the owner) may inspect incoming issues and PRs, request

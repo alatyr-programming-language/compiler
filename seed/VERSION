@@ -1,17 +1,36 @@
 # The bootstrap seed (seed/alatyr) is a STATIC self-host compiler binary — a TOOL-1 fixpoint
 # artifact (byte-identical to the `target/debug/alatyr` that it builds).
 #
-# HOW THE SEED IS REPLACED, and it is no longer the ancestor route: every reseed since 2026-08-19 has
-# been a SELF-PROMOTE of a validated Stage1 (see the dated entries below). The frozen Rust ancestor
-# CANNOT parse the current canonical src/ — the entry for 2026-08-19 records exactly where it stopped
-# being able to — so it can no longer bootstrap this tree, and it is not published. The `rs-ancestor`
-# line below and the ancestor commits named in the entries are a PROVENANCE RECORD of where the
-# lineage began, not a recipe you can run today.
+# HOW THE SEED IS REPLACED, and it is no longer the ancestor route: every reseed since 2026-08-19
+# has been a SELF-PROMOTE of a validated self-build (see the dated entries below for the promoted
+# stage). The frozen Rust ancestor CANNOT parse the current canonical src/ — the entry for
+# 2026-08-19 records exactly where it stopped being able to — so it can no longer bootstrap this
+# tree, and it is not published. The `rs-ancestor` line below and the ancestor commits named in the
+# entries are a PROVENANCE RECORD of where the lineage began, not a recipe you can run today.
 #
-# To promote: build Stage1, have it build Stage2 and Stage3, require Stage1 == Stage2 == Stage3 in
-# both the emitted GAS and the binary, read the seed->Stage1 GAS delta line by line (normalize the
-# .L<N> and .Lra<N>_<k> label families first, or the diff is drowned in renumbering), copy Stage1 over
-# seed/alatyr, and append an entry here with those three hashes and that delta reading.
+# To promote: build Stage1, have it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in
+# the emitted GAS, byte-identical after normalizing the .L<N> and .Lra<N>_<k> label families (do
+# that first, or the diff is drowned in renumbering), and Stage2 == Stage3 in the BINARY. Read the
+# normalized seed->Stage1 GAS delta line by line, copy STAGE2 over seed/alatyr, append an entry here
+# with those hashes and that delta reading, and re-run scripts/fixpoint.sh on the promoted tree —
+# that run, not the label, is the proof.
+#
+# Stage2, and not all three binaries. Stage1 is assembled from the STALE seed's emission, so it
+# implements the change for everything it compiles without carrying it in its own code; Stage2 is
+# assembled from the new emission and carries it. Nor can Stage1's binary be made to match: a
+# promotion also RELEASES A VERSION, so the promoted seed keeps a version string the Stage1 it
+# builds from the same tree cannot carry until the next release. The 0.1.0 -> 0.2.0 promotion
+# measured that difference as exactly 35 bytes, sizes equal, every one of them '1' -> '2'. The older
+# wording here — "both the emitted GAS and the binary", "copy Stage1" — would have scored that
+# successful promotion as a failed one, and the dated entries below have recorded Stage2 as the
+# promoted stage all along.
+#
+# "Read the delta line by line" has a pass condition of its own: the delta must be describable in
+# ONE SENTENCE. That promotion's was 822 hunks, 3288 lines added and zero removed — four lines per
+# hunk, four distinguishable line shapes, every insertion immediately before a byte load whose
+# index, length and pointer the three preceding lines set up. One recognizable pattern, repeated, is
+# what a reviewable delta looks like. A delta that resists a one-sentence characterization is the
+# signal to STOP and find out why.
 #
 # The entries below are APPEND-ONLY. Do not rewrite them to make old hashes resolve.
 rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
