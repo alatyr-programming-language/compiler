@@ -4645,3 +4645,107 @@ pub variant_index := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
   }
   res
 }
+
+## ─── The module-CONSTANT arrival of an integer constant (#574) ──────────────
+##
+## The x86_64 lower NORMALIZES an assignment's RHS before it asks any shape question about it:
+## `mut v := const_rhs(v, cx.decls, cx.src)` resolves a `Var` that names a module constant to that
+## constant's value expression, and the `Expr::Field` arm just below it materializes a depth-1
+## const-struct field the same way (`src/lower/assign.al`, `emit_st_assign`). So by the time the
+## x86 TYP-13 predicate runs, `a : f64 = K` and `a : f64 = C.k` have already become `Expr::Num`.
+##
+## The three non-x86 emitters never had that step — `grep -c const_rhs src/aarch64.al
+## src/riscv64.al src/wat.al` was `0 0 0` — so their own integer-constant predicates received an
+## `Expr::Var` / `Expr::Field`, answered "not an integer constant", the generic scalar path stored
+## the integer bits unchanged, and the later read interpreted them as a denormal: `3` on x86_64 and
+## `0` on aarch64, riscv64 and wasm, from a clean compile with no diagnostic. This is the shared
+## half of that normalization, in ONE place rather than three, so the four per-backend predicates
+## keep answering the identical question about the identical expression.
+##
+## It returns the VALUE EXPRESSION, not a bool: the caller then asks its OWN unchanged structural
+## predicate about the result, which is exactly how x86 reaches its answer.
+##
+## Deliberately EXACTLY x86's resolution set, because a wider one is a new divergence in the other
+## direction rather than a fix (each of these was measured on the parent tree, x86_64 answering the
+## unconverted `0`): ONE level only, so a constant that aliases another constant is not chased; a
+## `mut` global is excluded (runtime `.data` storage, not a compile-time constant); a field chain
+## deeper than one is not resolved; and nothing but a bare `Var` or a `Var`-rooted `Field` is.
+
+## The value expression of the module-level CONSTANT named `[s, s+n)`, else null. `kind == 0` with
+## no recorded `ret_tl` path excludes a type ALIAS and a listed member projection; `is_fn == false`
+## and `arity == 0` exclude every callable; `local_is_mut` excludes `mut NAME := …`, which
+## `lower::module_const_value` excludes for the same reason — x86 does NOT convert `mut G := 3`,
+## and matching that is the whole point of this helper.
+const_module_decl_value := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ptr(Expr) {
+  mut res : usize = 0
+  if n == 0 { return unchecked bitcast(ptr(Expr), res) }
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.is_fn == false and d.kind == 0 and d.ret_tl == 0 and d.arity == 0
+       and streq(src, d.name_start, d.name_len, s, n)
+       and ast::local_is_mut(src, d.name_start) == false { res = unchecked bitcast(usize, d.value) }
+    i += 1
+  }
+  unchecked bitcast(ptr(Expr), res)
+}
+
+## The value expression of field `[fs, fs+fl)` of the module-level CONST STRUCT that `base` names
+## (`C.k` where `C := S(k = 3)`), else null. The const's `StructLit` args are placed in field
+## DECLARATION order, so the field declarations and the literal's args are walked in LOCKSTEP and
+## the arg standing opposite the named field is its value — the same positional rule
+## `lower::const_struct_field` applies, without a second copy of the field-index scan.
+const_struct_field_value := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8)) -> ptr(Expr) {
+  z := unchecked bitcast(ptr(Expr), 0)
+  bnl := ex_var_nl(base)
+  if bnl == 0 { return z }
+  cv := const_module_decl_value(decls, src, ex_var_ns(base), bnl)
+  if unchecked bitcast(usize, cv) == 0 { return z }
+  snl := ex_struct_lit_nl(cv)
+  if snl == 0 { return z }
+  di := struct_decl_of(decls, src, ex_struct_lit_ns(cv), snl)
+  if di < 0 { return z }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  mut f := d.fields_head
+  mut g := ex_struct_lit_args(cv)
+  mut res : ptr(Expr) = z
+  while f != 0 and g != 0 {
+    fd := deref(fld_p(f))
+    ga := deref(arg_p(g))
+    if streq(src, fd.ns, fd.nl, fs, fl) { res = ga.e }
+    f = fd.next
+    g = ga.next
+  }
+  res
+}
+
+## The NAME that `e` DENOTES for the module-constant question — its own name for a `Var`, the field
+## BASE's name for a depth-1 `Field`, length 0 for every other form. A caller needs it to ask whether
+## that name is SHADOWED by a bind, parameter or local in the function being emitted: if it is, the
+## expression does not denote the module constant and must keep the path it already took. Two
+## single-assignment accessors rather than one span-returning matcher, this module's idiom.
+pub const_denote_ns := fn(e : ptr(Expr)) -> usize {
+  mut r := ex_var_ns(e)
+  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = ex_var_ns(fb) } _ => {} }
+  r
+}
+pub const_denote_nl := fn(e : ptr(Expr)) -> usize {
+  mut r := ex_var_nl(e)
+  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = ex_var_nl(fb) } _ => {} }
+  r
+}
+
+## The module-level CONSTANT value expression that `e` DENOTES, or null. `Expr::Var` is the
+## `a : f64 = K` arrival and `Expr::Field` the `a : f64 = C.k` one; every other form — including a
+## resolved value that is itself a `Var`, an arithmetic tree over a constant, and a deeper field
+## chain — answers null, which leaves the caller on the path it already took.
+pub const_denoted_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ptr(Expr) {
+  mut res : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
+  match deref(e) {
+    Expr::Var(vs, vn) => { res = const_module_decl_value(decls, src, vs, vn) }
+    Expr::Field(fb, ffs, ffl) => { res = const_struct_field_value(fb, ffs, ffl, decls, src) }
+    _ => {}
+  }
+  res
+}

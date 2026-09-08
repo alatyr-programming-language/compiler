@@ -4935,6 +4935,15 @@ run int_literal_float_runtime_f32 42
 ## The fixture CLASSIFIES each read-back (correct / zero / truncated / other) and returns
 ## `10 * case + class`, so a regression names the case and the outcome class instead of only "not 99".
 run int_literal_float_unchecked 99
+## TYP-13 / Types §9.1 (#574) — the CONSTANT-RESOLVED arrivals of the same conversion: a module
+## constant (`a : f64 = K`) and a depth-1 const-struct field (`a : f64 = C.k`). The x86_64 lower
+## normalizes the RHS through `lower::const_rhs` before it asks the TYP-13 question, so it already
+## answered 3; the three non-x86 emitters never had that step (`grep -c const_rhs` was `0 0 0`) and
+## stored the integer bits for a later read to interpret as a denormal, answering 0. Registered on
+## all four backends for the same reason the row above is: the predicate exists in four copies and
+## only the x86 one saw a resolved constant. Two of the nine cases are OVER-EAGERNESS controls — an
+## integer-annotated local fed by the same constant and field must keep the integer.
+run int_literal_float_module_const 99
 build_reject_has reject_typed_float_integer_f32 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_f64 "check: type mismatch at line 2"
 build_reject_has reject_typed_float_integer_u64 "check: type mismatch at line 2"
@@ -8838,6 +8847,7 @@ run_wat wasm_factorial 120
 run_wat smoke 42
 run_wat signed_local_divmod 42
 run_wat int_literal_float_unchecked 99
+run_wat int_literal_float_module_const 99
 run_wat inline_call 42
 run_wat stack_args 42
 run_wat early_return_result 42
@@ -8928,6 +8938,7 @@ run_a64 wasm_loop_sum 36
 run_a64 wasm_factorial 120
 run_a64 signed_local_divmod 42
 run_a64 int_literal_float_unchecked 99
+run_a64 int_literal_float_module_const 99
 ## I11/CG-7 scoping: `unchecked` drops the aarch64 div-by-zero guard → raw `sdiv x,x,0` = 0.
 run_a64 unchecked_div_zero 0
 ## `unchecked` drops the guard, so these document HARDWARE behaviour and legitimately differ per target
@@ -9003,6 +9014,7 @@ run_rv64 wasm_loop_sum 36
 run_rv64 wasm_factorial 120
 run_rv64 signed_local_divmod 42
 run_rv64 int_literal_float_unchecked 99
+run_rv64 int_literal_float_module_const 99
 run_rv64 unchecked_udiv_zero 42
 run_rv64 unchecked_rem_zero 41
 run_rv64 unchecked_div_min_neg1 41

@@ -39,6 +39,7 @@ stmt_p := ast::stmt_p
 (typearg_at, base_type_name) := lower_layout
 (ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, bitcast_target_is_pointer, deref_bitcast_pointee_bytes, deref_bitcast_pointee_signed) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
+(const_denoted_value, const_denote_ns, const_denote_nl) := lower_layout
 (param_ann_signed, param_ann_unsigned, named_param_is_float, callee_ret_is_float) := lower_layout
 (callee_ret_is_signed, arrty_elem_signed, lit_arith_i64) := lower_layout
 (ct_kind_of_name, ct_num_kind_of_name, ct_scalar_num_kind, ct_type_kind, std_ty_aggregate, struct_plain, ty_is_scalar) := lower_layout
@@ -4119,9 +4120,32 @@ a64_int_const_expr := fn(e : ptr(Expr)) -> bool {
   }
   r
 }
-a64_direct_float_num := fn(e : ptr(Expr), src : ptr(u8), ns : usize, nl : usize) -> bool {
+a64_direct_float_num := fn(e : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec), body_head : ptr(mut Stmt), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, bind_head : ptr(mut Bind)) -> bool {
   mut r := false
-  if ann_scan_float(src, ns + nl) { if a64_int_const_expr(e) { r = true } }
+  if ann_scan_float(src, ns + nl) == false { return r }
+  if a64_int_const_expr(e) { return true }
+  ## #574 — the module-CONSTANT (`a : f64 = K`) and const-struct-FIELD (`a : f64 = C.k`) arrivals.
+  ## x86 normalizes both to an `Expr::Num` before it asks this question (`lower::const_rhs` and the
+  ## `Expr::Field` arm beside it in `lower::assign::emit_st_assign`); this backend never had that
+  ## step, so the predicate above saw an `Expr::Var`/`Expr::Field`, said "not an integer constant",
+  ## and the integer bits were stored raw and read back as a denormal (0 against x86's 3). Resolve
+  ## the SAME one level x86 resolves, then ask the SAME unchanged predicate about the result — the
+  ## resolution lives once in `lower_layout` so all four copies keep answering identically.
+  dnl := const_denote_nl(e)
+  if dnl == 0 { return r }
+  dns := const_denote_ns(e)
+  ## SHADOWING. A bind, parameter or local of the same name means the expression does NOT denote the
+  ## module constant, so converting it would be a NEW wrong value rather than a fix. Measured on this
+  ## tree: with the resolution above but WITHOUT this guard, an `f64` PARAMETER named like the
+  ## constant read back 0 where the parent answered the correct 2, and an integer local named like it
+  ## moved too. x86's own normalizer does not ask this question (it resolves the constant regardless,
+  ## and answers 3 for that parameter) — that is a separate defect, filed as #589 — and this
+  ## predicate deliberately fires on FEWER shapes rather than reproducing it on three more backends.
+  if bind_list_index(bind_head, src, dns, dnl, a) >= 0 { return r }
+  if param_find(params_head, src, dns, dnl, a) >= 0 { return r }
+  if a64_local_off(body_head, src, dns, dnl, pcount, a, decls) >= 0 { return r }
+  cv := const_denoted_value(e, decls, src)
+  if unchecked bitcast(usize, cv) != 0 { if a64_int_const_expr(cv) { r = true } }
   r
 }
 a64_is_float_expr := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, params_head : ptr(mut Param), decls : ptr(rt::Vec), dep : i64) -> bool {
@@ -6823,7 +6847,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         iseix := eixw > 0
         isagg := isslit or iselit or isalit or isslice
         if (not isagg) and (not iscr) and (not iscre) and (not issret) and (not isenumsret) and (not iscopy) and (not isgcopy) and (not iseix) {
-          if a64_direct_float_num(v, src, ns, nl) {
+          if a64_direct_float_num(v, src, ns, nl, decls, body_head, params_head, pcount, a, bind_head) {
             emit_a64_expr(v, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
             push_str(sb, "  scvtf d0, x0\n  fmov x0, d0\n")
           } else { emit_a64_expr(v, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
