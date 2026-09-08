@@ -39,6 +39,7 @@ stmt_p := ast::stmt_p
 (typearg_at, base_type_name) := lower_layout
 (ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, bitcast_target_is_pointer, deref_bitcast_pointee_bytes, deref_bitcast_pointee_signed) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
+cmp_operand_bitcast_kind := lower_layout::cmp_operand_bitcast_kind
 (const_denoted_value, const_denote_ns, const_denote_nl) := lower_layout
 (param_ann_signed, param_ann_unsigned, named_param_is_float, callee_ret_is_float) := lower_layout
 (callee_ret_is_signed, arrty_elem_signed, lit_arith_i64) := lower_layout
@@ -3617,9 +3618,20 @@ a64_hole_local_init_signed := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : 
 ## unsigned, OR one operand is provably unsigned and the other is a bare integer LITERAL. Requiring
 ## the NON-LITERAL side to be PROVEN unsigned keeps the conservative character — it only ever moves
 ## signed → unsigned, never the reverse — so a mixed/unknown pair still keeps the signed default.
+## An identity-ERASED `bitcast` TARGET (#546) is asked FIRST, and it is the only thing here that can
+## move the answer toward SIGNED: Types §4.2 makes the written target the operand's interpretation,
+## and the parser records a word-sized bare scalar target nowhere in the AST
+## (`lower_layout::cmp_operand_bitcast_kind` recovers it from the source). A SIGNED target on EITHER
+## side forces the signed condition, which is also this family's default; an UNSIGNED target counts
+## as a proof of that operand's unsignedness and then feeds the SAME both-or-literal rule below,
+## unchanged. `0` — no erased bitcast, or an inner shape this scan declines — leaves the predicate
+## byte-for-byte the one it was.
 a64_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
-  ul := a64_operand_unsigned(l, params_head, body_head, src, a)
-  ur := a64_operand_unsigned(r, params_head, body_head, src, a)
+  bl := cmp_operand_bitcast_kind(l, src)
+  br := cmp_operand_bitcast_kind(r, src)
+  if bl == 1 or br == 1 { return false }
+  ul := bl == 2 or a64_operand_unsigned(l, params_head, body_head, src, a)
+  ur := br == 2 or a64_operand_unsigned(r, params_head, body_head, src, a)
   if ul and ur { return true }
   if ul and ex_is_num_lit(r) { return true }
   if ur and ex_is_num_lit(l) { return true }

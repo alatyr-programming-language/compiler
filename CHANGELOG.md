@@ -147,6 +147,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   rejects the mismatch at the field with the existing diagnostic, and preserves correct integer
   and boolean stores. Inferred or unknown pointees and deeper pointer-derived paths remain separate
   residuals of #304.
+- **A `bitcast` now decides a relational operator's signedness, so `bitcast(i64, x) < 0` is no longer
+  constant-false and a guard written that way actually refuses.** Types §4.2 makes `bitcast` the
+  reinterpret conversion — the same bits, with the target `T` deciding how they are read — and a
+  relational operator is exactly the construct that reads it. The compiler consulted the operand's
+  *declared* type instead: `unchecked bitcast(i64, off) < 0` over a `usize` `off` was lowered
+  UNSIGNED and answered **false for every value of `off`**, identically on x86_64, aarch64, riscv64
+  and wasm. That is not a wrong boolean, it is a silenced guard: every refusal predicate of the form
+  "if this went negative, refuse" compiled to "never refuse", from a clean build with a normal exit.
+  The cause was structural rather than a missed case — `src/parser.al` identity-erases a word-sized
+  bare scalar `bitcast` target, so no `Expr::Bitcast` node reaches the four signedness predicates at
+  all and there was nothing there for them to look through. The written target is now recovered from
+  the source around the operand, once, in `lower_layout`, and all four backends ask their own
+  unchanged unsignedness question about the result. The mirror direction works too: a `u64` target
+  forces the unsigned reading where the declared type would have proven signed. Nothing else moves —
+  a genuinely unsigned comparison across 2^63 keeps the unsigned condition, a `u64` target keeps it
+  rather than acquiring a signed one, and emission over `src/` + `lib/` is byte-identical (#546).
+
 - **A parameter, a local or a `comptime` binding named like a module constant now wins on x86_64
   too.** Declarations §5 makes scope lexical and block-structured and a function — its parameters and
   its body — an inner scope of the module, and §6.1 gives the inner name the win for the extent of

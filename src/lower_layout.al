@@ -3274,6 +3274,169 @@ _lit_char := fn(src : ptr(u8), i : usize) -> bool {
   (c >= 48 and c <= 57) or _alpha1(src, i) or c == 95
 }
 
+## ─── The identity-ERASED `bitcast` TARGET, recovered from the SOURCE (#546) ───
+##
+## `src/parser.al` identity-erases a WORD-SIZED bare scalar `bitcast` target: `bitcast(i64, off)`
+## builds NO node at all and hands the lowerers `off` itself, so the AST the four emitters see
+## records the author's declared interpretation NOWHERE. Types §4.2 makes `bitcast` the REINTERPRET
+## conversion — same bits, `T` decides the reading — and a relational operator is exactly the
+## construct that reads it. So `unchecked bitcast(i64, off) < 0` over a `usize` `off` was lowered
+## UNSIGNED (`setb` / `b.lo` / `sltu` / `i64.lt_u`) and answered FALSE for EVERY value: a valid
+## program, a clean build, a normal exit, and a REFUSAL PREDICATE THAT NEVER REFUSES. `src/ast.al`'s
+## `span_high_bit` carries the `shr(off, 63) == 1` workaround that this recovery is the answer to.
+##
+## There was no `Expr::Bitcast` arm to add. MEASURED: the operand the four `*_cmp_unsigned`
+## predicates receive for that spelling is `Bin(<, Unchecked(Var:off), Num(0))` on ALL FOUR
+## backends — the cast is GONE, not mis-handled — so the target has to be read where the parser left
+## it, in the source text around the operand's own span. `src/wat.al` already established exactly
+## this reverse scan for its value-break admission fence (`wat_erased_bitcast_at`); it lives HERE
+## now, one home for one decision, and answers the richer question (WHICH target) that the fence's
+## yes/no is a special case of. The four backends then ask their OWN unchanged unsignedness question
+## about the result, the shape `const_denoted_value` uses for the module-constant resolution.
+
+## Any line-comment marker before `p` on `p`'s own source line, else `p`. Returning the hash position
+## preserves all code before it, including a comma or opening delimiter; callers resume their own scan
+## there.
+_comment_back := fn(src : ptr(u8), p : usize) -> usize {
+  mut line := p
+  while line > 0 and str_at((src + line - 1), 1) != "\n" { line = line - 1 }
+  mut i := line
+  while i < p {
+    if str_at((src + i), 1) == "#" { return i }
+    i = i + 1
+  }
+  p
+}
+
+## Move backwards over whitespace and any `#`/`##` line comments between an expression leaf and its
+## enclosing delimiter. Once a comment marker is found, resume immediately before the hash so code
+## before an inline comment stays visible to the comma/delimiter scan.
+_gap_back := fn(src : ptr(u8), p : usize) -> usize {
+  mut r := p
+  mut searching := true
+  while searching {
+    while r > 0 and _ws1(src, r - 1) { r = r - 1 }
+    comment := _comment_back(src, r)
+    if comment != r {
+      r = comment
+    } else {
+      searching = false
+    }
+  }
+  r
+}
+
+## The TARGET-TYPE span of the identity-erased `bitcast(T, <arg>)` whose second argument begins at
+## `pos`, or `{0, 0}` when `pos` does not begin such an argument. From that leaf, walk BACKWARD
+## through the second-argument comma and the BALANCED first argument, and require the enclosing
+## callee to be exactly `bitcast` — a 7-character ident compare, so `mybitcast(i64, u)` declines.
+## `s` is never 0 on a hit (a `bitcast(` head cannot begin at source offset 0), so `s != 0` IS the
+## found flag and a `{s, 0}` result reports a malformed empty target as FOUND, exactly as the
+## yes/no fence answered before this returned a span.
+_erased_bitcast_target := fn(src : ptr(u8), pos : usize) -> LSpan {
+  if pos == 0 { return LSpan(s = 0, n = 0) }
+  mut p := pos
+  mut moving := true
+  while moving {
+    p = _gap_back(src, p)
+    mut punct := true
+    while punct {
+      punct = false
+      while p > 0 and (str_at((src + p - 1), 1) == "(" or str_at((src + p - 1), 1) == "+" or str_at((src + p - 1), 1) == "-") {
+        p = p - 1
+        punct = true
+      }
+      if punct { p = _gap_back(src, p) }
+    }
+    mut end := p
+    mut start := end
+    while start > 0 and _lit_char(src, start - 1) { start = start - 1 }
+    if end > start and str_at((src + start), end - start) == "unchecked" { p = start } else { moving = false }
+  }
+  if p == 0 or str_at((src + p - 1), 1) != "," { return LSpan(s = 0, n = 0) }
+  comma := p - 1
+  mut q := comma
+  mut depth := 0
+  mut open := 0
+  mut found := false
+  while q > 0 and not found {
+    comment := _comment_back(src, q)
+    if comment != q {
+      q = comment
+    } else {
+      c := str_at((src + q - 1), 1)
+      if c == ")" or c == "]" { depth = depth + 1 }
+      if c == "(" or c == "[" {
+        if depth > 0 { depth = depth - 1 } else { open = q - 1 ; found = true }
+      }
+      q = q - 1
+    }
+  }
+  if not found { return LSpan(s = 0, n = 0) }
+  mut ne := open
+  while ne > 0 and _ws1(src, ne - 1) { ne = ne - 1 }
+  mut ns := ne
+  while ns > 0 and _lit_char(src, ns - 1) { ns = ns - 1 }
+  if ne - ns != 7 { return LSpan(s = 0, n = 0) }
+  if str_at((src + ns), 7) != "bitcast" { return LSpan(s = 0, n = 0) }
+  mut ts := open + 1
+  mut te := comma
+  while te > ts and _ws1(src, te - 1) { te = te - 1 }
+  while ts < te and _ws1(src, ts) { ts = ts + 1 }
+  LSpan(s = ts, n = te - ts)
+}
+
+## The yes/no form `src/wat.al`'s bounded value-break admission asks: is this leaf the second
+## argument of an identity-erased `bitcast`? Unchanged answer, one home.
+pub erased_bitcast_at := fn(src : ptr(u8), pos : usize) -> bool {
+  _erased_bitcast_target(src, pos).s != 0
+}
+
+## What an identity-erased `bitcast` says about a RELATIONAL operand's signedness: `1` SIGNED,
+## `2` UNSIGNED, `0` nothing at all. The four `*_cmp_unsigned` predicates read it; nothing else does,
+## so `/`, `%`, `shr` and the `{}` hole keep the exact operand classification they have today.
+##
+## The shape gate is EXACT IN BOTH DIRECTIONS, because a source scan that fires one character too
+## far changes an unrelated comparison:
+##   • the operand node must be a bare `Expr::Var`, optionally under the `unchecked` VERIFICATION
+##     scope the four predicates already peel. A name has ONE span, so BOTH ends of its text are
+##     known — which no other operand shape gives this scan.
+##   • the next non-blank byte after that name must be the `)` that closes the `bitcast`. Without
+##     that forward half `bitcast(i64, x < y)` — where the target reinterprets the comparison's
+##     BOOL result and says nothing about `x` — would have answered "`x` is `i64`" for the inner
+##     comparison's own operand.
+## Every other inner shape (`bitcast(i64, f(x))`, `bitcast(i64, a + b)`, `bitcast(i64, s.f)`) lowers
+## exactly as it does today: a MISS leaves the always-signed default plus whatever the existing
+## scans prove, the same conservative direction the whole family has. The blank skip is BUDGETED so
+## the forward half cannot walk off the end of a source buffer.
+pub cmp_operand_bitcast_kind := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
+  mut r : i64 = 0
+  match deref(e) {
+    Expr::Unchecked(inner) => { r = cmp_operand_bitcast_kind(inner, src) }
+    Expr::Var(s, n) => {
+      mut q := s + n
+      mut budget := 64
+      while budget > 0 and _ws1(src, q) { q = q + 1 ; budget = budget - 1 }
+      if str_at((src + q), 1) == ")" {
+        sp := _erased_bitcast_target(src, s)
+        if sp.n != 0 {
+          if scalar_name_is_signed(src, sp.s, sp.n) { r = 1 }
+          if scalar_name_is_unsigned(src, sp.s, sp.n) { r = 2 }
+        }
+      }
+    }
+    ## NOT a bare name, so this scan has no second end to prove the operand IS the whole erased
+    ## argument. Listed rather than left to `_ =>` so a later `Expr` variant cannot join the
+    ## "declined" answer silently (the `const_scalar_lit` idiom).
+    Expr::Num | Expr::BoolLit | Expr::FloatLit | Expr::Bin | Expr::If | Expr::Match
+      | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Field | Expr::Index | Expr::Try
+      | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  r
+}
+
 ## §8 field-attribute CHAIN walker — the shared backward scan for the per-field layout levers
 ## `@offset(N)` / `@align(N)` / `@endian(big|little)` (spec Types §8). From the field NAME at source
 ## index `ns`, walk BACKWARD over the field's PREFIX CHAIN of adjacent `@ident(arg)` attributes and

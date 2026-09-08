@@ -7233,6 +7233,13 @@ run_x86 signedness_global_array 42
 ## (`i64.lt_u`/…) backends: plain `run` so ALL sweeps exercise the boundary (a signed regression →
 ## non-42 = SILENT miscompile there). x86 also asserts 42; every operand is provably `u64` → UNSIGNED.
 run unsigned_cmp_backends 42
+## #546 / Types §4.2 — an identity-ERASED `bitcast` target decides a RELATIONAL operand's signedness.
+## `unchecked bitcast(i64, <usize>) < 0` was constant-FALSE on all four backends, so every "if this
+## went negative, refuse" guard compiled to "never refuse". First failing case, 99 = all ten pass;
+## cases 7..10 are the over-eagerness controls (a `u64` above 2^63 must still order unsigned). Plain
+## `run` so the a64/rv64/wasm sweeps carry it too; the explicit per-backend rows below are the direct
+## e2e assertions.
+run bitcast_cmp_signedness 99
 ## §4: `deref(p) = <struct literal>` stores all fields (was a silent 1-garbage-word scalar store).
 run_x86 deref_assign_struct_lit 42
 ## FIELD write THROUGH a pointer `deref(p).field = v` (p : ptr(mut Rec)): the store dual of the
@@ -9504,6 +9511,7 @@ run_wat signed_local_divmod 42
 run_wat int_literal_float_unchecked 99
 run_wat int_literal_float_module_const 99
 run_wat module_const_shadowed_name 99
+run_wat bitcast_cmp_signedness 99
 run_wat inline_call 42
 run_wat stack_args 42
 run_wat early_return_result 42
@@ -9596,6 +9604,7 @@ run_a64 signed_local_divmod 42
 run_a64 int_literal_float_unchecked 99
 run_a64 int_literal_float_module_const 99
 run_a64 module_const_shadowed_name 99
+run_a64 bitcast_cmp_signedness 99
 ## I11/CG-7 scoping: `unchecked` drops the aarch64 div-by-zero guard → raw `sdiv x,x,0` = 0.
 run_a64 unchecked_div_zero 0
 ## `unchecked` drops the guard, so these document HARDWARE behaviour and legitimately differ per target
@@ -9673,6 +9682,7 @@ run_rv64 signed_local_divmod 42
 run_rv64 int_literal_float_unchecked 99
 run_rv64 int_literal_float_module_const 99
 run_rv64 module_const_shadowed_name 99
+run_rv64 bitcast_cmp_signedness 99
 run_rv64 unchecked_udiv_zero 42
 run_rv64 unchecked_rem_zero 41
 run_rv64 unchecked_div_min_neg1 41
