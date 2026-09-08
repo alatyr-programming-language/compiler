@@ -8,6 +8,10 @@
 # acceptable — the module never runs). What is NOT allowed is a VALID module that runs to a wrong,
 # non-trap exit code: that is a SILENT MISCOMPILE, the one failure mode the fail-loud design forbids.
 #
+# A module that the per-program ceiling had to kill is NONE of those three: it never produced an exit
+# code at all. It is its own outcome, it is re-observed alone once the parallel walk is over, and only
+# the second observation is classified — `sweep_guest_run`/`sweep_reobserve` in sweep_common.sh.
+#
 # Requires wat2wasm + wasmtime (flake devShell); absent → SKIP (an env gap is not a failure). Builds
 # Stage1 from the seed unless `ALATYR_SWEEP_CC` names one already built (scripts/sweeps.sh builds it
 # once and shares it). Exit 0 = no silent miscompiles (or skipped); 1 = a WRONG was found.
@@ -38,22 +42,33 @@ wasm_verdict() { # scratch-prefix, name, want
   "$CC" wat "$ROOT/test/$2.al" > "$wat" 2>"$wat.err" < /dev/null \
     || { echo "WRONG wat emit failed: $(head -3 "$wat.err" | tr '\n' ' ')"; return; }
   wat2wasm "$wat" -o "$wasm" 2>/dev/null < /dev/null || { echo reject; return; }
-  timeout 10 wasmtime "$wasm" >/dev/null 2>&1 < /dev/null; got=$?
-  if [ "$got" = "$3" ]; then echo match
-  elif [ "$got" = 134 ]; then echo trap
-  else echo "WRONG wasm=$got want=$3 (valid module, non-trap, wrong exit = SILENT MISCOMPILE)"; fi
+  ## `match` is tested BEFORE the ceiling so a program whose wanted exit code really is 124 stays a
+  ## match, and the ceiling breach is tested BEFORE the trap/WRONG split so a module that was KILLED is
+  ## never described by an exit code it did not choose. `= 134` is kept exactly as it was: wasmtime's
+  ## `(unreachable)` abort is that one status, and widening it would swallow verdicts. The ceiling
+  ## verdict is not a result: see `sweep_reobserve`, which re-runs this row alone before classification.
+  sweep_guest_run wasmtime "$wasm"
+  if [ "$SWEEP_GOT" = "$3" ]; then echo match
+  elif [ "$SWEEP_BREACH" = 1 ]; then echo "timeout wasm: the ${SWEEP_TIMEOUT}s ceiling killed the module after ${SWEEP_ELAPSED}s (want=$3)"
+  elif [ "$SWEEP_GOT" = 134 ]; then echo trap
+  else echo "WRONG wasm=$SWEEP_GOT want=$3 (valid module, non-trap, wrong exit = SILENT MISCOMPILE)"; fi
 }
 
 sweep_selftest wasm_sweep || exit 1
+sweep_reobserve_selftest wasm_sweep || exit 1
 
 fail=0
 sweep_run_corpus "$ROOT" wasm_sweep wasm_verdict || fail=1
 ## `wrong` separates the ONE forbidden verdict (a valid binary with a wrong exit code) from a harness
 ## failure such as a truncated corpus, so the closing banner never claims a miscompile that nobody saw.
 wrong=0; [ "$SWEEP_WRONG" = 0 ] || wrong=1
-echo "wasm_sweep: match=$SWEEP_MATCH trap=$SWEEP_TRAP reject=$SWEEP_REJECT missing=$SWEEP_MISSING corpus=$corpus"
+## `timeout=` and `reobserved=` are on the SAME line as the counts on purpose: a run that recovered a
+## starved module is green, and a green line that did not mention it would hide the only evidence that
+## the ceiling was ever near.
+echo "wasm_sweep: match=$SWEEP_MATCH trap=$SWEEP_TRAP reject=$SWEEP_REJECT missing=$SWEEP_MISSING timeout=$SWEEP_TIMEDOUT reobserved=$SWEEP_REOBS corpus=$corpus ceiling=${SWEEP_TIMEOUT}s"
 sweep_check_total wasm_sweep "$SWEEP_SEEN" "$corpus" || fail=1
 if [ "$fail" = 0 ]; then echo "*** wasm_sweep: no silent miscompiles ***"
 elif [ "$wrong" = 1 ]; then echo "*** wasm_sweep: SILENT MISCOMPILE(S) FOUND ***"
+elif [ "$SWEEP_TIMEDOUT" != 0 ]; then echo "*** wasm_sweep: TIMED OUT — $SWEEP_TIMEDOUT program(s) never finished inside the ${SWEEP_TIMEOUT}s ceiling (each TIMED-OUT row above says how many observations its verdict rests on); that is a non-terminating module or a machine that could not finish it, and it is NOT a miscompile finding ***"
 else echo "*** wasm_sweep: FAILED — the sweep could not reach a verdict (see the FAIL line above); this is NOT a miscompile finding ***"; fi
 exit "$fail"
