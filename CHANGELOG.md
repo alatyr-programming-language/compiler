@@ -37,22 +37,62 @@ promotions the number stands still and `## Unreleased` accumulates, so the numbe
 generation together with the tree that seed reproduces — not an individual commit.
 
 `scripts/fixpoint.sh` enforces the pairing: `package.al`'s `version` must equal
-`current-seed-version` in `seed/VERSION`'s CURRENT SEED block. It fires on both ways of breaking it — a
-promotion that forgets the bump, and a bump made without a promotion. The fixpoint itself would not
-catch either: the version IS part of the emission (a compile-time constant, TOOL-21), but changing it
-moves the seed's output and Stage1's identically, so they stay byte-equal.
+`current-seed-version` in `seed/VERSION`'s CURRENT SEED block. It fires on a disagreement in either
+direction — a promotion that forgets the bump, and a `package.al` bump made on its own — before it
+builds anything. The fixpoint itself would not catch either: the version IS part of the emission (a
+compile-time constant, TOOL-21), but changing it moves the seed's output and Stage1's identically, so
+they stay byte-equal. What that check does **not** see is a tree where both fields agree and the seed
+answers a third thing; that is the state `main` is in today, and #586 is that hole.
 
-A promotion commit therefore carries all of these, and the gate is red if any is missing:
+**The bump comes first, before the stages are built.** `src/cli.al`'s `cli_version` answers
+`app.version`, which TOOL-15 injects as a compile-time constant, so a compiler reports the version of
+the tree it was **compiled from** — not the tree it is committed into. Bump, then build, then
+promote, and the frozen Stage2 answers the number it is released under. Bumping inside the promotion
+commit freezes a Stage2 compiled from the previous tree, and that seed answers the previous version
+for the rest of its life: `seed/alatyr` on `main` is recorded, released and tagged `v0.2.0`, answers
+`alatyr 0.1.0`, and contains not one occurrence of the string `0.2.0` — where the Stage1 it builds
+from that same tree contains 35, one for each embedded copy of the version constant.
 
-1. `seed/alatyr` — the promoted Stage2 binary.
-2. `seed/VERSION` — the appended entry with the three stage hashes and the **read** delta, plus the
-   CURRENT SEED block updated to the new hash and version. The entry is the reviewable part: it lands
-   in the promotion PR, where a human can read the delta before it becomes history.
-3. `package.al` — the new `version`.
-4. `scripts/package_cli_test.sh` — its expected `alatyr <version>` line. Easy to forget, and forgetting
-   it fails the gate with a diagnostic that never mentions the version.
-5. This file — `## Unreleased` becomes `## <version> — <date>`, and a fresh empty `## Unreleased`
+The order is fixpoint-safe, measured on a throwaway worktree rather than argued: `package.al` and
+`current-seed-version` at a test `0.2.1` over the untouched 0.1.0-answering seed still gave
+`seed == Stage1 == Stage2` at 1 224 447 GAS lines, with Stage1 and Stage2 byte-identical and both
+answering `alatyr 0.2.1`. The version constant is 35 embedded copies of the string, one differing
+byte each; the fixpoint compares two compilations of the same tree, so those 35 bytes move in both
+emissions at once — which is why the fixpoint cannot police the version and the seed-identity check
+has to.
+
+A promotion therefore happens in this order, and the gate is red if any step is missing.
+
+**Before the stages are built:**
+
+1. `package.al` — the new `version`.
+2. `seed/VERSION` — `current-seed-version` moves to that number, in the same step. Not later:
+   `scripts/fixpoint.sh` compares it to `package.al` before it builds anything and exits 6 on a
+   disagreement, so a bump on its own cannot reach a build at all.
+3. `scripts/package_cli_test.sh` — its expected `alatyr <version>` line. This is the one that gets
+   forgotten. It hardcodes the `--version` output of a **stage**, so it goes stale the moment
+   `package.al` moves and fails the gate with a diagnostic that never mentions the version.
+
+**Then Stage1 → Stage2 → Stage3 are built from that tree** and validated as `AGENTS.md`'s
+Reproducibility section and `.agents/skills/alatyr-integrate/SKILL.md` §3 require.
+
+**Then the promotion itself:**
+
+4. `seed/alatyr` — the promoted Stage2 binary, which now answers the new version.
+5. `seed/VERSION` — `current-seed-sha256` moves to the promoted digest, and the entry with the three
+   stage hashes and the **read** delta is appended. The entry is the reviewable part: it lands in the
+   promotion PR, where a human can read the delta before it becomes history.
+6. This file — `## Unreleased` becomes `## <version> — <date>`, and a fresh empty `## Unreleased`
    opens above it.
+
+All six land in **one commit**. Between step 1 and step 4 the working copy carries a version the
+committed seed does not answer, and `seed/VERSION`'s two CURRENT SEED lines describe two different
+compilers for a moment — the digest the old one, the version the one about to be frozen. That split
+exists only in the working copy, and the atomicity of the commit is currently the only thing keeping
+it out of a published tree: the measurement above passed the complete seed-identity check with both
+fields at `0.2.1` over a seed answering `0.1.0`, because only the digest side of that block is
+checked against the artifact. Do not commit the intermediate state, and do not "fix" it by moving the
+bump back into the promotion commit.
 
 **The tag.** After the promotion lands, an **annotated** tag `v<version>` goes on the promotion commit.
 It is created after the merge, so nothing reviews its message — which is why the tag carries the digest
