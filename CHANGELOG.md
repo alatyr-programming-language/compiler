@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **Assignment type checking now follows every declared field in a pointer-rooted place.**
+  A direct `deref(p).f` store was checked, but `deref(p).inner.f = "text"` still accepted
+  a string at a `u64` leaf. The semantic check now mirrors the recursive field-place grammar
+  from a proven `ptr([mut] Struct)` pointee and rejects the mismatch before lowering. Unknown
+  pointees, indexes and slices remain poison-tolerant; correct integer and boolean stores still
+  return 42.
 - **Assignment type checking now follows a direct pointer-returning call into its field place.**
   The explicitly typed local form was checked, but `deref(make_ptr()).f = "text"` still accepted
   a string at a `u64` field. A uniquely resolved direct call's declared `ptr([mut] Struct)`
