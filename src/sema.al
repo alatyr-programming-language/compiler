@@ -7193,9 +7193,10 @@ sema_nested_field_path_value_bad := fn(path : NestedPath, checked : Ty, v : ptr(
   sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc, "PLACE-NESTED", path.rs)
 }
 
-## TYP-6 bounded pointer-field slice — resolve exactly `deref(p).field` where `p` has a declared
-## `ptr([mut] Struct)` type. Inferred/unknown pointees, deeper paths, pointer calls, indexes, and
-## slices remain poison-tolerant for their separate residuals.
+## TYP-6 bounded pointer-field slices — resolve exactly `deref(p).field` where `p` has a declared
+## `ptr([mut] Struct)` type, or the same direct field through a call with that declared result.
+## Inferred/unknown pointees, deeper paths, indirect/ambiguous calls, indexes, and slices remain
+## poison-tolerant for their separate residuals.
 sema_pointer_field_path_value_bad := fn(place : ptr(Expr), checked : Ty, v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
   field := expr_field_span(place)
   base := expr_field_base(place)
@@ -7203,8 +7204,9 @@ sema_pointer_field_path_value_bad := fn(place : ptr(Expr), checked : Ty, v : ptr
   inner := expr_deref_inner(base)
   if unchecked bitcast(usize, inner) == 0 { return false }
   root := expr_var_span(inner)
-  if root.n == 0 { return false }
-  pty := local_ty(locals, nloc, src, root.s, root.n)
+  mut pty := Ty(tag = 0, ns = 0, nl = 0)
+  if root.n != 0 { pty = local_ty(locals, nloc, src, root.s, root.n) }
+  else { pty = expr_call_result_ty(inner, decls, upto, src) }
   mut ptag : u8 = pty.tag
   if ptag >= 128 and ptag != 255 { ptag = ptag - 128 }
   if ptag != 5 or pty.nl == 0 { return false }
