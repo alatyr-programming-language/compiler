@@ -3241,6 +3241,23 @@ expr_addr_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
     _ => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
+## Recover a pointer's pointee identity only for the proven inferred-binding shape
+## `p := ptr([mut] local_struct)`. The Result(Ty, CheckErr) carrier preserves the pointer tag but
+## not its ns/nl payload, while the addressed local's Local record retains the exact nominal struct.
+## Any other address operand or unresolved/non-struct local stays fully UNKNOWN; this helper carries
+## type identity only and deliberately says nothing about write permission.
+sema_addr_local_struct_ptr_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Ty {
+  mut none := Ty(tag = 0, ns = 0, nl = 0)
+  inner := expr_addr_inner(v)
+  if unchecked bitcast(usize, inner) == 0 { return none }
+  root := expr_var_span(inner)
+  if root.n == 0 or nloc == 0 or not local_in(locals, nloc, src, root.s, root.n) { return none }
+  raw := local_ty(locals, nloc, src, root.s, root.n)
+  mut tag : u8 = raw.tag
+  if tag >= 128 and tag != 255 { tag = tag - 128 }
+  if (tag == 3 or tag == 9) and raw.nl != 0 { return Ty(tag = 5, ns = raw.ns, nl = raw.nl) }
+  none
+}
 ## The POINTEE expression of a `deref(p)` place (null otherwise). A small single-focus match, for the
 ## same reason `expr_var_span` is one: `check_expr`'s big bound-deref match does not dispatch the
 ## payload-heavy arms under the seed. Issue #557 needs it to type the `match deref(v)` scrutinee.
@@ -9468,6 +9485,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           mut bind_tag : u8 = tv.tag
           mut bind_prov : u8 = 0
           ain := expr_addr_inner(v)
+          ## AddrOf is a payload-heavy arm that the frozen bootstrap may skip in check_expr's large
+          ## match, returning UNKNOWN instead of its invariant pointer tag. The dedicated accessor is
+          ## the reliable AST fact: every Expr::AddrOf has type ptr(_), independently of its pointee.
+          if bind_tag == 0 and unchecked bitcast(usize, ain) != 0 { bind_tag = 5 }
           if unchecked bitcast(usize, ain) != 0 and expr_field_span(ain).n != 0 { bind_prov = 1 }
           ## A range-slice local is a view, so its write permission follows the backing place rather
           ## than the view's own copied pair. Keep that provenance in the existing `prov` byte: 2 means
@@ -9541,9 +9562,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## garbage pointee that happens to be nonzero makes a valid `x := <ptr-value>` then `f(x)`
           ## SPURIOUSLY mismatch against `f`'s real param pointee (found whole-tree: `b := bind_head` then
           ## `bnd_next(b)`; `inner := e` then `str_lit_info(inner)`). Recover the pointee RELIABLY from
-          ## STORAGE, never the truncated Result: a Var-local RHS → that local's recorded pointee; otherwise
-          ## DROP to unknown (0/0, poison-tolerant). Monotonic — this only ever REMOVES a known-pointee
-          ## mismatch (an unknown pointee is compatible with anything), never introduces one.
+          ## STORAGE, never the truncated Result: a Var-local RHS → that pointer local's recorded pointee;
+          ## a direct AddrOf(Var-local-struct) → the addressed local's recorded nominal type; otherwise DROP
+          ## to unknown (0/0, poison-tolerant). The AddrOf recovery is intentionally struct-only: it supplies
+          ## the exact fact needed by recursive pointer-field place typing without widening other consumers.
           if bind_tag == 5 {
             bind_ns = 0
             bind_nl = 0
@@ -9553,6 +9575,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
               mut rltag : u8 = rlt.tag
               if rltag >= 128 and rltag != 255 { rltag = rltag - 128 }
               if rltag == 5 { bind_ns = rlt.ns; bind_nl = rlt.nl; bind_prov = local_prov(locals, cnt, src, rvs.s, rvs.n) }
+            }
+            if bind_nl == 0 {
+              apt := sema_addr_local_struct_ptr_ty(v, src, locals, cnt)
+              if apt.tag == 5 {
+                bind_ns = apt.ns
+                bind_nl = apt.nl
+              }
             }
           }
           if dt.tag != 0 { bind_tag = dt.tag; bind_ns = dt.ns; bind_nl = dt.nl }
@@ -9564,11 +9593,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## RELIABLE aggregate recording (scar #2: StructLit/EnumLit don't dispatch check_expr's big
           ## match, so `tv.tag` came back 0). Recover the aggregate type NAME + tag straight from the
           ## literal, so a later use of this local (return / annotated-local / call-arg / field / array-
-          ## element / global sink) is checked against a scalar sink (TYP-6). An ARRAY literal of
-          ## SCALAR-LITERAL elements is tagged 7 (scalar-element array) so a whole-aggregate store into
-          ## `xs[i]` is rejected. Only fires when nothing has typed the binding yet (bind_tag == 0), so an
-          ## annotation / call-return type still wins.
-          if bind_tag == 0 {
+          ## element / global sink) is checked against a scalar sink (TYP-6). The Result carrier may
+          ## preserve StructLit's public tag 3 while dropping its name payload; that is still unresolved,
+          ## so recover it exactly like tag 0 instead of recording a nameless struct local. An ARRAY literal
+          ## of SCALAR-LITERAL elements is tagged 7 (scalar-element array) so a whole-aggregate store into
+          ## `xs[i]` is rejected. An annotation / call-return with a reliable payload still wins.
+          if bind_tag == 0 or (bind_tag == 3 and bind_nl == 0) {
             ## HIDDEN tags 9 (struct) / 10 (enum): `value_agg_ty` maps them back, but `check_expr`'s Var
             ## resolution does NOT surface them, so the overload-naive existing arg checks stay tolerant.
             ## Covers a StructLit / EnumLit / nullary-enum-variant RHS (and a Var aliasing such a local).
