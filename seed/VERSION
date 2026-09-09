@@ -8,7 +8,12 @@
 # tree, and it is not published. The `rs-ancestor` line below and the ancestor commits named in the
 # entries are a PROVENANCE RECORD of where the lineage began, not a recipe you can run today.
 #
-# To promote: build Stage1, have it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in
+# To promote: FIRST bump the version — package.al's `version`, the `current-seed-version` line in the
+# CURRENT SEED block below, and scripts/package_cli_test.sh's expected `alatyr <version>` line. A
+# compiler bakes the version of the tree it was COMPILED FROM (src/cli.al's cli_version reads the
+# TOOL-15-injected app.version), so a Stage2 built before the bump answers the previous number for
+# its whole life; that is #586, and the seed committed here is the proof.
+# THEN build Stage1, have it build Stage2 and Stage3. Require Stage1 == Stage2 == Stage3 in
 # the emitted GAS, byte-identical after normalizing the .L<N> and .Lra<N>_<k> label families (do
 # that first, or the diff is drowned in renumbering), and Stage2 == Stage3 in the BINARY. Read the
 # normalized seed->Stage1 GAS delta line by line, copy STAGE2 over seed/alatyr, append an entry here
@@ -67,10 +72,24 @@ current-seed-version: 0.2.0
 # `current-seed-version` is the `version` field of `package.al` at the moment of the promotion, and by
 # the versioning order in CHANGELOG.md the two must agree at all times: the version moves ON a
 # promotion and only on one. The gate enforces that agreement in both directions — a promotion that
-# forgets the bump, and a bump made without a promotion, both fail. Note that this value cannot be
-# obtained by asking the seed: the committed seed predates `--version` and answers
-# `selfhost: cannot open source file` to it. That is expected, not a defect; the self-built compiler
-# implements TOOL-21.
+# forgets the bump, and a bump made without a promotion, both fail.
+#
+# The seed CAN be asked, and asking it is how #586 was found. The sentence that used to stand here —
+# "this value cannot be obtained by asking the seed: the committed seed predates `--version` and
+# answers `selfhost: cannot open source file` to it" — was false on both halves once TOOL-21 landed
+# (#192): `./seed/alatyr --version` prints `alatyr 0.1.0` and exits 0. It is recorded here rather
+# than merely deleted, because it is the reason nobody looked.
+#
+# And what the seed answers is NOT this line's value. The seed committed here is recorded, released
+# and tagged v0.2.0, yet it does not contain the string `0.2.0` even once — the Stage1 it builds from
+# this tree contains it 35 times, one per embedded copy of the version constant — because the
+# 0.1.0 -> 0.2.0 promotion bumped package.al in the same commit that froze a Stage2 compiled from the
+# tree BEFORE the bump. That is what the old order produced every time, not a slip in one commit: see
+# the bump-first step in the "To promote" header above, CHANGELOG.md's versioning order and #586. The
+# next promotion is built bump-first and its seed will answer its own number. #586's second step then
+# replaces this claim-to-claim version comparison in scripts/fixpoint.sh with the claim-to-artifact
+# comparison the digest check above already is; it cannot land before that promotion, because on the
+# present tree it would be correctly red with no way to make it green short of promoting.
 #
 #
 # Self-promoted 2026-08-19 — nested enum and Slice(T) payload construction now preserves the complete
