@@ -5364,6 +5364,9 @@ issue298_immutable_places_test
 issue304_place_type_test
 check_build_located reject_issue304_array_field_type 5 "type mismatch"
 check_accept accept_issue304_array_field_type
+check_build_located reject_issue304_pointer_field_type 5 "type mismatch"
+check_accept accept_issue304_pointer_field_type
+run_x86 accept_issue304_pointer_field_type 42
 check_reject reject_lambda_aggregate_return
 check_reject reject_lambda_capture_escape
 check_accept accept_param_default
