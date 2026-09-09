@@ -7193,24 +7193,42 @@ sema_nested_field_path_value_bad := fn(path : NestedPath, checked : Ty, v : ptr(
   sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc, "PLACE-NESTED", path.rs)
 }
 
-## TYP-6 bounded pointer-field slices — resolve exactly `deref(p).field` where `p` has a declared
-## `ptr([mut] Struct)` type, or the same direct field through a call with that declared result.
-## Inferred/unknown pointees, deeper paths, indirect/ambiguous calls, indexes, and slices remain
-## poison-tolerant for their separate residuals.
+## Resolve the declared type of a pointer-rooted field chain. The recursion mirrors the place grammar:
+## a dereference supplies the known struct pointee, and each Field step supplies the next declared
+## type. Unknown pointees and every non-field step remain poison-tolerant; indexes and slices have
+## distinct type-recovery boundaries and must not be guessed here.
+sema_pointer_rooted_field_ty := fn(place : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> Ty {
+  inner := expr_deref_inner(place)
+  if unchecked bitcast(usize, inner) != 0 {
+    root := expr_var_span(inner)
+    mut pty := Ty(tag = 0, ns = 0, nl = 0)
+    if root.n != 0 { pty = local_ty(locals, nloc, src, root.s, root.n) }
+    else { pty = expr_call_result_ty(inner, decls, upto, src) }
+    mut ptag : u8 = pty.tag
+    if ptag >= 128 and ptag != 255 { ptag = ptag - 128 }
+    if ptag == 5 and pty.nl != 0 { return Ty(tag = 3, ns = pty.ns, nl = pty.nl) }
+    return Ty(tag = 0, ns = 0, nl = 0)
+  }
+  field := expr_field_span(place)
+  base := expr_field_base(place)
+  if field.n == 0 or unchecked bitcast(usize, base) == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  owner := sema_pointer_rooted_field_ty(base, decls, upto, src, locals, nloc, a)
+  if owner.tag != 3 or owner.nl == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  ann := sema_field_ann_span(decls, upto, src, owner.ns, owner.nl, field.s, field.n, a)
+  if ann.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  resolve_ty(src, ann.s, ann.n, decls, upto)
+}
+
+## TYP-6 pointer-field slice — resolve `deref(p).field...leaf` where `p` has a declared
+## `ptr([mut] Struct)` type, or the same chain through a call with that declared result.
+## Inferred/unknown pointees, indirect/ambiguous calls, indexes, and slices remain poison-tolerant.
 sema_pointer_field_path_value_bad := fn(place : ptr(Expr), checked : Ty, v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
   field := expr_field_span(place)
   base := expr_field_base(place)
   if field.n == 0 or unchecked bitcast(usize, base) == 0 { return false }
-  inner := expr_deref_inner(base)
-  if unchecked bitcast(usize, inner) == 0 { return false }
-  root := expr_var_span(inner)
-  mut pty := Ty(tag = 0, ns = 0, nl = 0)
-  if root.n != 0 { pty = local_ty(locals, nloc, src, root.s, root.n) }
-  else { pty = expr_call_result_ty(inner, decls, upto, src) }
-  mut ptag : u8 = pty.tag
-  if ptag >= 128 and ptag != 255 { ptag = ptag - 128 }
-  if ptag != 5 or pty.nl == 0 { return false }
-  leaf_span := sema_field_ann_span(decls, upto, src, pty.ns, pty.nl, field.s, field.n, a)
+  owner := sema_pointer_rooted_field_ty(base, decls, upto, src, locals, nloc, a)
+  if owner.tag != 3 or owner.nl == 0 { return false }
+  leaf_span := sema_field_ann_span(decls, upto, src, owner.ns, owner.nl, field.s, field.n, a)
   if leaf_span.n == 0 { return false }
   leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
   sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc, "PLACE-PTRFIELD", field.s)
