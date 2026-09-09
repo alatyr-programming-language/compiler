@@ -7193,6 +7193,27 @@ sema_nested_field_path_value_bad := fn(path : NestedPath, checked : Ty, v : ptr(
   sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc, "PLACE-NESTED", path.rs)
 }
 
+## TYP-6 bounded pointer-field slice — resolve exactly `deref(p).field` where `p` has a declared
+## `ptr([mut] Struct)` type. Inferred/unknown pointees, deeper paths, pointer calls, indexes, and
+## slices remain poison-tolerant for their separate residuals.
+sema_pointer_field_path_value_bad := fn(place : ptr(Expr), checked : Ty, v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
+  field := expr_field_span(place)
+  base := expr_field_base(place)
+  if field.n == 0 or unchecked bitcast(usize, base) == 0 { return false }
+  inner := expr_deref_inner(base)
+  if unchecked bitcast(usize, inner) == 0 { return false }
+  root := expr_var_span(inner)
+  if root.n == 0 { return false }
+  pty := local_ty(locals, nloc, src, root.s, root.n)
+  mut ptag : u8 = pty.tag
+  if ptag >= 128 and ptag != 255 { ptag = ptag - 128 }
+  if ptag != 5 or pty.nl == 0 { return false }
+  leaf_span := sema_field_ann_span(decls, upto, src, pty.ns, pty.nl, field.s, field.n, a)
+  if leaf_span.n == 0 { return false }
+  leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
+  sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc, "PLACE-PTRFIELD", field.s)
+}
+
 ## TYP-6 bounded array-field path — resolve exactly `root.array[index].field` through the root
 ## struct, its fixed-array field, and the array element's struct before comparing the stored value
 ## with the leaf declaration. Pointer, slice, dynamic/deeper paths, and non-struct array elements
@@ -9628,6 +9649,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         np := expr_nested_path(pl)
         if sema_nested_field_path_value_bad(np, cvp, fpv, decls, upto, src, locals, cnt, a) {
           mark_failed(locals, mismatch_err(np.ss, 0))
+        }
+        if sema_pointer_field_path_value_bad(pl, cvp, fpv, decls, upto, src, locals, cnt, a) {
+          pfield := expr_field_span(pl)
+          mark_failed(locals, mismatch_err(pfield.s, 0))
         }
         afp := expr_array_nested_path(pl)
         if sema_array_nested_field_path_value_bad(afp, cvp, fpv, decls, upto, src, locals, cnt, a) {

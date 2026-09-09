@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A wrong-typed value can no longer be stored through a field reached by an explicitly typed
+  pointer.** Types §4.2/§4.3 and Memory §3.2 make assignment a typed value-to-place store, but
+  `p : ptr(mut P) = ptr(s); deref(p).f = "text"` accepted a string at a `u64` field and stored
+  its address. The semantic place check now resolves the declared pointee struct and field type,
+  rejects the mismatch at the field with the existing diagnostic, and preserves correct integer
+  and boolean stores. Inferred or unknown pointees and deeper pointer-derived paths remain separate
+  residuals of #304.
 - **A parameter, a local or a `comptime` binding named like a module constant now wins on x86_64
   too.** Declarations §5 makes scope lexical and block-structured and a function — its parameters and
   its body — an inner scope of the module, and §6.1 gives the inner name the win for the extent of
