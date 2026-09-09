@@ -3242,8 +3242,8 @@ expr_addr_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   }
 }
 ## Recover a pointer's pointee identity only for the proven inferred-binding shape
-## `p := ptr([mut] local_struct)`. The Result(Ty, CheckErr) carrier preserves the pointer tag but
-## not its ns/nl payload, while the addressed local's Local record retains the exact nominal struct.
+## `p := ptr([mut] local_struct)`. The Result(Ty, CheckErr) carrier may lose the pointer tag and
+## its ns/nl payload, while the addressed local's Local record retains the exact nominal struct.
 ## Any other address operand or unresolved/non-struct local stays fully UNKNOWN; this helper carries
 ## type identity only and deliberately says nothing about write permission.
 sema_addr_local_struct_ptr_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Ty {
