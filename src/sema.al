@@ -4777,6 +4777,24 @@ array_elem_ty := fn(src : ptr(u8), ty : Ty, decls : ptr(rt::Vec), upto : usize) 
   resolve_ty(src, sp.s, sp.n, decls, upto)
 }
 
+## Recover the element type for the two compiler-known indexed places whose binding carries enough
+## source evidence: a fixed array recorded in `Ty`, or an explicitly annotated `Slice(T)` local/param.
+## `Slice` is nominal (tag 3), so its element argument is not retained by `local_ty`; recover it from
+## the parser-independent annotation span exactly as the other bootstrap-sensitive generic-type checks
+## do. Inferred views and generic/ambiguous arguments remain UNKNOWN rather than inventing a type.
+sema_direct_index_elem_ty := fn(src : ptr(u8), local : Local, decls : ptr(rt::Vec), upto : usize) -> Ty {
+  ty := Ty(tag = local.tag, ns = local.tns, nl = local.tnl)
+  ae := array_elem_ty(src, ty, decls, upto)
+  if ae.tag != 0 { return ae }
+  ann := local_type_span(src, local.ns, local.nl)
+  if ann.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  bn := base_type_name(src, ann.s, ann.n)
+  if bn.n == 0 or str_at((src + bn.s), bn.n) != "Slice" { return Ty(tag = 0, ns = 0, nl = 0) }
+  elem := typearg_at(src, bn.s, bn.n, 0)
+  if elem.n == 0 or typearg_at(src, bn.s, bn.n, 1).n != 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  resolve_ty(src, elem.s, elem.n, decls, upto)
+}
+
 ## Replace a whole unreadied aggregate marker with one unreadied direct-field entry per declared field.
 ## Unknown/non-struct types stay conservative: the root marker is not discharged.
 da_seed_fields := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, ty : Ty) {
@@ -9931,8 +9949,9 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## confident aggregate value fires (a struct/enum-element array is left tolerant).
         ibv := expr_var_span(ib)
         if ibv.n != 0 {
-          iae := local_ty(locals, cnt, src, ibv.s, ibv.n)
-          aet := array_elem_ty(src, iae, decls, upto)
+          ilocal := local_at(locals, cnt, src, ibv.s, ibv.n)
+          iae := Ty(tag = ilocal.tag, ns = ilocal.tns, nl = ilocal.tnl)
+          aet := sema_direct_index_elem_ty(src, ilocal, decls, upto)
           if sema_direct_place_value_bad(aet, civ, iv, src, locals, cnt, "ELEM-STORE", ibv.s) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
           if expr_is_num_lit(ii) {
             da_assign_array(deref(da), src, ibv.s, ibv.n, expr_num_lit_val(ii), iae)
