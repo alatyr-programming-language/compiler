@@ -174,8 +174,11 @@ not be you. Before gating:
 - **Keep PR-controlled commands unprivileged.** Use a disposable integration worktree and do not pass
   `GH_TOKEN`, `GITHUB_TOKEN`, SSH agent credentials, or other secrets into scripts supplied by the PR.
   GitHub API calls made by the integrator happen outside the PR-controlled commands.
-- **Re-run the repro yourself**, and probe a form the PR skipped.
-- **Check the fixture fails on the parent.** One lane's `reject_` fixture failed pre-fix for an
+- **Re-run the repro yourself**, and probe a form the PR skipped. For an inert-prose candidate,
+  independently verify the factual defect, every changed reference, and the claim that no executable
+  or tool-consumed behavior changed.
+- **Check the fixture fails on the parent for every behavior or executable-workflow change.** One
+  lane's `reject_` fixture failed pre-fix for an
   unrelated reason ("unbound name"), so registering it as a bare `build_reject` would have passed
   before the fix and proved nothing; it went in as `build_reject_has` with the real diagnostic.
   That check exists only if you do it.
@@ -188,6 +191,14 @@ not be you. Before gating:
   the checkout contains, and the gate compiles and *runs* fixtures under qemu and wasmtime. Do not
   execute changed scripts, build definitions, or fixtures from a fork until the complete diff has
   passed the safety and issue-scope review.
+
+A PR may use the docs-only gate only after the integrator independently classifies the complete merged
+range. Never trust a PR label or contributor verdict. The candidate allowlist is regular,
+non-executable `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and `docs/**/*.md|txt`.
+Anything else, including `AGENTS.md`, `.agents/**`, `.github/**`, generated or tool-consumed prose,
+executable examples, normative language/build/release/security/permission behavior, object/mode
+changes, deletions, or uncertainty uses the full gate. Because a contributor may modify the classifier,
+run the classifier taken from the trusted base, not the PR.
 
 Collect the scope evidence without executing anything from the PR:
 
@@ -425,9 +436,52 @@ tag you placed.
 
 ## 4 · Gate the merge, then assert the tree
 
+For a single-PR candidate, copy the classifier from the trusted base and classify the complete merged
+range. Do not execute a classifier supplied by the PR:
+
 ```sh
-ulimit -c 0
-nix develop -c bash scripts/full.sh --force-sweeps      # must print GREEN (sweeps RAN)
+TRUSTED_DOCS_CLASSIFIER="$(mktemp)"
+if git cat-file -e "$BASE:.agents/skills/alatyr-lane/classify_docs_only.sh" 2>/dev/null; then
+  git show "$BASE:.agents/skills/alatyr-lane/classify_docs_only.sh" > "$TRUSTED_DOCS_CLASSIFIER"
+  DOCS_RC=0
+  bash "$TRUSTED_DOCS_CLASSIFIER" "$BASE" "$M" || DOCS_RC=$?
+else
+  # Bootstrap of the classifier itself, or an older trusted base: never grant the exception.
+  DOCS_RC=1
+fi
+rm -f "$TRUSTED_DOCS_CLASSIFIER"
+case "$DOCS_RC" in
+  0)
+    git diff --raw --no-abbrev "$BASE" "$M"
+    git diff "$BASE" "$M"
+    # Inspect every mode and hunk; verify local links, anchors, issue numbers and spec citations.
+    # Reject tool-consumed text, executable examples and normative behavior changes.
+    bash .agents/skills/alatyr-lane/classify_docs_only_test.sh
+    git diff --check "$BASE" "$M"
+    git diff --exit-code
+    git diff --cached --exit-code
+    GATE_OUTCOME="docs-only PASS"
+    ;;
+  1)
+    GATE_OUTCOME="full gate required"
+    ;;
+  *)
+    echo "trusted docs-only classifier refused the merged range" >&2
+    exit 1
+    ;;
+esac
+```
+
+The classifier establishes only path/object eligibility. `docs-only PASS` additionally requires the
+manual hunk and reference review in the comments above. Any uncertainty, any batch, or any non-candidate
+sets `DOCS_RC=1` and uses the full gate:
+
+```sh
+if [ "$DOCS_RC" -eq 1 ]; then
+  ulimit -c 0
+  nix develop -c bash scripts/full.sh --force-sweeps    # must print GREEN (sweeps RAN)
+  GATE_OUTCOME="GREEN (sweeps RAN)"
+fi
 ```
 
 Then, as separate statements — **never chained to the push**:
@@ -449,7 +503,8 @@ removed rows do not pair up, so a positional read invents transitions that are n
 `run → assemble/*` transition is a **regression** even when it arrives among two dozen wins — that
 exact shape, 8 among 23, once nearly landed.
 
-There are two landing paths. For an ordinary PR, the first merged-tree gate must be green. For an
+There are three landing paths. An independently classified inert-prose PR must report
+`docs-only PASS`; an ordinary PR's first merged-tree full gate must be green. For an
 intentional behavior change whose feature-only PR explicitly records an oracle transition, run
 `scripts/land.sh <pr>` **without `--push`**. Its first gate may report the expected oracle mismatch and
 leave the exact merge commit detached; that result is an inspection stop, not a landing failure to
@@ -465,6 +520,8 @@ The same rule applies to an intentional `idiom.baseline` or `needle.baseline` re
 For a normal PR, `--push` is available after its green verdict. For an intentional oracle transition,
 use the detached result as the documented pre-oracle inspection point, complete the separate maintainer
 oracle commit and final gate manually, then publish that final exact object with the saved lease.
+The script is full-gate only; an inert-prose candidate uses the manual merge, independent
+classification, docs-only gate, snapshot comparison, and leased push in this procedure.
 
 If any reseed or oracle commit was added after the initial merge, refresh the object to publish only
 after the final green gate:
@@ -695,7 +752,7 @@ gh pr comment "$PR" -R "$R" --body-file - <<EOF
 Accepted and landed by the maintainer.
 
 - gated main object: $M
-- authoritative gate: GREEN (sweeps RAN)
+- authoritative gate: $GATE_OUTCOME
 - batch membership: <this PR alone, or every PR merged into the gated object>
 - joined corpus transitions: <the classes and counts observed, against the per-PR predictions made in advance>
 - oracle changes: <none, or the separately gated oracle commit(s)>

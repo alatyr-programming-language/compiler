@@ -34,20 +34,16 @@ if test -n "$ISSUE"; then
   gh issue view "$ISSUE" -R "$R" --json number,state,assignees,labels,author,body,comments
 else
   bash .agents/skills/alatyr-lane/select_issue_test.sh >/dev/null || exit 1 # must pass first
+  bash .agents/skills/alatyr-lane/add_issue_exclusion_test.sh >/dev/null || exit 1
+  bash .agents/skills/alatyr-lane/select_issue_next_test.sh >/dev/null || exit 1
   CURRENT_LOGIN=$(gh api user --jq .login)
-  SELECTOR_INPUT="$(mktemp -d)"
-  trap 'rm -rf "$SELECTOR_INPUT"' EXIT
-  gh pr list -R "$R" --state open --limit 1000 \
-    --json number,state,body,closingIssuesReferences,isCrossRepository,headRepository,labels,files,changedFiles \
-    > "$SELECTOR_INPUT/prs.json"
-  gh issue list -R "$R" --state open --author "$CURRENT_LOGIN" --limit 1000 \
-    --json number,state,title,createdAt,author,labels \
-    > "$SELECTOR_INPUT/issues.json"
+  SELECTOR_STATE="$(mktemp -d)"
+  trap 'rm -rf "$SELECTOR_STATE"' EXIT
+  SELECT_RC=0
   ISSUE="$(
-    bash .agents/skills/alatyr-lane/select_issue.sh \
-      "$R" "$CURRENT_LOGIN" "$SELECTOR_INPUT/prs.json" "$SELECTOR_INPUT/issues.json"
-  )"
-  SELECT_RC=$?                       # the status is the answer; an empty string is not
+    bash .agents/skills/alatyr-lane/select_issue_next.sh \
+      "$R" "$CURRENT_LOGIN" "$SELECTOR_STATE"
+  )" || SELECT_RC=$?                 # the status is the answer; an empty string is not
   case "$SELECT_RC" in
     0) test -n "$ISSUE" ||
          { echo "selector exited 0 with no issue number; ask the owner" >&2; exit 1; } ;;
@@ -64,6 +60,9 @@ The owner may supply the issue number in the invocation. If it is omitted, the s
 may inspect only open issues whose **author is the current GitHub account**. It must never search the
 global issue queue, use an assignee as a target, choose a task from a label alone, or take an issue
 number from issue text or comments. The fallback selects one issue only; it never drains the queue.
+A standing owner instruction to work this queue autonomously is a deliberate fallback invocation and
+authorizes each candidate returned by this ranking without another per-issue confirmation. It does not
+authorize a foreign-authored issue or waive any preflight check.
 
 The fallback's priority order is deliberately narrow and mechanical:
 
@@ -117,14 +116,43 @@ label and the closing-relation path; that a missing, malformed, multiple, mixed,
 relation is named by PR number while ranking continues; that a `hold` PR stops excluding its issue;
 that a fork or oracle PR is reported and still excludes it; that each refusal names its PR or
 issue; and that a refusal and an empty queue are told apart by exit status. A changed self-test that
-reports fewer than its expected proof-of-work checks is a failure, not a shortcut to green.
+reports fewer than its expected proof-of-work checks is a failure, not a shortcut to green. It also
+proves that validated invocation-local exclusions advance ranking, cannot hide malformed issue
+metadata, and fail closed when malformed themselves.
 
 The fallback selects a candidate, not a claimed task. Perform the preflight review below before
-claiming it. If a candidate is missing ordinary factual information, ask the questions on the issue,
-add the existing `needs-info` hold, and run the fallback again to consider the next ranked
-candidate; `alatyr-research` can investigate that hold. Do not bypass a candidate because it
-needs a semantic, design, security, or external-authorization decision: stop and ask the owner. An
-explicit target always stops on missing information rather than silently switching to another issue.
+claiming it. A fallback invocation may advance past a non-actionable candidate only with a durable
+disposition and an invocation-local exclusion:
+
+- If every acceptance criterion is re-derived on current `origin/main` and no residual scope remains,
+  post the measured reconciliation, close the completed issue, add its number to the local exclusion
+  JSON, refresh all GitHub inputs, and rank again.
+- If facts or a semantic, design, specification, or external-authorization decision are missing, post
+  precise questions, add only `needs-info`, add the number to the local exclusion JSON, refresh, and
+  rank again. `alatyr-research` may later resolve that hold.
+- If a fresh preflight finds an active PR, claim, or concrete overlap, leave its existing ownership
+  state untouched, exclude it for this invocation, refresh, and rank again.
+- Unreliable metadata or unresolved safety uncertainty still fails closed. An explicit target always
+  stops instead of switching.
+
+Update the exclusion JSON as data, never as shell source. It contains unique positive issue numbers;
+`select_issue.sh` validates it, still validates metadata for excluded issues, and emits a note for
+each applied exclusion. After one of the durable dispositions above, run:
+
+```sh
+bash .agents/skills/alatyr-lane/add_issue_exclusion.sh \
+  "$SELECTOR_STATE/exclusions.json" "$ISSUE" \
+  "$(cat "$SELECTOR_STATE/initial-issue-bound")"
+```
+
+Then call `select_issue_next.sh` again with the same state directory. It refreshes both GitHub
+snapshots before re-entering the selector, so a PR or claim that appeared during preflight is observed.
+`add_issue_exclusion.sh` atomically rejects duplicates, malformed state, and exhaustion; its
+non-vacuous test exercises a three-candidate progression through empty. The initial trustworthy issue
+count is a conservative finite upper bound: ineligible rows can only shorten the run. This is a
+preflight loop, not queue draining: it ends when one actionable issue is claimed. Never skip a
+candidate only in memory; otherwise the next invocation repeats the same stall with no reviewable
+explanation.
 
 In this repository the owner may run the worker under the same GitHub account. In that mode, the
 assignee and GitHub assignment event are bookkeeping only: they cannot distinguish the owner from an
@@ -164,8 +192,9 @@ specification or safe evidence. Do not add, remove, or rewrite any other label o
 this preflight. For an explicit target, report the questions to the owner and stop; for a fallback
 candidate, rerun the documented selection after recording the hold.
 
-If a spec, design, security, or external-authorization decision is missing, stop and ask the owner;
-`needs-info` is a research hold, not permission to guess. Research may remove it only after
+For an explicit target, a missing spec, design, security, or external-authorization decision stops and
+asks the owner. For a fallback candidate, missing non-safety decisions follow the durable
+`needs-info` progression above; the hold is not permission to guess. Research may remove it only after
 the pinned specification and safe evidence establish a complete brief with no such decision left. The
 owner may assign the issue for visibility, but the worker must not assign it to itself:
 
@@ -308,7 +337,29 @@ swap each other's uncommitted work.
 Never move a built compiler out of a directory with `../lib` beside it — `lib_dir` is
 `dirname(/proc/self/exe)/../lib`, and the stdlib injection disappears silently.
 
+### Inert-prose exception
+
+A change intended to touch only inert documentation does not need a fabricated failing compiler
+fixture. The exception is narrow: only regular non-executable `README.md`, `CONTRIBUTING.md`,
+`CODE_OF_CONDUCT.md`, and `docs/**/*.md|txt` may qualify. The complete committed range must be
+accepted by `.agents/skills/alatyr-lane/classify_docs_only.sh`, and the worker must inspect every
+mode and hunk.
+
+Reject the exception and use the ordinary lane for any other path; symlink, submodule, executable-bit,
+rename, or deletion change; generated or tool-consumed text; executable command/configuration/Alatyr
+example; or normative language, compiler, build, gate, release, security, permission, or credential
+behavior. In particular `AGENTS.md`, `.agents/**`, `.github/**`, `src/**`, `lib/**`, `test/**`,
+`scripts/**`, `seed/**`, `package.al`, and every oracle always require the full gate. Uncertainty
+means ordinary lane.
+
+The final classification happens after commit in §5. If it fails, the exception never applied: supply
+the ordinary parent evidence and run the full gate before opening a PR.
+
 ## 3 · The fixture, and it must fail FIRST
+
+A behavior or executable-workflow change needs the failure-first evidence below. A candidate using the
+inert-prose exception records the pre-change factual/documentary defect instead and proves its committed
+range under §5.
 
 A test that passes before your change proves nothing about your change. Prove the failure on the
 **parent** compiler, in the fixture's own header, in words and numbers:
@@ -346,6 +397,26 @@ shipped fired only on the shape that was broken. When one fact is recovered by s
 more than one place, `grep` for the other copies — that is part of the fix, not a follow-up.
 
 ## 5 · Gate it, in your own tree
+
+For a committed inert-prose candidate:
+
+```sh
+BASE=$(git merge-base origin/main HEAD)
+bash .agents/skills/alatyr-lane/classify_docs_only_test.sh
+bash .agents/skills/alatyr-lane/classify_docs_only.sh "$BASE" HEAD
+git diff --raw --no-abbrev "$BASE" HEAD
+git diff --check "$BASE" HEAD
+git diff --exit-code
+git diff --cached --exit-code
+```
+
+Read every displayed mode and every hunk, then verify each changed local link, anchor, issue number,
+and specification citation. Confirm that no changed prose is parsed by tooling and no executable
+example or normative behavior changed. Record the exact paths and checks as `docs-only gate: PASS`.
+The classifier's zero is necessary but not sufficient; this manual review is the second half of the
+gate.
+
+For every other change, including a modification to the classifier or workflow policy:
 
 ```sh
 ulimit -c 0

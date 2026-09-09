@@ -2,7 +2,8 @@
 # Select one same-account issue from GitHub JSON after reading every open PR's issue relation.
 #
 # Usage:
-#   bash .agents/skills/alatyr-lane/select_issue.sh REPOSITORY LOGIN PRS_JSON ISSUES_JSON
+#   bash .agents/skills/alatyr-lane/select_issue.sh \
+#     REPOSITORY LOGIN PRS_JSON ISSUES_JSON LOCAL_EXCLUSIONS_JSON
 #
 # The JSON files are data, not shell input. Exit status is the answer, not the printed text:
 #
@@ -17,8 +18,8 @@
 # refusal instead, because that means the query, not a contributor, has to be fixed.
 set -eu
 
-if [ "$#" -ne 4 ]; then
-  echo "usage: $0 REPOSITORY LOGIN PRS_JSON ISSUES_JSON" >&2
+if [ "$#" -ne 5 ]; then
+  echo "usage: $0 REPOSITORY LOGIN PRS_JSON ISSUES_JSON LOCAL_EXCLUSIONS_JSON" >&2
   exit 2
 fi
 
@@ -26,8 +27,10 @@ REPOSITORY="$1"
 LOGIN="$2"
 PRS_JSON="$3"
 ISSUES_JSON="$4"
+LOCAL_EXCLUSIONS_JSON="$5"
 
-if [ -z "$REPOSITORY" ] || [ -z "$LOGIN" ] || [ ! -r "$PRS_JSON" ] || [ ! -r "$ISSUES_JSON" ]; then
+if [ -z "$REPOSITORY" ] || [ -z "$LOGIN" ] || [ ! -r "$PRS_JSON" ] ||
+   [ ! -r "$ISSUES_JSON" ] || [ ! -r "$LOCAL_EXCLUSIONS_JSON" ]; then
   echo "refusing same-account lane fallback: invalid selector input" >&2
   exit 2
 fi
@@ -48,6 +51,15 @@ SELECTOR_JQ='
       refuse($what + " must be a positive integer")
     else
       $value
+    end;
+
+  def checked_exclusions($data):
+    if any($data[]; (type != "number") or (. <= 0) or (. != floor)) then
+      refuse("local exclusions must contain only positive integers")
+    elif ($data | unique | length) != ($data | length) then
+      refuse("local exclusions must not contain duplicates")
+    else
+      $data
     end;
 
   # Every message names its subject. An entry too malformed to carry a number is named by position.
@@ -246,10 +258,14 @@ SELECTOR_JQ='
 
   (one_array("open PR metadata"; $prs)) as $open_prs |
   (one_array("issue metadata"; $issues)) as $all_issues |
+  (one_array("local exclusion metadata"; $local_exclusions) | checked_exclusions(.)) as $excluded_here |
   [ $open_prs | to_entries[] | pr_result(.key; .value) ] as $pr_results |
   ([ $pr_results[] | .veto[] ] | unique) as $vetoed |
-  ([ $pr_results[] | .notes[] ]) as $notes |
-  [ $all_issues | to_entries[] | checked_issue(.key; .value) |
+  (([ $pr_results[] | .notes[] ]) +
+   [ $excluded_here[] |
+     "issue #" + tostring + " excluded for this invocation; ranking continues" ]) as $notes |
+  [ $all_issues | to_entries[] | checked_issue(.key; .value) ] as $checked_issues |
+  [ $checked_issues[] |
     select(.state == "OPEN") |
     select(.author.login == $login) |
     ([.labels[] | .name]) as $label_names |
@@ -269,7 +285,8 @@ SELECTOR_JQ='
                    end)
       }
     end |
-    select(.number as $number | any($vetoed[]; . == $number) | not)
+    select(.number as $number | any($vetoed[]; . == $number) | not) |
+    select(.number as $number | ($excluded_here | index($number)) == null)
   ] as $candidates |
   {
     notes: $notes,
@@ -289,6 +306,7 @@ if ! RESULT="$(
     --arg login "$LOGIN" \
     --slurpfile prs "$PRS_JSON" \
     --slurpfile issues "$ISSUES_JSON" \
+    --slurpfile local_exclusions "$LOCAL_EXCLUSIONS_JSON" \
     "$SELECTOR_JQ" </dev/null 2>"$SELECTOR_ERR"
 )"; then
   sed -e 's/^jq: error[^:]*: //' "$SELECTOR_ERR" >&2

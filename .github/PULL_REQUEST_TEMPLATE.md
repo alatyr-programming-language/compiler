@@ -30,12 +30,15 @@ intervening command substitution, and because a file had moved between the two t
 > locally, runs the gate on **that merge**, and re-derives every number below. Say how each one was
 > obtained so that re-deriving it is possible.
 
-- **The fixture failed first.** How it failed before, in words and numbers:
+- **Parent evidence.** For behavior/executable work, how the focused fixture failed first in words and
+  numbers. For inert prose, the factual defect and the references inspected:
 - **Per backend, after:** x86_64 · aarch64 · riscv64 · wasm
-- `./scripts/full.sh --force-sweeps`:
+- **Verification path:** full compiler gate, intentional-oracle path, or independently classified
+  docs-only gate. Include its output:
 
 ```
-paste the fixpoint line, the e2e proof-of-work line, the manifest verdict and the three sweep triples
+for a full gate, paste the fixpoint line, e2e proof-of-work line, manifest verdict and sweep triples;
+for docs-only, list the classifier verdict, changed paths, hunk/mode review, references and diff checks
 ```
 
 For an intentional behavior change whose expected result updates an oracle, this feature-only PR must
@@ -45,22 +48,28 @@ local merge; the final complete gate is run on that merge plus oracle commit.
 
 ## Checklist
 
-- [ ] For an ordinary change, the gate is green, and `git diff --exit-code` is clean **after** it — the
+- [ ] For an ordinary change, the full gate is green. For an inert-prose change, both worker and
+      integrator classified and reviewed the complete range and the docs-only gate passed. In either
+      case, `git diff --exit-code` is clean **after** verification — the
       tree the gate ran on did not move. For an intentional oracle transition, this feature-only PR
       contains no oracle file, the only expected pre-landing failure is the reviewed oracle mismatch,
       and the maintainer will make the separate oracle commit and run the final green gate after merge.
       (A clean `git status` alone does not prove `--check` rather than `--write`: a committed `--write`
       regeneration leaves the status clean too.)
-- [ ] A fixture registered in `scripts/e2e.sh` that **fails on the parent commit**. Not a fixture
-      that merely passes now.
-- [ ] `scripts/e2e.sh`'s vacuous-needle banner did not grow. (The check is mechanical now — this
-      box is here so you read the banner, not so you assert it.)
+- [ ] Behavior or executable-workflow work has a fixture registered in `scripts/e2e.sh` that
+      **fails on the parent commit**, not one that merely passes now. Inert prose instead records the
+      pre-change factual defect and complete reference/hunk review.
+- [ ] For a full-gate change, `scripts/e2e.sh`'s vacuous-needle banner did not grow. For docs-only,
+      this check is inapplicable. (The full-gate check is mechanical now — this box is here so you
+      read the banner, not so you assert it.)
 - [ ] Emission changed? The GAS delta was measured with the **input tree held fixed, in both
       directions**, with `.L<N>` and `.Lra<N>_<k>` normalized. Comparing your tree against the old
       one compares a longer source with a shorter one and proves nothing.
-- [ ] Fixpoint green. A reseed, if one is owed, is the maintainer's act and needs three-stage
-      evidence — say so rather than doing it.
-- [ ] The corpus manifest matches for an ordinary PR, or the expected transition is explained here and
+- [ ] Fixpoint green for every full-gate change. A reseed, if one is owed, is the maintainer's act and
+      needs three-stage evidence — say so rather than doing it. For docs-only, record why fixpoint is
+      inapplicable.
+- [ ] The corpus manifest matches for an ordinary full-gate PR, is inapplicable to independently
+      classified inert prose, or the expected transition is explained here and
       the maintainer will regenerate it in a separate one-file commit after the local merge. The
       message for that commit carries the `scripts/corpus_manifest.sh --explain` output verbatim (it
       joins on `(backend, path)` and separates severity classes; reading the raw diff positionally

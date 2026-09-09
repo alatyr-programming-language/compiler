@@ -12,10 +12,14 @@
 # The refusal cases prove that unreliable selector input still fails closed, that every refusal
 # names the offending PR or issue, and that a refusal (exit 2) is distinguishable from an empty
 # queue (exit 3) by exit status rather than by an empty stdout.
+#
+# The progression cases prove that invocation-local exclusions advance deterministic ranking without
+# hiding malformed issue metadata, and that malformed exclusion input fails closed.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SELECTOR="$ROOT/.agents/skills/alatyr-lane/select_issue.sh"
+NEXT="$ROOT/.agents/skills/alatyr-lane/select_issue_next.sh"
 SKILL="$ROOT/.agents/skills/alatyr-lane/SKILL.md"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -25,13 +29,14 @@ checks=0
 pass()  { checks=$((checks + 1)); echo "ok   lane-selection: $*"; }
 flunk() { checks=$((checks + 1)); fail=1; echo "FAIL lane-selection: $*"; }
 
-# run_case NAME EXPECTED_RC PRS_JSON ISSUES_JSON EXPECTED_STDOUT EXPECTED_STDERR
+# run_case_with_exclusions NAME EXPECTED_RC PRS_JSON ISSUES_JSON EXPECTED_STDOUT EXPECTED_STDERR EXCLUSIONS_JSON
 # Use - for an unchecked stdout or stderr expectation.
-run_case() {
+run_case_with_exclusions() {
   local name="$1" want_rc="$2" prs="$3" issues="$4" want_out="$5" want_err="$6"
+  local exclusions="$7"
   local out="$WORK/$name.out" err="$WORK/$name.err" rc=0
   bash "$SELECTOR" alatyr-programming-language/compiler nizovtsevnv \
-    "$prs" "$issues" >"$out" 2>"$err" || rc=$?
+    "$prs" "$issues" "$exclusions" >"$out" 2>"$err" || rc=$?
   if [ "$rc" -ne "$want_rc" ]; then
     flunk "$name: exit $rc, expected $want_rc (stderr: $(tr '\n' '|' <"$err"))"
     return
@@ -45,6 +50,10 @@ run_case() {
     return
   fi
   pass "$name"
+}
+
+run_case() {
+  run_case_with_exclusions "$1" "$2" "$3" "$4" "$5" "$6" "$EMPTY_EXCLUSIONS"
 }
 
 json() { cat > "$WORK/$1"; printf '%s' "$WORK/$1"; }
@@ -62,10 +71,20 @@ issue() {
   printf '"author":{"login":"nizovtsevnv"},"labels":%s}' "$3"
 }
 
+EMPTY_EXCLUSIONS="$(json exclusions-empty.json <<'JSON'
+[]
+JSON
+)"
+PRS_EMPTY="$(json prs-empty.json <<'JSON'
+[]
+JSON
+)"
+
 # ---------------------------------------------------------------- wiring checks
 
-if [ -f "$SELECTOR" ] && grep -Fq 'select_issue.sh' "$SKILL" &&
-   grep -Fq 'closingIssuesReferences,isCrossRepository,headRepository,labels,files,changedFiles' "$SKILL"; then
+if [ -f "$SELECTOR" ] && [ -f "$NEXT" ] && grep -Fq 'select_issue_next.sh' "$SKILL" &&
+   grep -Fq 'closingIssuesReferences,isCrossRepository,headRepository,labels,files,changedFiles' "$NEXT" &&
+   grep -Fq 'exclusions.json' "$NEXT"; then
   pass "skill wires the data-only selector and complete PR metadata"
 else
   flunk "skill does not wire the data-only selector and complete PR metadata"
@@ -103,6 +122,37 @@ PRS_CLOSING="$(json prs-closing.json <<JSON
 JSON
 )"
 run_case closing-relations-exclude-their-issues 0 "$PRS_CLOSING" "$ISSUES_CLOSING" 344 -
+
+# ----------------------------------------------- deterministic invocation-local progression
+
+ISSUES_PRIORITY="$(json issues-priority.json <<JSON
+[$(issue 360 48 '[{"name":"priority-0"}]'),
+ $(issue 361 49 '[{"name":"priority-1"}]'),
+ $(issue 362 50 '[{"name":"priority-2"}]')]
+JSON
+)"
+EXCLUDE_360="$(json exclude-360.json <<'JSON'
+[360]
+JSON
+)"
+run_case_with_exclusions highest-priority-local-exclusion-selects-next 0 \
+  "$PRS_EMPTY" "$ISSUES_PRIORITY" 361 \
+  "issue #360 excluded for this invocation; ranking continues" "$EXCLUDE_360"
+
+EXCLUDE_360_361="$(json exclude-360-361.json <<'JSON'
+[360,361]
+JSON
+)"
+run_case_with_exclusions several-local-exclusions-preserve-order 0 \
+  "$PRS_EMPTY" "$ISSUES_PRIORITY" 362 - "$EXCLUDE_360_361"
+
+EXCLUDE_ALL="$(json exclude-all.json <<'JSON'
+[360,361,362]
+JSON
+)"
+run_case_with_exclusions all-candidates-locally-excluded-is-empty 3 \
+  "$PRS_EMPTY" "$ISSUES_PRIORITY" "" \
+  "no eligible issue authored by nizovtsevnv" "$EXCLUDE_ALL"
 
 # -------------------------------------------- availability: a bad PR body is diagnosed, not fatal
 
@@ -242,6 +292,47 @@ run_case refusal-on-pr-input-that-is-not-an-array 2 \
   "$PRS_NOT_ARRAY" "$ISSUES_338" "" \
   "open PR metadata must be one JSON array"
 
+for bad in duplicate zero negative fractional string object; do
+  case "$bad" in
+    duplicate) value='[338,338]'; needle='local exclusions must not contain duplicates' ;;
+    zero) value='[0]'; needle='local exclusions must contain only positive integers' ;;
+    negative) value='[-1]'; needle='local exclusions must contain only positive integers' ;;
+    fractional) value='[1.5]'; needle='local exclusions must contain only positive integers' ;;
+    string) value='["338"]'; needle='local exclusions must contain only positive integers' ;;
+    object) value='[{"number":338}]'; needle='local exclusions must contain only positive integers' ;;
+  esac
+  exclusions="$(json "exclusions-$bad.json" <<JSON
+$value
+JSON
+)"
+  run_case_with_exclusions "refusal-on-$bad-local-exclusion" 2 \
+    "$PRS_NO_RELATION" "$ISSUES_338" "" "$needle" "$exclusions"
+done
+
+ISSUES_EXCLUDED_MALFORMED="$(json issues-excluded-malformed.json <<'JSON'
+[{"number":338,"state":"OPEN","title":"candidate","createdAt":"2026-09-01T01:08:48Z",
+  "author":{"login":"nizovtsevnv"},"labels":"not-an-array"},
+ {"number":339,"state":"OPEN","title":"candidate","createdAt":"2026-09-01T01:08:49Z",
+  "author":{"login":"nizovtsevnv"},"labels":[]}]
+JSON
+)"
+EXCLUDE_338="$(json exclude-338.json <<'JSON'
+[338]
+JSON
+)"
+run_case_with_exclusions excluded-issue-metadata-still-fails-closed 2 \
+  "$PRS_NO_RELATION" "$ISSUES_EXCLUDED_MALFORMED" "" \
+  "issue #338 labels are missing or malformed" "$EXCLUDE_338"
+
+ISSUES_EXCLUDED_BAD_PRIORITY="$(json issues-excluded-bad-priority.json <<JSON
+[$(issue 338 48 '[{"name":"priority-1"},{"name":"priority-2"}]'),
+ $(issue 339 49 '[]')]
+JSON
+)"
+run_case_with_exclusions excluded-issue-priority-still-fails-closed 2 \
+  "$PRS_NO_RELATION" "$ISSUES_EXCLUDED_BAD_PRIORITY" "" \
+  "issue #338 carries ambiguous or malformed priority labels" "$EXCLUDE_338"
+
 # ------------------------------------ empty queue: exit 3, distinct from the refusals above
 
 ISSUES_CLAIMED="$(json issues-claimed.json <<JSON
@@ -256,8 +347,8 @@ run_case empty-queue-when-every-issue-has-a-conforming-pr 3 \
   "$PRS_REFS" "$ISSUES_338" "" \
   "no eligible issue authored by nizovtsevnv"
 
-if [ "$checks" -ne 20 ]; then
-  echo "FAIL lane-selection: expected 20 checks, reached $checks" >&2
+if [ "$checks" -ne 31 ]; then
+  echo "FAIL lane-selection: expected 31 checks, reached $checks" >&2
   exit 1
 fi
 if [ "$fail" -ne 0 ]; then
