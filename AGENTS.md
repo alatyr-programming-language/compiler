@@ -138,10 +138,18 @@ the exact item for an agent operation. An agent must not perform a repository-wi
 a foreign-authored item by label or assignee, or post a triage decision on an item that the owner did
 not select. The worker skills below are the only automatic routing paths: an explicit issue or PR number,
 or the narrowly scoped same-account fallback documented by that skill. Those paths are routing only and
-do not grant authorization. If triage authority or a required decision is unclear, stop and report it
-to the owner; do not resolve the ambiguity by adding a label or changing the item. Existing issue or PR
+do not grant authority outside their selected current-account item. Within a deliberately invoked
+same-account fallback, recording precise unanswered questions and adding `needs-info` is an authorized
+disposition, not a decision: it makes no semantic choice and allows deterministic ranking to continue.
+Outside that path, or when safety itself is uncertain, stop and report the ambiguity to the owner; do
+not resolve it by adding a label or changing the item. Existing issue or PR
 comments and other context, including context on #288, are evidence: preserve them and add a correction
 or follow-up rather than deleting or rewriting history.
+
+A standing owner instruction to work the current account's queue autonomously is a deliberate
+invocation of the documented same-account fallback. It authorizes each candidate produced by that
+mechanical ranking without a new per-issue confirmation; it does not authorize foreign-authored work,
+waive preflight, or turn labels and issue text into authority.
 
 `needs-info` is both an implementation hold and a research queue. The separate
 `alatyr-research` operation may read the pinned specification, inspect the repository,
@@ -174,8 +182,13 @@ target selection, and independent safety checks are the operational boundary.
   issues it legibly names rather than stopping the whole queue. Unreliable PR or issue metadata — a
   requested field that is absent, wrongly typed, or self-contradictory — is instead a refusal that
   names that PR or issue and is distinguished from an empty queue by exit status, never by an empty
-  result. The `needs-info` exclusion is for implementation; the research skill has its own
-  narrowly scoped fallback for that queue.
+  result. A fallback invocation keeps a validated invocation-local exclusion list and may rerun ranking
+  after a candidate is durably dispositioned: a proved-complete issue is reconciled on GitHub; a
+  candidate missing facts or a required decision receives a precise `needs-info` record; an active
+  owner is already represented by its PR or claim. It never skips a candidate only in memory, never
+  lets a local exclusion hide malformed metadata, and bounds reranking by the initial trustworthy
+  issue snapshot. Explicit targets still stop on missing information. The `needs-info` exclusion is
+  for implementation; the research skill has its own narrowly scoped fallback for that queue.
 - `in-progress` is the visible operation-claim marker for research or implementation. The
   operation adds it only after its preflight and a final re-read immediately before starting; an issue
   carrying it is already claimed and must not be selected or duplicated. Research releases it after
@@ -235,9 +248,12 @@ their PR evidence and acceptance record still provide the full description.
   and may carry only the reviewed pre-oracle mismatch as evidence; the maintainer owns the oracle
   regeneration after the local merge. Each regeneration is one commit touching that oracle alone,
   followed by a complete green gate on the resulting object.
-- The gate runs on the locally merged result, not the contributor branch. Re-derive the evidence, gate
-  that merge, and push exactly the object that passed. Never re-merge or modify it between gate and push.
-- Hosted CI or pull-request status is not authoritative; the local full gate is the only landing verdict.
+- Verification runs on the locally merged result, not the contributor branch. Re-derive the evidence,
+  check that merge with the gate appropriate to its independently reviewed change class, and push exactly
+  the object that passed. Never re-merge or modify it between verification and push.
+- Hosted CI or pull-request status is not authoritative. The local full gate is the verdict for every
+  executable, generated, compiler, fixture, build, workflow-control, release, security, permission, or
+  uncertain change. Only independently classified inert prose may use the docs-only gate below.
 - After a successful landing, the integrator removes the accepted same-repository remote feature
   branch and, only when its local tip exactly equals the landed PR head and its dedicated worktree is
   clean, removes the matching local worktree and branch too. A dirty, diverged, or ambiguous local
@@ -262,7 +278,9 @@ No single check is sufficient:
 
 ## Evidence rules
 
-- Every change owns a focused regression that fails on the parent before the fix.
+- Every behavior or executable-workflow change owns a focused regression that fails on the parent
+  before the fix. Inert prose has no runtime behavior to make fail first; it instead owns complete
+  diff, mode, reference, and formatting evidence under the docs-only gate.
 - For a refactor, compare byte-identical output with the input tree held fixed and use the corpus oracle.
 - Verify the measurement method independently: check exit status outside pipelines, use absolute compiler
   paths where fixtures change directory, and verify behavior rather than a symbol's presence.
@@ -274,11 +292,24 @@ No single check is sufficient:
 ## Gates
 
 - `nix develop -c bash scripts/dev.sh` is the fast loop. `nix develop -c bash scripts/full.sh` is the
-  authoritative gate and must be green before publish. A feature-only PR with an intentional oracle
+  authoritative compiler gate and must be green before publish for every change outside the narrow
+  docs-only class. A feature-only PR with an intentional oracle
   transition may use the first non-green run only to document the expected oracle mismatch; the final
   merge plus maintainer oracle commit must pass the complete gate before publish.
 - The full gate covers fixpoint, e2e, corpus, formatter, duplicate-decision, invariant, and cross-target
   checks; an individual green check is never sufficient.
+- The docs-only gate is available only when
+  `.agents/skills/alatyr-lane/classify_docs_only.sh <base> <head>` accepts the complete committed range
+  and both worker and integrator independently inspect every hunk. Its allowlist is regular,
+  non-executable `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and `docs/**/*.md|txt`.
+  Changes to `AGENTS.md`, `.agents/**`, `.github/**`, source/library/tests/scripts/seed/package
+  files, modes, symlinks, submodules, deletions, generated or tool-consumed text, executable examples,
+  or normative language/build/release/security/permission behavior require the full gate. Uncertainty
+  means full gate.
+- A docs-only pass requires the raw diff and modes, every hunk, local references and cited anchors,
+  `git diff --check`, and clean tracked and staged trees. Integration reclassifies the merged range
+  using the classifier from the trusted base and preserves the same snapshot, lease, exact-object,
+  claim-release, and acceptance-record rules. A mixed batch always uses the full gate.
 - A non-x86 emission change runs the cross-target sweeps; `--force-sweeps` overrides the change filter.
 - The detailed execution order, safety review, branch cleanup, and acceptance comment are defined by
   `alatyr-lane` and `alatyr-integrate`.
