@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **Pointers inferred from a local address now retain the local's declared struct identity.**
+  The bootstrap type carrier could erase both the `ptr` tag and its pointee name for
+  `p := ptr(mut value)`, so a later `deref(p).inner.f = "text"` bypassed the leaf's
+  `u64` compatibility check. Dedicated AST accessors now recover only the invariant pointer
+  tag and a proven local-struct pointee; unsupported address expressions remain unknown.
+  Correct deep integer and boolean stores continue to return 42.
 - **Assignment type checking now follows every declared field in a pointer-rooted place.**
   A direct `deref(p).f` store was checked, but `deref(p).inner.f = "text"` still accepted
   a string at a `u64` leaf. The semantic check now mirrors the recursive field-place grammar
