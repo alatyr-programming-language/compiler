@@ -5380,6 +5380,10 @@ check_build_located reject_issue304_slice_local_type 5 "type mismatch"
 check_build_located reject_issue304_slice_param_type 3 "type mismatch"
 check_accept accept_issue304_slice_element_type
 run accept_issue304_slice_element_type 42
+check_build_located reject_issue304_inferred_slice_scalar_type 5 "type mismatch"
+check_build_located reject_issue304_inferred_slice_struct_type 5 "type mismatch"
+check_accept accept_issue304_inferred_slice_element_type
+run accept_issue304_inferred_slice_element_type 42
 check_reject reject_lambda_aggregate_return
 check_reject reject_lambda_capture_escape
 check_accept accept_param_default
