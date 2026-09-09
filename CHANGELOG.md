@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **Assignment type checking now follows a direct pointer-returning call into its field place.**
+  The explicitly typed local form was checked, but `deref(make_ptr()).f = "text"` still accepted
+  a string at a `u64` field. A uniquely resolved direct call's declared `ptr([mut] Struct)`
+  result now feeds the same field-type compatibility check; indirect, ambiguous, unknown-pointee,
+  and deeper pointer expressions retain their existing boundary. Correct integer and boolean
+  stores through the call-produced pointer continue to return 42.
 - **A wrong-typed value can no longer be stored through a field reached by an explicitly typed
   pointer.** Types §4.2/§4.3 and Memory §3.2 make assignment a typed value-to-place store, but
   `p : ptr(mut P) = ptr(s); deref(p).f = "text"` accepted a string at a `u64` field and stored
