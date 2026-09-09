@@ -255,12 +255,27 @@ pub Ty := struct { tag : u8, ns : usize, nl : usize }
 ## I11, D-usize→ptr). Accepting it here is monotonic (teaches `check` to accept what `build` compiles);
 ## the `ptr(X)`-vs-`ptr(Y)` pointee discrimination (two tag-5 with distinct known pointees) is UNAFFECTED
 ## — that lives in `ty_compat`, keyed on both tags being 5.
+## Issue #529 — the int(1)↔ptr(5) SEAM, extracted verbatim from `tag_compat` into ONE named
+## predicate. Two reasons, neither cosmetic. (1) The census below has to agree with the acceptance
+## about which pairs the seam covers; two copies of the pair test could drift, and a census that
+## measures a slightly different relation than the compiler accepts is worse than no census.
+## (2) #529's step 4 removes the seam, and with the pair test named it is one call site to delete
+## rather than two conditionals to find. The BODY is unchanged, so `tag_compat` decides exactly what
+## it decided before: this is the same relation under a name.
+ptrint_seam := fn(x : u8, y : u8) -> bool {
+  if x == 1 and y == 5 { return true }
+  if x == 5 and y == 1 { return true }
+  false
+}
 tag_compat := fn(x : u8, y : u8) -> bool {
+  ## Issue #529 census: the UNCLASSIFIED totals, taken at the one funnel every compatibility site
+  ## reaches. `seam` here counts INVOCATIONS, not places; the classified rows below count places, and
+  ## the difference between them is the census's own blind spot rather than a rounding error.
+  ptrint_probe_call(x, y)
   if x == 0 { return true }
   if y == 0 { return true }
   if x == y { return true }
-  if x == 1 and y == 5 { return true }
-  if x == 5 and y == 1 { return true }
+  if ptrint_seam(x, y) { return true }
   false
 }
 ty_eq := fn(a : Ty, b : Ty, src : ptr(u8)) -> bool {
@@ -290,6 +305,209 @@ ty_compat := fn(a : Ty, b : Ty, src : ptr(u8)) -> bool {
   bothptr := a.tag == 5 and b.tag == 5 and a.nl != 0 and b.nl != 0
   if bothptr { return streq(src, a.ns, a.nl, b.ns, b.nl) }
   return true
+}
+
+## ---------------------------------------------------------------------------
+## Issue #529 step 2 — the usize↔ptr(T) MEASUREMENT instrument. It COUNTS and it never refuses.
+##
+## Types §4.3 makes **reinterpret** always explicit and Memory §4.5 makes fabricating a pointer from
+## an integer ill-formed outside an `unchecked` grant, so `ptrint_seam` above is a recorded departure
+## from the pin. The owner has decided to conform (issue #529, "Owner's decision"), and the forced
+## order is: #441 (landed) → this census → the tree brought to explicit form in reviewed slices →
+## the seam removed last. Removing it first breaks the self-host's own build, which is why it exists.
+##
+## The instrument answers ONE question: at how many concrete PLACES does the seam actually change the
+## verdict? Not how many pointers the tree mentions. A pointer passed to a pointer parameter never
+## reaches the seam at all: `tag_compat` returns on `x == y` first. #452's lesson applies literally —
+## `src : ptr(u8)` is declared 1821 times in `src/` against `src : usize` once, and neither number
+## says anything about this one, because a grep counts FORMS and the type comes from the enclosing
+## declaration the grep never read.
+##
+## Every row goes to file descriptor 98, which an ordinary invocation does not have open, so the
+## `write` fails with EBADF, no byte reaches any stream the caller can see, and the exit status, the
+## diagnostics and the emitted GAS are the ones the uninstrumented compiler produces. A census run is
+## the same command with the channel opened: `alatyr check f.al 98>census.txt`. There is no
+## environment read, no CLI flag (TOOL-14/TOOL-22 surface untouched) and no allocation on the silent
+## path. 98 rather than the #299 instrument's 99 ON PURPOSE: the two censuses then never share a
+## stream, `scripts/brand_census.sh`'s row counts keep meaning what they meant, and both can run in
+## one invocation.
+##
+## The CLASSES are place kinds, because #529 step 3 slices by place and each kind has a different
+## remedy:
+##   ARG          a call ARGUMENT against its declared parameter.
+##   BIND         an ANNOTATED `:=` binding (`p : ptr(u8) = h`).
+##   REASSIGN     a `=` write to an existing local whose recorded type differs.
+##   FIELD-LIT    a struct LITERAL's field value against the declared field type.
+##   FIELD-STORE  a direct `root.f = v` field store.
+##   ELEM-STORE   an `xs[i] = v` array-element store.
+##   PLACE-NESTED / PLACE-ARRNESTED  the two bounded nested-place stores.
+##   RESULT-RET   an early `return <e>` against the declared result.
+##   RESULT-TAIL  a tail expression against the declared result.
+##   OP-CMP / OP-IF / OP-MATCH  an OPERAND pair: a comparison's two operands, an `if`/`else`
+##                expression's two branches, a value-`match`'s two arm results. These are SYMMETRIC
+##                places — neither side is a sink — so their direction is reported as `sym`.
+## A class with no place is still a row of the report: the script prints every class, zero included.
+##
+## Direction is recorded from the VALUE side, normalized at each hook, because the remedy differs:
+##   i2p  an integer value reaching a pointer sink — Memory §4.5's fabricated pointer, the capability
+##        -requiring direction, spelled `unchecked bitcast(ptr(T), h)`.
+##   p2i  a pointer value reaching an integer sink — a §4.2 reinterpret, spelled
+##        `unchecked bitcast(usize, p)`.
+## Two of the sixteen hooked conditionals ask with the SINK first (`tag_compat(dt.tag, tv.tag)` at an
+## annotated binding and at a reassignment); their hooks swap the arguments back, so a row's
+## direction means what it says. Getting that backwards would have printed a clean-looking table
+## that named the wrong remedy for every binding in the tree.
+ptrint_probe_fd := fn() -> usize { 98 }
+## `tag_compat` invocations, and the two subsets that matter. `unequal` is the ENTRY PROBE: it counts
+## invocations whose two tags are both known and different, i.e. every invocation that could possibly
+## have reached the seam test. A census reporting `seam=0` while `unequal=0` has measured nothing and
+## must not be read as a clean tree; `unequal>0` with `seam=0` would be the real, publishable zero.
+mut PTRINT_CALLS : usize = 0
+mut PTRINT_UNEQUAL : usize = 0
+mut PTRINT_SEAM : usize = 0
+## Classified rows actually emitted. `seam - rows - break` is the instrument's OWN blind spot: an
+## invocation that reached the funnel from a conditional this block does not hook. Printed, not hidden.
+mut PTRINT_ROWS : usize = 0
+## The loop-`break` value merge (`lbv_merge`) is counter-only: it is handed a tag pair and a span but
+## NOT the source buffer, so it can classify but cannot quote its line. Counting it here keeps it out
+## of the blind-spot residue while being honest that it carries no row.
+mut PTRINT_BREAK : usize = 0
+## ADJACENT, and deliberately NOT part of the count above: `Expr::Bin` arithmetic accepts a POINTER
+## operand directly (`tl.tag != 1 and tl.tag != 5`) without consulting `tag_compat` at all, and yields
+## tag 1. So `base + off` on a `ptr(u8)` is a second, independent departure that deleting
+## `ptrint_seam` does not touch — and it is the manufacturer of many of the tag-1 values the seam then
+## accepts at a pointer sink downstream. Step 4 needs this number; step 2 must not fold it into its own.
+mut PTRINT_ARITH : usize = 0
+mut PTRINT_LOST : usize = 0
+## The OWNING declaration of the place a row reports, as the two source spans sema already has on
+## every `Decl`: `mod_start`/`mod_len` is the module identity the parser stamps (the driver's
+## per-file stem, so `sema`, `lower__place`, `std__io`), and `name_start`/`name_len` is the
+## declaration's own name. This is what makes a row ATTRIBUTABLE TO A FILE.
+##
+## It has to be recovered this way rather than from the offset, and that is the point: sema is handed
+## the modules CONCATENATED into one buffer and is NOT handed the driver's file table
+## (`check_program(decls, src, a)`), so an offset alone names no file, and reconstructing the
+## concatenation in the census script would be a second, unverified model of the driver's own layout.
+## Quoting the source line is not enough either — `_ => { s = 0 }` occurs verbatim in a dozen modules,
+## which is exactly the #452 trap one level up: matching a FORM cannot recover the file it came from.
+mut PTRINT_MOD_NS : usize = 0
+mut PTRINT_MOD_NL : usize = 0
+mut PTRINT_DECL_NS : usize = 0
+mut PTRINT_DECL_NL : usize = 0
+## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF for
+## one that is closed or opened read-only, and touches no memory in either case.
+ptrint_probe_open := fn() -> bool { rt::sys_write(1, ptrint_probe_fd(), 0, 0) == 0 }
+## The row buffer, in the instrument's OWN freshly mapped arena: bumping a compile arena would move
+## addresses the compiler's own output depends on, so an instrument that shared them could not claim
+## byte-identical emission. Mapped only when the channel is open.
+##
+## This near-repeats `brand_probe_buf`/`brand_probe_send`, and that is deliberate rather than missed.
+## The #299 block records a MEASURED scar directly above `brand_probe_fd`: while that instrument was
+## being written, reading the descriptor from a module-level constant made the row writer emit nothing
+## while the summary writer emitted correctly, and only the nullary-function spelling worked in every
+## position. Factoring these two into one helper taking `fd` as a PARAMETER would put the descriptor
+## back into a variable in exactly the position that silently produced zero bytes. A census whose
+## channel can go quiet without failing is worthless, so each instrument keeps its own nullary fd and
+## its own two-line writer.
+ptrint_probe_buf := fn(in out pa : rt::Arena) -> rt::StrBuf {
+  rt::arena_init(pa, 4096)
+  return rt::strbuf(pa, 1024)
+}
+ptrint_probe_send := fn(in out sb : rt::StrBuf) {
+  n := rt::push_byte(sb, 10)
+  w := rt::sb_flush(sb, ptrint_probe_fd())
+  if w != unchecked bitcast(isize, n) { PTRINT_LOST = PTRINT_LOST + 1 }
+}
+## Remember which declaration the walk is inside. One assignment per declaration, at the single
+## entry every declaration-checking path goes through, so a row can name its module and its
+## declaration without any hook having to carry them.
+ptrint_probe_decl := fn(d : Decl) {
+  PTRINT_MOD_NS = d.mod_start
+  PTRINT_MOD_NL = d.mod_len
+  PTRINT_DECL_NS = d.name_start
+  PTRINT_DECL_NL = d.name_len
+}
+## The unclassified totals, at the funnel.
+ptrint_probe_call := fn(x : u8, y : u8) {
+  PTRINT_CALLS = PTRINT_CALLS + 1
+  if x != 0 and y != 0 and x != y { PTRINT_UNEQUAL = PTRINT_UNEQUAL + 1 }
+  if ptrint_seam(x, y) { PTRINT_SEAM = PTRINT_SEAM + 1 }
+}
+## The module and declaration columns are pushed INLINE, with the `nl == 0` guard written twice, and
+## that repetition is a MEASURED requirement rather than an oversight. Both tidier spellings crash:
+##   * a helper RETURNING the text — `fn(src, ns, nl) -> str { if nl == 0 { return "-" } ; str_at((src + ns), nl) }`
+##   * a helper PUSHING it — `fn(in out sb : rt::StrBuf, src : ptr(u8), ns : usize, nl : usize)`, which
+##     forwards this function's own `in out` buffer onward to `rt::push_str` as `in out` again
+## SEGFAULTED the census over `package.al` (rc 139) on the frozen seed, while the identical run with
+## the two spans printed as raw integers was correct — so the spans themselves were sound and only the
+## extracted-helper shapes failed. One-variable A/B, same build, same input, twice. This is recorded,
+## not filed: the reduced form is a nested `in out` aggregate forward, which the #299 block's own scar
+## note directly above says has bitten this instrument once before in a different spelling, and a
+## census is not allowed to stop and fix a compiler defect it trips over. A minimal reproducer is a
+## follow-up unit; the duplication here is the price of a channel that cannot go quiet.
+ptrint_dir_name := fn(directional : bool, vt : u8, st : u8) -> str {
+  if not directional { return "sym" }
+  if vt == 1 { return "i2p" }
+  "p2i"
+}
+## One census observation at one concrete compatibility site. `vt` is the VALUE side's tag and `st`
+## the SINK side's — normalized by the hook, not by this function. `cls` names the KIND of place and
+## `site` the exact conditional that asked, so a place two traversals of the same expression both
+## reach stays visible instead of being silently averaged away: the script dedupes on (class, offset)
+## and reports the raw row count beside it. The whole source LINE is quoted because sema is handed the
+## concatenated source buffer but NOT the driver's file table, so it cannot name a file; the line's
+## own text is what makes a row attributable, with the raw offset beside it for ordering.
+ptrint_probe_site := fn(cls : str, site : str, directional : bool, vt : u8, st : u8, off : usize, src : ptr(u8)) {
+  if not ptrint_seam(vt, st) { return }
+  PTRINT_ROWS = PTRINT_ROWS + 1
+  if ptrint_probe_open() {
+    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    mut sb := ptrint_probe_buf(pa)
+    w0 := rt::push_str(sb, "#529 ")
+    w1 := rt::push_str(sb, cls)
+    w2 := rt::push_str(sb, " ")
+    w3 := rt::push_str(sb, ptrint_dir_name(directional, vt, st))
+    w4 := rt::push_str(sb, " ")
+    w5 := rt::push_str(sb, site)
+    w6 := rt::push_str(sb, " ")
+    w7 := rt::push_int(sb, i64(off))
+    w8 := rt::push_str(sb, " ")
+    mns := PTRINT_MOD_NS
+    mnl := PTRINT_MOD_NL
+    if mnl == 0 { d0 := rt::push_str(sb, "-") } else { d1 := rt::push_str(sb, str_at((src + mns), mnl)) }
+    m1 := rt::push_str(sb, " ")
+    dns := PTRINT_DECL_NS
+    dnl := PTRINT_DECL_NL
+    if dnl == 0 { e0 := rt::push_str(sb, "-") } else { e1 := rt::push_str(sb, str_at((src + dns), dnl)) }
+    m3 := rt::push_str(sb, " |")
+    ls := brand_probe_line(src, off)
+    w9 := rt::push_str(sb, str_at((src + ls.s), ls.n))
+    ptrint_probe_send(sb)
+  }
+}
+## The census's own receipt. Printed on `check_program`'s ACCEPTING exit only, exactly like the #299
+## summary: a run that printed rows but no SUMMARY was refused before the walk ended, and its rows are
+## a lower bound rather than a total.
+ptrint_probe_summary := fn() {
+  if ptrint_probe_open() {
+    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    mut sb := ptrint_probe_buf(pa)
+    w0 := rt::push_str(sb, "#529 SUMMARY calls=")
+    w1 := rt::push_int(sb, i64(PTRINT_CALLS))
+    w2 := rt::push_str(sb, " unequal=")
+    w3 := rt::push_int(sb, i64(PTRINT_UNEQUAL))
+    w4 := rt::push_str(sb, " seam=")
+    w5 := rt::push_int(sb, i64(PTRINT_SEAM))
+    w6 := rt::push_str(sb, " rows=")
+    w7 := rt::push_int(sb, i64(PTRINT_ROWS))
+    w8 := rt::push_str(sb, " break=")
+    w9 := rt::push_int(sb, i64(PTRINT_BREAK))
+    a0 := rt::push_str(sb, " arith_ptr_operand=")
+    a1 := rt::push_int(sb, i64(PTRINT_ARITH))
+    l0 := rt::push_str(sb, " lost=")
+    l1 := rt::push_int(sb, i64(PTRINT_LOST))
+    ptrint_probe_send(sb)
+  }
 }
 
 ## Do two source spans denote the same name (content equality)?
@@ -6179,6 +6397,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
             match at {
               Result::Ok(av) => {
                 pt := callee_param_ty(decls, upto, src, cs, cl, ai, a)
+                ptrint_probe_site("ARG", "unbound", true, av.tag, pt.tag, s_of(ga.e, a), src)
                 if not tag_compat(av.tag, pt.tag) { bad = true }
               }
               Result::Err(e0) => { bad = true }
@@ -6540,6 +6759,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       cbe := sema_brand_sink_err(pty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc)
       if cbe != 0 { mark_failed(locals, cbe) }
       if crt0.tag != 0 and not (crt0.tag == 5 and pty0.tag == 3) {
+        if pty0.tag != 0 { ptrint_probe_site("ARG", "premat", true, crt0.tag, pty0.tag, s_of(ca.e, a), src) }
         if pty0.tag != 0 and not ty_compat(crt0, pty0, src) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
       }
       apix += 1
@@ -6613,6 +6833,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       tr := check_expr(r, decls, upto, src, a, locals, nloc)?
       ## A comparison (kinds 20/24/25/26/27/28) yields bool; its operands must agree.
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
+        ptrint_probe_site("OP-CMP", "bincmp", false, tl.tag, tr.tag, s_of(l, a), src)
         if ty_eq(tl, tr, src) { Result(Ty, CheckErr).Ok(Ty(tag = 2, ns = 0, nl = 0)) }
         else { Result(Ty, CheckErr).Err(mismatch_err(s_of(l, a), 0)) }
       } else if op == 40 or op == 41 {
@@ -6633,6 +6854,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         ## arithmetic: both operands must be int OR a pointer (the usize↔ptr handle seam — `base + off`,
         ## `p - q` for pointer distance; MEM-7/8, I11) → int. A ptr operand is accepted like an int; the
         ## result stays int (tag 1), which `tag_compat` treats as compatible with a ptr slot downstream.
+        if tl.tag == 5 or tr.tag == 5 { PTRINT_ARITH = PTRINT_ARITH + 1 }
         bad_l := tl.tag != 0 and tl.tag != 1 and tl.tag != 5
         bad_r := tr.tag != 0 and tr.tag != 1 and tr.tag != 5
         if bad_l { Result(Ty, CheckErr).Err(mismatch_err(s_of(l, a), 0)) }
@@ -6646,6 +6868,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       if cc.tag != 0 and cc.tag != 2 { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(c, a), 0)); return er }
       tt := check_expr(t, decls, upto, src, a, locals, nloc)?
       tf := check_expr(f, decls, upto, src, a, locals, nloc)?
+      ptrint_probe_site("OP-IF", "ifarm", false, tt.tag, tf.tag, s_of(f, a), src)
       if ty_eq(tt, tf, src) { Result(Ty, CheckErr).Ok(unify(tt, tf)) }
       else { Result(Ty, CheckErr).Err(mismatch_err(s_of(f, a), 0)) }
     }
@@ -6675,6 +6898,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         lvec_truncate(deref(locals), base)
         nl2 = base
         if seen {
+          ptrint_probe_site("OP-MATCH", "matcharm", false, acc.tag, cb.tag, s_of(am.body, a), src)
           if not ty_eq(acc, cb, src) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(am.body, a), 0)); return er }
           acc = unify(acc, cb)
         } else { acc = cb; seen = true }
@@ -6708,6 +6932,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
           ta := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
           if not qgen {
             pt := callee_param_ty(decls, upto, src, qcs, qcl, pidx, a)
+            ptrint_probe_site("ARG", "callarm", true, ta.tag, pt.tag, s_of(ga.e, a), src)
             if not ty_compat(ta, pt, src) {
               if not bad { bad = true; bad_span = s_of(ga.e, a) }
             }
@@ -6732,6 +6957,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         if fld != 0 {
           fd := deref(fld_p(fld))
           ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
+          ptrint_probe_site("FIELD-LIT", "structlit", true, tv.tag, ft.tag, s_of(sa.e, a), src)
           if not ty_compat(tv, ft, src) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(sa.e, a), 0)); return er }
           fld = fd.next
         }
@@ -6920,7 +7146,10 @@ lbv_lit_tag := fn(e : ptr(Expr)) -> u8 {
 ## and the exact literal tag only when the ordinary result is UNKNOWN. Hidden aggregate binding tags are
 ## normalized to their public tags. Unknowns remain accepted so this helper cannot widen the bounded
 ## direct-field/direct-local-array slice into nested, slice, or other deferred assignment paths.
-sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
+## `cls`/`off` are the Issue #529 census's, not the check's: this ONE function decides four different
+## KINDS of place (a direct field store, an array-element store, and the two bounded nested paths) and
+## the caller is the only thing that knows which. Passing them beats four copies of the seam test.
+sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, cls : str, off : usize) -> bool {
   mut actual := checked
   mut atag : u8 = actual.tag
   if atag >= 128 and atag != 255 { atag = atag - 128 }
@@ -6943,6 +7172,7 @@ sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : p
     if ltag != 0 { actual = Ty(tag = ltag, ns = 0, nl = 0) }
   }
   if dst.tag == 0 or actual.tag == 0 { return false }
+  ptrint_probe_site(cls, "place", true, actual.tag, dst.tag, off, src)
   not ty_compat(actual, dst, src)
 }
 
@@ -6960,7 +7190,7 @@ sema_nested_field_path_value_bad := fn(path : NestedPath, checked : Ty, v : ptr(
   leaf_span := sema_field_ann_span(decls, upto, src, first_ty.ns, first_ty.nl, path.ss, path.sl, a)
   if leaf_span.n == 0 { return false }
   leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
-  sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc)
+  sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc, "PLACE-NESTED", path.rs)
 }
 
 ## TYP-6 bounded array-field path — resolve exactly `root.array[index].field` through the root
@@ -6984,7 +7214,7 @@ sema_array_nested_field_path_value_bad := fn(path : ArrayNestedPath, checked : T
   leaf_span := sema_field_ann_span(decls, upto, src, elem_ty.ns, elem_ty.nl, path.ss, path.sl, a)
   if leaf_span.n == 0 { return false }
   leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
-  sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc)
+  sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc, "PLACE-ARRNESTED", path.rs)
 }
 
 ## ── Types §9.1 — an integer literal's PER-TYPE range is checked at compile time ──────────────────
@@ -8049,6 +8279,7 @@ lbv_merge := fn(acc : usize, t : u8, span : usize) -> usize {
   if at == 250 { return acc }
   if t == 0 { return acc }
   if at == 0 { return lbv_code(t, span) }
+  if ptrint_seam(at, t) { PTRINT_BREAK = PTRINT_BREAK + 1 }
   if tag_compat(at, t) { return acc }
   lbv_code(250, span)
 }
@@ -9131,6 +9362,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           if xtag == 9 { xtag = 3 }
           if xtag == 10 { xtag = 4 }
           xt := Ty(tag = xtag, ns = raw.ns, nl = raw.nl)
+          ptrint_probe_site("REASSIGN", "reassign", true, tv.tag, xt.tag, ns, src)
           if not tag_compat(xt.tag, tv.tag) { mark_failed(locals, mismatch_err(ns, 0)) }
           ## Issue #299 — a `=` write to an existing local is the same value sink as its `:=` binding:
           ## `mut a : A = A(1) ; a = b` must not launder a sibling brand through the slot. `tag_compat`
@@ -9140,6 +9372,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           if rbe != 0 { mark_failed(locals, rbe) }
         } else {
           mut bad_decl := false
+          if ann.n != 0 { ptrint_probe_site("BIND", "annbind", true, tv.tag, dt.tag, ns, src) }
           if ann.n != 0 { bad_decl = not tag_compat(dt.tag, tv.tag) }
           ## #299 census hooks (no refusal): an annotated binding is the declared sink; an INFERRED
           ## binding from a brand constructor is the identity the recorded local type drops.
@@ -9358,7 +9591,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ftsp0 := sema_field_ann_span(decls, upto, src, bowner.s, bowner.n, fns, fnl, a)
           if ftsp0.n != 0 {
             ft0 := resolve_ty(src, ftsp0.s, ftsp0.n, decls, upto)
-            if sema_direct_place_value_bad(ft0, cv, fv, src, locals, cnt) { mark_failed(locals, mismatch_err(bns, 0)) }
+            if sema_direct_place_value_bad(ft0, cv, fv, src, locals, cnt, "FIELD-STORE", bns) { mark_failed(locals, mismatch_err(bns, 0)) }
           }
         }
         ## Issue #298 — a field store is authorized by the ROOT binding's `mut`, not by the field
@@ -9450,6 +9683,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         rr := check_expr_da(rv, decls, upto, src, a, locals, cnt, da)
         match rr {
           Result::Ok(cr) => {
+            if ret_tag != 0 { ptrint_probe_site("RESULT-RET", "retexpr", true, cr.tag, u8(ret_tag), s_of(rv, a), src) }
             if ret_tag != 0 and not tag_compat(cr.tag, u8(ret_tag)) { return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0)) }
             ## The frozen seed can leave a payload-heavy literal's ordinary `check_expr` result UNKNOWN
             ## even though the AST shape is exact. Recover the literal tag on this return boundary so a
@@ -9457,11 +9691,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             ## same bootstrap-safe classifier used by annotated bindings and loop-value checking; an
             ## unknown/non-literal remains conservative and is still handled by the existing paths.
             rlit := lbv_lit_tag(rv)
+            if ret_tag != 0 and rlit != 0 { ptrint_probe_site("RESULT-RET", "retlit", true, rlit, u8(ret_tag), s_of(rv, a), src) }
             if ret_tag != 0 and rlit != 0 and not tag_compat(rlit, u8(ret_tag)) { return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0)) }
             ## A direct/UFCS call can have a declared result even when the bootstrap-safe `check_expr`
             ## carrier surfaced UNKNOWN for the payload-heavy call node. Recover that result before
             ## accepting an early `return make_str()` from a scalar-returning function.
             rcall := expr_call_result_ty(rv, decls, upto, src)
+            if ret_tag != 0 and rcall.tag != 0 { ptrint_probe_site("RESULT-RET", "retcall", true, rcall.tag, u8(ret_tag), s_of(rv, a), src) }
             if ret_tag != 0 and rcall.tag != 0 and not tag_compat(rcall.tag, u8(ret_tag)) {
               return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0))
             }
@@ -9622,7 +9858,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if ibv.n != 0 {
           iae := local_ty(locals, cnt, src, ibv.s, ibv.n)
           aet := array_elem_ty(src, iae, decls, upto)
-          if sema_direct_place_value_bad(aet, civ, iv, src, locals, cnt) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
+          if sema_direct_place_value_bad(aet, civ, iv, src, locals, cnt, "ELEM-STORE", ibv.s) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
           if expr_is_num_lit(ii) {
             da_assign_array(deref(da), src, ibv.s, ibv.n, expr_num_lit_val(ii), iae)
           }
@@ -10957,11 +11193,13 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         ## too: #561's decl-level hook saw only constructors and declared callees and reported 0 there.
         tbe := sema_brand_sink_err(rett, d.value, sema_brand_span(s_of(d.value, a), d.name_start), decls, upto, src, ptr(locals), nloc)
         if tbe != 0 { err = tbe; failed = true }
+        ptrint_probe_site("RESULT-TAIL", "tailexpr", true, tail_ty.tag, rett.tag, s_of(d.value, a), src)
         if not ty_compat(tail_ty, rett, src) { err = mismatch_err(s_of(d.value, a), 0); failed = true }
         ## The same literal fallback is needed for a tail expression: `fn() -> u64 { "x" }` has no
         ## explicit Stmt::Return for the ordinary tag check to see, while `lbv_lit_tag` knows the exact
         ## `StrLit` shape. Unknown tails stay poison-tolerant when the declared result is unresolved.
         rtail_lit := lbv_lit_tag(d.value)
+        if rtail_lit != 0 and rett.tag != 0 { ptrint_probe_site("RESULT-TAIL", "taillit", true, rtail_lit, rett.tag, s_of(d.value, a), src) }
         if rtail_lit != 0 and rett.tag != 0 and not tag_compat(rtail_lit, rett.tag) { err = mismatch_err(s_of(d.value, a), 0); failed = true }
       }
       Result::Err(e) => { err = e; failed = true }
@@ -11021,6 +11259,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
 ## type with its params + body bindings in scope (`check_fn`). A struct (2) / enum (3) carries
 ## no expressions to check (skip).
 check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> Result(usize, CheckErr) {
+  ptrint_probe_decl(d)
   if d.kind == 1 { return check_fn(d, decls, upto, src, a) }
   if d.kind == 0 {
     mut failed_word := 0
@@ -14243,6 +14482,18 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   ## at; `src/` and `lib/` declare no brand of their own, so this answers 0 and every hook returns
   ## immediately — the self-build pays one scan and emits the same bytes.
   SEMA_BRAND_DECLS = sema_brand_decl_count(decls, src)
+  ## Issue #529 census bookkeeping — plain counter resets; the instrument has no per-program scan.
+  PTRINT_CALLS = 0
+  PTRINT_UNEQUAL = 0
+  PTRINT_SEAM = 0
+  PTRINT_ROWS = 0
+  PTRINT_BREAK = 0
+  PTRINT_ARITH = 0
+  PTRINT_LOST = 0
+  PTRINT_MOD_NS = 0
+  PTRINT_MOD_NL = 0
+  PTRINT_DECL_NS = 0
+  PTRINT_DECL_NL = 0
   BRAND_PROBE_SINKS = 0
   BRAND_PROBE_HITS = 0
   BRAND_PROBE_LOST = 0
@@ -14326,5 +14577,6 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   ## The census's own receipt, on the ACCEPTING exit only: a rejected program leaves through one of
   ## the returns above, so a run that prints rows but no SUMMARY was refused before the walk ended.
   brand_probe_summary()
+  ptrint_probe_summary()
   0
 }
