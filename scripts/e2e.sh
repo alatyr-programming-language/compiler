@@ -1573,6 +1573,63 @@ main := fn() -> u64 {
   return u64(a)
 }' 8
 
+  ## ---- the two FIELD sinks: a place-path STORE, and a value READ out of a branded field --------
+  ## `sibling_struct_field` above is the struct-literal FIELD, judged when the value is CONSTRUCTED.
+  ## These are the other two halves of the same surface: writing into an already-built struct, and
+  ## taking a value back out of one. Every §4.2 class is put through the store, because the store's
+  ## `dst` is the field's declared type and therefore covers the whole classifier, not just B2.
+  _brand_reject field_store_sibling 'S := struct { x : A }
+main := fn() -> u64 {
+  b : B = B(2)
+  mut s := S(x = A(4))
+  s.x = b
+  return u64(s.x)
+}' 10
+  ## B1 at the store is refused by the OLDER fence that runs first: the field's declared type is
+  ## tag 8 and a raw local is tag 1, so `sema_direct_place_value_bad`'s `tag_compat` already says no
+  ## — MEASURED on the parent (`main` b61bfa4), where this program is `type mismatch at line 6`
+  ## while the sibling and cross-domain twins compile clean. The row passes that needle explicitly
+  ## rather than being left out: the verdict is right, and pinning today's wording makes a later
+  ## re-classification somebody's decision instead of silent drift.
+  _brand_reject field_store_raw 'S := struct { x : A }
+main := fn() -> u64 {
+  r : u64 = 3
+  mut s := S(x = A(4))
+  s.x = r
+  return u64(s.x)
+}' 10 'type mismatch'
+  _brand_reject field_store_cross_domain 'S := struct { x : A }
+main := fn() -> u64 {
+  c : C = C(3)
+  mut s := S(x = A(4))
+  s.x = c
+  return u64(s.x)
+}' 10
+  _brand_reject field_read_into_raw 'S := struct { x : A }
+main := fn() -> u64 {
+  s := S(x = A(4))
+  fld : u64 = s.x
+  return fld
+}' 9
+  _brand_reject field_read_into_sibling 'S := struct { x : A }
+main := fn() -> u64 {
+  s := S(x = A(4))
+  b : B = s.x
+  return u64(b)
+}' 9
+  _brand_reject field_read_arg 'S := struct { y : B }
+main := fn() -> u64 {
+  s := S(y = B(2))
+  return take_a(s.y)
+}' 9
+  _brand_reject field_read_binop 'S := struct { y : B }
+main := fn() -> u64 {
+  a : A = A(1)
+  s := S(y = B(2))
+  t := a + s.y
+  return u64(t)
+}' 10
+
   ## ---- B1 / B1R, the two directions of §4.2's brand class (always explicit) ---------------------
   _brand_reject raw_into_brand_bind 'main := fn() -> u64 {
   r : u64 = 3
@@ -1656,6 +1713,21 @@ main := fn() -> u64 { return u64(mk()) }' 8
   if take_a(A(u64(b))) != 4 { return 3 }
   if take_a(A(u64(u8(c)))) != 5 { return 4 }
   if u64(a) + u64(b) != 7 { return 5 }
+  return 42
+}' 42
+  ## …and the FIELD surface's own control: the same brand stored into and read out of a field, plus
+  ## the EXPLICIT `u64(...)` spelling of the read the `field_read_into_raw` row refuses. Without this
+  ## the field rows above would also pass if the fence simply refused every field.
+  _brand_accept field_same_brand_and_explicit 'S := struct { x : A }
+main := fn() -> u64 {
+  mut s := S(x = A(4))
+  s.x = A(9)
+  a2 : A = s.x
+  if u64(a2) != 9 { return 1 }
+  if take_a(s.x) != 9 { return 2 }
+  if take_r(u64(s.x)) != 9 { return 3 }
+  s.x = A(u64(B(20)))
+  if u64(s.x) != 20 { return 4 }
   return 42
 }' 42
   _brand_accept same_brand_is_self_consistent 'main := fn() -> u64 {
@@ -6215,6 +6287,17 @@ build_reject_has reject_brand_sibling_sink "implicit brand conversion"
 emit_reject_has wat reject_brand_sibling_sink "implicit brand conversion"
 emit_reject_has aarch64 reject_brand_sibling_sink "implicit brand conversion"
 emit_reject_has riscv64 reject_brand_sibling_sink "implicit brand conversion"
+## …and the same four-surface witness for the two FIELD sinks: the struct-field STORE (`s.x = b`,
+## a place-path write the landed refusal's value sinks never saw) and the B1R direction through a
+## FIELD READ (`fld : u64 = s.x`, whose brand identity the recovery had no fourth source for).
+build_reject_has reject_brand_field_store_sink "implicit brand conversion"
+emit_reject_has wat reject_brand_field_store_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_field_store_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_field_store_sink "implicit brand conversion"
+build_reject_has reject_brand_field_read_sink "implicit brand conversion"
+emit_reject_has wat reject_brand_field_read_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_field_read_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_field_read_sink "implicit brand conversion"
 check_accept accept_brand_explicit_conversions
 run accept_brand_explicit_conversions 42
 check_accept accept_brand_require_identity
