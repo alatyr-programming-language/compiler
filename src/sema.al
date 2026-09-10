@@ -4814,6 +4814,27 @@ sema_range_slice_elem_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec),
   array_elem_ty(src, bt, decls, upto)
 }
 
+## Recover T for the exact indexed place `root.field[i]` when `root` is a direct local with a
+## resolvable struct type and `field` is declared as `Slice(T)`. The field annotation is reliable
+## declaration evidence; aliases, nested/indirect roots, non-Slice fields, and unresolved generic
+## arguments remain UNKNOWN for their own bounded slices.
+sema_direct_slice_field_elem_ty := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> Ty {
+  field := expr_field_span(base)
+  owner_expr := expr_field_base(base)
+  if field.n == 0 or unchecked bitcast(usize, owner_expr) == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  root := expr_var_span(owner_expr)
+  if root.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  owner := s3a_struct_span(owner_expr, decls, upto, src, locals, nloc, a)
+  if owner.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  ann := sema_field_ann_span(decls, upto, src, owner.s, owner.n, field.s, field.n, a)
+  if ann.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  bn := base_type_name(src, ann.s, ann.n)
+  if bn.n == 0 or str_at((src + bn.s), bn.n) != "Slice" { return Ty(tag = 0, ns = 0, nl = 0) }
+  elem := typearg_at(src, bn.s, bn.n, 0)
+  if elem.n == 0 or typearg_at(src, bn.s, bn.n, 1).n != 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  resolve_ty(src, elem.s, elem.n, decls, upto)
+}
+
 ## Replace a whole unreadied aggregate marker with one unreadied direct-field entry per declared field.
 ## Unknown/non-struct types stay conservative: the root marker is not discharged.
 da_seed_fields := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, ty : Ty) {
@@ -9989,6 +10010,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             if va.tag == 3 or va.tag == 4 { mark_failed(locals, mismatch_err(ibv.s, 0)) }
           }
         } else {
+          sfet := sema_direct_slice_field_elem_ty(ib, decls, upto, src, locals, cnt, a)
+          sfsp := expr_field_span(ib)
+          if sema_direct_place_value_bad(sfet, civ, iv, src, locals, cnt, "SLICE-FIELD-STORE", sfsp.s) {
+            mark_failed(locals, mismatch_err(sfsp.s, 0))
+          }
           if unchecked bitcast(usize, expr_field_base(ib)) != 0 and expr_is_num_lit(ii) {
             fbv := expr_field_base(ib)
             frv := expr_var_span(fbv)
