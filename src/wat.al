@@ -52,7 +52,7 @@ local_is_comptime := ast::binding_is_comptime
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 variant_payload_type := lower_layout::variant_payload_type
 (typearg_at, base_type_name) := lower_layout
-(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n) := lower_layout
+(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n) := lower_layout
 (erased_bitcast_at, cmp_operand_bitcast_kind) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
 (const_denoted_value, const_denote_ns, const_denote_nl) := lower_layout
@@ -4925,6 +4925,33 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           push_str(sb, "(global.get $__ovo)")
           push_str(sb, ntpost)
           push_str(sb, ")")
+          return
+        }
+        ## CHECKED narrow `MIN / -1` (Concurrency §6.1 / CG-8 division overflow, #606). WASM's own
+        ## `i64.div_s` traps on a zero divisor and on the 64-bit `INT64_MIN / -1`, and the emitter
+        ## leaned on exactly that — which is why a NARROW divide had no guard at all: at 64 bits
+        ## `-128 / -1` is a perfectly ordinary 128, so nothing trapped and the value outside `i8`
+        ## reached the binding. `narrow_signed_min` answers the operand's own minimum and 0 for a
+        ## native or unsigned width, so this block never fires for a `u64`/`i64` divide and the
+        ## generic path below stays byte-identical there. `%` (29) is excluded: `MIN % -1` is 0.
+        ## The two operands are captured off the value stack into the same nesting-safe scratch
+        ## globals the checked `+`/`-`/`*` blocks above use.
+        mut dvmin : i64 = 0
+        if op == 19 {
+          mut dvn := wat_operand_narrow(l, params_head, body_head, src, a)
+          if dvn == "" { dvn = wat_operand_narrow(r, params_head, body_head, src, a) }
+          dvmin = narrow_signed_min(dvn)
+        }
+        if dvmin != 0 and WAT_CHK {
+          push_str(sb, "(block (result i64) ")
+          emit_wat_expr(l, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, " ")
+          emit_wat_expr(r, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, " global.set $__ovb global.set $__ova")
+          push_str(sb, " (if (i32.and (i64.eq (global.get $__ovb) (i64.const -1)) (i64.eq (global.get $__ova) (i64.const ")
+          push_int(sb, dvmin)
+          push_str(sb, "))) (then (unreachable)))")
+          push_str(sb, " (i64.div_s (global.get $__ova) (global.get $__ovb)))")
           return
         }
         ## bind pre/post to locals FIRST — an inline str-returning call as a push_str arg scrambles it.
