@@ -9100,6 +9100,18 @@ run issue393_prelude_bare_variant 42
 run issue393_prelude_arena_type 42
 run issue393_prelude_alloc_error 42
 run issue393_prelude_user_shadow 42
+## issue #393 residual item 2 — the other half of the same textual scan. Every bare-name trigger in
+## `cli::ambient_paths` checked the LEADING word boundary; the result- and option-type triggers had no
+## TRAILING one, so an identifier that merely BEGINS with the scanned word fired them. These two rows
+## are the consequence stated as a program: a dead top-level binding, declared and never read, decided
+## whether a file that uses only `assert` and `min` — two prelude names with no trigger of their own —
+## compiled at all. On the parent BOTH files build and run 42; with the trailing boundary they are
+## refused, located on the first name that cannot resolve, exactly like the same file without the
+## binding. The needles carry the line number because a bare non-zero exit is also what a crash gives.
+## The refusal itself is residual item 1 surfacing honestly (injection is a text scan), not a new
+## limit: `run bare_option_result 42` above is the direction that must not move, and does not.
+build_reject_has issue393_result_prefix_no_prelude "unbound name at line 24 in issue393_result_prefix_no_prelude"
+build_reject_has issue393_option_prefix_no_prelude "unbound name at line 25 in issue393_option_prefix_no_prelude"
 ## field read taken DIRECTLY off a pointer-returning call `f(x).field` — was a silent 0 (fell to pushq $0);
 ## now materializes the returned pointer then loads the field. Multi-word/unresolvable leaf fails loud. = 106.
 run callfield_ptr_ret 106

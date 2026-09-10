@@ -4665,10 +4665,23 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
       ## may construct `Result` even when the package root has no std/alloc reference. A user declaration
       ## is recorded before the post-scan veto, so forward references and the self-host's own Result stay
       ## declaration-owned rather than pulling a duplicate shipped module.
+      ## The reference is WORD-BOUNDARY matched on BOTH sides (issue #393 residual item 2). The leading
+      ## guard was always there; the trailing one was not, so an identifier that merely BEGINS with the
+      ## scanned word fired the trigger. A dead, never-read top-level binding then decided whether an
+      ## unrelated program compiled: `assert(1 == 1)` + `min(u64, 42, 77)` is refused as unbound, and the
+      ## same file with `Result_marker_unused := 0` prepended builds and runs — the two names it needs
+      ## come from the base prelude that the accidental prefix match pulled in. The same hole was in the
+      ## `Option` trigger below. Both are closed here; the qualified and applied spellings a real use
+      ## writes (`Result(T, E)`, `Result::Ok`, `Result.Err`, `Result :=`) all end at a non-identifier
+      ## byte and keep firing. Measured cost before the change, over `package.al` plus every tracked
+      ## `src/`, `lib/` and `test/` source (2114 compilation units with a census summary, 12 manifest
+      ## reject fixtures that never reach this scan and contain neither word): 885 `Result` and 757
+      ## `Option` hits already carried a trailing boundary, and ZERO fired only by prefix match — so no
+      ## file in the tree changes the prelude it receives, and the TOOL-1 input set is untouched.
       if is_lib == false and (i == 0 or amb_idc(bytes(src)[i - 1]) == false) {
         if amb_lit_at(src, i, n, "Result :=") { has_result_decl = true }
         if amb_lit_at(src, i, n, "Option :=") { has_option_decl = true }
-        if amb_lit_at(src, i, n, "Result") { needs_result = true }
+        if amb_lit_at(src, i, n, "Result") and (i + 6 >= n or amb_idc(bytes(src)[i + 6]) == false) { needs_result = true }
       }
       ## The bare OVERFLOW-POLICY family (`wrapping_`/`saturating_`/`checked_`/`overflowing_`,
       ## Concurrency §6.3, defined for all eight integer types in `lib/base/num.al`) — a program using
@@ -4699,7 +4712,9 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
       ## self-host path today and already owns its allocator/option/aggregate declarations; widening
       ## those triggers here would make this focused Result fix silently change the TOOL-1 input set.
       if is_lib == false and is_pkg == false and (i == 0 or amb_idc(bytes(src)[i - 1]) == false) {
-        if amb_lit_at(src, i, n, "Option") { needs_alloc = true }
+        ## bare `Option` at a word boundary on both sides — see the `Result` trigger above for the
+        ## measurement that closed the trailing half of it.
+        if amb_lit_at(src, i, n, "Option") and (i + 6 >= n or amb_idc(bytes(src)[i + 6]) == false) { needs_alloc = true }
         ## bare `u128` at a word boundary (trailing char not an ident char) → the ambient prelude type.
         if amb_lit_at(src, i, n, "u128") and (i + 4 >= n or amb_idc(bytes(src)[i + 4]) == false) { needs_u128 = true }
         ## bare `uint(` (TYP-10) → the same prelude module; a local `uint :=` decl vetoes it (above).

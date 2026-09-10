@@ -690,6 +690,20 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   unchanged. aarch64, riscv64 and wasm still trap on every `str` index rather than answering a wrong
   value, exactly as they do for the local spelling. No emitted byte of the compiler's own build moves:
   `src/` and `lib/` declare no module-level array global at all.
+- **A dead binding whose name merely begins with a prelude trigger word no longer decides whether a
+  program compiles.** The ambient prelude a single file receives is chosen by scanning its source
+  text, and every bare-name trigger checked the leading word boundary. The result- and option-type
+  triggers had no trailing one, so `Result_marker_unused := 0` — declared, never read, of no
+  interest to any line below it — matched and pulled in the whole base closure. A file using only
+  `assert` and `min`, two prelude names reachable by no trigger of their own, therefore compiled and
+  ran with that binding present and was refused without it. Both triggers are now matched on both
+  sides. Every spelling a real use writes (`Result(T, E)`, `Result::Ok`, `Result.Err`, `Option(T)`,
+  `Option.Some`, and the `Result :=` / `Option :=` declaration vetoes) ends at a non-identifier byte
+  and keeps firing, so no file in the tree changes the prelude it receives: measured over
+  `package.al` plus every tracked `src/`, `lib/` and `test/` source, 885 result-type and 757
+  option-type trigger hits already carried a trailing boundary and zero fired by prefix match alone.
+  A program that was relying on the accidental match is now refused exactly as the same program
+  without the binding already was — the text-scan limit itself is unchanged and still tracked.
 
 ## 0.2.0 — 2026-09-07
 
