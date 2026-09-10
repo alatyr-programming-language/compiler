@@ -11907,6 +11907,25 @@ check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a 
     gts := local_type_span(src, d.name_start, d.name_len)
     if gts.n != 0 {
       gdt := resolve_ty(src, gts.s, gts.n, decls, upto)
+      ## Issue #299 census hook — the MODULE-LEVEL value declaration sink, `G : A = B(1)`. It is the
+      ## one value sink `check_stmts` never sees: a module binding carries no dedicated type field,
+      ## so its `: T` is recovered from the source spelling here exactly as `global_type_span` does
+      ## for the global-reassign sink. The annotation is already resolved directly above for the
+      ## §3.1 assignability checks, so this sink needs no new type recovery — `gdt` IS the `dst` an
+      ## annotated LOCAL binding gets, reached through a decl instead of a statement. `locals` is
+      ## the empty table at decl level, so the identity comes from the constructor / declared-callee
+      ## sources, which is what a module initializer can spell.
+      brand_probe_sink(gdt, d.value, d.name_start, decls, upto, src, ptr(none), 0, a)
+      ## …and the REFUSAL at the same sink, through the same `sema_brand_class` /
+      ## `sema_brand_refuse_class` pair the fourteen landed sinks use. Nothing above can see it: the
+      ## §3.1 whitelist beside it compares LITERAL tags (`ann_lit_incompatible`, the range and float
+      ## guards) and never two typed values, and `check_expr` judges the initializer on its own with
+      ## no sink type in hand. While it was open, `G : A = B(1)` was the last unhooked way to launder
+      ## a sibling into a brand-typed binding. Located at the initializer when the AST records its
+      ## span, else at the binding name, which is where this decl's other annotation diagnostics
+      ## already point.
+      gbe := sema_brand_sink_err(gdt, d.value, sema_brand_span(s_of(d.value, a), d.name_start), decls, upto, src, ptr(none), 0, a)
+      if gbe != 0 { mark_failed(ptr(none), gbe) }
       if ann_lit_incompatible(gdt.tag, lbv_lit_tag(d.value)) { mark_failed(ptr(none), mismatch_err(d.name_start, 0)) }
       if float_lit_into_integer_bad(src, gts.s, gts.n, d.value) { mark_failed(ptr(none), mismatch_err(d.name_start, 0)) }
       if int_lit_into_float_bad(src, gts.s, gts.n, d.value) { mark_failed(ptr(none), mismatch_err(d.name_start, 0)) }

@@ -166,6 +166,26 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   arrays of raw types, or Types §8.1 `@require` contracts. An element of a *nested* array
   annotation (`[[2]A; 2]`) remains open.
 
+- **A module-level value declaration no longer launders a brand.** A brand has a distinct nominal
+  identity and every brand conversion is explicit (Types §4.2/§4.3); two *sibling* brands over one
+  block do not convert into each other at all (§5.4). Every sink the refusal reached so far was
+  inside a function body, because a module binding carries no dedicated type field and is not one of
+  the checker's statement-level value sinks — its `: T` is recovered from the source at the
+  declaration itself. So `G : A = B(1)` at module scope compiled clean and ran, and it was the last
+  unhooked way to put a sibling brand into a brand-typed binding. **Newly rejected:** an implicit
+  brand crossing at an annotated module-level declaration, in every direction — a sibling
+  (`G : A = B(1)`), a brand over another block (`G : A = C(3)`), a raw value into a brand
+  (`G : A = u64(3)`), a brand into a raw slot (`H : u64 = A(1)`), a `mut` binding, and an
+  initializer whose type comes from a declared callee result (`G : A = mk()`). The diagnostic is the
+  usual located `implicit brand conversion` on all four surfaces. The legal spellings are unchanged:
+  a same-brand initializer, the explicit route through the shared block (`G : A = A(u64(b))`), an
+  explicit removal (`GR : u64 = u64(A(7))`), and an integer literal taking its type from the
+  annotation (`GL : A = 5`, Types §9.1/§9.2 — not a conversion, and deliberately untouched). This
+  also closes the **composition** of this sink with the array-literal one: a module-level
+  declaration annotated with an array (`G : [2]A = [B(1), B(2)]`) is now refused per element, a
+  shape neither slice covered on its own. A MULTI-COMPONENT enum-variant payload remains open
+  on #299.
+
 ## 0.2.2 — 2026-09-10
 - **A `::` head that names nothing is now a compile error instead of a silently different call.**
   `zzz::aa()`, with no `zzz` declared anywhere, used to build at rc 0 and run the *root's own* `aa`:
