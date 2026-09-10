@@ -456,6 +456,11 @@ fmt_benign_src()  { case "$1" in MOD-IDEM) return 0 ;; esac; return 1; }
 #      second, over the SAME synthetic corpus in the SAME `fmt_reobserve` call, so neither can be
 #      green while the other is broken.
 #
+#   1b. THE FUNCTIONS THAT MAKE THE DECISION PER FIXTURE. `one` and `one_mod` are where a breached
+#      child becomes `TIMED-OUT`/`MOD-TIMED-OUT` instead of the accusation below it, so a self-test
+#      that only drives the helpers proves the mechanism and not the stage. Section 6 drives both
+#      against a stub compiler.
+#
 #   2. THE DECIDERS THAT HAD NO SELF-TEST. #584 found `_e2e_runtime_failure` — the one function
 #      deciding whether a runtime ceiling breach counts as a failure at all — uncovered, and turning
 #      its timeout branch into a note left the whole e2e suite green. #585 found the same shape in
@@ -467,255 +472,26 @@ fmt_benign_src()  { case "$1" in MOD-IDEM) return 0 ;; esac; return 1; }
 #      in both directions and for exactness, together with `fmt_step_blame` (which decides whether an
 #      accusation is printed at all) and `fmt_parse_ceiling` (which decides what the ceiling even is).
 #
-# Costs ~1.2 s: three real children for the ceiling separation, two for `fmt_step`, none for the
-# corpus directions. Prints one line with the number of checks actually made — a green line with no
-# count cannot be told apart from a self-test that silently skipped everything.
-FMT_SELFTEST_EXPECTED=76
-fmt_corpus_selftest() {
-  local root="$W/selftest" bad="" k=0
-  local keep_tcc="$TCC" keep_trun="$TRUN" keep_ta="$TCC_AFTER_MS" keep_ra="$TRUN_AFTER_MS"
-  local keep_fail="$fail" keep_cls="$FMT_TIMEDOUT_CLASS" keep_show="$SHOW_OK"
-  local keep_allow=("${ALLOW[@]+${ALLOW[@]}}")
-  rm -rf "$root"; mkdir -p "$root"
-  # `_ck <ok?> <name>` — one assertion, counted whether it passes or fails, so the printed count is
-  # proof of work rather than proof of survival.
-  _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
+# Costs ~3 s: real children for the ceiling separation, for `fmt_step`'s two arms, and for the two
+# walk workers driven against a stub compiler; none for the corpus directions. Prints one line with
+# the number of checks actually made — a green line with no count cannot be told apart from a
+# self-test that silently skipped everything.
+# The re-observation of walk 1 gets its OWN sandbox (`w R`, the one job index `seq 1 $JOBS` cannot
+# produce), so a row's second observation cannot inherit a formatted file that a first observation
+# left behind. Built lazily by this hook, passed to `fmt_reobserve` as its fourth argument: a walk
+# with no breach copies nothing. It lives up here with the workers so the self-test drives the real
+# one — a hook that builds nothing is indistinguishable, from inside `fmt_reobserve`, from one that
+# works.
+fmt_reobs_sandbox() { rm -rf "$W/wR"; cp -r "$ROOT/test" "$W/wR"; ln -s . "$W/wR/test"; }
 
-  # ---- 1 · `fmt_parse_ceiling`: the validator is a decider. --------------------------------
-  local t
-  for t in 10s 1m 60s '' abc 1.2.3 -5 '1 2'; do
-    if fmt_parse_ceiling "$t" 2>"$root/ceil.err"; then _ck 1 "parse_ceiling-accepted('$t')"; else _ck 0 x; fi
-    # It must refuse ON PURPOSE. Without this the arithmetic below `case` refuses `10s` too, by
-    # blowing up, and a hole in the pattern would be invisible.
-    grep -q 'must be a positive number of seconds' "$root/ceil.err"
-    _ck $? "parse_ceiling-refused('$t')-without-its-own-diagnostic"
-  done
-  for t in 0 0.0 0.000; do
-    if fmt_parse_ceiling "$t" 2>"$root/ceil.err"; then _ck 1 "parse_ceiling-accepted('$t')"; else _ck 0 x; fi
-    grep -q 'ceiling' "$root/ceil.err"; _ck $? "parse_ceiling-refused('$t')-silently"
-  done
-  fmt_parse_ceiling 60 2>/dev/null && [ "$FMT_CEIL_MS" = 60000 ]; _ck $? parse_ceiling-60
-  fmt_parse_ceiling 0.02 2>/dev/null && [ "$FMT_CEIL_MS" = 20 ]; _ck $? parse_ceiling-0.02
-  fmt_parse_ceiling 10 2>/dev/null && [ "$FMT_CEIL_MS" = 10000 ]; _ck $? parse_ceiling-10
-  [ "$(fmt_breach_after 60000)" = 59900 ]; _ck $? breach_after-60s
-  [ "$(fmt_breach_after 20)" = 0 ];        _ck $? breach_after-sub-second
-
-  # ---- 2 · `fmt_timed`: a ceiling breach is not the same fact as the child's own 124. -------
-  # THE assertion this whole fix rests on. Get it wrong the strict way and a starved child is
-  # reported as a wrong value; wrong the loose way and a genuine 124 becomes a load artifact.
-  fmt_timed probe 1 900 "$root" /dev/null /dev/null /bin/sh -c 'sleep 5'
-  [ "$FMT_RC" = 124 ] && [ "$FMT_BREACH" = 1 ]
-  _ck $? "timed-missed-a-real-breach(rc=$FMT_RC breach=$FMT_BREACH ms=$FMT_MS)"
-  fmt_timed probe 30 29900 "$root" /dev/null /dev/null /bin/sh -c 'exit 124'
-  [ "$FMT_RC" = 124 ] && [ "$FMT_BREACH" = 0 ]
-  _ck $? "timed-called-a-child's-own-124-a-breach(ms=$FMT_MS)"
-  fmt_timed probe 30 29900 "$root" /dev/null /dev/null /bin/sh -c 'exit 42'
-  [ "$FMT_RC" = 42 ] && [ "$FMT_BREACH" = 0 ]
-  _ck $? "timed-mangled-an-ordinary-exit(rc=$FMT_RC breach=$FMT_BREACH)"
-
-  # ---- 3 · `fmt_step` + `fmt_step_blame`: the serial walks, both directions. ----------------
-  TCC=1; TCC_AFTER_MS=900; FMT_TIMEDOUT_CLASS=SELFTEST-TIMED-OUT
-  local r0=$FMT_STEP_REOBS c0=$FMT_STEP_RECOVERED p0=$FMT_STEP_PERSISTED
-  # 3a a child that breaches EVERY observation stays a failure, under its own class, and the arm's
-  #    accusation about the program is suppressed.
-  fail=0
-  fmt_step cc "selftest hang" "$root" "$root/hang.out" /dev/null \
-    /bin/sh -c 'sleep 5' > "$root/step_hang.txt" 2>&1
-  [ "$FMT_STEP_TIMEDOUT" = 1 ]; _ck $? step-did-not-flag-a-persistent-breach
-  grep -q '^SELFTEST-TIMED-OUT selftest hang ' "$root/step_hang.txt"
-  _ck $? step-did-not-report-the-breach-under-its-own-class
-  fmt_step_blame "SELFTEST-ACCUSATION about the program" > "$root/blame_hang.txt" 2>&1
-  [ ! -s "$root/blame_hang.txt" ]; _ck $? blame-still-accused-the-program-for-an-unobserved-child
-  [ "$fail" = 1 ]; _ck $? blame-suppressed-the-accusation-AND-the-failure
-  [ "$FMT_STEP_PERSISTED" = "$((p0+1))" ]; _ck $? step-persisted-counter
-  # 3b a child that breaches ONCE and then finishes must recover to its real status, and the ladder
-  #    must see that status rather than a timeout.
-  fail=0
-  rm -f "$root/starved.seen"
-  fmt_step cc "selftest starved" "$root" "$root/starved.out" /dev/null \
-    /bin/sh -c 'if [ -f '"$root"'/starved.seen ]; then exit 7; else : > '"$root"'/starved.seen; sleep 5; fi' \
-    > "$root/step_starved.txt" 2>&1
-  local starved_rc=$?
-  [ "$starved_rc" = 7 ]; _ck $? "step-lost-the-second-observation's-status(rc=$starved_rc)"
-  [ "$FMT_STEP_TIMEDOUT" = 0 ]; _ck $? step-kept-the-timeout-flag-after-a-recovery
-  grep -q RECOVERED "$root/step_starved.txt"; _ck $? step-did-not-report-the-recovery
-  [ "$FMT_STEP_RECOVERED" = "$((c0+1))" ]; _ck $? step-recovered-counter
-  [ "$FMT_STEP_REOBS" = "$((r0+2))" ]; _ck $? step-reobs-counter
-  # 3c the eraser check: after an ordinary failing child, `fmt_step_blame` MUST still print. A fix
-  #    that silenced every accusation would pass 3a and be worthless.
-  fail=0
-  fmt_step cc "selftest plain" "$root" /dev/null /dev/null /bin/sh -c 'exit 3' >/dev/null 2>&1
-  [ "$FMT_STEP_TIMEDOUT" = 0 ]; _ck $? step-flagged-an-ordinary-failure-as-a-breach
-  fmt_step_blame "SELFTEST-ACCUSATION about the program" > "$root/blame_plain.txt" 2>&1
-  grep -q '^SELFTEST-ACCUSATION about the program$' "$root/blame_plain.txt"
-  _ck $? blame-swallowed-a-legitimate-accusation
-  [ "$fail" = 1 ]; _ck $? blame-did-not-record-a-legitimate-failure
-  TCC="$keep_tcc"; TCC_AFTER_MS="$keep_ta"; FMT_TIMEDOUT_CLASS="$keep_cls"
-
-  # ---- 4 · `fmt_reobserve`: both ceiling directions, one drive of the REAL function. --------
-  # `m_plain` never breached and must be observed EXACTLY ZERO times here — that is what proves the
-  # re-observation costs nothing when nothing timed out. `t_hang` breaches again; `t_starved` does not.
-  local raw="$root/raw"
-  printf '%s\n' \
-    'BEHAVIOUR-EXIT  b_real (exit 1 want 42)' \
-    'OK              m_plain' \
-    'TIMED-OUT       t_hang (base run hit the 10s ceiling after 10001ms)' \
-    'TIMED-OUT       t_starved (fmt pass 1 hit the 60s ceiling after 60002ms)' > "$raw"
-  _st_worker() { # job flat-name rel
-    printf 'x\n' >> "$root/observed.$3"
-    case "$3" in
-      t_hang)    echo "TIMED-OUT       t_hang (base run hit the 10s ceiling after 10003ms)" ;;
-      t_starved) echo "OK              t_starved" ;;
-      *)         echo "SELFTEST-LOST   $3" ;;
-    esac
-  }
-  fmt_reobserve "$raw" _st_worker TIMED-OUT > "$root/reobs.txt" 2>&1
-  _ck $? reobserve-reported-a-broken-mechanism-when-it-was-not
-  [ "$FMT_REOBS" = 2 ];      _ck $? "reobs=$FMT_REOBS(want 2)"
-  [ "$FMT_PERSISTED" = 1 ];  _ck $? "persisted=$FMT_PERSISTED(want 1)"
-  [ "$FMT_RECOVERED" = 1 ];  _ck $? "recovered=$FMT_RECOVERED(want 1)"
-  [ ! -f "$root/observed.m_plain" ]; _ck $? reobserve-re-ran-a-row-that-never-breached
-  [ ! -f "$root/observed.b_real" ];  _ck $? reobserve-re-ran-a-genuine-failure
-  [ "$(grep -c '' < "$raw")" = 4 ];  _ck $? "reobserve-changed-the-row-count(one-line-in-one-line-out)"
-  grep -q '^TIMED-OUT       t_hang .*10003ms' "$raw"
-  _ck $? reobserve-did-not-replace-the-hang-with-its-SECOND-observation
-  grep -q '^OK              t_starved$' "$raw"; _ck $? reobserve-did-not-let-a-starved-row-recover
-  grep -q STILL-AT-THE-CEILING "$root/reobs.txt"; _ck $? reobserve-did-not-name-the-persistent-row
-  grep -q RECOVERED "$root/reobs.txt";            _ck $? reobserve-did-not-name-the-recovered-row
-  # A second observation that produces NO verdict leaves the FIRST one unjudgeable too, so the
-  # mechanism must fail loudly rather than quietly keep or drop the row.
-  _st_silent() { : ; }
-  printf '%s\n' 'TIMED-OUT       t_hang (x)' > "$root/raw_mute"
-  fmt_reobserve "$root/raw_mute" _st_silent TIMED-OUT > "$root/reobs_mute.txt" 2>&1
-  [ $? = 1 ]; _ck $? reobserve-accepted-a-second-observation-with-no-verdict
-  grep -q 'mechanism is broken' "$root/reobs_mute.txt"; _ck $? reobserve-did-not-say-the-mechanism-broke
-  unset -f _st_silent
-
-  # The escape hatch must be exercised HERE and must not be able to switch the self-test off: a
-  # self-test that obeyed the operator's flag would stop testing exactly when someone disabled it.
-  printf '%s\n' 'TIMED-OUT       t_hang (x)' > "$root/raw0"
-  ALATYR_FMT_REOBSERVE=0 fmt_reobserve "$root/raw0" _st_worker TIMED-OUT > "$root/reobs0.txt" 2>&1
-  grep -q 'NOT a gate verdict' "$root/reobs0.txt"; _ck $? reobserve-0-did-not-disclaim-itself
-  grep -q '^TIMED-OUT       t_hang (x)$' "$root/raw0"; _ck $? reobserve-0-rewrote-the-verdict-anyway
-
-  # ---- 5 · `fmt_classify` + `allowed`: the decider that had no self-test. -------------------
-  # Direction A: a failure nothing excuses is a REGRESSION and reddens the gate.
-  SHOW_OK=0
-  ALLOW=()
-  fmt_classify "$raw" "$root/seen" "$root/reg" allowed fmt_benign_test > "$root/cls_a.txt" 2>&1
-  [ $? = 1 ]; _ck $? classify-passed-a-walk-with-a-regression-and-a-timeout
-  [ "$FMT_REGRESSIONS" = 1 ]; _ck $? "classify-regressions=$FMT_REGRESSIONS(want 1)"
-  [ "$FMT_TIMEDOUT" = 1 ];    _ck $? "classify-timedout=$FMT_TIMEDOUT(want 1)"
-  grep -q '^REGRESSION BEHAVIOUR-EXIT  b_real' "$root/cls_a.txt"; _ck $? classify-lost-the-regression
-  grep -q '^TIMED-OUT       t_hang' "$root/cls_a.txt"; _ck $? classify-lost-the-timed-out-row
-  grep -q 'NOT a fmt finding' "$root/cls_a.txt"; _ck $? classify-did-not-say-what-a-timeout-is-not
-  # Direction B: the SAME row, excused by an exact ALLOW entry, is a footnote and the walk is green.
-  ALLOW=("BEHAVIOUR-EXIT b_real")
-  printf '%s\n' 'BEHAVIOUR-EXIT  b_real (exit 1 want 42)' 'OK              m_plain' > "$root/raw_b"
-  fmt_classify "$root/raw_b" "$root/seen" "$root/reg" allowed fmt_benign_test > "$root/cls_b.txt" 2>&1
-  [ $? = 0 ]; _ck $? classify-failed-a-walk-whose-only-failure-is-a-reasoned-residual
-  grep -q '^allow BEHAVIOUR-EXIT  b_real' "$root/cls_b.txt"; _ck $? classify-did-not-print-the-allow
-  [ "$FMT_REGRESSIONS" = 0 ]; _ck $? classify-counted-an-allowed-row-as-a-regression
-  # Direction C: the predicate is EXACT on both fields. A near-miss must not excuse anything.
-  ALLOW=("BEHAVIOUR-EXIT b_other" "NONIDEMPOTENT b_real")
-  fmt_classify "$root/raw_b" "$root/seen" "$root/reg" allowed fmt_benign_test > "$root/cls_c.txt" 2>&1
-  [ $? = 1 ]; _ck $? classify-let-a-near-miss-ALLOW-entry-excuse-a-failure
-  # Direction D: a ceiling breach is NOT excusable. It is not a statement about the formatter, so an
-  # ALLOW entry must not be able to bury it.
-  ALLOW=("TIMED-OUT t_hang")
-  printf '%s\n' 'TIMED-OUT       t_hang (x)' > "$root/raw_d"
-  fmt_classify "$root/raw_d" "$root/seen" "$root/reg" allowed fmt_benign_test > "$root/cls_d.txt" 2>&1
-  [ $? = 1 ]; _ck $? classify-let-an-ALLOW-entry-bury-a-ceiling-breach
-  [ "$FMT_TIMEDOUT" = 1 ]; _ck $? classify-stopped-counting-an-allowed-timeout
-  # Direction E: walk 2's own benign class and predicate, so `mod_allowed` is covered too.
-  local MOD_ALLOW_KEEP=("${MOD_ALLOW[@]+${MOD_ALLOW[@]}}")
-  MOD_ALLOW=("MOD-NONIDEM m_x")
-  printf '%s\n' 'MOD-IDEM        m_ok' 'MOD-NONIDEM     m_x (1 differing line(s))' \
-    'MOD-TIMED-OUT   m_slow (fmt pass 1 hit the 60s ceiling after 60001ms)' > "$root/raw_e"
-  fmt_classify "$root/raw_e" "$root/seen" "$root/reg" mod_allowed fmt_benign_src > "$root/cls_e.txt" 2>&1
-  [ $? = 1 ]; _ck $? classify-passed-walk2-despite-a-MOD-TIMED-OUT
-  grep -q '^allow MOD-NONIDEM     m_x' "$root/cls_e.txt"; _ck $? mod_allowed-did-not-excuse-its-exact-entry
-  [ "$FMT_TIMEDOUT" = 1 ]; _ck $? "walk2-timedout=$FMT_TIMEDOUT(want 1)"
-  # …and a module failure nothing excuses must be a REGRESSION. Without this, `mod_allowed`
-  # returning 0 unconditionally left the walk-2 direction green on the strength of the
-  # MOD-TIMED-OUT row alone, which is not allow-able and so proves nothing about the predicate.
-  printf '%s\n' 'MOD-IDEM        m_ok' 'MOD-NONIDEM     m_y (2 differing line(s))' > "$root/raw_f"
-  fmt_classify "$root/raw_f" "$root/seen" "$root/reg" mod_allowed fmt_benign_src > "$root/cls_f.txt" 2>&1
-  [ $? = 1 ]; _ck $? classify-passed-walk2-with-an-unexcused-MOD-NONIDEM
-  grep -q '^REGRESSION MOD-NONIDEM     m_y' "$root/cls_f.txt"; _ck $? mod_allowed-excused-a-row-it-does-not-list
-  [ "$FMT_REGRESSIONS" = 1 ]; _ck $? "walk2-regressions=$FMT_REGRESSIONS(want 1)"
-  MOD_ALLOW=("${MOD_ALLOW_KEEP[@]+${MOD_ALLOW_KEEP[@]}}")
-
-  # ---- restore, then report ----------------------------------------------------------------
-  # Reached only if nothing above unwound this function. `fmt_corpus_selftest` is called through a
-  # marker check for exactly that reason: an arithmetic expansion error anywhere in a function it
-  # drives returns straight to top level, printing nothing, and a self-test that can be silenced
-  # rather than failed is not a self-test. Measured — the neutered-ceiling-validator plant did
-  # exactly this and left no line at all.
-  # The RESULT, in files, before any branch of this function decides what to say about it. The
-  # caller reads these, so neutering the reporting branch below cannot turn a failed self-test into
-  # a green line — that plant is in the non-vacuity set precisely because it used to work.
-  printf '%s' "$bad" > "$root/bad"
-  printf '%s' "$k" > "$root/checks"
-  : > "$root/complete"
-  ALLOW=("${keep_allow[@]+${keep_allow[@]}}")
-  TCC="$keep_tcc"; TRUN="$keep_trun"; TCC_AFTER_MS="$keep_ta"; TRUN_AFTER_MS="$keep_ra"
-  fail="$keep_fail"; FMT_TIMEDOUT_CLASS="$keep_cls"; SHOW_OK="$keep_show"
-  # The self-test's own children breached a ceiling on purpose. Those must not show up in walk 1b's
-  # `ceiling-breaches=` proof-of-work line, which is a statement about the corpus.
-  FMT_STEP_REOBS=0; FMT_STEP_RECOVERED=0; FMT_STEP_PERSISTED=0; FMT_STEP_TIMEDOUT=0
-  unset -f _ck _st_worker
-  if [ -n "$bad" ]; then
-    echo "*** fmt corpus selftest: FAILED —$bad ***"
-    return 1
-  fi
-  if [ "$k" -lt "$FMT_SELFTEST_EXPECTED" ]; then
-    echo "*** fmt corpus selftest: ran $k checks, expected at least $FMT_SELFTEST_EXPECTED — a self-test"
-    echo "    that reports fewer checks than it owes is a failure, not a shortcut to green ***"
-    return 1
-  fi
-  echo "fmt corpus selftest: $k checks — ceiling breach vs a child's own 124, the ceiling validator,"
-  echo "  fmt_step/fmt_step_blame in both directions, serial re-observation in both directions, and"
-  echo "  the allowed/mod_allowed regression-vs-residual decision in five"
-  return 0
-}
-# The self-test's verdict is read from what it RECORDED, not only from what it printed or returned.
-# Two separate ways it could otherwise pass without proving anything, both measured while planting
-# defects: a bash arithmetic expansion error anywhere in a function it drives unwinds every enclosing
-# function to top level, printing nothing at all, and a defect in its own reporting branch turns a
-# non-empty failure list into a green line.
-rm -rf "$W/selftest"
-fmt_corpus_selftest; FMT_SELFTEST_RC=$?
-if [ ! -f "$W/selftest/complete" ]; then
-  echo "*** fmt corpus selftest: did NOT run to completion (rc=$FMT_SELFTEST_RC) — it recorded no"
-  echo "    verdict, so this run proves nothing about the ceiling mechanism or the ALLOW deciders ***"
-  fail=1
-else
-  if [ -s "$W/selftest/bad" ]; then
-    echo "*** fmt corpus selftest: recorded failures — $(cat "$W/selftest/bad") ***"
-    fail=1
-  fi
-  if [ "$(cat "$W/selftest/checks")" -lt "$FMT_SELFTEST_EXPECTED" ]; then
-    echo "*** fmt corpus selftest: recorded $(cat "$W/selftest/checks") checks, expected at least"
-    echo "    $FMT_SELFTEST_EXPECTED — a self-test that reports fewer checks than it owes is a"
-    echo "    failure, not a shortcut to green ***"
-    fail=1
-  fi
-  [ "$FMT_SELFTEST_RC" = 0 ] || fail=1
-fi
-
-# ==========================================================================================
-# WALK 1 — the `test/` corpus: PROGRAMS, both halves of the norm.
-# ==========================================================================================
-if [ "$ONLY" != src ]; then
-
-# One sandbox per job: a full copy of `test/` so a fixture's SIBLING imports still resolve, and so
-# the file under test can be replaced by its formatted text IN PLACE (the module name is the file
-# stem and becomes a GAS symbol, so the formatted text must keep the same basename). The `test ->
-# .` self-symlink makes a path written the way e2e writes it (`embed("test/embed_fixture.bin")`,
-# resolved against the compiler's CWD) resolve here too — without it the embed fixtures failed to
-# COMPILE in the sandbox and were misfiled as FMT-REJECT instead of the deliberate FMT-REFUSE.
-for j in $(seq 1 "$JOBS"); do cp -r "$ROOT/test" "$W/w$j"; ln -s . "$W/w$j/test"; done
+# The two WALK WORKERS live here, above the self-test, rather than inside the `if` block of the
+# walk that uses them. They are the functions that actually short-circuit a breached child to a
+# TIMED-OUT class instead of letting the ladder below it accuse the program — the whole subject of
+# issue #599 — and a self-test that cannot reach them cannot prove that. Measured before they were
+# hoisted: deleting `one`'s formatted-run breach arm (so a starved run falls through to
+# `BEHAVIOUR-EXIT` again) and deleting `one_mod`'s pass-1 arm (so a starved module reads as
+# `MOD-REFUSE`) each left the self-test green and the stage exit 0. Nothing else about them changed;
+# both still read the same globals the walks set.
 
 # `one` prints EXACTLY ONE verdict line for one fixture. A ceiling breach on ANY of its six children
 # short-circuits the row to `TIMED-OUT <rel> (<which child>)`: the row was not observed, so none of
@@ -803,6 +579,451 @@ one() { # job-index flat-name relative-path
   fi
   echo "OK              $rel"
 }
+
+# One module, one verdict line — the same worker shape walk 1 uses, so the second observation of a
+# ceiling breach can go through the SAME `fmt_reobserve`. A breach on either `fmt` pass short-circuits
+# the module to `MOD-TIMED-OUT`: it must not be read as `MOD-REFUSE`, which asserts that `fmt` cannot
+# format one of the compiler's own modules.
+one_mod() { # unused-job-index flat-name relative-path
+  local nm="$2" rel="$3"
+  local o1="$MW/o/$nm.f1.al" o2="$MW/o/$nm.f2.al" er="$MW/o/$nm.err"
+  local d="$MW/src/$(dirname "$rel")"
+  mkdir -p "$d"
+  cp "$ROOT/$rel" "$MW/src/$rel"
+  INV=$((INV+1))
+  fmt_timed mod-fmt1 "$TCC" "$TCC_AFTER_MS" "$MW/src" "$o1" "$er" "$AL" fmt "$rel"
+  if [ "$FMT_BREACH" = 1 ]; then
+    echo "MOD-TIMED-OUT   $rel (fmt pass 1 hit the ${TCC}s ceiling after ${FMT_MS}ms)"; return
+  fi
+  if [ "$FMT_RC" != 0 ]; then
+    echo "MOD-REFUSE      $rel ($(tr -d '\r' < "$er" | grep -v '^$' | tail -1 | cut -c1-90))"; return
+  fi
+  if [ ! -s "$o1" ]; then echo "MOD-REFUSE      $rel (empty output)"; return; fi
+  # Format the SANDBOX COPY IN PLACE: the module's name is its file stem and becomes a GAS
+  # symbol, so the second pass has to read a file with the same basename, never a temp name.
+  cp "$o1" "$MW/src/$rel"
+  INV=$((INV+1))
+  fmt_timed mod-fmt2 "$TCC" "$TCC_AFTER_MS" "$MW/src" "$o2" /dev/null "$AL" fmt "$rel"
+  if [ "$FMT_BREACH" = 1 ]; then
+    cp "$ROOT/$rel" "$MW/src/$rel"
+    echo "MOD-TIMED-OUT   $rel (fmt pass 2 hit the ${TCC}s ceiling after ${FMT_MS}ms)"; return
+  fi
+  if [ "$FMT_RC" != 0 ]; then
+    echo "MOD-NONIDEM     $rel (re-emit refused its own output)"; return
+  fi
+  if ! diff -q "$o1" "$o2" >/dev/null 2>&1; then
+    echo "MOD-NONIDEM     $rel ($(diff "$o1" "$o2" | grep -c '^[<>]') differing line(s))"
+    return
+  fi
+  echo "MOD-IDEM        $rel"
+}
+
+FMT_SELFTEST_EXPECTED=99
+fmt_corpus_selftest() {
+  local root="$W/selftest" bad="" k=0
+  local keep_tcc="$TCC" keep_trun="$TRUN" keep_ta="$TCC_AFTER_MS" keep_ra="$TRUN_AFTER_MS"
+  local keep_fail="$fail" keep_cls="$FMT_TIMEDOUT_CLASS" keep_show="$SHOW_OK"
+  local keep_allow=("${ALLOW[@]+${ALLOW[@]}}")
+  rm -rf "$root"; mkdir -p "$root"
+  # `_ck <ok?> <name>` — one assertion, counted whether it passes or fails, so the printed count is
+  # proof of work rather than proof of survival.
+  _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
+
+  # ---- 1 · `fmt_parse_ceiling`: the validator is a decider. --------------------------------
+  local t
+  for t in 10s 1m 60s '' abc 1.2.3 -5 '1 2'; do
+    if fmt_parse_ceiling "$t" 2>"$root/ceil.err"; then _ck 1 "parse_ceiling-accepted('$t')"; else _ck 0 x; fi
+    # It must refuse ON PURPOSE. Without this the arithmetic below `case` refuses `10s` too, by
+    # blowing up, and a hole in the pattern would be invisible.
+    grep -q 'must be a positive number of seconds' "$root/ceil.err"
+    _ck $? "parse_ceiling-refused('$t')-without-its-own-diagnostic"
+  done
+  for t in 0 0.0 0.000; do
+    if fmt_parse_ceiling "$t" 2>"$root/ceil.err"; then _ck 1 "parse_ceiling-accepted('$t')"; else _ck 0 x; fi
+    grep -q 'ceiling' "$root/ceil.err"; _ck $? "parse_ceiling-refused('$t')-silently"
+  done
+  fmt_parse_ceiling 60 2>/dev/null && [ "$FMT_CEIL_MS" = 60000 ]; _ck $? parse_ceiling-60
+  fmt_parse_ceiling 0.02 2>/dev/null && [ "$FMT_CEIL_MS" = 20 ]; _ck $? parse_ceiling-0.02
+  fmt_parse_ceiling 10 2>/dev/null && [ "$FMT_CEIL_MS" = 10000 ]; _ck $? parse_ceiling-10
+  [ "$(fmt_breach_after 60000)" = 59900 ]; _ck $? breach_after-60s
+  [ "$(fmt_breach_after 20)" = 0 ];        _ck $? breach_after-sub-second
+
+  # ---- 2 · `fmt_timed`: a ceiling breach is not the same fact as the child's own 124. -------
+  # THE assertion this whole fix rests on. Get it wrong the strict way and a starved child is
+  # reported as a wrong value; wrong the loose way and a genuine 124 becomes a load artifact.
+  fmt_timed probe 1 900 "$root" /dev/null /dev/null /bin/sh -c 'sleep 5'
+  [ "$FMT_RC" = 124 ] && [ "$FMT_BREACH" = 1 ]
+  _ck $? "timed-missed-a-real-breach(rc=$FMT_RC breach=$FMT_BREACH ms=$FMT_MS)"
+  fmt_timed probe 30 29900 "$root" /dev/null /dev/null /bin/sh -c 'exit 124'
+  [ "$FMT_RC" = 124 ] && [ "$FMT_BREACH" = 0 ]
+  _ck $? "timed-called-a-child's-own-124-a-breach(ms=$FMT_MS)"
+  fmt_timed probe 30 29900 "$root" /dev/null /dev/null /bin/sh -c 'exit 42'
+  [ "$FMT_RC" = 42 ] && [ "$FMT_BREACH" = 0 ]
+  _ck $? "timed-mangled-an-ordinary-exit(rc=$FMT_RC breach=$FMT_BREACH)"
+
+  # ---- 3 · `fmt_step` + `fmt_step_blame`: the serial walks, both directions. ----------------
+  TCC=1; TCC_AFTER_MS=900; FMT_TIMEDOUT_CLASS=SELFTEST-TIMED-OUT
+  local r0=$FMT_STEP_REOBS c0=$FMT_STEP_RECOVERED p0=$FMT_STEP_PERSISTED
+  # 3a a child that breaches EVERY observation stays a failure, under its own class, and the arm's
+  #    accusation about the program is suppressed.
+  fail=0
+  fmt_step cc "selftest hang" "$root" "$root/hang.out" /dev/null \
+    /bin/sh -c 'sleep 5' > "$root/step_hang.txt" 2>&1
+  [ "$FMT_STEP_TIMEDOUT" = 1 ]; _ck $? step-did-not-flag-a-persistent-breach
+  grep -q '^SELFTEST-TIMED-OUT selftest hang ' "$root/step_hang.txt"
+  _ck $? step-did-not-report-the-breach-under-its-own-class
+  fmt_step_blame "SELFTEST-ACCUSATION about the program" > "$root/blame_hang.txt" 2>&1
+  [ ! -s "$root/blame_hang.txt" ]; _ck $? blame-still-accused-the-program-for-an-unobserved-child
+  [ "$fail" = 1 ]; _ck $? blame-suppressed-the-accusation-AND-the-failure
+  [ "$FMT_STEP_PERSISTED" = "$((p0+1))" ]; _ck $? step-persisted-counter
+  # 3b a child that breaches ONCE and then finishes must recover to its real status, and the ladder
+  #    must see that status rather than a timeout.
+  fail=0
+  rm -f "$root/starved.seen"
+  fmt_step cc "selftest starved" "$root" "$root/starved.out" /dev/null \
+    /bin/sh -c 'if [ -f '"$root"'/starved.seen ]; then exit 7; else : > '"$root"'/starved.seen; sleep 5; fi' \
+    > "$root/step_starved.txt" 2>&1
+  local starved_rc=$?
+  [ "$starved_rc" = 7 ]; _ck $? "step-lost-the-second-observation's-status(rc=$starved_rc)"
+  [ "$FMT_STEP_TIMEDOUT" = 0 ]; _ck $? step-kept-the-timeout-flag-after-a-recovery
+  grep -q RECOVERED "$root/step_starved.txt"; _ck $? step-did-not-report-the-recovery
+  [ "$FMT_STEP_RECOVERED" = "$((c0+1))" ]; _ck $? step-recovered-counter
+  [ "$FMT_STEP_REOBS" = "$((r0+2))" ]; _ck $? step-reobs-counter
+  # 3c the eraser check: after an ordinary failing child, `fmt_step_blame` MUST still print. A fix
+  #    that silenced every accusation would pass 3a and be worthless. The flag is deliberately
+  #    poisoned first: `FMT_STEP_TIMEDOUT` describes the step just taken, and two arms of walk 1b
+  #    read it directly to decide whether an expected `fmt` REFUSAL was actually observed. A stale 1
+  #    from an earlier step would silence a real accusation there, and deleting `fmt_step`'s own
+  #    reset was measured to leave this self-test green before this line existed.
+  fail=0
+  FMT_STEP_TIMEDOUT=1
+  fmt_step cc "selftest plain" "$root" /dev/null /dev/null /bin/sh -c 'exit 3' >/dev/null 2>&1
+  [ "$FMT_STEP_TIMEDOUT" = 0 ]; _ck $? step-kept-a-stale-timeout-flag-from-an-earlier-step
+  fmt_step_blame "SELFTEST-ACCUSATION about the program" > "$root/blame_plain.txt" 2>&1
+  grep -q '^SELFTEST-ACCUSATION about the program$' "$root/blame_plain.txt"
+  _ck $? blame-swallowed-a-legitimate-accusation
+  [ "$fail" = 1 ]; _ck $? blame-did-not-record-a-legitimate-failure
+  # 3d the `run` arm picks the RUN ceiling, the compile arms the COMPILE ceiling. `fmt_step` chooses
+  #    between them on its `kind` argument alone, and every check above drives it as `cc`, so the
+  #    arm that guards walk 1b's two program RUNS — the 10s ceiling, the one whose breach used to be
+  #    reported as a behaviour finding — was never taken. Measured: swapping the `run` arm to `$TCC`
+  #    left the whole self-test green. The two ceilings are set far apart here so the assertion is
+  #    which one was consulted, not how long a child took.
+  TCC=30; TCC_AFTER_MS=29900; TRUN=0.2; TRUN_AFTER_MS=0
+  fail=0
+  fmt_step run "selftest run-ceiling" "$root" /dev/null /dev/null \
+    /bin/sh -c 'sleep 5' > "$root/step_run.txt" 2>&1
+  [ "$FMT_STEP_TIMEDOUT" = 1 ]; _ck $? step-run-arm-did-not-use-the-run-ceiling
+  grep -q 'the 0.2s ceiling ended it' "$root/step_run.txt"
+  _ck $? step-run-arm-reported-a-ceiling-that-is-not-the-run-ceiling
+  FMT_STEP_TIMEDOUT=0
+  fmt_step cc "selftest cc-ceiling" "$root" /dev/null /dev/null \
+    /bin/sh -c 'sleep 0.5' > "$root/step_cc.txt" 2>&1
+  [ "$FMT_STEP_TIMEDOUT" = 0 ]; _ck $? step-compile-arm-used-the-run-ceiling
+  fail=0
+  TCC="$keep_tcc"; TRUN="$keep_trun"; TCC_AFTER_MS="$keep_ta"; TRUN_AFTER_MS="$keep_ra"
+  FMT_TIMEDOUT_CLASS="$keep_cls"
+
+  # ---- 4 · `fmt_reobserve`: both ceiling directions, one drive of the REAL function. --------
+  # `m_plain` never breached and must be observed EXACTLY ZERO times here — that is what proves the
+  # re-observation costs nothing when nothing timed out. `t_hang` breaches again; `t_starved` does not.
+  local raw="$root/raw"
+  printf '%s\n' \
+    'BEHAVIOUR-EXIT  b_real (exit 1 want 42)' \
+    'OK              m_plain' \
+    'TIMED-OUT       t_hang (base run hit the 10s ceiling after 10001ms)' \
+    'TIMED-OUT       t_starved (fmt pass 1 hit the 60s ceiling after 60002ms)' > "$raw"
+  : > "$root/order"
+  # Walk 1 passes a fourth argument: the hook that builds the re-observation's own sandbox. Nothing
+  # drove it before, and a hook that is never called — or called after the first row — leaves every
+  # re-observed row of walk 1 formatting into a directory that does not exist, which reports as a
+  # recovery that never happened. Measured: both `fmt_reobserve` dropping the call and
+  # `fmt_reobs_sandbox` building nothing left the self-test green.
+  _st_setup() { printf 'setup\n' >> "$root/order"; }
+  _st_worker() { # job flat-name rel
+    printf 'work %s\n' "$3" >> "$root/order"
+    printf 'x\n' >> "$root/observed.$3"
+    case "$3" in
+      t_hang)    echo "TIMED-OUT       t_hang (base run hit the 10s ceiling after 10003ms)" ;;
+      t_starved) echo "OK              t_starved" ;;
+      *)         echo "SELFTEST-LOST   $3" ;;
+    esac
+  }
+  fmt_reobserve "$raw" _st_worker TIMED-OUT _st_setup > "$root/reobs.txt" 2>&1
+  _ck $? reobserve-reported-a-broken-mechanism-when-it-was-not
+  [ "$(head -1 "$root/order")" = setup ]
+  _ck $? reobserve-re-observed-a-row-before-building-the-sandbox-the-hook-owns
+  [ "$(grep -c '^setup$' "$root/order")" = 1 ]
+  _ck $? "reobserve-called-the-sandbox-hook-$(grep -c '^setup$' "$root/order")-times(want 1)"
+  [ "$FMT_REOBS" = 2 ];      _ck $? "reobs=$FMT_REOBS(want 2)"
+  [ "$FMT_PERSISTED" = 1 ];  _ck $? "persisted=$FMT_PERSISTED(want 1)"
+  [ "$FMT_RECOVERED" = 1 ];  _ck $? "recovered=$FMT_RECOVERED(want 1)"
+  [ ! -f "$root/observed.m_plain" ]; _ck $? reobserve-re-ran-a-row-that-never-breached
+  [ ! -f "$root/observed.b_real" ];  _ck $? reobserve-re-ran-a-genuine-failure
+  [ "$(grep -c '' < "$raw")" = 4 ];  _ck $? "reobserve-changed-the-row-count(one-line-in-one-line-out)"
+  grep -q '^TIMED-OUT       t_hang .*10003ms' "$raw"
+  _ck $? reobserve-did-not-replace-the-hang-with-its-SECOND-observation
+  grep -q '^OK              t_starved$' "$raw"; _ck $? reobserve-did-not-let-a-starved-row-recover
+  grep -q STILL-AT-THE-CEILING "$root/reobs.txt"; _ck $? reobserve-did-not-name-the-persistent-row
+  grep -q RECOVERED "$root/reobs.txt";            _ck $? reobserve-did-not-name-the-recovered-row
+  # A second observation that produces NO verdict leaves the FIRST one unjudgeable too, so the
+  # mechanism must fail loudly rather than quietly keep or drop the row.
+  _st_silent() { : ; }
+  printf '%s\n' 'TIMED-OUT       t_hang (x)' > "$root/raw_mute"
+  fmt_reobserve "$root/raw_mute" _st_silent TIMED-OUT > "$root/reobs_mute.txt" 2>&1
+  [ $? = 1 ]; _ck $? reobserve-accepted-a-second-observation-with-no-verdict
+  grep -q 'mechanism is broken' "$root/reobs_mute.txt"; _ck $? reobserve-did-not-say-the-mechanism-broke
+  unset -f _st_silent
+
+  # The escape hatch must be exercised HERE and must not be able to switch the self-test off: a
+  # self-test that obeyed the operator's flag would stop testing exactly when someone disabled it.
+  printf '%s\n' 'TIMED-OUT       t_hang (x)' > "$root/raw0"
+  ALATYR_FMT_REOBSERVE=0 fmt_reobserve "$root/raw0" _st_worker TIMED-OUT > "$root/reobs0.txt" 2>&1
+  grep -q 'NOT a gate verdict' "$root/reobs0.txt"; _ck $? reobserve-0-did-not-disclaim-itself
+  grep -q '^TIMED-OUT       t_hang (x)$' "$root/raw0"; _ck $? reobserve-0-rewrote-the-verdict-anyway
+
+  # ---- 5 · `fmt_classify` + `allowed`: the decider that had no self-test. -------------------
+  # Direction A: a failure nothing excuses is a REGRESSION and reddens the gate.
+  SHOW_OK=0
+  ALLOW=()
+  fmt_classify "$raw" "$root/seen" "$root/reg" allowed fmt_benign_test > "$root/cls_a.txt" 2>&1
+  [ $? = 1 ]; _ck $? classify-passed-a-walk-with-a-regression-and-a-timeout
+  [ "$FMT_REGRESSIONS" = 1 ]; _ck $? "classify-regressions=$FMT_REGRESSIONS(want 1)"
+  [ "$FMT_TIMEDOUT" = 1 ];    _ck $? "classify-timedout=$FMT_TIMEDOUT(want 1)"
+  grep -q '^REGRESSION BEHAVIOUR-EXIT  b_real' "$root/cls_a.txt"; _ck $? classify-lost-the-regression
+  grep -q '^TIMED-OUT       t_hang' "$root/cls_a.txt"; _ck $? classify-lost-the-timed-out-row
+  grep -q 'NOT a fmt finding' "$root/cls_a.txt"; _ck $? classify-did-not-say-what-a-timeout-is-not
+  # Direction B: the SAME row, excused by an exact ALLOW entry, is a footnote and the walk is green.
+  ALLOW=("BEHAVIOUR-EXIT b_real")
+  printf '%s\n' 'BEHAVIOUR-EXIT  b_real (exit 1 want 42)' 'OK              m_plain' > "$root/raw_b"
+  fmt_classify "$root/raw_b" "$root/seen" "$root/reg" allowed fmt_benign_test > "$root/cls_b.txt" 2>&1
+  [ $? = 0 ]; _ck $? classify-failed-a-walk-whose-only-failure-is-a-reasoned-residual
+  grep -q '^allow BEHAVIOUR-EXIT  b_real' "$root/cls_b.txt"; _ck $? classify-did-not-print-the-allow
+  [ "$FMT_REGRESSIONS" = 0 ]; _ck $? classify-counted-an-allowed-row-as-a-regression
+  # Direction C: the predicate is EXACT on both fields. A near-miss must not excuse anything.
+  ALLOW=("BEHAVIOUR-EXIT b_other" "NONIDEMPOTENT b_real")
+  fmt_classify "$root/raw_b" "$root/seen" "$root/reg" allowed fmt_benign_test > "$root/cls_c.txt" 2>&1
+  [ $? = 1 ]; _ck $? classify-let-a-near-miss-ALLOW-entry-excuse-a-failure
+  # Direction D: a ceiling breach is NOT excusable. It is not a statement about the formatter, so an
+  # ALLOW entry must not be able to bury it.
+  ALLOW=("TIMED-OUT t_hang")
+  printf '%s\n' 'TIMED-OUT       t_hang (x)' > "$root/raw_d"
+  fmt_classify "$root/raw_d" "$root/seen" "$root/reg" allowed fmt_benign_test > "$root/cls_d.txt" 2>&1
+  [ $? = 1 ]; _ck $? classify-let-an-ALLOW-entry-bury-a-ceiling-breach
+  [ "$FMT_TIMEDOUT" = 1 ]; _ck $? classify-stopped-counting-an-allowed-timeout
+  # Direction E: walk 2's own benign class and predicate, so `mod_allowed` is covered too.
+  local MOD_ALLOW_KEEP=("${MOD_ALLOW[@]+${MOD_ALLOW[@]}}")
+  MOD_ALLOW=("MOD-NONIDEM m_x")
+  printf '%s\n' 'MOD-IDEM        m_ok' 'MOD-NONIDEM     m_x (1 differing line(s))' \
+    'MOD-TIMED-OUT   m_slow (fmt pass 1 hit the 60s ceiling after 60001ms)' > "$root/raw_e"
+  fmt_classify "$root/raw_e" "$root/seen" "$root/reg" mod_allowed fmt_benign_src > "$root/cls_e.txt" 2>&1
+  [ $? = 1 ]; _ck $? classify-passed-walk2-despite-a-MOD-TIMED-OUT
+  grep -q '^allow MOD-NONIDEM     m_x' "$root/cls_e.txt"; _ck $? mod_allowed-did-not-excuse-its-exact-entry
+  [ "$FMT_TIMEDOUT" = 1 ]; _ck $? "walk2-timedout=$FMT_TIMEDOUT(want 1)"
+  # …and a module failure nothing excuses must be a REGRESSION. Without this, `mod_allowed`
+  # returning 0 unconditionally left the walk-2 direction green on the strength of the
+  # MOD-TIMED-OUT row alone, which is not allow-able and so proves nothing about the predicate.
+  printf '%s\n' 'MOD-IDEM        m_ok' 'MOD-NONIDEM     m_y (2 differing line(s))' > "$root/raw_f"
+  fmt_classify "$root/raw_f" "$root/seen" "$root/reg" mod_allowed fmt_benign_src > "$root/cls_f.txt" 2>&1
+  [ $? = 1 ]; _ck $? classify-passed-walk2-with-an-unexcused-MOD-NONIDEM
+  grep -q '^REGRESSION MOD-NONIDEM     m_y' "$root/cls_f.txt"; _ck $? mod_allowed-excused-a-row-it-does-not-list
+  [ "$FMT_REGRESSIONS" = 1 ]; _ck $? "walk2-regressions=$FMT_REGRESSIONS(want 1)"
+  MOD_ALLOW=("${MOD_ALLOW_KEEP[@]+${MOD_ALLOW_KEEP[@]}}")
+
+  # ---- 6 · `one` and `one_mod`: the two workers that actually short-circuit a breach. -------
+  # Everything above drives the ceiling helpers and the classifier with synthetic rows. None of it
+  # reaches the two functions that decide, per fixture, that a breached child means TIMED-OUT rather
+  # than the accusation the ladder under it would otherwise make — and those decisions ARE issue
+  # #599. Measured before this section existed: deleting `one`'s formatted-run breach arm and
+  # deleting `one_mod`'s pass-1 arm each left the self-test green and the stage exit 0.
+  #
+  # Driven against a STUB compiler and a fake `$ROOT`, so the whole section costs well under a
+  # second and depends on no real fixture's timing. The stub answers exactly two argv shapes, the
+  # only two the workers use, and three environment switches choose which child hangs.
+  local keep_al="$AL" keep_root="$ROOT" keep_mw="${MW:-}" keep_inv="${INV:-}"
+  local stub="$root/stub-alatyr" fake="$root/fake"
+  mkdir -p "$fake/test" "$W/wSELF"
+  cat > "$stub" <<'STUB'
+#!/bin/sh
+case "$1" in
+  fmt) [ -n "${STUB_FMT_HANG:-}" ] && sleep 5
+       cat "$2"; exit 0 ;;
+  -o)  [ -n "${STUB_CC_HANG:-}" ] && sleep 5
+       case "$2" in
+         *.fbin) if [ -n "${STUB_RUN_HANG:-}" ]
+                 then printf '#!/bin/sh\nsleep 5\n' > "$2"
+                 else printf '#!/bin/sh\nexit 0\n'  > "$2"; fi ;;
+         *)      printf '#!/bin/sh\nexit 0\n' > "$2" ;;
+       esac
+       chmod +x "$2"; exit 0 ;;
+esac
+exit 2
+STUB
+  chmod +x "$stub"
+  AL="$stub"; ROOT="$fake"
+  printf 'main := fn() -> u64 { 0 }\n' > "$fake/test/selftest_row.al"
+  cp "$fake/test/selftest_row.al" "$W/wSELF/selftest_row.al"
+  # 6a a base-compile breach is `TIMED-OUT`, not `NOCOMPILE-BASE`/`FMT-REJECT`. This was the SILENT
+  #    one: those two classes are benign, so the walk used to check nothing, say nothing and exit 0.
+  TCC=0.2; TCC_AFTER_MS=0; TRUN=30; TRUN_AFTER_MS=29900
+  STUB_CC_HANG=1 one SELF selftest_row selftest_row > "$root/one_cc.txt" 2>&1
+  [ "$(grep -c '' < "$root/one_cc.txt")" = 1 ]; _ck $? one-did-not-print-exactly-one-line
+  grep -q '^TIMED-OUT       selftest_row (base compile hit the 0.2s ceiling' "$root/one_cc.txt"
+  _ck $? one-did-not-short-circuit-a-starved-base-compile
+  grep -qE '^(NOCOMPILE-BASE|FMT-REJECT)' "$root/one_cc.txt"
+  [ $? = 1 ]; _ck $? one-filed-a-starved-base-compile-as-a-finding-about-the-program
+  # 6b a formatted-RUN breach is `TIMED-OUT`, not `BEHAVIOUR-*`. This is the accusation the issue is
+  #    named for: this stage's strongest verdict, manufactured by machine load.
+  TCC=30; TCC_AFTER_MS=29900; TRUN=0.2; TRUN_AFTER_MS=0
+  cp "$fake/test/selftest_row.al" "$W/wSELF/selftest_row.al"
+  STUB_RUN_HANG=1 one SELF selftest_row selftest_row > "$root/one_run.txt" 2>&1
+  [ "$(grep -c '' < "$root/one_run.txt")" = 1 ]; _ck $? one-did-not-print-exactly-one-line-for-a-run-breach
+  grep -q '^TIMED-OUT       selftest_row (formatted run hit the 0.2s ceiling' "$root/one_run.txt"
+  _ck $? one-did-not-short-circuit-a-starved-formatted-run
+  grep -q BEHAVIOUR "$root/one_run.txt"
+  [ $? = 1 ]; _ck $? one-still-blamed-fmt-for-a-starved-formatted-run
+  # 6c the eraser control: with nothing hanging, the SAME row must reach its real class. A `one`
+  #    that answered TIMED-OUT for everything would pass 6a and 6b and be worthless.
+  TCC=30; TCC_AFTER_MS=29900; TRUN=30; TRUN_AFTER_MS=29900
+  cp "$fake/test/selftest_row.al" "$W/wSELF/selftest_row.al"
+  one SELF selftest_row selftest_row > "$root/one_ok.txt" 2>&1
+  grep -q '^OK              selftest_row$' "$root/one_ok.txt"
+  _ck $? "one-lost-a-clean-row($(head -1 "$root/one_ok.txt"))"
+  # 6d/6e the same pair for walk 2's worker: a starved `fmt` pass is `MOD-TIMED-OUT`, never
+  #    `MOD-REFUSE`, which asserts that `fmt` cannot format one of the compiler's own modules.
+  MW="$root/mw"; INV=0
+  rm -rf "$MW"; mkdir -p "$MW/src" "$MW/o"
+  printf 'main := fn() -> u64 { 0 }\n' > "$fake/selftest_mod.al"
+  TCC=0.2; TCC_AFTER_MS=0
+  STUB_FMT_HANG=1 one_mod - selftest_mod selftest_mod.al > "$root/mod_hang.txt" 2>&1
+  grep -q '^MOD-TIMED-OUT   selftest_mod.al (fmt pass 1 hit the 0.2s ceiling' "$root/mod_hang.txt"
+  _ck $? one_mod-did-not-short-circuit-a-starved-fmt-pass
+  grep -q MOD-REFUSE "$root/mod_hang.txt"
+  [ $? = 1 ]; _ck $? one_mod-said-fmt-cannot-format-a-module-it-never-observed
+  TCC=30; TCC_AFTER_MS=29900
+  one_mod - selftest_mod selftest_mod.al > "$root/mod_ok.txt" 2>&1
+  grep -q '^MOD-IDEM        selftest_mod.al$' "$root/mod_ok.txt"
+  _ck $? "one_mod-lost-a-clean-module($(head -1 "$root/mod_ok.txt"))"
+  # 1 for the breached pass-1 (which returns before pass 2) plus 2 for the clean module.
+  [ "$INV" = 3 ]; _ck $? "one_mod-fmt-invocation-count=$INV(want 3)"
+  # 6f walk 1's own sandbox hook, driven against the fake `$ROOT` so the copy is one file. Passing
+  #    it is section 4's subject; that it BUILDS something is this one's, and the two are separate
+  #    defects — a hook that returns without copying left the self-test green until this check.
+  rm -rf "$W/wR"
+  fmt_reobs_sandbox
+  [ -f "$W/wR/selftest_row.al" ]; _ck $? reobs_sandbox-did-not-copy-the-corpus-into-the-sandbox
+  [ -L "$W/wR/test" ] && [ -f "$W/wR/test/selftest_row.al" ]
+  _ck $? reobs_sandbox-did-not-make-the-test-self-symlink-resolve
+  rm -rf "$W/wR"
+  AL="$keep_al"; ROOT="$keep_root"; MW="$keep_mw"; INV="$keep_inv"
+  rm -rf "$W/wSELF"
+
+  # ---- 7 · `fmt_timedout_basis`: what the verdict line CLAIMS was observed. -----------------
+  # Both walks put this function's answer inside their `*** … hit a wall-clock ceiling … ***` line.
+  # It is the one place that states how many observations a reported breach rests on, and with
+  # `ALATYR_FMT_REOBSERVE=0` the second one was never taken. Measured: hard-coding it to the
+  # two-observation wording left the self-test green while every disabled-re-observation run
+  # claimed a second observation it had not made.
+  case "$(fmt_timedout_basis)" in
+    TWICE*) _ck 0 x ;; *) _ck 1 "timedout_basis-does-not-say-TWICE-when-re-observation-is-on" ;;
+  esac
+  case "$(ALATYR_FMT_REOBSERVE=0 fmt_timedout_basis)" in
+    ONCE*) _ck 0 x ;; *) _ck 1 "timedout_basis-claims-a-second-observation-it-did-not-take" ;;
+  esac
+  ALATYR_FMT_REOBSERVE=0 fmt_timedout_basis | grep -q 'not a gate verdict'
+  _ck $? timedout_basis-did-not-disclaim-a-run-that-skipped-the-second-observation
+
+  # ---- restore, then report ----------------------------------------------------------------
+  # Reached only if nothing above unwound this function. `fmt_corpus_selftest` is called through a
+  # marker check for exactly that reason: an arithmetic expansion error anywhere in a function it
+  # drives returns straight to top level, printing nothing, and a self-test that can be silenced
+  # rather than failed is not a self-test. Measured — the neutered-ceiling-validator plant did
+  # exactly this and left no line at all.
+  # The RESULT, in files, before any branch of this function decides what to say about it. The
+  # caller reads these, so neutering the reporting branch below cannot turn a failed self-test into
+  # a green line — that plant is in the non-vacuity set precisely because it used to work.
+  # The self-test's own children breached a ceiling on purpose, and walk 1b's
+  # `ceiling-breaches=`/`recovered=`/`timed-out=` line is a statement about the CORPUS. Asserted in
+  # both directions rather than merely reset: non-zero first, because a self-test whose counters
+  # never moved did not actually breach anything, and zero after, because the caller must not be
+  # handed this function's own breaches as the corpus's. The subshell the caller runs this in makes
+  # the leak impossible today; this is the check that notices if that ever stops being true.
+  [ "$FMT_STEP_REOBS" -gt 0 ] && [ "$FMT_STEP_PERSISTED" -gt 0 ] && [ "$FMT_STEP_RECOVERED" -gt 0 ]
+  _ck $? "selftest-took-no-ceiling-breach-of-its-own(reobs=$FMT_STEP_REOBS)"
+  FMT_STEP_REOBS=0; FMT_STEP_RECOVERED=0; FMT_STEP_PERSISTED=0; FMT_STEP_TIMEDOUT=0
+  [ "$FMT_STEP_REOBS$FMT_STEP_RECOVERED$FMT_STEP_PERSISTED$FMT_STEP_TIMEDOUT" = 0000 ]
+  _ck $? selftest-left-its-own-ceiling-breaches-in-the-walk-1b-counters
+  printf '%s' "$bad" > "$root/bad"
+  printf '%s' "$k" > "$root/checks"
+  : > "$root/complete"
+  ALLOW=("${keep_allow[@]+${keep_allow[@]}}")
+  TCC="$keep_tcc"; TRUN="$keep_trun"; TCC_AFTER_MS="$keep_ta"; TRUN_AFTER_MS="$keep_ra"
+  fail="$keep_fail"; FMT_TIMEDOUT_CLASS="$keep_cls"; SHOW_OK="$keep_show"
+  unset -f _ck _st_worker _st_setup
+  if [ -n "$bad" ]; then
+    echo "*** fmt corpus selftest: FAILED —$bad ***"
+    return 1
+  fi
+  if [ "$k" -lt "$FMT_SELFTEST_EXPECTED" ]; then
+    echo "*** fmt corpus selftest: ran $k checks, expected at least $FMT_SELFTEST_EXPECTED — a self-test"
+    echo "    that reports fewer checks than it owes is a failure, not a shortcut to green ***"
+    return 1
+  fi
+  echo "fmt corpus selftest: $k checks — ceiling breach vs a child's own 124, the ceiling validator,"
+  echo "  fmt_step/fmt_step_blame in both directions and on both of its ceilings, serial"
+  echo "  re-observation in both directions and its sandbox hook, one/one_mod short-circuiting a"
+  echo "  starved child in both directions, what the verdict line claims was observed, and the"
+  echo "  allowed/mod_allowed regression-vs-residual decision in five"
+  return 0
+}
+# The self-test's verdict is read from what it RECORDED, not only from what it printed or returned.
+# Two separate ways it could otherwise pass without proving anything, both measured while planting
+# defects: a bash arithmetic expansion error anywhere in a function it drives unwinds every enclosing
+# function to top level, printing nothing at all, and a defect in its own reporting branch turns a
+# non-empty failure list into a green line.
+rm -rf "$W/selftest"
+# In a SUBSHELL, and that is the third defence rather than a style choice. A bash arithmetic
+# expansion error — or an unbound variable under `set -u` — anywhere in a function this drives does
+# not merely fail its own command: it unwinds to top level and, at top level, ENDS THE SCRIPT. The
+# completion-marker check below was written for exactly that case and could never run, because the
+# script was already gone: measured, two planted defects (`fmt_classify` losing its `FMT_TIMEDOUT`
+# initialisation, and both of `fmt_parse_ceiling`'s guards removed at once) exited 1 having printed
+# NOTHING AT ALL — no verdict, no diagnostic, no stage output. Inside a subshell the same unwind
+# ends the subshell, `FMT_SELFTEST_RC` is assigned, and the marker check says what happened. Nothing
+# the self-test sets needs to reach the walks; it records its verdict in files and restores the
+# globals it borrows either way.
+( fmt_corpus_selftest ); FMT_SELFTEST_RC=$?
+if [ ! -f "$W/selftest/complete" ]; then
+  echo "*** fmt corpus selftest: did NOT run to completion (rc=$FMT_SELFTEST_RC) — it recorded no"
+  echo "    verdict, so this run proves nothing about the ceiling mechanism or the ALLOW deciders ***"
+  fail=1
+else
+  if [ -s "$W/selftest/bad" ]; then
+    echo "*** fmt corpus selftest: recorded failures — $(cat "$W/selftest/bad") ***"
+    fail=1
+  fi
+  if [ "$(cat "$W/selftest/checks")" -lt "$FMT_SELFTEST_EXPECTED" ]; then
+    echo "*** fmt corpus selftest: recorded $(cat "$W/selftest/checks") checks, expected at least"
+    echo "    $FMT_SELFTEST_EXPECTED — a self-test that reports fewer checks than it owes is a"
+    echo "    failure, not a shortcut to green ***"
+    fail=1
+  fi
+  [ "$FMT_SELFTEST_RC" = 0 ] || fail=1
+fi
+
+# ==========================================================================================
+# WALK 1 — the `test/` corpus: PROGRAMS, both halves of the norm.
+# ==========================================================================================
+if [ "$ONLY" != src ]; then
+
+# One sandbox per job: a full copy of `test/` so a fixture's SIBLING imports still resolve, and so
+# the file under test can be replaced by its formatted text IN PLACE (the module name is the file
+# stem and becomes a GAS symbol, so the formatted text must keep the same basename). The `test ->
+# .` self-symlink makes a path written the way e2e writes it (`embed("test/embed_fixture.bin")`,
+# resolved against the compiler's CWD) resolve here too — without it the embed fixtures failed to
+# COMPILE in the sandbox and were misfiled as FMT-REJECT instead of the deliberate FMT-REFUSE.
+for j in $(seq 1 "$JOBS"); do cp -r "$ROOT/test" "$W/w$j"; ln -s . "$W/w$j/test"; done
+
 export -f one fmt_timed fmt_now_us
 export W AL TCC TRUN TCC_AFTER_MS TRUN_AFTER_MS FMT_TIMING
 
@@ -830,10 +1051,6 @@ sort -o "$W/raw" "$W/raw"
 # Between the walk and the classification, and in that order: nothing of this walk's is in flight
 # any more, which is the whole point of the second observation.
 #
-# The re-observation gets its OWN sandbox (`w R`, the one job index `seq 1 $JOBS` cannot produce), so
-# a row's second observation cannot inherit a formatted file that a first observation left behind.
-# Built lazily by this hook: a walk with no breach copies nothing.
-fmt_reobs_sandbox() { rm -rf "$W/wR"; cp -r "$ROOT/test" "$W/wR"; ln -s . "$W/wR/test"; }
 fmt_reobserve "$W/raw" one TIMED-OUT fmt_reobs_sandbox || fail=1
 
 # ---- report -------------------------------------------------------------------------------
@@ -1140,43 +1357,6 @@ if [ -n "$FILTER" ]; then grep -E "$FILTER" "$MW/list" > "$MW/list2" || true; mv
 # same green summary as a walk that did 128 real renders.
 INV=0
 : > "$MW/raw"
-# One module, one verdict line — the same worker shape walk 1 uses, so the second observation of a
-# ceiling breach can go through the SAME `fmt_reobserve`. A breach on either `fmt` pass short-circuits
-# the module to `MOD-TIMED-OUT`: it must not be read as `MOD-REFUSE`, which asserts that `fmt` cannot
-# format one of the compiler's own modules.
-one_mod() { # unused-job-index flat-name relative-path
-  local nm="$2" rel="$3"
-  local o1="$MW/o/$nm.f1.al" o2="$MW/o/$nm.f2.al" er="$MW/o/$nm.err"
-  local d="$MW/src/$(dirname "$rel")"
-  mkdir -p "$d"
-  cp "$ROOT/$rel" "$MW/src/$rel"
-  INV=$((INV+1))
-  fmt_timed mod-fmt1 "$TCC" "$TCC_AFTER_MS" "$MW/src" "$o1" "$er" "$AL" fmt "$rel"
-  if [ "$FMT_BREACH" = 1 ]; then
-    echo "MOD-TIMED-OUT   $rel (fmt pass 1 hit the ${TCC}s ceiling after ${FMT_MS}ms)"; return
-  fi
-  if [ "$FMT_RC" != 0 ]; then
-    echo "MOD-REFUSE      $rel ($(tr -d '\r' < "$er" | grep -v '^$' | tail -1 | cut -c1-90))"; return
-  fi
-  if [ ! -s "$o1" ]; then echo "MOD-REFUSE      $rel (empty output)"; return; fi
-  # Format the SANDBOX COPY IN PLACE: the module's name is its file stem and becomes a GAS
-  # symbol, so the second pass has to read a file with the same basename, never a temp name.
-  cp "$o1" "$MW/src/$rel"
-  INV=$((INV+1))
-  fmt_timed mod-fmt2 "$TCC" "$TCC_AFTER_MS" "$MW/src" "$o2" /dev/null "$AL" fmt "$rel"
-  if [ "$FMT_BREACH" = 1 ]; then
-    cp "$ROOT/$rel" "$MW/src/$rel"
-    echo "MOD-TIMED-OUT   $rel (fmt pass 2 hit the ${TCC}s ceiling after ${FMT_MS}ms)"; return
-  fi
-  if [ "$FMT_RC" != 0 ]; then
-    echo "MOD-NONIDEM     $rel (re-emit refused its own output)"; return
-  fi
-  if ! diff -q "$o1" "$o2" >/dev/null 2>&1; then
-    echo "MOD-NONIDEM     $rel ($(diff "$o1" "$o2" | grep -c '^[<>]') differing line(s))"
-    return
-  fi
-  echo "MOD-IDEM        $rel"
-}
 
 while read -r rel; do
   [ -n "$rel" ] || continue
