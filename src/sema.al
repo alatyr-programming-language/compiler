@@ -4950,16 +4950,21 @@ sema_direct_type_alias_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(
   r
 }
 
-## Recover T for the exact indexed place `root.field[i]` when `root` is a direct local with a
-## resolvable struct type and `field` is declared as `Slice(T)` or one direct alias of it. The field
-## and alias annotations are reliable declaration evidence; nested/indirect roots, non-Slice fields,
-## alias chains, and unresolved generic arguments remain UNKNOWN for their own bounded slices.
+## Recover T for the indexed place `<owner>.field[i]` when `<owner>` is a declared-struct place —
+## a direct local, or a chain of declared struct fields over one — and `field` is declared as
+## `Slice(T)` or one direct alias of it. The field and alias annotations are reliable declaration
+## evidence; pointer/index/call-derived owners, non-Slice fields, alias chains, and unresolved
+## generic arguments remain UNKNOWN for their own bounded slices.
+##
+## The owner is resolved by `s3a_struct_span`, which was ALREADY recursive over `Field` steps: the
+## only thing that kept `outer.leaf.values[i] = v` unchecked was a `expr_var_span(owner_expr) != 0`
+## guard in front of that call, whose result this function never used. Until #629 taught the parser
+## to recognise the two-owner statement form the shape could not reach here at all, so widening the
+## guard now is the first moment the recursion has anything to answer for (#623, #304).
 sema_direct_slice_field_elem_ty := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> Ty {
   field := expr_field_span(base)
   owner_expr := expr_field_base(base)
   if field.n == 0 or unchecked bitcast(usize, owner_expr) == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
-  root := expr_var_span(owner_expr)
-  if root.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   owner := s3a_struct_span(owner_expr, decls, upto, src, locals, nloc, a)
   if owner.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   ann := sema_field_ann_span(decls, upto, src, owner.s, owner.n, field.s, field.n, a)

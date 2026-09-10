@@ -691,6 +691,19 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   value, exactly as they do for the local spelling. No emitted byte of the compiler's own build moves:
   `src/` and `lib/` declare no module-level array global at all.
 
+- **A `Slice(T)` element store through a nested field path is now typed.** `outer.leaf.values[i] =
+  <wrong-typed value>` was accepted with `check` and `build` both returning 0: the element-type
+  resolver walked its owner with an already recursive resolver, but a guard in front of that call
+  demanded a bare local root, so a two- or three-owner path left the element type UNKNOWN and any
+  value passed. Reading the slot back then answered the string's address — 6 in one measured run.
+  A wrong `str`, a `bool` into `Slice(u64)`, and a struct value into a scalar element are now all
+  refused with the same located `type mismatch` diagnostic the single-owner spelling already
+  produced, on all four backends, because the check is in `sema`. Valid nested and deep stores of
+  the declared element type keep working, and the single-owner and fixed-array-field spellings are
+  untouched. Element stores through a nested owner whose field is a fixed array, and through one
+  type alias of `Slice(T)` under a nested owner, remain unchecked: the x86_64 lowering declines
+  both places at build time before an element type would be consulted.
+
 ## 0.2.0 — 2026-09-07
 
 - An out-of-range `bytes(s)[i]` now **traps** instead of answering with the byte that happened to
