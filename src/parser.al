@@ -4024,6 +4024,16 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   ## parses `v.field[i]` into `Index(Field(Var(v), field), idx)`; `index_parts` unwraps it to a
   ## `Field`-based `IndexAssign` (lower's `emit_index_addr` resolves the array field's word-0
   ## address). Checked BEFORE the plain `arr[i] =` form (which requires `ident [` directly).
+  ## `o.i.v[k] = <cmp>` — an indexed write through a NESTED field path. `p_field` parses the place
+  ## into `Index(Field(Field(Var(o), i), v), k)`; `index_parts` unwraps the outer `Index` so the base
+  ## stays the nested `Field` chain the READ path already resolves, and the store is recorded as the
+  ## ordinary `IndexAssign` every backend already lowers. Kept BEFORE the single-owner form below.
+  if field_path_index_assign_starts(pc) {
+    fptarget := p_field(pc)
+    fpival := p_place_val(pc, fptarget)
+    fpix := index_parts(fptarget)
+    return snode(pc.arena, Stmt.IndexAssign(fpix.b, fpix.i, fpival, 0))
+  }
   if field_index_assign_starts(pc) {
     ftarget := p_field(pc)              ## parses `v.field[i]` into Index(Field(Var(v),field), idx)
     fival := p_place_val(pc, ftarget)
@@ -4208,6 +4218,10 @@ stmt_starts := fn(pc : PC) -> bool {
   ## `a[i].f = …` — an array-of-struct element-FIELD write (checked BEFORE the whole-element
   ## form so a `].f =` is not mistaken for `] =`).
   if idx_field_assign_starts(pc) { return true }
+  ## `o.i.v[k] = …` — an indexed write through a NESTED field path (≥2 owners). Checked before the
+  ## single-owner `v.field[i] =` below, whose lookahead requires the `[` immediately after the first
+  ## field. Without this the line was not a statement head at all and the store was silently dropped.
+  if field_path_index_assign_starts(pc) { return true }
   ## `v.field[i] = …` — a NESTED PLACE write (a struct field that is an array). Checked before
   ## the plain `arr[i] =` form (which requires `ident [` directly, no `.field` before the `[`).
   if field_index_assign_starts(pc) { return true }
@@ -4640,6 +4654,39 @@ field_index_assign_starts := fn(pc : PC) -> bool {
   if tok_at(pc, pc.idx + 2).kind != 1 { return false }  ## field ident
   if tok_at(pc, pc.idx + 3).kind != 14 { return false } ## '['
   mut i := pc.idx + 3            ## the '['
+  mut depth := 0
+  while i < nt {
+    k := tok_at(pc, i).kind
+    if k == 14 { depth = depth + 1 }
+    else if k == 15 {
+      depth = depth - 1
+      if depth == 0 { i = i + 1; break }
+    }
+    i += 1
+  }
+  if i >= nt { return false }
+  is_assign_tok(tok_at(pc, i).kind)   ## '=' / 'op=' just after the closing ']'
+}
+
+## Is the cursor an indexed write through a NESTED field path — `o.i.v[k] = …` (≥2 `.field` levels
+## before the `[`)? The shallow `field_index_assign_starts` above demands the `[` at exactly
+## `idx + 3`, so a second owner (`o.i.v[k] =`) failed every assignment recognizer AND `stmt_starts`,
+## and the line fell to the trailing-expression path: the place became a discarded read, the `= 42`
+## a discarded literal, and the STORE was emitted nowhere on any of the four backends — the same
+## silent drop `deep_idx_field_assign_starts` and `deref_field_index_path_assign_starts` were added
+## for. `nf >= 2` keeps the single-owner `v.field[i] =` on its established lighter path untouched.
+field_path_index_assign_starts := fn(pc : PC) -> bool {
+  nt := ntoks(pc)
+  if pc.idx + 3 >= nt { return false }
+  if tok_at(pc, pc.idx).kind != 1 { return false }      ## base var ident
+  mut i := pc.idx + 1
+  mut nf := 0
+  while i + 1 < nt and tok_at(pc, i).kind == 22 and tok_at(pc, i + 1).kind == 1 {
+    nf += 1
+    i += 2
+  }
+  if nf < 2 { return false }                            ## one owner is the shallow form above
+  if i >= nt or tok_at(pc, i).kind != 14 { return false } ## '[' right after the field path
   mut depth := 0
   while i < nt {
     k := tok_at(pc, i).kind
