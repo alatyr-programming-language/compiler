@@ -131,46 +131,51 @@ fail=0
 # `fmt_reobserve` for the parallel walk and `fmt_step` for the two serial ones.
 #
 # MEASURED, because nobody knew the margin and #537/#585 each found the prior claim stale or absent.
-# Every child of every walk, timed ONE AT A TIME by a throwaway harness that replays the same child
-# commands independently of this file — so a bug in the `FMT_TIMING` instrumentation below could not
-# flatter the number. Re-measure from the shipped code path with
+# Every child of every walk, timed ONE AT A TIME (`--jobs 1`, so no child is competing with a
+# sibling of its own walk) by the instrumentation below. Re-measure with
 #
 #     FMT_TIMING=/tmp/fmt.tsv nix develop -c bash scripts/fmt_corpus.sh --jobs 1
 #
-# which appends `kind<TAB>ms<TAB>rc<TAB>command` for every child. 12 cores, load average 2.47 rising
-# to 4.89 over the pass (so these are upper bounds for an idle machine, and ~13% above the corpus
-# walk's own idle figures for the same two programs):
+# which appends `kind<TAB>ms<TAB>rc<TAB>command` for every child, and skips nothing: the two passes
+# below are the SHIPPED code path over the whole tracked corpus, not a replay harness. 12 cores,
+# 2045 tracked fixtures. Pass 1 on a quiet machine, load average 1.79 rising to 2.96 over the pass:
 #
-#   ceiling  child                                 n     p50      p99     max      margin at the max
-#   TCC=60   alatyr -o <bin> <src>      base     2020   47.8ms   126ms   7662ms       7.8x
-#   TCC=60   alatyr -o <fbin> <fmt'd>            1959   47.6ms   127ms   7827ms       7.7x
-#   TCC=60   alatyr fmt <src>           pass 1   2020    1.4ms     3ms      5ms   11196x
-#   TCC=60   alatyr fmt <fmt'd>         pass 2   1959    1.5ms     3ms      4ms   14392x
-#   TCC=60   alatyr fmt <module>        walk 2     69    4.4ms   539ms    539ms     111x
-#   TRUN=10  <bin>                      base     1326    1.0ms    65ms    131ms      76x
-#   TRUN=10  <fbin>                      fmt'd   1326    1.0ms    64ms    131ms      76x
+#   ceiling  child                                 n     p50      p99      max     margin at the max
+#   TCC=60   alatyr -o <bin> <src>      base     2045     48ms    119ms   7102ms       8.4x
+#   TCC=60   alatyr -o <fbin> <fmt'd>            1984     48ms    118ms   7082ms       8.5x
+#   TCC=60   alatyr fmt <src>           pass 1   2045      2ms      3ms      5ms   12000x
+#   TCC=60   alatyr fmt <fmt'd>         pass 2   1984      2ms      4ms      6ms   10000x
+#   TCC=60   alatyr fmt <module>        walk 2     69      6ms    485ms    485ms     124x
+#   TRUN=10  <bin>                      base     1335      2ms     61ms    126ms      79x
+#   TRUN=10  <fbin>                      fmt'd   1335      2ms     60ms    125ms      80x
 #
 # THE SHAPE MATTERS MORE THAN THE MARGIN, and it is the opposite of the sweeps'. #585 found no hot
 # spot at all there — p50 and max within a factor of 1.4, a different slowest guest on every pass, so
-# ~60ms was qemu start-up. Here TWO fixtures out of 2020 carry the ENTIRE compile-side exposure, and
-# they are the SAME two the corpus walk found (#537). The third-slowest compile is
-# `sort_conformance` at 300ms; drop those two files and the compile margin is 200x.
+# ~60ms was qemu start-up. Here the max does NOT float: TWO fixtures out of 2045 are the two slowest
+# compiles on both children of both passes, and they are the SAME two the corpus walk found (#537).
+# The third-slowest compile is `sort_conformance` at 274ms — 26x below the second — so dropping
+# those two files takes the compile margin to 219x. The run side has a stable hot spot too, one
+# fixture (`issue348_env_lookup_matrix`) on all four children of both passes, at 79x.
 #
 # So a compile here CAN breach by being slow, not only by being starved — and the margin is a
-# function of load, which is the whole argument against raising the ceiling. Same tree, same two
-# files, same one-at-a-time method, at three points on this machine's real load range:
+# function of load, which is the whole argument against raising the ceiling. Pass 2 is the same
+# command over the same tree while the machine filled up under other work, load average 10.88 rising
+# to 20.82, and it is a measurement rather than a targeted probe:
 #
-#   load average     test/uint256.al      margin      test/u128_div.al
-#   2.5 - 4.9         7.66s               7.8x         3.02s
-#   14 - 16          11.3 / 13.0 / 13.3s  4.5 - 5.3x   5.0 / 5.0 / 5.9s
-#   16 - 21          14.45s               4.2x         5.53s
+#   pass  load average    uint256.al  base / fmt'd   margin   u128_div.al        slowest run
+#   1      1.79 -  2.96     7102ms  /  7082ms         8.4x     2712 / 2694ms       126ms
+#   2     10.88 - 20.82     8055ms  / 11742ms         5.1x     3824 / 5401ms       241ms
 #
 # A ceiling raised to absorb that would have to be raised again: #537 records this project raising
 # the corpus walk's ceiling 10s -> 30s and the same file breaching at load 28, 33 and 42. A
-# wall-clock threshold on a shared machine has no upper bound. The second observation does have one.
+# wall-clock threshold on a shared machine has no upper bound. The second observation does have one
+# — but only one. Re-observation removes a ONE-OFF starvation, and nothing more: measured on the
+# lane #564 gate, a row breached, was re-observed at load 33.16, breached again and stayed red
+# (`failed=1 reobserved=1`). That is the mechanism working, not failing, and this stage inherits
+# exactly the same limit.
 #
-# The run side is comfortable (76x, max 131ms on `issue348_env_lookup_matrix`) and the `fmt` passes
-# are not close to anything (11196x). The exposure that matters is the compile ceiling on two files.
+# The `fmt` passes are not close to anything (10000x) and the run side is comfortable even under
+# load. The exposure that matters is the compile ceiling on two files.
 # ==========================================================================================
 
 # `ALATYR_FMT_TCC` / `ALATYR_FMT_TRUN` make a breach reproducible from outside, the way
