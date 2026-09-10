@@ -14469,9 +14469,20 @@ expr_is_int_lit := fn(e : ptr(Expr)) -> bool {
 ## compiler's own `isize` comparisons among them; flipping the DEFAULT to unsigned was tried on
 ## 2026-07-24 and broke self-reproduction). `0 < u64::MAX` (both `u64`) and `n >= 10` (`u64` vs a
 ## literal) are then both compared with the unsigned setcc and evaluate TRUE.
+## An identity-ERASED `bitcast` TARGET (#546) is asked FIRST, and it is the only thing here that can
+## move the answer toward SIGNED: Types §4.2 makes the written target the operand's interpretation,
+## and the parser records a word-sized bare scalar target nowhere in the AST
+## (`lower_layout::cmp_operand_bitcast_kind` recovers it from the source). A SIGNED target on EITHER
+## side forces the signed condition, which is also this family's default; an UNSIGNED target counts
+## as a proof of that operand's unsignedness and then feeds the SAME both-or-literal rule below,
+## unchanged. `0` — no erased bitcast, or an inner shape this scan declines — leaves the predicate
+## byte-for-byte the one it was.
 is_unsigned_cmp := fn(l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx)) -> bool {
-  ul := is_unsigned_expr(l, cx)
-  ur := is_unsigned_expr(r, cx)
+  bl := lower_layout::cmp_operand_bitcast_kind(l, cx.src)
+  br := lower_layout::cmp_operand_bitcast_kind(r, cx.src)
+  if bl == 1 or br == 1 { return false }
+  ul := bl == 2 or is_unsigned_expr(l, cx)
+  ur := br == 2 or is_unsigned_expr(r, cx)
   if ul and ur { return true }
   if ul and expr_is_int_lit(r) { return true }
   if ur and expr_is_int_lit(l) { return true }

@@ -53,6 +53,7 @@ local_is_comptime := ast::binding_is_comptime
 variant_payload_type := lower_layout::variant_payload_type
 (typearg_at, base_type_name) := lower_layout
 (ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n) := lower_layout
+(erased_bitcast_at, cmp_operand_bitcast_kind) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
 (const_denoted_value, const_denote_ns, const_denote_nl) := lower_layout
 (param_ann_signed, param_ann_unsigned, named_param_is_float, callee_ret_is_float) := lower_layout
@@ -353,9 +354,20 @@ wat_hole_local_init_signed := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : 
 ## provably unsigned and the other is a bare integer LITERAL. Requiring the NON-LITERAL side to be
 ## PROVEN unsigned keeps the conservative character: it only ever moves signed → unsigned, never the
 ## reverse, so a mixed/unknown pair still keeps the signed default.
+## An identity-ERASED `bitcast` TARGET (#546) is asked FIRST, and it is the only thing here that can
+## move the answer toward SIGNED: Types §4.2 makes the written target the operand's interpretation,
+## and the parser records a word-sized bare scalar target nowhere in the AST
+## (`lower_layout::cmp_operand_bitcast_kind` recovers it from the source). A SIGNED target on EITHER
+## side forces the signed condition, which is also this family's default; an UNSIGNED target counts
+## as a proof of that operand's unsignedness and then feeds the SAME both-or-literal rule below,
+## unchanged. `0` — no erased bitcast, or an inner shape this scan declines — leaves the predicate
+## byte-for-byte the one it was.
 wat_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
-  ul := wat_operand_unsigned(l, params_head, body_head, src, a)
-  ur := wat_operand_unsigned(r, params_head, body_head, src, a)
+  bl := cmp_operand_bitcast_kind(l, src)
+  br := cmp_operand_bitcast_kind(r, src)
+  if bl == 1 or br == 1 { return false }
+  ul := bl == 2 or wat_operand_unsigned(l, params_head, body_head, src, a)
+  ur := br == 2 or wat_operand_unsigned(r, params_head, body_head, src, a)
   if ul and ur { return true }
   if ul and ex_is_num_lit(r) { return true }
   if ur and ex_is_num_lit(l) { return true }
@@ -3368,97 +3380,10 @@ wat_bitcast_pointer_is_subword := fn(src : ptr(u8), ts : usize, tl : usize) -> b
   pn_n != 0 and scalar_width::subword_bytes(src, pn_s, pn_n) != 0
 }
 
-wat_source_blank := fn(src : ptr(u8), i : usize) -> bool {
-  c := bytes(str_at((src + i), 1))[0]
-  c == 32 or c == 9 or c == 10 or c == 13
-}
-
-wat_source_ident := fn(src : ptr(u8), i : usize) -> bool {
-  c := bytes(str_at((src + i), 1))[0]
-  (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
-}
-
-## Find any line-comment marker before p on p's source line. Returning the hash position preserves all
-## code before it, including a comma or opening delimiter; callers then continue their own scan there.
-wat_source_comment_back := fn(src : ptr(u8), p : usize) -> usize {
-  mut line := p
-  while line > 0 and str_at((src + line - 1), 1) != "\n" { line = line - 1 }
-  mut i := line
-  while i < p {
-    if str_at((src + i), 1) == "#" { return i }
-    i = i + 1
-  }
-  p
-}
-
-## Move backwards over whitespace and any #/## line comments between an expression leaf and its
-## enclosing delimiter. Once a comment marker is found, resume immediately before the hash so code
-## before an inline comment remains visible to the comma/delimiter scan.
-wat_source_gap_back := fn(src : ptr(u8), p : usize) -> usize {
-  mut r := p
-  mut searching := true
-  while searching {
-    while r > 0 and wat_source_blank(src, r - 1) { r = r - 1 }
-    comment := wat_source_comment_back(src, r)
-    if comment != r {
-      r = comment
-    } else {
-      searching = false
-    }
-  }
-  r
-}
-
-## The parser returns only the value node for a word-sized bitcast. Starting at that node's left leaf,
-## walk backwards through the second-argument comma and the balanced first argument; admit no expression
-## whose enclosing callee is `bitcast`. This is deliberately source-aware and conservative: comments,
-## malformed spans, and source-less compiler constants do not receive a scalar admission.
-wat_erased_bitcast_at := fn(src : ptr(u8), pos : usize) -> bool {
-  if pos == 0 { return false }
-  mut p := pos
-  mut moving := true
-  while moving {
-    p = wat_source_gap_back(src, p)
-    mut punct := true
-    while punct {
-      punct = false
-      while p > 0 and (str_at((src + p - 1), 1) == "(" or str_at((src + p - 1), 1) == "+" or str_at((src + p - 1), 1) == "-") {
-        p = p - 1
-        punct = true
-      }
-      if punct { p = wat_source_gap_back(src, p) }
-    }
-    mut end := p
-    mut start := end
-    while start > 0 and wat_source_ident(src, start - 1) { start = start - 1 }
-    if end > start and str_at((src + start), end - start) == "unchecked" { p = start } else { moving = false }
-  }
-  if p == 0 or str_at((src + p - 1), 1) != "," { return false }
-  mut q := p - 1
-  mut depth := 0
-  mut open := 0
-  mut found := false
-  while q > 0 and not found {
-    comment := wat_source_comment_back(src, q)
-    if comment != q {
-      q = comment
-    } else {
-      c := str_at((src + q - 1), 1)
-      if c == ")" or c == "]" { depth = depth + 1 }
-      if c == "(" or c == "[" {
-        if depth > 0 { depth = depth - 1 } else { open = q - 1 ; found = true }
-      }
-      q = q - 1
-    }
-  }
-  if not found { return false }
-  mut ne := open
-  while ne > 0 and wat_source_blank(src, ne - 1) { ne = ne - 1 }
-  mut ns := ne
-  while ns > 0 and wat_source_ident(src, ns - 1) { ns = ns - 1 }
-  ne - ns == 7 and str_at((src + ns), 7) == "bitcast"
-}
-
+## The reverse source scan that recovered an identity-ERASED `bitcast` for this file's admission
+## fence (`wat_source_comment_back` / `wat_source_gap_back` / `wat_erased_bitcast_at`, plus its two
+## byte-class leaves) moved to `lower_layout` when #546 needed the same scan to report WHICH target
+## was erased. `lower_layout::erased_bitcast_at` is that yes/no, unchanged.
 ## Is a recovered type span one of the language's INTEGER scalar types? Keep bool/float/pointer and
 ## every unresolved or aggregate span out of the bounded value-break admission.
 wat_break_integer_type := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
@@ -3527,7 +3452,7 @@ wat_break_scalar_expr := fn(e : ptr(Expr), params_head : ptr(mut Param), fn_head
     _ => {}
   }
   start := wat_expr_start(e)
-  if start == 0 or ((not explicit_bitcast) and wat_erased_bitcast_at(src, start)) { return false }
+  if start == 0 or ((not explicit_bitcast) and erased_bitcast_at(src, start)) { return false }
   mut r := false
   match deref(e) {
     Expr::Num(_v, _s, _n) => { r = true }
