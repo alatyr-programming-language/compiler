@@ -4,7 +4,7 @@
 ## `target/debug/alatyr` — `debug` is the default build profile, `--release` selects `release` — and
 ## that compiler then reproduces itself byte-for-byte (TOOL-1; scripts/fixpoint.sh).
 app := Package(
-    version = "0.2.1",
+    version = "0.2.2",
     source_dir = "src",
     target_dir = "target",
     targets = [

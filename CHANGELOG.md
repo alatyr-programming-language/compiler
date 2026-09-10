@@ -122,6 +122,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.2 — 2026-09-10
+
 - **Two more ways to launder a brand through a struct field are refused.** A brand has a distinct
   nominal identity and every brand conversion is explicit (Types §4.2/§4.3); two *sibling* brands
   over one block do not convert into each other at all (§5.4). The refusal that landed earlier

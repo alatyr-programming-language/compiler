@@ -61,13 +61,13 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: 6193a26568ef6ee60b02c5a9ae67f4d51df7f3d5d2d4d2850f67518574a39343
-current-seed-version: 0.2.1
+current-seed-sha256: 4b389116b750e97bef19c6b5b7ebd3473a607ffbb56597f491fd87a1c2c8bf3c
+current-seed-version: 0.2.2
 #
-# Promoted:      2026-09-10 (see the last entry in this file)
+# Promoted:      2026-09-10 (second promotion of the day; see the last entry in this file)
 # Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
-# GAS at promotion: 1234799 lines
-# GAS SHA-256:   91c9365ad3085e52ab5c938b0c5df44ff85240be06d69b670d4f5feb7b96fd2f
+# GAS at promotion: 1237719 lines
+# GAS SHA-256:   2e3f90b1c4e83642b74d953d573865b2740940d0414e8995eeafd86655806ca6
 #
 # `current-seed-version` is the `version` field of `package.al` at the moment of the promotion, and by
 # the versioning order in CHANGELOG.md the two must agree at all times: the version moves ON a
@@ -1342,4 +1342,46 @@ current-seed-version: 0.2.1
 # `./seed/alatyr --version` against `package.al` instead of comparing one claim to another — can now
 # land without reddening `main`.
 #
+# The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
+
+## 2026-09-10 — self-promote #2: one operand cannot be signed for the compare and unsigned for the add.
+# Trigger: PR #652 (#646) and PR #653 (#651), landed as one stack because they are one repair of one
+# defect family. #648's normalization made a comptime-for bound genuinely negative, and the three
+# non-x86 CompForRange unrolls then compared their counter with a signed `<` while guarding `k + 1`
+# with the UNSIGNED carry test — at k = -1 the guard fired and the compiler emitted `ud2`: a crash
+# while emitting, no diagnostic, on all three emitters. #648 shipped three local `unchecked`
+# increments as a bypass; this promotion is the repair that lets them come out.
+#
+# ROOT CAUSE, measured rather than guessed. Not the arithmetic: `bind_slot_typed` no-ops on a name
+# that is already bound, so with one name declared twice only the FIRST declaration reaches the slot
+# map, with the first binding's type. `emit_wat_stmts` has an untyped `mut k := 0` long before
+# `mut k : i64 = lo`, so the annotation was discarded and `is_signed_expr` answered false. #653 then
+# closed the second half: `local_decl_assign` walked only the top-level statement list, so a local
+# declared inside a block, and a local inferred from a `Bin`, never resolved either.
+#
+# SPEC: Types 3.2 — "signedness lives in operations"; the operand's interpretation picks the intrinsic
+# "exactly as it does for `+` and `<`". One operand cannot be signed for one and unsigned for the
+# other. Concurrency 6.1 — the trap belongs to an operation that OVERFLOWS, and -1 + 1 does not
+# overflow i64. 6.2 never applied: the counter is in no `unchecked` scope, which is what the bypass
+# had to manufacture.
+#
+# THE DELTA, four label families normalized (#628), seed 1237719 -> Stage1 1237719 lines, NET ZERO:
+#   64 hunks, 86 lines removed and 86 added, every one an in-place substitution.
+#   62 `jnc` -> `jno` · 20 `mulq %rbx` -> `imulq %rbx, %rax` · 2 `divq %rbx` -> `idivq %rbx` ·
+#   2 `xorq %rdx, %rdx` -> `cqto`.
+# One sentence, covering all 86: every changed line swaps a signedness-selected instruction for its
+# signed counterpart at a site whose operand is a native-signed local the scan had left untyped.
+# No comparison moved, and #653's own x86 contribution to this delta is ZERO changed lines in both
+# directions — the entire repair lives in the three non-x86 emitters.
+#
+# CONVERGENCE:
+# Stage1 == Stage2 == Stage3 GAS byte-identical RAW, no normalization needed, at 1237719 lines.
+# GAS SHA-256: 2e3f90b1c4e83642b74d953d573865b2740940d0414e8995eeafd86655806ca6.
+# Stage1 binary SHA-256: 1878f571dc6b9c713a7c369d4ed3fddde1d30540cf6810ea08001a71955fa245 (4676048 B).
+# Stage2 == Stage3 binary SHA-256:
+# 4b389116b750e97bef19c6b5b7ebd3473a607ffbb56597f491fd87a1c2c8bf3c (4676048 B).
+# Promoted `seed/alatyr` is Stage2. All three stages answer `alatyr 0.2.2`; the bump landed before
+# the build, as #586/#612 require, so this is the second consecutive seed to answer its own number.
+#
+# VERSION 0.2.1 -> 0.2.2, PATCH: a compiler crash and two silent wrong values fixed, no new surface.
 # The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
