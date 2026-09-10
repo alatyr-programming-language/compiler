@@ -212,7 +212,13 @@ ALEOF
     fi
   done
   # It must also FAIL, not merely report: an empty baseline plus findings must exit non-zero.
-  if verdict "$W/st_plant/observed" /dev/null "$W/st_plant" >/dev/null 2>&1; then
+  # Its outdir is its OWN directory, not `$W/st_plant`. `verdict` writes seven working files named
+  # after its own outputs — `base`, `obs.k`, `base.k`, `new.k`, `stale.k`, `new`, `stale` — so
+  # aiming it at the scan directory left a FILE called `stale` beside `observed`, and the stale
+  # probe below, whose outdir is a directory of that name, could then not `mkdir` it. Every
+  # redirection in that call failed, `$o/new` was never created, and `[ ! -s "$o/new" ]` answered
+  # true: the check passed while measuring nothing at all (issue #600).
+  if verdict "$W/st_plant/observed" /dev/null "$W/st_plant/nobase" >/dev/null 2>&1; then
     echo "idiom: FAIL gate-of-the-gate — findings absent from the baseline did not produce a non-zero exit"
     ok=0
   fi
@@ -229,8 +235,28 @@ ALEOF
     cat "$W/st_plant/observed"
     printf 'TABLE\tstale.al\tstale_a\tstale.al\tstale_b\t5\t-\t1:2\n'
   } > "$W/st_plant/stale.base"
-  if ! verdict "$W/st_plant/observed" "$W/st_plant/stale.base" "$W/st_plant/stale" >/dev/null 2>&1; then
+  if ! verdict "$W/st_plant/observed" "$W/st_plant/stale.base" "$W/st_plant/staleprobe" >/dev/null 2>&1; then
     echo "idiom: FAIL gate-of-the-gate — a stale baseline line caused a failure"
+    ok=0
+  fi
+  # …and that line must actually BE REPORTED stale, in both directions. `stale` can never make this
+  # gate red, so nothing above notices when the computation stops computing: measured (issue #600),
+  # emptying the stale pipeline left every check in this function green, the stage exit 0, and the
+  # `stale=` count silently fell from 12 to 0 — the whole channel that tells a lane which reviewed
+  # baseline lines are droppable went dark with no verdict changing. The over-reporting direction is
+  # asserted with the same file: a computation that calls EVERY baseline line stale is as useless as
+  # one that calls none, and deleting the lines it names would unmask live findings as NEW.
+  local nstale
+  nstale="$(grep -c '' < "$W/st_plant/staleprobe/stale" 2>/dev/null || echo 0)"
+  if ! grep -qF "$(printf 'TABLE\tstale.al\tstale_a\t')" "$W/st_plant/staleprobe/stale" 2>/dev/null; then
+    echo "idiom: FAIL gate-of-the-gate — a baseline line that no longer occurs was NOT reported stale."
+    echo "       The stale channel is this gate's only advice about droppable baseline lines, and it"
+    echo "       cannot fail a run, so nothing else here would notice it going dark."
+    ok=0
+  elif [ "$nstale" != 1 ]; then
+    echo "idiom: FAIL gate-of-the-gate — $nstale baseline line(s) reported stale, want exactly the one"
+    echo "       that no longer occurs; the still-observed findings must never be advertised droppable."
+    sed 's/^/    /' "$W/st_plant/staleprobe/stale"
     ok=0
   fi
   # A global rarity cutoff may make an existing TABLE pair lose shared literals when an unrelated
