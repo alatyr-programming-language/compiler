@@ -3896,6 +3896,14 @@ d_diag_ident_len := fn(base : usize, s : usize) -> usize {
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
 DIAG_QUALIFIED_PRIVATE_CONST_MARKER := 6900000000000000000
+## Issue #580 / Modules §3+§6 + Tooling §5 — the sema-side UNRESOLVED `::`-HEAD class
+## (`sema::UNRESOLVED_QUAL_HEAD_DIAG_MARKER`). Its payload is 128-wide: the low 7 bits are the
+## head's LENGTH and the rest is the head's source offset, so the renderer can quote the exact
+## spelling instead of a bare "unresolved". It sits between the qualified-private-constant and the
+## comptime windows, so only the former's upper bound moves and every other decoded range stays
+## byte-identical.
+DIAG_UNRESOLVED_QUAL_HEAD_MARKER := 6901000000000000000
+DIAG_UNRESOLVED_QUAL_HEAD_SLOT := 128
 ## CT-12 / Comptime §2.6 — the COMPTIME guard-failure class (shared with sema::comptime_err). Above
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
@@ -4013,7 +4021,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ctg := code >= DIAG_CT_MARKER and code < DIAG_COMPTIME_COND_MARKER
   global_init_call := code >= DIAG_GLOBAL_INIT_CALL_MARKER and code < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_GLOBAL_INIT_CALL_MARKER
-  private_const := code >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and code < DIAG_CT_MARKER
+  private_const := code >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and code < DIAG_UNRESOLVED_QUAL_HEAD_MARKER
+  unresolved_qual_head := code >= DIAG_UNRESOLVED_QUAL_HEAD_MARKER and code < DIAG_CT_MARKER
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_BRAND_CONVERSION_MARKER
   brand_conv := code >= DIAG_BRAND_CONVERSION_MARKER and code < DIAG_SAME_SCOPE_REDECL_MARKER
@@ -4080,6 +4089,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if private_const {
     raw = code - DIAG_QUALIFIED_PRIVATE_CONST_MARKER
     span = raw / 4
+  } else if unresolved_qual_head {
+    raw = code - DIAG_UNRESOLVED_QUAL_HEAD_MARKER
+    span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
   } else if enum_dup_disc {
     raw = code - DIAG_ENUM_DUP_DISC_MARKER
     span = raw / 4
@@ -4117,7 +4129,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::fd_str(2, "@limits(")
       wk1 := rt::fd_str(2, limit_name(kind))
@@ -4146,6 +4158,11 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     }
     else if multidim_array { wkmda := rt::fd_str(2, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { wkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
+    else if unresolved_qual_head {
+      wkuqh0 := rt::fd_str(2, "no module, type, or alias named `")
+      wkuqh1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
+      wkuqh2 := rt::fd_str(2, "` is in scope here — a `::` head must name a module, a type, an alias to one, or an intrinsic namespace (Modules §3/§6); check the spelling or add the import")
+    }
     else if tuple_global { wktg := rt::fd_str(2, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if unknown_ctor { wku := rt::fd_str(2, "unknown type constructor") }
     else if manifest_value {
@@ -6685,7 +6702,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ctg := r >= DIAG_CT_MARKER and r < DIAG_COMPTIME_COND_MARKER
   global_init_call := r >= DIAG_GLOBAL_INIT_CALL_MARKER and r < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_GLOBAL_INIT_CALL_MARKER
-  private_const := r >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and r < DIAG_CT_MARKER
+  private_const := r >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and r < DIAG_UNRESOLVED_QUAL_HEAD_MARKER
+  unresolved_qual_head := r >= DIAG_UNRESOLVED_QUAL_HEAD_MARKER and r < DIAG_CT_MARKER
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_BRAND_CONVERSION_MARKER
   brand_conv := r >= DIAG_BRAND_CONVERSION_MARKER and r < DIAG_SAME_SCOPE_REDECL_MARKER
@@ -6752,6 +6770,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if private_const {
     raw = r - DIAG_QUALIFIED_PRIVATE_CONST_MARKER
     span = raw / 4
+  } else if unresolved_qual_head {
+    raw = r - DIAG_UNRESOLVED_QUAL_HEAD_MARKER
+    span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
   } else if enum_dup_disc {
     raw = r - DIAG_ENUM_DUP_DISC_MARKER
     span = raw / 4
@@ -6790,7 +6811,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
@@ -6822,6 +6843,11 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     }
     else if multidim_array { dwkmda := rt::fd_str(2, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { dwkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
+    else if unresolved_qual_head {
+      dwkuqh0 := rt::fd_str(2, "no module, type, or alias named `")
+      dwkuqh1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
+      dwkuqh2 := rt::fd_str(2, "` is in scope here — a `::` head must name a module, a type, an alias to one, or an intrinsic namespace (Modules §3/§6); check the spelling or add the import")
+    }
     else if tuple_global { dwktg := rt::fd_str(2, "a standard-layout byte tuple global is not supported yet (global storage is word-based)") }
     else if unknown_ctor { dwku := rt::fd_str(2, "unknown type constructor") }
     else if manifest_value {

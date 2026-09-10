@@ -123,6 +123,19 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 ## Unreleased
 
 ## 0.2.2 — 2026-09-10
+- **A `::` head that names nothing is now a compile error instead of a silently different call.**
+  `zzz::aa()`, with no `zzz` declared anywhere, used to build at rc 0 and run the *root's own* `aa`:
+  every resolver in the tree matches a qualified callee by its trailing segment alone, so the head
+  was never read. That is a wrong answer to a typo — you name one thing and get another, with no
+  diagnostic. **Newly rejected:** a call whose `::` head names none of a module (by path), a type
+  used as an associated-function or variant namespace, a local alias to either, one `pub` re-export
+  projection, or an intrinsic namespace (`atomic`, `volatile`). The verdict is one located
+  `alatyr: check: no module, type, or alias named ...` on all four surfaces — `build`, `check`, and
+  the WAT/AArch64/RISC-V emit paths — and it is reported at the *end* of the check, so it never
+  depends on the order the modules were listed in. An `@extern` import (Modules §7) is an ordinary
+  declaration and is not affected; neither is FFI. One consequence worth naming: for a manifest-less
+  `alatyr build a.al b.al`, the first file is the package root and Tooling §4 excludes it from
+  module-path scanning, so `a::something()` from `b.al` names nothing and is now refused too.
 
 - **Two more ways to launder a brand through a struct field are refused.** A brand has a distinct
   nominal identity and every brand conversion is explicit (Types §4.2/§4.3); two *sibling* brands

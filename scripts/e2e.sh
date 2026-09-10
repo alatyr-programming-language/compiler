@@ -4782,20 +4782,26 @@ limit_scope_multi() {
 ##
 ##   head    — one qualified spelling is resolved twice, once through the ROOT file's stem and once
 ##             through a head that names nothing. TWO declarations of that name exist, so the resolver
-##             must CHOOSE, and the choice reveals whether the stem is a module: the parent answers 7
-##             for the root stem (it selected the root's declaration through a module named `hroot`)
-##             and 9 for the unknown head. The two must now AGREE. Written as a DIFFERENTIAL so the
-##             row keeps its meaning when the unknown-head/unqualified visibility hole (#403) closes.
-##   class   — the parent rejects the root-stem spelling with the Modules §3 visibility class
-##             (`invalid`), which a resolver reaches only after an exact module-segment match against a
-##             declaration whose module is that stem. That class must be gone.
+##             must CHOOSE, and the choice reveals whether the stem is a module: the pre-#516 parent
+##             answered 7 for the root stem (it selected the root's declaration through a module named
+##             `hroot`) and 9 for the unknown head. The two must AGREE. Written as a DIFFERENTIAL so
+##             the row keeps its meaning as the surrounding resolution tightens — and it has now
+##             tightened twice. #516 made both answer 9; #580 makes both a LOCATED COMPILE ERROR,
+##             because a head that names nothing is no longer resolved silently at all. The
+##             differential is unchanged; only the observable it is measured on moved, from an exit
+##             code to the refusal — which is #516's acceptance criterion 1, reachable at last.
+##   class   — the pre-#516 parent rejected the root-stem spelling with the Modules §3 visibility
+##             class (`invalid`), which a resolver reaches only after an exact module-segment match
+##             against a declaration whose module is that stem. That class must be gone, and since
+##             #580 the verdict in its place is the unresolved-head class rather than silence.
 ##   sibling — the SAME §3 rejection between two REAL sibling modules must remain. A guard row against
 ##             overshoot: this fix must not switch the visibility test off. Holds on both sides.
 ##   stems   — the listed files must still resolve one another by their own stems. Guard row.
 ##   symbols — Modules §6.1, "A root-level declaration is unprefixed": the byte-level cause of all of
 ##             the above, and the one assertion that is not an exit code. The root's declarations are
 ##             bare labels, the listed file keeps `hchild__twin`, and the synthesized ELF entry calls
-##             the bare root entry.
+##             the bare root entry. Measured on the ACCEPTED pair, since #580 makes the root-stem
+##             spelling a refusal that emits no GAS to read.
 ##   base    — TOOL-11: the artifact base is STILL the first listed file's stem. Only the module path
 ##             moved; the two facts come from the same sentence and must not be conflated.
 ##
@@ -4812,9 +4818,14 @@ issue516_root_module_test() {
     'pub twin := fn() -> u64 { return 7 }' \
     'main := fn() -> u64 { return hchild::probe() + base() }' > "$d/hroot.al"
   printf '%s\n' \
-    '## A listed file. Its module IS named by its stem; it is a descendant of the root.' \
+    '## A listed file. Its module IS named by its stem; it is a descendant of the root — and it' \
+    '## names its OWN declaration through its OWN stem, which IS a module and therefore resolves.' \
     'pub twin := fn() -> u64 { return 9 }' \
-    'pub probe := fn() -> u64 { return hroot::twin() }' > "$d/hchild.al"
+    'pub probe := fn() -> u64 { return hchild::twin() }' > "$d/hchild.al"
+  printf '%s\n' \
+    '## The same file, spelling the call through the ROOT FILE STEM.' \
+    'pub twin := fn() -> u64 { return 9 }' \
+    'pub probe := fn() -> u64 { return hroot::twin() }' > "$d/hchildq.al"
   printf '%s\n' \
     '## The control: a head that names nothing at all, over the same two candidate declarations.' \
     'pub twin := fn() -> u64 { return 9 }' \
@@ -4842,25 +4853,37 @@ issue516_root_module_test() {
     '## The sibling reference the pinned spec allows.' \
     'pub probe := fn() -> u64 { return sib_a::open() }' > "$d/sib_q.al"
 
-  ## head — the root file's stem and a head that names nothing must now resolve identically.
+  ## head — the root file's stem and a head that names nothing must resolve identically, and after
+  ## #580 they do so at a STRONGER point than before: both are now a located compile error rather
+  ## than a silent fall-through to whichever `twin` the tail-name scan reached last. The row keeps
+  ## its exact meaning — the root file's stem is NOT a module, so a head that spells it names
+  ## nothing — and the differential is now measured on the refusal instead of on an exit code. This
+  ## is #516's own acceptance criterion 1 ("requires the unresolved-path refusal"), which was
+  ## unreachable while an unknown head resolved silently; the comment above records the pre-#580
+  ## form (both answered 9).
   local hb="$d/head.bin" zb="$d/headz.bin"
-  "$CC" -o "$hb" "$d/hroot.al" "$d/hchild.al" >/dev/null 2>&1 || {
-    echo "FAIL issue516_root_module/head: build"; fail=1; return; }
-  "$CC" -o "$zb" "$d/hroot.al" "$d/hchildz.al" >/dev/null 2>&1 || {
-    echo "FAIL issue516_root_module/head: control build"; fail=1; return; }
-  _e2e_exec "$hb" >/dev/null 2>&1; local got_head=$?
-  if _e2e_runtime_failure "issue516_root_module/head" "$got_head"; then return; fi
-  _e2e_exec "$zb" >/dev/null 2>&1; local got_zero=$?
-  if _e2e_runtime_failure "issue516_root_module/head(control)" "$got_zero"; then return; fi
-  if [ "$got_head" = "$got_zero" ] && [ "$got_head" = 9 ]; then
-    echo "ok   issue516_root_module/head: the root file's stem resolves like a head that names nothing ($got_head)"
+  local he="$d/head.err" ze="$d/headz.err"
+  "$CC" -o "$hb" "$d/hroot.al" "$d/hchildq.al" >/dev/null 2>"$he"; local got_head=$?
+  "$CC" -o "$zb" "$d/hroot.al" "$d/hchildz.al" >/dev/null 2>"$ze"; local got_zero=$?
+  if [ "$got_head" != 0 ] && [ "$got_head" = "$got_zero" ] &&
+     grep -qF "no module, type, or alias named" "$he" &&
+     grep -qF "no module, type, or alias named" "$ze"; then
+    echo "ok   issue516_root_module/head: the root file's stem is refused exactly like a head that names nothing (rc $got_head)"
   else
-    echo "FAIL issue516_root_module/head: root-stem head got $got_head, unknown head got $got_zero, want both 9"
+    echo "FAIL issue516_root_module/head: root-stem head rc=$got_head [$(cat "$he" 2>/dev/null)], unknown head rc=$got_zero [$(cat "$ze" 2>/dev/null)], want both the same non-zero unresolved-head refusal"
     fail=1
   fi
+  if [ -e "$hb" ] || [ -e "$zb" ]; then
+    echo "FAIL issue516_root_module/head: refused but left an output artifact"; fail=1
+  fi
 
-  ## symbols — Modules §6.1 on the GAS the `head` build just emitted.
-  local gas="$hb.s"
+  ## symbols — Modules §6.1 on the GAS of the ACCEPTED pair. `hchild.al` spells no qualified head at
+  ## all, so this row measures the SYMBOL SHAPE and nothing else; the root-stem head it used to
+  ## carry moved to `hchildq.al` and to the `head` row above, which is now a refusal.
+  local sb2="$d/sym.bin"
+  "$CC" -o "$sb2" "$d/hroot.al" "$d/hchild.al" >/dev/null 2>&1 || {
+    echo "FAIL issue516_root_module/symbols: build"; fail=1; return; }
+  local gas="$sb2.s"
   if [ ! -s "$gas" ]; then
     echo "FAIL issue516_root_module/symbols: no emitted GAS at $gas"; fail=1
   else
@@ -4879,11 +4902,16 @@ issue516_root_module_test() {
     fi
   fi
 
-  ## class — the Modules §3 visibility verdict must no longer answer for the root file's stem.
+  ## class — the Modules §3 visibility verdict must not answer for the root file's stem. That is
+  ## still exactly what this row measures; what changed with #580 is the verdict it must see
+  ## INSTEAD. Before, the head resolved to nothing silently and `check` answered rc 0; now it is the
+  ## unresolved-head class, which is the class #516's expected behaviour 1 names ("the ordinary
+  ## unresolved-path class, not the §3 `invalid` class"). The `invalid` half is unchanged and is
+  ## still the assertion that would catch a resolver that found a module named `croot`.
   local ce="$d/cqual.check.err"
   "$CC" check "$d/croot.al" "$d/cqual.al" >/dev/null 2>"$ce"; local qrc=$?
-  if [ "$qrc" = 0 ] && ! grep -q "invalid" "$ce"; then
-    echo "ok   issue516_root_module/class: no module-visibility verdict for the root file's stem"
+  if [ "$qrc" = 1 ] && grep -qF "no module, type, or alias named" "$ce" && ! grep -q "invalid" "$ce"; then
+    echo "ok   issue516_root_module/class: the root file's stem gets the unresolved-head class, not the visibility class"
   else
     echo "FAIL issue516_root_module/class: check rc=$qrc diagnostic=[$(cat "$ce" 2>/dev/null)]"
     fail=1
@@ -9645,6 +9673,35 @@ run alloc_with_elision 42
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.
 run ambient_alloc_nested_shadow 42
 run alias_injection 42
+## Issue #580 / Modules §3+§6 + Tooling §5 — a `::` HEAD THAT NAMES NOTHING.
+##
+## THE DEFECT. Measured on the parent (`origin/main` 73a6632): `reject_unresolved_qual_head.al`
+## BUILT at rc 0 and the artifact RAN to 7 — the head `zzz` was ignored and the call bound to the
+## root's own `aa`. Every resolver in the tree matches a qualified callee by its TAIL segment
+## alone, so nothing read the head at all. The refusal is one located `check` verdict on all four
+## surfaces, which is the property #508 established and the reason the emit rows are here too.
+build_reject_has reject_unresolved_qual_head "no module, type, or alias named"
+check_reject_has reject_unresolved_qual_head "no module, type, or alias named"
+emit_reject_has wat reject_unresolved_qual_head "no module, type, or alias named"
+emit_reject_has aarch64 reject_unresolved_qual_head "no module, type, or alias named"
+emit_reject_has riscv64 reject_unresolved_qual_head "no module, type, or alias named"
+## THE CLOSED SET, one witness per arm. Each of these five heads has a kind mask of exactly ONE
+## bit (1, 2, 4, 8, 16 — the `#580 HEAD` census rows on fd 99 print it), so deleting that arm from
+## `sema::sema_qual_head_kinds` makes exactly the named row below stop compiling. A closed set
+## whose member nothing exercises is decorative, not closed.
+run_x86 qual_head_module 61
+check_accept qual_head_module
+run_x86 qual_head_type 63
+check_accept qual_head_type
+run_x86 qual_head_alias 64
+check_accept qual_head_alias
+run_x86 qual_head_reexport 65
+check_accept qual_head_reexport
+run_x86 qual_head_intrinsic 66
+check_accept qual_head_intrinsic
+## Modules §7 — an `@extern` import is a declaration like any other, so a head that reaches one is
+## NOT an unresolved name. `check` only: the point is the resolution, not a link against a C object.
+check_accept qual_head_extern
 run ufcs_push_local 42
 run ambient_hashmap 42
 ## Comptime §3.3 — a comptime type argument INFERRED from a `str` view argument, and the fail-loud reject
