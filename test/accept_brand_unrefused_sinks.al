@@ -1,11 +1,13 @@
 ## e2e — Issue #299, the COVERAGE reminder. This program is INVALID under Types §4.2/§4.3 + §5.4:
-## every crossing below is an implicit brand conversion. It is accepted today, and this fixture
-## deliberately locks that in so nobody can read the landed refusal as complete.
+## each of the three NUMBERED crossings below is an implicit brand conversion. They are accepted
+## today, and this fixture deliberately locks that in so nobody can read the landed refusal as
+## complete. Everything that is not numbered is a legal control and must stay accepted.
 ##
 ## The refusal reaches every sink the checker's LIVE path reaches — the annotated binding, a `=`
 ## re-assignment, a direct/UFCS call argument, the declared result, an early `return`, a binary
-## operator (including an `if`-expression's condition), a struct-literal FIELD, and a brand
-## constructor fed another brand. These five sinks it does NOT reach, each for a stated reason:
+## operator (including an `if`-expression's condition), a struct-literal FIELD, a brand constructor
+## fed another brand, and — since the FIELD slice — the struct-field STORE and a value read out of a
+## branded FIELD. These three sinks it does NOT reach, each for a stated reason:
 ##
 ##   1. `G : A = B(1)`      — a MODULE-LEVEL value declaration is not one of the checker's hooked
 ##                            value sinks; its annotation is recovered separately (`global_type_span`).
@@ -15,12 +17,13 @@
 ##   3. `E.One(b)`          — an ENUM-VARIANT payload: the parser records no per-component payload
 ##                            type ("their type against the variant's payload type is DEFERRED"), so
 ##                            the sink type does not exist in the AST yet.
-##   4. `s.x = b`           — a struct-FIELD store: a place-typed assignment, judged by the field
-##                            store path rather than by a value sink.
-##   5. `fld : u64 = s.x`   — the B1R direction through a FIELD READ: the brand-identity recovery
-##                            reads a constructor, a declared callee result and an annotated local,
-##                            and a `Field` expression is none of those, so the value's identity is
-##                            unknown and the poison-tolerant sink accepts it.
+##
+## Two entries LEFT this list, and they are the reason this fixture is worth keeping. `s.x = b`, the
+## struct-FIELD store, and `fld : u64 = s.x`, the B1R direction through a FIELD READ, were items 4
+## and 5 here. Both are now refused; on the compiler that closed them this file failed at `s.x = b`,
+## which is exactly the job the header below describes. They moved to `test/reject_brand_field_store_sink.al`
+## and `test/reject_brand_field_read_sink.al`. A NESTED place path (`s.t.y = b`, a `Stmt::FieldPathAssign`)
+## and a field read whose base is not a directly known struct root are residual on #299, not closed.
 ##
 ## Two more shapes are accepted ON PURPOSE and are not gaps: `u64(c)` composes brand removal with a
 ## numeric conversion in one `T(v)`, which the pin does not say a single constructor may or may not
@@ -51,14 +54,17 @@ main := fn() -> u64 {
   b : B = B(2)
   c : C = C(3)
 
-  ## (2) an array-literal element, (3) an enum-variant payload, (4) a struct-field store.
+  ## (2) an array-literal element, (3) an enum-variant payload.
   xs : [2]A = [b, b]
   e := E.One(b)
-  mut s := S(x = A(4))
-  s.x = b
 
-  ## (5) the brand→raw direction through a field read.
-  fld : u64 = s.x
+  ## The struct S is kept, written the LEGAL way, so this file still exercises a branded field beside
+  ## the three open sinks: a same-brand store and an EXPLICIT `u64(...)` read are the two spellings
+  ## `test/reject_brand_field_store_sink.al` and `test/reject_brand_field_read_sink.al` refuse the
+  ## implicit form of, and they must keep passing here.
+  mut s := S(x = A(4))
+  s.x = A(2)
+  fld : u64 = u64(s.x)
 
   ev := match e { E::One(v) => { u64(v) } E::Two => { 0 } }
 

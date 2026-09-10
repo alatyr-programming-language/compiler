@@ -122,6 +122,21 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **Two more ways to launder a brand through a struct field are refused.** A brand has a distinct
+  nominal identity and every brand conversion is explicit (Types §4.2/§4.3); two *sibling* brands
+  over one block do not convert into each other at all (§5.4). The refusal that landed earlier
+  reached the annotated binding, the `=` re-assignment of a name, the call argument, the declared
+  result, the early `return`, the binary operator, the struct-*literal* field and the brand
+  constructor — but not a write into an already-built struct, and not a value read back out of one.
+  So `s.x = b` compiled clean and ran, which made it the standing way around all of the above, and
+  `fld : u64 = s.x` dropped the field's brand on the way out. **Newly rejected:** an implicit brand
+  crossing at a struct-field store (`s.x = b`, sibling or cross-domain — a *raw* value there was
+  already refused as a type mismatch) and at any sink fed by a direct branded field read
+  (`fld : u64 = s.x`, `b : B = s.x`, `take_a(s.y)`, `a + s.y`). The explicit spellings are unchanged
+  and still accepted: `s.x = A(u64(b))` and `u64(s.x)`. Same-brand stores and reads, widening, and
+  Types §8.1 `@require` contracts are untouched. Nested place paths (`s.t.y = b`) and a field read
+  through an index or pointer root remain open.
+
 ## 0.2.1 — 2026-09-10
 
 - **A written negative integer literal is now one literal, and the three silent wrong values that
