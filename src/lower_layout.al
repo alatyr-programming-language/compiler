@@ -8,9 +8,10 @@
 ## self-host cross-module surface (a sibling submodule of the `selfhost` package root,
 ## reached by `::`), the same machinery `driver` uses for `lexer`/`parser`/`lower`.
 vec := alloc::vec
-(Arg, Bind, Decl, Expr, FieldDecl, Param, Stmt) := ast
+(Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt) := ast
 (bnd_ns, bnd_nl, bnd_next) := ast
 stmt_p := ast::stmt_p
+arm_p := ast::arm_p
 (int_lit_err, dec_val) := lexrt
 fld_p := ast::fld_p
 param_p := ast::param_p
@@ -2452,6 +2453,113 @@ pub ann_scan_narrow := fn(src : ptr(u8), pos : usize) -> str {
   sp := ann_scan_span(src, pos)
   if sp.n == 0 { return "" }
   scalar_name_narrow(src, sp.s, sp.n)
+}
+
+## ─── The NESTED-BLOCK annotation scan (#651) ──────────────────────────────
+##
+## `local_decl_assign` above is deliberately FLAT, and every backend-local type recovery built on it
+## inherits that: a local declared INSIDE an `if`/`while`/`match`/`loop` arm is never found, so the
+## question falls to the caller's default. For the three non-x86 SIGNEDNESS scans that default is
+## UNSIGNED, and it is a wrong answer rather than a missing one: `mut m : i64 = neg()` written one
+## block deep took the unsigned CARRY guard on `m + 1` while `m < hi` beside it kept the SIGNED
+## comparison, and at m = -1 the two disagreed and the guard trapped a program the language defines
+## (Types §3.2 — "the operand's interpretation picks the intrinsic exactly as it does for `+` and
+## `<`"; Concurrency §6.1 — the trap belongs to an operation that OVERFLOWS, and `-1 + 1` does not
+## overflow `i64`).
+##
+## This scan descends. It is deliberately NOT a second `local_decl_assign`: widening THAT would move
+## array-ness, float-ness, narrow width, place types and lambda binding all at once. It answers one
+## question, and it answers it the way `param_ann_signed` answers its own — STICKY-TRUE over every
+## declaration of the name, at any depth. That is the same value model the three backends already
+## have: `:=` locals are function-scoped here and one NAME is one slot, so two declarations of `k`
+## are one variable, and #646/#652 settled on x86 that such a name is signed everywhere.
+##
+## It inherits #652's two refusals verbatim, because opening either of them here would re-open a
+## question that lane deliberately closed:
+##
+##   * a NARROW annotation (`i8`/`i16`/`i32`) is declined — it also carries the §4 value model
+##     (truncation and the per-width trap), which the backends recover through a SEPARATE flat
+##     `*_local_narrow` scan; making the signedness deep while the width stays flat would produce a
+##     64-bit signed op on a value that owes a narrow wrap.
+##   * a native UNSIGNED annotation is declined — that direction moves an ordering comparison off
+##     the signed default, which is #546's question and was measured 2026-07-24 to break
+##     self-reproduction.
+##
+## So the only thing it can do is move an operand from the UNSIGNED default to SIGNED at a site whose
+## source states `i64`/`isize`. `dep` bounds the descent; a `Stmt` tree deeper than 64 blocks answers
+## "unknown", which is the pre-existing default and never a wrong type.
+
+## Is the annotation at `pos` a NATIVE-WIDTH signed integer (`i64` / `isize`)? The narrow signed
+## family answers FALSE here on purpose — see the refusals above. Spelled exactly like
+## `lower::slot_adopt_native_int_type`'s own test, which is the x86 dual of this decision.
+pub ann_scan_native_signed := fn(src : ptr(u8), pos : usize) -> bool {
+  sp := ann_scan_span(src, pos)
+  if sp.n == 0 { return false }
+  tn := str_at((src + sp.s), sp.n)
+  tn == "i64" or tn == "isize"
+}
+
+## Does ANY declaration of the local `[ns, nl)` in the statement TREE rooted at `head` — nested
+## blocks included — annotate it `i64`/`isize`? Sticky-true; false means "not proven", never "no".
+pub local_ann_native_signed_deep := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, dep : i64) -> bool {
+  if dep > 64 { return false }
+  mut s := head
+  mut r := false
+  while s != 0 {
+    st := deref(stmt_p(Stmt, s))
+    match st {
+      Stmt::Assign(ans, anl, v, nx) => {
+        if streq(src, ans, anl, ns, nl) { if ann_scan_native_signed(src, ans + anl) { r = true } }
+        s = nx
+      }
+      Stmt::While(c, b, nx) => { if local_ann_native_signed_deep(b, src, ns, nl, dep + 1) { r = true } ; s = nx }
+      Stmt::Loop(lb, nx) => { if local_ann_native_signed_deep(lb, src, ns, nl, dep + 1) { r = true } ; s = nx }
+      Stmt::Unchecked(ub, nx) => { if local_ann_native_signed_deep(ub, src, ns, nl, dep + 1) { r = true } ; s = nx }
+      Stmt::AllocWith(aa, ab, nx) => { if local_ann_native_signed_deep(ab, src, ns, nl, dep + 1) { r = true } ; s = nx }
+      Stmt::If(c, th, el, nx) => {
+        if local_ann_native_signed_deep(th, src, ns, nl, dep + 1) { r = true }
+        if local_ann_native_signed_deep(el, src, ns, nl, dep + 1) { r = true }
+        s = nx
+      }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if local_ann_native_signed_deep(fb, src, ns, nl, dep + 1) { r = true } ; s = nx }
+      Stmt::Match(c, ah, nx) => {
+        mut arm := ah
+        while arm != 0 {
+          am := deref(arm_p(arm))
+          if local_ann_native_signed_deep(am.body_stmts, src, ns, nl, dep + 1) { r = true }
+          arm = am.next
+        }
+        s = nx
+      }
+      Stmt::CompIf(cc, ct, ce, nx) => {
+        if local_ann_native_signed_deep(ct, src, ns, nl, dep + 1) { r = true }
+        if local_ann_native_signed_deep(ce, src, ns, nl, dep + 1) { r = true }
+        s = nx
+      }
+      Stmt::CompFor(cvs, cvl, cisv, cb, nx) => { if local_ann_native_signed_deep(cb, src, ns, nl, dep + 1) { r = true } ; s = nx }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if local_ann_native_signed_deep(rb, src, ns, nl, dep + 1) { r = true } ; s = nx }
+      Stmt::CompMatch(cm, ah, nx) => {
+        mut car : usize = ah
+        while car != 0 {
+          cam := deref(arm_p(car))
+          if local_ann_native_signed_deep(cam.body_stmts, src, ns, nl, dep + 1) { r = true }
+          car = cam.next
+        }
+        s = nx
+      }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+      Stmt::Return(rv, nx) => { s = nx }
+      Stmt::DerefAssign(dpe, dval, nx) => { s = nx }
+      Stmt::IndexAssign(iab, iai, iav, nx) => { s = nx }
+      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, nx) => { s = nx }
+      Stmt::FieldPathAssign(fpp, fpv, nx) => { s = nx }
+      Stmt::Break(bv, bd, nx) => { s = nx }
+      Stmt::Continue(cd, nx) => { s = nx }
+      Stmt::ExprStmt(e, nx) => { s = nx }
+      _ => { s = 0 }
+    }
+  }
+  r
 }
 
 ## ─── The NAMED-PARAMETER annotation lookup, shared by every backend ────────

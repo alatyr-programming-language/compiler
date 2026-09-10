@@ -10452,6 +10452,20 @@ emit_reject_has riscv64 issue523_hof_synth_span "unbound name at line 30 in issu
 ## which is why the sweeps' trap-tolerant verdict is not what proves it either.
 run accept_rebound_local_signed_guard 42
 check_accept accept_rebound_local_signed_guard
+## Issue #651 — the SAME disagreement in the three non-x86 backends' own annotation SCAN, which
+## walked only the function body's TOP-LEVEL statement list. A local declared inside a block, and a
+## local inferred from arithmetic, therefore fell to those backends' UNSIGNED default: the guard
+## shapes trapped (a64/rv64 133, wasm 134) and the `/`, `%`, `shr` shapes ran to completion with the
+## WRONG NUMBER. Measured on the parent (f81caf6, the #646 repair, and identically on b61bfa4).
+##
+## x86_64 answers 42 on the parent and is registered as the CONTROL: the defect is on the other
+## three surfaces, so those three rows are the ones that fail first and they are registered here
+## rather than left to the corpus walk.
+run accept_block_scoped_signed_local 42
+run_a64 accept_block_scoped_signed_local 42
+run_rv64 accept_block_scoped_signed_local 42
+run_wat accept_block_scoped_signed_local 42
+check_accept accept_block_scoped_signed_local
 ## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
 ## span IS synthesized and which must keep COMPILING and answering their own values —
 ## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`

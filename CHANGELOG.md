@@ -136,6 +136,25 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   and still accepted: `s.x = A(u64(b))` and `u64(s.x)`. Same-brand stores and reads, widening, and
   Types §8.1 `@require` contracts are untouched. Nested place paths (`s.t.y = b`) and a field read
   through an index or pointer root remain open.
+- **On aarch64, riscv64 and WASM, an `i64` local declared inside a block — and a local inferred from
+  arithmetic over one — is now signed for arithmetic too, not just for its comparison.** Those three
+  backends have no slot map to read a local's type from; they recover it by scanning the source, and
+  the scan walked only the function body's TOP-LEVEL statement list. Two shapes therefore never
+  resolved and both fell to the UNSIGNED default. `mut m : i64 = neg()` written inside an
+  `if`/`while`/`loop`/`match` arm took the unsigned carry guard on `m + 1` while `m < hi` beside it
+  kept the signed comparison, and at `m = -1` the two disagreed and the program died on the guard's
+  trap. `d := m - 1` records no annotation at all, so `0 + d + p` trapped the same way — and `d / 2`,
+  `d % 4` and `shr(d, 1)`, which select an instruction rather than a guard, ran to completion and
+  returned the UNSIGNED answer: a clean build, a normal exit, a wrong number. Types §3.2 puts
+  signedness in the operations — the operand's interpretation picks the intrinsic exactly as it does
+  for `+` and `<` — and Concurrency §6.1 traps only an operation that overflows, which `-1 + 1` does
+  not for `i64`. The scan now descends into every nested block for a native-width SIGNED annotation,
+  and an un-annotated local bound from an arithmetic expression takes its operands' signedness when
+  they prove it. Both refusals of the x86 repair above are inherited verbatim: a NARROW annotation
+  is not adopted (it carries the §4 value model, recovered by a separate scan that is still flat),
+  and a native UNSIGNED one is not either — that direction is #546's question. All four backends now
+  agree on both shapes; x86_64's answer, which was already right, does not move a single emitted
+  byte.
 - **A signed local whose name is also bound, untyped, somewhere else in the same function no longer
   crashes the compiler's output on `k + 1`.** `:=` locals are function-scoped in this backend and
   the slot binder no-ops on a name it has already bound, so of two declarations of one name only the

@@ -2727,26 +2727,88 @@ rv_local_rhs := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, 
   }
   r
 }
-rv_shift_call_signed := fn(v : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+rv_shift_call_signed := fn(v : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
   mut r := false
   match deref(v) {
     Expr::Call(cs, cl, na, ah) => {
       cn := str_at((src + cs), cl)
-      if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" { if rv_operand_signed(arg_expr_at(ah, 0, a), params_head, body_head, src, a) { r = true } }
+      if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" { if rv_operand_signed_dep(arg_expr_at(ah, 0, a), params_head, body_head, src, a, dep) { r = true } }
     }
     _ => {}
   }
   r
 }
+## #651 — the `Bin`-INFERRED local, the shape the source scan can never see. `p := m * 3` records no
+## annotation to find at all, so `rv_local_ann_signed` above answers "not proven" and an enclosing
+## `acc + d + p` fell to the UNSIGNED carry guard even when every named operand is `i64` — a trap on a
+## program the language defines (Types §3.2: the operand's interpretation picks the intrinsic exactly
+## as it does for `+` and `<`; Concurrency §6.1: the trap belongs to an operation that OVERFLOWS, and
+## `-1 + -3` does not overflow `i64`). x86_64 answers this by RECORDING a type in
+## `lower::infer_local_scalar_type`'s `Bin` arm; the three source-scanning backends have no slot to
+## record into, so the arithmetic is re-read from the AST at the query.
+##
+## The proof rule is `lower::infer_local_scalar_type`'s, not the emit site's. That site takes
+## `dsigned = dl or dr`, but a MIXED pair (`i64 + u64`) proves nothing about the binding, and x86
+## refuses exactly that pair (`mixed_signedness_pair`) after taking the first typed operand made the
+## recorded type depend on OPERAND ORDER. So: both operands proven signed, or one proven signed and
+## the other a bare integer literal (which has no signedness of its own and takes its partner's).
+## Structurally the mirror image of `rv_operand_unsigned`'s `Bin` arm, down to the operator list;
+## COMPARISONS are excluded there for the same reason — they yield `bool`, not the operand type.
+## One-directional like every predicate in this family: it can only move an operand from the
+## UNSIGNED default to signed, never the reverse.
+rv_bin_init_signed := fn(v : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+  mut r := false
+  match deref(v) {
+    Expr::Bin(op, bl, br) => {
+      if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36 {
+        sl := rv_operand_signed_dep(bl, params_head, body_head, src, a, dep)
+        sr := rv_operand_signed_dep(br, params_head, body_head, src, a, dep)
+        if sl and sr { r = true }
+        if sl and ex_is_num_lit(br) { r = true }
+        if sr and ex_is_num_lit(bl) { r = true }
+      }
+    }
+    _ => {}
+  }
+  r
+}
+
+## The signedness oracle every `/`, `%`, `shr` and checked `+`/`-`/`*` site reads. Unchanged
+## signature; the recursion `rv_bin_init_signed` introduces is bounded by `_dep` below.
 rv_operand_signed := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+  rv_operand_signed_dep(e, params_head, body_head, src, a, 0)
+}
+
+## `dep` BOUNDS the binding-chain walk, and the bound is load-bearing rather than defensive: this
+## backend's `:=` locals are function-scoped, `rv_local_rhs` resolves a name to its FIRST flat
+## `Stmt::Assign` — which for a name declared inside a nested block is a later plain `=` — and two
+## such names can each be re-assigned from the other (`if c { mut a := 0 ; mut b := 0 } ; a = b + 1 ;
+## b = a + 1`). Without the cap that pair walks forever. Exhausting it answers "not proven", which is
+## the pre-existing unsigned default and never a wrong type. Same shape and same cap as
+## `rv_is_float_local`.
+rv_operand_signed_dep := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, dep : i64) -> bool {
+  if dep > 24 { return false }
   mut r := false
   match deref(e) {
     Expr::Var(s, n) => {
       if param_ann_signed(params_head, src, s, n, a) { r = true }
       if rv_local_ann_signed(body_head, src, s, n, a) { r = true }
-      if r == false { rhs := rv_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if rv_shift_call_signed(rhs, params_head, body_head, src, a) { r = true } } }
+      ## #651 — the scan above is FLAT (`lower_layout::local_decl_assign` walks only the top-level
+      ## statement list), so `mut m : i64 = neg()` written inside an `if`/`while`/`match` arm was
+      ## invisible and `m + 1` took the unsigned guard while `m < hi` beside it stayed signed. One
+      ## NAME is one slot in this backend, so a name annotated `i64`/`isize` anywhere in the function
+      ## is that type everywhere — the same value model #646/#652 settled for the x86 slot map. The
+      ## deep scan declines narrow and unsigned annotations for #652's two recorded reasons.
+      if r == false { if lower_layout::local_ann_native_signed_deep(body_head, src, s, n, 0) { r = true } }
+      ## un-annotated `b := shr(<signed>, n)` — recover the signed result type from the shift RHS.
+      if r == false { rhs := rv_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if rv_shift_call_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
+      ## un-annotated `d := m - 1` — recover the signed result type from the ARITHMETIC RHS (#651).
+      if r == false { rhs := rv_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if rv_bin_init_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
     }
     Expr::Call(cs, cl, na, ah) => { cn := str_at((src + cs), cl) ; if cn == "i8" or cn == "i16" or cn == "i32" or cn == "i64" or cn == "isize" { r = true } }
+    ## An ARITHMETIC `Bin` used DIRECTLY as an operand (`(a - b) + c`) carries its operands' type by
+    ## the same rule as a `Bin`-inferred binding — the two halves of `0 + d + p` (#651).
+    Expr::Bin(bop, obl, obr) => { if rv_bin_init_signed(e, params_head, body_head, src, a, dep + 1) { r = true } }
     _ => {}
   }
   r
