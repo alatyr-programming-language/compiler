@@ -5429,6 +5429,23 @@ check_build_located reject_issue304_aliased_slice_field_scalar_type 8 "type mism
 check_build_located reject_issue304_aliased_slice_field_bool_type 8 "type mismatch"
 check_accept accept_issue304_aliased_slice_field_element_type
 run accept_issue304_aliased_slice_field_element_type 42
+## Issue #304 — the same `Slice(T)` element store reached through a field path of TWO or THREE
+## owners. `sema_direct_slice_field_elem_ty` already resolved its owner with the recursive
+## `s3a_struct_span`; a guard demanding a bare local root sat in front of that call and left the
+## element type UNKNOWN, so every value was accepted. Until #629 taught the parser the two-owner
+## statement form, the shape could not reach sema at all. On the parent all four rows below built
+## with rc 0 and ran to 0, and reading the slot back gave the string's address.
+check_build_located reject_issue304_nested_slice_field_scalar_type 12 "type mismatch"
+check_build_located reject_issue304_nested_slice_field_bool_type 11 "type mismatch"
+check_build_located reject_issue304_nested_slice_field_aggregate_type 12 "type mismatch"
+check_build_located reject_issue304_deep_slice_field_scalar_type 11 "type mismatch"
+## The valid controls keep their stores in a checked dead branch: a LIVE nested `Slice(T)` field
+## access traps 133/133/134 on AArch64, RISC-V64 and Wasm under the independent #621, and the
+## per-file corpus row would freeze those exits. `run` therefore records 42 on all four backends
+## without executing the store; the executing proof for this statement form stays with the
+## fixed-array carrier accept_issue623_nested_array_field_store below.
+check_accept accept_issue304_nested_slice_field_element_type
+run accept_issue304_nested_slice_field_element_type 42
 ## Issue #623 — an element store through a field path with TWO owners. `stmt_starts` and `p_stmt`
 ## demanded the `[` immediately after the FIRST field, so `outer.leaf.arr[0] = 42` was not an
 ## assignment statement at all and the store was emitted on no backend, with exit 0 and no
