@@ -77,6 +77,16 @@ pub is_slice_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
     stmt := deref(stmt_p(Stmt, d))
     match stmt {
       Stmt::Assign(ans, anl, v, nx) => { if lower_layout::ex_is_slice(v) { r = true } }
+      ## #544 stage 1 leaves THIS wildcard alone, deliberately, and it is the only one left in the
+      ## file. Exhaustiveness does not see this `match`: the scrutinee's type arrives through the
+      ## GENERIC `ast::stmt_p(T, ...) -> ptr(mut T)` instantiated at `T = Stmt`, and measured on this
+      ## function, removing the wildcard gives rc 0 and no diagnostic, while annotating the local
+      ## (`stmt : Stmt = ...`) or the pointer (`sp : ptr(mut Stmt) = ...`) gives rc 1 at this line
+      ## (#660, five-row table). Spelling out the twenty absorbed `Stmt` variants here would cost the
+      ## lines and buy nothing, because a 22nd `Stmt` variant still would not be refused; and #544's
+      ## census measured that a `match` with no arm taken returns -1 on a clean compile, so a blind
+      ## site is where a mechanical sweep writes a silent wrong value. Enumerate this one when #660
+      ## lands, together with a non-vacuity check that names this line.
       _ => {}
     }
   }
@@ -182,121 +192,263 @@ pub sub_arr_len := fn(src : ptr(u8), ts : usize, tl : usize) -> i64 {
 
 ## Architecture-neutral Expr accessors shared by the scalar backends. Keep the scalar returns separate:
 ## the frozen seed has a known mis-lowering scar for newly introduced struct return types.
+##
+## #544 stage 1 — WHY EVERY ACCESSOR BELOW ENDS IN A SPELLED-OUT GROUP ARM RATHER THAN `_ => {}`.
+## Each of these is a PREDICATE or a PROJECTION, never an emitter: it asks "is this node an X?" or
+## "give me X's k-th span", and for every OTHER `Expr` form the answer is the `false` / `0` /
+## null-pointer default the function already initialises. Nothing is emitted for those forms because
+## nothing is DECIDED for them here — the caller's own classification chain decides. The reason is
+## written once, here, for the whole band: repeating it at each of the twenty arms would say the same
+## sentence twenty times and hide the one place it can differ.
+##
+## The group arm is spelled out so that ADDING an `Expr` variant is a compile error at every one of
+## these sites (Control Flow §5.1; the enforcement itself arrived with #557/PR #573). Measured on this
+## file: deleting any one of these group arms is refused with `check: type mismatch at line <n> in
+## lower_ctx`, 23 sites for 23. Variants are listed in `src/ast.al` declaration order so a reader can
+## diff the list against the enum by eye. A new variant belongs in the group arm unless the accessor's
+## own question can be true of it — in which case it needs a real arm and a fixture.
 pub expr_is_struct_lit := fn(v : ptr(Expr)) -> bool {
   mut r := false
-  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = true } _ => {} }
+  match deref(v) {
+    Expr::StructLit(ss, sn, nf, ah) => { r = true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_struct_lit_ns := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = ss } _ => {} }
+  match deref(v) {
+    Expr::StructLit(ss, sn, nf, ah) => { r = ss }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_struct_lit_nl := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = sn } _ => {} }
+  match deref(v) {
+    Expr::StructLit(ss, sn, nf, ah) => { r = sn }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_field_base := fn(e : ptr(Expr)) -> ptr(Expr) {
   mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
-  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = fb } _ => {} }
+  match deref(e) {
+    Expr::Field(fb, ffs, ffl) => { r = fb }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_field_name_s := fn(e : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = ffs } _ => {} }
+  match deref(e) {
+    Expr::Field(fb, ffs, ffl) => { r = ffs }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_field_name_l := fn(e : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(e) { Expr::Field(fb, ffs, ffl) => { r = ffl } _ => {} }
+  match deref(e) {
+    Expr::Field(fb, ffs, ffl) => { r = ffl }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 
 ## Architecture-neutral Expr enum-literal accessors shared by the scalar backends. Keep the scalar
 ## returns separate for the frozen-seed-compatible shape used by the neighboring accessors.
+## Group arms spelled out per the accessor-band note above (#544 stage 1).
 pub expr_is_enum_lit := fn(v : ptr(Expr)) -> bool {
   mut r := false
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = true } _ => {} }
+  match deref(v) {
+    Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_enum_lit_ns := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = es } _ => {} }
+  match deref(v) {
+    Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = es }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_enum_lit_nl := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = en } _ => {} }
+  match deref(v) {
+    Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = en }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_enum_variant_ns := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vs } _ => {} }
+  match deref(v) {
+    Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vs }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_enum_variant_nl := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vn } _ => {} }
+  match deref(v) {
+    Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = vn }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 
 ## Architecture-neutral Expr string-literal accessors shared by the scalar backends. Keep the scalar
 ## returns separate for the frozen-seed-compatible shape used by the neighboring accessors.
+## Group arms spelled out per the accessor-band note above (#544 stage 1).
 pub expr_is_str_lit := fn(v : ptr(Expr)) -> bool {
   mut r := false
-  match deref(v) { Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = true } _ => {} }
+  match deref(v) {
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_str_lit_ns := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = ss } _ => {} }
+  match deref(v) {
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = ss }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_str_lit_nl := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = sl } _ => {} }
+  match deref(v) {
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = sl }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_str_lit_label := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = lbl } _ => {} }
+  match deref(v) {
+    Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = lbl }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 
 ## Architecture-neutral Expr float-literal accessors shared by the scalar backends. Keep the scalar
 ## returns separate for the frozen-seed-compatible shape used by the neighboring accessors.
+## Group arms spelled out per the accessor-band note above (#544 stage 1).
 pub expr_is_float_lit := fn(v : ptr(Expr)) -> bool {
   mut r := false
-  match deref(v) { Expr::FloatLit(fs, fl) => { r = true } _ => {} }
+  match deref(v) {
+    Expr::FloatLit(fs, fl) => { r = true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_float_lit_ns := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::FloatLit(fs, fl) => { r = fs } _ => {} }
+  match deref(v) {
+    Expr::FloatLit(fs, fl) => { r = fs }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_float_lit_nl := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::FloatLit(fs, fl) => { r = fl } _ => {} }
+  match deref(v) {
+    Expr::FloatLit(fs, fl) => { r = fl }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 
 ## Architecture-neutral Expr::Call callee-name span projections shared by the scalar backends. Keep
 ## the scalar returns separate for the frozen-seed-compatible shape used by the neighboring accessors.
+## Group arms spelled out per the accessor-band note above (#544 stage 1).
 pub expr_call_name_ns := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::Call(cs, cl, n, ah) => { r = cs } _ => {} }
+  match deref(v) {
+    Expr::Call(cs, cl, n, ah) => { r = cs }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 pub expr_call_name_nl := fn(v : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(v) { Expr::Call(cs, cl, n, ah) => { r = cl } _ => {} }
+  match deref(v) {
+    Expr::Call(cs, cl, n, ah) => { r = cl }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 
 ## The name span of a `Var` (0/0 if not a `Var`); the inner content span of a `StrLit` (`asm_str_span`);
 ## a single decimal digit's value (`asm_digit`) — small standalone accessors shared by the raw-asm cluster.
+## Both spans are PROJECTIONS in the sense of the accessor-band note above: the empty span IS the
+## "not that form" answer, and `lower_asm` reads `.n != 0` as exactly that. Their group arms are
+## spelled out for the same reason and carry the same rule for a new `Expr` variant.
 pub CSpan := struct { s : usize, n : usize }
 
 ## Recover the balanced source argument of a `typeinfo(...)` range bound. The parser's compact
@@ -388,7 +540,10 @@ pub var_name_span := fn(e : ptr(Expr)) -> CSpan {
   mut res := CSpan(s = 0, n = 0)
   match deref(e) {
     Expr::Var(s, n) => { res = CSpan(s = s, n = n) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -396,18 +551,34 @@ pub asm_str_span := fn(e : ptr(Expr)) -> CSpan {
   mut res := CSpan(s = 0, n = 0)
   match deref(e) {
     Expr::StrLit(s, n, lbl, _ps, _pn) => { res = CSpan(s = s, n = n) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
 ## The integer value of an `Expr::Num`/`BoolLit` (else 0); the i-th arg expr of an arg list (0-based,
 ## null Expr ptr if absent) — small shared accessors (moved from lower.al, §6 decomposition).
+##
+## `num_lit_value` is the ONE accessor in this file whose "not that form" answer is NOT distinguishable
+## from a real answer: `0` is both "not a literal" and the literal zero. Enumerating the group arm is
+## what made that visible, and it is a measured wrong value, not a hypothetical — `movq(rbx, 0 - 1)` in
+## a raw-asm body emits `movq $0, %rbx` with rc 0 from both `check` and `build` (#659, with the GAS and
+## the four-form table). The defect is in the two CALLERS that commit to the immediate path before
+## asking (`src/lower_asm.al:122` and `:172`), so it is fixed there and not by changing this accessor's
+## contract underneath its fifteen other call sites, all of which pass a compiler-synthesized tuple
+## component index that can only be a `Num`. The group arm below therefore keeps today's behaviour
+## exactly; it names the forms that reach it so #659 has a list to work from.
 pub num_lit_value := fn(e : ptr(Expr)) -> i64 {
   mut res := 0
   match deref(e) {
     Expr::Num(v, s, n) => { res = i64(v) }
     Expr::BoolLit(v) => { res = i64(v) }
-    _ => {}
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
