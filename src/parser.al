@@ -1298,6 +1298,30 @@ relex_default := fn(in out pc : PC, ds : usize, dl : usize) -> ptr(Expr) {
 ## factor := int | ident | '(' expr ')'
 ## `alloc::with(pc.arena)` makes the cursor's arena the ambient, so the `newnode`
 ## calls elide it — `newnode(pc.arena, Expr.Num(v))` rather than `newnode(pc.arena, Expr.Num(v))`.
+## ── #602 — a written negative literal is ONE `Num`, not a subtraction from zero ──────────────────
+##
+## Field readers for the unary-minus fold below. Each is a SINGLE-LEVEL match, the shape the
+## bootstrap seed dispatches reliably (a nested match in this position mis-lowers under the seed).
+unm_foldable := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) { Expr::Num(v, s, n) => { if n != 0 { r = true } } _ => {} }
+  r
+}
+unm_num_v := fn(e : ptr(Expr)) -> i64 {
+  mut r := 0
+  match deref(e) { Expr::Num(v, s, n) => { r = v } _ => {} }
+  r
+}
+unm_num_start := fn(e : ptr(Expr)) -> usize {
+  mut r : usize = 0
+  match deref(e) { Expr::Num(v, s, n) => { r = s } _ => {} }
+  r
+}
+unm_num_end := fn(e : ptr(Expr)) -> usize {
+  mut r : usize = 0
+  match deref(e) { Expr::Num(v, s, n) => { r = s + n } _ => {} }
+  r
+}
 p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     ## THE ROOT OF THE BALANCED-TRUNCATION SEGVs. `p_factor` is the only place a VALUE is read, and
     ## none of its branches matches the EOF sentinel (kind 0), so the fall-through at the bottom
@@ -1329,9 +1353,52 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     ## re-enters `p_factor` for its primary, a nested prefix (`- -a`, `-~a[i]`) still parses, which is
     ## the `unary-expr` right-recursion of the same production.
     if cur(pc).kind == 17 {
+      umstart := cur(pc).start
       pc.idx = pc.idx + 1
+      ## The token that FOLLOWS the `-`, captured before `p_field` consumes it: the fold below
+      ## needs to know that the operand was written as one INT-LITERAL token (kind 3) abutting the
+      ## `-`, which is a fact about the TOKEN STREAM and is unrecoverable from the returned node.
+      ulit := cur(pc)
       uzero := newnode(pc.arena, Expr.Num(0, 0, 0))
       uinner := p_field(pc)
+      ## #602 — a written NEGATIVE LITERAL is normalised to ONE `Num` carrying the negated value
+      ## and a raw span that INCLUDES the `-`, instead of the `Unchecked(Bin(17, Num(0), Num(N)))`
+      ## tree the general case below builds. FIFTEEN predicates measurably open with "is this a
+      ## numeric literal" and declined that tree, which produced six defects from one
+      ## representation: #558/#581 (`x : f64 = unchecked 3` read back a denormal), #590 (a negative
+      ## module constant traps 133 on aarch64/riscv64 and reads 0 on wasm), #602 (a literal below a
+      ## signed bound accepted and silently wrapped, against Types §9.1 / I11), #637 (`mut G := -9`
+      ## materialises 0 in `.data`) and #638 (`comptime for i in -2..2` iterates 0, 1). Teaching one
+      ## predicate at a time was measured to be strictly MORE work than normalising here, because
+      ## the moment a predicate answers "yes, a literal, value −129" it needs the two-sided bound
+      ## anyway.
+      ##
+      ## The grant this removes was never specified. Concurrency §6.1 puts unary `-` (negating the
+      ## minimum value) in the CHECKED-overflow set by name, and §6.2 grants wrapping only "inside
+      ## an `unchecked` scope". The `Expr.Unchecked` wrapper below is an unconditional grant on
+      ## every unary minus; for a LITERAL operand there is no run-time operation left to grant it
+      ## to, and Types §2.3 makes a comptime number mathematical until it is materialised. Every
+      ## NON-literal negation keeps the wrapper, which is exactly §6.1's family.
+      ##
+      ## ADJACENCY GUARD, and it is load-bearing: fold only `-<int-literal>` written with NOTHING
+      ## between the two — the operand is one kind-3 token starting at the byte after the `-`, and
+      ## `p_field` returned exactly that token's `Num` rather than a postfix expression built over
+      ## it. The folded node's raw span is the text `alatyr fmt` replays VERBATIM, so it must be
+      ## exactly `-N`.
+      ##
+      ## Both halves were measured. Without the start test, `- (5)` folded to a node spanning from
+      ## the `-` to the end of the literal — the text `- (5` — and `fmt` re-emitted that: the
+      ## formatted file no longer parsed, i.e. `fmt` destroyed the user's program while exiting 0.
+      ## Without the token test, `- -4` folded TWICE and produced a `Num(+4)` whose span opens with
+      ## a `-`, so `lit_num_written_neg` called `+4` a written negative and `n : u8 = - -4` — a
+      ## value of 4, in range — became a false rejection. Neither the corpus oracle (0 rows) nor
+      ## `fmt_corpus.sh` could see either one, because no tracked file writes those spellings;
+      ## `test/fmt_neg_lit_adjacency.al` writes all of them. `- (5)`, `-  7` and `- -4` keep the
+      ## `Unchecked(Bin(17, Num(0), …))` shape and every value below is unchanged.
+      unm_fold := ulit.kind == 3 and ulit.start == umstart + 1 and unm_foldable(uinner) and unm_num_start(uinner) == ulit.start and unm_num_end(uinner) == ulit.start + ulit.len
+      if unm_fold {
+        return newnode(pc.arena, Expr.Num(unchecked (0 - unm_num_v(uinner)), umstart, unm_num_end(uinner) - umstart))
+      }
       ## Unary negation `-x` = `0 - x` is 2's-complement negation — INHERENTLY modular (a "negative
       ## literal" `-17` on a u64 is the wrap `2^64-17`), so it must NOT trap under the checked `-`
       ## underflow guard (I11 / CG-8). Wrap in `Expr.Unchecked` so the subtraction lowers guard-free;

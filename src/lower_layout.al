@@ -2584,10 +2584,35 @@ lit_arith_leaf := fn(e : ptr(Expr)) -> bool {
 ## A BARE literal is deliberately NOT this shape — only an arithmetic EXPRESSION is. That keeps the
 ## predicate to the operand class #457 names and leaves a bare `print("{}", 18446744073709551615)`
 ## rendering the bytes it already renders on these backends.
-pub lit_arith_i64 := fn(e : ptr(Expr)) -> bool {
+## Since #602 a written NEGATIVE literal is ONE `Num` — see `parser::p_factor`. Its payload alone
+## cannot be told from a written non-negative literal at or above 2^63 (`-1` and
+## `18446744073709551615` are the same 64 bits), so the discriminator is the node's RAW SPAN, which
+## the normalisation extends to include the `-`. A zero-length span is a synthetic `Num` the parser
+## built itself and carries no source text, so it answers no before the byte is read.
+##
+## This is the ONE place the question is decided; `sema` imports this predicate rather than
+## re-deriving it, so the two passes cannot drift on what "written negative" means.
+pub lit_num_written_neg := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+  mut rs : usize = 0
+  mut rn : usize = 0
+  match deref(e) { Expr::Num(v, s, n) => { rs = s ; rn = n } _ => {} }
+  if rn == 0 { return false }
+  str_at((src + rs), 1) == "-"
+}
+
+## A bare written NEGATIVE literal IS this shape, and a bare non-negative one still is not (#602).
+## The exception is not a widening of the operand class: Stdlib appendix §2 requires the leading `-`
+## for a negative two's-complement value, and before the normalisation this same `-4` arrived here
+## as `Unchecked(Bin(17, Num(0), Num(4)))` and was already accepted through the `Unchecked` arm
+## below. Dropping the wrapper without this line would have re-broken exactly what #457/#486 fixed —
+## measured: `print("neg {}\n", -4)` rendered `neg 18446744073709551612` on all three non-x86
+## backends, 6 corpus rows across `test/print_hole_unary_minus.al` and
+## `test/print_hole_signed_shapes.al`.
+pub lit_arith_i64 := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+  if lit_num_written_neg(e, src) { return true }
   mut r := false
   match deref(e) {
-    Expr::Unchecked(inner) => { r = lit_arith_i64(inner) }
+    Expr::Unchecked(inner) => { r = lit_arith_i64(inner, src) }
     Expr::Bin(op, bl, br) => {
       if op == 16 or op == 17 or op == 18 or op == 19 or op == 29 {
         if lit_arith_leaf(bl) and lit_arith_leaf(br) { r = true }

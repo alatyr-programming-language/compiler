@@ -1788,7 +1788,7 @@ emit_variadic_print := fn(args_head : ptr(mut Arg), block_head : ptr(mut Stmt), 
           ## Guarded to plain scalars: a struct/enum/array var is NOT rendered as int (it needs Display).
           emit_arg(argx, sb, cx, a, nl, cx.str_tmp)
           push_str(sb, "  popq %rdi\n  call std__fmt__print_one_int\n")
-        } else if expr_is_arith_bin(argx) or lit_arith_i64(argx) {
+        } else if expr_is_arith_bin(argx) or lit_arith_i64(argx, cx.src) {
           ## an ARITHMETIC EXPRESSION hole (`a + b`) — an int-valued expression with no type span;
           ## the §7.1 default numeric renderer `print_one_int`. Without this it rendered nothing.
           ##

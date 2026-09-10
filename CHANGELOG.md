@@ -122,6 +122,21 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A written negative integer literal is now one literal, and the three silent wrong values that
+  followed from it are gone.** The parser represented every unary minus as an `unchecked`
+  subtraction from zero, so fifteen compiler predicates that ask "is this a numeric literal"
+  answered *no* about `-129`. Three consequences, all of them silent: a literal below a signed
+  type's lower bound was accepted and wrapped (`n : i8 = -129` and `i8(-129)` both ran to 127 on
+  all four backends, where Types §9.1 requires a compile error); `mut G := -9` materialized 0 in
+  `.data` on x86_64 and wasm and trapped on aarch64 and riscv64, while the same value written
+  `0 - 9` was correct; and `comptime for i in -2..2` unrolled two iterations instead of four.
+  `-<digits>` written with nothing between the minus and the digits is now a single literal
+  carrying the negative value, and all three are fixed. **Newly rejected:** a negative literal
+  outside its target type's range, in the annotation, constructor, module-binding, argument and
+  `return` positions — including `n : u8 = -1`, since no negative value is representable in an
+  unsigned type. `unchecked` still wraps, `-128`, `-32768`, `-2147483648` and `i64`'s minimum stay
+  accepted, `-0` is the mathematical zero everywhere, and a negation whose operand is *not* a
+  literal (`-v`, `- (5)`, `- -4`) is unchanged in both shape and value.
 - **A range slice indexed directly, `xs[lo..hi][i]`, now reads the view's element on aarch64,
   riscv64 and WASM too.** Grammar §3.4 writes `postfix-expr ::= primary { postfix }` with both
   `"[" expr "]"` and the range form among the postfix ops, so this is one primary and two postfix
