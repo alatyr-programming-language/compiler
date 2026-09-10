@@ -2694,17 +2694,98 @@ sema_brand_refuse_class := fn(dst : Ty, act : Ty, decls : ptr(rt::Vec), upto : u
   if c == 5 { return 0 }
   c
 }
-## One concrete VALUE sink, as a CheckErr (0 = nothing proven). `dst` is the sink's declared type as
-## `resolve_ty` gives it and `v` the value expression, so the identity recovery can see a constructor
-## the packed `Result(Ty, CheckErr)` carrier has already flattened to unknown. Located at `off`, the
-## offending value's own source offset (Tooling §5: a diagnostic carries a span).
-sema_brand_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+## One concrete SCALAR value sink, as a CheckErr (0 = nothing proven). `dst` is the sink's declared
+## type as `resolve_ty` gives it and `v` the value expression, so the identity recovery can see a
+## constructor the packed `Result(Ty, CheckErr)` carrier has already flattened to unknown. Located at
+## `off`, the offending value's own source offset (Tooling §5: a diagnostic carries a span).
+sema_brand_value_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   if SEMA_BRAND_DECLS == 0 { return 0 }
   if dst.tag != 8 and dst.tag != 1 { return 0 }
   act := sema_brand_value_ty(v, decls, upto, src, locals, nloc, a)
   if act.tag != 8 and dst.tag != 8 { return 0 }
   if sema_brand_refuse_class(dst, act, decls, upto, src) == 0 { return 0 }
   brand_conversion_err(off)
+}
+## The ELEMENT-type span of a fixed-array annotation, in BOTH spellings this tree writes: `[T; N]`
+## and `[N]T` (`test/view_var_copy.al`, `test/slice_param_copy_local.al`). Written here instead of by
+## widening `array_elem_span`, and that is a MEASUREMENT rather than a preference: `array_elem_span`
+## feeds `array_elem_ty`, `sema_direct_index_elem_ty` and the fixed-array conformance checks around
+## `array_type_count`, every one of which answers `{0,0}` for a `[N]T` annotation today. Teaching the
+## shared extractor that spelling would start answering a type at all of those consumers at once — a
+## tag-7 behaviour change far away from brands. This extractor has ONE consumer and can move none of
+## them.
+##
+## The closing `]` is matched at DEPTH so a nested `[[u8; 2]; 3]` reads its own separator, and the
+## `[N]T` arm is everything after that bracket. An unbracketed, unterminated or empty span answers
+## `{0,0}`, which the walker below reads as "no declared element type" — the state this slice found.
+sema_brand_array_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> VSpan {
+  mut z := VSpan(s = 0, n = 0)
+  if tl < 3 { return z }
+  end := ts + tl
+  if str_at((src + ts), 1) != "[" { return z }
+  mut p := ts + 1
+  mut depth := 0
+  mut semi := 0
+  mut close := 0
+  while p < end {
+    c := str_at((src + p), 1)
+    if c == "[" or c == "(" { depth = depth + 1 }
+    else if c == ")" { if depth > 0 { depth = depth - 1 } }
+    else if c == "]" {
+      if depth == 0 { close = p; p = end } else { depth = depth - 1 }
+    }
+    else if c == ";" and depth == 0 and semi == 0 { semi = p }
+    if p < end { p = p + 1 }
+  }
+  if close == 0 { return z }
+  mut es := ts + 1
+  mut ee := semi
+  if semi == 0 { es = close + 1; ee = end }
+  while es < ee and (str_at((src + es), 1) == " " or str_at((src + es), 1) == "\n" or str_at((src + es), 1) == "\t" or str_at((src + es), 1) == "\r") { es = es + 1 }
+  while ee > es and (str_at((src + ee - 1), 1) == " " or str_at((src + ee - 1), 1) == "\n" or str_at((src + ee - 1), 1) == "\t" or str_at((src + ee - 1), 1) == "\r") { ee = ee - 1 }
+  if ee > es { z = VSpan(s = es, n = ee - es) }
+  z
+}
+## The ARRAY-LITERAL ELEMENT sink: `xs : [2]A = [b, b]`. `resolve_ty` answers tag 7 for the WHOLE
+## `[2]A` annotation and extracts no element type, so there was no declared sink type to judge an
+## element against and a sibling brand crossed silently — item 2 of the standing list in
+## `test/accept_brand_unrefused_sinks.al`. The element type comes from the extractor above and each
+## element goes to the SAME classifier (`sema_brand_refuse_class` → `sema_brand_class`) every one of
+## the fourteen already-closed sinks uses; this unit adds no second brand decision.
+##
+## The element list is recovered through `expr_array_lit_head`, the scar-#2 pre-match accessor idiom
+## (`expr_var_span` / `expr_agg_lit` / `expr_struct_lit_head`), because `check_expr`'s big bound-deref
+## match does not dispatch its payload-heavy literal arms under the bootstrap seed. The `[e; n]` FILL
+## form keeps its element in the same arg list and is judged identically. Located at the offending
+## ELEMENT's own span when the AST records one, else at the sink's — `s_of` answers 0 for the shapes
+## it does not model, and a zero span renders UNLOCATED.
+##
+## An element whose own declared type is an array again (`[[2]A; 2]`) is NOT walked: `resolve_ty`
+## gives the inner element tag 7, the scalar judge answers 0 for it, and a nested walk is a second
+## slice with its own census, not a free extension of this one.
+sema_brand_array_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+  if SEMA_BRAND_DECLS == 0 { return 0 }
+  if unchecked bitcast(usize, v) == 0 { return 0 }
+  sp := sema_brand_array_elem_span(src, dst.ns, dst.nl)
+  if sp.n == 0 { return 0 }
+  et := resolve_ty(src, sp.s, sp.n, decls, upto)
+  if et.tag != 8 and et.tag != 1 { return 0 }
+  mut g := expr_array_lit_head(v)
+  mut err : CheckErr = 0
+  while g != 0 {
+    ea := deref(arg_p(g))
+    ee := sema_brand_value_sink_err(et, ea.e, sema_brand_span(s_of(ea.e, a), off), decls, upto, src, locals, nloc, a)
+    if ee != 0 and err == 0 { err = ee }
+    g = ea.next
+  }
+  err
+}
+## The value-sink DISPATCHER every hooked sink calls. A tag-7 declared type is an array annotation
+## whose ELEMENTS are the value sinks; every other declared type is judged directly. One entry, so a
+## sink that is hooked once is hooked for both shapes and no call site learns about arrays.
+sema_brand_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+  if dst.tag == 7 { return sema_brand_array_sink_err(dst, v, off, decls, upto, src, locals, nloc, a) }
+  sema_brand_value_sink_err(dst, v, off, decls, upto, src, locals, nloc, a)
 }
 ## The same judgement for one binary operator whose two operands are two DIFFERENT brands. §5.4 gives
 ## a brand "the applicable operation set" of its own, so two siblings share none; the explicit form is
@@ -3904,6 +3985,18 @@ expr_field_base_var := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Field(base, fs, fl) => { expr_var_span(base) }
     _ => { VSpan(s = 0, n = 0) }
+  }
+}
+## The ELEMENT-list head (arena handle) of an `ArrayLit` value expression, else 0 — the same
+## single-level scar-#2 accessor idiom as `expr_array_first` below it and `expr_struct_lit_head`:
+## `check_expr`'s big bound-deref match does not dispatch the payload-heavy literal arms under the
+## bootstrap seed, so anything that has to walk the elements recovers the list here. The parser shares
+## `ArrayLit` between arrays, tuples and the `[e; n]` fill form; the caller discriminates by the
+## DECLARED type it is judging against, never by this handle.
+expr_array_lit_head := fn(e : ptr(Expr)) -> usize {
+  match deref(e) {
+    Expr::ArrayLit(nel, eh) => { eh }
+    _ => { 0 }
   }
 }
 ## The FIRST element expr of an `ArrayLit` (null if not an array / empty) — a scalar-element array is

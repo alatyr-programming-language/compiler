@@ -149,6 +149,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   records one payload type span per variant — the first component's — so components 2..n have no
   declared type to judge against. That residual stays open on #299.
 
+- **An array literal can no longer launder a brand through its elements.** A brand has a distinct
+  nominal identity and every brand conversion is explicit (Types §4.2/§4.3); two *sibling* brands
+  over one block do not convert into each other at all (§5.4). Every sink refused so far judged one
+  whole value against one declared type, and an array annotation has neither: the resolver answered
+  "this is an array" for `[2]A` and stopped, so `xs : [2]A = [b, b]` compiled clean and read back
+  the sibling `b` — the standing way to move a brand into an `A`-typed slot. **Newly rejected:** an
+  implicit brand crossing at any ELEMENT of an array literal written at a fixed-array sink, in both
+  annotation spellings (`[2]A` and `[A; 2]`), sibling, cross-domain, and in both directions between
+  a brand and its raw base (`xs : [2]A = [r, r]`, `ys : [2]u64 = [a, a]`). The `[e; n]` fill form is
+  judged the same way. The verdict is one located `alatyr: check: implicit brand conversion …` on
+  all four surfaces — `build`, `check`, and the WAT/AArch64/RISC-V emit paths — and it names the
+  offending element's own line. The explicit spelling is unchanged and still accepted:
+  `xs : [2]A = [A(u64(b)), A(u64(b))]`. Integer-literal elements (`xs : [2]A = [1, 2]`) are *not*
+  refused — §9.1/§9.2 give a literal its type from context — and neither are same-brand elements,
+  arrays of raw types, or Types §8.1 `@require` contracts. An element of a *nested* array
+  annotation (`[[2]A; 2]`) remains open.
+
 ## 0.2.2 — 2026-09-10
 - **A `::` head that names nothing is now a compile error instead of a silently different call.**
   `zzz::aa()`, with no `zzz` declared anywhere, used to build at rc 0 and run the *root's own* `aa`:
