@@ -3126,10 +3126,97 @@ local_ty := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : u
   r
 }
 
-## Provenance of a local pointer value relevant to a lower-side build fence. `prov == 1` means the
-## pointer was taken from a FIELD place (`ptr(mut o.inner)`), not from the containing struct local. The
-## lower can address the latter's fields but cannot yet recover the inner field's layout on a later
-## `deref(p).f = v`; keeping this one bit in the existing local record mirrors that exact lost fact.
+## Issue #626 — `Local.prov`, and the ONLY place in this compiler that encodes or decodes it.
+##
+## The field is NOT one bit. It is a small closed set of named provenance CONCEPTS, each recording a
+## fact about how a local came to be that its recorded `Ty` cannot carry, and each consumed by a
+## different fence:
+##
+##   0        no provenance recorded (the `Local(...)` field initializer's own zero)
+##   1        the value is a pointer taken from a FIELD place (`ptr(mut o.inner)`), not from the
+##            containing struct local. The lower can address the latter's fields but cannot recover
+##            the inner field's layout on a later `deref(p).f = v` — `prov_field_ptr`.
+##   4        the binding holds a `str` (`[u8]`) VIEW whose public tag `check_expr` dropped — the
+##            Issue #429 marker that keeps `s[i] = v` refused — `prov_str_view`.
+##   5 / 6    the binding is an inferred ARRAY LITERAL whose elements are all numeric / all boolean —
+##            `prov_lit_array` builds it, `prov_lit_array_elem` reads it back.
+##   7        the local is a by-reference array-shaped PARAMETER (`pm.pmode == 1`: `a : [T; N]`, and
+##            the tuple parameters that share that representation) — `prov_array_param`.
+##   20 … 25  the binding is a RANGE-SLICE VIEW (`v := backing[lo..hi]`), carrying two sub-facts: the
+##            BACKING place's write permission, and the element kind its initializer proved. Six
+##            values, one per (permission x element kind) pair — `prov_view` builds them,
+##            `prov_is_view` / `prov_view_backing_imm` / `prov_view_elem` read them back.
+##
+## Two things about this list are deliberate and are the whole point of the refactor that produced it.
+##
+## FIRST, nothing is computed. The retired shape carried ELEVEN meanings in TWO overlapping arithmetic
+## encodings — `4 + <scalar tag>` for an inferred array literal and `+8` / `+10` layered over an
+## existing view value — decoded by hand at four independent consumers. A consumer that compared
+## against a bare `2` and meant "a slice view" was correct for two of the six view values and silently
+## wrong for the other four, and the failure mode of being silently wrong here is a WRONG TYPE. Every
+## value above is now written out, once, in the constructor below; no consumer sees a literal.
+##
+## SECOND, the view family deliberately does not start at 2. Values 2 and 3 are UNUSED and are never
+## produced, so the exact naive mistake this field kept inviting — `prov == 2` for "a slice view" — is
+## now a branch that can never be taken rather than one that fires for a third of the cases. A dead
+## branch is caught by the failure-first fixture the lane already owes; a branch that fires for the
+## plain `a[lo..hi]` shape and misses the inferred-literal one is not.
+##
+## Ask these questions, never a number. Adding a concept means adding it here, which is the one place
+## that can see every other concept it has to stay distinct from.
+
+## The value is a pointer taken from a field place, not from the containing struct local.
+prov_field_ptr := fn() -> u8 { 1 }
+## The binding holds a `str` view whose bytes are not an assignable place (Issue #429).
+prov_str_view := fn() -> u8 { 4 }
+## The local is a by-reference array-shaped parameter (`pm.pmode == 1`). SEPARATE from the view family
+## on purpose: until #626 this shared the view's "mutable backing" value because both wanted
+## `sema_write_mutability` to answer 0, and that agreement was the only thing keeping the two apart.
+prov_array_param := fn() -> u8 { 7 }
+## The binding is an inferred array literal with a proven homogeneous scalar element tag (1 numeric,
+## 2 boolean). Any other tag records no provenance: this is evidence, not inference.
+prov_lit_array := fn(elem_tag : u8) -> u8 {
+  if elem_tag == 1 { return 5 }
+  if elem_tag == 2 { return 6 }
+  0
+}
+## …and the element tag back out, 0 when this provenance is not an inferred array literal.
+prov_lit_array_elem := fn(p : u8) -> u8 {
+  if p == 5 { return 1 }
+  if p == 6 { return 2 }
+  0
+}
+## The binding is a range-slice view. `backing_imm` is the backing place's write permission and
+## `elem_tag` the element kind its initializer proved (1 numeric, 2 boolean, anything else unproven).
+## Six explicit values rather than one arithmetic base plus two offsets — see the note above.
+prov_view := fn(backing_imm : bool, elem_tag : u8) -> u8 {
+  if elem_tag == 1 {
+    if backing_imm { return 22 }
+    return 23
+  }
+  if elem_tag == 2 {
+    if backing_imm { return 24 }
+    return 25
+  }
+  if backing_imm { return 20 }
+  21
+}
+## Is this provenance a range-slice view, of ANY backing permission and ANY element kind? Enumerated
+## rather than range-tested so a seventh view value cannot be added without editing this answer.
+prov_is_view := fn(p : u8) -> bool {
+  p == 20 or p == 21 or p == 22 or p == 23 or p == 24 or p == 25
+}
+## A view's BACKING place is immutable. Meaningless, and false, for every non-view provenance.
+prov_view_backing_imm := fn(p : u8) -> bool { p == 20 or p == 22 or p == 24 }
+## The scalar element tag a view proved (1 numeric, 2 boolean), 0 when unproven or not a view.
+prov_view_elem := fn(p : u8) -> u8 {
+  if p == 22 or p == 23 { return 1 }
+  if p == 24 or p == 25 { return 2 }
+  0
+}
+
+## The provenance recorded for the local named [s, s+n) among the first `upto` locals, or 0 when the
+## name is not a local. Decode the result with the queries above, never with a literal.
 local_prov := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : usize) -> u8 {
   mut r : u8 = 0
   mut i := 0
@@ -4796,12 +4883,15 @@ sema_direct_index_elem_ty := fn(src : ptr(u8), local : Local, decls : ptr(rt::Ve
   }
   ## A range-inferred view records only its proven element span in tns/tnl; provenance is the
   ## discriminator that prevents an unrelated UNKNOWN local carrying stale spans from becoming typed.
-  mut pclass := local.prov
-  if local.prov == 10 or local.prov == 12 { pclass = 2 } ## inferred literal, immutable backing
-  if local.prov == 11 or local.prov == 13 { pclass = 3 } ## inferred literal, mutable backing
-  if local.prov == 10 or local.prov == 11 { return Ty(tag = 1, ns = 0, nl = 0) } ## numeric
-  if local.prov == 12 or local.prov == 13 { return Ty(tag = 2, ns = 0, nl = 0) } ## boolean
-  if (pclass == 2 or pclass == 3) and local.tnl != 0 {
+  ## Only a VIEW answers here: an array-shaped PARAMETER's tns/tnl are its own declared type's spans,
+  ## which would resolve the ARRAY where the ELEMENT is due. Measured on the parent before #626 split
+  ## the two values apart: over `src/`, `lib/` and all 2052 tracked fixtures, 422 entries reached this
+  ## function and every one of the 38 array-shaped parameters was answered by the annotation arm above
+  ## (`local_type_span` recovers a parameter's `: T` in every case), so the collision was latent, not
+  ## live. Keeping the concepts distinct is what stops it from becoming live.
+  vet := prov_view_elem(local.prov)
+  if vet != 0 { return Ty(tag = vet, ns = 0, nl = 0) }
+  if prov_is_view(local.prov) and local.tnl != 0 {
     return resolve_ty(src, local.tns, local.tnl, decls, upto)
   }
   Ty(tag = 0, ns = 0, nl = 0)
@@ -4840,8 +4930,8 @@ sema_range_slice_elem_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec),
   bt := local_ty(locals, nloc, src, bv.s, bv.n)
   declared := array_elem_ty(src, bt, decls, upto)
   if declared.tag != 0 { return declared }
-  prov := local_prov(locals, nloc, src, bv.s, bv.n)
-  if prov == 5 or prov == 6 { return Ty(tag = prov - 4, ns = 0, nl = 0) }
+  laet := prov_lit_array_elem(local_prov(locals, nloc, src, bv.s, bv.n))
+  if laet != 0 { return Ty(tag = laet, ns = 0, nl = 0) }
   Ty(tag = 0, ns = 0, nl = 0)
 }
 
@@ -9601,18 +9691,18 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## match, returning UNKNOWN instead of its invariant pointer tag. The dedicated accessor is
           ## the reliable AST fact: every Expr::AddrOf has type ptr(_), independently of its pointee.
           if bind_tag == 0 and unchecked bitcast(usize, ain) != 0 { bind_tag = 5 }
-          if unchecked bitcast(usize, ain) != 0 and expr_field_span(ain).n != 0 { bind_prov = 1 }
+          if unchecked bitcast(usize, ain) != 0 and expr_field_span(ain).n != 0 { bind_prov = prov_field_ptr() }
           ## A range-slice local is a view, so its write permission follows the backing place rather
-          ## than the view's own copied pair. Keep that provenance in the existing `prov` byte: 2 means
-          ## an immutable backing place, 3 means mutable/unknown backing. This preserves the existing
+          ## than the view's own copied pair. `prov_view` names that provenance; its element kind is
+          ## still unproven at this point and is filled in below. This preserves the existing
           ## `mut ws; w := ws[...]; w[i] = ...` view idiom while rejecting `a := [...]; s := a[...];
-          ## s[i] = ...` from Issue #298. A pointer-field provenance (1) remains higher priority.
+          ## s[i] = ...` from Issue #298. A pointer-field provenance remains higher priority.
           if bind_prov == 0 {
             slice_base := sema_slice_base(v)
             if unchecked bitcast(usize, slice_base) != 0 {
               sroot := sema_place_root_var(slice_base)
               sperm := sema_write_mutability(decls, src, locals, cnt, sroot)
-              if sperm == 1 or sperm == 2 { bind_prov = 2 } else { bind_prov = 3 }
+              bind_prov = prov_view(sperm == 1 or sperm == 2, 0)
             }
           }
           ## Issue #429 — record that this binding holds a STRING LITERAL's view, in the provenance byte
@@ -9621,23 +9711,21 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## back 0 for `s := "abc"` and every write fence keyed on the recorded type saw an UNKNOWN place
           ## — that is the hole the indexed store fell through into `.rodata`. Promoting the binding to
           ## the public tag 6 instead would also re-type it for every arg/return/reassign check at once;
-          ## this marker changes NOTHING but the element-store fence below. `local_prov` is compared for
-          ## exact values (1, 2, 3) everywhere else, so 4 is inert there.
-          if bind_prov == 0 and lbv_lit_tag(v) == 6 { bind_prov = 4 }
+          ## this marker changes NOTHING but the element-store fence below. Every other consumer asks
+          ## `local_prov` a NAMED question (see the provenance block above `local_prov`), and none of
+          ## them names this concept, so it stays inert there.
+          if bind_prov == 0 and lbv_lit_tag(v) == 6 { bind_prov = prov_str_view() }
           ## …and carry it across a bare ALIAS (`t := s`), which reaches the same bytes through a second
           ## name. The alias binding copies the two-word view, not the run it points at, so the pointee
           ## permission it inherits is the source's: measured on the parent, `t := s` re-opened the
           ## SIGSEGV for every spelling of `s` — the literal binding, the annotated local AND a `str`
           ## parameter, whose own `s[i] = v` the established fence already refused. Transitive by
           ## construction: `u := t` reads `t`'s marker the same way.
-          if bind_prov == 0 and sema_place_is_str_view(locals, cnt, src, expr_var_span(v)) { bind_prov = 4 }
+          if bind_prov == 0 and sema_place_is_str_view(locals, cnt, src, expr_var_span(v)) { bind_prov = prov_str_view() }
           ## Preserve the homogeneous scalar element kind of an inferred array literal without
-          ## pretending that Local carries a source type span. Values 5/6 are private provenance
-          ## markers (4 + scalar tag); existing provenance consumers leave them inert.
-          if bind_prov == 0 {
-            lit_etag := sema_array_literal_elem_tag(v)
-            if lit_etag == 1 or lit_etag == 2 { bind_prov = 4 + lit_etag }
-          }
+          ## pretending that Local carries a source type span. `prov_lit_array` records 0 for every
+          ## unproven element kind, so this assignment leaves an undecided provenance undecided.
+          if bind_prov == 0 { bind_prov = prov_lit_array(sema_array_literal_elem_tag(v)) }
           ## The binding's type NAME never comes from `tv`: `check_expr` hands its `Ty` back through the
           ## PACKED `Result(Ty, CheckErr)` carrier, which preserves only the TAG — `tv.ns`/`tv.nl` are
           ## STACK GARBAGE (the truncation the tag-5 recovery below already documents, generalized: it is
@@ -9659,12 +9747,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## Preserve the proven T of an inferred `view := fixed_array[lo..hi]` in the existing local
           ## payload. The public tag remains UNKNOWN because the value is a Slice(T), not T itself;
           ## only `sema_direct_index_elem_ty` consumes this span or scalar tag under slice provenance.
-          if bind_prov == 2 or bind_prov == 3 {
+          if prov_is_view(bind_prov) {
             set := sema_range_slice_elem_ty(v, src, locals, cnt, decls, upto)
             if set.tag != 0 {
               if set.nl != 0 { bind_ns = set.ns; bind_nl = set.nl }
-              else if set.tag == 1 { bind_prov = bind_prov + 8 }
-              else if set.tag == 2 { bind_prov = bind_prov + 10 }
+              else { bind_prov = prov_view(prov_view_backing_imm(bind_prov), set.tag) }
             }
           }
           ## RECOVER the un-truncated type-NAME for a call-value binding (`x := f(...)`): `check_expr`'s
@@ -9822,7 +9909,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
       Stmt::FieldPathAssign(pl, fpv, nx) => {
         pbase := field_path_deref_var(pl)
         pfs := expr_field_span(pl)
-        if pbase.n != 0 and local_prov(locals, cnt, src, pbase.s, pbase.n) == 1 and pfs.n != 0 {
+        if pbase.n != 0 and local_prov(locals, cnt, src, pbase.s, pbase.n) == prov_field_ptr() and pfs.n != 0 {
           return Result(usize, CheckErr).Err(located_err(pfs.s))
         }
         cvp := check_expr_da(fpv, decls, upto, src, a, locals, cnt, da)?
@@ -11065,11 +11152,17 @@ sema_slice_base := fn(e : ptr(Expr)) -> ptr(Expr) {
 sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, root : VSpan) -> u8 {
   if root.n == 0 { return 0 }
   if local_in(locals, nloc, src, root.s, root.n) {
-    mut prov := local_prov(locals, nloc, src, root.s, root.n)
-    if prov == 10 or prov == 12 { prov = 2 }
-    if prov == 11 or prov == 13 { prov = 3 }
-    if prov == 2 { return 1 }
-    if prov == 3 { return 0 }
+    prov := local_prov(locals, nloc, src, root.s, root.n)
+    ## A range-slice view's permission is its BACKING place's, whatever element kind it also proved.
+    if prov_is_view(prov) {
+      if prov_view_backing_imm(prov) { return 1 }
+      return 0
+    }
+    ## An array-shaped parameter is already a caller-backed place in the existing ABI, so its element
+    ## writes stay permitted. It reached this answer through the view family's "mutable backing" value
+    ## until #626; the two concepts are separate values now and each states its own case (the other
+    ## half of this pair is the `prov_array_param()` setter in `check_fn`).
+    if prov == prov_array_param() { return 0 }
     raw := local_ty(locals, nloc, src, root.s, root.n)
     mut tag : u8 = raw.tag
     if tag >= 128 and tag != 255 { tag = tag - 128 }
@@ -11097,7 +11190,7 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
 sema_place_is_str_view := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), root : VSpan) -> bool {
   if root.n == 0 { return false }
   if not local_in(locals, nloc, src, root.s, root.n) { return false }
-  if local_prov(locals, nloc, src, root.s, root.n) == 4 { return true }
+  if local_prov(locals, nloc, src, root.s, root.n) == prov_str_view() { return true }
   raw := local_ty(locals, nloc, src, root.s, root.n)
   mut tag : u8 = raw.tag
   if tag >= 128 and tag != 255 { tag = tag - 128 }
@@ -11271,11 +11364,16 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     lpe := late_enum_ann_ty(src, pm.ts, pm.tl, decls, upto)
     if ptag == 0 and lpe.tag == 4 { ptag = 10; pt = lpe }
     if pm.pmode == 2 { ptag = ptag + 128 }
-    ## Fixed-array parameters are already caller-backed places in the existing ABI (pmode 1); keep
-    ## their element writes compatible with the pre-existing aggregate-parameter contract. Scalar
-    ## parameters still require the explicit `out`/`in out` pmode 2 marker below.
+    ## Array-shaped parameters are already caller-backed places in the existing ABI (pmode 1: a
+    ## `[T; N]` and the tuple parameters that share that representation); keep their element writes
+    ## compatible with the pre-existing aggregate-parameter contract. Scalar parameters still require
+    ## the explicit `out`/`in out` pmode 2 marker below. This is one half of a pair: the concept has
+    ## its OWN provenance value since #626, and the reason it may be written through is stated at the
+    ## `prov_array_param()` reader in `sema_write_mutability`. Until #626 it borrowed the range-slice
+    ## view's "mutable backing" value, and the only thing holding that alias together was that both
+    ## concepts happened to want the same answer from that one reader.
     mut pprov : u8 = 0
-    if pm.pmode == 1 { pprov = 3 }
+    if pm.pmode == 1 { pprov = prov_array_param() }
     lvec_push(locals, Local(ns = pm.ns, nl = pm.nl, tag = ptag, prov = pprov, tns = pt.ns, tnl = pt.nl))
     pp = pm.next
   }
