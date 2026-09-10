@@ -1987,6 +1987,304 @@ main := fn() -> u64 {
   fi
 }
 
+## Issue #602 — the Types §9.1 refusal matrix for a WRITTEN NEGATIVE integer literal, and the
+## controls that keep it from being over-reach. §9.1 makes a literal's representability in its
+## context type a COMPILE-TIME judgement — "a literal outside the target type's range is a compile
+## error (I11), never a silent wrap" — and #564 closed the POSITIVE half of it. The negative half
+## survived #564 in every spelling, because the parser did not build a `Num` for `-129` at all: it
+## built `Unchecked(Bin(17, Num(0), Num(129)))`, and every rule that opens with "is this a numeric
+## literal" declined before it started. Measured on the parent, EVERY refused row below compiled
+## clean on all four backends and ran to the wrapped value.
+##
+## The refusal is asserted on FIVE surfaces per row — `check`, the `-o` build, and the three
+## non-x86 EMIT entry points — because AGENTS.md is explicit that a reject fixture does not by
+## itself prove that every non-x86 surface rejects, and #5 tracks 32 fixtures that emit anyway.
+## Each row also asserts the LOCATED line and that nothing reached stdout: a bare non-zero exit is
+## also what a crash gives, and the defect this row exists for was a CLEAN compile.
+##
+## The programs live in this row's private scratch directory, so the four-backend corpus oracle
+## gains no row for a matrix whose point is one verdict per shape; `reject_neg_lit_range_ann`,
+## `reject_neg_lit_range_ctor`, `reject_neg_lit_range_unsigned`, `accept_neg_lit_range_edges`,
+## `accept_neg_lit_unchecked_wrap`, `fmt_neg_lit_adjacency`, `accept_neg_lit_global_mut` and
+## `accept_neg_lit_comptime_for` carry the tracked four-backend witnesses.
+issue602_negative_literal_range_test() {
+  local d="$T/issue602_negative_literal_range"
+  local nfail=0 nok=0
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue602_negative_literal_range: scratch"; fail=1; return; }
+
+  ## REFUSED on all five surfaces, with the located line, empty stdout and no artifact.
+  _neg_reject() { # case, program, want-line
+    local n="$1" body="$2" line="$3"
+    local src="$d/$n.al" co="$d/$n.co" ce="$d/$n.ce" bo="$d/$n.bin" be="$d/$n.be"
+    printf '%s\n' "$body" > "$src"
+    "$CC" check "$src" >"$co" 2>"$ce"; local crc=$?
+    "$CC" -o "$bo" "$src" >/dev/null 2>"$be"; local brc=$?
+    if [ "$crc" = 0 ] || [ "$brc" = 0 ] || [ -s "$co" ] || [ -e "$bo" ]; then
+      echo "FAIL issue602/refuse/$n: check=$crc build=$brc out=$(wc -c <"$co") artifact=$([ -e "$bo" ] && echo yes || echo no)"
+      nfail=$((nfail+1)); return
+    fi
+    if ! grep -qF "at line $line in" "$ce" || ! grep -qF "at line $line in" "$be"; then
+      echo "FAIL issue602/refuse/$n: unlocated or wrong line, want $line [$(head -c 200 "$ce")]"
+      nfail=$((nfail+1)); return
+    fi
+    ## The three non-x86 EMIT surfaces must run the same check BEFORE emitting: non-zero exit, the
+    ## same located diagnostic, and NOTHING on stdout. Measured before #297 landed, these surfaces
+    ## exited 0 and printed machine code for programs `-o` rejects.
+    local backend eo ee erc
+    for backend in wat aarch64 riscv64; do
+      eo="$d/$n.$backend.emit"; ee="$d/$n.$backend.emiterr"
+      "$CC" "$backend" "$src" >"$eo" 2>"$ee"; erc=$?
+      if [ "$erc" = 0 ] || [ -s "$eo" ] || ! grep -qF "at line $line in" "$ee"; then
+        echo "FAIL issue602/refuse/$n($backend): rc=$erc emitted=$(wc -c <"$eo")B [$(head -c 160 "$ee")]"
+        nfail=$((nfail+1)); return
+      fi
+    done
+    nok=$((nok+1))
+  }
+
+  ## ACCEPTED: both entry points accept, the artifact runs, and it returns `$3`. Every accepted
+  ## case asserts a VALUE, because the whole family's defect was an accepted program with a wrong
+  ## one.
+  _neg_accept() { # case, program, want-exit
+    local n="$1" body="$2" want="$3"
+    local src="$d/$n.al" bo="$d/$n.bin" ce="$d/$n.ce" be="$d/$n.be"
+    printf '%s\n' "$body" > "$src"
+    "$CC" check "$src" >/dev/null 2>"$ce"; local crc=$?
+    "$CC" -o "$bo" "$src" >/dev/null 2>"$be"; local brc=$?
+    if [ "$crc" != 0 ] || [ "$brc" != 0 ] || [ ! -x "$bo" ]; then
+      echo "FAIL issue602/accept/$n: check=$crc build=$brc [$(head -c 160 "$ce")][$(head -c 160 "$be")]"
+      nfail=$((nfail+1)); return
+    fi
+    _e2e_exec "$bo" >/dev/null 2>&1; local got=$?
+    if [ "$got" != "$want" ]; then
+      echo "FAIL issue602/accept/$n: got $got want $want"; nfail=$((nfail+1)); return
+    fi
+    nok=$((nok+1))
+  }
+
+  ## ---- REFUSED: the ANNOTATION spelling, one row per signed width ----------------------------
+  ## Each is exactly one below the type's lower bound. `i64`'s row is the interesting one: its
+  ## magnitude 2^63+1 has no i64 representation at all, so the parser's negation wraps the payload
+  ## back to a POSITIVE +9223372036854775807 — the case a one-sided "is it below the minimum" test
+  ## would wave through.
+  _neg_reject ann_i8   'main := fn() -> u64 {
+  n : i8 = -129
+  u64(unchecked bitcast(usize, i64(n)))
+}' 2
+  _neg_reject ann_i16  'main := fn() -> u64 {
+  n : i16 = -32769
+  u64(unchecked bitcast(usize, i64(n)))
+}' 2
+  _neg_reject ann_i32  'main := fn() -> u64 {
+  n : i32 = -2147483649
+  u64(unchecked bitcast(usize, i64(n)))
+}' 2
+  _neg_reject ann_i64  'main := fn() -> u64 {
+  n : i64 = -9223372036854775809
+  u64(unchecked bitcast(usize, n))
+}' 2
+  _neg_reject ann_isize 'main := fn() -> u64 {
+  n : isize = -9223372036854775809
+  u64(unchecked bitcast(usize, n))
+}' 2
+
+  ## ---- REFUSED: the CONSTRUCTOR spelling, the same four widths -------------------------------
+  ## §9.2 names `T(v)` as a form that refines a literal's type, so this is the same §9.1 case.
+  ## #564's `ctor_lit_range_bad` reached these programs and declined one level in, on the
+  ## argument's own "is this a literal" test — two independent sites, one representation.
+  _neg_reject ctor_i8  'main := fn() -> u64 {
+  n := i8(-129)
+  u64(unchecked bitcast(usize, i64(n)))
+}' 2
+  _neg_reject ctor_i16 'main := fn() -> u64 {
+  n := i16(-32769)
+  u64(unchecked bitcast(usize, i64(n)))
+}' 2
+  _neg_reject ctor_i32 'main := fn() -> u64 {
+  n := i32(-2147483649)
+  u64(unchecked bitcast(usize, i64(n)))
+}' 2
+  _neg_reject ctor_i64 'main := fn() -> u64 {
+  n := i64(-9223372036854775809)
+  u64(unchecked bitcast(usize, n))
+}' 2
+
+  ## ---- REFUSED: every UNSIGNED type, in both spellings ---------------------------------------
+  ## A negative value is not representable in any unsigned type, so §9.1's answer is the same for
+  ## all of them. This is the NEW refusal beyond the defect #602 opens with, taken inside this unit
+  ## on the integrator's judgement: it follows from the same rule, no corpus row depends on the old
+  ## behaviour, and holding it back would have cost a second seed promotion for one predicate row.
+  _neg_reject ann_u8    'main := fn() -> u64 {
+  n : u8 = -1
+  u64(n)
+}' 2
+  _neg_reject ann_u16   'main := fn() -> u64 {
+  n : u16 = -1
+  u64(n)
+}' 2
+  _neg_reject ann_u32   'main := fn() -> u64 {
+  n : u32 = -1
+  u64(n)
+}' 2
+  _neg_reject ann_u64   'main := fn() -> u64 {
+  n : u64 = -1
+  n
+}' 2
+  _neg_reject ann_usize 'main := fn() -> u64 {
+  n : usize = -1
+  u64(n)
+}' 2
+  _neg_reject ctor_u8   'main := fn() -> u64 {
+  n := u8(-1)
+  u64(n)
+}' 2
+
+  ## ---- REFUSED: the other three §9.1 sinks -----------------------------------------------------
+  ## The module-scope binding, the call ARGUMENT against its parameter type, and the explicit
+  ## `return` against the declared return type. The same four sinks #564 enumerated for the
+  ## positive half; the negative half now reaches all four because the judgement moved into the
+  ## shared helper rather than into one call site.
+  _neg_reject global_i8 'G : i8 = -129
+main := fn() -> u64 {
+  u64(unchecked bitcast(usize, i64(G)))
+}' 1
+  ## Both of these locate at the ENCLOSING declaration, not the offending token — the same
+  ## convention the positive half already had (`test/reject_lit_range_return.al`'s header records
+  ## "located at the fn"), so the line asserted here is line 4 and line 1 respectively.
+  _neg_reject arg_i8 'f := fn(v : i8) -> u64 {
+  u64(unchecked bitcast(usize, i64(v)))
+}
+main := fn() -> u64 {
+  f(-129)
+}' 4
+  _neg_reject return_i8 'g := fn() -> i8 {
+  return -129
+}
+main := fn() -> u64 {
+  u64(unchecked bitcast(usize, i64(g())))
+}' 1
+  _neg_reject default_i64 'main := fn() -> u64 {
+  n := -9223372036854775809
+  u64(unchecked bitcast(usize, n))
+}' 2
+
+  ## ---- REFUSED: the base is irrelevant ---------------------------------------------------------
+  ## `0x81`, `0b…`, `0o…` and `129` all reach the AST as the same decoded value, so a hexadecimal
+  ## or underscore-separated spelling of an out-of-range magnitude is the same judgement.
+  _neg_reject ann_hex 'main := fn() -> u64 {
+  n : i8 = -0x81
+  u64(unchecked bitcast(usize, i64(n)))
+}' 2
+  _neg_reject ann_underscore 'main := fn() -> u64 {
+  n : i8 = -1_29
+  u64(unchecked bitcast(usize, i64(n)))
+}' 2
+
+  ## ---- CONTROL 1: the ASYMMETRIC boundary, which is the whole risk of this change --------------
+  ## `i8` is −128 .. 127. A rule written from the positive half's shape refuses −128 as readily as
+  ## −129, and the fixture that would catch that has to assert the VALUE, not the acceptance.
+  _neg_accept boundary_signed 'main := fn() -> u64 {
+  a : i8 = -128
+  b : i16 = -32768
+  c : i32 = -2147483648
+  d : i64 = -9223372036854775808
+  e : isize = -9223372036854775808
+  if i64(a) != 0 - 128 { return 11 }
+  if i64(b) != 0 - 32768 { return 12 }
+  if i64(c) != 0 - 2147483648 { return 13 }
+  if d != 0 - 9223372036854775807 - 1 { return 14 }
+  if e != 0 - 9223372036854775807 - 1 { return 15 }
+  42
+}' 42
+  _neg_accept boundary_ctor 'main := fn() -> u64 {
+  a := i8(-128)
+  b := i16(-32768)
+  c := i32(-2147483648)
+  d := i64(-9223372036854775808)
+  if i64(a) != 0 - 128 { return 11 }
+  if i64(b) != 0 - 32768 { return 12 }
+  if i64(c) != 0 - 2147483648 { return 13 }
+  if d != 0 - 9223372036854775807 - 1 { return 14 }
+  42
+}' 42
+
+  ## ---- CONTROL 2: `unchecked` still wraps (Concurrency §6.2) ----------------------------------
+  ## §6.2 grants the wrapping evaluation inside an `unchecked` scope at the programmer's chosen
+  ## granularity, so the refusal is about the CHECKED spelling only. The wrapped VALUE is asserted:
+  ## a row that only said "accepted" would pass on a compiler that never learned the rule at all.
+  _neg_accept unchecked_wraps 'main := fn() -> u64 {
+  n := unchecked i8(-129)
+  m := unchecked i16(-32769)
+  if i64(n) != 127 { return 11 }
+  if i64(m) != 32767 { return 12 }
+  42
+}' 42
+
+  ## ---- CONTROL 3: `-0` is the mathematical zero, which every integer type holds ----------------
+  ## The unsigned rule above is "a negative value is unrepresentable", not "the text begins with a
+  ## minus": `-0` denotes zero and must stay accepted, unsigned targets included.
+  _neg_accept negative_zero 'main := fn() -> u64 {
+  a : u8 = -0
+  b : u64 = -0
+  c : i8 = -0
+  d : usize = -0
+  if u64(a) != 0 { return 11 }
+  if b != 0 { return 12 }
+  if i64(c) != 0 { return 13 }
+  if u64(d) != 0 { return 14 }
+  42
+}' 42
+
+  ## ---- CONTROL 4: a NON-LITERAL operand keeps the old representation and the old behaviour -----
+  ## The parser folds only a literal abutting the `-`. `-v` for a run-time `v` is §6.1's checked
+  ## negation family and is untouched — that residual is #633's, and #489's, not this unit's. The
+  ## row asserts the value the parent produced, so a later change to that family moves this row on
+  ## purpose rather than by accident.
+  _neg_accept nonliteral_operand_untouched 'main := fn() -> u64 {
+  v : i8 = 0 - 128
+  w := -v
+  if i64(w) != 0 - 128 { return 11 }
+  x : i64 = 5
+  y := -x
+  if y != 0 - 5 { return 12 }
+  42
+}' 42
+
+  ## ---- CONTROL 5: the spellings the ADJACENCY GUARD deliberately leaves alone ------------------
+  ## `- (5)`, `-  7` and `- -4` are not `-<int>` written adjacently, so they keep the
+  ## `Unchecked(Bin(17, Num(0), …))` shape and reach the range rules as non-literals — which is why
+  ## `n : u8 = - -4`, whose value 4 IS in range, must not be refused.
+  _neg_accept adjacency_untouched 'main := fn() -> u64 {
+  n : u8 = - -4
+  m : u8 = --4
+  p := - (5)
+  q := -  7
+  if u64(n) != 4 { return 11 }
+  if u64(m) != 4 { return 12 }
+  if p != 0 - 5 { return 13 }
+  if q != 0 - 7 { return 14 }
+  42
+}' 42
+
+  ## ---- CONTROL 6: a float target and a `char` codepoint are other rules ------------------------
+  ## A negative literal into `f64` is `int_lit_into_float_bad`'s judgement (TYP-13), not this one,
+  ## and it must stay accepted with its value.
+  _neg_accept neighbouring_targets_untouched 'main := fn() -> u64 {
+  x : f64 = -2.5
+  y := f64(-3)
+  if x != 0.0 - 2.5 { return 11 }
+  if y != 0.0 - 3.0 { return 12 }
+  42
+}' 42
+
+  if [ "$nfail" = 0 ]; then
+    echo "ok   issue602/negative-literal-range: $nok cases — every sink and every width refuses the unrepresentable negative literal on all five surfaces, and the asymmetric boundary, unchecked, negative-zero, non-literal-operand, adjacency and neighbouring-target controls hold"
+  else
+    echo "FAIL issue602/negative-literal-range: $nfail of $((nfail+nok)) cases wrong"; fail=1
+  fi
+}
+
 ## Issue #304 / TYP-6 + Types §§4.2–4.3 — direct field and local fixed-array-element stores must
 ## compare the value with the declared destination type before lower can emit a word-sized store.
 ## These sources live only in the gate's private scratch directory: each negative case checks both
@@ -5869,6 +6167,46 @@ emit_reject_has aarch64 reject_ctor_literal_range "type mismatch at line 7 in re
 emit_reject_has riscv64 reject_ctor_literal_range "type mismatch at line 7 in reject_ctor_literal_range"
 check_accept accept_ctor_literal_range
 run accept_ctor_literal_range 42
+## Issue #602 — the Types §9.1 NEGATIVE-literal refusal. The breadth matrix above is per-shape and
+## lives in a private scratch directory; these rows give the per-file corpus oracle and the
+## cross-target sweeps a tracked source each. The three reject sources carry the four-surface
+## witness (the `-o` build plus the three non-x86 emit entry points), because a reject fixture on
+## its own does not prove that the non-x86 EMIT surfaces refuse too.
+issue602_negative_literal_range_test
+build_reject_has reject_neg_lit_range_ann "type mismatch at line 13 in reject_neg_lit_range_ann"
+emit_reject_has wat reject_neg_lit_range_ann "type mismatch at line 13 in reject_neg_lit_range_ann"
+emit_reject_has aarch64 reject_neg_lit_range_ann "type mismatch at line 13 in reject_neg_lit_range_ann"
+emit_reject_has riscv64 reject_neg_lit_range_ann "type mismatch at line 13 in reject_neg_lit_range_ann"
+check_reject_has reject_neg_lit_range_ann "type mismatch at line 13 in reject_neg_lit_range_ann"
+build_reject_has reject_neg_lit_range_ctor "type mismatch at line 13 in reject_neg_lit_range_ctor"
+emit_reject_has wat reject_neg_lit_range_ctor "type mismatch at line 13 in reject_neg_lit_range_ctor"
+emit_reject_has aarch64 reject_neg_lit_range_ctor "type mismatch at line 13 in reject_neg_lit_range_ctor"
+emit_reject_has riscv64 reject_neg_lit_range_ctor "type mismatch at line 13 in reject_neg_lit_range_ctor"
+check_reject_has reject_neg_lit_range_ctor "type mismatch at line 13 in reject_neg_lit_range_ctor"
+build_reject_has reject_neg_lit_range_unsigned "type mismatch at line 12 in reject_neg_lit_range_unsigned"
+emit_reject_has wat reject_neg_lit_range_unsigned "type mismatch at line 12 in reject_neg_lit_range_unsigned"
+emit_reject_has aarch64 reject_neg_lit_range_unsigned "type mismatch at line 12 in reject_neg_lit_range_unsigned"
+emit_reject_has riscv64 reject_neg_lit_range_unsigned "type mismatch at line 12 in reject_neg_lit_range_unsigned"
+check_reject_has reject_neg_lit_range_unsigned "type mismatch at line 12 in reject_neg_lit_range_unsigned"
+## The accept half: the asymmetric boundary, the `unchecked` grant, and the two silent wrong values
+## the same normalisation closes. `run` puts each on all four backends (the sweeps read `^run [a-z]`).
+check_accept accept_neg_lit_range_edges
+run accept_neg_lit_range_edges 42
+check_accept accept_neg_lit_unchecked_wrap
+run accept_neg_lit_unchecked_wrap 42
+## #637 — `mut G := -9` materialised 0 in `.data` on x86_64 and wasm and trapped 133 on
+## aarch64/riscv64; #638 — `comptime for i in -2..2` unrolled 0, 1 instead of -2, -1, 0, 1. Both are
+## silent wrong values from the same AST representation, and both are closed by normalising it.
+check_accept accept_neg_lit_global_mut
+run accept_neg_lit_global_mut 42
+check_accept accept_neg_lit_comptime_for
+run accept_neg_lit_comptime_for 42
+## The ADJACENCY GUARD. `fmt_check` is the row that matters here: it is the only stage that can see
+## `fmt` rewriting a program into one that no longer parses, which is what the fold does without the
+## guard. `run` pins the values so a rendering that reparsed to a different program is caught twice.
+fmt_check fmt_neg_lit_adjacency
+check_accept fmt_neg_lit_adjacency
+run fmt_neg_lit_adjacency 42
 ## Issue #299 — the four-backend witnesses for the refusal. The matrix row above is `check`-level and
 ## lives in a private scratch directory; these four tracked sources give the per-file corpus oracle and
 ## the cross-target sweeps a row each, because a reject fixture on its own does not prove that the
