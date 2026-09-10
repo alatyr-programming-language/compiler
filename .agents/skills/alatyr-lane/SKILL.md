@@ -407,6 +407,12 @@ Fire on the exact new shape. A broad lowering fix once regressed ~90 stdlib test
 shipped fired only on the shape that was broken. When one fact is recovered by scanning the source in
 more than one place, `grep` for the other copies — that is part of the fix, not a follow-up.
 
+If the unit replaces `_ =>` arms with spelled-out ones (#544 stage 1), read
+`.agents/skills/alatyr-lane/wildcard_enumeration.md` first. It is kept separate because it is one
+stage's procedure over nine files, not something every lane owes; it carries the three blind classes
+where deleting a wildcard writes a silent wrong value instead of failing the build, the per-arm
+deletion census that tells the two apart, and the measured form of the empty arm.
+
 ## 5 · Gate it, in your own tree
 
 For a committed inert-prose candidate:
