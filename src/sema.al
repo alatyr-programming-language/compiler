@@ -4796,22 +4796,53 @@ sema_direct_index_elem_ty := fn(src : ptr(u8), local : Local, decls : ptr(rt::Ve
   }
   ## A range-inferred view records only its proven element span in tns/tnl; provenance is the
   ## discriminator that prevents an unrelated UNKNOWN local carrying stale spans from becoming typed.
-  if (local.prov == 2 or local.prov == 3) and local.tnl != 0 {
+  mut pclass := local.prov
+  if local.prov == 10 or local.prov == 12 { pclass = 2 } ## inferred literal, immutable backing
+  if local.prov == 11 or local.prov == 13 { pclass = 3 } ## inferred literal, mutable backing
+  if local.prov == 10 or local.prov == 11 { return Ty(tag = 1, ns = 0, nl = 0) } ## numeric
+  if local.prov == 12 or local.prov == 13 { return Ty(tag = 2, ns = 0, nl = 0) } ## boolean
+  if (pclass == 2 or pclass == 3) and local.tnl != 0 {
     return resolve_ty(src, local.tns, local.tnl, decls, upto)
   }
   Ty(tag = 0, ns = 0, nl = 0)
 }
 
+## Return the one reliable scalar tag shared by every element of an inferred array literal.
+## Mixed, empty, aggregate, named, and otherwise unresolved literals stay UNKNOWN: this is evidence
+## for the exact `[number, ...]` / `[bool, ...]` forms, not general array type inference.
+sema_array_literal_elem_tag := fn(v : ptr(Expr)) -> u8 {
+  mut r : u8 = 0
+  match deref(v) {
+    Expr::ArrayLit(_nel, eh) => {
+      mut g := eh
+      while g != 0 {
+        a := deref(arg_p(g))
+        tag := lbv_lit_tag(a.e)
+        if (tag != 1 and tag != 2) or (r != 0 and r != tag) { return 0 }
+        r = tag
+        g = a.next
+      }
+    }
+    _ => { return 0 }
+  }
+  r
+}
+
 ## Recover T for the exact inferred binding `view := array[lo..hi]` when `array` is a direct local
-## whose fixed-array annotation retained `[T; N]`. Field/indirect bases and arrays without a retained
-## type span stay UNKNOWN; this helper records evidence at the binding rather than rescanning later.
+## whose fixed-array annotation retained `[T; N]`, or whose initializer proved one homogeneous
+## scalar literal tag. Field/indirect bases and unresolved literal kinds stay UNKNOWN; this helper
+## records evidence at the binding rather than rescanning later.
 sema_range_slice_elem_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), upto : usize) -> Ty {
   base := sema_slice_base(v)
   if unchecked bitcast(usize, base) == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   bv := expr_var_span(base)
   if bv.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   bt := local_ty(locals, nloc, src, bv.s, bv.n)
-  array_elem_ty(src, bt, decls, upto)
+  declared := array_elem_ty(src, bt, decls, upto)
+  if declared.tag != 0 { return declared }
+  prov := local_prov(locals, nloc, src, bv.s, bv.n)
+  if prov == 5 or prov == 6 { return Ty(tag = prov - 4, ns = 0, nl = 0) }
+  Ty(tag = 0, ns = 0, nl = 0)
 }
 
 ## Return the full RHS span for one direct type alias. Alias chains are rejected independently, so
@@ -9600,6 +9631,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## parameter, whose own `s[i] = v` the established fence already refused. Transitive by
           ## construction: `u := t` reads `t`'s marker the same way.
           if bind_prov == 0 and sema_place_is_str_view(locals, cnt, src, expr_var_span(v)) { bind_prov = 4 }
+          ## Preserve the homogeneous scalar element kind of an inferred array literal without
+          ## pretending that Local carries a source type span. Values 5/6 are private provenance
+          ## markers (4 + scalar tag); existing provenance consumers leave them inert.
+          if bind_prov == 0 {
+            lit_etag := sema_array_literal_elem_tag(v)
+            if lit_etag == 1 or lit_etag == 2 { bind_prov = 4 + lit_etag }
+          }
           ## The binding's type NAME never comes from `tv`: `check_expr` hands its `Ty` back through the
           ## PACKED `Result(Ty, CheckErr)` carrier, which preserves only the TAG — `tv.ns`/`tv.nl` are
           ## STACK GARBAGE (the truncation the tag-5 recovery below already documents, generalized: it is
@@ -9620,10 +9658,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           mut bind_nl := 0
           ## Preserve the proven T of an inferred `view := fixed_array[lo..hi]` in the existing local
           ## payload. The public tag remains UNKNOWN because the value is a Slice(T), not T itself;
-          ## only `sema_direct_index_elem_ty` consumes this span under slice provenance 2/3.
+          ## only `sema_direct_index_elem_ty` consumes this span or scalar tag under slice provenance.
           if bind_prov == 2 or bind_prov == 3 {
             set := sema_range_slice_elem_ty(v, src, locals, cnt, decls, upto)
-            if set.tag != 0 { bind_ns = set.ns; bind_nl = set.nl }
+            if set.tag != 0 {
+              if set.nl != 0 { bind_ns = set.ns; bind_nl = set.nl }
+              else if set.tag == 1 { bind_prov = bind_prov + 8 }
+              else if set.tag == 2 { bind_prov = bind_prov + 10 }
+            }
           }
           ## RECOVER the un-truncated type-NAME for a call-value binding (`x := f(...)`): `check_expr`'s
           ## `Result(Ty,…)` keeps the tag but drops ns/nl, so `x` otherwise records no resolvable type name.
@@ -11023,7 +11065,9 @@ sema_slice_base := fn(e : ptr(Expr)) -> ptr(Expr) {
 sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, root : VSpan) -> u8 {
   if root.n == 0 { return 0 }
   if local_in(locals, nloc, src, root.s, root.n) {
-    prov := local_prov(locals, nloc, src, root.s, root.n)
+    mut prov := local_prov(locals, nloc, src, root.s, root.n)
+    if prov == 10 or prov == 12 { prov = 2 }
+    if prov == 11 or prov == 13 { prov = 3 }
     if prov == 2 { return 1 }
     if prov == 3 { return 0 }
     raw := local_ty(locals, nloc, src, root.s, root.n)
