@@ -7276,11 +7276,20 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
             hi := wat_comp_range_bound(rhi, decls, src)
             if hi - lo > 100000 { push_str(sb, "    (unreachable) (; comptime-for range exceeds the unroll budget ;)\n") }
             else {
+              ## The counter is `i64` and, since #602 folds a written negative literal, `lo` is now
+              ## reachably NEGATIVE — `comptime for i in -2..2` used to fold to 0 here and unroll the
+              ## wrong iteration set (#638). Its increment is `unchecked` because the self-host lower
+              ## compares this counter with the SIGNED `<` but guards `k + 1` with the UNSIGNED carry
+              ## test, so at k = -1 the increment carried and this emitter died on its own `ud2`, with
+              ## no diagnostic, on all three non-x86 surfaces (#646). The wrap `unchecked` permits
+              ## cannot occur: the budget check immediately above bounds `hi - lo` at 100000, so the
+              ## counter stays inside [lo, hi). This is a LOCAL bypass justified by that bound, not a
+              ## fix for #646; `lower::emit_st_comp_for_range` is the x86 twin that already works.
               mut k : i64 = lo
               while k < hi {
                 push_str(sb, "    (local.set ") ; push_int(sb, vidx) ; push_str(sb, " (i64.const ") ; push_int(sb, k) ; push_str(sb, "))\n")
                 emit_wat_stmts(rb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-                k = k + 1
+                k = unchecked (k + 1)
               }
             }
           }

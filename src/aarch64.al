@@ -8007,11 +8007,16 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             hi := a64_comp_range_bound(rhi, decls, src)
             if hi - lo > 100000 { push_str(sb, "  brk #0 // comptime-for range exceeds the unroll budget\n") }
             else {
+              ## See the note on the same unroll in `wat::emit_wat_stmts` (#602/#638/#646): `lo` is
+              ## now reachably negative, and the counter's increment is `unchecked` because the
+              ## self-host lower guards it with the UNSIGNED carry test while comparing it with the
+              ## SIGNED `<`. The budget check above bounds the range, so no wrap can occur; this is a
+              ## local bypass justified by that bound, not a fix for #646.
               mut k : i64 = lo
               while k < hi {
                 push_str(sb, "  ldr x0, =") ; push_int(sb, k) ; push_str(sb, "\n  str x0, [x29, #") ; push_int(sb, ioff) ; push_str(sb, "]\n")
                 emit_a64_stmts(rb, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
-                k = k + 1
+                k = unchecked (k + 1)
               }
             }
           }
