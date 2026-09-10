@@ -121,6 +121,18 @@ Two numbers that are **not** the compiler's version: the specification revision 
 tag lives in the sibling repository; a `v1.0.0` here would mean something else entirely.
 
 ## Unreleased
+- **A `ptr(T)` annotation's pointee no longer depends on which file name the type is declared in.**
+  Exhaustiveness was already independent of module order for a direct annotation (`c : C`), but the
+  spelling a real `Expr` walk writes is `e : ptr(C)`, and the pointee of a pointer annotation was
+  still resolved against the modules checked *so far*. A `ptr(C)` parameter written in a module that
+  sorts before the module declaring `C` therefore recorded "pointer to something unknown", and a
+  non-exhaustive `match deref(c)` on it compiled clean — where the byte-identical program with the
+  enum's file renamed to sort first was refused. **Newly rejected:** a non-exhaustive `match` over a
+  `deref` of such a pointer, with the same located `type mismatch` the earlier-sorting order already
+  produced. Nothing else changes: only an *enum* pointee is recovered this way, and only where the
+  prefix left it unknown, so pointer-vs-pointer argument compatibility is unaffected. Concretely, in
+  this compiler's own source `src/aarch64.al` is the one module sorting before `src/ast.al`, and 39
+  of its 63 `_ =>` wildcard arms were unchecked for this reason.
 
 ## 0.2.2 — 2026-09-10
 - **A `::` head that names nothing is now a compile error instead of a silently different call.**

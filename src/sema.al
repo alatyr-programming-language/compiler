@@ -2823,6 +2823,40 @@ late_enum_ann_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Ve
   unknown
 }
 
+## Issue #656 — the POINTER twin of `late_enum_ann_ty`. #557 closed the class for a DIRECT annotation
+## (`c : C`); the spelling every backend's `Expr` walk actually writes is a pointer one
+## (`e : ptr(Expr)`), and `resolve_ty`'s `is_ptr` branch resolves the pointee through
+## `ptr_pointee_span(…, decls, upto)` — under the very same NAME-RESOLUTION prefix. So a `ptr(E)`
+## annotation written in a module that sorts BEFORE the enum's own module recorded tag 5 with
+## `nl == 0` (pointee unknown), and branch (2) of `match_scrut_enum_ty` requires `nl != 0`.
+## `src/aarch64.al` is this compiler's only module sorting before `src/ast.al`, so every one of its
+## `match deref(e)` arms went unchecked for exhaustiveness while the byte-identical constructs in
+## `src/riscv64.al`, `src/wat.al` and `src/lower.al` were checked normally. Module membership is a
+## SET, not a sequence — the principle already stated at `late_enum_ann_ty`, still violated here.
+##
+## Deliberately as NARROW as its direct twin: it answers only for an annotation whose PREFIX resolve
+## already produced a pointer with an UNKNOWN pointee, only when the FULL declaration list resolves
+## that pointee to an ENUM, and it returns the pointee's own TEXT span — byte for byte what
+## `resolve_ty` records when the enum's module happens to sort first, so the late case and the early
+## case become the same recording rather than two. A STRUCT pointee is deliberately left alone: the
+## pointee name also feeds `ty_compat`'s ptr(X)-vs-ptr(Y) discrimination and
+## `sema_pointer_rooted_field_ty`, and widening those is a separate measurement.
+late_enum_ptr_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), upto : usize) -> Ty {
+  unknown := Ty(tag = 0, ns = 0, nl = 0)
+  if tl == 0 { return unknown }
+  ncnt := rt::vec_len(deref(decls))
+  if ncnt <= upto { return unknown }
+  pre := resolve_ty(src, ts, tl, decls, upto)
+  if pre.tag != 5 { return unknown }
+  if pre.nl != 0 { return unknown }
+  sp := ptr_pointee_span(src, ts, tl, decls, ncnt)
+  if sp.n == 0 { return unknown }
+  full := resolve_ty(src, sp.s, sp.n, decls, ncnt)
+  if full.tag != 4 { return unknown }
+  if full.nl == 0 { return unknown }
+  Ty(tag = 5, ns = sp.s, nl = sp.n)
+}
+
 ## True if `e` is a `Var` naming a PRELUDE namespace / enum type used in `.variant` / `.field` position
 ## (`Ordering.acquire`, `Arch.x86_64`, `target.arch`, `verify.checked`). Such a base is a type/namespace,
 ## not a bindable value — so a `base.f` field access on it must NOT be checked as a value read (else
@@ -9903,6 +9937,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             }
           }
           if dt.tag != 0 { bind_tag = dt.tag; bind_ns = dt.ns; bind_nl = dt.nl }
+          ## Issue #656 — the POINTER twin of #557's late enum annotation (below): `p : ptr(E)` where
+          ## `E` is declared in a later-sorted module. Fills only the pointee NAME the `upto` prefix
+          ## could not resolve; the recorded tag is unchanged (see `late_enum_ptr_ty`).
+          if dt.tag == 5 and dt.nl == 0 and ann.n != 0 {
+            lpp := late_enum_ptr_ty(src, ann.s, ann.n, decls, upto)
+            if lpp.tag == 5 { bind_ns = lpp.ns; bind_nl = lpp.nl }
+          }
           ## Issue #557 — the same late-declared enum annotation, on an annotated local binding.
           if dt.tag == 0 and ann.n != 0 {
             lae := late_enum_ann_ty(src, ann.s, ann.n, decls, upto)
@@ -11476,6 +11517,12 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     ## the hidden enum tag 10 so only `value_agg_ty`'s consumers see it (see `late_enum_ann_ty`).
     lpe := late_enum_ann_ty(src, pm.ts, pm.tl, decls, upto)
     if ptag == 0 and lpe.tag == 4 { ptag = 10; pt = lpe }
+    ## Issue #656 — the POINTER twin of the line above: `e : ptr(E)` whose pointee enum is declared in
+    ## a LATER-sorted module. The tag is already 5 and stays 5; only the pointee NAME the `upto` prefix
+    ## could not see is filled in, so the recording becomes identical to the one an earlier-sorted
+    ## enum's module already produces (see `late_enum_ptr_ty`).
+    lpp := late_enum_ptr_ty(src, pm.ts, pm.tl, decls, upto)
+    if ptag == 5 and pt.nl == 0 and lpp.tag == 5 { pt = lpp }
     if pm.pmode == 2 { ptag = ptag + 128 }
     ## Array-shaped parameters are already caller-backed places in the existing ABI (pmode 1: a
     ## `[T; N]` and the tuple parameters that share that representation); keep their element writes
