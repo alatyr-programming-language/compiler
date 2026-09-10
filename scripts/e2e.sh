@@ -10356,6 +10356,19 @@ emit_reject_has riscv64 issue523_alloc_synth_span "unbound name at line 23 in is
 emit_reject_has wat issue523_hof_synth_span "unbound name at line 30 in issue523_hof_synth_span"
 emit_reject_has aarch64 issue523_hof_synth_span "unbound name at line 30 in issue523_hof_synth_span"
 emit_reject_has riscv64 issue523_hof_synth_span "unbound name at line 30 in issue523_hof_synth_span"
+
+## Issue #646 — a SIGNED local whose name is ALSO bound, untyped, in an inner scope of the same
+## function took the UNSIGNED overflow guard on `+`/`-`/`*` while its comparison stayed SIGNED. At
+## k = -1 the two disagreed and the guard's `ud2` fired on a program the language defines
+## (Types §3.2; Concurrency §6.1 traps only an operation that OVERFLOWS, and -1 + 1 does not).
+##
+## Measured on the parent (b61bfa4): x86_64 compiles and links clean, then rc=132, SIGILL. A plain
+## value assertion would have PASSED there — the program never returns a wrong number, it dies — so
+## the row that catches this is the exit code itself. aarch64/riscv64/wasm already answer 42 for
+## this shape (their annotation scan reads the function's top-level statements, not the slot map),
+## which is why the sweeps' trap-tolerant verdict is not what proves it either.
+run accept_rebound_local_signed_guard 42
+check_accept accept_rebound_local_signed_guard
 ## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
 ## span IS synthesized and which must keep COMPILING and answering their own values —
 ## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`
