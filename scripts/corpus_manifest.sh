@@ -52,6 +52,11 @@
 #     is driven in BOTH directions with a stubbed worker: a child that times out again must stay a
 #     reported failure, and a child that comes back inside the ceiling must return to its observed phase.
 #     A mechanism that only ever un-fails rows is not a re-measurement, it is an eraser;
+#   • body-shape self-test — the row-count and non-vacuity decision above is itself planted against
+#     (`check_body_shape`, issue #600): a truncated body, an overlong one, rows that hold the right
+#     LINE count but are not rows, a backend that ran nothing, a runner answering the same thing for
+#     every program, and the two bodies it must accept. Until that existed nothing drove the
+#     decision, and neutering it let `--write` bless a 400-row oracle for a 2052-source corpus;
 #   • provenance — the compiler under test is named with its sha256, a `target/debug/alatyr` older than the
 #     newest `src/`/`lib/` file is refused, and a compiler supplied via `ALATYR_CORPUS_CC` that differs
 #     from this checkout's own is refused unless the caller says so out loud;
@@ -77,8 +82,8 @@
 #     --write            overwrite scripts/corpus.manifest (an intentional behaviour change owns this)
 #     --explain A B      read two manifests JOINED on (backend, path), grouped by severity class.
 #                        A regeneration's commit message carries this output verbatim.
-#     --self-test        run the detector, classifier, normalization, stream-separation, re-observation
-#                        and frame-layout self-tests only; never walk the corpus or write
+#     --self-test        run the detector, classifier, normalization, stream-separation, re-observation,
+#                        body-shape and frame-layout self-tests only; never walk the corpus or write
 #                        scripts/corpus.manifest
 #
 #   ALATYR_CORPUS_CC        absolute compiler to exercise (default: this checkout's target/debug/alatyr)
@@ -447,6 +452,61 @@ for e in "${EXCLUDE_PAIRS[@]}"; do echo "corpus manifest:   quarantined: $e"; do
 
 # --- comparison, and the proof that it is alive ----------------------------------------------------
 body_rows() { awk -F'\t' 'NF==6 && $1 ~ /^(x86_64|aarch64|riscv64|wasm)$/ {n++} END{print n+0}' "$1"; }
+
+# ---------------------------------------------------------------------------------------------
+# THE BODY-SHAPE DECIDER (issue #600) — the one function that decides a finished walk is not a
+# manifest. It owns both halves of the gate-of-the-gate the header promises: the ROW-COUNT
+# identity (`sources × backends − quarantined`) and the per-backend non-vacuity counters.
+#
+# Factored out of the walk's inline `if`s so a self-test can drive the real decision. It was this
+# stage's uncovered decider — `sweep_check_total`'s exact shape one stage over, and #585's
+# consequence too. Measured on the parent with the job list truncated to the first 100 of 2052
+# sources: with the row-count refusal turned into a note, `--write` BLESSED a 400-row oracle and
+# printed `WROTE … (400 rows, 2052 sources, all four backends ran)` with exit 0. Every per-source
+# assertion above it passed — each walked source did produce its four rows — and the four
+# non-vacuity counters passed too, because 100 sources still run and still differ. The row count
+# is the only thing that can see 95% of the corpus missing, and nothing exercised it.
+#
+# `wc -l` cannot substitute for it either: the per-source check counts LINES, this counts
+# STRUCTURALLY VALID rows, so a worker emitting six-field garbage satisfies the first and not this.
+#
+# Sets CM_ROWS and the per-backend RUN_<b>/EXIT_<b> counters the report line prints. Returns 0 to
+# accept the body, 2 to refuse it — printing, on stderr, which of the three ways it is not a
+# manifest. It never exits: the caller owns that, and a self-test must be able to drive a refusal.
+check_body_shape() { # body-file expect-rows src-count excluded-pairs
+  local body="$1" expect="$2" srcs="$3" excl="$4" b n d bad=0
+  for b in x86_64 aarch64 riscv64 wasm; do unset "RUN_$b" "EXIT_$b"; done
+  CM_ROWS="$(body_rows "$body")"
+  if [ "$CM_ROWS" != "$expect" ]; then
+    echo "corpus manifest: the body holds $CM_ROWS rows, want $expect ($srcs × 4 − $excl)" >&2
+    bad=2
+  fi
+  ## Two counts per backend, and both must be non-vacuous.
+  ##   RUN_<b>  — sources that reached phase `run`. Zero means the backend never executed a program:
+  ##              measured with a shimmed always-failing `aarch64-as`, `--write` blessed a baseline
+  ##              holding ZERO aarch64 `run` rows and exited 0.
+  ##   EXIT_<b> — DISTINCT exit codes among those rows. One means the runner answered the same thing
+  ##              for every program, which is what a broken runner looks like from here: measured,
+  ##              running wasmtime with an unwritable cache directory made all 1 235 wasm `run` rows
+  ##              `exit 1`, a whole column that passed the RUN_ check while recording nothing.
+  eval "$(awk -F'\t' '$3=="run" {c[$1]++; k[$1 FS $4]=1}
+                       END{for (b in c) printf "RUN_%s=%d\n", b, c[b];
+                           for (x in k) {split(x, a, FS); d[a[1]]++}
+                           for (b in d) printf "EXIT_%s=%d\n", b, d[b]}' "$body")"
+  for b in x86_64 aarch64 riscv64 wasm; do
+    eval "n=\${RUN_$b:-0}; d=\${EXIT_$b:-0}"
+    if [ "$n" -lt 1 ]; then
+      echo "corpus manifest: backend $b reached phase 'run' for ZERO sources — it never executed a" >&2
+      echo "  single program, so its rows record nothing about behaviour. Refusing to report a result." >&2
+      bad=2
+    elif [ "$d" -lt 2 ]; then
+      echo "corpus manifest: backend $b ran $n programs and every one exited the SAME way — its runner" >&2
+      echo "  is answering independently of the program, so the column is vacuous. Refusing to report." >&2
+      bad=2
+    fi
+  done
+  return "$bad"
+}
 
 ## Compare two manifests. Returns 0 when identical. On a mismatch it says FIRST how many rows differ,
 ## then shows a bounded sample and states how many rows it withheld — the first cut printed
@@ -1068,6 +1128,127 @@ frame_perturbation_selftest() {
   echo "corpus manifest: frame perturbation self-test ok (N=$n dead muts, frame $base_frame -> $dead_frame, delta=$delta, both run=42)"
   return 0
 }
+## The body-shape self-test: drive `check_body_shape` — this stage's row-count and non-vacuity
+## decider — with planted bodies, in every direction it can refuse and in the direction it must
+## accept. Costs no child and no walk. In a SUBSHELL and read from FILES for the reason #599
+## recorded: an unbound variable or an arithmetic error inside a driven function unwinds to top
+## level and ENDS THE SCRIPT, so a diagnostic written for that case can never print.
+CM_BODY_SELFTEST_EXPECTED=19
+body_shape_selftest() { # work-dir
+  local st="$1" bad="" k=0 out rc
+  rm -rf "$st"; mkdir -p "$st" || return 1
+  _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
+  ## Four sources × four backends = 16 rows, each backend running all four and answering
+  ## differently. Four, not two, so that a check can corrupt ONE source's rows on every backend
+  ## and still leave each backend three running rows with three distinct exits — otherwise the
+  ## structural checks below would be measuring the non-vacuity half instead of the row count.
+  _body() { # file -- seeds the clean sixteen
+    awk 'BEGIN { OFS = "\t"
+      split("x86_64 aarch64 riscv64 wasm", b, " ")
+      split("42 7 9 13", e, " ")
+      split("a b c d", f, " ")
+      for (i = 1; i <= 4; i++) for (j = 1; j <= 4; j++)
+        print b[i], "test/" f[j] ".al", "run", e[j], "h" j, "H" j }' > "$1"
+  }
+  _body "$st/clean"
+
+  # 1 · a complete, non-vacuous body is accepted, and the row count it reports is the one it counted.
+  check_body_shape "$st/clean" 16 4 0 2>"$st/e1"; rc=$?
+  [ "$rc" = 0 ]; _ck $? "body-shape-refused-a-complete-body(rc=$rc: $(cat "$st/e1"))"
+  [ "$CM_ROWS" = 16 ]; _ck $? "body-shape-miscounted-a-complete-body(CM_ROWS=$CM_ROWS)"
+  [ "${RUN_x86_64:-0}" = 4 ] && [ "${EXIT_wasm:-0}" = 4 ]
+  _ck $? "body-shape-did-not-publish-the-per-backend-counters(run=${RUN_x86_64:-0} exits=${EXIT_wasm:-0})"
+
+  # 2 · THE TRUNCATED WALK — the measured defect. One whole source is missing from a body that is
+  #     otherwise perfect: every backend still ran, each with three distinct exits, so all four
+  #     non-vacuity counters are happy and only the row count can see the loss. That is exactly
+  #     the shape the parent measurement had at scale — 100 of 2052 sources walked, 400 rows
+  #     blessed as an oracle, exit 0.
+  awk -F'\t' '$2 != "test/d.al"' "$st/clean" > "$st/short"
+  out="$(check_body_shape "$st/short" 16 4 0 2>&1)"; rc=$?
+  [ "$rc" = 2 ]; _ck $? "body-shape-accepted-a-truncated-body(rc=$rc)"
+  case "$out" in *'holds 12 rows, want 16'*) _ck 0 x ;;
+                 *) _ck 1 "body-shape-did-not-say-how-short-the-body-is($out)" ;; esac
+  case "$out" in *'4 × 4 − 0'*) _ck 0 x ;;
+                 *) _ck 1 body-shape-did-not-show-how-the-expectation-is-derived ;; esac
+
+  # 3 · …and the other direction: the count is an IDENTITY, not a floor. A duplicated row is not a
+  #     manifest either, and a `-lt` comparison would wave it through.
+  { cat "$st/clean"; head -1 "$st/clean"; } > "$st/long"
+  check_body_shape "$st/long" 16 4 0 2>/dev/null
+  [ $? = 2 ]; _ck $? body-shape-accepted-a-body-with-more-rows-than-the-corpus-owes
+
+  # 4 · STRUCTURE, not lines, and this is the half `wc -l` cannot do. Both planted bodies hold
+  #     exactly the sixteen LINES the walk's own per-source check counts, and each still leaves
+  #     every backend three running rows with three distinct exits, so the non-vacuity half is
+  #     satisfied too: the row count is the only thing left that can see them.
+  awk -F'\t' 'BEGIN { OFS = "\t" } $2 == "test/d.al" { print $1, $2, $3; next } { print }' \
+    "$st/clean" > "$st/ragged"
+  [ "$(grep -c '' < "$st/ragged")" = 16 ]; _ck $? selftest-planted-a-ragged-body-of-the-wrong-length
+  out="$(check_body_shape "$st/ragged" 16 4 0 2>&1)"; rc=$?
+  [ "$rc" = 2 ]; _ck $? "body-shape-counted-a-three-field-line-as-a-row(rc=$rc)"
+  case "$out" in *'holds 12 rows, want 16'*) _ck 0 x ;;
+                 *) _ck 1 "body-shape-did-not-count-structurally($out)" ;; esac
+  awk -F'\t' 'BEGIN { OFS = "\t" } $2 == "test/d.al" { $1 = "sparc" } { print }' \
+    "$st/clean" > "$st/alien"
+  [ "$(grep -c '' < "$st/alien")" = 16 ]; _ck $? selftest-planted-an-alien-body-of-the-wrong-length
+  check_body_shape "$st/alien" 16 4 0 2>/dev/null
+  [ $? = 2 ]; _ck $? body-shape-counted-rows-of-an-unknown-backend
+
+  # 5 · a backend that never executed a program. Measured with a shimmed always-failing
+  #     `aarch64-as`: `--write` blessed a baseline holding ZERO aarch64 `run` rows.
+  awk -F'\t' 'BEGIN { OFS = "\t" } $1 == "aarch64" { $3 = "assemble"; $4 = 1 } { print }' \
+    "$st/clean" > "$st/norun"
+  out="$(check_body_shape "$st/norun" 16 4 0 2>&1)"; rc=$?
+  [ "$rc" = 2 ]; _ck $? "body-shape-accepted-a-backend-that-ran-nothing(rc=$rc)"
+  case "$out" in *"backend aarch64 reached phase 'run' for ZERO sources"*) _ck 0 x ;;
+                 *) _ck 1 "body-shape-did-not-name-the-backend-that-ran-nothing($out)" ;; esac
+
+  # 6 · a backend whose runner answers the same thing for every program.
+  awk -F'\t' 'BEGIN { OFS = "\t" } $1 == "wasm" { $4 = 1 } { print }' "$st/clean" > "$st/uniform"
+  out="$(check_body_shape "$st/uniform" 16 4 0 2>&1)"; rc=$?
+  [ "$rc" = 2 ]; _ck $? "body-shape-accepted-a-runner-answering-independently-of-the-program(rc=$rc)"
+  case "$out" in *'backend wasm ran 4 programs and every one exited the SAME way'*) _ck 0 x ;;
+                 *) _ck 1 "body-shape-did-not-name-the-vacuous-column($out)" ;; esac
+
+  # 7 · the eraser control, and the stale-counter control with it. A decider that refused every
+  #     body would satisfy 2 to 6 and block every run; and the counters must describe THIS body,
+  #     not the last one — check 6 left `EXIT_wasm=1` behind.
+  check_body_shape "$st/clean" 16 4 0 2>/dev/null
+  [ $? = 0 ]; _ck $? body-shape-refused-a-clean-body-after-refusing-a-broken-one
+  [ "${EXIT_wasm:-0}" = 4 ]; _ck $? "body-shape-kept-a-stale-counter-from-the-previous-body(EXIT_wasm=${EXIT_wasm:-0})"
+  ## Quarantined pairs are part of the expectation, so a body short by exactly the excluded pairs
+  ## is the CORRECT one. The exclusion list is empty today; if it stops being, this is the check
+  ## that keeps the arithmetic honest rather than the comment above it.
+  grep -v "^wasm	test/a.al	" "$st/clean" > "$st/quarantined"
+  check_body_shape "$st/quarantined" 15 4 1 2>/dev/null
+  [ $? = 0 ]; _ck $? body-shape-refused-a-body-whose-only-missing-rows-are-quarantined
+
+  printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
+  unset -f _ck _body
+  if [ -n "$bad" ]; then echo "corpus manifest: body-shape self-test FAILED —$bad" >&2; return 1; fi
+  if [ "$k" -lt "$CM_BODY_SELFTEST_EXPECTED" ]; then
+    echo "corpus manifest: body-shape self-test FAILED — ran $k checks, expected at least" >&2
+    echo "  $CM_BODY_SELFTEST_EXPECTED; a self-test that reports fewer checks than it owes is a failure" >&2
+    return 1
+  fi
+  echo "corpus manifest: body-shape self-test ok ($k checks — a truncated body, an overlong one,"
+  echo "  ragged and alien rows that hold the right LINE count, a backend that ran nothing, a runner"
+  echo "  answering the same thing for every program, and the clean and quarantined bodies it must accept)"
+  return 0
+}
+CM_BST="$WORK/body-shape-selftest"
+( body_shape_selftest "$CM_BST" ); CM_BST_RC=$?
+if [ ! -f "$CM_BST/complete" ]; then
+  echo "corpus manifest: the body-shape self-test did NOT run to completion (rc=$CM_BST_RC) — it" >&2
+  echo "  recorded no verdict, so this run proves nothing about the row-count or non-vacuity decision" >&2
+  exit 2
+fi
+[ -s "$CM_BST/bad" ] && { echo "corpus manifest: body-shape self-test recorded failures — $(cat "$CM_BST/bad")" >&2; exit 2; }
+[ "$(cat "$CM_BST/checks")" -ge "$CM_BODY_SELFTEST_EXPECTED" ] || {
+  echo "corpus manifest: body-shape self-test recorded $(cat "$CM_BST/checks") checks, expected at least $CM_BODY_SELFTEST_EXPECTED" >&2; exit 2; }
+[ "$CM_BST_RC" = 0 ] || exit 2
+
 frame_perturbation_selftest || exit 2
 if [ "$MODE" = selftest ]; then
   echo "corpus manifest: self-tests only; committed corpus.manifest untouched"
@@ -1131,36 +1312,8 @@ done < "$JOBFILE"
 [ "$fail" = 0 ] || die "the corpus walk is incomplete; the rows below are NOT a full manifest"
 
 # --- the gate of the gate: non-vacuity, counted from the BODY ---------------------------------------
-ROWS="$(body_rows "$BODY")"
-if [ "$ROWS" != "$EXPECT_ROWS" ]; then
-  die "the body holds $ROWS rows, want $EXPECT_ROWS ($SRC_COUNT × 4 − $EXCLUDED_PAIRS)"
-fi
-## Two counts per backend, and both must be non-vacuous.
-##   RUN_<b>  — sources that reached phase `run`. Zero means the backend never executed a program:
-##              measured with a shimmed always-failing `aarch64-as`, `--write` blessed a baseline
-##              holding ZERO aarch64 `run` rows and exited 0.
-##   EXIT_<b> — DISTINCT exit codes among those rows. One means the runner answered the same thing for
-##              every program, which is what a broken runner looks like from here: measured, running
-##              wasmtime with an unwritable cache directory made all 1 235 wasm `run` rows `exit 1`,
-##              a whole column that passed the RUN_ check while recording nothing.
-eval "$(awk -F'\t' '$3=="run" {c[$1]++; k[$1 FS $4]=1}
-                     END{for (b in c) printf "RUN_%s=%d\n", b, c[b];
-                         for (x in k) {split(x, a, FS); d[a[1]]++}
-                         for (b in d) printf "EXIT_%s=%d\n", b, d[b]}' "$BODY")"
-vac=0
-for b in x86_64 aarch64 riscv64 wasm; do
-  eval "n=\${RUN_$b:-0}; d=\${EXIT_$b:-0}"
-  if [ "$n" -lt 1 ]; then
-    echo "corpus manifest: backend $b reached phase 'run' for ZERO sources — it never executed a" >&2
-    echo "  single program, so its rows record nothing about behaviour. Refusing to report a result." >&2
-    vac=1
-  elif [ "$d" -lt 2 ]; then
-    echo "corpus manifest: backend $b ran $n programs and every one exited the SAME way — its runner" >&2
-    echo "  is answering independently of the program, so the column is vacuous. Refusing to report." >&2
-    vac=1
-  fi
-done
-[ "$vac" = 0 ] || exit 2
+check_body_shape "$BODY" "$EXPECT_ROWS" "$SRC_COUNT" "$EXCLUDED_PAIRS" || exit 2
+ROWS="$CM_ROWS"
 ## A `*_timeout` row is the one observation that can move because the MACHINE was busy rather than
 ## because the compiler changed, so it is never silent. What is reported now is the SECOND observation:
 ## a row that reaches here breached the ceiling in the parallel walk AND again on its own, so the stage
