@@ -7287,6 +7287,38 @@ run checked_div_zero 132
 run checked_udiv_zero 132
 run checked_rem_zero 132
 run checked_div_min_neg1 132
+## #606 — `MIN / -1` is a member of the checked-overflow set at EVERY signed width, not only i64.
+## Each backend's guard compared the dividend against the 64-bit INT64_MIN, which a narrow dividend
+## can never equal, so `(-128 : i8) / (-1 : i8)` answered 128 — a value OUTSIDE `i8` living in an
+## `i8` binding. Measured 60 on x86_64, aarch64, riscv64 and wasm alike before the fix; the trap is
+## now 132 / 133 / 133 / 134. Plain `run` enters each row in the cross-target sweeps AND pins the
+## exact x86 status; the explicit per-backend rows pin the other three, because a sweep accepts ANY
+## trap (>= 128) for any program and so cannot tell a guard that fired from one that fired for
+## another reason. `run_cli_trap` keeps `alatyr run` reporting the same status as build+execute.
+run issue606_divmin_narrow_i8 132
+run_cli_trap issue606_divmin_narrow_i8 132
+run_a64 issue606_divmin_narrow_i8 133
+run_rv64 issue606_divmin_narrow_i8 133
+run_wat issue606_divmin_narrow_i8 134
+run issue606_divmin_narrow_i16 132
+run_a64 issue606_divmin_narrow_i16 133
+run_rv64 issue606_divmin_narrow_i16 133
+run_wat issue606_divmin_narrow_i16 134
+## i32 is the widest bound a narrow guard materializes and the aarch64 encoding edge: 128 and 32768
+## fit the small compare-negative immediates and 2147483648 does not, so a guard written only
+## against the small forms passes the two rows above and still lets this one answer a value.
+run issue606_divmin_narrow_i32 132
+run_a64 issue606_divmin_narrow_i32 133
+run_rv64 issue606_divmin_narrow_i32 133
+run_wat issue606_divmin_narrow_i32 134
+## NON-VACUITY. A guard that fires on every narrow signed divide, or on the minimum dividend alone,
+## satisfies all three rows above; and the sweeps would not object, because they accept a trap as a
+## permitted outcome for any program. Only a VALUE assertion on all four backends catches it, which
+## is why this row is registered four times rather than left to the sweeps.
+run issue606_narrow_div_inrange 63
+run_a64 issue606_narrow_div_inrange 63
+run_rv64 issue606_narrow_div_inrange 63
+run_wat issue606_narrow_div_inrange 63
 # Checked integer OVERFLOW on `+` traps on ALL backends (I11/CG-8): plain `run` so x86 asserts the
 # exact SIGILL exit (132, `ud2`) AND the a64/rv64/wasm sweeps assert a TRAP (>= 128, brk/ebreak/
 # unreachable), not a silent wrapped exit. `unchecked_add_ovf` (aarch64-only, below) proves scoping.
