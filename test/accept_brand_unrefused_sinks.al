@@ -6,24 +6,34 @@
 ## The refusal reaches every sink the checker's LIVE path reaches — the annotated binding, a `=`
 ## re-assignment, a direct/UFCS call argument, the declared result, an early `return`, a binary
 ## operator (including an `if`-expression's condition), a struct-literal FIELD, a brand constructor
-## fed another brand, and — since the FIELD slice — the struct-field STORE and a value read out of a
-## branded FIELD. These three sinks it does NOT reach, each for a stated reason:
+## fed another brand, the struct-field STORE, a value read out of a branded FIELD, and — since the
+## PAYLOAD slice — the payload of an ARITY-1 enum variant. These three sinks it does NOT reach, each
+## for a stated reason:
 ##
 ##   1. `G : A = B(1)`      — a MODULE-LEVEL value declaration is not one of the checker's hooked
 ##                            value sinks; its annotation is recovered separately (`global_type_span`).
 ##   2. `xs : [2]A = [b, b]`— an ARRAY-LITERAL element: `resolve_ty` answers tag 7 for the whole
 ##                            `[2]A` annotation and the element type is never extracted, so there is
 ##                            no declared sink type to judge against.
-##   3. `E.One(b)`          — an ENUM-VARIANT payload: the parser records no per-component payload
-##                            type ("their type against the variant's payload type is DEFERRED"), so
-##                            the sink type does not exist in the AST yet.
+##   3. `F.P(b, 7)` and     — a MULTI-COMPONENT enum-variant payload. `src/ast.al`'s `FieldDecl`
+##      `F.P(A(1), c)`        carries ONE `ts`/`tl` pair for the whole payload LIST, and
+##                            `src/parser.al` fills it under `if marity == 0` — the FIRST component's
+##                            type. So components 2..n have no recorded sink type at all, and the one
+##                            span that IS recorded cannot be attributed to a component without the
+##                            rest of the list beside it. Closing this needs `FieldDecl` to grow a
+##                            per-component type list; that is not AST- or emission-neutral and is
+##                            residual on #299, not part of the arity-1 slice.
 ##
-## Two entries LEFT this list, and they are the reason this fixture is worth keeping. `s.x = b`, the
-## struct-FIELD store, and `fld : u64 = s.x`, the B1R direction through a FIELD READ, were items 4
-## and 5 here. Both are now refused; on the compiler that closed them this file failed at `s.x = b`,
-## which is exactly the job the header below describes. They moved to `test/reject_brand_field_store_sink.al`
-## and `test/reject_brand_field_read_sink.al`. A NESTED place path (`s.t.y = b`, a `Stmt::FieldPathAssign`)
-## and a field read whose base is not a directly known struct root are residual on #299, not closed.
+## Three entries LEFT this list, and they are the reason this fixture is worth keeping. `s.x = b`,
+## the struct-FIELD store, and `fld : u64 = s.x`, the B1R direction through a FIELD READ, were items
+## 4 and 5 here; `E.One(b)`, the ARITY-1 enum payload, was item 3, listed on the belief that the
+## parser "records no per-component payload type" — accurate only for components 2..n, since an
+## arity-1 variant's declared type is exactly what `FieldDecl.ts`/`.tl` holds. All three are now
+## refused; on the compiler that closed the payload this file failed at `E.One(b)`, which is exactly
+## the job the header below describes. They moved to `test/reject_brand_field_store_sink.al`,
+## `test/reject_brand_field_read_sink.al` and `test/reject_brand_enum_payload_sink.al`. A NESTED
+## place path (`s.t.y = b`, a `Stmt::FieldPathAssign`) and a field read whose base is not a directly
+## known struct root are residual on #299 too, not closed.
 ##
 ## Two more shapes are accepted ON PURPOSE and are not gaps: `u64(c)` composes brand removal with a
 ## numeric conversion in one `T(v)`, which the pin does not say a single constructor may or may not
@@ -46,6 +56,7 @@ C := brand(u8)
 
 S := struct { x : A }
 E := enum { One(A), Two }
+F := enum { P(A, u64), Q }
 
 ## (1) a module-level value declaration annotated `A`, initialized with a sibling `B`.
 G : A = B(1)
@@ -54,9 +65,18 @@ main := fn() -> u64 {
   b : B = B(2)
   c : C = C(3)
 
-  ## (2) an array-literal element, (3) an enum-variant payload.
+  ## (2) an array-literal element.
   xs : [2]A = [b, b]
-  e := E.One(b)
+
+  ## (3) a MULTI-COMPONENT variant payload, in BOTH positions: a sibling `B` where component 1 is
+  ## declared `A`, and a `C` over another block where component 2 is declared `u64` (the B1R
+  ## direction). Neither is judged, because one recorded span cannot answer for a two-component
+  ## list. The ARITY-1 spelling `E.One(b)` right below IS refused now, and `E` is kept here written
+  ## the LEGAL way so the contrast is in one file: same enum machinery, one payload, refused.
+  f1 := F.P(b, 7)
+  f2 := F.P(A(1), c)
+
+  e := E.One(A(9))
 
   ## The struct S is kept, written the LEGAL way, so this file still exercises a branded field beside
   ## the three open sinks: a same-brand store and an EXPLICIT `u64(...)` read are the two spellings
@@ -67,11 +87,15 @@ main := fn() -> u64 {
   fld : u64 = u64(s.x)
 
   ev := match e { E::One(v) => { u64(v) } E::Two => { 0 } }
+  fv := match f1 { F::P(p, q) => { u64(p) + q } F::Q => { 0 } }
+  gv := match f2 { F::P(p2, q2) => { u64(p2) + q2 } F::Q => { 0 } }
 
   if u64(G) != 1 { return 1 }
   if u64(xs[0]) != 2 { return 2 }
-  if ev != 2 { return 3 }
+  if ev != 9 { return 3 }
   if fld != 2 { return 4 }
   if u64(c) != 3 { return 5 }
+  if fv != 9 { return 6 }
+  if gv != 4 { return 7 }
   return 42
 }

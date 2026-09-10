@@ -3783,6 +3783,18 @@ expr_struct_lit_name := fn(e : ptr(Expr)) -> VSpan {
     _ => { VSpan(s = 0, n = 0) }
   }
 }
+## The PAYLOAD-ARGUMENT list head of an `EnumLit` value expression (0 otherwise). Same scar #2 idiom
+## as `expr_struct_lit_head`: `check_expr`'s big bound-deref match does not dispatch the payload-heavy
+## `EnumLit` arm under the bootstrap seed, so anything that must judge a payload sink has to recover
+## the list through a small single-focus accessor. `expr_enum_parts` deliberately does not carry it —
+## the variant NAME and ARITY rules need no payload value — so the head is recovered here instead of
+## widening that struct for every caller.
+expr_enum_lit_head := fn(e : ptr(Expr)) -> usize {
+  match deref(e) {
+    Expr::EnumLit(ets, etl, evs, evl, enp, eph) => { eph }
+    _ => { 0 }
+  }
+}
 ## True only for the parser's generic-construction shape `Name(type-args)(field = value, …)`.
 ## `StructLit` stores only the head after the parser erases the first parenthesized group, so recover
 ## that distinction from source: skip whitespace, consume the first balanced group, skip whitespace,
@@ -5827,20 +5839,31 @@ sema_enum_variant_known := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
 ## Issue #513 / Types §9.4 — the variant-ARITY verdict for `E.V(a0, …)`, computed from the SAME walk
 ## `sema_enum_variant_known` uses: the same `upto` bound, the same `name_matches` head test and the
 ## same `kind == 3` declarations, so the count is read from the very declaration whose variant list
-## already answered the name question. Two fields:
+## already answered the name question. Its fields:
 ##   * `known`  — some visible declaration of this head declares a variant `V` at all;
 ##   * `fits`   — some such declaration declares `V` with EXACTLY the supplied component count;
-##   * `want`   — the FIRST matching declaration's component count, for the diagnostic's expected count.
+##   * `want`   — the FIRST matching declaration's component count, for the diagnostic's expected count;
+##   * `ts`/`tl`— the FIRST matching declaration's payload TYPE span, which `FieldDecl` records for the
+##                FIRST payload component only (`src/ast.al`'s `FieldDecl` carries ONE `ts`/`tl` pair
+##                for the whole list, and `src/parser.al` fills it under `if marity == 0`);
+##   * `amb`    — two visible declarations of this head declare `V` with a DIFFERENT arity or a
+##                different payload type span, so neither `want` nor `ts`/`tl` identifies one sink.
+## The type span is carried here rather than recovered by a second walk because Issue #299's
+## payload-sink refusal needs exactly the declaration this walk already found; a second walk would be
+## a second decision about which declaration a constructor names.
 ## `fits` is deliberately an OR across every matching declaration, so two same-named enums in
 ## different modules can never make a valid constructor look wrong; the reject fires only on
 ## `known and not fits`. `FieldDecl.arity` is the parser's per-payload-TYPE count — the same number
 ## `enum_max_arity` already sizes a payload with — so the rule compares the constructor against its
 ## own declaration and never against a fixed number.
-EnumVariantArity := struct { known : bool, fits : bool, want : usize }
+EnumVariantArity := struct { known : bool, fits : bool, want : usize, ts : usize, tl : usize, amb : bool }
 sema_enum_variant_arity := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), es : usize, el : usize, vs : usize, vl : usize, np : usize) -> EnumVariantArity {
   mut known := false
   mut fits := false
   mut want := 0
+  mut ts := 0
+  mut tl := 0
+  mut amb := false
   mut i := 0
   while i < upto {
     d := deref(decl_get(decls, i))
@@ -5849,7 +5872,11 @@ sema_enum_variant_arity := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
       while f != 0 {
         fd := deref(fld_p(f))
         if streq(src, fd.ns, fd.nl, vs, vl) {
-          if not known { want = fd.arity }
+          if not known {
+            want = fd.arity
+            ts = fd.ts
+            tl = fd.tl
+          } else if fd.arity != want or streq(src, fd.ts, fd.tl, ts, tl) == false { amb = true }
           known = true
           if fd.arity == np { fits = true }
         }
@@ -5858,7 +5885,32 @@ sema_enum_variant_arity := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
     }
     i += 1
   }
-  EnumVariantArity(known = known, fits = fits, want = want)
+  EnumVariantArity(known = known, fits = fits, want = want, ts = ts, tl = tl, amb = amb)
+}
+
+## Issue #299 — the ENUM-VARIANT PAYLOAD sink, for a variant of arity ONE, as `resolve_ty` gives it
+## (tag 0 = no judgeable sink). `FieldDecl` stores ONE payload type span per variant, filled from the
+## FIRST component (`src/parser.al`'s `if marity == 0`), so an arity-1 variant's declared payload type
+## IS in the AST and an arity->=2 variant's components 2..n are NOT: judging only `want == 1` refuses
+## exactly the shape whose sink type exists and leaves the multi-component residual untouched rather
+## than judging component 2 against component 1's type. `amb` and a `fits` mismatch stay fail-open —
+## the arity reject above already owns a count disagreement, and an ambiguous head has no one sink.
+sema_enum_payload_one_ty := fn(eva : EnumVariantArity, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> Ty {
+  unknown := Ty(tag = 0, ns = 0, nl = 0)
+  if eva.known == false { return unknown }
+  if eva.amb { return unknown }
+  if eva.fits == false { return unknown }
+  if eva.want != 1 { return unknown }
+  if eva.tl == 0 { return unknown }
+  resolve_ty(src, eva.ts, eva.tl, decls, upto)
+}
+## …and that variant's ONE supplied payload value, as the `Arg` node's address (0 = not exactly one).
+## The list is recovered through `expr_enum_lit_head` for the scar #2 reason stated there.
+sema_enum_payload_one_arg := fn(e : ptr(Expr)) -> usize {
+  h := expr_enum_lit_head(e)
+  if h == 0 { return 0 }
+  if (deref(arg_p(h))).next != 0 { return 0 }
+  h
 }
 
 ## The bounded scalar `comptime` slice (Comptime §2.2 / §9.1) accepts only a NULLARY user-enum
@@ -7009,6 +7061,20 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       eva0 := sema_enum_variant_arity(decls, upto, src, eparts0.es, eparts0.el, eparts0.vs, eparts0.vl, eparts0.np)
       if eva0.known and not eva0.fits {
         mark_failed(locals, enum_variant_arity_err(eparts0.vs, eva0.want, eparts0.np))
+      }
+      ## #299 census hook (no refusal): the ENUM-VARIANT PAYLOAD sink of an arity-1 variant, judged
+      ## from the very declaration the arity verdict above already found. Inert unless the program
+      ## declares a brand of its own.
+      epty0 := sema_enum_payload_one_ty(eva0, decls, upto, src)
+      eph0 := sema_enum_payload_one_arg(e)
+      if epty0.tag != 0 and eph0 != 0 {
+        epa0 := deref(arg_p(eph0))
+        brand_probe_sink(epty0, epa0.e, s_of(epa0.e, a), decls, upto, src, locals, nloc, a)
+        ## …and the REFUSAL at the same sink. Poisons rather than returning, so the arity verdict
+        ## above and the ordinary walk below still run. Located at the offending payload VALUE's own
+        ## span, falling back to the variant name — the span this arm's other diagnostics point at.
+        epe0 := sema_brand_sink_err(epty0, epa0.e, sema_brand_span(s_of(epa0.e, a), eparts0.vs), decls, upto, src, locals, nloc, a)
+        if epe0 != 0 { mark_failed(locals, epe0) }
       }
     }
   }

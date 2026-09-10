@@ -6326,6 +6326,14 @@ build_reject_has reject_brand_field_read_sink "implicit brand conversion"
 emit_reject_has wat reject_brand_field_read_sink "implicit brand conversion"
 emit_reject_has aarch64 reject_brand_field_read_sink "implicit brand conversion"
 emit_reject_has riscv64 reject_brand_field_read_sink "implicit brand conversion"
+## …and for the ENUM-VARIANT PAYLOAD of an ARITY-1 variant (`E.One(b)`). `FieldDecl` records one
+## payload type span per variant, filled from the FIRST component, so an arity-1 variant's declared
+## type IS in the AST — the belief that it was not is why this sink outlived the two above. A
+## multi-component variant keeps no per-component type and stays open in `accept_brand_unrefused_sinks`.
+build_reject_has reject_brand_enum_payload_sink "implicit brand conversion"
+emit_reject_has wat reject_brand_enum_payload_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_enum_payload_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_enum_payload_sink "implicit brand conversion"
 check_accept accept_brand_explicit_conversions
 run accept_brand_explicit_conversions 42
 check_accept accept_brand_require_identity

@@ -134,6 +134,21 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   this compiler's own source `src/aarch64.al` is the one module sorting before `src/ast.al`, and 39
   of its 63 `_ =>` wildcard arms were unchecked for this reason.
 
+- **A sibling brand can no longer be laundered through an enum variant's payload.** A brand has a
+  distinct nominal identity and every brand conversion is explicit (Types §4.2/§4.3); two *sibling*
+  brands over one block do not convert into each other at all (§5.4). `E := enum { One(A) }` with
+  `E.One(b)` for a `b : B` compiled clean and ran, so a variant payload was the remaining way past
+  the annotated binding, the call argument, the struct-literal field, the field store and the field
+  read that are already refused. **Newly rejected:** an implicit brand crossing at the payload of an
+  **arity-1** enum variant, in either direction (a sibling or cross-domain brand into a branded
+  component, and a brand into a raw one). The explicit spellings are unchanged and still accepted:
+  `E.One(A(u64(b)))` and `E.One(A(1))`, as are a literal payload (`E.One(7)`, which Types §9.1/§9.2
+  refine from context) and a nullary variant. One located `alatyr: check: implicit brand
+  conversion …` on all four surfaces — `build`, `check` and the WAT/AArch64/RISC-V emit paths.
+  A variant of **two or more** components is unaffected and still accepts the crossing: the AST
+  records one payload type span per variant — the first component's — so components 2..n have no
+  declared type to judge against. That residual stays open on #299.
+
 ## 0.2.2 — 2026-09-10
 - **A `::` head that names nothing is now a compile error instead of a silently different call.**
   `zzz::aa()`, with no `zzz` declared anywhere, used to build at rc 0 and run the *root's own* `aa`:
