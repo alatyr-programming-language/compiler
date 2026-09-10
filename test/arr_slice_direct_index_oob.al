@@ -13,9 +13,12 @@
 ## attributed immediately rather than read as "the fixture ran": 5 = it read `xs[3]` past the view,
 ## 6 = a zero / frame slot 0, 7 = some other word. None of them is the pass condition.
 ##
-## x86_64-only by registration. The three non-x86 backends do not lower this shape at all; they emit
-## a fail-loud trap for it (measured a133 / rv133 / wasm134), which is a different status than the
-## checked 132 asserted here and is the acceptable half of correct-or-trap.
+## The x86 row is `run_x86_trap` (SIGILL = 132). aarch64, riscv64 and WAT now lower this shape too
+## (#422's non-x86 residual) and are registered beside it at 133 / 133 / 134: their checked bound is
+## the same runtime `hi - lo`, and only the trap instruction differs — `brk` raises SIGTRAP and
+## wasmtime's `unreachable` exits 134. Those three rows passed BEFORE that lowering as well, for a
+## different reason (no lowering at all, so the same trap arrived from the chain's fail-loud
+## default), which is why they are a control here rather than regression evidence.
 main := fn() -> u64 {
   xs : [u64; 4] = [71, 42, 93, 55]
   v := xs[1..3][2]

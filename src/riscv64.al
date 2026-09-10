@@ -4739,6 +4739,16 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       stdidxel := rv_arrty_elem(src, stdidxarr.s, stdidxarr.n)
       mut stdidxelem := false
       if rv_std_idx_path_ok(ibase, body_head, src, a, decls) and stdidxel.n != 0 and scalar_byte_size(src, stdidxel.s, stdidxel.n) == 1 { stdidxelem = true }
+      ## #422 — the DIRECT range-slice base `xs[lo..hi][i]`. The claim rule is shared
+      ## (`lower_ctx::direct_slice_index_claim`); RISC-V supplies its own four answers. Computed with
+      ## the other classifiers so the chain below reads as one decision per arm.
+      dsnm := lower_ctx::direct_slice_index_array(ibase)
+      dsoff := rv_local_off(body_head, src, dsnm.s, dsnm.n, pcount, a, decls)
+      ## The stride query takes the base EXPRESSION, so it is asked only once the shape half has
+      ## answered — `ex_slice_base` of a non-`Slice` is a null node and must not be dereferenced.
+      mut dsstride := i64(0)
+      if dsnm.n != 0 { dsstride = rv_iter_stride(body_head, src, ex_slice_base(ibase), a, decls) }
+      dsclaim := lower_ctx::direct_slice_index_claim(dsnm, rv_is_array_local(body_head, src, dsnm.s, dsnm.n, a), dsstride, rv_array_is_float(body_head, src, dsnm.s, dsnm.n, a, params_head, decls), dsoff >= 0)
       if stdidxelem {
         ## `xs[i].data[j]`: preserve the inner index while composing the byte-strided outer element,
         ## add the byte field path, then perform a one-byte signed/unsigned load.
@@ -4850,6 +4860,49 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       else if deepidx {
         emit_rv_place_idx_addr(ibase, iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "  ld a0, 0(a0)\n")
+      }
+      ## Grammar §3.4 / Types §9.4 (#422) — a RANGE SLICE used DIRECTLY as an index base,
+      ## `xs[lo..hi][i]`. The claim rule is `lower_ctx::direct_slice_index_claim`, written once for
+      ## all three non-x86 backends; only the instruction selection below is RISC-V's.
+      ##
+      ## The deliverer is the BOUND spelling's own arithmetic. `s := xs[lo..hi]` stores exactly two
+      ## words into the view's frame slots — word0 = `s0 + <array off> + lo*8`, word1 = `hi - lo` —
+      ## and `s[i]` then bounds-checks `i` against word1 and loads `0(word0 + i*8)`. Emitting that
+      ## same pair onto the MACHINE STACK instead of a frame slot makes `xs[lo..hi][i]` and
+      ## `v := xs[lo..hi]; v[i]` name the same byte, which is the disagreement #422 reported, and
+      ## needs no frame reservation (unlike `emit_rv_slice_arg`'s RV_AGG block, whose per-occurrence
+      ## count is taken over CALL ARGUMENTS only). `lo` is ACCOUNTED FOR, not ignored, and the check
+      ## is against the VIEW's runtime length, so an index past the view's end TRAPS instead of
+      ## reading the base array beyond `hi` — the bound spelling's behaviour exactly.
+      ##
+      ## Order is load-bearing: the INDEX is lowered first and parked, because the pair's own `lo`/`hi`
+      ## lowering may clobber every scratch register. `lo` is evaluated twice (once for the length,
+      ## once for the pointer), which is what the slice BINDING already does.
+      ##
+      ## Placed immediately above the trap rather than at the head of the chain: every arm before it
+      ## needs `bnl != 0` (a bare `Var` base) or keys on a `Field`/`Index` base, and an `Expr::Slice`
+      ## base answers none of those, so this position is byte-identical for every other shape.
+      else if dsclaim {
+        dslo := ex_slice_lo(ibase)
+        dshi := ex_slice_hi(ibase)
+        ## the index → the machine stack
+        emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
+        ## the view's runtime LENGTH (`hi - lo`) → the machine stack
+        emit_rv_expr(dshi, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
+        emit_rv_expr(dslo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        push_str(sb, "  mv a1, a0\n  ld a0, 0(sp)\n  sub a0, a0, a1\n  sd a0, 0(sp)\n")
+        ## the view's DATA POINTER (`&base[lo]`) → a0
+        emit_rv_expr(dslo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        push_str(sb, "  slli a0, a0, 3\n  add a0, a0, s0\n  addi a0, a0, ")
+        push_int(sb, dsoff)
+        push_str(sb, "\n  ld a1, 0(sp)\n  addi sp, sp, 16\n  ld a2, 0(sp)\n  addi sp, sp, 16\n")
+        ## CHECKED BOUNDS (I11 / CG-7) against the VIEW's own length in a1, the same `bltu`/`ebreak`
+        ## shape every other index uses; `bltu` is unsigned, so a negative i64 index also traps.
+        ## Dropped in an `unchecked` scope, like the bound spelling's own check.
+        if RV_CHK { push_str(sb, "  bltu a2, a1, 1f\n  ebreak\n1:\n") }
+        push_str(sb, "  slli a2, a2, 3\n  add a0, a0, a2\n  ld a0, 0(a0)\n")
       }
       else { push_str(sb, "  ebreak\n") }
     }

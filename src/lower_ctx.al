@@ -83,6 +83,54 @@ pub is_slice_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
   r
 }
 
+## Grammar §3.4 / Types §9.4 (#422) — a RANGE SLICE used DIRECTLY as an index base, `xs[lo..hi][i]`.
+## `postfix-expr ::= primary { postfix }` lists both `"[" expr "]"` and the range form among the
+## postfix ops, so this is ONE primary plus TWO postfix steps and needs no intermediate binding. The
+## view it names has no frame home, though, and EVERY arm of each backend's `Expr::Index` chain keys
+## on a bare `Var` base, so the shape fell past all of them to that backend's fail-loud default while
+## `v := xs[lo..hi]; v[i]` — the same access, one binding later — answered correctly. Two spellings of
+## one access disagreeing is the defect; x86_64's recognizer (`src/lower/place.al`) closed its half
+## against `emit_arr_slice_pair`, and aarch64 / riscv64 / WAT close theirs against the {ptr, len} their
+## OWN slice-binding path already stores.
+##
+## THE DECISION LIVES HERE ONCE, in two halves, because three emitters must not each grow their own
+## copy of it (`scripts/idiom_gate.sh` exists for exactly that class): the SHAPE half below is pure
+## AST and identical everywhere, and the CLAIM half is a single boolean rule the three backends feed
+## with their own equivalents of the four queries. Only the instruction selection stays backend-local.
+##
+## The base array's NAME SPAN when `base` is `Slice(<Var>, lo, hi)`, else {0, 0}. A `str` range slice
+## (`s[lo..hi][i]`) reaches this too — its base IS a `Var` — and is turned away by the claim rule's
+## element tests, which no `str` local answers as a scalar-word array local (#494 keeps that shape).
+pub direct_slice_index_array := fn(base : ptr(Expr)) -> CSpan {
+  if not lower_layout::ex_is_slice(base) { return CSpan(s = 0, n = 0) }
+  sbase := lower_layout::ex_slice_base(base)
+  CSpan(s = lower_layout::ex_var_ns(sbase), n = lower_layout::ex_var_nl(sbase))
+}
+
+## May the direct range-slice index recognizer CLAIM this base? Narrow BY MEASUREMENT, not by taste —
+## every condition here turned away a shape that was measured to be a wrong value or an unreachable
+## address if it were let through:
+##
+##   * `nm.n != 0`          — the slice's own base must be a NAME. A slice of a call result or of a
+##                            deeper place has no frame address to advance from.
+##   * `base_is_array_local` — a frame ARRAY LOCAL only. A by-reference array PARAM base and an array
+##                            GLOBAL base both trap on all three backends even in the BOUND spelling
+##                            (measured: 133/133/134 for `takea(a) { v := a[1..3]; v[0] }`), so
+##                            claiming them here would invent a lowering the bound path has not got.
+##   * `estride == 1`        — a ONE-WORD element. The load below is a single word; a struct/enum
+##                            element spans `estride` words and its VALUE is its address, so a word
+##                            load would answer word 0 of the element (a wrong scalar).
+##   * `not base_is_float`   — the callers that route a float element to the fp register file all key
+##                            on a bare `Var` index base, so an `Expr::Slice` base answers "not a
+##                            float" to every one of them; pairing a correct address with an integer
+##                            load would hand back the raw bit pattern. Float element arrays keep the
+##                            trap, as x86_64 keeps their located reject.
+##   * `base_located`        — the backend actually resolved the base array to a frame offset (native)
+##                            or to its WASM local (WAT). A negative answer is "not found", never 0.
+pub direct_slice_index_claim := fn(nm : CSpan, base_is_array_local : bool, estride : i64, base_is_float : bool, base_located : bool) -> bool {
+  nm.n != 0 and base_is_array_local and estride == 1 and (not base_is_float) and base_located
+}
+
 ## `[E; N]` → the static element COUNT N, else 0 (not a fixed-array type, or a non-literal length — a
 ## `[T; <comptime expr>]` stays 0 so every dependent path falls back to the fail-loud default).
 ## The scan is shared because the three target backends consume the same source-relative type spans and
