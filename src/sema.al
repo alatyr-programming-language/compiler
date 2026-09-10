@@ -43,6 +43,9 @@ stmt_label_span := ast::stmt_label_span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
 ## which enum is rejected.
 (enum_repr_ty, repr_ty_is_integer, repr_ty_capacity) := lower_layout
+## #602 — "was this `Num` written with a leading `-`?" is decided ONCE, in `lower_layout`, because
+## the four emitters ask it too; re-deriving it here would let the two passes drift.
+lit_num_written_neg := lower_layout::lit_num_written_neg
 ## Module visibility is source metadata consumed by more than the lowerer.  Keep the single
 ## `pub` reader shared with the build-side Modules §3 pass; the sema pass must not grow a second
 ## spelling table for `pub mut` / first-line declarations.
@@ -7495,17 +7498,41 @@ sema_array_nested_field_path_value_bad := fn(path : ArrayNestedPath, checked : T
 ## the span `local_type_span` / `Param.ts` / `Decl.ret_ts` already carry.
 ##
 ## `v` is the `Expr::Num` payload: an `i64` holding the literal's 64-BIT PATTERN (`parser::lit_val_at`
-## decodes into a `usize`; the AST node is `Num(i64)`). The grammar has NO negative literal — unary
-## `-x` is `Unchecked(Bin(17, Num(0), x))`, which is not a `Num` and never reaches here — so a
-## NEGATIVE payload means one thing only: the written literal was at or above 2^63. That reduces the
-## 64-bit half of the judgement to a sign test and keeps every comparison here SIGNED, so none of it
-## depends on how an unsigned compare lowers.
+## decodes into a `usize`; the AST node is `Num(i64)`). Since #602 the parser NORMALISES a written
+## negative literal — `-129` spelled with the digits abutting the `-` — into one `Num` carrying the
+## negated value and a raw span that INCLUDES the `-`, so a `Num` now reaches here from two different
+## spellings and the payload ALONE no longer identifies which: `-1` and `18446744073709551615` are
+## the same 64 bits. `lit_written_neg` reads the first byte of the raw span to tell them apart, and
+## the two judgements are separate functions rather than one signed test:
+##
+##   * `num_lit_out_of_range` — the literal was written WITHOUT a `-`. A negative payload then means
+##     one thing only: the written literal was at or above 2^63.
+##   * `num_lit_neg_out_of_range` — the literal was written WITH a `-`. The mathematical value is
+##     non-positive, so it is out of range for every unsigned type (except the value zero, which
+##     `-0` denotes and which every unsigned type holds), and for a signed type the lower bound is
+##     the live one. A POSITIVE payload here is the 2^63 wrap of the negation — `-9223372036854775809`
+##     comes back as `+9223372036854775807` — which is out of range for every integer type.
+##
+## Every comparison in both stays SIGNED, so none of it depends on how an unsigned compare lowers.
 ##
 ## A WHITELIST of proven-bad cases, exactly like `ann_lit_incompatible`: only the names below are
 ## judged at all. `u64`/`usize` hold every 64-bit pattern, so no literal is ever out of range for
 ## them; every other name (`f64`, `char`, `bits8`, a brand, a generic instance, an array/pointer
 ## annotation, an unresolvable name) falls through to ACCEPTED. Base is irrelevant — `0xFF`, `0b…`,
 ## `0o…` and `255` all reach the AST as the same decoded value (`parser::dec_val`).
+## The §9.1 judgement for a literal written WITH a `-`, the negative half of `num_lit_out_of_range`
+## below. `v` is the already-negated payload. `v > 0` is the 2^63 wrap of the negation and is out of
+## range for EVERY integer type here, unsigned included; `v == 0` is `-0`, whose mathematical value
+## is zero and therefore in range everywhere the positive `0` is. The same whitelist discipline as
+## the positive half: only the names below are judged, everything else falls through to ACCEPTED.
+num_lit_neg_out_of_range := fn(w : str, v : i64) -> bool {
+  if w == "u8" or w == "u16" or w == "u32" or w == "u64" or w == "usize" { return v != 0 }
+  if w == "i8" { return v < 0 - 128 or v > 0 }
+  if w == "i16" { return v < 0 - 32768 or v > 0 }
+  if w == "i32" { return v < 0 - 2147483648 or v > 0 }
+  if w == "i64" or w == "isize" { return v > 0 }
+  false
+}
 num_lit_out_of_range := fn(w : str, v : i64) -> bool {
   if w == "u8" { return v < 0 or v > 255 }
   if w == "u16" { return v < 0 or v > 65535 }
@@ -7526,6 +7553,7 @@ num_lit_out_of_range := fn(w : str, v : i64) -> bool {
 ann_lit_range_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) -> bool {
   if tl == 0 { return false }
   if expr_is_num_lit(e) == false { return false }
+  if lit_num_written_neg(e, src) { return num_lit_neg_out_of_range(str_at((src + ts), tl), expr_num_lit_val(e)) }
   num_lit_out_of_range(str_at((src + ts), tl), expr_num_lit_val(e))
 }
 
@@ -7597,11 +7625,16 @@ int_lit_into_float_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr
 }
 
 ## Types §9.1 / Declarations §3.4 — with no context an integer literal takes the target's native SIGNED
-## integer. All supported targets are 64-bit, so a bare `Num` whose payload is negative is a written,
-## non-negative literal in [2^63, 2^64), which does not fit the default i64. A written negative literal
-## is parsed as `Unchecked(Bin(17, Num(0), ...))`, not as `Num`, and is intentionally outside this helper.
-default_lit_range_bad := fn(e : ptr(Expr)) -> bool {
+## integer. All supported targets are 64-bit, so a bare `Num` written WITHOUT a `-` whose payload is
+## negative is a written, non-negative literal in [2^63, 2^64), which does not fit the default i64.
+## Since #602 a written NEGATIVE literal is also a `Num`, and its own judgement against that same
+## default type is `num_lit_neg_out_of_range`'s `i64` row — one decision in one place, so `x := -5`
+## stays accepted, `x := -9223372036854775808` (i64 MIN, whose magnitude has no positive counterpart)
+## stays accepted, and `x := -9223372036854775809`, whose negation wraps back to a POSITIVE payload,
+## is refused rather than silently binding `+9223372036854775807`.
+default_lit_range_bad := fn(src : ptr(u8), e : ptr(Expr)) -> bool {
   if expr_is_num_lit(e) == false { return false }
+  if lit_num_written_neg(e, src) { return num_lit_neg_out_of_range("i64", expr_num_lit_val(e)) }
   expr_num_lit_val(e) < 0
 }
 
@@ -7670,6 +7703,7 @@ ctor_lit_range_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
   if sema_direct_call_name(src, cs.s, cs.n) == false { return false }
   w := ctor_int_target_name(decls, upto, src, cs.s, cs.n)
   if w.n == 0 { return false }
+  if lit_num_written_neg(arg.e, src) { return num_lit_neg_out_of_range(str_at((src + w.s), w.n), expr_num_lit_val(arg.e)) }
   num_lit_out_of_range(str_at((src + w.s), w.n), expr_num_lit_val(arg.e))
 }
 
@@ -9671,7 +9705,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## Declarations §3.4). A negative `Num` payload is the parser's 64-bit representation of a
           ## written non-negative literal at or above 2^63; reject it before the untyped binding can
           ## silently preserve the bit pattern as a native word.
-          if ann.n == 0 and default_lit_range_bad(v) { bad_decl = true }
+          if ann.n == 0 and default_lit_range_bad(src, v) { bad_decl = true }
           ## CT-12 / Comptime §2.6 — a failed CHECKED GUARD in the comptime evaluation of this
           ## initializer is a LOCATED diagnostic at the operation's site, never a deferred trap.
           cte := ct_guard_err(src, ann.s, ann.n, v, ns, decls, upto)
@@ -11601,7 +11635,7 @@ check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a 
       if ann_lit_range_bad(src, gts.s, gts.n, d.value) { mark_failed(ptr(none), mismatch_err(d.name_start, 0)) }
     } else {
       ## A module-level `name := literal` has the same no-context default as a local binding.
-      if default_lit_range_bad(d.value) { mark_failed(ptr(none), mismatch_err(d.name_start, 0)) }
+      if default_lit_range_bad(src, d.value) { mark_failed(ptr(none), mismatch_err(d.name_start, 0)) }
     }
     ## Types §9.1 CONSTRUCTOR spelling at MODULE scope (#564) — the same walk a fn body gets, so
     ## `G : u8 = u8(300)` and `G := u8(300)` are refused where a local already was.

@@ -323,7 +323,7 @@ wat_hole_signed := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : p
   if wat_operand_signed(e, params_head, body_head, src, a) { return true }
   if wat_operand_unsigned(e, params_head, body_head, src, a) { return false }
   mut r := false
-  if lit_arith_i64(e) { r = true }
+  if lit_arith_i64(e, src) { r = true }
   match deref(e) {
     Expr::Index(bse, ix) => { if wat_hole_index_signed(bse, body_head, src, a) { r = true } }
     Expr::Call(cs, cl, na, ah) => { if callee_ret_is_signed(decls, src, cs, cl) { r = true } }
@@ -347,7 +347,7 @@ wat_hole_index_signed := fn(bse : ptr(Expr), body_head : ptr(mut Stmt), src : pt
 wat_hole_local_init_signed := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   rhs := wat_local_rhs(body_head, src, ns, nl, a)
   mut r := false
-  if unchecked bitcast(usize, rhs) != 0 { if lit_arith_i64(rhs) { r = true } }
+  if unchecked bitcast(usize, rhs) != 0 { if lit_arith_i64(rhs, src) { r = true } }
   r
 }
 ## PROVABLY UNSIGNED ordering comparison iff BOTH operands are provably unsigned, OR one operand is
@@ -7276,11 +7276,20 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
             hi := wat_comp_range_bound(rhi, decls, src)
             if hi - lo > 100000 { push_str(sb, "    (unreachable) (; comptime-for range exceeds the unroll budget ;)\n") }
             else {
-              mut k := lo
+              ## The counter is `i64` and, since #602 folds a written negative literal, `lo` is now
+              ## reachably NEGATIVE — `comptime for i in -2..2` used to fold to 0 here and unroll the
+              ## wrong iteration set (#638). Its increment is `unchecked` because the self-host lower
+              ## compares this counter with the SIGNED `<` but guards `k + 1` with the UNSIGNED carry
+              ## test, so at k = -1 the increment carried and this emitter died on its own `ud2`, with
+              ## no diagnostic, on all three non-x86 surfaces (#646). The wrap `unchecked` permits
+              ## cannot occur: the budget check immediately above bounds `hi - lo` at 100000, so the
+              ## counter stays inside [lo, hi). This is a LOCAL bypass justified by that bound, not a
+              ## fix for #646; `lower::emit_st_comp_for_range` is the x86 twin that already works.
+              mut k : i64 = lo
               while k < hi {
                 push_str(sb, "    (local.set ") ; push_int(sb, vidx) ; push_str(sb, " (i64.const ") ; push_int(sb, k) ; push_str(sb, "))\n")
                 emit_wat_stmts(rb, fn_head, true, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-                k = k + 1
+                k = unchecked (k + 1)
               }
             }
           }

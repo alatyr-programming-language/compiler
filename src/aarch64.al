@@ -3587,7 +3587,7 @@ a64_hole_signed := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : p
   if a64_operand_signed(e, params_head, body_head, src, a) { return true }
   if a64_operand_unsigned(e, params_head, body_head, src, a) { return false }
   mut r := false
-  if lit_arith_i64(e) { r = true }
+  if lit_arith_i64(e, src) { r = true }
   match deref(e) {
     Expr::Index(bse, ix) => { if a64_hole_index_signed(bse, body_head, src, a) { r = true } }
     Expr::Call(cs, cl, na, ah) => { if callee_ret_is_signed(decls, src, cs, cl) { r = true } }
@@ -3611,7 +3611,7 @@ a64_hole_index_signed := fn(bse : ptr(Expr), body_head : ptr(mut Stmt), src : pt
 a64_hole_local_init_signed := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   rhs := a64_local_rhs(body_head, src, ns, nl, a)
   mut r := false
-  if unchecked bitcast(usize, rhs) != 0 { if lit_arith_i64(rhs) { r = true } }
+  if unchecked bitcast(usize, rhs) != 0 { if lit_arith_i64(rhs, src) { r = true } }
   r
 }
 ## An ORDERING comparison (`<`/`>`/`<=`/`>=`) is PROVABLY UNSIGNED iff BOTH operands are provably
@@ -8007,11 +8007,16 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             hi := a64_comp_range_bound(rhi, decls, src)
             if hi - lo > 100000 { push_str(sb, "  brk #0 // comptime-for range exceeds the unroll budget\n") }
             else {
-              mut k := lo
+              ## See the note on the same unroll in `wat::emit_wat_stmts` (#602/#638/#646): `lo` is
+              ## now reachably negative, and the counter's increment is `unchecked` because the
+              ## self-host lower guards it with the UNSIGNED carry test while comparing it with the
+              ## SIGNED `<`. The budget check above bounds the range, so no wrap can occur; this is a
+              ## local bypass justified by that bound, not a fix for #646.
+              mut k : i64 = lo
               while k < hi {
                 push_str(sb, "  ldr x0, =") ; push_int(sb, k) ; push_str(sb, "\n  str x0, [x29, #") ; push_int(sb, ioff) ; push_str(sb, "]\n")
                 emit_a64_stmts(rb, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
-                k = k + 1
+                k = unchecked (k + 1)
               }
             }
           }
