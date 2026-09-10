@@ -1375,6 +1375,50 @@ run_pkg_check_build_located() { # package dir, source line, naming module, optio
   fi
 }
 
+# Issue #656 / Control Flow §5.1 + Modules §1 — the two-module CONTROL, stated by the issue as its
+# own acceptance test: two module sets that are byte-identical apart from the file NAME the enum's
+# module sorts under must report the SAME verdict. Two independent `run_pkg_check_build_located`
+# rows would not prove that: each only compares one package against a line number this file hands
+# it, so a pair that agreed by accident, or a pair whose diagnostics differed in any other byte,
+# would still pass twice. This helper compares the four streams to ONE expected line and to each
+# other, and it first proves the premise — that the two consuming modules really are byte-identical
+# and the two enum modules really are byte-identical — because a "same verdict" claim over two
+# different programs is not a claim about module order at all.
+run_issue656_module_order_pair() {
+  local first="$ROOT/test/package/issue656_ptr_enum_module_first"
+  local last="$ROOT/test/package/issue656_ptr_enum_module_last"
+  local want="alatyr: check: type mismatch at line 2 in main"
+  local p cmd out rc prev
+  if ! cmp -s "$first/src/main.al" "$last/src/main.al"; then
+    echo "FAIL issue656_module_order_pair: the two consuming modules are not byte-identical"; fail=1; return
+  fi
+  if ! cmp -s "$first/src/aenum.al" "$last/src/zenum.al"; then
+    echo "FAIL issue656_module_order_pair: the two enum modules are not byte-identical"; fail=1; return
+  fi
+  if grep -R --include='*.al' -qF -- "type mismatch" "$first/src" "$last/src"; then
+    echo "FAIL issue656_module_order_pair: diagnostic needle appears in fixture source"; fail=1; return
+  fi
+  prev=""
+  for p in "$first" "$last"; do
+    for cmd in check build; do
+      rm -rf "$p/target"
+      out=$( (cd "$p" && "$CC" "$cmd" package.al) 2>&1 ); rc=$?
+      rm -rf "$p/target"
+      if [ "$rc" != 1 ]; then
+        echo "FAIL issue656_module_order_pair: $(basename "$p") $cmd rc=$rc, want 1"; fail=1; return
+      fi
+      if [ "$out" != "$want" ]; then
+        echo "FAIL issue656_module_order_pair: $(basename "$p") $cmd got '$out', want '$want'"; fail=1; return
+      fi
+      if [ -n "$prev" ] && [ "$out" != "$prev" ]; then
+        echo "FAIL issue656_module_order_pair: $(basename "$p") $cmd disagrees with the previous stream"; fail=1; return
+      fi
+      prev="$out"
+    done
+  done
+  echo "ok   issue656_module_order_pair: both module orders, check and build, rc 1 and $want"
+}
+
 # The positive half: a package whose cross-module global references ARE legal must build, link and
 # exit with its own expected value (read from the fixture, not assumed to be 42), through `run` and
 # through the built artifact alike. `want_sym` (optional) is a `.data` label that must be present,
@@ -2514,6 +2558,16 @@ run_pkg_check_build_located module_fn_ambiguous_reject 1 caller
 # prefix and so could not see a type declared in a later-sorted module.
 run_pkg_check_build_located issue557_enum_module_first 4 main "type mismatch"
 run_pkg_check_build_located issue557_enum_module_last 4 main "type mismatch"
+# Issue #656 — the POINTER twin of the pair above, and the spelling that actually matters: #557 fixed
+# the DIRECT annotation, while `resolve_ty`'s `is_ptr` branch went on resolving a `ptr(C)` pointee
+# under the name-resolution prefix. Measured on the parent, this pair is the two-module control from
+# the issue: `..._first` was refused at line 2 and `..._last` BUILT CLEANLY and linked an artifact,
+# from byte-identical source. `src/aarch64.al` is this compiler's only module sorting before
+# `src/ast.al`, and all 63 of its `_ =>` arms were measured invisible to this same check on the
+# parent (each deleted in turn: 63 clean rc=0 compiles). 39 of them are restored here; the other 24
+# are a DIFFERENT, order-independent gap — `match st` over an inferred `st := deref(stmt_p(…))`
+# binding, equally invisible in `src/wat.al`, which sorts after `src/ast.al`.
+run_issue656_module_order_pair
 
 ## Modules §3 + Types §4.1 for a bare TYPE NAME — the TYPE half of the same family, and the one that
 ## still blocked the file split. `lower_layout::struct_decl_of`/`enum_decl_of` took NO naming module at
