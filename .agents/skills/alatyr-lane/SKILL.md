@@ -386,6 +386,17 @@ Three traps that have each cost a cycle:
   in both orders. The compound-assignment lane was green on every new-operator fixture while
   `x &= 58` followed by `x = 1` was rejected, because three source-scan recoveries still listed only
   the four old operators.
+- **`git add` every new fixture BEFORE the authoritative gate.** `scripts/corpus_manifest.sh`,
+  `scripts/fmt_corpus.sh` and `scripts/idiom_gate.sh` enumerate their input with `git ls-files` —
+  the INDEX — while `scripts/e2e.sh`, the three sweeps and the compiler build open paths in the
+  WORKTREE. An unstaged fixture is run by the second group and invisible to the first, and the
+  corpus oracle's row-count identity is computed from the same index enumeration as its rows, so
+  both sides shrink together and nothing inside those stages can notice. The #422 lane's first
+  complete `scripts/full.sh` went GREEN at the parent's `rows=8208` for exactly this reason and had
+  to be re-run from scratch. `scripts/full.sh` now refuses that tree up front — its first stage,
+  `scripts/corpus_enum_check.sh`, names the offending paths and stops before anything is built
+  (issue #645) — so the cost is a second of gate time rather than a wasted run, but the habit is
+  still: stage the fixture, then gate. Committing is not required; staging is.
 
 Cross-backend fixtures must return **< 126**: WASI `proc_exit` rejects anything else and wasmtime's
 host abort is indistinguishable from a failure.
@@ -423,6 +434,12 @@ ulimit -c 0
 nix develop -c bash scripts/full.sh --force-sweeps    # ~6 min; must print GREEN (sweeps RAN)
 git diff --exit-code && git diff --cached --exit-code # the manifest ran --check, not --write
 ```
+
+The gate's first stage is `scripts/corpus_enum_check.sh`, and it refuses in about a second when the
+git index and the worktree do not name the same `.al` corpus — an unstaged new fixture, or a
+tracked one deleted without `git rm`. That refusal is not a stage failure to work around: every
+later stage would be measuring an input set nobody chose. Stage the file (or remove it) and start
+the gate again.
 
 Run the **full** table, not just your fixtures. For an ordinary change, the command must print GREEN;
 a red branch must not reach a pull request. There is one maintainer-controlled exception for an

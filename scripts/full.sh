@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # scripts/full.sh — the AUTHORITATIVE integration gate for a src/ change.
 #
-# fixpoint (byte-for-byte self-reproduction: seed == Stage1 == Stage2) + the full e2e suite + the
+# The INPUT-SET check first (scripts/corpus_enum_check.sh: the git index and the worktree must name
+# the same `.al` corpus, 0.085 s measured, no compiler needed — a fixture that is written but never `git
+# add`ed is invisible to the two oracle stages and visible to e2e and all three sweeps, and no later
+# stage can see that, issue #645). Then fixpoint (byte-for-byte self-reproduction: seed == Stage1 == Stage2) + the full e2e suite + the
 # per-file four-backend CORPUS MANIFEST (scripts/corpus_manifest.sh: every tracked test/*.al on all four
 # backends, ~1.5 min) + the `fmt` ARBITER over both corpora (scripts/fmt_corpus.sh: `run(fmt(x)) == run(x)`
 # and `fmt(fmt(x)) == fmt(x)` over every tracked test/*.al, plus idempotence over the compiler's own
@@ -61,6 +64,14 @@ if [ "${1:-}" = "--self-test" ]; then
   _full_gate_filter_self_test
   _full_gate_filter_self_test_rc=$?
   [ "$_full_gate_filter_self_test_rc" = 0 ] || exit "$_full_gate_filter_self_test_rc"
+  # The INPUT-SET decider's gate-of-the-gate (issue #645). It belongs here, with the gate's other
+  # self-tests, for the reason that issue records: on a healthy tree the enumeration check never
+  # reaches its own failure verdict, so a neutered decider would go on printing a green line for
+  # ever. Eleven planted trees drive the decider directly, and four of them are CONTROLS that must
+  # stay green, so a decider that simply always failed would score zero here rather than full marks.
+  bash "$ROOT/scripts/corpus_enum_check.sh" --self-test
+  _full_corpus_enum_self_test_rc=$?
+  [ "$_full_corpus_enum_self_test_rc" = 0 ] || exit "$_full_corpus_enum_self_test_rc"
   bash "$ROOT/scripts/land.sh" --self-test
   _full_land_self_test_rc=$?
   [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
@@ -82,6 +93,34 @@ fail=0
 # shared path means two lanes silently overwrite each other's evidence (and then read the other's).
 LOGDIR="$ROOT/target"; mkdir -p "$LOGDIR"
 FP_LOG="$LOGDIR/full_fp.log"; E2E_LOG="$LOGDIR/full_e2e.log"; CM_LOG="$LOGDIR/full_corpus_manifest.log"
+
+# The INPUT-SET check, and it runs FIRST on purpose. Every stage below enumerates its input either
+# from the git INDEX (corpus manifest, both fmt walks) or from the WORKTREE (e2e, the three sweeps,
+# the compiler build), and a fixture that is written but never `git add`ed exists for the second
+# group and not for the first. That is not a stage failure anywhere: the corpus oracle's row-count
+# identity (`rows == sources × 4 − excluded`) is computed from the same index enumeration as the
+# rows, so both sides shrink together and the gate goes GREEN describing a corpus it never saw
+# (measured by the #422 lane at rows=8208; issue #645). Nothing after this line can detect it, so
+# the divergence is refused here and the gate STOPS — running six minutes of stages over an input
+# set nobody chose produces evidence that must not be read.
+echo "### CORPUS ENUMERATION (git index vs worktree) ###"
+CE_LOG="$LOGDIR/full_corpus_enum.log"
+bash scripts/corpus_enum_check.sh > "$CE_LOG" 2>&1
+ce_rc=$?
+cat "$CE_LOG"
+ce_cover="$(grep -E "^corpus enum: index=" "$CE_LOG" | tail -1 | sed 's/^corpus enum: //')"
+if [ "$ce_rc" != 0 ]; then
+  echo "*** FULL GATE: REFUSED before any stage ran — the git index and the worktree do not name the"
+  echo "    same .al corpus (see above). The oracle stages and the executing stages would describe"
+  echo "    different trees, and a GREEN verdict from this run would be meaningless. ***"
+  exit 1
+fi
+# A check that printed no counts cannot be told apart from one that enumerated nothing.
+if [ -z "$ce_cover" ]; then
+  echo "*** FULL GATE: REFUSED — scripts/corpus_enum_check.sh printed no 'index=' coverage line, so"
+  echo "    what it compared is unknown. ***"
+  exit 1
+fi
 
 echo "### FIXPOINT ###"
 bash scripts/fixpoint.sh > "$FP_LOG" 2>&1
@@ -183,6 +222,7 @@ if [ "$fail" != 0 ]; then
   echo "*** FULL GATE: FAILURES ***"
 elif [ "$sw_status" = "RAN" ]; then
   echo "*** FULL GATE: GREEN (sweeps RAN) ***"
+  echo "    corpus enum:     $ce_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
@@ -190,6 +230,7 @@ else
   echo "*** FULL GATE: GREEN — but the SWEEPS DID NOT RUN (sweeps STATUS=$sw_status): the aarch64/"
   echo "    riscv64/wasm backends were NOT exercised by the sweeps. Re-run with --force-sweeps before"
   echo "    landing any change that can reach a backend. ***"
+  echo "    corpus enum:     $ce_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
