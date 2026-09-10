@@ -104,9 +104,144 @@ land_message_shape_self_test() {
   echo 'ok   land message-shape self-test: malformed body rejected; formatted literal examples accepted'
 }
 
+# ------------------------------------------------------------------------------------------------
+# THE PR-SHAPE REFUSAL DECIDERS (issue #600).
+#
+# Each of these four is the ONLY thing standing between a malformed PR and a merge, and until this
+# issue not one of them was exercised by anything: `--self-test` drove `message_shape_check` alone,
+# so `land.sh --self-test` and `full.sh --self-test` both reported green with the oracle-mixing and
+# seed-binary refusals turned into notes — measured on the parent. They are factored out here, out
+# of PHASE 2's inline `if`s, for the same reason `fmt_classify` was in #599: a decision a self-test
+# cannot call is a decision nothing can plant against.
+#
+# Each returns 0 to allow and 1 to refuse, prints its own REFUSE line, and reads only its
+# arguments — no repository state — so the self-test drives the REAL decision without a merge, a
+# network call, or a git object.
+ORACLE_PATH_RE='^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline)$'
+
+## A feature PR and an oracle regeneration are separate review objects.
+pr_oracle_mix_check() { # changed-paths
+  local oracle non_oracle
+  oracle="$(printf '%s\n' "$1" | grep -E "$ORACLE_PATH_RE" || true)"
+  non_oracle="$(printf '%s\n' "$1" | grep -Ev "$ORACLE_PATH_RE" | grep -v '^$' || true)"
+  [ -n "$oracle" ] && [ -n "$non_oracle" ] || return 0
+  echo "  REFUSE: this PR mixes an oracle path with non-oracle paths. The feature PR must be oracle-free;"
+  echo "          the maintainer regenerates each affected oracle after the local merge in its own commit."
+  return 1
+}
+
+## A reseed is the maintainer's act and its three-stage evidence is not a property of a diff.
+pr_seed_binary_check() { # changed-paths
+  printf '%s\n' "$1" | grep -qx 'seed/alatyr' || return 0
+  echo "  REFUSE: the PR contains seed/alatyr. A reseed is the maintainer's act and its three-stage"
+  echo "          evidence is not a property of a diff — GitHub renders it as 'Binary file not shown'."
+  return 1
+}
+
+## `seed/VERSION` is append-only: never rewrite entries to make old hashes resolve.
+pr_seed_version_append_only_check() { # changed-paths deleted-line-count
+  printf '%s\n' "$1" | grep -qx 'seed/VERSION' || return 0
+  case "${2:-0}" in ''|0) return 0 ;; esac
+  echo "  REFUSE: seed/VERSION is append-only and this PR deletes ${2} line(s) from it."
+  return 1
+}
+
+## A regenerated oracle owns a commit that touches nothing else.
+pr_oracle_commit_isolation_check() { # oracle-path commit other-file-count
+  case "${3:-0}" in ''|0) return 0 ;; esac
+  echo "  REFUSE: commit $2 changes $1 AND $3 other file(s)."
+  echo "          A regenerated oracle owns a commit that touches nothing else, or the review is"
+  echo "          reading a diff \`.gitattributes\` has told GitHub not to render."
+  return 1
+}
+
+# ------------------------------------------------------------------------------------------------
+# THE GATE OF THE GATE. Counted, recorded in files, and run in a SUBSHELL: an unbound variable or
+# an arithmetic error inside a driven function unwinds to top level and ENDS THE SCRIPT, so the
+# diagnostic written for that case can never print. The marker check below is what notices.
+LAND_SELFTEST_EXPECTED=22
+land_shape_self_test() { # work-dir
+  local st="$1" bad="" k=0 out
+  rm -rf "$st"; mkdir -p "$st" || return 1
+  _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
+
+  # The pre-existing message-shape self-test, kept exactly as it was and counted as the one
+  # verdict it reports. It is deliberately NOT inflated to the three directions it asserts
+  # internally: the printed count is proof of work, and a count that credits checks this
+  # function did not itself make is the sort of decoration this issue exists to remove.
+  land_message_shape_self_test; _ck $? message-shape-self-test
+
+  # ---- 1 · the oracle-mixing refusal, both directions and every oracle. --------------------
+  local oracle
+  for oracle in scripts/corpus.manifest scripts/idiom.baseline scripts/needle.baseline; do
+    out="$(pr_oracle_mix_check "$(printf '%s\n%s' "$oracle" src/lower.al)" 2>&1)"
+    [ $? = 1 ]; _ck $? "oracle-mix-allowed-$oracle-beside-a-source-file"
+    case "$out" in *'mixes an oracle path with non-oracle paths'*) _ck 0 x ;;
+                   *) _ck 1 "oracle-mix-did-not-say-why($oracle)" ;; esac
+    pr_oracle_mix_check "$oracle" >/dev/null 2>&1
+    _ck $? "oracle-mix-refused-an-oracle-ONLY-PR($oracle)"
+  done
+  # …and the eraser control: a PR touching no oracle at all must pass. A predicate that refused
+  # everything would satisfy every check above and block every landing.
+  pr_oracle_mix_check "$(printf '%s\n%s' src/lower.al test/x.al)" >/dev/null 2>&1
+  _ck $? oracle-mix-refused-an-ordinary-PR
+  # A path that merely LOOKS like an oracle is not one; the anchors in the pattern are load-bearing.
+  pr_oracle_mix_check "$(printf '%s\n%s' scripts/corpus.manifest.bak src/lower.al)" >/dev/null 2>&1
+  _ck $? oracle-mix-treated-a-lookalike-path-as-an-oracle
+
+  # ---- 2 · the seed binary. ----------------------------------------------------------------
+  out="$(pr_seed_binary_check "$(printf '%s\n%s' src/lower.al seed/alatyr)" 2>&1)"
+  [ $? = 1 ]; _ck $? seed-binary-allowed-a-PR-carrying-seed/alatyr
+  case "$out" in *'A reseed is the maintainer'*) _ck 0 x ;; *) _ck 1 seed-binary-did-not-say-why ;; esac
+  pr_seed_binary_check "$(printf '%s\n%s' seed/VERSION src/lower.al)" >/dev/null 2>&1
+  _ck $? seed-binary-refused-a-PR-that-does-not-carry-the-binary
+
+  # ---- 3 · seed/VERSION is append-only, and only when it is in the PR at all. --------------
+  out="$(pr_seed_version_append_only_check seed/VERSION 4 2>&1)"
+  [ $? = 1 ]; _ck $? append-only-allowed-a-deletion-from-seed/VERSION
+  case "$out" in *'deletes 4 line(s)'*) _ck 0 x ;; *) _ck 1 append-only-did-not-name-the-deletion-count ;; esac
+  pr_seed_version_append_only_check seed/VERSION 0 >/dev/null 2>&1
+  _ck $? append-only-refused-a-pure-append
+  pr_seed_version_append_only_check src/lower.al 4 >/dev/null 2>&1
+  _ck $? append-only-fired-on-a-PR-that-does-not-touch-seed/VERSION
+
+  # ---- 4 · an oracle commit touches that oracle alone. -------------------------------------
+  out="$(pr_oracle_commit_isolation_check scripts/corpus.manifest deadbeef 2 2>&1)"
+  [ $? = 1 ]; _ck $? oracle-commit-allowed-a-commit-carrying-two-other-files
+  case "$out" in *deadbeef*'AND 2 other file(s)'*) _ck 0 x ;;
+                 *) _ck 1 oracle-commit-did-not-name-the-commit-and-the-count ;; esac
+  pr_oracle_commit_isolation_check scripts/corpus.manifest deadbeef 0 >/dev/null 2>&1
+  _ck $? oracle-commit-refused-a-one-file-oracle-commit
+
+  printf '%s' "$bad" > "$st/bad"; printf '%s' "$k" > "$st/checks"; : > "$st/complete"
+  if [ -n "$bad" ]; then echo "*** land self-test: FAILED —$bad ***" >&2; return 1; fi
+  if [ "$k" -lt "$LAND_SELFTEST_EXPECTED" ]; then
+    echo "*** land self-test: ran $k checks, expected at least $LAND_SELFTEST_EXPECTED — a self-test" >&2
+    echo "    that reports fewer checks than it owes is a failure, not a shortcut to green ***" >&2
+    return 1
+  fi
+  echo "ok   land PR-shape self-test: $k checks — the oracle-mixing, seed-binary, seed/VERSION"
+  echo "     append-only and one-file-oracle-commit refusals, each in both directions"
+  return 0
+}
+
 if [ "${1:-}" = '--self-test' ]; then
-  land_message_shape_self_test
-  exit $?
+  LAND_ST="$(mktemp -d)"
+  ( land_shape_self_test "$LAND_ST" ); LAND_ST_RC=$?
+  if [ ! -f "$LAND_ST/complete" ]; then
+    echo "land self-test: did NOT run to completion (rc=$LAND_ST_RC) — it recorded no verdict, so" >&2
+    echo "     this run proves nothing about the PR-shape refusals" >&2
+    rm -rf "$LAND_ST"; exit 1
+  fi
+  if [ -s "$LAND_ST/bad" ]; then
+    echo "land self-test: recorded failures — $(cat "$LAND_ST/bad")" >&2; rm -rf "$LAND_ST"; exit 1
+  fi
+  if [ "$(cat "$LAND_ST/checks")" -lt "$LAND_SELFTEST_EXPECTED" ]; then
+    echo "land self-test: recorded $(cat "$LAND_ST/checks") checks, expected at least $LAND_SELFTEST_EXPECTED" >&2
+    rm -rf "$LAND_ST"; exit 1
+  fi
+  rm -rf "$LAND_ST"
+  exit "$LAND_ST_RC"
 fi
 
 PR="${1:-}"
@@ -180,36 +315,19 @@ done
 # isolation is not enough: a PR can otherwise hide a feature change beside an oracle-only commit, and
 # the resulting combined review would violate the worker/maintainer boundary even when both commits
 # are individually one-file-shaped.
-ORACLE_CHANGED="$(printf '%s\n' "$CHANGED" | grep -E '^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline)$' || true)"
-NON_ORACLE_CHANGED="$(printf '%s\n' "$CHANGED" | grep -Ev '^(scripts/corpus\.manifest|scripts/idiom\.baseline|scripts/needle\.baseline)$' | grep -v '^$' || true)"
-if [ -n "$ORACLE_CHANGED" ] && [ -n "$NON_ORACLE_CHANGED" ]; then
-  echo "  REFUSE: this PR mixes an oracle path with non-oracle paths. The feature PR must be oracle-free;"
-  echo "          the maintainer regenerates each affected oracle after the local merge in its own commit."
-  shape_fail=1
-fi
-if printf '%s\n' "$CHANGED" | grep -qx 'seed/alatyr'; then
-  echo "  REFUSE: the PR contains seed/alatyr. A reseed is the maintainer's act and its three-stage"
-  echo "          evidence is not a property of a diff — GitHub renders it as 'Binary file not shown'."
-  shape_fail=1
-fi
-if printf '%s\n' "$CHANGED" | grep -qx 'seed/VERSION'; then
+pr_oracle_mix_check "$CHANGED" || shape_fail=1
+pr_seed_binary_check "$CHANGED" || shape_fail=1
+dels=0
+printf '%s\n' "$CHANGED" | grep -qx 'seed/VERSION' &&
   dels="$(git diff --numstat "$BASE...$HEAD_SHA" -- seed/VERSION | awk '{print $2}')"
-  if [ "${dels:-0}" != 0 ]; then
-    echo "  REFUSE: seed/VERSION is append-only and this PR deletes $dels line(s) from it."
-    shape_fail=1
-  fi
-fi
+pr_seed_version_append_only_check "$CHANGED" "${dels:-0}" || shape_fail=1
 for oracle in scripts/corpus.manifest scripts/idiom.baseline scripts/needle.baseline; do
   printf '%s\n' "$CHANGED" | grep -qx "$oracle" || continue
   # An oracle regeneration owns its own commit. Squash/rebase merging is disabled at the repo level
   # for exactly this reason; here we check the commits that actually exist.
   for c in $(git rev-list "$BASE..$HEAD_SHA" -- "$oracle"); do
     others="$(git show --name-only --format= "$c" | grep -v "^$oracle$" | grep -c '' || true)"
-    [ "$others" = 0 ] && continue
-    echo "  REFUSE: commit $(git rev-parse --short "$c") changes $oracle AND $others other file(s)."
-    echo "          A regenerated oracle owns a commit that touches nothing else, or the review is"
-    echo "          reading a diff \`.gitattributes\` has told GitHub not to render."
-    shape_fail=1
+    pr_oracle_commit_isolation_check "$oracle" "$(git rev-parse --short "$c")" "$others" || shape_fail=1
   done
 done
 # A path with history is a resurrection: a lane once overwrote a stronger existing fixture that way.
