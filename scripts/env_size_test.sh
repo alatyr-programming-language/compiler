@@ -52,6 +52,113 @@ flunk() { checks=$((checks + 1)); fail=1; echo "FAIL $*"; }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+## The final verdict, factored out under its own name so a self-test can drive the REAL decision.
+## It is the SECOND decider in this file: `flunk` decides that one observation is a failure, and
+## this decides that the run as a whole is one — including the coverage half, where a check that
+## silently stopped being REACHED turns the suite red instead of quietly shrinking it.
+env_size_verdict() { # checks-run failures-seen expected
+  local _c="$1" _rc="$2" _e="$3"
+  if [ "$_c" != "$_e" ]; then
+    _rc=1
+    echo "FAIL env_size: $_c assertions ran, expected $_e — a check was not reached"
+  fi
+  if [ "$_rc" = "0" ]; then
+    echo "ok   env_size: all checks passed ($_c assertions)"
+  else
+    echo "FAIL env_size ($_c assertions ran)"
+  fi
+  return "$_rc"
+}
+
+# ==========================================================================================
+# THE GATE OF THE GATE (issue #600) — this file's own verdict machinery, planted against.
+#
+# `flunk` is the ONLY function here that turns an observation into a failure, and `env_size_verdict`
+# is the only one that turns the run into one. Neither had a self-test, which is the shape #584
+# found in `_e2e_runtime_failure`, #585 in `sweep_check_total` and #599 in `allowed`/`mod_allowed`.
+# Measured on the parent, with one assertion planted to fail: turning `flunk` into a note left the
+# stage printing `ok   env_size: all checks passed (11 assertions)` and exiting 0 — every failure
+# this suite can find routed into a footnote, and `ext_test env_size_test` green with it.
+#
+# Costs ~0: no compiler, no child, no build. It drives the real functions with synthetic verdicts,
+# in a SUBSHELL, and records what it found in files — a bash arithmetic error or a `set -u` unbound
+# variable inside a driven function unwinds to top level and ENDS THE SCRIPT, so a diagnostic
+# written for that case can never print. The completion marker below is what notices instead.
+ENV_SIZE_SELFTEST_EXPECTED=14
+env_size_selftest() {
+  local st="$WORK/selftest" bad="" k=0 out
+  rm -rf "$st"; mkdir -p "$st"
+  _ck() { k=$((k+1)); [ "$1" = 0 ] || bad="$bad $2"; }
+
+  # ---- 1 · `pass` and `flunk`: the per-observation decider, both directions. ----------------
+  # Both must COUNT, only one may fail, and each must say so in the line the caller reads (this
+  # script's lines are replayed verbatim by `ext_test env_size_test` and counted into e2e's
+  # `assertions=`, so the wording is an interface, not decoration).
+  fail=0; checks=0
+  pass "selftest probe" > "$st/pass.out" 2>&1
+  [ "$fail" = 0 ];   _ck $? pass-recorded-a-failure
+  [ "$checks" = 1 ]; _ck $? "pass-did-not-count-its-verdict(checks=$checks)"
+  grep -qx 'ok   selftest probe' "$st/pass.out"; _ck $? pass-did-not-print-its-ok-line
+
+  fail=0; checks=0
+  flunk "selftest probe" > "$st/flunk.out" 2>&1
+  [ "$fail" = 1 ];   _ck $? flunk-did-not-record-the-failure
+  [ "$checks" = 1 ]; _ck $? "flunk-did-not-count-its-verdict(checks=$checks)"
+  grep -qx 'FAIL selftest probe' "$st/flunk.out"; _ck $? flunk-did-not-print-its-FAIL-line
+  grep -q '^ok' "$st/flunk.out"; [ $? = 1 ]; _ck $? flunk-called-a-failure-ok
+
+  # ---- 2 · `env_size_verdict`: the run-level decider, all four directions. ------------------
+  # 2a a complete, clean run is green and says how much it covered.
+  out="$(env_size_verdict 11 0 11 2>&1)"; _ck $? verdict-failed-a-clean-complete-run
+  case "$out" in *'all checks passed (11 assertions)'*) _ck 0 x ;;
+                 *) _ck 1 "verdict-did-not-report-its-coverage($out)" ;; esac
+  # 2b a complete run holding a failure is red, and does NOT claim everything passed.
+  out="$(env_size_verdict 11 1 11 2>&1)"; [ $? = 1 ]; _ck $? verdict-passed-a-run-with-a-failure
+  case "$out" in *'all checks passed'*) _ck 1 verdict-claimed-a-failed-run-passed ;;
+                 *) _ck 0 x ;; esac
+  # 2c a run that lost a check is red even though nothing said FAIL — the coverage half, and the
+  #    one failure mode a green-only script cannot report about itself.
+  out="$(env_size_verdict 10 0 11 2>&1)"; [ $? = 1 ]; _ck $? verdict-passed-a-run-that-lost-a-check
+  case "$out" in *'10 assertions ran, expected 11'*) _ck 0 x ;;
+                 *) _ck 1 "verdict-did-not-name-the-missing-coverage($out)" ;; esac
+  # 2d …and one that ran MORE than it owes is red too: the count is an identity, not a floor.
+  out="$(env_size_verdict 12 0 11 2>&1)"; [ $? = 1 ]; _ck $? verdict-passed-a-run-with-an-unexpected-extra-check
+
+  printf '%s' "$bad" > "$st/bad"
+  printf '%s' "$k"   > "$st/checks"
+  : > "$st/complete"
+  if [ -n "$bad" ]; then
+    echo "*** env_size selftest: FAILED —$bad ***"
+    return 1
+  fi
+  if [ "$k" -lt "$ENV_SIZE_SELFTEST_EXPECTED" ]; then
+    echo "*** env_size selftest: ran $k checks, expected at least $ENV_SIZE_SELFTEST_EXPECTED — a"
+    echo "    self-test that reports fewer checks than it owes is a failure, not a shortcut ***"
+    return 1
+  fi
+  echo "ok   env_size selftest: $k checks — pass/flunk in both directions, and the run-level"
+  echo "     verdict on a clean run, a failed run, a run that lost a check and one that gained one"
+  return 0
+}
+## In a SUBSHELL, and the verdict is read from what it RECORDED, so neither an unwind to top level
+## nor a defect in its own reporting branch can turn a failed self-test into a green line.
+( env_size_selftest ); ENV_SIZE_SELFTEST_RC=$?
+if [ ! -f "$WORK/selftest/complete" ]; then
+  echo "FAIL env_size selftest: did NOT run to completion (rc=$ENV_SIZE_SELFTEST_RC) — it recorded no"
+  echo "     verdict, so this run proves nothing about pass/flunk or the run-level verdict"
+  exit 1
+fi
+if [ -s "$WORK/selftest/bad" ]; then
+  echo "FAIL env_size selftest: recorded failures — $(cat "$WORK/selftest/bad")"
+  exit 1
+fi
+if [ "$(cat "$WORK/selftest/checks")" -lt "$ENV_SIZE_SELFTEST_EXPECTED" ]; then
+  echo "FAIL env_size selftest: recorded $(cat "$WORK/selftest/checks") checks, expected at least"
+  echo "     $ENV_SIZE_SELFTEST_EXPECTED"
+  exit 1
+fi
+[ "$ENV_SIZE_SELFTEST_RC" = 0 ] || exit 1
+
 # A tiny package, so each repetition costs a fraction of a second instead of a whole self-build.
 mkdir -p "$WORK/pkg/src"
 cat > "$WORK/pkg/src/main.al" <<'AL'
@@ -245,14 +352,7 @@ check_spawn_vs_rejection
 check_repeated_self_build
 
 ## The count is the coverage claim: green means all $EXPECT_ASSERTIONS verdicts were REACHED, not
-## merely that none of the ones that ran said FAIL.
-if [ "$checks" != "$EXPECT_ASSERTIONS" ]; then
-  fail=1
-  echo "FAIL env_size: $checks assertions ran, expected $EXPECT_ASSERTIONS — a check was not reached"
-fi
-if [ "$fail" = "0" ]; then
-  echo "ok   env_size: all checks passed ($checks assertions)"
-else
-  echo "FAIL env_size ($checks assertions ran)"
-fi
-exit "$fail"
+## merely that none of the ones that ran said FAIL. Both halves live in `env_size_verdict`, which
+## the self-test above drives in all four directions.
+env_size_verdict "$checks" "$fail" "$EXPECT_ASSERTIONS"
+exit $?

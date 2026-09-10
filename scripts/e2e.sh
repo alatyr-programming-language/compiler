@@ -4656,6 +4656,39 @@ check_ra_imm64_widen() {
 # their own right and belong in this log. The old blocks discarded nothing on success but collapsed a
 # failure to the single word `FAIL <name>`, which is how "FAIL env_size_test" became the entire public
 # record of a failure whose cause was several lines further down.
+## THE EXTERNAL-SCRIPT VERDICT (issue #600). An `ext_test` row hands its whole verdict to another
+## script, so that script's own decider — `flunk` in `scripts/env_size_test.sh`, 151 inline
+## `fail=1` sites and one `exit "$fail"` in `scripts/package_cli_test.sh` — is the only thing
+## between a failure and a green row. Measured on the parent: with `package_cli_test.sh`'s single
+## `exit "$fail"` turned into `exit 0`, `ext_test` read the status alone and e2e printed
+## `*** e2e: all green ***` with the line `FAIL noarg_help: …` sitting in its own output, replayed
+## by this very function and counted into `assertions=`.
+##
+## So the status is no longer the only reading: a script whose OUTPUT accuses something while its
+## STATUS says fine is a disagreement, and a disagreement is a failure. That is cheap here and
+## covers every external script at once, including the ones whose deciders this issue does not
+## reach. Returns 0 only when both readings agree that the row passed.
+_ext_verdict() { # name, status, log
+  local _ev_name="$1" _ev_rc="$2" _ev_log="$3" _ev_n
+  if [ "$_ev_rc" != 0 ]; then
+    echo "FAIL $_ev_name(ext): exit $_ev_rc"
+    return 1
+  fi
+  _ev_n="$(grep -c '^FAIL ' "$_ev_log" 2>/dev/null || true)"
+  case "${_ev_n:-0}" in
+    ''|0) ;;
+    *)
+      echo "FAIL $_ev_name(ext): exit 0, but its own output holds ${_ev_n} FAIL line(s) — the script's"
+      echo "     verdict and its exit status disagree. A status is all this row can otherwise read,"
+      echo "     so an external script that stops turning its own findings into a non-zero exit"
+      echo "     would be invisible here (issue #600)."
+      return 1
+      ;;
+  esac
+  echo "ok   $_ev_name(ext): exit 0"
+  return 0
+}
+
 ext_test() { # name
   script="$ROOT/scripts/$1.sh"
   [ -f "$script" ] || { echo "MISS $1(ext): no $script"; fail=1; return; }
@@ -4663,7 +4696,7 @@ ext_test() { # name
   ALATYR="$CC" bash "$script" > "$log" 2>&1 < /dev/null
   got=$?
   cat "$log"
-  if [ "$got" = 0 ]; then echo "ok   $1(ext): exit 0"; else echo "FAIL $1(ext): exit $got"; fail=1; fi
+  _ext_verdict "$1" "$got" "$log" || fail=1
 }
 
 ## Issue #297 / Comptime §§8.2–9.1 + Tooling §5 — the lower's unsupported comptime-if fold must
@@ -10177,6 +10210,102 @@ _e2e_selftest() {
     fi
     unset -f _e2e_clone_probe
   fi
+  # 14. THE COMPLETENESS DECIDER, in every direction it has (issue #600). `_e2e_completeness_check`
+  #     and `_e2e_report`'s lost-row branch are the only three lines that make `rows=`/`executed=`
+  #     mean anything, and nothing drove them: measured, dropping one row from `_e2e_dispatch` and
+  #     turning both into notes left the suite printing `*** e2e: all green ***` with
+  #     `executed=0 lost=1 assertions=0` — a run that executed NOTHING, reported green.
+  #     Everything this function is defined after is reachable from here: the self-test is CALLED
+  #     below `_e2e_report`'s definition, not at the point of its own.
+  local comp_out comp_rc
+  comp_out="$(_e2e_completeness_check 5 5 0 5 '' 2>&1)"; comp_rc=$?
+  if [ "$comp_rc" = 0 ] && [ -z "$comp_out" ]; then
+    echo "ok   e2e_selftest(complete_run): a run that covered its table is not an accusation"
+  else
+    echo "FAIL e2e_selftest(complete_run): rc=$comp_rc out=[$comp_out]"; bad=1
+  fi
+  comp_out="$(_e2e_completeness_check 4 5 1 5 '' 2>&1)"; comp_rc=$?
+  case "$comp_rc:$comp_out" in
+    1:*'executed 4 of 5 rows'*'1 were lost'*)
+      echo "ok   e2e_selftest(lost_row_counts): a row the runner lost is a failure, named and counted" ;;
+    *) echo "FAIL e2e_selftest(lost_row_counts): rc=$comp_rc out=[$comp_out]"; bad=1 ;;
+  esac
+  comp_out="$(_e2e_completeness_check 5 5 0 9 '' 2>&1)"; comp_rc=$?
+  case "$comp_rc:$comp_out" in
+    1:*'recorded 9 rows but only 5 were selected'*)
+      echo "ok   e2e_selftest(unselected_rows): an unfiltered run that lost table rows is a failure" ;;
+    *) echo "FAIL e2e_selftest(unselected_rows): rc=$comp_rc out=[$comp_out]"; bad=1 ;;
+  esac
+  #     …and the eraser control: a FILTERED run legitimately selects fewer rows, and a decider that
+  #     refused every short selection would make `scripts/e2e_fast.sh` permanently red.
+  _e2e_completeness_check 5 5 0 9 'some-filter' >/dev/null 2>&1
+  if [ $? = 0 ]; then
+    echo "ok   e2e_selftest(filtered_selection): a filtered run may select fewer rows than recorded"
+  else
+    echo "FAIL e2e_selftest(filtered_selection): a filtered run was called incomplete"; bad=1
+  fi
+  #     A run can be short in BOTH ways at once, and neither line may swallow the other.
+  comp_out="$(_e2e_completeness_check 4 5 1 9 '' 2>&1)"
+  if [ "$(printf '%s\n' "$comp_out" | grep -c '^FAIL:')" = 2 ]; then
+    echo "ok   e2e_selftest(both_shortfalls): the two completeness failures are reported separately"
+  else
+    echo "FAIL e2e_selftest(both_shortfalls): out=[$comp_out]"; bad=1
+  fi
+  # 15. …and the REAL reporter's lost-row branch, which is the one that notices in the first place.
+  #     Driven over row 1 of the real table with its result files removed — exactly the state
+  #     `_row_exec` leaves when it never ran. `COSTFILE` is redirected so the schedule the next run
+  #     reads is untouched.
+  local keep_n="$E2E_N" keep_cost="$COSTFILE"
+  COSTFILE="$d/selftest_cost.tsv"
+  E2E_N=1
+  rm -f "$WORK/rc/1" "$WORK/out/1"
+  fail=0
+  _e2e_report > "$d/report_lost.out" 2>&1
+  if [ "$fail" = 1 ] && [ "$E2E_LOST" = 1 ] && [ "$E2E_EXECUTED" = 0 ] &&
+     grep -q 'the runner produced no result for this row' "$d/report_lost.out"; then
+    echo "ok   e2e_selftest(report_lost_row): a row with no result is a located FAIL, not a smaller run"
+  else
+    echo "FAIL e2e_selftest(report_lost_row): fail=$fail lost=$E2E_LOST executed=$E2E_EXECUTED"
+    sed 's/^/     | /' "$d/report_lost.out"
+    bad=1
+  fi
+  #     The eraser control for it: a row that DID produce a result is not a lost row.
+  printf '0 5\n' > "$WORK/rc/1"; : > "$WORK/out/1"
+  fail=0
+  _e2e_report > "$d/report_ok.out" 2>&1
+  if [ "$fail" = 0 ] && [ "$E2E_LOST" = 0 ] && [ "$E2E_EXECUTED" = 1 ]; then
+    echo "ok   e2e_selftest(report_present_row): a row that produced a result is counted as executed"
+  else
+    echo "FAIL e2e_selftest(report_present_row): fail=$fail lost=$E2E_LOST executed=$E2E_EXECUTED"; bad=1
+  fi
+  rm -f "$WORK/rc/1" "$WORK/out/1" "$d/selftest_cost.tsv" "$d/selftest_cost.tsv.new"
+  E2E_N="$keep_n"; COSTFILE="$keep_cost"
+  E2E_EXECUTED=0; E2E_LOST=0; E2E_FAILED=0
+  # 16. THE EXTERNAL-SCRIPT VERDICT. An `ext_test` row's whole verdict is another script's exit
+  #     status, so a script that stops turning its own findings into a non-zero exit is invisible.
+  #     Measured on the parent with `package_cli_test.sh`'s `exit "$fail"` neutered: the suite said
+  #     `*** e2e: all green ***` with `FAIL noarg_help: …` in its own replayed output.
+  printf 'ok   probe: fine\n' > "$d/ext_clean.log"
+  printf 'ok   probe: fine\nFAIL probe: it is not fine\n' > "$d/ext_accusing.log"
+  local ext_out ext_rc
+  _ext_verdict extprobe 0 "$d/ext_clean.log" > "$d/ext1.out" 2>&1; ext_rc=$?
+  if [ "$ext_rc" = 0 ] && grep -qx 'ok   extprobe(ext): exit 0' "$d/ext1.out"; then
+    echo "ok   e2e_selftest(ext_clean): a clean external script is one ok row"
+  else
+    echo "FAIL e2e_selftest(ext_clean): rc=$ext_rc out=[$(cat "$d/ext1.out")]"; bad=1
+  fi
+  _ext_verdict extprobe 3 "$d/ext_clean.log" > "$d/ext2.out" 2>&1; ext_rc=$?
+  if [ "$ext_rc" = 1 ] && grep -q 'exit 3' "$d/ext2.out"; then
+    echo "ok   e2e_selftest(ext_status): a non-zero external status is a failure"
+  else
+    echo "FAIL e2e_selftest(ext_status): rc=$ext_rc out=[$(cat "$d/ext2.out")]"; bad=1
+  fi
+  ext_out="$(_ext_verdict extprobe 0 "$d/ext_accusing.log" 2>&1)"; ext_rc=$?
+  case "$ext_rc:$ext_out" in
+    1:*'holds 1 FAIL line(s)'*)
+      echo "ok   e2e_selftest(ext_disagreement): exit 0 with a FAIL line in its own output is a failure" ;;
+    *) echo "FAIL e2e_selftest(ext_disagreement): rc=$ext_rc out=[$ext_out]"; bad=1 ;;
+  esac
   unset -f _st
   E2E_TEST="$keep_test"
   E2E_PHASE=dispatch
@@ -10257,6 +10386,32 @@ _e2e_report() {
   E2E_EXECUTED="$executed"; E2E_LOST="$lost"; E2E_FAILED="$failed"
 }
 
+## THE COMPLETENESS DECIDER (issue #600) — the only thing that says a run which did not execute
+## its own table is a FAILURE rather than a smaller run. Both halves live here, and together with
+## `_e2e_report`'s lost-row branch they are the three lines that make `rows=`/`executed=` mean
+## anything: measured on the parent, dropping one row from `_e2e_dispatch` and turning both of
+## these into notes left the suite printing `*** e2e: all green ***` with
+## `executed=0 lost=1 assertions=0`. Nothing else in this file compares what ran with what was
+## recorded — there is no floor on `assertions=` — so a run that executed NOTHING was green.
+##
+## Factored out under its own name so `_e2e_selftest` can drive the real decision, in the shape
+## #584 (`_e2e_runtime_failure`), #585 (`sweep_check_total`) and #599 (`allowed`) established.
+## Returns 0 only when the run covered its table.
+_e2e_completeness_check() { # executed, selected, lost, recorded, filter
+  local _cc_ex="$1" _cc_n="$2" _cc_lost="$3" _cc_rec="$4" _cc_filter="$5" _cc_bad=0
+  if [ "$_cc_ex" != "$_cc_n" ]; then
+    echo "FAIL: executed $_cc_ex of $_cc_n rows — $_cc_lost were lost by the runner, not by a test"
+    _cc_bad=1
+  fi
+  # Unfiltered, every row the table recorded must have been selected. `recorded` is printed either
+  # way, so a filtered run cannot be mistaken for full coverage by reading the counts.
+  if [ -z "$_cc_filter" ] && [ "$_cc_n" != "$_cc_rec" ]; then
+    echo "FAIL: the table recorded $_cc_rec rows but only $_cc_n were selected, with no filter set"
+    _cc_bad=1
+  fi
+  return "$_cc_bad"
+}
+
 if [ -n "$FILTER" ]; then
   echo "=== e2e: FILTERED run (ALATYR_E2E_FILTER='$FILTER') — this is NOT the gate ==="
 fi
@@ -10292,16 +10447,7 @@ _e2e_report
 E2E_ASSERTIONS=$(grep -chE '^(ok|FAIL|MISS|skip) ' "$WORK"/out/* 2>/dev/null | awk '{s += $1} END {print s + 0}')
 E2E_SKIPPED=$(grep -ch '^skip ' "$WORK"/out/* 2>/dev/null | awk '{s += $1} END {print s + 0}')
 E2E_MISSING=$(grep -ch '^MISS ' "$WORK"/out/* 2>/dev/null | awk '{s += $1} END {print s + 0}')
-if [ "$E2E_EXECUTED" != "$E2E_N" ]; then
-  echo "FAIL: executed $E2E_EXECUTED of $E2E_N rows — $E2E_LOST were lost by the runner, not by a test"
-  fail=1
-fi
-# Unfiltered, every row the table recorded must have been selected. `recorded` is printed either way, so
-# a filtered run cannot be mistaken for full coverage by reading the counts.
-if [ -z "$FILTER" ] && [ "$E2E_N" != "$E2E_RECORDED" ]; then
-  echo "FAIL: the table recorded $E2E_RECORDED rows but only $E2E_N were selected, with no filter set"
-  fail=1
-fi
+_e2e_completeness_check "$E2E_EXECUTED" "$E2E_N" "$E2E_LOST" "$E2E_RECORDED" "$FILTER" || fail=1
 # Ceiling breaches that were RE-OBSERVED instead of reported (issue #537). Zero is the normal number.
 # Anything else is the only evidence a run leaves that it was contending with something for the machine,
 # so it goes on the console and into the summary line rather than into a log nobody opens.
