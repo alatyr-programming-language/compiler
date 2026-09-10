@@ -130,6 +130,15 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   ending in an indexed write and records the ordinary `IndexAssign` every backend already lowers.
   The single-owner `v.field[i] =` form keeps its existing path unchanged. Stores through an
   immutable owner are now refused with a located diagnostic.
+- **A narrow signed `MIN / -1` now traps instead of answering an unrepresentable value.**
+  `MIN / -1` is a member of the checked-overflow set at every signed width, but each backend's
+  guard compared the dividend against the 64-bit `INT64_MIN` alone — a bound a narrow dividend can
+  never reach. `(-128 : i8) / (-1 : i8)` therefore produced 128, a value outside `i8` living in an
+  `i8` binding, identically on x86_64, aarch64, riscv64 and wasm. The guard now materializes the
+  operand's own minimum (-128 / -32768 / -2147483648) and takes the family's direct inline trap.
+  Native-width division emits exactly the bytes it did before, `%` is untouched (`MIN % -1` is 0 and
+  representable), and `unchecked` keeps its target-specific hardware behaviour. Unary `-` on a
+  minimum value still wraps silently at every width and is tracked separately.
 - **Pointers inferred from a local address now retain the local's declared struct identity.**
   The bootstrap type carrier could erase both the `ptr` tag and its pointee name for
   `p := ptr(mut value)`, so a later `deref(p).inner.f = "text"` bypassed the leaf's

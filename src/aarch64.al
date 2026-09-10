@@ -37,7 +37,7 @@ stmt_p := ast::stmt_p
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
-(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, bitcast_target_is_pointer, deref_bitcast_pointee_bytes, deref_bitcast_pointee_signed) := lower_layout
+(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, bitcast_target_is_pointer, deref_bitcast_pointee_bytes, deref_bitcast_pointee_signed) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
 cmp_operand_bitcast_kind := lower_layout::cmp_operand_bitcast_kind
 (const_denoted_value, const_denote_ns, const_denote_nl) := lower_layout
@@ -3665,7 +3665,7 @@ a64_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head 
   r
 }
 
-emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, in out sb : rt::StrBuf) {
+emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out sb : rt::StrBuf) {
   ## CHECKED div-by-zero (I11 / CG-7): `sdiv`/`msub`-remainder by 0 on AArch64 returns 0 (NO hardware
   ## trap, unlike x86_64 `idivq` #DE), a silent wrong result. Trap (`brk`) when the divisor x1 is 0.
   ## Dropped under `unchecked` (A64_CHK false). The `1f`/`1:` pair is self-contained (x1 already holds
@@ -3678,7 +3678,22 @@ emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, in out sb : rt::Str
       ## so the guard is the only thing that stops a wrong value. `cmn x1, #1` sets Z iff x1 == -1;
       ## `negs x2, x0` (= `subs x2, xzr, x0`) sets V iff x0 == INT64_MIN. Same `brk #0` as every other
       ## guard in the family. x2 is dead scratch here (the `%` path overwrites it with the quotient).
-      if dsigned { push_str(sb, "  cmn x1, #1\n  b.ne 1f\n  negs x2, x0\n  b.vc 1f\n  brk #0\n1:\n") }
+      ##
+      ## `dvmin` carries the operand's own minimum for a SIGNED NARROW divide and 0 otherwise (#606,
+      ## `lower_layout::narrow_signed_min`). The V-flag trick reads INT64_MIN only, so a narrow
+      ## dividend never matched it and `(-128 : i8) / (-1 : i8)` yielded 128 — outside `i8`. For a
+      ## narrow width the bound is materialized instead and compared with `cmn x0, x2`, which sets Z
+      ## iff x0 == -x2; all three magnitudes (128, 32768, 2147483648) are single `mov` wide
+      ## immediates (`imm16 << 0` / `<< 16`). The zero case keeps the previous bytes exactly, so
+      ## every native-width divide is unchanged. `%` (29) never sets `dvmin`: `MIN % -1` is 0.
+      if dsigned {
+        if dvmin == 0 { push_str(sb, "  cmn x1, #1\n  b.ne 1f\n  negs x2, x0\n  b.vc 1f\n  brk #0\n1:\n") }
+        else {
+          push_str(sb, "  cmn x1, #1\n  b.ne 1f\n  mov x2, #")
+          push_int(sb, 0 - dvmin)
+          push_str(sb, "\n  cmn x0, x2\n  b.ne 1f\n  brk #0\n1:\n")
+        }
+      }
     }
   }
   ## CHECKED overflow on `+` (I11 / CG-8): `adds` sets NZCV; trap (`brk`) on unsigned CARRY (`b.cc`
@@ -4794,7 +4809,16 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           nw = a64_operand_narrow(l, params_head, body_head, src, a)
           if nw == "" { nw = a64_operand_narrow(r, params_head, body_head, src, a) }
         }
-        emit_a64_arith(op, dsigned, (nw != "") or ex_is_zero_lit(l), sb)
+        ## The narrow signed DIVIDEND's own minimum for the `MIN / -1` guard (#606); 0 for a native
+        ## or unsigned width, which keeps the emitter's previous native-width bytes. Kept out of
+        ## `nw` above because `nw` also selects the value-model wrap, which division does not need.
+        mut dvmin : i64 = 0
+        if op == 19 {
+          mut dvn := a64_operand_narrow(l, params_head, body_head, src, a)
+          if dvn == "" { dvn = a64_operand_narrow(r, params_head, body_head, src, a) }
+          dvmin = narrow_signed_min(dvn)
+        }
+        emit_a64_arith(op, dsigned, (nw != "") or ex_is_zero_lit(l), dvmin, sb)
         if nw != "" {
           if A64_CHK and (not ex_is_zero_lit(l)) { a64_emit_narrow_trap(nw, sb) }
           a64_emit_narrow(nw, sb)

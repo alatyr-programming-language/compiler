@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, ptr_target_pointee_s, ptr_target_pointee_n, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -16497,9 +16497,31 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## (`expr_is_pos_num`, provably neither condition). %rbx holds the fully-evaluated divisor and %rax
       ## the dividend; %rdx is dead scratch here — the divide below overwrites it (`cqto` / `xorq
       ## %rdx, %rdx`). Each `1f`/`1:` pair is self-contained (GAS resolves `1f` to the NEXT `1:`).
+      ## (2) is a per-WIDTH bound, not the 64-bit one (#606). Concurrency §6.1 puts `MIN / -1` in the
+      ## checked set at every signed width, but the constant below was `INT64_MIN`, which a narrow
+      ## dividend can never equal — so `(-128 : i8) / (-1 : i8)` produced 128, a value outside `i8`
+      ## living in an `i8` binding. `narrow_signed_min` answers the operand's own minimum and 0 for a
+      ## native or unsigned width, so the 64-bit arm below is byte-unchanged. `%` (29) is deliberately
+      ## excluded: `MIN % -1` is 0 at every width, representable, and not a member of the set.
+      mut dvmin : i64 = 0
+      if op == 19 {
+        mut dvt := expr_type_span(l, cx)
+        if dvt.n == 0 { dvt = expr_type_span(r, cx) }
+        if dvt.n != 0 {
+          dvb := base_type_name(cx.src, dvt.s, dvt.n)
+          dvmin = narrow_signed_min(str_at((cx.src + dvb.s), dvb.n))
+        }
+      }
       if cx.vchk and (op == 19 or op == 29) and (not expr_is_pos_num(r)) {
         push_str(sb, "  testq %rbx, %rbx\n  jnz 1f\n  ud2\n1:\n")
-        if dsigned { push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movq $-9223372036854775808, %rdx\n  cmpq %rdx, %rax\n  jne 1f\n  ud2\n1:\n") }
+        if dsigned {
+          if dvmin == 0 { push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movq $-9223372036854775808, %rdx\n  cmpq %rdx, %rax\n  jne 1f\n  ud2\n1:\n") }
+          else {
+            push_str(sb, "  cmpq $-1, %rbx\n  jne 1f\n  movq $")
+            push_int(sb, dvmin)
+            push_str(sb, ", %rdx\n  cmpq %rdx, %rax\n  jne 1f\n  ud2\n1:\n")
+          }
+        }
       }
       if op == 19 {
         if dsigned { push_str(sb, "  cqto\n  idivq %rbx\n") } else { push_str(sb, "  xorq %rdx, %rdx\n  divq %rbx\n") }

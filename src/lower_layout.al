@@ -2195,6 +2195,28 @@ pub bitcast_narrow_is_signed := fn(name : str) -> bool {
   name == "i8" or name == "i16" or name == "i32"
 }
 
+## The MINIMUM value of a SIGNED narrow integer name — `i8` → -128, `i16` → -32768,
+## `i32` → -2147483648 — and 0 for every other name (a native width, an unsigned `uN`, a `bitsN`,
+## or an unresolved type).
+##
+## Concurrency §6.1 puts `MIN / -1` in the checked-overflow set at EVERY signed width, and each
+## backend's division guard compared the dividend against the 64-bit `INT64_MIN` alone. A narrow
+## dividend can never equal that, so `(-128 : i8) / (-1 : i8)` produced 128 — a value outside `i8`
+## living in an `i8` binding, on all four backends (#606). The bound the guard needs is the
+## OPERAND's own minimum, and WHICH NUMBER that is, is one language-level decision the four
+## emitters must never disagree about; the ENCODING of the comparison stays per-target. The zero
+## answer is what selects each backend's unchanged native-width arm, so a `u64`/`i64` divide keeps
+## its previous bytes exactly.
+##
+## `%` deliberately has no caller here: `MIN % -1` is 0, representable at every width, and the
+## remainder is not a member of the checked-overflow set.
+pub narrow_signed_min := fn(name : str) -> i64 {
+  if name == "i8" { return 0 - 128 }
+  if name == "i16" { return 0 - 32768 }
+  if name == "i32" { return 0 - 2147483648 }
+  0
+}
+
 ## Is byte `[p]` a blank inside a TYPE text? Bounded by the caller's `[ts, ts+tl)` extent.
 type_text_blank := fn(src : ptr(u8), p : usize) -> bool {
   c := str_at((src + p), 1)

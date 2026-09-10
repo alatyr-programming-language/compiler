@@ -30,7 +30,7 @@ stmt_p := ast::stmt_p
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
-(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, bitcast_target_is_pointer, deref_bitcast_pointee_bytes, deref_bitcast_pointee_signed) := lower_layout
+(ann_tok_stop, scalar_name_is_signed, scalar_name_is_unsigned, scalar_name_is_float, scalar_name_narrow, scalar_name_is_int_conv, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, bitcast_target_is_pointer, deref_bitcast_pointee_bytes, deref_bitcast_pointee_signed) := lower_layout
 (ann_scan_signed, ann_scan_unsigned, ann_scan_narrow, ann_scan_float) := lower_layout
 cmp_operand_bitcast_kind := lower_layout::cmp_operand_bitcast_kind
 (const_denoted_value, const_denote_ns, const_denote_nl) := lower_layout
@@ -2926,7 +2926,7 @@ rv_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head :
   r
 }
 
-rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, in out sb : rt::StrBuf) {
+rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out sb : rt::StrBuf) {
   ## CHECKED div-by-zero (I11 / CG-7): RV64 `div`/`rem` by 0 does NOT trap (returns all-ones / the
   ## dividend per the ISA), a silent wrong result unlike x86_64 `idivq` #DE. Trap (`ebreak`) when the
   ## divisor a1 is 0. Dropped under `unchecked` (RV_CHK false). `1f`/`1:` is self-contained (a1 already
@@ -2939,7 +2939,21 @@ rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, in out sb : rt::StrB
       ## a wrong value for a checked divide. Trap (`ebreak`) when a1 == -1 AND a0 == INT64_MIN
       ## (`li a3, 1; slli a3, a3, 63` materializes INT64_MIN; no 64-bit immediate compare exists).
       ## a2/a3 are dead scratch. Dropped under `unchecked` with the div-by-zero guard above.
-      if dsigned { push_str(sb, "  li a2, -1\n  bne a1, a2, 1f\n  li a3, 1\n  slli a3, a3, 63\n  bne a0, a3, 1f\n  ebreak\n1:\n") }
+      ##
+      ## `dvmin` carries the operand's own minimum for a SIGNED NARROW divide and 0 otherwise (#606,
+      ## `lower_layout::narrow_signed_min`). The bound above is INT64_MIN, which a narrow dividend
+      ## can never equal, so `(-128 : i8) / (-1 : i8)` yielded 128 — a value outside `i8`. A narrow
+      ## width materializes its own bound with the `li` pseudo-instruction instead (every narrow
+      ## minimum is a 32-bit signed value, so `li` expands to at most `lui`+`addiw`). The zero case
+      ## keeps the previous bytes exactly. `%` (29) never sets `dvmin`: `MIN % -1` is 0.
+      if dsigned {
+        if dvmin == 0 { push_str(sb, "  li a2, -1\n  bne a1, a2, 1f\n  li a3, 1\n  slli a3, a3, 63\n  bne a0, a3, 1f\n  ebreak\n1:\n") }
+        else {
+          push_str(sb, "  li a2, -1\n  bne a1, a2, 1f\n  li a3, ")
+          push_int(sb, dvmin)
+          push_str(sb, "\n  bne a0, a3, 1f\n  ebreak\n1:\n")
+        }
+      }
     }
   }
   ## CHECKED overflow on `+` (I11 / CG-8): RISC-V has no flags, so mirror num.al's comparison. Sum in
@@ -4086,7 +4100,16 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           nw = rv_operand_narrow(l, params_head, body_head, src, a)
           if nw == "" { nw = rv_operand_narrow(r, params_head, body_head, src, a) }
         }
-        rv_emit_arith(op, dsigned, (nw != "") or ex_is_zero_lit(l), sb)
+        ## The narrow signed DIVIDEND's own minimum for the `MIN / -1` guard (#606); 0 for a native
+        ## or unsigned width, which keeps the emitter's previous native-width bytes. Kept out of
+        ## `nw` above because `nw` also selects the value-model wrap, which division does not need.
+        mut dvmin : i64 = 0
+        if op == 19 {
+          mut dvn := rv_operand_narrow(l, params_head, body_head, src, a)
+          if dvn == "" { dvn = rv_operand_narrow(r, params_head, body_head, src, a) }
+          dvmin = narrow_signed_min(dvn)
+        }
+        rv_emit_arith(op, dsigned, (nw != "") or ex_is_zero_lit(l), dvmin, sb)
         if nw != "" {
           if RV_CHK and (not ex_is_zero_lit(l)) { rv_emit_narrow_trap(nw, sb) }
           rv_emit_narrow(nw, sb)
