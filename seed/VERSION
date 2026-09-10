@@ -61,13 +61,13 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: 8bebf32afb8cc276a5be6a00fd1e471e345b33667d0bbc7908f3ddbe5d18d74d
-current-seed-version: 0.2.0
+current-seed-sha256: 6193a26568ef6ee60b02c5a9ae67f4d51df7f3d5d2d4d2850f67518574a39343
+current-seed-version: 0.2.1
 #
-# Promoted:      2026-09-07 (see the last entry in this file)
+# Promoted:      2026-09-10 (see the last entry in this file)
 # Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
-# GAS at promotion: 1205397 lines
-# GAS SHA-256:   7ec0b50b257d0b4715cbfbfa138ca6be1ee350bf7d2392daa527ba7c0c0e8339
+# GAS at promotion: 1234799 lines
+# GAS SHA-256:   91c9365ad3085e52ab5c938b0c5df44ff85240be06d69b670d4f5feb7b96fd2f
 #
 # `current-seed-version` is the `version` field of `package.al` at the moment of the promotion, and by
 # the versioning order in CHANGELOG.md the two must agree at all times: the version moves ON a
@@ -1300,3 +1300,46 @@ current-seed-version: 0.2.0
 # and a parenthesized generic `bitcast` target now compile. The newly refused programs are all ones the
 # specification declares invalid, which that order calls a PATCH and not a break. The specification pin
 # (1.0.0 plus post-tag commits to b4e7979) did not move.
+
+## 2026-09-10 — self-promote: normalize a written negative literal to one `Num` (#602), and the first
+## seed whose `--version` answers the number it is released under.
+# Trigger: PR #648 folds `-<int>` into a single `Num(-v)` in the parser, so the fifteen predicates that
+# ask "is this a numeric literal" stop declining a written negative one. The frozen 0.2.0 seed cannot
+# reproduce that emission, so a promotion is owed.
+#
+# THE DELTA, read line by line with four label families normalized (`.L<N>`, `.Lra<N>_<k>`,
+# `.Lstr<M>_<N>`, `.Lflt<N>` — `AGENTS.md` names only the first two, which is #628):
+#   seed 1236164 lines -> Stage1 1234799 lines, net -1365, in 274 hunks.
+#   Removed, by shape: 546 `movq $N, %rax` · 273 `subq %rbx, %rax` · 273 `pushq %rax` ·
+#                      273 `popq %rax` · 273 `movq %rax, %rbx`  = 1638, plus one `.quad 0`.
+#   Added:             273 `movq $N, %rax`                       =  273, plus one `.quad -64`.
+# One sentence: each of 273 written negative literals replaces the six-instruction `0 - N` sequence
+# with a single `movq $-N`. 273 x 6 = 1638 of the 1639 removed lines, and 273 of the 274 added.
+#
+# THE ONE REMAINING HUNK is worth its own line, because it is the defect fixing itself: `.quad 0` ->
+# `.quad -64` is `src/regalloc.al`'s `mut RA_SPILL_BASE := -64`. The compiler had been emitting 0 for
+# its own negative global initializer — #637 living inside the compiler — invisible because nine call
+# sites reassign it before any read. Nothing in the tree depended on the wrong value, and nothing
+# depends on the right one; it is recorded because a delta with an unexplained hunk is not a read delta.
+#
+# CONVERGENCE:
+# Stage1 == Stage2 == Stage3 GAS byte-identical RAW, no normalization needed, at 1234799 lines.
+# Stage1 == Stage2 == Stage3 GAS SHA-256: 91c9365ad3085e52ab5c938b0c5df44ff85240be06d69b670d4f5feb7b96fd2f.
+# Stage1 binary SHA-256: d03e71fa00adb5b1fb05baad225dd81b13c9eaa2df2db3359c8bee8635508b51 (4671400 B).
+# Stage2 == Stage3 binary SHA-256:
+# 6193a26568ef6ee60b02c5a9ae67f4d51df7f3d5d2d4d2850f67518574a39343 (4667304 B).
+# Promoted `seed/alatyr` is Stage2, the only one of the three assembled from the new emission.
+#
+# THE VERSION, AND WHAT IS DIFFERENT ABOUT THIS PROMOTION. Version moves 0.2.0 -> 0.2.1, PATCH by
+# CHANGELOG.md's versioning order: every newly refused program is one Types 9.1 declares invalid, and
+# no new surface is added. The bump landed FIRST, before the stages were built, per #586/#612 — and so,
+# for the first time, the promoted seed answers the number it is released under:
+#     ./seed/alatyr --version  ->  alatyr 0.2.1
+# The 0.2.0 seed answers `alatyr 0.1.0` and contains not one occurrence of the string `0.2.0`. That was
+# #586, and this entry is the first promotion in which it does not happen. The consequence for the next
+# integrator: `seed != Stage1` here is the ordinary stale-emission difference only, no longer compounded
+# by 35 version-string bytes, and #586's step 2 — teaching `scripts/fixpoint.sh` to compare
+# `./seed/alatyr --version` against `package.al` instead of comparing one claim to another — can now
+# land without reddening `main`.
+#
+# The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.

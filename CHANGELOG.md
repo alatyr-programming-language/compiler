@@ -122,6 +122,8 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.1 — 2026-09-10
+
 - **A written negative integer literal is now one literal, and the three silent wrong values that
   followed from it are gone.** The parser represented every unary minus as an `unchecked`
   subtraction from zero, so fifteen compiler predicates that ask "is this a numeric literal"
