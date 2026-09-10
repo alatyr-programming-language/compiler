@@ -219,6 +219,21 @@ enum_variant_arity_err := fn(s : usize, declared : usize, supplied : usize) -> C
   if sup > ENUM_VARIANT_ARITY_COUNT_CAP { sup = ENUM_VARIANT_ARITY_COUNT_CAP }
   ENUM_VARIANT_ARITY_DIAG_MARKER + diag_span(s) * 1024 + dcl * 32 + sup
 }
+## Issue #580 / Modules §3+§6 + Tooling §5 — a `::` HEAD THAT NAMES NOTHING. `zzz::aa()` used to
+## compile at rc 0 and RUN the root's own `aa`, because every resolver matches a qualified callee by
+## its TAIL segment alone. The payload is 128-wide so ONE word carries what the renderer needs to
+## NAME the head: the low 7 bits are the head's LENGTH (capped at UNRESOLVED_QUAL_HEAD_LEN_CAP) and
+## the rest is the head's source offset, so the message can quote the exact spelling the user wrote
+## rather than a bare "unresolved". Keep the class between the qualified-private-constant and CT
+## windows so only the former's upper bound moves and every other decoded CheckErr range stays
+## byte-identical.
+UNRESOLVED_QUAL_HEAD_DIAG_MARKER := 6901000000000000000
+UNRESOLVED_QUAL_HEAD_LEN_CAP := 127
+unresolved_qual_head_err := fn(s : usize, n : usize) -> CheckErr {
+  mut hn := n
+  if hn > UNRESOLVED_QUAL_HEAD_LEN_CAP { hn = UNRESOLVED_QUAL_HEAD_LEN_CAP }
+  UNRESOLVED_QUAL_HEAD_DIAG_MARKER + diag_span(s) * 128 + hn
+}
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -2961,6 +2976,16 @@ build_sema_dnh := fn(decls : ptr(rt::Vec), src : ptr(u8), in out a : rt::Arena) 
   }
   SLIM_L = limb
   SLIM_N = k
+  ## #580 — the `::`-head memo, allocated on this SAME one-time scan so the head check adds no
+  ## allocation of its own. 64 direct-mapped entries of (span start, span length, kind + 1);
+  ## `kind + 1 == 0` is "empty", so a zeroed block is a cold cache.
+  qhc := rt::bump(a, 64 * 3 * 8 + 8)
+  mut qi := 0
+  while qi < 64 * 3 {
+    rt::rec_set(unchecked bitcast(ptr(mut u8), qhc), qi, 0)
+    qi = qi + 1
+  }
+  QH_MEMO = qhc
 }
 ## True if a decl name `[dns,dnl)` matches a callee span `[cs,cn)` — either exactly, or as the TAIL
 ## after the last `::` (a qualified call `mod::sub::f` resolves to the decl named `f`, mirroring the
@@ -3386,6 +3411,15 @@ field_path_deref_var := fn(e : ptr(Expr)) -> VSpan {
     Expr::Field(base, fs, fl) => { field_path_deref_var(base) }
     Expr::Deref(inner) => { expr_var_span(inner) }
     _ => { VSpan(s = 0, n = 0) }
+  }
+}
+## The operand of an `unchecked(…)` wrapper, else 0 — the pre-match accessor the #580 head walk
+## needs, in the shape of the single-level accessors around it. Measured: `unchecked(zzz::aa())`
+## reached no hook through the big match.
+expr_unchecked_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
+  match deref(e) {
+    Expr::Unchecked(inner) => { inner }
+    _ => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 expr_index_base := fn(e : ptr(Expr)) -> ptr(Expr) {
@@ -6752,6 +6786,10 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     jcs := expr_call_callee_span(e)
     return Result(Ty, CheckErr).Err(located_err(jcs.s))
   }
+  ## #580 — RECORD (never refuse here) a `::` head that names nothing. Pre-match for the scar #2
+  ## reason above: the big match's `Expr::Call` arm is not dispatched under the bootstrap seed.
+  ## The verdict is deferred to the end of `check_program`, so no answer depends on module order.
+  sema_qual_head_record(e, decls, src)
   mvc0 := sema_manifest_value_ctor_span(e, src)
   if mvc0.n != 0 { return Result(Ty, CheckErr).Err(manifest_value_err(mvc0.s)) }
   uct0 := sema_unknown_type_ctor_span(e, decls, upto, src)
@@ -13653,6 +13691,299 @@ sema_is_root_mod := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
   ml == 7 and str_at((src + ms), ml) == "package"
 }
 
+## ---------------------------------------------------------------------------------------------
+## #580 — A `::` HEAD THAT NAMES NOTHING.
+## ---------------------------------------------------------------------------------------------
+## `zzz::aa()` with no `zzz` declared anywhere compiled at rc 0 and RAN the root's own `aa`: sema
+## resolves a qualified callee by its TAIL segment alone (`name_matches`) and the backends do the
+## same, so the head was never read at all. That is a wrong answer to a typo, not a missing feature.
+##
+## THE RULE is the owner's: a non-existent, NON-EXTERNAL name must produce a clear compile error. A
+## head is legal when it names any of the FIVE kinds below. `@extern` needs no arm of its own — a
+## bodyless `name := @extern fn(…)` import (Modules §7) is an ordinary `decls` row, so a head that
+## resolves to one is answered by the same scans as anything else and is never "unresolved".
+##
+## NO EXTRA PASS, and that is the constraint that shaped this. The information is already gathered:
+## `decls` is one flat vector the parse already built, and its `mod_start/mod_len` IS the scope that
+## `d_mod_seg_eq`/`sema_mod_seg_eq` already compare on every qualified reference. The observation
+## point is a hook on the decision walk `check_decl`/`check_expr`, which already visits every call
+## exactly once. Only the INTRINSIC arm needs a literal list, and that list is a transcription of
+## the specification (Concurrency §2's atomic family, and the `volatile` MMIO pair beside it), not
+## an allow-list invented to make a gate pass.
+##
+## WHY THE ANSWER IS DEFERRED TO THE END OF `check`. #573 measured the hazard: a lookup bounded by
+## `upto` made the verdict depend on MODULE ORDER. Recording the negative and filtering it after the
+## walk removes that by construction — nothing is refused for not having been seen yet.
+##
+## CLOSURE IS A CLAIM ABOUT THIS TREE, not about the language. The five kinds are what survived
+## re-measuring #580's eight-category taxonomy against the tree (see `sema_qual_head_kinds`).
+## Whether the list is closed BY THE LANGUAGE is a specification question — Modules §3/§6
+## should state what may precede `::` — and it is deliberately left open here: a later addition to
+## the list can only make the compiler accept MORE, never reject something it accepts today.
+
+## The `::`-HEAD span of a callee `[cs,cl)` — everything before the LAST `::` — or `{0,0}` when the
+## callee carries no separator, opens with one, or ends with one. Mirrors driver's `d_colon_pos`,
+## which also keeps the LAST separator so `alloc::vec::push` has the head `alloc::vec`.
+sema_qual_head := fn(src : ptr(u8), cs : usize, cl : usize) -> VSpan {
+  mut res := 0
+  mut found := false
+  mut i := 0
+  while i + 1 < cl {
+    if str_at((src + cs + i), 2) == "::" { res = i ; found = true ; i = i + 2 } else { i = i + 1 }
+  }
+  if found == false { return VSpan(s = 0, n = 0) }
+  if res == 0 { return VSpan(s = 0, n = 0) }
+  if cl < res + 3 { return VSpan(s = 0, n = 0) }
+  VSpan(s = cs, n = res)
+}
+
+## BIT 4 — the INTRINSIC namespaces. Concurrency §2 defines the atomic family (`load`, `store`,
+## `swap`, `fetch_add/sub/and/or/xor`, `cas_weak/strong`); `volatile::load|store` is the
+## non-synchronising MMIO pair beside it. `lower` matches BOTH on the WHOLE callee string
+## (`src/lower.al:16816`+), so their heads never reach a declaration scan — which is exactly why a
+## refusal driven by "is the head a module?" refused all ten atomic sites.
+sema_head_is_intrinsic := fn(src : ptr(u8), hs : usize, hl : usize) -> bool {
+  if hl == 6 and str_at((src + hs), hl) == "atomic" { return true }
+  if hl == 8 and str_at((src + hs), hl) == "volatile" { return true }
+  false
+}
+
+## Does the name `[hs,hl)` denote a MODULE (by mangled path) or a TYPE (a struct/enum declaration)?
+## The two kinds a module ALIAS may legally be bound to, and the reason this is a separate helper: a
+## root alias (`strbuf := rt`) has to be followed one hop to its target, and the follow must not be
+## able to recurse — `a := b` / `b := a` would otherwise not terminate.
+sema_head_names_scope := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize) -> bool {
+  if hl == 0 { return false }
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  mut r := false
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.mod_len != 0 and sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl) { r = true }
+    if d.name_len != 0 and d.is_fn == false and unchecked bitcast(usize, d.fields_head) != 0 {
+      if streq(src, d.name_start, d.name_len, hs, hl) { r = true }
+    }
+    i = i + 1
+  }
+  r
+}
+
+## EVERY kind the head `[hs,hl)` names, as a BITMASK — 0 is "nothing in scope here". A mask rather
+## than a first-match answer, because the mask is what makes the closed set MEASURABLE: a head whose
+## mask is exactly one bit is a witness that that one arm is load-bearing, and a set whose member
+## nothing exercises alone is decorative, not closed (#580 acceptance criterion 5). The census below
+## prints the mask for every distinct head, so the witness table is re-derivable, not asserted.
+##   bit 0 (1)  — a MODULE by path                                    `qual_head_module`
+##   bit 1 (2)  — a TYPE as an associated-fn / variant namespace       `qual_head_type`
+##   bit 2 (4)  — a local ALIAS, either parser shape                   `qual_head_alias`
+##   bit 3 (8)  — one PUB re-export projection                         `qual_head_reexport`
+##   bit 4 (16) — an INTRINSIC namespace                               `qual_head_intrinsic`
+##
+## FIVE, not the six #580's taxonomy listed, and the sixth was dropped on evidence rather than for
+## tidiness. "The root module's own name" is not a legal head on this tree in either of its two
+## spellings. `main::add1` (`test/fn_value_qualified.al`) is not the root module at all: a
+## single-file compile names the module by the FILE STEM, so that program emits
+## `fn_value_qualified__add1` and the head `main` matched NOTHING — the tail-name fallback resolved
+## it, which is this defect, not a legal head. And the actual root module is EXCLUDED from
+## module-path scanning by Tooling §4 ("so it is not also a module by its own stem", #516), which is
+## exactly why `hroot::twin()` and `croot::quiet()` must now be refused. An arm for either spelling
+## would have re-created the hole this unit closes.
+##
+## ONE scan of `decls` — the same O(cnt) scan `d_qual_target` already performs twice on its success
+## path — and `qh_memo_kinds` memoizes it per distinct head, so the self-host's 2016 qualified call
+## sites resolve their handful of distinct heads once each.
+sema_qual_head_kinds := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize) -> usize {
+  if hl == 0 { return 0 }
+  if sema_head_is_intrinsic(src, hs, hl) { return 16 }
+  ## the head's OWN last segment, for the one-hop re-export projection (`facade::math::floor`)
+  mut lp := 0
+  mut chained := false
+  mut i := 0
+  while i + 1 < hl {
+    if str_at((src + hs + i), 2) == "::" { lp = i + 2 ; chained = true ; i = i + 2 } else { i = i + 1 }
+  }
+  cnt := rt::vec_len(deref(decls))
+  mut r := 0
+  ## the RHS identifier of a ROOT alias (`strbuf := rt`), followed one hop after the scan
+  mut rts := 0
+  mut rtn := 0
+  i = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    ## BIT 0 — a MODULE, by path: the head mangles onto some declaration's own module span
+    ##     (`std::thread` <-> `std__thread`; `sema` <-> `sema`).
+    if d.mod_len != 0 and sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl) { r = r | 1 }
+    if d.name_len != 0 {
+      nm := streq(src, d.name_start, d.name_len, hs, hl)
+      ## the parser's MODULE-ALIAS shape, recorded in `d_qual_target`'s own comment: a kind-0 /
+      ## arity-0 decl whose `ret` span holds the RHS PATH (`vec := alloc::vec`, `mm := std::math`).
+      al := d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0
+      ## BIT 1 — a TYPE as an associated-function / variant namespace (`Option::unwrap`, `Option::Some`)
+      if nm and d.is_fn == false and unchecked bitcast(usize, d.fields_head) != 0 { r = r | 2 }
+      ## BIT 2 — a local ALIAS to any of the above, in EITHER of its two parser shapes. The `::`-path
+      ##     form is the one above; a bare ROOT alias (`strbuf := rt`, `ifc := iface`) never reaches
+      ##     `parser.al`'s module-alias branch at all — that branch requires a `::` in the RHS — so
+      ##     it is recorded as an ordinary kind-0 value binding whose VALUE is a `Var`. That is the
+      ##     shape #580 measured as the sharpest false reject: `src/driver.al:2499` is the compiler's
+      ##     own use of it and the census counts 219 sites of it in `src/` alone, so the self-host
+      ##     build is this arm's regression test.
+      if nm and al { r = r | 4 }
+      if nm and d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl == 0 {
+        if unchecked bitcast(usize, d.value) != 0 {
+          rv := expr_var_span(d.value)
+          if rv.n != 0 { rts = rv.s ; rtn = rv.n }
+        }
+      }
+      ## BIT 3 — one PUB re-export projection: the head's last segment is a re-exported alias
+      ##     (`facade::math::floor`, mirroring driver's `d_one_reexport_module`).
+      if chained and al and decl_is_pub(src, d.name_start) {
+        if streq(src, d.name_start, d.name_len, hs + lp, hl - lp) { r = r | 8 }
+      }
+    }
+    i = i + 1
+  }
+  if rtn != 0 {
+    if sema_head_names_scope(decls, src, rts, rtn) { r = r | 4 }
+  }
+  r
+}
+
+## ---- the memo --------------------------------------------------------------------------------
+## The heads in a real program repeat hard: `src/` spells 2016 qualified call sites over a couple of
+## dozen distinct heads (`rt::` alone is 1822 textual occurrences). Answering each SITE with an
+## O(decls) scan would make the check's cost a function of the CALL count; answering each distinct
+## HEAD once makes it a function of the HEAD count, which is what keeps the self-host build flat.
+## Direct-mapped, 64 entries, keyed on the head's FNV hash and ARBITRATED by content — a collision
+## evicts, it never returns a wrong mask.
+mut QH_MEMO : usize = 0
+qh_memo_kinds := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize) -> usize {
+  if QH_MEMO == 0 {
+    k0 := sema_qual_head_kinds(decls, src, hs, hl)
+    qh_probe_head(src, hs, hl, k0)
+    return k0
+  }
+  mb := unchecked bitcast(ptr(mut u8), QH_MEMO)
+  j := (sema_name_hash(src, hs, hl) & 63) * 3
+  es := rt::rec_get(mb, j)
+  en := rt::rec_get(mb, j + 1)
+  ek := rt::rec_get(mb, j + 2)
+  if ek != 0 and en == hl and streq(src, es, en, hs, hl) { return ek - 1 }
+  k := sema_qual_head_kinds(decls, src, hs, hl)
+  rt::rec_set(mb, j, hs)
+  rt::rec_set(mb, j + 1, hl)
+  rt::rec_set(mb, j + 2, k + 1)
+  qh_probe_head(src, hs, hl, k)
+  k
+}
+
+## ---- the recorded negative -------------------------------------------------------------------
+## `check_program` resets these; the hook appends; the report at the end of the walk reads them.
+## Only the FIRST surviving head span is kept as the diagnostic's location (the checker returns one
+## located verdict), while the COUNT is what the #508 census reports.
+mut QH_UNRESOLVED : usize = 0
+mut QH_FIRST_S : usize = 0
+mut QH_FIRST_N : usize = 0
+mut QH_SEEN : usize = 0
+mut QH_PROBE_LOST : usize = 0
+## The census channel, byte-for-byte the #299/#529 instrument's: fd 99, opened by the probe harness
+## and closed on an ordinary run, so an ordinary run maps nothing and writes nothing.
+qh_probe_fd := fn() -> usize { 99 }
+qh_probe_open := fn() -> bool { rt::sys_write(1, qh_probe_fd(), 0, 0) == 0 }
+qh_probe_send := fn(in out sb : rt::StrBuf) {
+  n := rt::push_byte(sb, 10)
+  w := rt::sb_flush(sb, qh_probe_fd())
+  if w != unchecked bitcast(isize, n) { QH_PROBE_LOST = QH_PROBE_LOST + 1 }
+}
+## One row per DISTINCT head (emitted on a memo miss), carrying the kind MASK. This is the witness
+## table acceptance criterion 5 asks for: a head whose mask is a single bit proves that arm is the
+## only thing keeping its fixture compiling.
+qh_probe_head := fn(src : ptr(u8), hs : usize, hl : usize, kinds : usize) {
+  if qh_probe_open() {
+    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    rt::arena_init(pa, 4096)
+    mut sb := rt::strbuf(pa, 1024)
+    w0 := rt::push_str(sb, "#580 HEAD head=")
+    w1 := rt::push_str(sb, str_at((src + hs), hl))
+    w2 := rt::push_str(sb, " kinds=")
+    w3 := rt::push_int(sb, i64(kinds))
+    qh_probe_send(sb)
+  }
+}
+qh_probe_row := fn(src : ptr(u8), hs : usize, hl : usize, off : usize) {
+  if qh_probe_open() {
+    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    rt::arena_init(pa, 4096)
+    mut sb := rt::strbuf(pa, 1024)
+    w0 := rt::push_str(sb, "#580 UNRESOLVED head=")
+    w1 := rt::push_str(sb, str_at((src + hs), hl))
+    w2 := rt::push_str(sb, " off=")
+    w3 := rt::push_int(sb, i64(off))
+    w4 := rt::push_str(sb, " line=")
+    bl := brand_probe_line(src, off)
+    w5 := rt::push_str(sb, str_at((src + bl.s), bl.n))
+    qh_probe_send(sb)
+  }
+}
+qh_probe_summary := fn() {
+  if qh_probe_open() {
+    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    rt::arena_init(pa, 4096)
+    mut sb := rt::strbuf(pa, 1024)
+    w0 := rt::push_str(sb, "#580 SUMMARY qualified=")
+    w1 := rt::push_int(sb, i64(QH_SEEN))
+    w2 := rt::push_str(sb, " unresolved=")
+    w3 := rt::push_int(sb, i64(QH_UNRESOLVED))
+    w4 := rt::push_str(sb, " lost=")
+    w5 := rt::push_int(sb, i64(QH_PROBE_LOST))
+    qh_probe_send(sb)
+  }
+}
+
+## THE HOOK. One call per `check_expr` visit, on the PRE-MATCH path (scar #2: the big match's
+## `Expr::Call` arm is not dispatched under the bootstrap seed, so a hook placed there would count
+## nothing and report a false zero — the exact failure #561's census had).
+sema_qual_head_record := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) {
+  ## The BINARY-OPERATOR operands and the if-as-EXPRESSION condition are reached through the
+  ## pre-match accessors, not through the big match, for the same scar #2 reason and with the same
+  ## two accessors the #299 census uses. MEASURED, on a ten-position matrix over `zzz::aa()`: eight
+  ## positions (tail, initializer, argument, return, statement, match scrutinee, module-global
+  ## initializer, and the ordinary call) reach this hook, and the two that did NOT were both a call
+  ## used as a BIN operand — `zzz::aa() + 1` and every `if zzz::aa() == 7` / `while … == 7`
+  ## condition. Without this the refusal would have shipped blind to the commonest spelling of all.
+  bp := expr_bin_parts(e)
+  if bp.is_bin {
+    sema_qual_head_record(bp.left, decls, src)
+    sema_qual_head_record(bp.right, decls, src)
+  }
+  ip := expr_if_parts(e)
+  if ip.is_if { sema_qual_head_record(ip.cond, decls, src) }
+  ## …and the two remaining wrappers the same matrix found blind: an INDEX subscript and an
+  ## `unchecked(…)` operand. Both were rows=0 before this; the covered positions stay rows=1, so
+  ## nothing here double-counts a site the big match already reaches.
+  ixe := expr_index_index(e)
+  if unchecked bitcast(usize, ixe) != 0 { sema_qual_head_record(ixe, decls, src) }
+  ixb := expr_index_base(e)
+  if unchecked bitcast(usize, ixb) != 0 { sema_qual_head_record(ixb, decls, src) }
+  une := expr_unchecked_inner(e)
+  if unchecked bitcast(usize, une) != 0 { sema_qual_head_record(une, decls, src) }
+  dre := expr_deref_inner(e)
+  if unchecked bitcast(usize, dre) != 0 { sema_qual_head_record(dre, decls, src) }
+  ade := expr_addr_inner(e)
+  if unchecked bitcast(usize, ade) != 0 { sema_qual_head_record(ade, decls, src) }
+  fbe := expr_field_base(e)
+  if unchecked bitcast(usize, fbe) != 0 { sema_qual_head_record(fbe, decls, src) }
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 { return }
+  h := sema_qual_head(src, cs.s, cs.n)
+  if h.n == 0 { return }
+  QH_SEEN = QH_SEEN + 1
+  if qh_memo_kinds(decls, src, h.s, h.n) != 0 { return }
+  QH_UNRESOLVED = QH_UNRESOLVED + 1
+  if QH_FIRST_N == 0 { QH_FIRST_S = h.s ; QH_FIRST_N = h.n }
+  qh_probe_row(src, h.s, h.n, cs.s)
+}
+
+
 ## A root declaration is private to its own package tree.  The anonymous module name alone cannot
 ## express that boundary because dependency modules are checked in the same Decl Vec, so the driver
 ## publishes the current package's owned module-name spans before the sema pass.
@@ -14883,6 +15214,12 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   BRAND_PROBE_SINKS = 0
   BRAND_PROBE_HITS = 0
   BRAND_PROBE_LOST = 0
+  ## #580 census bookkeeping — plain counter resets; the instrument has no per-program scan.
+  QH_SEEN = 0
+  QH_UNRESOLVED = 0
+  QH_FIRST_S = 0
+  QH_FIRST_N = 0
+  QH_PROBE_LOST = 0
   lim := enforce_declared_limits(decls, src, a)
   if lim != 0 { return lim }
   vis0 := sema_vis_declared(decls, src)
@@ -14962,7 +15299,16 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   }
   ## The census's own receipt, on the ACCEPTING exit only: a rejected program leaves through one of
   ## the returns above, so a run that prints rows but no SUMMARY was refused before the walk ended.
+  ## #580 — THE REPORT. The negatives the walk recorded are answered ONCE, here, after the whole
+  ## program is known. Deferring it to the end is what removes the module-order hazard #573
+  ## measured: nothing is refused because it had not been seen YET. One located verdict per
+  ## compilation (the `CheckErr` channel carries one), located at the head itself.
+  if QH_UNRESOLVED != 0 {
+    qh_probe_summary()
+    return unresolved_qual_head_err(QH_FIRST_S, QH_FIRST_N)
+  }
   brand_probe_summary()
   ptrint_probe_summary()
+  qh_probe_summary()
   0
 }
