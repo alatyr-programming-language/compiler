@@ -9385,6 +9385,34 @@ check_accept index_base_tail_controls
 ## a fail-loud trap for this shape (a133 / rv133 / wasm134) and are unchanged.
 run_x86_trap arr_slice_direct_index_oob 132
 check_accept arr_slice_direct_index_oob
+## Grammar §3.4 / Types §9.4 (#422), the NON-x86 residual. The paragraph above described the tree
+## before this: aarch64, riscv64 and WAT had no lowering for `xs[lo..hi][i]` at all, so every arm of
+## their `Expr::Index` chains — each of which keys on a bare `Var` base — missed an `Expr::Slice`
+## base and the shape reached their fail-loud default (measured on `main` `d590e90`: a133 / rv133 /
+## wasm134, while `v := xs[lo..hi]; v[i]` answered 42 on the same compiler). Each of the three now
+## composes the element address off the {ptr, len} its OWN slice-binding path already stores, under
+## one shared claim rule (`lower_ctx::direct_slice_index_claim`).
+##
+## The value rows come first, on all four backends, because a trap is not the pass condition here:
+## the direct and the bound spelling must name the SAME byte. The fixture's codes name the wrong
+## ANSWERS a partial fix produces (a zero, `lo` ignored, one element either side, the view's length)
+## rather than only the failing line (#386), and it carries the WASM scratch-local control — bounds
+## and index each recovered through another checked index in one expression.
+run issue422_direct_range_slice_index 42
+run_a64 issue422_direct_range_slice_index 42
+run_rv64 issue422_direct_range_slice_index 42
+run_wat issue422_direct_range_slice_index 42
+check_accept issue422_direct_range_slice_index
+## The OUT-OF-VIEW index on the three non-x86 backends. These rows pass on the parent too — it
+## trapped for a DIFFERENT reason (no lowering at all) — so they are a CONTROL, not the regression
+## evidence: they are what keeps the new bounds check honest, because without them nothing asserts
+## that index 2 of a two-element view still traps on a64/rv64/wasm rather than quietly reading
+## `xs[3]` = 55. The unchecked half of the same address math (55, not a trap) is asserted as a value
+## in `issue422_direct_range_slice_index`. The codes differ from x86's 132 because the trap
+## instruction does: `brk` raises SIGTRAP (133) and wasmtime's `unreachable` exits 134.
+run_a64 arr_slice_direct_index_oob 133
+run_rv64 arr_slice_direct_index_oob 133
+run_wat arr_slice_direct_index_oob 134
 ## BYTES bounded return ABI: `[u8; N]` with 1 <= N <= 16 is returned as one or two packed words and
 ## indexed both after binding and directly. The bound form remains x86-only; the direct form is also
 ## covered on AArch64 by its matching x0/x1 carrier. The wider/non-u8 direct forms below remain located rejects.
