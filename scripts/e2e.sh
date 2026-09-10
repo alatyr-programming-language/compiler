@@ -5396,6 +5396,25 @@ check_build_located reject_issue304_aliased_slice_field_scalar_type 8 "type mism
 check_build_located reject_issue304_aliased_slice_field_bool_type 8 "type mismatch"
 check_accept accept_issue304_aliased_slice_field_element_type
 run accept_issue304_aliased_slice_field_element_type 42
+## Issue #623 — an element store through a field path with TWO owners. `stmt_starts` and `p_stmt`
+## demanded the `[` immediately after the FIRST field, so `outer.leaf.arr[0] = 42` was not an
+## assignment statement at all and the store was emitted on no backend, with exit 0 and no
+## diagnostic. x86_64 declines the fixed-array carrier through a nested owner at build time (a
+## separate fail-loud lowering gap, recorded by the per-file corpus row), so the proof that the
+## recovered store EXECUTES is the three cross-backend runners: all three returned the pre-store
+## value or trapped on the parent and return 42 here.
+run_a64 accept_issue623_nested_array_field_store 42
+run_rv64 accept_issue623_nested_array_field_store 42
+run_wat accept_issue623_nested_array_field_store 42
+## The same two-owner and three-owner paths ending in a Slice(T) element, which is the carrier #304
+## needs reachable. Backend write execution stays in a checked dead branch: a Slice(T) struct field
+## still traps on AArch64, RISC-V64 and Wasm under #621, and recording those exits here would freeze
+## a defect the oracle then has to unlearn.
+check_accept accept_issue623_nested_slice_field_store
+run accept_issue623_nested_slice_field_store 42
+## The recovered statement form must still obey the write-permission rule, and say where. On the
+## parent both entry points exited 0 on this program and discarded the store silently.
+check_build_located reject_issue623_nested_field_immutable_owner 12 "immutable binding"
 check_reject reject_lambda_aggregate_return
 check_reject reject_lambda_capture_escape
 check_accept accept_param_default

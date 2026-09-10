@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An element store through a nested field path is no longer discarded.** `outer.leaf.arr[i] = v`
+  and deeper paths matched no assignment statement form — the recognizers demanded the `[`
+  immediately after the FIRST field — so the line fell to the trailing-expression path and the store
+  was emitted on none of the four backends, with exit 0 and no diagnostic; the write-permission and
+  element-type rules never ran either. The parser now recognizes a field path of two or more owners
+  ending in an indexed write and records the ordinary `IndexAssign` every backend already lowers.
+  The single-owner `v.field[i] =` form keeps its existing path unchanged. Stores through an
+  immutable owner are now refused with a located diagnostic.
 - **Pointers inferred from a local address now retain the local's declared struct identity.**
   The bootstrap type carrier could erase both the `ptr` tag and its pointee name for
   `p := ptr(mut value)`, so a later `deref(p).inner.f = "text"` bypassed the leaf's
