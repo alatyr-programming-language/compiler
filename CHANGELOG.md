@@ -122,6 +122,24 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A signed local whose name is also bound, untyped, somewhere else in the same function no longer
+  crashes the compiler's output on `k + 1`.** `:=` locals are function-scoped in this backend and
+  the slot binder no-ops on a name it has already bound, so of two declarations of one name only the
+  first reached the slot map — with the first binding's recorded type. When that first one was
+  untyped (`mut k := 0`), a later `mut k : i64 = ...` lost its annotation, the signedness scan could
+  not prove the counter signed, and its `+` took the UNSIGNED carry guard while `k < hi` beside it
+  kept the SIGNED comparison. At `k = -1` the two disagreed — the compare read -1 and continued, the
+  increment carried, and the program died on the guard's `ud2` with no diagnostic. Types §3.2 puts
+  signedness in the operations, so the operand's own interpretation picks the add and the compare
+  alike, and Concurrency §6.1 traps only an operation that OVERFLOWS: `-1 + 1` does not overflow
+  `i64`. A rebinding whose annotation is a native-width SIGNED integer now fills a slot entry that
+  recorded no type at all; a first binding's type is never overwritten, a narrow annotation is not
+  adopted (it carries the §4 value model, which must not apply retroactively to the earlier scope),
+  and a native UNSIGNED one is not adopted either — that direction would move a comparison off the
+  signed default, which is #546's question and not this one. This is what removed the three
+  `unchecked` bypasses 0.2.1 had to put on the `comptime for` unroll counters in the aarch64,
+  riscv64 and WASM emitters: those three loops are the shape, and their compilers were dying on it.
+
 ## 0.2.1 — 2026-09-10
 
 - **A written negative integer literal is now one literal, and the three silent wrong values that

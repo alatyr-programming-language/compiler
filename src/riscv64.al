@@ -7161,15 +7161,14 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             if hi - lo > 100000 { push_str(sb, "  ebreak\n") }
             else {
               ## See the note on the same unroll in `wat::emit_wat_stmts` (#602/#638/#646): `lo` is
-              ## now reachably negative, and the counter's increment is `unchecked` because the
-              ## self-host lower guards it with the UNSIGNED carry test while comparing it with the
-              ## SIGNED `<`. The budget check above bounds the range, so no wrap can occur; this is a
-              ## local bypass justified by that bound, not a fix for #646.
+              ## now reachably negative, and #648's `unchecked` bypass on the increment is gone —
+              ## the lower records this local's `i64` annotation, so the increment's overflow guard
+              ## is the SIGNED one that matches the SIGNED `<` beside it.
               mut k : i64 = lo
               while k < hi {
                 push_str(sb, "  li a0, ") ; push_int(sb, k) ; push_str(sb, "\n  sd a0, ") ; push_int(sb, ioff) ; push_str(sb, "(s0)\n")
                 emit_rv_stmts(rb, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
-                k = unchecked (k + 1)
+                k = k + 1
               }
             }
           }

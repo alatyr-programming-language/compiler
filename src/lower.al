@@ -3260,13 +3260,59 @@ bind_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize) -> usi
   svec_len(ptr(slots))
 }
 
+## #646 — the LATE SIGNED-NATIVE-INTEGER ANNOTATION of a name that already owns a slot.
+##
+## Alatyr `:=` locals are FUNCTION-scoped in this backend and `bind_slot_typed` no-ops on a name it
+## has already bound, so of two declarations of one name in DISJOINT sibling scopes only the FIRST
+## reaches the slot map — together with the FIRST binding's recorded type. When that first binding
+## was UNTYPED (`mut k := 0`, whose literal initializer `infer_local_scalar_type` declines), the
+## slot's `sns`/`snl` stay 0 and a later `mut k : i64 = …` in another scope silently loses its
+## annotation. `is_signed_expr` then cannot prove the counter signed, and `emit_routed_int_guard` /
+## the built-in `+` fall to the UNSIGNED CARRY guard (`jnc`) on a SIGNED counter — while the
+## comparison keeps its signed `<`. At `k = -1` the two disagree: `<` reads -1 and continues, the
+## increment's carry fires, and a program that Types §3.2 makes well defined dies on `ud2` with no
+## diagnostic (#646; the three non-x86 `CompForRange` unrolls are where it first became reachable).
+##
+## Types §3.2 — "signedness lives in the operations" — makes the operand's own interpretation pick
+## the add and the compare intrinsic alike, and Concurrency §6.1 traps only an operation that
+## OVERFLOWS: `-1 + 1` does not overflow `i64`. So the SIGNED `<` is right and the unsigned guard is
+## wrong, and the repair is to let the annotation reach the slot.
+##
+## MONOTONE and NATIVE-WIDTH ONLY, deliberately:
+##  - only an entry that recorded NO type at all (`sns == 0 and snl == 0`) is filled, so a first
+##    binding's type is never overwritten and the aggregate-collision reject above keeps its meaning;
+##  - only a native-width SIGNED integer (`i64`/`isize`) is adopted. A NARROW annotation
+##    (`u8`/`i32`/…) also carries the §4 value model — truncation and the per-width overflow trap —
+##    which must not be applied retroactively to the earlier scope's uses of the name. And a native
+##    UNSIGNED annotation (`u64`/`usize`) is deliberately NOT adopted: it would move an ORDERING
+##    comparison from the signed default to `setb`/`seta`, and `is_unsigned_expr` above records why
+##    that direction is the dangerous one — mis-flipping a comparison signed → unsigned mis-lowers
+##    the compiler's own negative-going comparisons, which is measured (2026-07-24) to break
+##    self-reproduction. Adopting a SIGNED type can only move an OVERFLOW GUARD (`jnc`→`jno`,
+##    `mulq`→`imulq`, `divq`→`idivq` plus its `MIN / -1` test) and leaves every comparison on the
+##    signed default it already had, so it cannot change a value — only which operations trap.
+##    The unsigned direction is #546's, and it stays there.
+##  - a non-scalar entry (`ek != 0`) is left alone; aggregates, arrays, strs, floats and slices all
+##    own dedicated binders and their own collision rules.
+slot_adopt_native_int_type := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, ts : usize, tl : usize) {
+  tn := str_at((src + ts), tl)
+  if tn != "i64" and tn != "isize" { return }
+  ei := entry_of(ptr(slots), src, s, n)
+  e := svec_at(SlotEntry, ptr(slots), ei)
+  if streq(src, deref(e).ns, deref(e).nl, s, n) == false { return }
+  if deref(e).ek != 0 { return }
+  if deref(e).sns != 0 or deref(e).snl != 0 { return }
+  deref(e).sns = ts
+  deref(e).snl = tl
+}
+
 ## Like `bind_slot`, but records the scalar's TYPE name span (`ts`/`tl`) in the slot's `sns`/`snl`.
 ## Used for a scalar VALUE parameter (ek 0) so per-signature overload resolution can recover the
 ## argument's type at a call site (`arg_type_name`). Harmless for existing paths: `sns`/`snl` on an
 ## ek-0 slot is only read by field/type resolution, which a scalar never reaches (fixpoint-checked).
 bind_slot_typed := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, ts : usize, tl : usize) -> usize {
   existing := slot_of(ptr(slots), src, s, n)
-  if existing >= 0 { return svec_len(ptr(slots)) }
+  if existing >= 0 { slot_adopt_native_int_type(slots, src, s, n, ts, tl) ; return svec_len(ptr(slots)) }
   off := svec_len(ptr(slots))
   svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = ts, snl = tl, ek = 0, estride = 1, eek = 0, is_ref = false))
   svec_len(ptr(slots))
