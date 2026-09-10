@@ -4787,12 +4787,31 @@ sema_direct_index_elem_ty := fn(src : ptr(u8), local : Local, decls : ptr(rt::Ve
   ae := array_elem_ty(src, ty, decls, upto)
   if ae.tag != 0 { return ae }
   ann := local_type_span(src, local.ns, local.nl)
-  if ann.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
-  bn := base_type_name(src, ann.s, ann.n)
-  if bn.n == 0 or str_at((src + bn.s), bn.n) != "Slice" { return Ty(tag = 0, ns = 0, nl = 0) }
-  elem := typearg_at(src, bn.s, bn.n, 0)
-  if elem.n == 0 or typearg_at(src, bn.s, bn.n, 1).n != 0 { return Ty(tag = 0, ns = 0, nl = 0) }
-  resolve_ty(src, elem.s, elem.n, decls, upto)
+  if ann.n != 0 {
+    bn := base_type_name(src, ann.s, ann.n)
+    if bn.n == 0 or str_at((src + bn.s), bn.n) != "Slice" { return Ty(tag = 0, ns = 0, nl = 0) }
+    elem := typearg_at(src, bn.s, bn.n, 0)
+    if elem.n == 0 or typearg_at(src, bn.s, bn.n, 1).n != 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+    return resolve_ty(src, elem.s, elem.n, decls, upto)
+  }
+  ## A range-inferred view records only its proven element span in tns/tnl; provenance is the
+  ## discriminator that prevents an unrelated UNKNOWN local carrying stale spans from becoming typed.
+  if (local.prov == 2 or local.prov == 3) and local.tnl != 0 {
+    return resolve_ty(src, local.tns, local.tnl, decls, upto)
+  }
+  Ty(tag = 0, ns = 0, nl = 0)
+}
+
+## Recover T for the exact inferred binding `view := array[lo..hi]` when `array` is a direct local
+## whose fixed-array annotation retained `[T; N]`. Field/indirect bases and arrays without a retained
+## type span stay UNKNOWN; this helper records evidence at the binding rather than rescanning later.
+sema_range_slice_elem_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), upto : usize) -> Ty {
+  base := sema_slice_base(v)
+  if unchecked bitcast(usize, base) == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  bv := expr_var_span(base)
+  if bv.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  bt := local_ty(locals, nloc, src, bv.s, bv.n)
+  array_elem_ty(src, bt, decls, upto)
 }
 
 ## Replace a whole unreadied aggregate marker with one unreadied direct-field entry per declared field.
@@ -9555,6 +9574,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## the aggregate-literal recovery, or the binding's own `: T` annotation.
           mut bind_ns := 0
           mut bind_nl := 0
+          ## Preserve the proven T of an inferred `view := fixed_array[lo..hi]` in the existing local
+          ## payload. The public tag remains UNKNOWN because the value is a Slice(T), not T itself;
+          ## only `sema_direct_index_elem_ty` consumes this span under slice provenance 2/3.
+          if bind_prov == 2 or bind_prov == 3 {
+            set := sema_range_slice_elem_ty(v, src, locals, cnt, decls, upto)
+            if set.tag != 0 { bind_ns = set.ns; bind_nl = set.nl }
+          }
           ## RECOVER the un-truncated type-NAME for a call-value binding (`x := f(...)`): `check_expr`'s
           ## `Result(Ty,…)` keeps the tag but drops ns/nl, so `x` otherwise records no resolvable type name.
           ## Re-resolve the callee's declared return type directly (`callee_ret_ty`, un-packed). Guarded to
