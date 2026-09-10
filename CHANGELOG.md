@@ -122,6 +122,18 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A range slice indexed directly, `xs[lo..hi][i]`, now reads the view's element on aarch64,
+  riscv64 and WASM too.** Grammar §3.4 writes `postfix-expr ::= primary { postfix }` with both
+  `"[" expr "]"` and the range form among the postfix ops, so this is one primary and two postfix
+  steps and needs no intermediate binding — yet `v := xs[lo..hi]; v[i]`, the same access one
+  binding later, was the only spelling those three backends lowered. Every arm of their index
+  chains keys on a bare name, so a slice base matched none of them and the shape reached their
+  fail-loud default: a program that compiled cleanly and then trapped. All three now compose the
+  element address off the {ptr, len} their own slice-binding path already stores, bounds-checked
+  against the view's runtime length, so the two spellings name the same byte. x86_64 (unchanged
+  here) closed its half earlier. An index past the view's end still traps rather than reading the
+  base array beyond `hi`, and `unchecked` still drops that check. Float-element, `[u8; N]`-packed,
+  struct-element, array-parameter and array-global bases keep their existing fail-loud behaviour.
 - **An element store through a nested field path is no longer discarded.** `outer.leaf.arr[i] = v`
   and deeper paths matched no assignment statement form — the recognizers demanded the `[`
   immediately after the FIRST field — so the line fell to the trailing-expression path and the store

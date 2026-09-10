@@ -5507,6 +5507,20 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       if stdpathok and stdel.n != 0 {
         if scalar_byte_size(src, stdel.s, stdel.n) == 1 { stdidx = true }
       }
+      ## #422 — the DIRECT range-slice base `xs[lo..hi][i]`. The claim rule is shared
+      ## (`lower_ctx::direct_slice_index_claim`); WAT supplies its own four answers. Computed with the
+      ## other classifiers so the chain below reads as one decision per arm. The base array's WASM
+      ## LOCAL (which holds its linear-memory base address) stands in for the native frame offset;
+      ## `name_local_index` answers `pcount` rather than a negative for an absent name, so the shared
+      ## rule's `base_located` half is carried by `is_array_local` here, not by the index itself.
+      dsnm := lower_ctx::direct_slice_index_array(ibase)
+      mut dsidx := i64(0) - 1
+      mut dsstride := i64(0)
+      if dsnm.n != 0 {
+        dsidx = name_local_index(body_head, src, dsnm.s, dsnm.n, pcount, a, decls)
+        dsstride = array_local_stride(body_head, src, dsnm.s, dsnm.n, a, decls)
+      }
+      dsclaim := lower_ctx::direct_slice_index_claim(dsnm, is_array_local(body_head, src, dsnm.s, dsnm.n, a), dsstride, wat_array_is_float(body_head, src, dsnm.s, dsnm.n, a, params_head, decls), dsidx >= 0)
       if stdidx {
         ## Byte-array field read (`p.bytes[i]`): standard field offset is a byte offset and the element
         ## stride is one byte, not the legacy word stride used by the branches below.
@@ -5668,6 +5682,42 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         if not wat_std_idx_path_ok(ibase, body_head, src, a, decls) { push_str(sb, "(i64.load (i32.wrap_i64 ") }
         emit_wat_place_idx_addr(ibase, iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "))")
+      } else if dsclaim {
+        ## Grammar §3.4 / Types §9.4 (#422) — a RANGE SLICE used DIRECTLY as an index base,
+        ## `xs[lo..hi][i]`. The deliverer is the BOUND spelling's own arithmetic: `s := xs[lo..hi]`
+        ## stores word0 = `<base array local> + lo*stride*8` and word1 = `hi - lo`, and `s[i]` then
+        ## bounds-checks `i` against word1 and loads at `word0 + i*8`. Composing the same address
+        ## INLINE — no `{ptr,len}` block, so no `$__sp` bump and no reservation to account for —
+        ## makes the direct and the bound spelling name the same byte, which is the disagreement
+        ## #422 reported. `lo` is ACCOUNTED FOR, not ignored, and it is evaluated twice (once in the
+        ## address, once in the length), exactly as the `Expr::Slice` value arm already does.
+        ##
+        ## Placed immediately above the trap: every arm before it needs a bare `Var` base or keys on
+        ## a `Field`/`Index` base, so this position is byte-identical for every other shape.
+        push_str(sb, "(i64.load (i32.wrap_i64 (i64.add (i64.add (local.get ")
+        push_int(sb, dsidx)
+        push_str(sb, ") (i64.mul ")
+        emit_wat_expr(ex_slice_lo(ibase), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        push_str(sb, " (i64.const 8))) (i64.mul ")
+        ## CHECKED BOUNDS (I11 / CG-7) against the VIEW's runtime length `hi - lo`; `i64.ge_u` is
+        ## unsigned, so a negative i64 index also traps. WASM has no scratch register, so the index is
+        ## parked in the SECOND extra local (`pcount + nlocals + 1`) rather than the first: the bound
+        ## `hi - lo` is an EXPRESSION here, unlike every other checked arm's constant or memory load,
+        ## and it is evaluated after the park — so it must not collide with the scratch the index sits
+        ## in. Anything a bound expression can itself contain that uses the FIRST scratch (any other
+        ## checked index) is therefore safe. Dropped in an `unchecked` scope, like the bound spelling.
+        if WAT_CHK {
+          sc2 := pcount + count_locals(body_head, src, a, decls) + 1
+          push_str(sb, "(block (result i64) (local.set ") ; push_int(sb, sc2) ; push_str(sb, " ")
+          emit_wat_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, ") (if (i64.ge_u (local.get ") ; push_int(sb, sc2) ; push_str(sb, ") (i64.sub ")
+          emit_wat_expr(ex_slice_hi(ibase), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, " ")
+          emit_wat_expr(ex_slice_lo(ibase), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, ")) (then (unreachable))) (local.get ") ; push_int(sb, sc2) ; push_str(sb, "))")
+        }
+        if not WAT_CHK { emit_wat_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        push_str(sb, " (i64.const 8)))))")
       } else {
         push_str(sb, "(unreachable) (; unsupported index ;)\n")
       }
