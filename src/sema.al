@@ -4814,10 +4814,25 @@ sema_range_slice_elem_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec),
   array_elem_ty(src, bt, decls, upto)
 }
 
+## Return the full RHS span for one direct type alias. Alias chains are rejected independently, so
+## this lookup never recurses or turns an unresolved name into a guessed type expression.
+sema_direct_type_alias_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), name : VSpan) -> VSpan {
+  mut r := VSpan(s = 0, n = 0)
+  mut i := 0
+  while i < upto {
+    d := deref(decl_get(decls, i))
+    if d.kind == 0 and d.alias_tl != 0 and streq(src, d.name_start, d.name_len, name.s, name.n) {
+      r = VSpan(s = d.alias_ts, n = d.alias_tl)
+    }
+    i += 1
+  }
+  r
+}
+
 ## Recover T for the exact indexed place `root.field[i]` when `root` is a direct local with a
-## resolvable struct type and `field` is declared as `Slice(T)`. The field annotation is reliable
-## declaration evidence; aliases, nested/indirect roots, non-Slice fields, and unresolved generic
-## arguments remain UNKNOWN for their own bounded slices.
+## resolvable struct type and `field` is declared as `Slice(T)` or one direct alias of it. The field
+## and alias annotations are reliable declaration evidence; nested/indirect roots, non-Slice fields,
+## alias chains, and unresolved generic arguments remain UNKNOWN for their own bounded slices.
 sema_direct_slice_field_elem_ty := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> Ty {
   field := expr_field_span(base)
   owner_expr := expr_field_base(base)
@@ -4828,7 +4843,15 @@ sema_direct_slice_field_elem_ty := fn(base : ptr(Expr), decls : ptr(rt::Vec), up
   if owner.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   ann := sema_field_ann_span(decls, upto, src, owner.s, owner.n, field.s, field.n, a)
   if ann.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
-  bn := base_type_name(src, ann.s, ann.n)
+  mut target := ann
+  mut bn := base_type_name(src, target.s, target.n)
+  if bn.n != 0 and str_at((src + bn.s), bn.n) != "Slice" {
+    alias := sema_direct_type_alias_span(decls, upto, src, bn)
+    if alias.n != 0 {
+      target = alias
+      bn = base_type_name(src, target.s, target.n)
+    }
+  }
   if bn.n == 0 or str_at((src + bn.s), bn.n) != "Slice" { return Ty(tag = 0, ns = 0, nl = 0) }
   elem := typearg_at(src, bn.s, bn.n, 0)
   if elem.n == 0 or typearg_at(src, bn.s, bn.n, 1).n != 0 { return Ty(tag = 0, ns = 0, nl = 0) }
