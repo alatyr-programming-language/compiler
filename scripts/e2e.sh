@@ -9548,6 +9548,22 @@ run comptime_type_eq 42
 ## §3: a comptime-for over a numeric RANGE (comptime for i in lo..hi) — unrolled at compile time.
 run comptime_for_range 42
 check_accept comptime_for_range
+## #672 CONTROL — the NEIGHBOURING bound spellings. This fixture's bounds are a literal (`0 .. 6`,
+## `2 .. 5`) and a bare module const (`0 .. N`); both already answered 42 on all four backends before
+## the const-arithmetic fold landed and still do, which is what makes the four-backend rows of
+## `comptime_for_const_arith_bound` below a contrast rather than a bare assertion.
+run_a64 comptime_for_range 42
+run_rv64 comptime_for_range 42
+run_wat comptime_for_range 42
+## #672: a const-ARITHMETIC range bound (`N - 1`, `2 + 2`, `M * 3`, `N - 4 ..`, `0 - 2 ..`, `N + 1`,
+## `N / 2`, `N % 3`). `lower.al`'s `global_init_value` folds these; the three emit-side twins absorbed
+## `Expr::Bin` into a wildcard and returned their initial `mut r := 0` AS the bound, so the loop
+## unrolled a different element set — clean compile, exit 0, no diagnostic, on every surface. Parent
+## (`20ddb3f`): x86_64 42 against aarch64 3, riscv64 3, wasm 3.
+run comptime_for_const_arith_bound 42
+run_a64 comptime_for_const_arith_bound 42
+run_rv64 comptime_for_const_arith_bound 42
+run_wat comptime_for_const_arith_bound 42
 ## §3: a comptime-for range bound of typeinfo(T).n (comptime array length) — unrolls N times.
 run comptime_for_typeinfo_n 42
 ## CT-6: the range bound uses the typeinfo(X) argument itself, even when X differs from the
