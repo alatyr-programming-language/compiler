@@ -103,28 +103,90 @@ mut A64_NL := 0
 mut A64_PRINT_I64 : bool = false
 a64_next_label := fn() -> i64 { r := A64_NL ; A64_NL = A64_NL + 1 ; r }
 
+## ── #544 STAGE 1 · WHY THESE `match`es END IN A SPELLED-OUT GROUP ARM ─────────────────────────────
+## Every `match deref(<expr>)` in this file that used to end in `_ => {}` now ends in ONE OR-pattern
+## group arm naming every `Expr` variant it absorbs, in `src/ast.al` declaration order, so that ADDING
+## an `Expr` variant is a compile error at each of these sites instead of a silent default (Control
+## Flow §5.1). The enforcement itself arrived with #557/PR #573; this file could not see it until
+## #656/PR #662 made a `ptr(T)` annotation resolve its pointee independently of module order — every
+## arm here was invisible while `aarch64` sorted before `ast`.
+##
+## SITE KIND, because only one of the four is dangerous. Almost every one of these is a PREDICATE
+## ("is this node an X?") or a PROJECTION ("give me X's k-th span/child"), and for every other form the
+## `false` / `0` / null-pointer / `{0,0}` default the function already initialises IS the answer — this
+## site decides nothing for those forms, the caller's own classification chain does.
+## `a64_emit_out_scalar_arg` is a NORMALIZER (it forwards every other form to `emit_a64_expr`), and
+## `emit_a64_expr` / `emit_a64_stmts` are the EMITTERS, whose absorbed forms reach a located `brk #0`
+## trap rather than a guessed value. A new `Expr` variant belongs in the group arm unless the
+## accessor's own question can be TRUE of it — then it needs a real arm and a fixture. The reason is
+## written once here instead of thirty-eight times; only the three arms whose reason is genuinely
+## their own carry a note of their own.
+##
+## MEASURED on this file at `cff2b72`, one arm at a time, the whole file restored between runs, with a
+## compiler built from this tree (NOT the frozen seed, which predates #656 and accepts all 63):
+## each of the 63 `_ =>` arms deleted in turn, `check package.al` re-run, rc read outside a pipeline —
+##   * 39 REFUSED, rc 1, `alatyr: check: type mismatch at line <n> in aarch64`, naming the arm's site.
+##   * 24 ACCEPTED, rc 0, silent. All 24 are `match st` over `st := deref(stmt_p(Stmt, <h>))` — the
+##     #660/#557 blind class, where an inferred local bound from a generic call adopts no enum type.
+##     They KEEP their `_` and each is marked below. Spelling them out would buy the LOOK of
+##     enforcement and nothing else, because a 22nd `Stmt` variant would still not be refused and
+##     nothing would hold the written list current.
+## The 24 are not blind because of module order: the byte-identical twin in `src/wat.al` — a module
+## sorting AFTER `src/ast.al` — is equally blind. `wat.al:298` deleted -> rc 0, silent, while the
+## `match deref(e)` at `wat.al:286` deleted -> rc 1 `type mismatch at line 266 in wat`.
+##
+## 38 of the 39 caught arms are spelled out. `emit_a64_expr`'s is the one that is not, and the reason
+## is a compiler defect (#673), not a judgement — see its own note. An OR-pattern arm's body is
+## emitted once per ALTERNATIVE, so a group arm's body is duplicated N times: invisible for the 36
+## empty `{}` bodies, cheap for `a64_cf_offset_value` and `a64_emit_out_scalar_arg`, and fatal for a
+## body holding a STRING LITERAL, which emits N `.rodata` definitions under ONE label.
+## ──────────────────────────────────────────────────────────────────────────────────────────────────
 ## Single-match `If` accessors — `is` + the then-branch expr. A struct-valued if-EXPRESSION
 ## (`x := if c {f()} else {g()}`) delivers its value through the branch tails; when each tail is a
 ## struct-returning call the branches leave the struct words in x0..x_(w-1), exactly like the tail of a
 ## struct-returning fn — so the binding path sizes/delivers it via the then-branch's return span (below).
 a64_is_if := fn(e : ptr(Expr)) -> bool {
   mut r := false
-  match deref(e) { Expr::If(c, t, f) => { r = true } _ => {} }
+  match deref(e) {
+    Expr::If(c, t, f) => { r = true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 a64_if_then := fn(e : ptr(Expr)) -> ptr(Expr) {
   mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
-  match deref(e) { Expr::If(c, t, f) => { r = t } _ => {} }
+  match deref(e) {
+    Expr::If(c, t, f) => { r = t }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 a64_if_cond := fn(e : ptr(Expr)) -> ptr(Expr) {
   mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
-  match deref(e) { Expr::If(c, t, f) => { r = c } _ => {} }
+  match deref(e) {
+    Expr::If(c, t, f) => { r = c }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 a64_if_else := fn(e : ptr(Expr)) -> ptr(Expr) {
   mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
-  match deref(e) { Expr::If(c, t, f) => { r = f } _ => {} }
+  match deref(e) {
+    Expr::If(c, t, f) => { r = f }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 ## Single-match `Match`-EXPRESSION accessors — `is`, the scrutinee expr, the arm-list head. A struct-
@@ -133,17 +195,35 @@ a64_if_else := fn(e : ptr(Expr)) -> ptr(Expr) {
 ## stores those words into p's slots. Delivery reuses emit_a64_struct_value (below).
 a64_is_match := fn(e : ptr(Expr)) -> bool {
   mut r := false
-  match deref(e) { Expr::Match(sc, ah) => { r = true } _ => {} }
+  match deref(e) {
+    Expr::Match(sc, ah) => { r = true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 a64_match_scrut := fn(e : ptr(Expr)) -> ptr(Expr) {
   mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
-  match deref(e) { Expr::Match(sc, ah) => { r = sc } _ => {} }
+  match deref(e) {
+    Expr::Match(sc, ah) => { r = sc }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 a64_match_armh := fn(e : ptr(Expr)) -> ptr(mut Arm) {
   mut r : ptr(mut Arm) = unchecked bitcast(ptr(mut Arm), 0)
-  match deref(e) { Expr::Match(sc, ah) => { r = ah } _ => {} }
+  match deref(e) {
+    Expr::Match(sc, ah) => { r = ah }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 ## True IFF every arm of a match-EXPRESSION is a SIMPLE variant/wildcard arm with an EXPRESSION body
@@ -237,7 +317,10 @@ a64_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Call | Expr::StructLit | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -309,6 +392,7 @@ a64_local_struct_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : 
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -373,6 +457,7 @@ a64_local_struct_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : 
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -509,13 +594,25 @@ a64_struct_has_word_array_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s : u
 ## whole-element aggregate copies: only a plain word-granular struct element can pass this gate.
 a64_is_deref := fn(e : ptr(Expr)) -> bool {
   mut r := false
-  match deref(e) { Expr::Deref(_inner) => { r = true } _ => {} }
+  match deref(e) {
+    Expr::Deref(_inner) => { r = true }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 
 a64_deref_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
-  match deref(e) { Expr::Deref(inner) => { r = inner } _ => {} }
+  match deref(e) {
+    Expr::Deref(inner) => { r = inner }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 
@@ -1314,6 +1411,7 @@ a64_local_enum_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : us
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -1352,6 +1450,7 @@ a64_local_enum_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : us
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -1415,7 +1514,13 @@ a64_elit_payload_scalar := fn(v : ptr(Expr)) -> bool {
 
 a64_alit_nel := fn(v : ptr(Expr)) -> i64 {
   mut r := 0
-  match deref(v) { Expr::ArrayLit(al_n, al_e) => { r = i64(al_n) } _ => {} }
+  match deref(v) {
+    Expr::ArrayLit(al_n, al_e) => { r = i64(al_n) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 ## Is the LOCAL `[ns,nl]` a range-SLICE view (its first `:=` value is an `Expr::Slice`)?
@@ -1435,6 +1540,7 @@ a64_is_array_local := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
         ## sentinel, so its array-ness lives only in the source annotation (a64_ann_arr_nel).
         if (not r) and a64_ann_arr_nel(src, ans, anl, v) > 0 { r = true }
       }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => {}
     }
   }
@@ -1508,6 +1614,7 @@ a64_arr_elem_struct_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, 
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -1556,6 +1663,7 @@ a64_iter_stride := fn(head : ptr(mut Stmt), src : ptr(u8), e : ptr(Expr), a : rt
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -1603,6 +1711,7 @@ a64_array_nel := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize,
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -1753,7 +1862,12 @@ a64_cf_offset_value := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a 
       if fwo >= 0 { return fwo * 8 }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    ## The group arm's body is `return 0 - 1`, and #673's per-ALTERNATIVE duplication applies: it is
+    ## emitted 23 times. Cheap here and semantically identical; recorded so the size is not a surprise.
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 ## The comptime value of `<f>.mutable` for the ACTIVE field-derive descriptor. The parser erases the
@@ -1773,7 +1887,10 @@ a64_cf_mutable_value := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -1987,6 +2104,7 @@ a64_first_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       ## a `deref(p) = v` store declares no local but MUST NOT terminate the scan.
       Stmt::DerefAssign(dpe, dval, dnx) => { s = dnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -2104,6 +2222,7 @@ a64_local_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : usi
       Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(dpe, dval, dnx) => { s = dnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -2131,7 +2250,9 @@ a64_slarg_count_e := fn(e : ptr(Expr)) -> i64 {
     Expr::StructLit(ss, sl, nf, fh) => { mut g := fh ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next } }
     Expr::ArrayLit(nel, eh) => { mut g := eh ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next } }
     Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g := ph ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   c
 }
@@ -2159,6 +2280,7 @@ a64_slarg_count := fn(list : ptr(mut Stmt)) -> i64 {
       Stmt::Unchecked(ub, unx) => { c = c + a64_slarg_count(ub) ; s = unx }
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -2186,7 +2308,9 @@ a64_aggval_words_e := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : pt
     Expr::StructLit(ss, sl, nf, fh) => { mut g := fh ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
     Expr::ArrayLit(nel, eh) => { mut g := eh ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
     Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g := ph ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   c
 }
@@ -2214,6 +2338,7 @@ a64_aggval_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls
       Stmt::Unchecked(ub, unx) => { c = c + a64_aggval_words(ub, src, a, decls) ; s = unx }
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -2285,6 +2410,7 @@ a64_match_tmp_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) ->
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -2509,6 +2635,15 @@ a64_inst_add := fn(src : ptr(u8), gi : usize, ts : usize, tl : usize) {
 ## Resolve a comptime-for RANGE BOUND to its constant value: a literal, or a module-level const `N := k`
 ## resolved by name (comptime_for_range's `0..N`). Mirrors the subset of the x86 lower's global_init_value
 ## the corpus range bounds use (literal + module const; no const arithmetic — range bounds carry none).
+## THE ONE ACCESSOR HERE WHOSE ABSORBED SET IS REACHED AND WRONG (#672). The group arm below lists
+## `Expr::Bin`, and the header sentence above says range bounds carry no const arithmetic. Measured on
+## `cff2b72`: they do, and x86 folds them. `comptime for i in 0 .. N - 1` with `N := 5` runs FOUR times
+## on x86_64 (`lower.al`'s `global_init_value` has a `Bin` arm) and ZERO times here, on riscv64 and on
+## wasm, with a clean compile and no diagnostic; `0 - 2 .. 2` gives x86 4 against 2 everywhere else.
+## The initial `mut r := 0` doubles as "I could not fold this", which is #638's `-1` sentinel one level
+## further in. NOT fixed here: this unit is a byte-identity refactor and a fix belongs with its own
+## four-backend fixture (#672). The group arm keeps today's behaviour exactly; it only names the forms
+## that arrive, so #672 has a list to work from.
 a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> i64 {
   mut r := 0
   match deref(e) {
@@ -2588,7 +2723,10 @@ a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
         }
       }
     }
-    _ => {}
+    Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf
+      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
   }
   r
 }
@@ -2692,7 +2830,10 @@ a64_gchain_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
       bt := a64_gchain_type(base, decls, src, a)
       if bt.n != 0 { if struct_decl_of(decls, src, bt.s, bt.n) >= 0 { r = field_type_span(decls, src, bt.s, bt.n, fs, fl, a) } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -2714,7 +2855,10 @@ a64_gchain_woff := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
         if fwo >= 0 { r = boff + fwo }
       } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -2725,7 +2869,10 @@ a64_gchain_root := fn(e : ptr(Expr)) -> CSpan {
   match deref(e) {
     Expr::Var(s, n) => { r = CSpan(s = s, n = n) }
     Expr::Field(base, fs, fl) => { r = a64_gchain_root(base) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -2751,7 +2898,10 @@ a64_lchain_type := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a
       bt := a64_lchain_type(base, body_head, src, a, decls)
       if bt.n != 0 { if struct_decl_of(decls, src, bt.s, bt.n) >= 0 { r = field_type_span(decls, src, bt.s, bt.n, fs, fl, a) } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -2772,7 +2922,10 @@ a64_lchain_woff := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a
         if fwo >= 0 { r = boff + fwo }
       } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -2991,6 +3144,7 @@ a64_local_ann_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = ann_span(src, ans, anl) }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => {}
     }
   }
@@ -3037,7 +3191,10 @@ a64_place_root_inferred_local := fn(e : ptr(Expr), body_head : ptr(mut Stmt), sr
     }
     Expr::Field(base, fs, fl) => { r = a64_place_root_inferred_local(base, body_head, src, a, decls) }
     Expr::Index(base, idx) => { r = a64_place_root_inferred_local(base, body_head, src, a, decls) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -3074,7 +3231,13 @@ a64_inferred_local_agg_elem_base := fn(e : ptr(Expr), body_head : ptr(mut Stmt),
 ## rather than guessing an addressing mode.
 a64_ex_is_var := fn(e : ptr(Expr)) -> bool {
   mut r := false
-  match deref(e) { Expr::Var(_s, _n) => { r = true } _ => {} }
+  match deref(e) {
+    Expr::Var(_s, _n) => { r = true }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 
@@ -3406,7 +3569,12 @@ a64_emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Are
       }
       if not done { emit_a64_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
     }
-    _ => { emit_a64_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+    ## NORMALIZER: every other form is forwarded to `emit_a64_expr`, which is what the `_` did. Per
+    ## #673 that forwarding call is emitted once per ALTERNATIVE (23 copies), not once for the arm.
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { emit_a64_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
   }
 }
 
@@ -3436,6 +3604,7 @@ a64_local_ann_signed := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_signed(src, ans + anl) { r = true } }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => {}
     }
   }
@@ -3457,6 +3626,7 @@ a64_local_rhs := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize,
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = v }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => {}
     }
   }
@@ -3471,7 +3641,10 @@ a64_shift_call_signed := fn(v : ptr(Expr), params_head : ptr(mut Param), body_he
       cn := str_at((src + cs), cl)
       if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" { if a64_operand_signed_dep(arg_expr_at(ah, 0, a), params_head, body_head, src, a, dep) { r = true } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -3505,7 +3678,10 @@ a64_bin_init_signed := fn(v : ptr(Expr), params_head : ptr(mut Param), body_head
         if sr and ex_is_num_lit(bl) { r = true }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -3546,7 +3722,10 @@ a64_operand_signed_dep := fn(e : ptr(Expr), params_head : ptr(mut Param), body_h
     ## An ARITHMETIC `Bin` used DIRECTLY as an operand (`(a - b) + c`) carries its operands' type by
     ## the same rule as a `Bin`-inferred binding — the two halves of `0 + d + p` (#651).
     Expr::Bin(bop, obl, obr) => { if a64_bin_init_signed(e, params_head, body_head, src, a, dep + 1) { r = true } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -3558,6 +3737,7 @@ a64_local_ann_unsigned := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => {}
     }
   }
@@ -3573,7 +3753,10 @@ a64_unchecked_init_unsigned := fn(v : ptr(Expr), params_head : ptr(mut Param), b
   mut r := false
   match deref(v) {
     Expr::Unchecked(inner) => { r = a64_operand_unsigned(inner, params_head, body_head, src, a) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -3615,7 +3798,10 @@ a64_operand_unsigned := fn(e : ptr(Expr), params_head : ptr(mut Param), body_hea
         if ur and ex_is_num_lit(bl) { r = true }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -3653,7 +3839,10 @@ a64_hole_signed := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : p
     Expr::Index(bse, ix) => { if a64_hole_index_signed(bse, body_head, src, a) { r = true } }
     Expr::Call(cs, cl, na, ah) => { if callee_ret_is_signed(decls, src, cs, cl) { r = true } }
     Expr::Var(vs, vn) => { if a64_hole_local_init_signed(body_head, src, vs, vn, a) { r = true } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -3706,6 +3895,7 @@ a64_local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = ann_scan_narrow(src, ans + anl) }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => {}
     }
   }
@@ -3721,7 +3911,10 @@ a64_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head 
       if r == "" { r = a64_local_narrow(body_head, src, s, n, a) }
     }
     Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -4171,6 +4364,7 @@ a64_array_is_float := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -4184,6 +4378,7 @@ a64_is_float_local := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_float(src, ans + anl) { r = true } ; if a64_is_float_expr(v, body_head, src, a, params_head, decls, dep + 1) { r = true } }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => {}
     }
   }
@@ -4204,7 +4399,10 @@ a64_int_const_expr := fn(e : ptr(Expr)) -> bool {
     ## which lowers the whole `Unchecked` node, so unwrapping HERE only answers the shape question.
     ## One of FOUR copies of this predicate (x86 `expr_num_const`, a64, rv64, wat); they must agree.
     Expr::Unchecked(inner) => { if a64_int_const_expr(inner) { r = true } }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -4275,7 +4473,9 @@ a64_is_float_expr := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8),
       bnl := ex_var_nl(base)
       if bnl != 0 { if a64_array_is_float(body_head, src, bns, bnl, a, params_head, decls) { r = true } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -4325,7 +4525,10 @@ a64_is_float_cmp := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), 
         if a64_is_float_expr(rr, body_head, src, a, params_head, decls, 0) { r = true }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -4394,7 +4597,10 @@ a64_is_agg_cmp := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), a 
         if a64_is_agg_index(rr, src, a, decls) { r = true }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -4422,6 +4628,7 @@ a64_bound_lambda := fn(body : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
       Stmt::Assign(as, al, v, nx) => {
         rhs = v
       }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => {}
     }
   }
@@ -5693,6 +5900,15 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       emit_a64_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
       A64_CHK = ov
     }
+    ## #544 stage 1 leaves THIS wildcard alone, and it is the only CHECKABLE arm in the file that is
+    ## not spelled out. Deleting it IS refused — rc 1, `type mismatch at line <n> in aarch64` naming
+    ## this site (the census measured it at the parent file's line 5696) — so the arm is visible to
+    ## exhaustiveness. What blocks the group arm is #673: an OR-pattern arm's body is emitted once per
+    ## ALTERNATIVE, and this body holds a string literal, so the eight absorbed variants (StructLit,
+    ## EnumLit, StrLit, ArrayLit, Try, Slice, Lambda, Loop) produce EIGHT `.rodata` definitions under
+    ## one `.Lstr<m>_<k>` label and `as` refuses the self-build. Measured, not inferred: the enumerated
+    ## form stops at `Error: symbol '.Lstr1_617' is already defined`, eight times. Enumerate this one
+    ## when #673 lands, with a non-vacuity check that names this line.
     _ => { push_str(sb, "  brk #0 // unsupported expr\n") }
   }
 }
@@ -6839,7 +7055,10 @@ emit_a64_byte_array_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, nel : i64
         done = true
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   if not done { push_str(sb, "  brk #0 // unsupported bounded byte-array return value\n") }
 }
@@ -8127,6 +8346,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         if not cfdone { push_str(sb, "  brk #0 // comptime-for fields: needs a struct mono instance\n") }
         s = nx
       }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { push_str(sb, "  brk #0 // unsupported statement\n") ; s = 0 }
     }
   }
@@ -8539,7 +8759,10 @@ a64_str_data_if_print := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8)
       ok := isp and expr_is_str_lit(sarg)
       if ok { emit_a64_str_bytes(sb, src, expr_str_lit_ns(sarg), expr_str_lit_nl(sarg), expr_str_lit_label(sarg)) }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 
@@ -8569,6 +8792,7 @@ emit_a64_str_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(
       Stmt::Unchecked(ub, unx) => { emit_a64_str_data(ub, sb, src, a) ; s = unx }
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
@@ -8588,7 +8812,9 @@ emit_a64_float_data_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(
     Expr::StructLit(ss, sl, nf, fh) => { mut g := fh ; while g != 0 { ga := deref(arg_p(g)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next } }
     Expr::ArrayLit(nel, eh) => { mut g := eh ; while g != 0 { ga := deref(arg_p(g)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next } }
     Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g := ph ; while g != 0 { ga := deref(arg_p(g)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Try | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
   }
 }
 emit_a64_float_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
@@ -8613,6 +8839,7 @@ emit_a64_float_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : pt
       Stmt::Unchecked(ub, unx) => { emit_a64_float_data(ub, sb, src, a) ; s = unx }
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
+      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
       _ => { s = 0 }
     }
   }
