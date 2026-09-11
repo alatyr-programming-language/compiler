@@ -2817,6 +2817,54 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
   }
 }
 
+## Issue #655 — the PROVENANCE question `sema` used to answer by spelling. `push_module_name` above
+## reaches a module's name through exactly three branches: a resolved path DEPENDENCY (named under
+## its alias), the ambient stdlib shipped under a `/lib/` directory, and this package's own source
+## tree. The first two are the modules `check` deliberately TRUSTS — separately built and verified —
+## and the third is the code under check. That distinction lives HERE, in the branch the name was
+## built from; the `__` that ends up in `std__io` is a CONSEQUENCE of it, not the fact itself, and a
+## nested package submodule (`src/lower/place.al` → `lower__place`) carries the same consequence
+## without being a library at all. Keep the two tests adjacent so the classes cannot drift apart.
+d_path_is_trusted_lib := fn(p : str) -> bool {
+  if dep_root_prefix(p) != 0 { return true }
+  mut i := 0
+  mut lib := false
+  while i + 5 <= p.len {
+    if bytes(p)[i] == 47 and str_at(unchecked bitcast(usize, p.ptr) + i, 5) == "/lib/" { lib = true }
+    i += 1
+  }
+  if lib == false { return false }
+  ## …but a `lib/` directory INSIDE the package's own source root is the package's own code, however
+  ## `push_module_name` chooses to name it. Trusting it would let anyone switch the type checker off
+  ## for part of their own package by naming a directory `lib`, and it would take `src/lib/thing.al`
+  ## (`test/package/dep_lib_nested`) out of the checked set it is in today. The ambient stdlib lives
+  ## at `<install>/lib/…`, outside every package's `source_dir`, so this costs it nothing.
+  not d_path_under_module_root(p)
+}
+
+## Publish those modules' NAME SPANS to sema, in the same pointer/length shape as the root-module and
+## package-module publications beside it. Membership is an exact `(mod_start, mod_len)` integer pair —
+## the very pair the parser stamps on every `Decl` of that module — so the checker compares identities
+## rather than re-reading a name. Always called on a path that builds a module table, including when
+## the table holds no library module at all: `sema::set_lib_modules` records that it was PUBLISHED,
+## which is a different answer from "nothing was published" and is what lets the fallback stay exact.
+d_publish_lib_modules := fn(pv : rt::Vec, mod_start : rt::Vec, mod_len : rt::Vec, in out tar : rt::Arena) {
+  n := rt::vec_len(pv)
+  base := rt::bump(tar, n * 2 * 8 + 8)
+  tbl := unchecked bitcast(ptr(mut u8), base)
+  mut c := 0
+  mut k := 0
+  while k < n {
+    if d_path_is_trusted_lib(rt::svec_str_get(pv, k)) {
+      rt::rec_set(tbl, c, rt::vec_get(mod_start, k))
+      rt::rec_set(tbl, c + 1, rt::vec_get(mod_len, k))
+      c += 2
+    }
+    k += 1
+  }
+  ksl := sema::set_lib_modules(base, c)
+}
+
 ## Publish the manifest's module source root for the following compile/check/test call. The CLI keeps
 ## the owning arena alive for the whole command, so storing the pointer/length avoids inventing a
 ## second path metadata channel alongside the newline-joined source list.
@@ -3112,6 +3160,15 @@ d_manifest_package_path := fn(p : str) -> bool {
     i += 1
   }
   if lib { return false }
+  d_path_under_module_root(p)
+}
+
+## Is `p` a file INSIDE the published module source root — the package under compilation's own tree?
+## Extracted from `d_manifest_package_path` above so the one location fact has one implementation:
+## #655's library/provenance test needs the same question asked WITHOUT that predicate's `/lib/`
+## exclusion, and two copies of a path prefix rule is how the two classes drift apart.
+d_path_under_module_root := fn(p : str) -> bool {
+  if MODULE_ROOT_N == 0 { return false }
   root := str_at(MODULE_ROOT_P, MODULE_ROOT_N)
   if root == "." {
     ## A flat package's own discovery paths are `./…`; dependency paths retain their `../…` or
@@ -4613,6 +4670,9 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     krn2 := sema::set_root_module(0, 0)
     parser::set_root_display(0, 0, 0, 0)
   }
+  ## Issue #655 — publish which of these modules are LIBRARIES, by the branch their name was built
+  ## from. Unconditional, so a table published by an earlier compile in this process cannot leak in.
+  d_publish_lib_modules(pv, mod_start, mod_len, tar)
   ## --- lex + parse each module's region into ONE rt Decl-handle Vec, threading nstr (all token
   ## records + the shared decls handle Vec + records live in `tar`, created above). ---
   ## Caps reserved from source size (rt::vec_push does not grow): decls ≤ total tokens ≤ total
@@ -6553,6 +6613,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     krn2 := sema::set_root_module(0, 0)
     parser::set_root_display(0, 0, 0, 0)
   }
+  ## Issue #655 — publish which of these modules are LIBRARIES, by the branch their name was built
+  ## from. Unconditional, so a table published by an earlier check in this process cannot leak in.
+  d_publish_lib_modules(pv, mod_start, mod_len, tar)
   dcap := strbuf::buf_len(bld) + n * 8 + 64
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
   ## The parser's by-name struct-construction table is a PASS-1 product, just like the enum-name table.

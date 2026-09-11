@@ -122,9 +122,15 @@ comptime_scalar_value := fn(e : ptr(Expr), cx : ptr(LCtx)) -> ComptimeScalar {
         if op == 41 { if lv.value != 0 or rv.value != 0 { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
         if op == 42 { if lv.value == 0 { return ComptimeScalar(known = true, value = 1) }; return ComptimeScalar(known = true, value = 0) }
       }
-      ComptimeScalar(known = false, value = 0)
+      ## `return`, not a tail value — #667, and this is a WORKAROUND for it. The body is a `match`
+      ## STATEMENT, and the checker's missing-result test asks a match to be ALL-return or
+      ## ALL-tail-value (`sema::stmts_return` / `stmts_tail_value`), never a mixture; the arms above
+      ## return, so a tail value here made the whole function read as delivering no result at all.
+      ## Same value, same lowering, and every arm now answers the same way. This module only became
+      ## visible to the checker with #655; revisit when #667 lands.
+      return ComptimeScalar(known = false, value = 0)
     }
-    _ => { ComptimeScalar(known = false, value = 0) }
+    _ => { return ComptimeScalar(known = false, value = 0) }
   }
 }
 

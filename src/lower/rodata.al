@@ -244,6 +244,21 @@ emit_rodata_expr := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, src : ptr(u8),
       }
       }
     }
+    ## The six `Expr` variants this walk emits nothing for, spelled out instead of left off the match
+    ## (#544 stage 1 / #557). Four are leaves with no child expression: `BoolLit`, `CompField`,
+    ## `FnRef`, and `Loop` (whose statements `emit_rodata_stmts` reaches on its own). `Lambda` never
+    ## survives to this pass — the driver's FN-6 lifting rewrites it to an `Expr::FnRef` plus a
+    ## synthetic top-level Decl, whose body this walk then reaches as an ordinary declaration.
+    ##
+    ## `Slice` is the one that is a genuine gap, not an empty answer, and it is #668: `b[lo..hi]` has
+    ## three child expressions and this is an EMITTER, so a literal written inside one of them gets
+    ## no `.rodata` cell. Measured — `take("hello world"[0..5])` fails to link with `undefined
+    ## reference to .Lstr0_0`, while the same literal bound to a local first builds and runs. It
+    ## reached this pass unvisited before this arm existed too: the arm RECORDS the gap, it does not
+    ## create it, and descending here changes emitted bytes, which is why it is its own unit. This
+    ## module was skipped by `check` wholesale until #655.
+    Expr::BoolLit | Expr::CompField | Expr::Slice | Expr::Lambda | Expr::FnRef
+      | Expr::Loop => {}
   }
 }
 

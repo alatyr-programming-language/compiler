@@ -197,6 +197,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   declaration annotated with an array (`G : [2]A = [B(1), B(2)]`) is now refused per element, a
   shape neither slice covered on its own. A MULTI-COMPONENT enum-variant payload remains open
   on #299.
+- **A nested submodule of your package is type-checked now — it was not type-checked at all.** The
+  compiler decided which modules to TRUST by looking for `__` in the *mangled* module name, which is
+  how it spells a path separator: `src/geo/child.al` becomes `geo__child`, the same shape as the
+  ambient stdlib's `std__io`, so every nested submodule of every package was skipped wholesale by
+  both `check` and `build`. A name declared nowhere compiled there, linked, and ran: measured on a
+  two-module package, `check` rc 0, `build` rc 0, an executable produced, and the unbound name
+  lowered to `movq -8(%rbp), %rax` — an uninitialized frame slot returned as the program's result.
+  **Newly rejected:** anything in a nested submodule that the checker already refuses in a top-level
+  one — an unbound name, a type mismatch, a non-exhaustive `match` on a known enum, a private
+  cross-module reference, a `[T]` in a signature. The verdict is the ordinary located
+  `alatyr: check: … at line N in <module>`, identical on `check` and `build`. Which modules are
+  libraries is now answered by where the file came from — the ambient `<install>/lib/` tree and
+  resolved path dependencies — instead of by how its name happens to be spelled; the ambient stdlib
+  is trusted exactly as before, and a `lib/` directory inside your own `source_dir` is your code and
+  stays checked. This was the compiler's own blind spot too: `src/lower/*.al`, twelve files and
+  12 007 lines of it, had never been type-checked, and enabling the checker there found four
+  declarations it refuses — all four addressed in the same change.
 
 ## 0.2.2 — 2026-09-10
 - **A `::` head that names nothing is now a compile error instead of a silently different call.**

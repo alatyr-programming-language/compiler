@@ -3133,6 +3133,44 @@ is_lib_module := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
   }
   false
 }
+
+## Issue #655 — the same question asked of the PRODUCER instead of the spelling. `is_lib_module`
+## above is a NAME test standing in for a provenance question, and the parser mangles a nested
+## package submodule `src/lower/place.al` to `lower__place`: the `__` that identifies `std__io` as
+## ambient is also what a subdirectory of this package's own `source_dir` produces. So the skip
+## below reached twelve files and 12 007 lines of THIS compiler — all of `src/lower/`, a seventh of
+## it; #655's "ten" is the only number in its report that the count does not bear out —
+## in which a name bound nowhere passed `check` AND `build`. `driver::push_module_name` knows which
+## of its three branches it took; `driver::d_publish_lib_modules` publishes the resulting name spans
+## of the trusted ones, and this asks that table. Membership is an exact `(start, len)` compare
+## against the pair the parser stamped on the Decl, so no substring is consulted at all.
+##
+## `SEMA_LIB_MODULES_SET` is deliberately separate from `_N`: "a table with no library module in it"
+## (a package that imports no stdlib file) and "no table was published" (single-source `check`, whose
+## module spans are `0/0` anyway) are DIFFERENT answers, and collapsing them onto `_N == 0` would
+## make the first one fall back to the name test this issue is about. Every front end that reaches
+## `check_program` with a module table publishes one; anything else keeps its exact previous verdict.
+mut SEMA_LIB_MODULES_P : usize = 0
+mut SEMA_LIB_MODULES_N : usize = 0
+mut SEMA_LIB_MODULES_SET : bool = false
+pub set_lib_modules := fn(p : usize, n : usize) -> i64 {
+  SEMA_LIB_MODULES_P = p
+  SEMA_LIB_MODULES_N = n
+  SEMA_LIB_MODULES_SET = true
+  0
+}
+
+sema_module_is_lib := fn(src : ptr(u8), ms : usize, ml : usize) -> bool {
+  if SEMA_LIB_MODULES_SET == false { return is_lib_module(src, ms, ml) }
+  tbl := unchecked bitcast(ptr(mut u8), SEMA_LIB_MODULES_P)
+  mut i := 0
+  mut hit := false
+  while i + 1 < SEMA_LIB_MODULES_N {
+    if rt::rec_get(tbl, i) == ms and rt::rec_get(tbl, i + 1) == ml { hit = true }
+    i += 2
+  }
+  hit
+}
 ## GENERICS tier: is the callee `[s, s+n)` a GENERIC fn (its first param `T : type`)? Its
 ## first call argument is then the COMPTIME TYPE argument (an ident naming a type) — NOT a
 ## value expression, so the checker skips it (a type name is not a local/decl). Mirrors lower's
@@ -15459,7 +15497,9 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
     d := deref(decl_get(decls, i))
     ## TRUST the stdlib: keep ambient-lib decls for resolution but do not re-check them (check/build
     ## parity — a check-gap on a stdlib feature must not reject a well-typed user program, §1 item 5).
-    if is_lib_module(src, d.mod_start, d.mod_len) { }
+    ## #655 — by PROVENANCE (the driver's published table), not by the `__` in the mangled name: a
+    ## nested submodule of the package under check spells its name the same way and is not a library.
+    if sema_module_is_lib(src, d.mod_start, d.mod_len) { }
     ## a FALSE `when`-guarded decl (CT-5, Comptime §9) is "as if absent" for THIS target: skip its
     ## duplicate + body check entirely, exactly as `lower::emit_program` neuters it before emission.
     else if guard_is_false(d, src) { }

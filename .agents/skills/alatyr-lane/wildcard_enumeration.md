@@ -10,10 +10,27 @@ below is from that file unless it says otherwise.
 
 ## 0 · Before you take a file
 
-Three blind classes have been measured, one of them since fixed. In a blind class enumerating buys
-nothing while *deleting* writes a wrong value. Check your file against all three before claiming it:
+Three blind classes have been measured; TWO of them have since been fixed and are kept here as worked
+examples, because a fixed class still tells you what to re-measure and how. In a blind class,
+enumerating buys nothing while *deleting* writes a wrong value. Check your file against all three
+before claiming it:
 
-- **#655** — nothing under `src/lower/` is type-checked at all. Ten files, 12 007 lines.
+- **#655 — FIXED on `main`; like #656 below, a worked example now, not a warning.**
+  `sema::check_program` decided which modules to TRUST by the substring `__` in the mangled module
+  name, and `__` is how the parser spells a path separator, so every nested submodule of every
+  package was skipped wholesale — all twelve files and 12 007 lines of `src/lower/`, in which a name
+  bound nowhere passed `check` AND `build`. PR #677 made the question a provenance one, answered
+  from the driver's published table. Re-measured on `a54ae6c`, with a compiler **built from that
+  tree** for the same reason #656 gives — the frozen seed predates the fix and still accepts every
+  deletion — the deletion census over all **57** line-initial `_ =>` arms under `src/lower/` answers
+  **44 caught**, where the same census on #677's parent answers **0 of 57**. The class is gone; the
+  twelve files are not finished by fixing it. The remaining **13** are blind per ARM, not per file,
+  and eight of them are the #660 shape below — `match st` over `st := deref(stmt_p(Stmt, …))`, the
+  same spelling as `src/aarch64.al`'s 24. The other five are `match deref(<expr>)` forms over a call
+  result, an argument node and an array place, and this unit did not classify them; classify before
+  enumerating. Per file, caught/total: `abi_c` 1/1, `assign` 1/1, `collect_slots` 0/2, `ctfold`
+  10/10, `enum_match` 5/5, `fnval` 2/3, `ir` 11/19, `mono` 1/2, `place` 10/11, `scratch` 3/3,
+  `decl_index` and `rodata` none to measure.
 - **#656 — FIXED on `main`; this entry is now a worked example, not a warning.** A module sorting
   before `src/ast.al` could not resolve `ptr(T)` identity, so every arm in it was invisible, and
   `src/aarch64.al` was the whole of that class. PR #662 (`4873d30`) fixed `resolve_ty`'s `is_ptr`
@@ -28,13 +45,15 @@ nothing while *deleting* writes a wrong value. Check your file against all three
   function's return type. This one is per-arm, not per-file, and it has a workaround: annotating the
   local (`stmt : Stmt = …`) or the pointer (`sp : ptr(mut Stmt) = …`) restores the check.
 
-`src/lower/*.al` and `comptime.al` are blocked, not merely deprioritised. `aarch64.al` is not, any
+`comptime.al` is blocked, not merely deprioritised. `aarch64.al` is not, any
 more: it was taken as the second file of this stage (`Refs #544`, 38 of its 39 caught arms enumerated)
 once #662 landed, and the first thing that unit owed was re-measuring the census rather than carrying
 #662's numbers over. A control is worth keeping beside a fixed class: the byte-identical twin of one
 of the 24 in `src/wat.al` — a module sorting AFTER `src/ast.al` — is equally blind (`wat.al:298`
 deleted -> rc 0 silent, while `wat.al:286`'s `match deref(e)` -> rc 1 `at line 266 in wat`), which is
-what tells a per-arm blindness apart from a per-file one.
+what tells a per-arm blindness apart from a per-file one. `src/lower/*.al` is not blocked either,
+since #677 (above); it is the next candidate for this stage and it meets §3's #673 constraint the
+moment a group arm's body is non-empty, so check the bodies before claiming a file.
 
 ## 1 · Count the arms with a parser, not a grep
 
