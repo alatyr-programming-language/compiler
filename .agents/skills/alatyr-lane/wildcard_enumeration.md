@@ -52,8 +52,9 @@ once #662 landed, and the first thing that unit owed was re-measuring the census
 of the 24 in `src/wat.al` — a module sorting AFTER `src/ast.al` — is equally blind (`wat.al:298`
 deleted -> rc 0 silent, while `wat.al:286`'s `match deref(e)` -> rc 1 `at line 266 in wat`), which is
 what tells a per-arm blindness apart from a per-file one. `src/lower/*.al` is not blocked either,
-since #677 (above); it is the next candidate for this stage and it meets §3's #673 constraint the
-moment a group arm's body is non-empty, so check the bodies before claiming a file.
+since #677 (above); it is the next candidate for this stage. §3's #673 constraint on a non-empty
+group-arm body is gone (PR #685), so a body holding a string literal no longer excludes an arm;
+what a non-empty body still costs is `src/` text, which §3 now quantifies.
 
 ## 1 · Count the arms with a parser, not a grep
 
@@ -111,18 +112,36 @@ Bare variant names, no payload patterns — the form `src/lower/assign.al`'s `co
 already uses. Declaration order so a reader can diff the list against the enum by eye. Generate the
 list with a script rather than by hand; a hand-typed 23-name list is where a transposition hides.
 
-**A non-empty group-arm body is duplicated once per alternative, and a string literal in one is a
-hard stop (#673).** The pilot never met this because all 23 of its bodies were `{}`. Measured on
-`src/aarch64.al`: `emit_a64_expr`'s wildcard body is `push_str(sb, "  brk #0 // unsupported expr\n")`
-and its group arm absorbs eight variants, so the self-build emits eight `.rodata` definitions under
-one `.Lstr<m>_<k>` label and `as` refuses the tree — `check` still says rc 0, so the failure arrives
-at build time with a diagnostic that names a `.s` file, not the source. An eleven-line user program
-reproduces it. So: enumerate every arm whose body is `{}`; for a non-empty body check whether it holds
-a string literal, and if it does, leave the `_` with a note pointing at #673 rather than reporting the
-arm as blind — it is checkable, it is simply not yet writable. A non-empty body WITHOUT a literal
-(`{ return 0 - 1 }`, a forwarding call) enumerates fine and costs N copies of that body, which is
-`src/` growth, not an emission change. Every backend twin — `riscv64.al`, `wat.al` — carries the same
-`brk #0` emitter, so the next two files meet this at the same place.
+**A non-empty group-arm body is duplicated once per alternative. A string literal in one WAS a hard
+stop; it is not any more (#673, PR #685).** The pilot never met this because all 23 of its bodies
+were `{}`. `src/aarch64.al` did: `emit_a64_expr`'s wildcard body is
+`push_str(sb, "  brk #0 // unsupported expr\n")` and its group arm absorbs eight variants, so the
+data walk reached that one body eight times and defined one `.Lstr<m>_<k>` eight times — `as` refused
+the self-build at `Error: symbol '.Lstr1_617' is already defined`, while `check` still said rc 0.
+That is why the file landed at 38 of 39 arms.
+
+The fix is in the walk, not in the label allocator: an OR-pattern's alternatives share ONE body node,
+a `.rodata` cell belongs to the literal NODE rather than to the control-flow path that reaches it, so
+the data walks now visit a shared body once (`ast::arm_body_first_use`). **A group-arm body may hold
+a string literal.** Nothing else about this section changes: enumerate every arm whose body is `{}`,
+and a non-empty body still enumerates fine and still costs N copies of its TEXT, which is `src/`
+growth rather than an emission change — measured at ~39 GAS bytes per extra alternative for a
+one-assignment body and ~415 for a ten-argument call, against ~61 bytes of per-alternative dispatch
+that a group arm costs whether its body is empty or not. The 69 empty group-arm bodies now in
+`src/`+`lib/` cost none of it.
+
+**But not until the seed can compile it, and that is measured.** `src/` is built by
+`seed/alatyr`, and the frozen seed is the compiler that has the defect. Converted on a throwaway
+worktree over the fixed tree, `emit_a64_expr`'s group arm still stops the seed build at
+`Error: symbol '.Lstr1_617' is already defined`; the same tree built by the Stage1 compiler compiled
+FROM the fixed tree builds clean, and its aarch64 emission is byte-identical to the unconverted
+compiler's over all 1 723 `test/*.al`. So the arm is correct, neutral and ready — and it can only be
+written into `src/` after the integrator promotes a seed that carries the fix. Until then this one
+arm stays a `_` with a note pointing here, and the constraint applies to the same emitters in
+`riscv64.al` and `wat.al`. In a user program there is no such wait: an OR-pattern arm body may hold
+a string literal on all four backends as soon as this lands.
+
+Enumerate it with a non-vacuity check that names its line, as every other arm in this stage owes.
 
 **Why a group arm and not one arm per variant, with numbers.** #544's plan says "a genuinely empty
 arm is written as its variant with an explicit comment saying why nothing is emitted, never as `_`".
