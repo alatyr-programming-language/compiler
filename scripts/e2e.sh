@@ -1630,6 +1630,30 @@ main := fn() -> u64 {
   return u64(t)
 }' 10
 
+  ## ---- the MODULE-LEVEL value declaration sink ------------------------------------------------
+  ## Every sink above is inside a function body. A module-level annotated binding is the one value
+  ## sink `check_stmts` never walks: a module binding carries no dedicated type field, so its `: T`
+  ## is recovered from source at the DECL site (the way `global_type_span` does), and the §3.1
+  ## assignability checks that already run there compare LITERAL tags rather than two typed values.
+  ## Every §4.2 class is put through it, because the decl's `dst` is the annotation itself and
+  ## therefore covers the whole classifier, not just B2.
+  _brand_reject module_global_sibling 'G : A = B(1)
+main := fn() -> u64 { return u64(G) }' 6
+  _brand_reject module_global_cross_domain 'G : A = C(3)
+main := fn() -> u64 { return u64(G) }' 6
+  _brand_reject module_global_raw_ctor 'G : A = u64(3)
+main := fn() -> u64 { return u64(G) }' 6
+  _brand_reject module_global_b1r 'H : u64 = A(1)
+main := fn() -> u64 { return H }' 6
+  ## …and the two shapes that prove the decl hook is not keyed on the spelling of one line: a `mut`
+  ## module binding, and an initializer whose identity comes from a DECLARED CALLEE result rather
+  ## than a constructor.
+  _brand_reject module_global_mut_sibling 'mut G : A = B(1)
+main := fn() -> u64 { return u64(G) }' 6
+  _brand_reject module_global_from_call 'mk := fn() -> B { B(2) }
+G : A = mk()
+main := fn() -> u64 { return u64(G) }' 7
+
   ## ---- B1 / B1R, the two directions of §4.2's brand class (always explicit) ---------------------
   _brand_reject raw_into_brand_bind 'main := fn() -> u64 {
   r : u64 = 3
@@ -1728,6 +1752,23 @@ main := fn() -> u64 {
   if take_r(u64(s.x)) != 9 { return 3 }
   s.x = A(u64(B(20)))
   if u64(s.x) != 20 { return 4 }
+  return 42
+}' 42
+  ## …and the MODULE surface's own control: the two LEGAL module-level spellings the rows above
+  ## refuse the sibling form of — a same-brand initializer and the explicit route through the shared
+  ## block — plus the §9.1/§9.2 literal, which is class B1U and is deliberately never refused.
+  ## Without this the module rows above would also pass if the fence simply refused every annotated
+  ## module binding.
+  _brand_accept module_global_legal 'G : A = A(1)
+GL : A = 5
+GX : A = A(u64(B(20)))
+GR : u64 = u64(A(7))
+main := fn() -> u64 {
+  if u64(G) != 1 { return 1 }
+  if u64(GL) != 5 { return 2 }
+  if u64(GX) != 20 { return 3 }
+  if GR != 7 { return 4 }
+  if take_a(G) != 1 { return 5 }
   return 42
 }' 42
   _brand_accept same_brand_is_self_consistent 'main := fn() -> u64 {
@@ -6344,12 +6385,36 @@ build_reject_has reject_brand_array_element_sink "implicit brand conversion"
 emit_reject_has wat reject_brand_array_element_sink "implicit brand conversion"
 emit_reject_has aarch64 reject_brand_array_element_sink "implicit brand conversion"
 emit_reject_has riscv64 reject_brand_array_element_sink "implicit brand conversion"
+## …and the same four-surface witness for the MODULE-LEVEL value declaration sink (`G : A = B(1)`),
+## the one value sink that is judged at the DECL site because a module binding carries no dedicated
+## type field and `check_stmts` therefore never walks it.
+build_reject_has reject_brand_module_global_sink "implicit brand conversion"
+emit_reject_has wat reject_brand_module_global_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_module_global_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_module_global_sink "implicit brand conversion"
+## …and the COMPOSITION of those two, which neither slice gated on its own: a MODULE-LEVEL value
+## declaration annotated with an ARRAY. The `check_decl` hook is what finds a sink there at all, and
+## the tag-7 element walker is what takes `[2]A` apart and judges each element; before either, a
+## tag-7 declared type reached the scalar judge and refused nothing. The `check` row carries the
+## LOCATED needle for the same reason the array row above does — it names the crossing's own line,
+## so a refusal that fired on the LEGAL module-level `[2]A` control instead would fail this row.
+check_reject_has reject_brand_module_array_element_sink "at line 33 in reject_brand_module_array_element_sink"
+build_reject_has reject_brand_module_array_element_sink "implicit brand conversion"
+emit_reject_has wat reject_brand_module_array_element_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_module_array_element_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_module_array_element_sink "implicit brand conversion"
 check_accept accept_brand_explicit_conversions
 run accept_brand_explicit_conversions 42
 check_accept accept_brand_require_identity
 run accept_brand_require_identity 42
 check_accept accept_brand_unrefused_sinks
 run accept_brand_unrefused_sinks 42
+## The LEGAL half of the composition row above. Its assertions are deliberately SPLIT across two
+## scopes — module scope proves the element walker ACCEPTS a legal `[2]A`, the local proves the value
+## path is right — because #674 makes a module-level array of a BRAND read all-zero today. The
+## fixture's own header says so at length; do not "fix" the asymmetry here either.
+check_accept accept_brand_module_array_legal
+run accept_brand_module_array_legal 42
 run accept_ann_str_binding 9
 run accept_ann_conforming 7
 run accept_ann_global_conforming 9
