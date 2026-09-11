@@ -61,10 +61,10 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: 4b389116b750e97bef19c6b5b7ebd3473a607ffbb56597f491fd87a1c2c8bf3c
-current-seed-version: 0.2.2
+current-seed-sha256: 804960039441267d40299929d0d462cbfec008f65a9635dda5889201f90918c4
+current-seed-version: 0.2.3
 #
-# Promoted:      2026-09-10 (second promotion of the day; see the last entry in this file)
+# Promoted:      2026-09-11 (see the last entry in this file)
 # Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
 # GAS at promotion: 1237719 lines
 # GAS SHA-256:   2e3f90b1c4e83642b74d953d573865b2740940d0414e8995eeafd86655806ca6
@@ -1384,4 +1384,49 @@ current-seed-version: 0.2.2
 # the build, as #586/#612 require, so this is the second consecutive seed to answer its own number.
 #
 # VERSION 0.2.1 -> 0.2.2, PATCH: a compiler crash and two silent wrong values fixed, no new surface.
+# The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.2 -> 0.2.3   promoted 2026-09-11   seed/alatyr := Stage2
+#
+# WHY: not a stale-emission repair. The fixpoint was ALREADY green on this tree — seed == Stage1 ==
+# Stage2 == Stage3, byte-identical RAW at 1251725 lines with no normalization needed, so the frozen
+# 0.2.2 seed emits exactly what the current source specifies and owes nothing. What it cannot do is
+# COMPILE a source that uses a construct the current compiler supports, because a frozen binary is
+# the compiler it was cut from.
+#
+# The construct is #673 (PR #685): an or-pattern arm's alternatives share ONE body node, so every
+# walk following `Arm.next` reached it once per alternative and a string literal in that body was
+# defined N times under one `.Lstr<m>_<k>` label — `as` refused the object while `check` said rc 0.
+# `ast::arm_body_first_use` makes the data walks visit a shared body once. Measured on a throwaway
+# worktree over the FIXED tree: `emit_a64_expr`'s eight-variant group arm still stopped the 0.2.2
+# seed build at `Error: symbol '.Lstr1_617' is already defined`, while the same tree built by the
+# Stage1 compiled FROM the fixed tree built clean and its aarch64 emission was byte-identical to the
+# unconverted compiler's over all 1723 `test/*.al`. So the arm is correct, neutral and ready, and it
+# becomes WRITABLE into `src/` only with this promotion. That unblocks #544 stage 1 on the two
+# backend files whose `brk #0` emitter carries the same shape — `src/riscv64.al` (56 wildcard arms)
+# and `src/wat.al` (80) — plus the one arm `src/aarch64.al` landed at 38 of 39 instead of 39.
+#
+# THE DELTA: EMPTY. `cmp` reports seed 1251725 == Stage1 1251725 lines byte for byte, with no label
+# normalization applied and none needed. One sentence, and it is the whole delta: the frozen seed
+# already emits exactly what this tree specifies, so this promotion changes no emitted byte and only
+# replaces the frozen binary with one assembled FROM that emission — which is why it now contains the
+# 41 objects landed since 0.2.2, `arm_body_first_use` among them (`strings` finds the symbol in
+# Stage2 and not in the 0.2.2 seed).
+#
+# CONVERGENCE:
+# seed == Stage1 == Stage2 == Stage3 GAS byte-identical RAW at 1251725 lines, no normalization.
+# GAS SHA-256: 3cdc51c8a9ec575857a0989b6688002da58a958ce9b3fb8de7fe1f90f8f50b2f.
+# Stage1 == Stage2 == Stage3 BINARY SHA-256:
+# 804960039441267d40299929d0d462cbfec008f65a9635dda5889201f90918c4 (4723176 B).
+# Stage1 matching the other two in the binary is STRONGER than the criterion asks (it requires only
+# Stage2 == Stage3) and is the bump-first order working: with `package.al`, `current-seed-version`
+# and `scripts/package_cli_test.sh` moved BEFORE the build, the version constant is the same in all
+# three, so the 35-byte Stage1 delta recorded at 0.1.0 -> 0.2.0 has nothing left to differ in.
+# All three answer `alatyr 0.2.3`; third consecutive seed to answer its own number (#586/#612).
+# Superseded seed (0.2.2) SHA-256:
+# 4b389116b750e97bef19c6b5b7ebd3473a607ffbb56597f491fd87a1c2c8bf3c (4676048 B).
+#
+# VERSION 0.2.2 -> 0.2.3, PATCH: no new surface and no emitted byte moves; the frozen bootstrap
+# advances so `src/` may use a construct the compiler already supports.
 # The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.

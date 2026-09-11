@@ -121,6 +121,24 @@ Two numbers that are **not** the compiler's version: the specification revision 
 tag lives in the sibling repository; a `v1.0.0` here would mean something else entirely.
 
 ## Unreleased
+
+## 0.2.3 — 2026-09-11
+
+- **Seed promotion; no emitted byte moves.** The frozen bootstrap `seed/alatyr` advances from 0.2.2
+  to 0.2.3. The fixpoint was already green on this tree — `seed == Stage1 == Stage2 == Stage3`,
+  byte-identical raw at 1 251 725 GAS lines with no label normalization needed — so the 0.2.2 seed
+  already emitted exactly what the source specifies and owed nothing. What a frozen binary cannot do
+  is *compile* a source that uses a construct the current compiler supports, because it is the
+  compiler it was cut from. That construct is the or-pattern arm body above: measured on a throwaway
+  worktree over the fixed tree, `emit_a64_expr`'s eight-variant group arm still stopped the 0.2.2
+  seed at `Error: symbol '.Lstr1_617' is already defined`, while the same tree built by the Stage1
+  compiled *from* the fixed tree built clean with byte-identical aarch64 emission over all 1 723
+  `test/*.al`. With this promotion such an arm becomes writable into `src/`, which unblocks #544's
+  stage 1 on `src/riscv64.al` and `src/wat.al` — whose `brk #0` emitter carries the same shape — and
+  on the one arm `src/aarch64.al` had to leave at 38 of 39. All three stages answer `alatyr 0.2.3`,
+  and Stage1 matching Stage2 and Stage3 in the *binary* is stronger than the criterion requires: the
+  bump-first order leaves the version constant identical in all three. The specification pin did not
+  move.
 - **A `match` arm written as an OR-pattern may now hold a string literal in its body.** The
   alternatives of `p | q | … => body` are surface sugar (Control Flow §5.4): the parser expands them
   into one arm per alternative, all sharing ONE body node. Every `.rodata` walk therefore reached
