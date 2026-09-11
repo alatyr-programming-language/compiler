@@ -7625,7 +7625,7 @@ emit_wat_str_data_stmts := fn(head : ptr(mut Stmt), in out sb : rt::StrBuf, src 
       Stmt::ExprStmt(e, nx) => { pi := print_call_info(e, src, a) ; if pi.ok { emit_str_data_seg(sb, src, pi.ss, pi.sl, pi.lbl, pi.nl, a) } ; s = nx }
       Stmt::While(c, b, nx) => { emit_wat_str_data_stmts(b, sb, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { emit_wat_str_data_stmts(th, sb, src, a) ; emit_wat_str_data_stmts(el, sb, src, a) ; s = nx }
-      Stmt::Match(sc, ah, nx) => { mut arm := ah ; while arm != 0 { am := deref(arm_p(arm)) ; emit_wat_str_data_stmts(am.body_stmts, sb, src, a) ; arm = am.next } ; s = nx }
+      Stmt::Match(sc, ah, nx) => { mut arm := ah ; while arm != 0 { am := deref(arm_p(arm)) ; if ast::arm_body_first_use(ah, arm) { emit_wat_str_data_stmts(am.body_stmts, sb, src, a) } ; arm = am.next } ; s = nx }
       Stmt::Assign(ns, nl, v, nx) => { s = nx }
       Stmt::Return(rv, nx) => { s = nx }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }

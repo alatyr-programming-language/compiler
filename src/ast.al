@@ -466,6 +466,46 @@ pub Arm := struct {
 pub arm_p := fn(p : ptr(mut Arm)) -> ptr(mut Arm) { p }
 pub arm_null := fn() -> ptr(mut Arm) { unchecked bitcast(ptr(mut Arm), 0) }
 
+## True when `arm` is the FIRST arm in the list starting at `head` that carries its body node —
+## i.e. no earlier arm in the same list points at the same body. The answer a DATA walk needs.
+##
+## An OR-pattern arm `p | q | … => body` (Control Flow §5.4) is pure surface sugar: the parser
+## splices it into ONE `Arm` per alternative and wires the SAME body node onto every one of them
+## (`set_arm_body` / `set_arm_body_stmts`). Every walk that follows `Arm.next` therefore reaches the
+## identical body node N times, and the two kinds of walk owe different things to that fact:
+##
+##   * a `.text` emitter MUST visit each alternative — each needs its own dispatch test and its own
+##     code path, and each visit allocates FRESH jump/return labels from a counter, so N visits are
+##     N distinct instruction sequences and nothing collides;
+##   * a DATA emitter MUST NOT. A `.rodata` cell (`.Lstr<m>_<n>`, `.Lflt<off>`) or a wasm
+##     `(data …)` segment is keyed on the LITERAL NODE, not on the control-flow path that reaches
+##     it, so N visits DEFINE ONE LABEL N TIMES and `as` refuses the object: "symbol `.Lstr14_1' is
+##     already defined" (#673). Measured on a three-alternative arm: three identical `.Lstr` cells
+##     on x86_64, aarch64 and riscv64, and three identical `(data …)` segments at one wasm address.
+##
+## So this is the walk's question, not the label allocator's: the N references all name the SAME
+## symbol, and making the N definitions distinct would mean cloning the body per alternative and
+## renumbering — strictly more emission for no semantic gain. Visit the shared body once instead.
+##
+## The two body fields are never both live in one arm (see `Arm`): a statement-position arm carries
+## `body_stmts` and a per-alternative dummy `body`, an expression-position arm carries `body` and a
+## zero `body_stmts`. Compare the one that is set, so both match forms are covered by one rule. A
+## zero body is nothing to walk, so it is always reported first-use rather than deduplicated.
+pub arm_body_first_use := fn(head : ptr(mut Arm), arm : ptr(mut Arm)) -> bool {
+  am := deref(arm_p(arm))
+  bs := unchecked bitcast(usize, am.body_stmts)
+  be := unchecked bitcast(usize, am.body)
+  if bs == 0 and be == 0 { return true }
+  mut p := head
+  while unchecked bitcast(usize, p) != 0 and unchecked bitcast(usize, p) != unchecked bitcast(usize, arm) {
+    pm := deref(arm_p(p))
+    if bs != 0 and unchecked bitcast(usize, pm.body_stmts) == bs { return false }
+    if bs == 0 and unchecked bitcast(usize, pm.body) == be { return false }
+    p = pm.next
+  }
+  true
+}
+
 ## A match variant-pattern **payload binding** (arena-linked): its source name span `[ns, ns+nl)`
 ## and `next` (0 = end). Walked in declaration order — binding `i` aliases the scrutinee's
 ## payload word `i+1`.

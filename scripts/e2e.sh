@@ -750,6 +750,46 @@ check_wat_has() { # name, needle
   echo "ok   $1(wat-has): [$2]"
 }
 
+# Control Flow §5.4 / #673 — an OR-pattern arm's body is emitted once per ALTERNATIVE, and a
+# `.rodata` cell is a DEFINITION, so N alternatives defined ONE `.Lstr<m>_<n>` N times and `as`
+# refused the object while `check` still said rc 0. Read the emitted x86_64 GAS, not only the exit
+# code, because the walk can be wrong in two directions that fail at two different tools and a
+# plain `run` row reports both as "compile/link": too many definitions is an ASSEMBLER refusal
+# (the defect), while de-duplicating too eagerly drops a cell the text still references and is a
+# LINKER undefined symbol (the over-fire). Asserting the text says which one happened, and names
+# the label it happened on.
+#
+# The invariant asserted is exactly the one `as` + `ld` need: every `.Lstr`/`.Lflt` cell is defined
+# AT MOST once, and every such label the text references is defined AT LEAST once. It quotes no
+# literal text, so no wording in the fixture's own comments can satisfy it. Then build, run, and
+# check BOTH stdout and the exit code — a print program's output is the point of the shared body.
+check_arm_rodata_labels() { # name, want-out, want-exit
+  src="$E2E_TEST/$1.al"
+  [ -f "$src" ] || { echo "MISS $1: no $src"; fail=1; return; }
+  asm="$T/e2e_$1_rodata.s"; defs="$T/e2e_$1_rodata.defs"; refs="$T/e2e_$1_rodata.refs"
+  "$CC" "$src" > "$asm" 2>/dev/null || { echo "FAIL $1(rodata-labels): emit"; fail=1; return; }
+  dup="$(grep -oE '^\.L(str|flt)[0-9_]+:' "$asm" | sort | uniq -d | tr -d ':' | tr '\n' ' ')"
+  if [ -n "$dup" ]; then
+    echo "FAIL $1(rodata-labels): defined more than once: $dup"; fail=1; return
+  fi
+  grep -oE '^\.L(str|flt)[0-9_]+'  "$asm" | sort -u > "$defs"
+  grep -oE  '\.L(str|flt)[0-9_]+'  "$asm" | sort -u > "$refs"
+  undef="$(comm -13 "$defs" "$refs" | tr '\n' ' ')"
+  if [ -n "$undef" ]; then
+    echo "FAIL $1(rodata-labels): referenced but never defined: $undef"; fail=1; return
+  fi
+  out="$T/e2e_$1_rodata.out"; gotout="$T/e2e_$1_rodata.stdout"
+  "$CC" -o "$out" "$src" >/dev/null 2>&1 || { echo "FAIL $1(rodata-labels): compile/link"; fail=1; return; }
+  _e2e_exec_capture "$gotout" "$out" 2>/dev/null; got=$?
+  if _e2e_runtime_failure "$1(rodata-labels)" "$got"; then return; fi
+  text="$(<"$gotout")"
+  if [ "$text" = "$2" ] && [ "$got" = "$3" ]; then
+    echo "ok   $1(rodata-labels): $(wc -l < "$defs") cell(s), each defined once; out+exit"
+  else
+    echo "FAIL $1(rodata-labels): out=[$text] exit=$got want=[$2]/$3"; fail=1
+  fi
+}
+
 # backend emission must be reproducible even when the AST arena moves between
 # processes. Loop/control-flow labels are an implementation detail, but pointer-derived names make
 # byte comparison (and any future content-addressed cache) meaningless. Run both a While and a Loop
@@ -6226,6 +6266,26 @@ run match_mixed_arm 42
 check_accept accept_range_exhaustive
 check_reject reject_range_nonexhaustive
 build_reject_has or_pattern_bind_reject "OR-pattern alternative may not bind a payload"
+# Control Flow §5.4 / #673 — an OR-pattern's alternatives SHARE one body node, so every data walk
+# reached that body once per alternative and DEFINED its `.rodata` cell that many times. The three
+# rows are one measurement: the reproducer (two alternatives, one literal), the family case (four
+# alternatives, two DIFFERENT literals plus a float and nested control flow, so a fix that collapsed
+# identical text would not pass), and the over-rejection control (the same two bodies written as two
+# SEPARATE arms, whose literals are distinct nodes and must keep distinct cells). `run` also puts the
+# first two on the aarch64/riscv64 sweeps, which refused the same object at `as`; `run_wat_out` covers
+# wasm, where the cell is addressed by a computed offset rather than a symbol, so the duplicate was
+# legal and silent — three `(data …)` segments at one address instead of a build failure.
+check_accept or_pattern_arm_string_literal
+run or_pattern_arm_string_literal 7
+run_wat_out or_pattern_arm_string_literal 'two' 7
+check_arm_rodata_labels or_pattern_arm_string_literal 'two' 7
+check_accept or_pattern_arm_two_literals
+run or_pattern_arm_two_literals 42
+run_wat_out or_pattern_arm_two_literals $'two\nthree' 42
+check_arm_rodata_labels or_pattern_arm_two_literals $'two\nthree' 42
+run or_pattern_arm_literal_control 42
+run_wat_out or_pattern_arm_literal_control 'two' 42
+check_arm_rodata_labels or_pattern_arm_literal_control 'two' 42
 check_reject reject_limit_unknown
 check_accept accept_limit_no_opt
 check_limit_named reject_limit_no_comptime 4 "@limits(no_comptime) violation"
