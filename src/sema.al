@@ -2622,7 +2622,10 @@ brand_probe_class_name := fn(c : usize) -> str {
 ## the field list through a small PRE-MATCH accessor and does reach the struct-literal field sink, and
 ## the declared-result refusal is handed `locals` where this census hook has none. The argument of an
 ## overloaded, generic or qualified callee stays unreachable in both — sema resolves no overload set.
-brand_probe_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) {
+##
+## This is the SCALAR half. A tag-7 declared type is an array annotation whose ELEMENTS are the value
+## sinks, and the entry below dispatches it into the same element walk the refusal uses.
+brand_probe_value_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) {
   if SEMA_BRAND_DECLS == 0 { return }
   if dst.tag != 8 and dst.tag != 1 { return }
   BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
@@ -2630,6 +2633,28 @@ brand_probe_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec
   if act.tag != 8 and dst.tag != 8 { return }
   c := sema_brand_class(dst, act, decls, upto, src)
   if c != 0 { brand_probe_row(brand_probe_class_name(c), off, src) }
+}
+## The census's value-sink DISPATCHER, and it is the MIRROR of the refusal's `sema_brand_sink_err`
+## below — deliberately, because the counter and the refuser must agree on what a sink IS even where
+## they disagree (class B1U) on the verdict. It was not, and that is issue #679: the scalar tag
+## filter above returned on tag 7, so an array-literal element crossing produced no census row
+## ANYWHERE, and it never could. Measured on `main` 20ddb3f: `test/reject_brand_array_element_sink.al`
+## — the fixture #664 landed for exactly that crossing — and `test/reject_brand_module_array_element_sink.al`
+## each produced ZERO rows while the compiler refused both. The #508 method is "count first, then
+## decide whether the refusal is safe", so a blind counter makes the next array-adjacent slice
+## measure a comfortable zero and land a refusal on no evidence: a zero from a blind instrument
+## cannot be told from a zero that means something.
+brand_probe_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) {
+  ## First, and before the tag dispatch, so a BRANDLESS program still pays nothing per sink — the
+  ## cost property the instrument's header states and the self-build depends on.
+  if SEMA_BRAND_DECLS == 0 { return }
+  if dst.tag == 7 {
+    ## The walk's CheckErr result is the refusal's answer and is not one here: in census mode it is
+    ## always 0 and the rows have already gone to the channel.
+    z := sema_brand_array_elems(true, dst, v, off, decls, upto, src, locals, nloc, a)
+    return
+  }
+  brand_probe_value_sink(dst, v, off, decls, upto, src, locals, nloc, a)
 }
 ## The same sink at DECL level (a function's declared result), where no locals table exists: the
 ## identity comes from the constructor / declared-callee sources only.
@@ -2763,7 +2788,16 @@ sema_brand_array_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> VSpan
 ## An element whose own declared type is an array again (`[[2]A; 2]`) is NOT walked: `resolve_ty`
 ## gives the inner element tag 7, the scalar judge answers 0 for it, and a nested walk is a second
 ## slice with its own census, not a free extension of this one.
-sema_brand_array_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+##
+## ONE traversal, TWO consumers. `census` selects which per-element judgement runs — the counting
+## hook or the refusing one — and selects NOTHING else: what an element sink IS (the element-type
+## extractor, the tag filter, the literal-head accessor, the `[e; n]` fill form, the located offset)
+## is decided here and only here. A second walk written for the census would be a second answer to
+## that question, the two would drift the moment either side learned a new spelling, and
+## `scripts/idiom_gate.sh` exists to catch exactly that. The two consumers still disagree where they
+## are MEANT to — the census counts class B1U and the refusal never refuses it — because that
+## disagreement lives in the per-element functions, not in this walk.
+sema_brand_array_elems := fn(census : bool, dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   if SEMA_BRAND_DECLS == 0 { return 0 }
   if unchecked bitcast(usize, v) == 0 { return 0 }
   sp := sema_brand_array_elem_span(src, dst.ns, dst.nl)
@@ -2774,11 +2808,20 @@ sema_brand_array_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : pt
   mut err : CheckErr = 0
   while g != 0 {
     ea := deref(arg_p(g))
-    ee := sema_brand_value_sink_err(et, ea.e, sema_brand_span(s_of(ea.e, a), off), decls, upto, src, locals, nloc, a)
-    if ee != 0 and err == 0 { err = ee }
+    eoff := sema_brand_span(s_of(ea.e, a), off)
+    if census {
+      brand_probe_value_sink(et, ea.e, eoff, decls, upto, src, locals, nloc, a)
+    } else {
+      ee := sema_brand_value_sink_err(et, ea.e, eoff, decls, upto, src, locals, nloc, a)
+      if ee != 0 and err == 0 { err = ee }
+    }
     g = ea.next
   }
   err
+}
+## The REFUSING end of that walk — the entry `sema_brand_sink_err` dispatches a tag-7 sink into.
+sema_brand_array_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+  sema_brand_array_elems(false, dst, v, off, decls, upto, src, locals, nloc, a)
 }
 ## The value-sink DISPATCHER every hooked sink calls. A tag-7 declared type is an array annotation
 ## whose ELEMENTS are the value sinks; every other declared type is judged directly. One entry, so a
