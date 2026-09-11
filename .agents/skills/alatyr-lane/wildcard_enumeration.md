@@ -10,17 +10,31 @@ below is from that file unless it says otherwise.
 
 ## 0 · Before you take a file
 
-Three blind classes are known, and in each of them enumerating buys nothing while *deleting* writes a
-wrong value. Check your file against all three before claiming it:
+Three blind classes have been measured, one of them since fixed. In a blind class enumerating buys
+nothing while *deleting* writes a wrong value. Check your file against all three before claiming it:
 
 - **#655** — nothing under `src/lower/` is type-checked at all. Ten files, 12 007 lines.
-- **#656** — a module sorting before `src/ast.al` cannot resolve `ptr(T)` identity. `src/aarch64.al`
-  is the whole of that class today, 62 arms.
+- **#656 — FIXED on `main`; this entry is now a worked example, not a warning.** A module sorting
+  before `src/ast.al` could not resolve `ptr(T)` identity, so every arm in it was invisible, and
+  `src/aarch64.al` was the whole of that class. PR #662 (`4873d30`) fixed `resolve_ty`'s `is_ptr`
+  branch. (The defect is gone; issue #656 itself was still open and carrying `in-progress` when this
+  was written, so read the tree, not the label.) Re-measured independently on `cff2b72`, with a
+  compiler **built from that tree** because the frozen seed predates the fix and still accepts all
+  63, the file's deletion census answers
+  **39 caught of 63**, where #662's parent answered **0 of 63**. The class is gone; the file was not
+  finished by fixing it. Its remaining **24** are blind for the third reason below, and that reason
+  is per ARM, not per file: all 24 are `match st` over `st := deref(stmt_p(Stmt, <h>))`.
 - **#660** — a single *site* is blind when its scrutinee's enum type arrives through a generic
   function's return type. This one is per-arm, not per-file, and it has a workaround: annotating the
   local (`stmt : Stmt = …`) or the pointer (`sp : ptr(mut Stmt) = …`) restores the check.
 
-`aarch64.al`, `src/lower/*.al` and `comptime.al` are blocked, not merely deprioritised.
+`src/lower/*.al` and `comptime.al` are blocked, not merely deprioritised. `aarch64.al` is not, any
+more: it was taken as the second file of this stage (`Refs #544`, 38 of its 39 caught arms enumerated)
+once #662 landed, and the first thing that unit owed was re-measuring the census rather than carrying
+#662's numbers over. A control is worth keeping beside a fixed class: the byte-identical twin of one
+of the 24 in `src/wat.al` — a module sorting AFTER `src/ast.al` — is equally blind (`wat.al:298`
+deleted -> rc 0 silent, while `wat.al:286`'s `match deref(e)` -> rc 1 `at line 266 in wat`), which is
+what tells a per-arm blindness apart from a per-file one.
 
 ## 1 · Count the arms with a parser, not a grep
 
@@ -77,6 +91,19 @@ match deref(v) {
 Bare variant names, no payload patterns — the form `src/lower/assign.al`'s `const_scalar_lit` (#601)
 already uses. Declaration order so a reader can diff the list against the enum by eye. Generate the
 list with a script rather than by hand; a hand-typed 23-name list is where a transposition hides.
+
+**A non-empty group-arm body is duplicated once per alternative, and a string literal in one is a
+hard stop (#673).** The pilot never met this because all 23 of its bodies were `{}`. Measured on
+`src/aarch64.al`: `emit_a64_expr`'s wildcard body is `push_str(sb, "  brk #0 // unsupported expr\n")`
+and its group arm absorbs eight variants, so the self-build emits eight `.rodata` definitions under
+one `.Lstr<m>_<k>` label and `as` refuses the tree — `check` still says rc 0, so the failure arrives
+at build time with a diagnostic that names a `.s` file, not the source. An eleven-line user program
+reproduces it. So: enumerate every arm whose body is `{}`; for a non-empty body check whether it holds
+a string literal, and if it does, leave the `_` with a note pointing at #673 rather than reporting the
+arm as blind — it is checkable, it is simply not yet writable. A non-empty body WITHOUT a literal
+(`{ return 0 - 1 }`, a forwarding call) enumerates fine and costs N copies of that body, which is
+`src/` growth, not an emission change. Every backend twin — `riscv64.al`, `wat.al` — carries the same
+`brk #0` emitter, so the next two files meet this at the same place.
 
 **Why a group arm and not one arm per variant, with numbers.** #544's plan says "a genuinely empty
 arm is written as its variant with an explicit comment saying why nothing is emitted, never as `_`".
@@ -181,6 +208,10 @@ five-row follow-up, ~4 min probing the wrong value it exposed, ~10 min writing t
 for the two compiler builds and the four GAS emissions, ~12 min writing the enumeration and the
 notes, ~5 min for the non-vacuity sequence, and ~12 min of gate. Serially that is about 1 h 15.
 
-The `check` runs scale linearly with the arm count and parallelise; the reading and the writing do
-neither. `lower.al`'s 205 caught arms are ~2 h of `check` serially and ~20 min at six-way
+Second data point, `src/aarch64.al` (63 arms, 8 879 lines): about **2 h** end to end, of which the
+63-run census was ~45 min at six-way parallelism on a loaded machine (~40 s per `check`, and it was
+competing with three other lanes' gates) — the census is the floor, and it does not shrink with
+familiarity. The two compiler builds and four GAS emissions were ~10 min; the two issues the file
+produced, ~25 min. The `check` runs scale linearly with the arm count and parallelise; the reading and
+the writing do neither. `lower.al`'s 205 caught arms are ~2 h of `check` serially and ~20 min at six-way
 parallelism, so what has to be sliced there is the reading, not the measuring.
