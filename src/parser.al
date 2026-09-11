@@ -634,6 +634,25 @@ lbl_push := fn() {
 }
 lbl_pop := fn() { if P_LOOP_SP > 0 { P_LOOP_SP = P_LOOP_SP - 1 } }
 
+## #544 stage 1 — WHY THE `_` ARMS IN THIS CLONE BAND ARE SPELLED OUT, AND WHY TWO OF THEM ARE NOT.
+## `clone_expr`'s catch-all is a LOCATED REFUSAL, not a default: the three forms it absorbs
+## (`Match`, `CompField`, `Lambda`) are exactly the ones a HOF specialization clone cannot
+## reproduce, and it says so by clearing the caller's `ok` flag — `driver.al`'s specializer turns
+## that into `ok = false` and abandons the clone, so nothing downstream ever sees a half-cloned
+## node. `renum_str_expr` is a NORMALIZER: it rewrites `StrLit` label indices inside a tree
+## `clone_expr` produced, and every form it absorbs either carries no sub-expression (`Num`,
+## `BoolLit`, `Var`, `FnRef`), is keyed by source span rather than by a label index (`FloatLit`),
+## or cannot appear in a cloned tree at all because `clone_expr` refused it (`Match`, `CompField`,
+## `Lambda`). Spelling both lists out makes ADDING an `Expr` variant a compile error here (Control
+## Flow §5.1): measured on this file, deleting either group arm is refused with `check: type
+## mismatch at line <n> in parser`.
+##
+## The two STATEMENT walkers (`clone_one_stmt`, `renum_str_stmts`) keep their `_` ON PURPOSE. Both
+## scrutinise `x := deref(stmt_p(Stmt, st))`, and the enum identity is lost through that binding
+## before the arm check asks for it (#660, generalised by #680): deleting either `_` is accepted
+## SILENTLY, rc 0, on a compiler built from this tree. Writing those two arms out would buy the
+## appearance of enforcement and none of the substance, because nothing would hold the list
+## current — so they are measured, named, and left exactly as they are.
 pub clone_args := fn(a : ptr(mut rt::Arena), ah : ptr(mut Arg), ok : ptr(mut bool)) -> ptr(mut Arg) {
   mut head := arg_null()
   mut tail := arg_null()
@@ -674,7 +693,7 @@ pub clone_expr := fn(a : ptr(mut rt::Arena), e : ptr(Expr), ok : ptr(mut bool)) 
     Expr::EnumLit(es, el, vs, vl, n, ah) => { cah := clone_args(a, ah, ok); r = newnode(a, Expr.EnumLit(es, el, vs, vl, n, cah)) }
     Expr::ArrayLit(n, ah) => { cah := clone_args(a, ah, ok); r = newnode(a, Expr.ArrayLit(n, cah)) }
     Expr::Loop(b) => { cb := clone_stmts(a, b, ok); r = newnode(a, Expr.Loop(cb)); ls := expr_label_span(e); expr_label_mark(r, ls.s, ls.n) }
-    _ => { deref(ok) = false }
+    Expr::Match | Expr::CompField | Expr::Lambda => { deref(ok) = false }
   }
   r
 }
@@ -701,6 +720,8 @@ clone_one_stmt := fn(a : ptr(mut rt::Arena), st : ptr(mut Stmt), ok : ptr(mut bo
     Stmt::FieldPathAssign(pl, fpv, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cpl := clone_expr(a, pl, ok); cfpv := clone_expr(a, fpv, ok); r = snode(a, Stmt.FieldPathAssign(cpl, cfpv, 0)) }
     Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cb := clone_expr(a, b, ok); cix := clone_expr(a, ix, ok); cv := clone_expr(a, v, ok); r = snode(a, Stmt.IndexFieldAssign(cb, cix, ffs, ffl, cv, 0)) }
     Stmt::AllocWith(ae, b, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cae := clone_expr(a, ae, ok); cb := clone_stmts(a, b, ok); r = snode(a, Stmt.AllocWith(cae, cb, 0)) }
+    ## #544 stage 1 — this `_` STAYS; `x := deref(stmt_p(Stmt, st))` is blind (#660/#680).
+    ## See the band note above `clone_args`. Deleting it is accepted SILENTLY, rc 0.
     _ => { deref(nxout) = 0; deref(ok) = false }
   }
   r
@@ -764,7 +785,8 @@ pub renum_str_expr := fn(a : ptr(mut rt::Arena), e : ptr(Expr), base : usize) {
     Expr::EnumLit(es, el, vs, vl, n, ah) => { renum_str_args(a, ah, base) }
     Expr::ArrayLit(n, ah) => { renum_str_args(a, ah, base) }
     Expr::Loop(b) => { renum_str_stmts(a, b, base) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::FloatLit | Expr::CompField
+      | Expr::Lambda | Expr::FnRef => {}
   }
 }
 renum_str_args := fn(a : ptr(mut rt::Arena), ah : ptr(mut Arg), base : usize) {
@@ -798,6 +820,8 @@ pub renum_str_stmts := fn(a : ptr(mut rt::Arena), head : ptr(mut Stmt), base : u
       Stmt::FieldPathAssign(pl, fpv, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, pl, base); renum_str_expr(a, fpv, base) }
       Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, b, base); renum_str_expr(a, ix, base); renum_str_expr(a, v, base) }
       Stmt::AllocWith(ae, b, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, ae, base); renum_str_stmts(a, b, base) }
+      ## #544 stage 1 — this `_` STAYS; `x := deref(stmt_p(Stmt, st))` is blind (#660/#680).
+      ## See the band note above `clone_args`. Deleting it is accepted SILENTLY, rc 0.
       _ => { nx = 0 }
     }
     st = unchecked bitcast(ptr(mut Stmt), nx)
@@ -1302,24 +1326,56 @@ relex_default := fn(in out pc : PC, ds : usize, dl : usize) -> ptr(Expr) {
 ##
 ## Field readers for the unary-minus fold below. Each is a SINGLE-LEVEL match, the shape the
 ## bootstrap seed dispatches reliably (a nested match in this position mis-lowers under the seed).
+## #544 stage 1 — each `_` below is written out as a group arm in `src/ast.al` declaration order, so
+## a new `Expr` variant is a compile error at all four sites (Control Flow §5.1); deleting any one
+## of them is refused with `check: type mismatch at line <n> in parser`, four for four. These are a
+## PREDICATE and three PROJECTIONS over the single variant `Num`, and for every other form the
+## initialised `false`/`0` IS the answer — the caller never reads a projection it has not first
+## qualified, because the `unm_fold` guard below tests `unm_foldable(uinner)` and only then reads
+## the three spans. That guard is what keeps this band off the #659 shape, where an accessor whose
+## default is a representable value is read by a caller that has already committed.
 unm_foldable := fn(e : ptr(Expr)) -> bool {
   mut r := false
-  match deref(e) { Expr::Num(v, s, n) => { if n != 0 { r = true } } _ => {} }
+  match deref(e) {
+    Expr::Num(v, s, n) => { if n != 0 { r = true } }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 unm_num_v := fn(e : ptr(Expr)) -> i64 {
   mut r := 0
-  match deref(e) { Expr::Num(v, s, n) => { r = v } _ => {} }
+  match deref(e) {
+    Expr::Num(v, s, n) => { r = v }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 unm_num_start := fn(e : ptr(Expr)) -> usize {
   mut r : usize = 0
-  match deref(e) { Expr::Num(v, s, n) => { r = s } _ => {} }
+  match deref(e) {
+    Expr::Num(v, s, n) => { r = s }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 unm_num_end := fn(e : ptr(Expr)) -> usize {
   mut r : usize = 0
-  match deref(e) { Expr::Num(v, s, n) => { r = s + n } _ => {} }
+  match deref(e) {
+    Expr::Num(v, s, n) => { r = s + n }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
   r
 }
 p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
@@ -2596,12 +2652,27 @@ p_ecallee := fn(in out pc : PC, callee : ptr(mut Expr), rn : NSpan) -> ptr(mut E
   newnode(pc.arena, Expr.Call(rn.s, rn.n, nargs + 1, chead))
 }
 
+## #544 stage 1 — THE SINGLE-ARM PROBE BAND (`field_base_expr` through `idx_field_parts`).
+## Every accessor from here down to `idx_field_parts` is a PREDICATE ("is this node an X?") or a
+## PROJECTION ("give me X's k-th field"), never an emitter. For every form that is not the one it
+## asks about, the `false` / `0,0` / null-pointer default IS the answer — nothing is emitted for
+## those forms because nothing is DECIDED for them here; the caller's own classification chain
+## decides. So each `_` is written out as ONE group arm listing the absorbed variants in
+## `src/ast.al` declaration order, and adding an `Expr` variant becomes a compile error at all
+## thirteen sites (Control Flow §5.1). Measured on this file: deleting any one of those group arms
+## is refused with `check: type mismatch at line <n> in parser`, thirteen sites for thirteen. The
+## reason is written once here instead of thirteen times; the one place it DIFFERS carries its own
+## note (`index_parts`, below) — and that difference is a filed defect, not a style point.
 ## The BASE expression of a `Field(base, f)` node (0 for anything else) — its own single-arm probe, like
 ## `index_parts` (a nested deref-match mis-lowers under the seed).
 field_base_expr := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Field(b, fs, fl) => { b }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop
+      => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 
@@ -2640,7 +2711,10 @@ NSpan := struct { s : usize, n : usize }
 enum_type_span := fn(base : ptr(Expr)) -> NSpan {
   match deref(base) {
     Expr::Var(s, n) => { NSpan(s = s, n = n) }
-    _ => { NSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { NSpan(s = 0, n = 0) }
   }
 }
 
@@ -2649,7 +2723,10 @@ enum_type_span := fn(base : ptr(Expr)) -> NSpan {
 field_tail_name := fn(e : ptr(Expr)) -> NSpan {
   match deref(e) {
     Expr::Field(b, fs, fl) => { NSpan(s = fs, n = fl) }
-    _ => { NSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { NSpan(s = 0, n = 0) }
   }
 }
 
@@ -2658,7 +2735,10 @@ field_tail_name := fn(e : ptr(Expr)) -> NSpan {
 expr_is_num := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Num(v, s, n) => { true }
-    _ => { false }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Whether `e` is an inline function VALUE (FN-6 lambda) — used to reject an immediately-invoked
@@ -2666,7 +2746,10 @@ expr_is_num := fn(e : ptr(Expr)) -> bool {
 expr_is_lambda := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Lambda(lfp, lph, lrs, lrl, lbh, lval) => { true }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Base kinds a call postfix is UNAMBIGUOUSLY applied to (see `p_field`'s trailing guard): an element
@@ -2675,37 +2758,55 @@ expr_is_lambda := fn(e : ptr(Expr)) -> bool {
 expr_is_index := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Index(ib, ii) => { true }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 expr_is_call := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Call(cs, cl, cn, ca) => { true }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 expr_is_field := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Field(fb, fs, fl) => { true }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 expr_is_deref := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Deref(dp) => { true }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 expr_is_slice := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Slice(sb, sl, sh) => { true }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 expr_is_try := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Try(ti) => { true }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -2713,11 +2814,22 @@ expr_is_try := fn(e : ptr(Expr)) -> bool {
 ## `Index` expr that `p_field` builds for `arr[i]`. The deref-match on the `Index` pointer
 ## stays in this helper (a direct param) — the lowerable shape (like `enum_type_span`). A
 ## non-`Index` expr yields both pointers null (0) — not part of the supported store grammar.
+## #544 stage 1 — THIS ONE IS NOT A SAFE DEFAULT, AND THE GROUP ARM IS WHAT MADE IT VISIBLE (#681).
+## Its default is a REPRESENTABLE value — a null base and a null index — and the nine `p_stmt` store
+## sites that call it have ALREADY committed to an `IndexAssign` on the strength of a token-only
+## lookahead (`ident [ … ] =`) that cannot tell `a[i]` from `a[lo..hi]`. On a slice place they build
+## `Stmt.IndexAssign(0, 0, v, 0)` and the compiler dies on SIGSEGV with no diagnostic at all. That
+## is #681, filed with a five-source table and a causal experiment. It is NOT fixed here: this unit
+## is a byte-identity refactor and a fix inside it would destroy the evidence that says so. The
+## group arm below changes nothing — it only replaces `_` with the list of forms that reach it.
 IxParts := struct { b : ptr(Expr), i : ptr(Expr) }
 index_parts := fn(e : ptr(Expr)) -> IxParts {
   match deref(e) {
     Expr::Index(b, i) => { IxParts(b = b, i = i) }
-    _ => {
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {
       z := unchecked bitcast(ptr(Expr), 0)
       IxParts(b = z, i = z)
     }
@@ -2737,7 +2849,10 @@ idx_field_parts := fn(e : ptr(Expr)) -> IFParts {
       ip := index_parts(base)
       res = IFParts(arr = ip.b, idx = ip.i, fs = fs, fl = fl)
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -3151,6 +3266,11 @@ is_assign_tok := fn(k : usize) -> bool {
 ## rather than silently becoming a double evaluation. `a[f()] op= e` is therefore a located
 ## reject, never the second `f()` call the textual rewrite `a[f()] = a[f()] + e` performs
 ## (measured on the seed: the rewrite runs `f` twice, the compound form must run it once).
+## #544 stage 1 — a WHITELIST predicate, and the one accessor in this file that already gets the
+## #681 shape right: a place shape it does not list answers `false` and the caller emits a located
+## reject instead of a store node. The `_` is spelled out so that adding an `Expr` variant forces
+## the question "is this re-readable?" to be ANSWERED here rather than defaulted to no. Deleting
+## the group arm is refused with `check: type mismatch at line <n> in parser`.
 place_reread_ok := fn(e : ptr(Expr)) -> bool {
   if unchecked bitcast(usize, e) == 0 { return false }
   mut r := false
@@ -3161,7 +3281,10 @@ place_reread_ok := fn(e : ptr(Expr)) -> bool {
     Expr::Index(ib, ix) => { r = place_reread_ok(ib) and place_reread_ok(ix) }
     Expr::Deref(di) => { r = place_reread_ok(di) }
     Expr::Bin(bop, bl, br) => { r = place_reread_ok(bl) and place_reread_ok(br) }
-    _ => { r = false }
+    Expr::BoolLit | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit
+      | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop
+      => { r = false }
   }
   r
 }
@@ -3241,6 +3364,11 @@ stmt_last := fn(h : ptr(mut Stmt), a : rt::Arena) -> ptr(mut Stmt) {
 ## Exhaustive over `Expr` (including an expression-position match's arm bodies and a value-position
 ## `loop`'s statement list) so a `?` at ANY depth within the block is caught. A LAMBDA's body is NOT
 ## recursed — a `?` inside a lambda early-exits the lambda, not the cleanup, so it is not a hazard.
+## #544 stage 1 — the `_` below is spelled out as a group arm. Every form it absorbs is a LEAF with
+## no sub-expression to recurse into (`Num`, `BoolLit`, `Var`, `StrLit`, `FloatLit`, `FnRef`) except
+## `Lambda`, whose exclusion is deliberate and explained just above — so `false` is the ANSWER here,
+## not a default. Adding an `Expr` variant is a compile error at this site (Control Flow §5.1);
+## deleting the group arm is refused with `check: type mismatch at line <n> in parser`.
 defer_expr_try := fn(e : ptr(Expr)) -> bool {
   mut res := false
   match deref(e) {
@@ -3261,7 +3389,8 @@ defer_expr_try := fn(e : ptr(Expr)) -> bool {
     Expr::ArrayLit(na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if defer_expr_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next } }
     Expr::CompField(b, i) => { if defer_expr_try(b) or defer_expr_try(i) { res = true } }
     Expr::Loop(b) => { res = defer_stmts_clean(b) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Lambda
+      | Expr::FnRef => {}
   }
   res
 }
@@ -3415,6 +3544,10 @@ p_stmt := fn(in out pc : PC) -> usize {
     ## `isize` type argument (`alloc_into(isize, a, init)`, the working explicit-T path); otherwise keep
     ## the implicit-T form (`alloc_into(a, init)`).
     mut is_num := false
+    ## #544 stage 1 — this `_` STAYS. `init_e := p_or(pc)` binds through an unannotated local, and
+    ## the enum identity is lost before the arm check asks for it: deleting the `_` is accepted
+    ## SILENTLY (rc 0), so writing the variants out would buy the appearance of enforcement and none
+    ## of it. #680 (the non-generic-callee half of #660); measured five ways in that issue's thread.
     match deref(init_e) { Expr::Num(nv, ns, nn) => { is_num = true } _ => {} }
     if is_num {
       ts := synth_ident_span(pc, "isize")
