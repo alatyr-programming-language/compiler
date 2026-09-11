@@ -851,9 +851,15 @@ wat_cf_mutable_value := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
   }
 }
 
-## Resolve a comptime-for RANGE BOUND to its constant value: a literal, or a module-level const `N := k`
-## resolved by name (comptime_for_range's `0..N`). Mirrors the subset of the x86 lower's global_init_value
-## the corpus range bounds use (literal + module const; no const arithmetic — range bounds carry none).
+## Resolve a comptime-for RANGE BOUND to its constant value: a literal, a module-level const `N := k`
+## resolved by name (comptime_for_range's `0..N`), or CONST ARITHMETIC over either (`N - 1`, `2 + 2`,
+## `0 - 2`, `N * 2`). Mirrors the x86 lower's `global_init_value` fold set (`+ - * / %`), because the
+## bound is a COMPTIME value and Comptime §8.3 emits the body once per element of the half-open
+## `lo .. hi` (Control Flow §5.4/§6): the element count is a property of the source, not of the
+## selected backend, so all four surfaces MUST agree on it. Until #672 the `Bin` form was absorbed and
+## the function's initial `mut r := 0` was returned as if it were the bound: `comptime for i in
+## 0 .. N - 1` with `N := 5` ran FOUR times on x86_64 and ZERO times here, on riscv64 and on wasm,
+## with a clean compile, exit 0 and no diagnostic on any of them.
 wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> i64 {
   mut r := 0
   match deref(e) {
@@ -929,6 +935,26 @@ wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
           while ndg { nbs := bytes(str_at((src + nlp), 1)) ; nb := nbs[0] ; if nb >= 48 and nb <= 57 { nval = nval * 10 + i64(nb - 48) ; nlp = nlp + 1 } else { ndg = false } }
           r = nval
         }
+      }
+    }
+    ## CONST ARITHMETIC (#672): fold `+ - * / %` over already-folded operands, the same op set and the
+    ## same recursion as `global_init_value`, so `0 .. N - 1` names the same element set on every
+    ## backend. A ZERO divisor is NOT folded — it declines, leaving today's value — because x86's
+    ## `unchecked (lv / rv)` SIGFPEs the compiler on that operand and propagating a crash to three more
+    ## surfaces is a different repair (Comptime §2.6 wants a located diagnostic there, on all four).
+    ## Independent guard-then-act `if`s, matching `lower/ctfold::ct_bound_fold`: a nested `if…else`
+    ## inside an `if`-then is not a lowerable shape under the self-host lower.
+    Expr::Bin(bop, bl, brr) => {
+      lv := wat_comp_range_bound(bl, decls, src)
+      rv := wat_comp_range_bound(brr, decls, src)
+      mut dz := false
+      if (bop == 19 or bop == 29) and rv == 0 { dz = true }
+      if dz == false {
+        if bop == 16 { r = unchecked (lv + rv) }
+        if bop == 17 { r = unchecked (lv - rv) }
+        if bop == 18 { r = unchecked (lv * rv) }
+        if bop == 19 { r = unchecked (lv / rv) }
+        if bop == 29 { r = unchecked (lv % rv) }
       }
     }
     _ => {}

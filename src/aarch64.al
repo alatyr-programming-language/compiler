@@ -2632,18 +2632,15 @@ a64_inst_add := fn(src : ptr(u8), gi : usize, ts : usize, tl : usize) {
 
 
 
-## Resolve a comptime-for RANGE BOUND to its constant value: a literal, or a module-level const `N := k`
-## resolved by name (comptime_for_range's `0..N`). Mirrors the subset of the x86 lower's global_init_value
-## the corpus range bounds use (literal + module const; no const arithmetic — range bounds carry none).
-## THE ONE ACCESSOR HERE WHOSE ABSORBED SET IS REACHED AND WRONG (#672). The group arm below lists
-## `Expr::Bin`, and the header sentence above says range bounds carry no const arithmetic. Measured on
-## `cff2b72`: they do, and x86 folds them. `comptime for i in 0 .. N - 1` with `N := 5` runs FOUR times
-## on x86_64 (`lower.al`'s `global_init_value` has a `Bin` arm) and ZERO times here, on riscv64 and on
-## wasm, with a clean compile and no diagnostic; `0 - 2 .. 2` gives x86 4 against 2 everywhere else.
-## The initial `mut r := 0` doubles as "I could not fold this", which is #638's `-1` sentinel one level
-## further in. NOT fixed here: this unit is a byte-identity refactor and a fix belongs with its own
-## four-backend fixture (#672). The group arm keeps today's behaviour exactly; it only names the forms
-## that arrive, so #672 has a list to work from.
+## Resolve a comptime-for RANGE BOUND to its constant value: a literal, a module-level const `N := k`
+## resolved by name (comptime_for_range's `0..N`), or CONST ARITHMETIC over either (`N - 1`, `2 + 2`,
+## `0 - 2`, `N * 2`). Mirrors the x86 lower's `global_init_value` fold set (`+ - * / %`), because the
+## bound is a COMPTIME value and Comptime §8.3 emits the body once per element of the half-open
+## `lo .. hi` (Control Flow §5.4/§6): the element count is a property of the source, not of the
+## selected backend, so all four surfaces MUST agree on it. Until #672 the `Bin` form was absorbed and
+## the function's initial `mut r := 0` was returned as if it were the bound: `comptime for i in
+## 0 .. N - 1` with `N := 5` ran FOUR times on x86_64 and ZERO times here, on riscv64 and on wasm,
+## with a clean compile, exit 0 and no diagnostic on any of them.
 a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> i64 {
   mut r := 0
   match deref(e) {
@@ -2723,7 +2720,27 @@ a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
         }
       }
     }
-    Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf
+    ## CONST ARITHMETIC (#672): fold `+ - * / %` over already-folded operands, the same op set and the
+    ## same recursion as `global_init_value`, so `0 .. N - 1` names the same element set on every
+    ## backend. A ZERO divisor is NOT folded — it declines, leaving today's value — because x86's
+    ## `unchecked (lv / rv)` SIGFPEs the compiler on that operand and propagating a crash to three more
+    ## surfaces is a different repair (Comptime §2.6 wants a located diagnostic there, on all four).
+    ## Independent guard-then-act `if`s, matching `lower/ctfold::ct_bound_fold`: a nested `if…else`
+    ## inside an `if`-then is not a lowerable shape under the self-host lower.
+    Expr::Bin(bop, bl, brr) => {
+      lv := a64_comp_range_bound(bl, decls, src)
+      rv := a64_comp_range_bound(brr, decls, src)
+      mut dz := false
+      if (bop == 19 or bop == 29) and rv == 0 { dz = true }
+      if dz == false {
+        if bop == 16 { r = unchecked (lv + rv) }
+        if bop == 17 { r = unchecked (lv - rv) }
+        if bop == 18 { r = unchecked (lv * rv) }
+        if bop == 19 { r = unchecked (lv / rv) }
+        if bop == 29 { r = unchecked (lv % rv) }
+      }
+    }
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf
       | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
       | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => {}
