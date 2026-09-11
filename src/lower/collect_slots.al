@@ -330,8 +330,17 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## to-struct. Bind `pp` as a 1-word scalar carrying the ULTIMATE pointee struct span (eek-1
           ## marker), so `deref(deref(pp)).field` resolves + `p2 := deref(pp)` infers ek-7. A u64/scalar
           ## double pointer (inner `p` not ek 7) never reaches here → binds scalar as before.
-          app := addr_ptrptr_struct_span(v, ptr(slots), src)
-          bind_ptrptrstruct_slot(slots, src, ns, nl, app.s, app.n)
+          ## Named `pps`, not `app` — #666, and the rename is a WORKAROUND, not that issue's fix. With
+          ## this local named `app` the checker refuses the field read below as an unbound name;
+          ## renaming the local removes it, and so does renaming `package.al`'s manifest handle (also
+          ## `app`) without touching this file, while inserting a line into `package.al` does not — so
+          ## it is the NAME, not the buffer layout. It is not the nesting either: the same probe at
+          ## this module's top level reproduces, while the same probe in `src/lower/place.al` does
+          ## not, and one built on a same-module struct is accepted here. #666 carries the full table.
+          ## This module only became visible to the checker with #655; renaming one local is the
+          ## emission-neutral way to keep that fix to one slice.
+          pps := addr_ptrptr_struct_span(v, ptr(slots), src)
+          bind_ptrptrstruct_slot(slots, src, ns, nl, pps.s, pps.n)
         } else if deref_ptrptr_pointee_span(v, ptr(slots), src).n != 0 {
           ## a `p2 := deref(pp)` binding where `pp` is a pointer-to-pointer-to-struct (eek-1 marker) —
           ## `deref(pp)` is a `ptr(mut Struct)`, so bind `p2` as an ek-7 pointer-to-struct carrying the

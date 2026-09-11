@@ -2551,6 +2551,16 @@ run_pkg_callees module_fn_ancestor module-fn-ancestor 42 +geo__helper +geo__gid_
 run_pkg_callees module_fn_shadow   module-fn-shadow   42 +geo__child__helper +geo__bump -aother__helper -aother__bump
 run_pkg_check_build_located module_fn_sibling_reject   1 geo__child
 run_pkg_check_build_located module_fn_ambiguous_reject 1 caller
+## Issue #655 — `sema::check_program` decided which modules to TRUST by looking for `__` in the
+## mangled module name, and the parser mangles a nested submodule `src/geo/child.al` to `geo__child`.
+## Every nested submodule of every package was therefore skipped WHOLESALE, `src/lower/*.al` (ten
+## files, 12 007 lines of this compiler) included. Measured on the parent compiler, the reject
+## package below answered `check` rc 0 AND `build` rc 0, linked, and its artifact exited 0: the
+## unbound name lowered to `movq -8(%rbp), %rax`, an uninitialized frame slot — a silent wrong value,
+## not a trap. The legal package is the other half: enabling the checker on nested submodules must
+## not start refusing the ancestor-chain shape `src/lower/*.al` itself is built on (Modules §3).
+run_pkg_check_build_located issue655_nested_unbound_reject 4 geo__child "unbound name"
+run_pkg_exit issue655_nested_legal issue655-nested-legal 42 "T geo__child__run"
 # Issue #557 / Control Flow §5.1 + Modules §1 — the same non-exhaustive `match` must be refused
 # whichever way the package's modules sort. Both packages are byte-identical apart from the enum
 # module's FILE NAME (`aenum.al` sorts before `main.al`, `zenum.al` after it); on the parent compiler

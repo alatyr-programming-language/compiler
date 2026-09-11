@@ -48,16 +48,28 @@ fld_p := ast::fld_p
 ## surface sugar the parser folds away), so do not expect `fmt`'s render of this file to keep the
 ## groups; `scripts/fmt_corpus.sh` only requires module idempotence, which the expansion satisfies.
 ##
-## READ THIS BEFORE TRUSTING IT AS A GATE. Enumerating a `match deref(v)` is DOCUMENTATION here, not
-## enforcement. `sema`'s enum-exhaustiveness check — `sv := expr_var_span(sc)` in `check_stmts`
-## (`src/sema.al:8604`) for a statement match, `msv := expr_var_span(emp.scrut)` in `check_expr`
-## (`:5845`) for a value match — fires only when the scrutinee is a bare `Var` whose local carries a
-## RESOLVED annotated enum type; `deref(v)` is not a `Var`, so the check is skipped by design
-## ("Fail-open: … non-local scrutinee … skips"). Measured on this tree: a planted 25th `Expr`
-## variant builds rc=0 both with the wildcards and with this enumeration, and rebinding the
-## scrutinee to `e : Expr = deref(v)` does not help either, because the local's annotated type is
-## recorded as tag 0 / no name span here. Until that gap is closed, adding an `Expr` variant still
-## compiles silently — these arms only make the omission visible to a reader and to `grep`.
+## THESE ARMS ARE THE GATE — and the note that used to stand here, saying they were documentation
+## only, blamed the wrong thing. It read: "`deref(v)` is not a `Var`, so the check is skipped by
+## design". That was already false when it was written. #557 resolves a match scrutinee's enum type
+## from the EXPRESSION (`sema::match_scrut_enum_ty`), not from a bare `Var`, and the byte-identical
+## `match deref(v)` in `src/lower_ctx.al` IS checked. The real reason was #655: `sema::check_program`
+## skipped every declaration whose module name carries `__`, which is how the parser spells a path
+## separator, so this file — module `lower::assign`, mangled `lower__assign` — and the eleven others
+## under `src/lower/` were never type-checked at all. A name bound nowhere passed `check` AND
+## `build` here.
+##
+## Re-measured on this tree with #655 fixed, by planting a 25th variant in `ast::Expr`: each of the
+## four enumerated sites below — `expr_num_const`, `direct_num_float_target`, `emit_struct_assign`,
+## `const_scalar_lit` — produces its own located `alatyr: check: type mismatch … in lower__assign`.
+## On the parent the same planted variant was refused only at `src/lower.al`, naming no site here.
+## The companion measurement is the deletion census #544 stage 1 owes, run over ALL 57 line-initial
+## `_ =>` arms under `src/lower/`, one arm at a time, on both sides with a compiler built from its own
+## tree: the parent catches **0 of 57** — every deletion accepted, rc 0, silent — and this tree
+## catches **44**, each naming its own module and line. The 13 that stay blind are per-arm, not
+## per-file, and eight of them are #660's `match st` shape. So adding an `Expr` variant now fails the
+## build here, and most deleted arms are caught — but read
+## `.agents/skills/alatyr-lane/wildcard_enumeration.md` §2 before treating any particular arm as
+## caught: that is a per-arm fact and it is measured one arm at a time, never assumed.
 ## ============================================================================================
 
 ## TYP-13: a direct integer Num used to initialize an explicitly typed float local must be

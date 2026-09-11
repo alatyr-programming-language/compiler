@@ -520,6 +520,18 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
       collect_insts_expr(hi, insts, decls, src, a, penv)
     }
     Expr::StrLit(ss, sl, lbl, _ps, _pn) => {}
+    ## The six `Expr` variants this collector visits NOTHING for, spelled out instead of left off the
+    ## match (#544 stage 1 / #557): `BoolLit`, `FloatLit`, `CompField` and `FnRef` are leaves with no
+    ## sub-expression to walk, and `Loop` carries statements that `collect_insts_stmts` reaches on its
+    ## own. `Lambda` is the one that is NOT self-evidently empty — the driver's FN-6 lifting rewrites
+    ## every `Expr::Lambda` to an `Expr::FnRef` plus a synthetic top-level Decl before this pass runs,
+    ## so no `Lambda` node survives to be walked here; if that ever stops holding, a generic instance
+    ## used only inside a lambda body would go unregistered. This walk is a COLLECTOR, not an emitter:
+    ## a missed variant registers no instance rather than writing a wrong value, and unlike
+    ## `lower::rodata`'s sibling group arm (#668) none of these six is known to lose anything. Until
+    ## #655 this whole module was skipped by `check`, so the non-exhaustiveness was invisible.
+    Expr::BoolLit | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Loop => {}
   }
 }
 
