@@ -149,6 +149,19 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   records one payload type span per variant — the first component's — so components 2..n have no
   declared type to judge against. That residual stays open on #299.
 
+- **A raw-asm operand the compiler cannot spell is refused instead of becoming `$0`.** Spec ch.80
+  §2/§6 gives a raw-asm instruction operand as a register name or an immediate literal. Anything else
+  — `movq(rbx, 0 - 1)`, `movq(rbx, 1 + 1)`, `movq(rbx, unchecked 2)`, `movq(rbx, x)` for a local `x`,
+  and the same operands inside an `asm("…{i}…", op…)` template — used to fall through to the
+  immediate path and emit `$0`, with rc 0 from both `check` and `build` and nothing printed. The
+  program then ran with zero in that register: `movq(rdi, 40)` + `movq(rbx, 0 - 1)` + `addq(rdi, rbx)`
+  exited **40** where 39 was due. **Newly rejected:** a raw-asm source operand that is neither a
+  register name nor an integer/boolean literal, with one located build diagnostic naming the
+  instruction and the operand's argument position. The admitted forms are unchanged and still
+  compile: `-1` (the parser folds it to a single literal), a bare decimal, `true`, a register, and a
+  template immediate. This is not a constant fold — whether a constant-*foldable* operand should be
+  accepted is a language question for the specification and is not answered here.
+
 ## 0.2.2 — 2026-09-10
 - **A `::` head that names nothing is now a compile error instead of a silently different call.**
   `zzz::aa()`, with no `zzz` declared anywhere, used to build at rc 0 and run the *root's own* `aa`:

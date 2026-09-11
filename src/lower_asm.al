@@ -6,7 +6,13 @@
 (Arg, Expr) := ast
 arg_p := ast::arg_p
 (push_str, push_int) := rt
-(LCtx, node_ptr, var_name_span, num_lit_value, arg_expr_at, asm_str_span, asm_digit) := lower_ctx
+(LCtx, node_ptr, var_name_span, num_lit, arg_expr_at, asm_str_span, asm_digit) := lower_ctx
+## The located-diagnostic helper the whole lower shares (`lower::ctfold`, reached by the EXPLICIT
+## qualified path Modules §4 gives a non-descendant). This module still imports nothing from
+## `lower.al` itself: the raw-asm operand refusal needs the same `write(2, …)` of the offending
+## source line that every other located lower reject prints, and re-deriving that scan here would
+## be a second copy of a decision the idiom gate exists to catch.
+(lower_show_src_line) := lower::ctfold
 
 ## Emit the stable local GAS name for a source code-point label. The declaration emission index is
 ## unique across generic instances, while the label spelling is the function-scoped target name.
@@ -52,6 +58,36 @@ pub fn_is_naked := fn(src : ptr(u8), ns : usize, nl : usize) -> bool {
   p += 2
   while str_at((src + p), 1) == " " or str_at((src + p), 1) == "\n" or str_at((src + p), 1) == "\t" or str_at((src + p), 1) == "\r" { p = p + 1 }
   str_at((src + p), 11) == "@abi(naked)"
+}
+
+## The ONE raw-asm SOURCE-OPERAND reader (spec ch.80 §2/§6: an operand is a register name or an
+## immediate literal, and nothing else). Both operand sites — the two-operand register form and the
+## `asm("…{i}…", op…)` template substitution — arrive at the immediate path by ELIMINATION ("this
+## operand is not a register, so it must be an immediate"), and that elimination is sound only if a
+## non-literal is REFUSED here. Until #659 they asked `lower_ctx::num_lit_value`, whose "not a literal"
+## answer is the value `0` and therefore indistinguishable from the literal zero: `movq(rbx, 0 - 1)`
+## emitted `movq $0, %rbx`, `check` and `build` both exited 0, no diagnostic was printed, and the
+## program ran with 0 in the register (measured: exit 40 where 39 was due; `1 + 1` and `unchecked 2`
+## gave 40 where 42 was due). `num_lit` can refuse, and this is the one place that acts on the refusal,
+## so a caller either gets a real immediate back or does not come back at all.
+##
+## NOT a constant fold: `0 - 1` is a `Bin`, and whether the raw-asm grammar should admit a
+## constant-FOLDABLE operand is a language question for the specification, not a lowering liberty.
+raw_imm_operand := fn(oe : ptr(Expr), cx : ptr(LCtx), cs : usize, cl : usize, argi : usize, a : rt::Arena) -> i64 {
+  nl := num_lit(oe)
+  if nl.ok == false {
+    lower_show_src_line(cx.src, cs)
+    mut db := rt::strbuf(a, 256)
+    z0 := push_str(db, "selfhost: the source line above is a raw-asm `")
+    z1 := push_str(db, str_at((cx.src + cs), cl))
+    z2 := push_str(db, "` instruction whose operand at argument position ")
+    z3 := push_int(db, i64(argi))
+    z4 := push_str(db, " is neither a register name nor an immediate literal.\n")
+    z5 := rt::sb_flush(db, 2)
+    if z5 < 0 { panic("rt: diagnostic write failed") }
+    panic("selfhost: spec ch.80 §2/§6 — a raw-asm instruction operand is a register name or an immediate literal; a computed expression is not an operand form (compute it into a register first, then name that register)")
+  }
+  nl.v
 }
 
 ## Is `e` a RAW-ASM instruction call over REGISTER operands (spec ch.80 §2) — the naked/raw surface,
@@ -119,7 +155,11 @@ pub emit_raw_instr := fn(e : ptr(Expr), in out sb : rt::StrBuf, cx : ptr(LCtx), 
             sv := var_name_span(oe)
             mut reg := ""
             if sv.n != 0 { reg = x86_gpreg(str_at((cx.src + sv.s), sv.n)) }
-            if reg == "" { push_str(sb, "$"); push_int(sb, num_lit_value(oe)) } else { push_str(sb, reg) }
+            if reg == "" {
+              iv := raw_imm_operand(oe, cx, cs, cl, idx + 1, a)   ## operand `idx` is ARG `idx+1`
+              push_str(sb, "$")
+              push_int(sb, iv)
+            } else { push_str(sb, reg) }
             if k < sp.n and str_at((cx.src + sp.s + k), 1) == "}" { k = k + 1 }   ## skip the closing '}'
             j = k
           } else {
@@ -162,14 +202,15 @@ pub emit_raw_instr := fn(e : ptr(Expr), in out sb : rt::StrBuf, cx : ptr(LCtx), 
         push_str(sb, nm)
         push_str(sb, " ")
         ## src operand — a register or an immediate. Use the STANDALONE accessors `var_name_span` /
-        ## `num_lit_value` (an inline `match deref(a1.e)` here degenerates the local-Expr payload read —
+        ## `raw_imm_operand` (an inline `match deref(a1.e)` here degenerates the local-Expr payload read —
         ## it bound the Num's `v` to the node pointer, emitting a garbage immediate).
         sv := var_name_span(a1.e)
         mut sreg := ""
         if sv.n != 0 { sreg = x86_gpreg(str_at((cx.src + sv.s), sv.n)) }
         if sreg == "" {
+          iv := raw_imm_operand(a1.e, cx, cs, cl, 1, a)   ## dest-first: the SOURCE operand is arg 1
           push_str(sb, "$")
-          push_int(sb, num_lit_value(a1.e))
+          push_int(sb, iv)
         } else {
           push_str(sb, sreg)
         }

@@ -561,26 +561,35 @@ pub asm_str_span := fn(e : ptr(Expr)) -> CSpan {
 ## The integer value of an `Expr::Num`/`BoolLit` (else 0); the i-th arg expr of an arg list (0-based,
 ## null Expr ptr if absent) — small shared accessors (moved from lower.al, §6 decomposition).
 ##
-## `num_lit_value` is the ONE accessor in this file whose "not that form" answer is NOT distinguishable
-## from a real answer: `0` is both "not a literal" and the literal zero. Enumerating the group arm is
-## what made that visible, and it is a measured wrong value, not a hypothetical — `movq(rbx, 0 - 1)` in
-## a raw-asm body emits `movq $0, %rbx` with rc 0 from both `check` and `build` (#659, with the GAS and
-## the four-form table). The defect is in the two CALLERS that commit to the immediate path before
-## asking (`src/lower_asm.al:122` and `:172`), so it is fixed there and not by changing this accessor's
-## contract underneath its fifteen other call sites, all of which pass a compiler-synthesized tuple
-## component index that can only be a `Num`. The group arm below therefore keeps today's behaviour
-## exactly; it names the forms that reach it so #659 has a list to work from.
-pub num_lit_value := fn(e : ptr(Expr)) -> i64 {
-  mut res := 0
+## `num_lit_value` used to be the ONE accessor in this file whose "not that form" answer was NOT
+## distinguishable from a real answer: `0` was both "not a literal" and the literal zero. That is a
+## measured wrong value, not a hypothetical — `movq(rbx, 0 - 1)` in a raw-asm body emitted
+## `movq $0, %rbx` with rc 0 from both `check` and `build` (#659, with the GAS and the four-form
+## table), because both raw-asm operand readers commit to the immediate path first and then ask for a
+## value the accessor could not refuse to give.
+##
+## So the DECISION now lives once, in `num_lit`, and it CAN refuse: `ok` says whether `e` is an
+## integer/bool literal at all, `v` carries the value when it is. `num_lit_value` stays exactly as it
+## was for the fifteen call sites that pass a compiler-synthesized tuple-component index (a `Num` by
+## construction, so the `ok` half would be dead weight at every one of them) — it is now a one-line
+## projection of `num_lit`, so there is still only ONE list of Expr forms to keep correct. The raw-asm
+## readers in `lower_asm` ask `num_lit` and refuse when it says no.
+pub NumLit := struct { ok : bool, v : i64 }
+pub num_lit := fn(e : ptr(Expr)) -> NumLit {
+  mut res := NumLit(ok = false, v = 0)
   match deref(e) {
-    Expr::Num(v, s, n) => { res = i64(v) }
-    Expr::BoolLit(v) => { res = i64(v) }
+    Expr::Num(v, s, n) => { res = NumLit(ok = true, v = i64(v)) }
+    Expr::BoolLit(v) => { res = NumLit(ok = true, v = i64(v)) }
     Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
+}
+pub num_lit_value := fn(e : ptr(Expr)) -> i64 {
+  nl := num_lit(e)
+  nl.v
 }
 pub arg_expr_at := fn(head : ptr(mut Arg), i : usize, a : rt::Arena) -> ptr(Expr) {
   mut g := head
