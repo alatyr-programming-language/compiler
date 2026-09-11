@@ -72,6 +72,17 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/corpus_enum_check.sh" --self-test
   _full_corpus_enum_self_test_rc=$?
   [ "$_full_corpus_enum_self_test_rc" = 0 ] || exit "$_full_corpus_enum_self_test_rc"
+  # The WILDCARD-ARM decider's gate-of-the-gate (issue #658, the #600 rule). Same reason as the one
+  # above it: on a tree that adds no wildcard arm the check never reaches its own failure verdict, so
+  # a neutered decider would print a green line for ever. Eleven planted trees drive the decider
+  # directly, and FIVE of them are controls that must stay green — an unchanged tree, a removal, an
+  # acknowledged arm, the integer/comptime exemptions, and an arm quoted in prose — so a decider that
+  # simply always failed scores zero here rather than full marks. Measured: an always-pass decider
+  # loses the five addition cases, an always-fail decider loses the five controls, and a scanner that
+  # stops skipping comments loses the prose control.
+  bash "$ROOT/scripts/wildcard_arm_check.sh" --self-test
+  _full_wildcard_self_test_rc=$?
+  [ "$_full_wildcard_self_test_rc" = 0 ] || exit "$_full_wildcard_self_test_rc"
   bash "$ROOT/scripts/land.sh" --self-test
   _full_land_self_test_rc=$?
   [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
@@ -120,6 +131,31 @@ if [ -z "$ce_cover" ]; then
   echo "*** FULL GATE: REFUSED — scripts/corpus_enum_check.sh printed no 'index=' coverage line, so"
   echo "    what it compared is unknown. ***"
   exit 1
+fi
+
+# The WILDCARD-ARM check (issue #658). A pure source scan like the idiom gate — no compiler, ~8 s —
+# and it runs here, before the six minutes of building, because the author of a new `_ =>` arm should
+# hear about it at the cheapest moment. It holds NO oracle file: it counts the arms over enumerable
+# scrutinees in the MERGE BASE and in this tree and refuses an unacknowledged increase, so there is no
+# committed number to regenerate and nothing for two lanes to conflict over. Unlike the enumeration
+# check above it does not stop the gate: an added wildcard arm does not make the later stages measure
+# the wrong tree, it just must not reach `main` unremarked.
+echo '### WILDCARD ARMS (a new `_ =>` over an enumerable scrutinee) ###'
+WA_LOG="$LOGDIR/full_wildcard_arms.log"
+bash scripts/wildcard_arm_check.sh > "$WA_LOG" 2>&1
+wa_rc=$?
+grep -E "^(wildcard arms|\*\*\* wildcard arms|    )" "$WA_LOG"
+wa_cover="$(grep -E "^wildcard arms: base=" "$WA_LOG" | tail -1 | sed 's/^wildcard arms: //')"
+if [ "$wa_rc" != 0 ]; then
+  echo "  FAILURES (from $WA_LOG):"; grep -E "^wildcard arms: FAIL|^    \+ " "$WA_LOG" | head -20 | sed 's/^/    /'
+  fail=1
+fi
+# A check that printed no counts cannot be told apart from one that scanned nothing — the same
+# proof-of-work rule every stage below follows.
+if [ -z "$wa_cover" ]; then
+  echo "  (scripts/wildcard_arm_check.sh printed no 'base=' coverage line — what it counted is"
+  echo "   unknown, treating as a failure)"
+  fail=1; wa_cover="UNKNOWN — no coverage line"
 fi
 
 echo "### FIXPOINT ###"
@@ -223,6 +259,7 @@ if [ "$fail" != 0 ]; then
 elif [ "$sw_status" = "RAN" ]; then
   echo "*** FULL GATE: GREEN (sweeps RAN) ***"
   echo "    corpus enum:     $ce_cover"
+  echo "    wildcard arms:   $wa_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
@@ -231,6 +268,7 @@ else
   echo "    riscv64/wasm backends were NOT exercised by the sweeps. Re-run with --force-sweeps before"
   echo "    landing any change that can reach a backend. ***"
   echo "    corpus enum:     $ce_cover"
+  echo "    wildcard arms:   $wa_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"

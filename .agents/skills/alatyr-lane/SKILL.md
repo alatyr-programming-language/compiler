@@ -407,6 +407,16 @@ Fire on the exact new shape. A broad lowering fix once regressed ~90 stdlib test
 shipped fired only on the shape that was broken. When one fact is recovered by scanning the source in
 more than one place, `grep` for the other copies — that is part of the fix, not a follow-up.
 
+**Do not add a `_ =>` arm over an enumerable scrutinee.** `scripts/wildcard_arm_check.sh` is a stage
+of the full gate and refuses one, naming the file and the line. Spell the absorbed variants as one
+OR-pattern group arm (`wildcard_enumeration.md` §3); if the wildcard is genuinely required, say so
+**on the arm's own line or the line above it** — `## wildcard-ok: <reason>`, with a real reason. The
+marker lives where the arm lives because a rule kept anywhere else is one people route around, which
+is the whole lesson of #649. `_` over an integer, a byte or a `comptime match typeinfo(T)` kind is
+exempt and needs no marker; the check decides that from the scrutinee's resolved type, and the census
+found four such arms in the entire tree. The reason the two directions are not treated
+alike is the section at the top of `wildcard_enumeration.md`.
+
 If the unit replaces `_ =>` arms with spelled-out ones (#544 stage 1), read
 `.agents/skills/alatyr-lane/wildcard_enumeration.md` first. It is kept separate because it is one
 stage's procedure over nine files, not something every lane owes; it carries the three blind classes

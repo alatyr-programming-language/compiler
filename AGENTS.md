@@ -270,6 +270,25 @@ No single check is sufficient:
   and compiler/library modules and must not rewrite them automatically.
 - `idiom_gate.sh` reports duplicated decisions and is reporting-only; its reviewed baseline is an oracle,
   not permission to ignore a new finding.
+- `wildcard_arm_check.sh` refuses a new unacknowledged `_ =>` arm over an **enumerable** scrutinee,
+  and it is an addition rule rather than a limit because the two directions were measured and are not
+  symmetric. Over a project `enum` the variant list is something a later commit extends, and a
+  spelled-out group arm turns that extension into a located `check` error where a `_` absorbs it
+  silently. Deleting an existing `_` is the expensive half: #544's census measured that in **249 of
+  727** cases the deletion is invisible — `check` 0, `build` 0, and a `match` with no arm taken
+  returns −1 at run time (`run rc=255`) with no diagnostic — so the tree's existing arms are removed
+  by hand, one file at a time, by `.agents/skills/alatyr-lane/wildcard_enumeration.md`. Preventing a
+  new one costs the author nothing; that asymmetry is the whole design. Over an integer or a byte `_`
+  is legitimate and exempt (the census found **4** tree-wide), as is a `comptime match typeinfo(T)`
+  kind dispatch; both exemptions are decided from the scrutinee's resolved type, never from the arm's
+  text, and both are counted in the verdict line rather than silently dropped. The check holds **no
+  oracle file**: like `corpus_enum_check.sh` it compares two things the repository already contains —
+  the merge base and the head — so there is no fourth committed number to regenerate or drift. It is
+  also the reason the count is parsed rather than grepped, and the error runs in both directions:
+  `src/parser.al` holds 24 real arms against 27 `grep -c '_ =>'` hits — three are band comments
+  quoting the token in prose — while `grep -cE '^\s+_ =>'` answered 4 for `src/lower_ctx.al`'s 24,
+  because twenty sat inline in one-line accessors. The scanner reproduces #544's independent census
+  to the unit: 727 over `src/` at `6759a95` and 731 at `6fe1e1d`.
 - The whole-program invariant checks and cross-target sweeps need non-vacuity tests; a green gate that
   never fails its own planted defect is not evidence.
 - `build_reject` proves only a nonzero exit. Use `build_reject_has` for an intended diagnostic, and do
@@ -296,8 +315,8 @@ No single check is sufficient:
   docs-only class. A feature-only PR with an intentional oracle
   transition may use the first non-green run only to document the expected oracle mismatch; the final
   merge plus maintainer oracle commit must pass the complete gate before publish.
-- The full gate covers fixpoint, e2e, corpus, formatter, duplicate-decision, invariant, and cross-target
-  checks; an individual green check is never sufficient.
+- The full gate covers fixpoint, e2e, corpus, formatter, duplicate-decision, wildcard-arm, invariant,
+  and cross-target checks; an individual green check is never sufficient.
 - The docs-only gate is available only when
   `.agents/skills/alatyr-lane/classify_docs_only.sh <base> <head>` accepts the complete committed range
   and both worker and integrator independently inspect every hunk. Its allowlist is regular,
