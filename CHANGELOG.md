@@ -135,6 +135,21 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   literal by a computed offset instead of a symbol — it emitted duplicate `(data …)` segments at one
   address, which is legal, and now emits one.
 
+
+- **A `comptime for` whose range bound is const arithmetic now unrolls the same loop on every
+  backend.** `comptime for i in 0 .. N - 1` with `N := 5` ran **four** times on x86_64 and **zero**
+  times on aarch64, riscv64 and wasm; `N - 4 .. N` with `N := 5` ran four times on x86_64 and five
+  everywhere else; `0 - 2 .. 2` ran four against two. Every one of those compiled clean, exited 0
+  and printed no diagnostic on all four surfaces, so the only way to see the disagreement was to run
+  one program on the whole matrix and compare the answers with each other. The x86 lower folded the
+  bound through `global_init_value`; the three emit-side resolvers absorbed the arithmetic into a
+  wildcard and returned their own "could not fold this" initial value, `0`, **as** the bound.
+  Comptime §8.3 emits the body once per element of the half-open `lo .. hi` (Control Flow §5.4/§6)
+  and Comptime §2.1–§2.5 make a completed comptime evaluation deterministic and
+  implementation-identical, so the element count is a property of the source rather than of the
+  selected backend and x86_64's answer was the correct one; the other three now fold `+ - * / %`
+  the same way, in both the lower and the upper bound. A bare literal, a bare module-const and a
+  unary negative-literal bound are unchanged — those already agreed on all four backends.
 - **A `ptr(T)` annotation's pointee no longer depends on which file name the type is declared in.**
   Exhaustiveness was already independent of module order for a direct annotation (`c : C`), but the
   spelling a real `Expr` walk writes is `e : ptr(C)`, and the pointee of a pointer annotation was
