@@ -7978,6 +7978,23 @@ fmt_test_has direct_jmp 42 "@label(done)"
 build_reject_has reject_jmp_unknown "unbound name"
 build_reject_has reject_jmp_duplicate "duplicate name"
 build_reject_has reject_jmp_checked "invalid at line"
+## #659 — the raw-asm SOURCE OPERAND. Spec ch.80 §2/§6 gives that operand as a register name or an
+## immediate literal; anything else used to reach the immediate path anyway and emit `$0`, because the
+## accessor the two operand readers asked could not tell "not a literal" from "the literal 0". Measured
+## on the parent compiler, all five reject rows below exited 0 from BOTH `check` and `build` and then
+## RAN: 40 where 39 was due (`0 - 1`), 40 where 42 was due (`1 + 1`, `unchecked 2`, a local name). The
+## needles carry the instruction name AND the operand's argument position, so a blanket refusal, a
+## refusal blamed on the wrong operand, or a bare crash cannot pass them. The two `run_x86` rows are
+## the CONTRAST: the admitted operand forms (`40`, `-1`, `true`, a register, a template immediate) in
+## both orders around the refused ones. `..._bin` puts an accepted operand before the offending line
+## and `..._bin_first` puts it after, so neither order can be what the refusal depends on.
+run_x86 raw_asm_operand_literals 42
+run_x86 raw_asm_tmpl_operand_literals 42
+build_reject_has reject_raw_asm_operand_bin 'raw-asm `movq` instruction whose operand at argument position 1 is neither a register name nor an immediate literal'
+build_reject_has reject_raw_asm_operand_bin_first 'raw-asm `movq` instruction whose operand at argument position 1 is neither a register name nor an immediate literal'
+build_reject_has reject_raw_asm_operand_unchecked 'raw-asm `movq` instruction whose operand at argument position 1 is neither a register name nor an immediate literal'
+build_reject_has reject_raw_asm_operand_var 'raw-asm `movq` instruction whose operand at argument position 1 is neither a register name nor an immediate literal'
+build_reject_has reject_raw_asm_tmpl_operand 'raw-asm `asm` instruction whose operand at argument position 2 is neither a register name nor an immediate literal'
 check_accept atomic_global_counter
 check_accept ambient
 check_accept check_typed_local
