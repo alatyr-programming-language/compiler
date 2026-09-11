@@ -6334,6 +6334,16 @@ build_reject_has reject_brand_enum_payload_sink "implicit brand conversion"
 emit_reject_has wat reject_brand_enum_payload_sink "implicit brand conversion"
 emit_reject_has aarch64 reject_brand_enum_payload_sink "implicit brand conversion"
 emit_reject_has riscv64 reject_brand_enum_payload_sink "implicit brand conversion"
+## …and the same four-surface witness for the ARRAY-LITERAL ELEMENT sink (`xs : [2]A = [b, b]`). Its
+## cause was not the classifier: `resolve_ty` answers tag 7 for the whole `[2]A` annotation and never
+## extracted an element type, so no declared sink type existed to judge an element against. The
+## `check` row carries the LOCATED needle on purpose — it names the crossing's own line, so a refusal
+## that fired on the LEGAL `[2]A` control one line above it fails this row instead of passing it.
+check_reject_has reject_brand_array_element_sink "at line 42 in reject_brand_array_element_sink"
+build_reject_has reject_brand_array_element_sink "implicit brand conversion"
+emit_reject_has wat reject_brand_array_element_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_array_element_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_array_element_sink "implicit brand conversion"
 check_accept accept_brand_explicit_conversions
 run accept_brand_explicit_conversions 42
 check_accept accept_brand_require_identity
