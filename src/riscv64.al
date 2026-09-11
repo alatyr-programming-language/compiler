@@ -7639,7 +7639,7 @@ emit_rv_str_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u
       Stmt::ExprStmt(e, nx) => { rv_str_data_if_print(e, sb, src, a) ; s = nx }
       Stmt::While(c, b, nx) => { emit_rv_str_data(b, sb, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { emit_rv_str_data(th, sb, src, a) ; emit_rv_str_data(el, sb, src, a) ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; emit_rv_str_data(am.body_stmts, sb, src, a) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; if ast::arm_body_first_use(mah, arm) { emit_rv_str_data(am.body_stmts, sb, src, a) } ; arm = am.next } ; s = mnx }
       Stmt::Assign(ns, nl, v, nx) => { s = nx }
       Stmt::Return(rv, nx) => { s = nx }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
@@ -7689,7 +7689,7 @@ emit_rv_float_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { emit_rv_float_data_expr(fv, sb, src, a) ; s = nx }
       Stmt::IndexFieldAssign(_ifb, _ifi, _iffs, _iffl, ifv, ifnx) => { emit_rv_float_data_expr(ifv, sb, src, a) ; s = ifnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { emit_rv_float_data_expr(iv, sb, src, a) ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; emit_rv_float_data(am.body_stmts, sb, src, a) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; if ast::arm_body_first_use(mah, arm) { emit_rv_float_data(am.body_stmts, sb, src, a) } ; arm = am.next } ; s = mnx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { emit_rv_float_data_expr(flo, sb, src, a) ; if unchecked bitcast(usize, fhi) != 0 { emit_rv_float_data_expr(fhi, sb, src, a) } ; emit_rv_float_data(fb, sb, src, a) ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { emit_rv_float_data_expr(rlo, sb, src, a) ; if unchecked bitcast(usize, rhi) != 0 { emit_rv_float_data_expr(rhi, sb, src, a) } ; emit_rv_float_data(rb, sb, src, a) ; s = nx }
       Stmt::CompIf(cc, th, el, nx) => { emit_rv_float_data(th, sb, src, a) ; emit_rv_float_data(el, sb, src, a) ; s = nx }

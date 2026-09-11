@@ -121,6 +121,20 @@ Two numbers that are **not** the compiler's version: the specification revision 
 tag lives in the sibling repository; a `v1.0.0` here would mean something else entirely.
 
 ## Unreleased
+- **A `match` arm written as an OR-pattern may now hold a string literal in its body.** The
+  alternatives of `p | q | … => body` are surface sugar (Control Flow §5.4): the parser expands them
+  into one arm per alternative, all sharing ONE body node. Every `.rodata` walk therefore reached
+  that body once per alternative and emitted its string-literal cell that many times under the same
+  `.Lstr<m>_<n>` label, so `as` refused the object — `check` reported rc 0 and `build`/`run` failed
+  with rc 13 and a diagnostic naming a temporary `.s` file rather than the source. **Newly accepted:**
+  an OR-pattern arm whose body contains a string literal, on all four backends. A `.rodata` cell
+  belongs to the literal node, not to the control-flow path that reaches it, so the data walk now
+  visits a shared body once; the executable body is still emitted per alternative, which is what
+  gives each alternative its own dispatch and its own jump labels. Float cells (`.Lflt`) were already
+  deduplicated and are unchanged; the WebAssembly backend never failed, because it addresses a
+  literal by a computed offset instead of a symbol — it emitted duplicate `(data …)` segments at one
+  address, which is legal, and now emits one.
+
 - **A `ptr(T)` annotation's pointee no longer depends on which file name the type is declared in.**
   Exhaustiveness was already independent of module order for a direct annotation (`c : C`), but the
   spelling a real `Expr` walk writes is `e : ptr(C)`, and the pointee of a pointer annotation was

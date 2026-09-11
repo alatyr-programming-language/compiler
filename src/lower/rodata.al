@@ -9,6 +9,7 @@
 ## and the runtime buffer/vector types below; parent helpers resolve through the lower ancestor chain.
 strbuf := rt
 arm_p := ast::arm_p
+arm_body_first_use := ast::arm_body_first_use
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 (Decl, Expr, Stmt, local_is_mut) := ast
@@ -160,8 +161,13 @@ emit_rodata_expr := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, src : ptr(u8),
         ## a STR-LITERAL pattern arm (`wild == 4`) carries its pattern StrLit's node handle in `lit`
         ## — emit that literal's `.ascii` rodata (the dispatch byte-compares against it).
         if am.wild == 4 { emit_rodata_expr(unchecked bitcast(ptr(Expr), usize(am.lit)), sb, src, a, seen) }
-        emit_rodata_expr(am.body, sb, src, a, seen)
-        emit_rodata_stmts(am.body_stmts, sb, src, a, seen)
+        ## #673: an OR-pattern's alternatives SHARE one body node, so the data walk visits it once —
+        ## see `ast::arm_body_first_use`. The pattern literal above is per-alternative, not shared,
+        ## so it stays outside the guard.
+        if arm_body_first_use(head, arm) {
+          emit_rodata_expr(am.body, sb, src, a, seen)
+          emit_rodata_stmts(am.body_stmts, sb, src, a, seen)
+        }
         arm = am.next
       }
     }
@@ -307,7 +313,8 @@ emit_rodata_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, src : 
           am := deref(arm_p(arm))
           ## a STR-LITERAL pattern arm (`wild == 4`): emit the pattern StrLit's `.ascii` rodata.
           if am.wild == 4 { emit_rodata_expr(unchecked bitcast(ptr(Expr), usize(am.lit)), sb, src, a, seen) }
-          emit_rodata_stmts(am.body_stmts, sb, src, a, seen)
+          ## #673: one shared body per OR-pattern arm group — walk it once (`ast::arm_body_first_use`).
+          if arm_body_first_use(ah, arm) { emit_rodata_stmts(am.body_stmts, sb, src, a, seen) }
           arm = am.next
         }
         s = nx
