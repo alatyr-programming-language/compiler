@@ -45,6 +45,13 @@ before claiming it:
   function's return type. This one is per-arm, not per-file, and it has a workaround: annotating the
   local (`stmt : Stmt = …`) or the pointer (`sp : ptr(mut Stmt) = …`) restores the check.
 
+Re-measured a third time on `src/parser.al` (`60338f4`, compiler built from that tree): **21 caught
+of 24**, and all three blind arms are the per-arm class — two are `#660`'s `match x` over
+`x := deref(stmt_p(Stmt, st))`, and the third, `parser.al:3418`, binds `init_e := p_or(pc)` where
+`p_or` is **not generic** and returns a concrete `ptr(mut Expr)`. So the boundary is the binding
+through an unannotated local, not the genericity of the callee; #680 carries the five-row table for
+both spellings. Check a candidate file for BOTH shapes, not only for `stmt_p`.
+
 `comptime.al` is blocked, not merely deprioritised. `aarch64.al` is not, any
 more: it was taken as the second file of this stage (`Refs #544`, 38 of its 39 caught arms enumerated)
 once #662 landed, and the first thing that unit owed was re-measuring the census rather than carrying
@@ -143,6 +150,17 @@ a string literal on all four backends as soon as this lands.
 
 Enumerate it with a non-vacuity check that names its line, as every other arm in this stage owes.
 
+**So the pre-census grep changed its question, not its value.** It used to ask "does this file hold
+a hard stop?"; it now asks "does this file need a seed promotion before its arm is writable?" — and
+it is still one grep over the group-arm bodies, still worth running before an hour of census.
+`src/parser.al` (24 arms, `Refs #544`) answers no at all 21 of its enumerated arms: every body is
+`{}`, a bare value (`{ false }`, `{ NSpan(s = 0, n = 0) }`, `{ unchecked bitcast(ptr(Expr), 0) }`,
+`{ r = false }`, `{ deref(ok) = false }`) or a two-line constructor, and not one holds a string
+literal — so that file was writable in full against the frozen seed, and its census was paid for
+knowing so. Expect that answer from a non-backend file: the `push_str(sb, "…")` shape that owns the
+wait lives in the three backend emitters, so the seed-promotion constraint is a property of
+`aarch64.al`, `riscv64.al` and `wat.al`, not of the stage.
+
 **Why a group arm and not one arm per variant, with numbers.** #544's plan says "a genuinely empty
 arm is written as its variant with an explicit comment saying why nothing is emitted, never as `_`".
 Read literally on one accessor that is 23 arms and 23 comments. Measured on the pilot's 23 enumerated
@@ -229,15 +247,35 @@ Look for that pattern in every accessor whose default is a representable value.
    in silence. Script the silencing; do it by hand and you will silence the two trees differently.
    The §2 deletion census remains the stronger per-arm form of the same proof, because it names
    every one of your arms rather than the first.
+
+   **Once the earlier files are enumerated, `_ => {}` is the wrong silencer and one-at-a-time is
+   the wrong loop.** Both were measured on `src/parser.al`, whose module name sorts late. Inserting
+   `_ => {}` into `aarch64.al`'s `a64_cf_offset_value`, every arm of which ends in `return`, left
+   the function with a value-less path and turned the sequence into `check: invalid at line 1857 in
+   aarch64` — an error about the silencer, not about the plant, and the loop cannot step past it.
+   Silence a match that ALREADY has a spelled-out group arm by appending `| Expr::<planted>` to that
+   arm instead: it is the same textual operation the enumeration itself performs, it cannot change
+   the arm's type, and it works for a value-position match. Keep `_ => {}` only for a match with no
+   group arm. And do the whole pre-your-file set in ONE scripted pass rather than one `check` per
+   step: `aarch64.al` alone masks for a dozen steps at ~40 s each. On `src/parser.al` a single
+   blanket pass over all 68 non-parser modules — 66 group-arm appends, 10 wildcard inserts, applied
+   identically to both trees, verified by `sha256sum` over every `src/**/*.al` showing exactly ONE
+   differing file — reduced the loop to **four** steps. It diverged at step 4: the branch stopped at
+   `type mismatch at line 674 in parser` (its first group arm, `clone_expr`'s) while the parent
+   walked past `parser` to `invalid at line 6674 in sema`. Check the name order you actually get
+   rather than the one you expect: `ast.al` sorts BEFORE `parser.al` and holds eight `Expr::`
+   patterns, but `aarch64` sorts before `ast`, and the first module to name the plant was
+   `aarch64`, then `lower`, `lower__assign`, `lower_layout`.
 4. **`git add` the file set before the gate.** `scripts/corpus_enum_check.sh` refuses in ~15 s when
    the index and the worktree name different `.al` sets.
 
 ## 8 · Order for the remaining files
 
 The census's order, and it is not by size — size correlates with neither the caught fraction nor the
-reading effort. `parser.al` (24), `fmt.al` (29, and it holds the one `gap=0` arm that is removable
-for free), then `riscv64.al` (50) and `wat.al` (63–64), then `lower_layout.al` (38), `sema.al` (108),
-`driver.al` (46 arms but 21 M entries), and `lower.al` (210) last, in reviewed slices.
+reading effort. `parser.al` (24) **is done** (`Refs #544`, 21 of its 24 caught arms enumerated),
+then `fmt.al` (29, and it holds the one `gap=0` arm that is removable for free), then `riscv64.al`
+(50) and `wat.al` (63–64), then `lower_layout.al` (38), `sema.al` (108), `driver.al` (46 arms but
+21 M entries), and `lower.al` (210) last, in reviewed slices.
 
 Budget, measured on the pilot rather than estimated: **about 1 h of wall clock** end to end with the
 `check` runs overlapped against the writing — ~12 min reading #544's comments and the file, ~2.5 min
@@ -245,6 +283,18 @@ for the 24-run deletion census (six worktree copies; ~14 min serial), ~4 min for
 five-row follow-up, ~4 min probing the wrong value it exposed, ~10 min writing the two issues, ~9 min
 for the two compiler builds and the four GAS emissions, ~12 min writing the enumeration and the
 notes, ~5 min for the non-vacuity sequence, and ~12 min of gate. Serially that is about 1 h 15.
+
+Third data point, `src/parser.al` (24 arms, 6 467 lines): about **2 h** end to end, and the shape of
+the cost is different from both files above. The 24-run census was **3 min 12 s** at six-way
+parallelism (~45 s per `check`, competing with three other lanes) and the five-row blind-arm
+follow-up another **2 min 14 s** — the measuring was under six minutes for the whole file. What cost
+the two hours was the **reading**: 24 arms over one enum, but five distinct bands with five distinct
+reasons, and one arm (`index_parts`) whose absorbed list had to be read against nine call sites
+before it could be written down. That reading is what produced #681, and it does not parallelise and
+does not shrink with practice. Budget by BANDS, not by arms. Two more numbers worth carrying: the
+two compiler builds plus the four GAS emissions were ~6 min, and the non-vacuity sequence was ~8 min
+once the blanket silencer above replaced the one-at-a-time loop (it was heading for 40+ `check` runs
+before that).
 
 Second data point, `src/aarch64.al` (63 arms, 8 879 lines): about **2 h** end to end, of which the
 63-run census was ~45 min at six-way parallelism on a loaded machine (~40 s per `check`, and it was
