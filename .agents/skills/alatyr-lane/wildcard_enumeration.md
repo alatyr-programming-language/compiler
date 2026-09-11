@@ -8,6 +8,55 @@ outcome. Read `AGENTS.md` and `SKILL.md` first — this file only adds what is s
 Measured on the pilot, `src/lower_ctx.al` (24 arms, 666 lines, PR for #544 `Refs #544`). Every number
 below is from that file unless it says otherwise.
 
+## The rule in the other direction, and why it is not symmetric
+
+**A change may not add an unacknowledged `_ =>` arm over an enumerable scrutinee.**
+`scripts/wildcard_arm_check.sh` is a stage of `scripts/full.sh` and refuses one by file and line.
+
+The two directions look like the same rule and are not, because the two costs were measured. Adding
+an arm costs the author nothing to avoid: they are present, they know which forms the arm absorbs,
+and they can either enumerate them or write down why the wildcard is required. **Deleting** one is
+expensive, and in **249 of the 727** arms the census walked it is worse than expensive — it is
+invisible. A `match` with no arm taken returns −1 at run time (`run rc=255`) on a clean compile with
+rc 0 from both `check` and `build`, no diagnostic anywhere; that is why §2's per-arm deletion census
+exists, and why the existing arms come out one file at a time instead of in a sweep.
+
+What forced the check rather than a written convention was the metric standing still. Between
+`6759a95` and `6fe1e1d` the `src/` total went **727 → 731** — lane #651 added one arm each to
+`src/aarch64.al`, `src/riscv64.al`, `src/wat.al` and `src/lower_layout.al`, and nothing was removed.
+Stage 1 then landed two entire files, `src/lower_ctx.al` 24 → 2 (#661) and `src/aarch64.al` 69 → 33
+(#678) — about 58 arms — and the tree-wide count did not move. Removal and addition were running at
+the same rate, so this stage could have spent its remaining eight files, `src/lower.al`'s 227
+included, and finished where it started. Refusing unacknowledged additions while letting removals
+through turns that stalemate into a monotone decrease.
+
+**The exceptions, written down.**
+
+- **A non-enumerable scrutinee.** Over an integer or a byte the domain is not a list anybody can
+  spell, and `_` is the only way to write "everything else". The census found **four** such arms in
+  the whole tree — `src/comptime.al`'s binary-op dispatch and `src/lower.al`'s three register-name
+  tables — so the rule almost never fires on a correct use. The check decides this from the
+  scrutinee's **resolved type**, never from the arm's text: it resolves the type through the sibling
+  arms' patterns against the `enum` declarations it parsed out of the tree, so `E::V`, `E.V` and the
+  bare `V` spelling all resolve alike and none of them is a way out.
+- **A `comptime match typeinfo(T)` kind dispatch**, and the generic `T.(v)` comptime-variant pattern
+  `lib/base/derive.al` uses. The kind set is closed, but it is not a project `enum` declaration the
+  scanner can name, so those ten arms are exempt — and reported by count in the verdict line rather
+  than silently dropped, so the exemption stays reviewable.
+- **No exemption for the single-case accessor.** §3 records the measurement: it would have skipped 22
+  of the pilot's 23 arms including `num_lit_value`, which is where the pilot's only wrong value
+  (#659) came from.
+
+**Acknowledging one.** Put `wildcard-ok: <reason>` in a comment on the arm's own line or the line
+immediately above it, with a non-empty reason. It lives where the arm lives on purpose: #649 had to
+turn the `git add` convention into a gate stage after a lane lost a whole gate run to it, and a
+reason kept in a commit message is a reason the next reader of the arm will never see.
+
+**Counted with a parser, not a grep.** `scripts/wildcard_arm_scan.awk` tokenizes with `src/lexrt.al`'s
+lexical rules. §1 below is the measurement that makes that mandatory, and the check reproduces this
+file's own census: over `src/` it answers **727** at `6759a95` and **731** at `6fe1e1d`, with four
+non-enumerable arms at both.
+
 ## 0 · Before you take a file
 
 Three blind classes have been measured; TWO of them have since been fixed and are kept here as worked
