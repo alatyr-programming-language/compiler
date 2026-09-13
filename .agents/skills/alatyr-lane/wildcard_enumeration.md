@@ -321,10 +321,11 @@ Look for that pattern in every accessor whose default is a representable value.
 ## 8 · Order for the remaining files
 
 The census's order, and it is not by size — size correlates with neither the caught fraction nor the
-reading effort. `parser.al` (24) **is done** (`Refs #544`, 21 of its 24 caught arms enumerated),
-then `fmt.al` (29, and it holds the one `gap=0` arm that is removable for free), then `riscv64.al`
-(50) and `wat.al` (63–64), then `lower_layout.al` (38), `sema.al` (108), `driver.al` (46 arms but
-21 M entries), and `lower.al` (210) last, in reviewed slices.
+reading effort. `parser.al` (24) **is done** (`Refs #544`, 21 of its 24 caught arms enumerated), and
+so is `riscv64.al` (52 by the parser-based count, all 27 of its caught arms enumerated); then
+`fmt.al` (29, and it holds the one `gap=0` arm that is removable for free), `wat.al` (63–64),
+`lower_layout.al` (38), `sema.al` (108), `driver.al` (46 arms but 21 M entries), and `lower.al` (210)
+last, in reviewed slices.
 
 Budget, measured on the pilot rather than estimated: **about 1 h of wall clock** end to end with the
 `check` runs overlapped against the writing — ~12 min reading #544's comments and the file, ~2.5 min
@@ -352,3 +353,33 @@ familiarity. The two compiler builds and four GAS emissions were ~10 min; the tw
 produced, ~25 min. The `check` runs scale linearly with the arm count and parallelise; the reading and
 the writing do neither. `lower.al`'s 205 caught arms are ~2 h of `check` serially and ~20 min at six-way
 parallelism, so what has to be sliced there is the reading, not the measuring.
+
+Fourth data point, `src/riscv64.al` (52 arms, 7 971 lines): about **2 h** end to end, and it is the
+first file whose census split on a PERFECTLY clean line — **27 caught / 25 blind, 27 for 27 of the
+`match deref(<expr>)` arms over `Expr` and 25 for 25 of the `match st` arms over
+`st := deref(stmt_p(Stmt, <h>))`**, with no third case anywhere in the file. That is worth carrying
+as a prediction for the remaining backends and NOT as a licence to skip the measurement: the split is
+what makes the file's reading cheap, and only the per-arm census can tell you the file has it.
+The 52-run census was **10 min 0 s** wall clock at eight-way parallelism (11:23:35 to 11:33:35;
+~40 s per `check` unloaded, ~90 s under its own eight-way load) against ~35 min serial; the two
+compiler builds and the four GAS emissions were ~8 min; the non-vacuity sequence diverged at
+**step 3** and took ~6 min.
+
+Three things this file adds to the procedure rather than repeating:
+
+- **Take the census with the compiler this tree builds, and take the GAS evidence with it too.** The
+  seed is 0.2.3 here and would have agreed, but that is luck, not method — §0's first two entries are
+  both cases where the seed disagreed with the tree it was being used to check.
+- **§3's seed-promotion wait is over, and this file is where it was spent.** `emit_rv_expr`'s group
+  arm absorbs eight variants over a body holding `push_str(sb, "  ebreak\n")` — the exact shape that
+  stopped `src/aarch64.al` at 38 of 39 with `Error: symbol '.Lstr1_617' is already defined`. Written
+  out against seed 0.2.3 (`a46be2c`, carrying PR #685) the seed builds it clean, and the emission is
+  byte-identical in both directions. `src/aarch64.al`'s one deferred arm is now writable too, and it
+  is the cheapest remaining unit of this stage: one arm, one already-measured census row.
+- **Name the blanket silencer's group arms by SHAPE, not by line.** §7's blanket pass appends
+  `| Expr::<planted>` to every existing group arm, and the first attempt here matched only arms whose
+  `|` and `=>` sit on the SAME line. `src/parser.al`'s enumerated arms wrap with a bare
+  `      => { … }` continuation line, so 2 of 93 were missed, `_ => {}` went into a value-position
+  match instead, and the loop spent three steps producing `check: invalid` errors about the silencer
+  before the file stopped parsing at all. Match a group-arm tail as "a line of `|`-joined bare
+  `Expr::X` tokens whose next non-empty line starts with `=>`" as well, and the pass is 93/93.
