@@ -9,7 +9,9 @@
 ## fed another brand, the struct-field STORE, a value read out of a branded FIELD, the payload of an
 ## ARITY-1 enum variant, every ELEMENT of an array literal at a `[N]T` / `[T; N]` sink and — since
 ## the MODULE-DECLARATION slice — a module-level annotated value declaration, including the
-## composition of the last two. This ONE sink it does NOT reach, for a stated reason:
+## composition of the last two — and, since #687, a DECLARED RESULT whose type is a fixed array,
+## in both the trailing-expression and the early-`return` spelling. This ONE sink it does NOT
+## reach, for a stated reason:
 ##
 ##   1. `F.P(b, 7)` and     — a MULTI-COMPONENT enum-variant payload. `src/ast.al`'s `FieldDecl`
 ##      `F.P(A(1), c)`        carries ONE `ts`/`tl` pair for the whole payload LIST, and
@@ -20,7 +22,14 @@
 ##                            per-component type list; that is not AST- or emission-neutral and is
 ##                            residual on #299, not part of the arity-1 slice.
 ##
-## FIVE entries LEFT this list, and they are the reason this fixture is worth keeping. `s.x = b`,
+## SIX entries LEFT this list, and they are the reason this fixture is worth keeping. The sixth is
+## the newest and the one that changes how the list should be read: `mk := fn() -> [A; 2] {`, a
+## DECLARED RESULT at a fixed-array type, was numbered here by the #687 unit and closed by the same
+## unit one commit later, so the entry existed for exactly as long as it took to make this fixture
+## go red. It was never on the list before that, and neither was the call ARGUMENT at an array
+## parameter beside it — both were found because the census instrument was REPAIRED (#679) and
+## started looking, not because anyone had written them down. The list is what someone measured,
+## never the boundary of the class. `s.x = b`,
 ## the struct-FIELD store, and `fld : u64 = s.x`, the B1R direction through a FIELD READ, were items
 ## 4 and 5 here; `E.One(b)`, the ARITY-1 enum payload, was item 3, listed on the belief that the
 ## parser "records no per-component payload type" — accurate only for components 2..n, since an

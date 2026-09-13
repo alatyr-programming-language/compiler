@@ -6463,6 +6463,24 @@ build_reject_has reject_brand_module_array_element_sink "implicit brand conversi
 emit_reject_has wat reject_brand_module_array_element_sink "implicit brand conversion"
 emit_reject_has aarch64 reject_brand_module_array_element_sink "implicit brand conversion"
 emit_reject_has riscv64 reject_brand_module_array_element_sink "implicit brand conversion"
+## …and the same four-surface witness for the DECLARED RESULT sink at a FIXED-ARRAY type
+## (`mk := fn() -> [A; 2] { [B(1), B(2)] }`, #687). Its cause was neither the classifier nor the
+## element walk — both were already right — but the SPAN the walk was handed: the parser records a
+## `[…]` result type as its `[` head token, so `Decl.ret_tl` is 1 and there was no element type to
+## read out of it. The two rows are two different WALKERS over that same truncated pair: a trailing
+## expression is judged at `check_fn`'s declared-result site, an early `return` by `ret_sink_err`.
+## Both `check` rows carry the LOCATED needle, so a refusal that fired on the LEGAL control one line
+## above the crossing fails the row instead of passing it.
+check_reject_has reject_brand_array_result_sink "at line 46 in reject_brand_array_result_sink"
+build_reject_has reject_brand_array_result_sink "implicit brand conversion"
+emit_reject_has wat reject_brand_array_result_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_array_result_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_array_result_sink "implicit brand conversion"
+check_reject_has reject_brand_array_result_return_sink "at line 28 in reject_brand_array_result_return_sink"
+build_reject_has reject_brand_array_result_return_sink "implicit brand conversion"
+emit_reject_has wat reject_brand_array_result_return_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_array_result_return_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_array_result_return_sink "implicit brand conversion"
 check_accept accept_brand_explicit_conversions
 run accept_brand_explicit_conversions 42
 check_accept accept_brand_require_identity
@@ -6475,6 +6493,12 @@ run accept_brand_unrefused_sinks 42
 ## fixture's own header says so at length; do not "fix" the asymmetry here either.
 check_accept accept_brand_module_array_legal
 run accept_brand_module_array_legal 42
+## The RUNNING legal half of the declared fixed-array result rows above: a `[A; 2]` result built the
+## explicit way, in both walkers, must stay accepted once the element walk can finally see it. The
+## two reject fixtures prove the refusal fires and where; only this row proves it does not fire on a
+## legal result, and it runs, so a refusal that merely moved to another phase cannot pass it.
+check_accept accept_brand_array_result_legal
+run accept_brand_array_result_legal 17
 run accept_ann_str_binding 9
 run accept_ann_conforming 7
 run accept_ann_global_conforming 9
