@@ -92,7 +92,14 @@ before claiming it:
   is per ARM, not per file: all 24 are `match st` over `st := deref(stmt_p(Stmt, <h>))`.
 - **#660** — a single *site* is blind when its scrutinee's enum type arrives through a generic
   function's return type. This one is per-arm, not per-file, and it has a workaround: annotating the
-  local (`stmt : Stmt = …`) or the pointer (`sp : ptr(mut Stmt) = …`) restores the check.
+  local (`stmt : Stmt = …`) or the pointer (`sp : ptr(mut Stmt) = …`) restores the check. **Spell the
+  annotation BARE.** Measured on `src/wat.al`: over the same caught site, `ee : ptr(Expr) = e`
+  keeps the check (deleting the arm → rc 1 `type mismatch`) while `ee : ptr(ast::Expr) = e` — the
+  path-qualified spelling of the same type — turns it OFF (rc 0, silent), and `ee := e`, no
+  annotation at all, keeps it. A bogus name in that slot, `ptr(ast::NoSuchTypeQQ)` or
+  `ptr(NoSuchTypeQQ)`, is also accepted at rc 0, so the annotation is not being resolved rather than
+  resolved to something else; that is **#697**. The consequence for this stage is practical: a
+  follow-up table run with the qualified spelling reports "annotation does not help" and is wrong.
 
 Re-measured a third time on `src/parser.al` (`60338f4`, compiler built from that tree): **21 caught
 of 24**, and all three blind arms are the per-arm class — two are `#660`'s `match x` over
@@ -322,10 +329,24 @@ Look for that pattern in every accessor whose default is a representable value.
 
 The census's order, and it is not by size — size correlates with neither the caught fraction nor the
 reading effort. `parser.al` (24) **is done** (`Refs #544`, 21 of its 24 caught arms enumerated), and
-so is `riscv64.al` (52 by the parser-based count, all 27 of its caught arms enumerated); then
-`fmt.al` (29, and it holds the one `gap=0` arm that is removable for free), `wat.al` (63–64),
-`lower_layout.al` (38), `sema.al` (108), `driver.al` (46 arms but 21 M entries), and `lower.al` (210)
-last, in reviewed slices.
+so is `wat.al` (65 at the time it was taken; 39 of its 40 `Expr` arms enumerated, its 25 `Stmt` arms
+measured blind and left, one dead arm removed). **`riscv64.al` landed in the same batch** (52 taken,
+27 caught and enumerated, 25 blind) — so the three backends now stand together at 25 residual arms
+apiece, every one of them the `match st` shape, which is #660/#680 and not this stage's to remove.
+
+Counts re-measured on the merged object with `scripts/wildcard_arm_scan.awk`, because the two lanes
+quoted them from different moments and neither number survived the merge: what remains is `fmt.al`
+(29), `lower_layout.al` (39), `driver.al` (46 arms but 21 M entries), `sema.al` (115), and
+`lower.al` (214) last, in reviewed slices. `fmt.al` was described here as holding "the one `gap=0` arm that is
+removable for free"; `wat.al` held one too (`wat_loop_scalar_code`), so that shape is not unique to
+one file — look for it in every census, because it is the cheapest row in the table.
+
+**A `gap=0` arm is not a blind arm, and the census alone cannot tell them apart.** Both answer rc 0
+to deletion. The discriminator is the ABSORBED SET, computed from the sibling arms against the enum
+declaration: an empty absorbed set means the `_` is unreachable by the enum's own text, so deleting
+it cannot change behaviour and there is nothing to write out. A non-empty absorbed set with rc 0 is
+blindness and the arm stays. Compute the absorbed set for every arm before you read the census, not
+after, or the free removal is indistinguishable from the class you must not touch.
 
 Budget, measured on the pilot rather than estimated: **about 1 h of wall clock** end to end with the
 `check` runs overlapped against the writing — ~12 min reading #544's comments and the file, ~2.5 min
@@ -346,6 +367,41 @@ two compiler builds plus the four GAS emissions were ~6 min, and the non-vacuity
 once the blanket silencer above replaced the one-at-a-time loop (it was heading for 40+ `check` runs
 before that).
 
+Fourth data point, `src/wat.al` (65 arms, 8 041 lines): about **3 h** end to end, and it is the first
+file whose census split along the ENUM rather than along the file. All 40 `Expr` arms and all 25
+`Stmt` arms live in one module, and the answer was **39 caught, 26 accepted silently** — where 25 of
+the 26 are *every* `Stmt` arm in the file and the 26th is one `Expr` arm. Every `Stmt` match here
+scrutinises `st := deref(stmt_p(Stmt, <h>))`, so #660/#680 takes the whole half at once; expect that
+shape in `riscv64.al` and `lower_layout.al` too, and count the `Stmt` arms out of the budget before
+estimating a backend file. Timings, on a machine carrying three other lanes: the 65-run census was
+**12 min 24 s** at six-way parallelism (~69 s per `check`), the blind-arm follow-up **twelve** runs
+rather than five (below), the branch-side re-census of the 39 written group arms **6 min 34 s**, the
+three compiler builds and four GAS emissions ~20 min, and the two issues ~35 min. The reading was
+again the cost: seven bands, and `wat_comp_range_bound`'s absorbed list had to be read against its
+three sibling backends and the x86 dual before it could be written down, which is what produced
+#696.
+
+Two procedural notes that cost time here and need not cost it again. **The five-row blind-arm
+follow-up is not always five rows.** `src/wat.al`'s one blind `Expr` arm needed twelve: the first
+four all answered "blind", which looks like a dead end, and the control that unstuck it was planting
+a real type error in the same block — the block IS checked, so the blindness is specific to the
+`match`. Keep a positive control in the table; a column of rc 0 with no control in it proves
+nothing. And when the control itself is a plant, **check that the plant is a real error in this
+language**: `zz : bool = 1 + true` is accepted at rc 0 here and wasted a cycle, while
+`zz : bool = "x"` and an unbound name are both refused with a located diagnostic. **The blanket
+silencer of §7.3 must handle a group arm whose `=>` sits on its own line.** `src/parser.al`'s landed
+group arms are wrapped that way; a silencer that only matches `… => body` on one line skips them,
+falls back to inserting `_ => {}` into a value-position match, and the loop then reports
+`invalid at line <n> in parser` — an error about the silencer — and cannot step past it. Match the
+arm as a BLOCK (bare-name pattern lines, then the `=>`), append `| Expr::<planted>` after the last
+variant name wherever it sits, and the pass goes through in one shot. Where a match has no group arm
+to extend, `_ => {}` is still the wrong silencer for the same reason a second time: `src/sema.al`'s
+`expr_statement_has_unbound_m` is a value-position match whose every arm is a bare `{ false }`, and
+`_ => {}` turned step 4 into `invalid at line 6717 in sema` — again an error about the silencer. The
+cheap general fix is to give the inserted `_` the LAST arm's body when that body references none of
+the last arm's bindings (`_ => { false }` here); it is the right type by construction and it costs
+one regex.
+
 Second data point, `src/aarch64.al` (63 arms, 8 879 lines): about **2 h** end to end, of which the
 63-run census was ~45 min at six-way parallelism on a loaded machine (~40 s per `check`, and it was
 competing with three other lanes' gates) — the census is the floor, and it does not shrink with
@@ -353,33 +409,3 @@ familiarity. The two compiler builds and four GAS emissions were ~10 min; the tw
 produced, ~25 min. The `check` runs scale linearly with the arm count and parallelise; the reading and
 the writing do neither. `lower.al`'s 205 caught arms are ~2 h of `check` serially and ~20 min at six-way
 parallelism, so what has to be sliced there is the reading, not the measuring.
-
-Fourth data point, `src/riscv64.al` (52 arms, 7 971 lines): about **2 h** end to end, and it is the
-first file whose census split on a PERFECTLY clean line — **27 caught / 25 blind, 27 for 27 of the
-`match deref(<expr>)` arms over `Expr` and 25 for 25 of the `match st` arms over
-`st := deref(stmt_p(Stmt, <h>))`**, with no third case anywhere in the file. That is worth carrying
-as a prediction for the remaining backends and NOT as a licence to skip the measurement: the split is
-what makes the file's reading cheap, and only the per-arm census can tell you the file has it.
-The 52-run census was **10 min 0 s** wall clock at eight-way parallelism (11:23:35 to 11:33:35;
-~40 s per `check` unloaded, ~90 s under its own eight-way load) against ~35 min serial; the two
-compiler builds and the four GAS emissions were ~8 min; the non-vacuity sequence diverged at
-**step 3** and took ~6 min.
-
-Three things this file adds to the procedure rather than repeating:
-
-- **Take the census with the compiler this tree builds, and take the GAS evidence with it too.** The
-  seed is 0.2.3 here and would have agreed, but that is luck, not method — §0's first two entries are
-  both cases where the seed disagreed with the tree it was being used to check.
-- **§3's seed-promotion wait is over, and this file is where it was spent.** `emit_rv_expr`'s group
-  arm absorbs eight variants over a body holding `push_str(sb, "  ebreak\n")` — the exact shape that
-  stopped `src/aarch64.al` at 38 of 39 with `Error: symbol '.Lstr1_617' is already defined`. Written
-  out against seed 0.2.3 (`a46be2c`, carrying PR #685) the seed builds it clean, and the emission is
-  byte-identical in both directions. `src/aarch64.al`'s one deferred arm is now writable too, and it
-  is the cheapest remaining unit of this stage: one arm, one already-measured census row.
-- **Name the blanket silencer's group arms by SHAPE, not by line.** §7's blanket pass appends
-  `| Expr::<planted>` to every existing group arm, and the first attempt here matched only arms whose
-  `|` and `=>` sit on the SAME line. `src/parser.al`'s enumerated arms wrap with a bare
-  `      => { … }` continuation line, so 2 of 93 were missed, `_ => {}` went into a value-position
-  match instead, and the loop spent three steps producing `check: invalid` errors about the silencer
-  before the file stopped parsing at all. Match a group-arm tail as "a line of `|`-joined bare
-  `Expr::X` tokens whose next non-empty line starts with `=>`" as well, and the pass is 93/93.
