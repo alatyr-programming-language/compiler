@@ -174,6 +174,49 @@ wat_extern_symbol := fn(src : ptr(u8), name_s : usize, name_l : usize) -> WSpan 
   WSpan(s = name_s, n = name_l)
 }
 
+## #544 stage 1 — THE WILDCARD CENSUS FOR THIS FILE, AND WHAT IT LICENSES.
+## `src/wat.al` carried 65 `_ =>` arms over an enumerable scrutinee: 40 over `ast::Expr` and 25 over
+## `ast::Stmt`. Each was measured ON ITS OWN with the per-arm deletion census of
+## `.agents/skills/alatyr-lane/wildcard_enumeration.md` §2 — restore the file, delete exactly that one
+## arm, `check package.al`, read the rc OUTSIDE a pipeline — on a compiler BUILT FROM THIS TREE and
+## never on `seed/alatyr`, because the frozen seed predates #656/#655 and still accepts deletions the
+## repaired checker refuses. The split is clean, and it runs along the ENUM rather than along the file:
+##
+##   • 39 of the 40 `Expr` arms are CAUGHT: deleting one is refused with
+##     `check: type mismatch at line <n> in wat`, 39 sites for 39. Those 39 are now ONE OR-pattern
+##     group arm each, listing the absorbed variants in `src/ast.al` declaration order, so ADDING an
+##     `Expr` variant is a compile error at all 39 sites (Control Flow §5.1). Deleting any one of the
+##     39 group arms is likewise refused, 39 for 39, measured on this tree with this tree's compiler.
+##   • all 25 `Stmt` arms are BLIND: deleting one is accepted SILENTLY, rc 0, no diagnostic anywhere.
+##     Every `Stmt` match in this file scrutinises `st := deref(stmt_p(Stmt, <h>))`, `stmt_p` is
+##     generic (`src/ast.al:806`), and the enum identity is lost through that binding before the arm
+##     check asks for it (#660, generalised by #680). Writing a blind arm out buys the APPEARANCE of
+##     enforcement and none of the substance, because nothing would hold the list current — so those
+##     arms are measured, named at their own line, and left exactly as they are.
+##     One of the 25 was different: `wat_loop_scalar_code` already spelled all 21 `Stmt` variants, so
+##     its `_ => { s = 0 }` was UNREACHABLE by the enum's own text, not merely unenforced. It is gone.
+##   • the 40th `Expr` arm, in `wat_break_scalar_var`, is blind for a NEIGHBOURING reason and carries
+##     its own note there. `match deref(d.value)` over `d := deref(decl_get(decls, i))`: annotating the
+##     pointer (`ve : ptr(Expr) = d.value`) restores the check, annotating the struct local does not.
+##
+## The reasons repeat, so they are written as BAND notes rather than 39 per-arm comments; a band note
+## says what a new `Expr` variant means for the whole band. Classify each band as PREDICATE /
+## PROJECTION / NORMALIZER / EMITTER: only an emitter is dangerous, because a predicate's "no", a
+## projection's empty span and a normalizer's identity ARE answers, while an emitter that emits
+## nothing is a missing lowering.
+##
+## Reading the newly explicit lists against their callers produced #696 — a `comptime for` range bound
+## wrapped in `unchecked (…)` is absorbed by `wat_comp_range_bound` and its three duals and silently
+## becomes `0` on all four backends. Per `wildcard_enumeration.md` §6 that is its own issue with its
+## own fixture, never a row inside this refactor, so nothing here changes behaviour.
+##
+## BAND — THE SIGNEDNESS / NARROWNESS PROOF BAND (`wat_local_ann_signed` … `wat_operand_narrow`).
+## Every function here is a PREDICATE ("is this operand provably signed / unsigned / narrow?") or a
+## PROJECTION of an annotation span, and every proof is ONE-DIRECTIONAL: it can move an operand OFF
+## the conservative default, never onto it. So for each form the band does not recognise, the
+## initialised `false` / `""` IS the answer and the always-signed `i64` default still covers it. A new
+## `Expr` variant reaching this band is a compile error at each of its group arms; what the author
+## then has to decide is only whether that form can CARRY signedness, and the safe answer is "no".
 wat_local_ann_signed := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   d := lower_layout::local_decl_assign(head, src, ns, nl)
   mut r := false
@@ -181,6 +224,8 @@ wat_local_ann_signed := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_signed(src, ans + anl) { r = true } }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
@@ -196,6 +241,8 @@ wat_local_rhs := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize,
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = v }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
@@ -208,7 +255,10 @@ wat_shift_call_signed := fn(v : ptr(Expr), params_head : ptr(mut Param), body_he
       cn := str_at((src + cs), cl)
       if cn == "shl" or cn == "shr" or cn == "rotl" or cn == "rotr" { if wat_operand_signed_dep(arg_expr_at(ah, 0, a), params_head, body_head, src, a, dep) { r = true } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -242,7 +292,10 @@ wat_bin_init_signed := fn(v : ptr(Expr), params_head : ptr(mut Param), body_head
         if sr and ex_is_num_lit(bl) { r = true }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -283,7 +336,10 @@ wat_operand_signed_dep := fn(e : ptr(Expr), params_head : ptr(mut Param), body_h
     ## An ARITHMETIC `Bin` used DIRECTLY as an operand (`(a - b) + c`) carries its operands' type by
     ## the same rule as a `Bin`-inferred binding — the two halves of `0 + d + p` (#651).
     Expr::Bin(bop, obl, obr) => { if wat_bin_init_signed(e, params_head, body_head, src, a, dep + 1) { r = true } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -295,6 +351,8 @@ wat_local_ann_unsigned := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
@@ -310,7 +368,10 @@ wat_unchecked_init_unsigned := fn(v : ptr(Expr), params_head : ptr(mut Param), b
   mut r := false
   match deref(v) {
     Expr::Unchecked(inner) => { r = wat_operand_unsigned(inner, params_head, body_head, src, a) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -352,7 +413,10 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : ptr(mut Param), body_hea
         if ur and ex_is_num_lit(bl) { r = true }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -390,7 +454,10 @@ wat_hole_signed := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : p
     Expr::Index(bse, ix) => { if wat_hole_index_signed(bse, body_head, src, a) { r = true } }
     Expr::Call(cs, cl, na, ah) => { if callee_ret_is_signed(decls, src, cs, cl) { r = true } }
     Expr::Var(vs, vn) => { if wat_hole_local_init_signed(body_head, src, vs, vn, a) { r = true } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -442,6 +509,8 @@ wat_local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = ann_scan_narrow(src, ans + anl) }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
@@ -456,7 +525,10 @@ wat_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head 
       if r == "" { r = wat_local_narrow(body_head, src, s, n, a) }
     }
     Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -671,6 +743,8 @@ wat_array_is_float := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -687,11 +761,18 @@ wat_is_float_local := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
         if ann_scan_float(src, ans + anl) { r = true }
         if wat_is_float_expr(v, body_head, src, a, params_head, decls, dep + 1) { r = true }
       }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
   r
 }
+## BAND — THE CONSTANT / FLOAT CLASSIFIERS (`wat_int_const_expr`, `wat_is_float_expr`). Both are
+## PREDICATES over a shape, and `false` is the conservative answer: an expression not proved constant
+## is emitted, and one not proved float takes the integer path, which is the representation the WAT
+## value model already assumes. See the census note above `wat_local_ann_signed` for how the arms
+## below were measured and why the `Stmt` walkers between them keep their `_`.
 wat_int_const_expr := fn(e : ptr(Expr)) -> bool {
   mut r := false
   match deref(e) {
@@ -707,7 +788,10 @@ wat_int_const_expr := fn(e : ptr(Expr)) -> bool {
     ## which lowers the whole `Unchecked` node, so unwrapping HERE only answers the shape question.
     ## One of FOUR copies of this predicate (x86 `expr_num_const`, a64, rv64, wat); they must agree.
     Expr::Unchecked(inner) => { if wat_int_const_expr(inner) { r = true } }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -771,7 +855,10 @@ wat_is_float_expr := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8),
       bn := expr_var_name(base)
       if bn.n != 0 { if wat_array_is_float(body_head, src, bn.s, bn.n, a, params_head, decls) { r = true } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
   }
   r
 }
@@ -836,6 +923,15 @@ count_params := fn(params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena) -
 ## The mutability bit of `<f>.mutable` for the ACTIVE comptime field descriptor (Comptime §5.1). Field
 ## mutability is a source-level marker, so recover it from the current field name exactly as x86 does.
 ## -1 means this is not an active mutable query; the ordinary field path then remains fail-loud.
+## BAND — THE COMPTIME DESCRIPTOR / FOLD BAND (`wat_cf_mutable_value`, `wat_comp_range_bound`,
+## `wat_comp_cond_fold`, `wat_cf_offset_value`). These answer a comptime question about the ACTIVE
+## descriptor, and three of the four carry an explicit NOT-AN-ANSWER sentinel (`-1`) that the caller
+## tests before using the value; for those, the absorbed forms are simply "this is not the query" and
+## the ordinary fail-loud path stays. `wat_comp_range_bound` is the exception and it is the reason
+## #696 exists: its initial `mut r := 0` is a REPRESENTABLE bound, so a caller cannot tell "not
+## foldable" from "the bound is zero" — the #659 shape, where an accessor whose default is a real
+## value is read by a caller that has already committed. Spelling its absorbed list out is what made
+## `Expr::Unchecked` visible there. See the census note above `wat_local_ann_signed`.
 wat_cf_mutable_value := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
   if WAT_CF_VAR_L == 0 { return 0 - 1 }
   match deref(e) {
@@ -847,7 +943,10 @@ wat_cf_mutable_value := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
       if ast::local_is_mut(src, WAT_CF_FLD_S) { return 1 }
       return 0
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 
@@ -957,7 +1056,10 @@ wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
         if bop == 29 { r = unchecked (lv % rv) }
       }
     }
-    _ => {}
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf
+      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
   }
   r
 }
@@ -983,7 +1085,10 @@ value_is_agg := fn(v : ptr(Expr)) -> bool {
     Expr::StructLit(a0, b0, c0, d0) => { r = true }
     Expr::EnumLit(a1, b1, c1, d1, e1, f1) => { r = true }
     Expr::ArrayLit(a2, b2) => { r = true }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -1079,7 +1184,10 @@ wat_gchain_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
       bt := wat_gchain_type(base, decls, src, a)
       if bt.n != 0 { if struct_decl_of(decls, src, bt.s, bt.n) >= 0 { fts := field_type_span(decls, src, bt.s, bt.n, fs, fl, a) ; r = WSpan(s = fts.s, n = fts.n) } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -1097,7 +1205,10 @@ wat_gchain_woff := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
         if fwo >= 0 { r = boff + fwo }
       } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -1108,7 +1219,10 @@ wat_gchain_root := fn(e : ptr(Expr)) -> WSpan {
   match deref(e) {
     Expr::Var(s, n) => { r = WSpan(s = s, n = n) }
     Expr::Field(base, fs, fl) => { r = wat_gchain_root(base) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -1376,7 +1490,10 @@ wat_addr_enum_span := fn(v : ptr(Expr), params_head : ptr(mut Param), body_head 
       pl := base_enum_type(params_head, body_head, src, vs, vn, a, decls, false)
       if pl.n != 0 and (not lower_layout::is_union_decl(decls, src, pl.s, pl.n)) and enum_all_scalar(decls, src, pl.s, pl.n, a) { return pl }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   WSpan(s = 0, n = 0)
 }
@@ -1390,7 +1507,10 @@ wat_try_enum_type := fn(inner : ptr(Expr), params_head : ptr(mut Param), fn_head
     Expr::Call(cs, cl, nargs, ah) => { return callee_ret_enum(decls, src, cs, cl, ah, a, false) }
     Expr::Unchecked(x) => { return wat_try_enum_type(x, params_head, fn_head, src, a, decls) }
     Expr::Bitcast(x, _ts, _tl) => { return wat_try_enum_type(x, params_head, fn_head, src, a, decls) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Loop => {}
   }
   WSpan(s = 0, n = 0)
 }
@@ -1418,12 +1538,24 @@ wat_try_success_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
 }
 
 ## The callee-name span of an expression IF it is a `Call` (`f(…)`), else {0,0}.
+## BAND — THE SINGLE-ARM PROBE BAND (`expr_call_name` … `expr_var_name`, and the same shape at
+## `array_lit_nel`, `print_call_info`, `str_lit_span`, `value_is_agg`, the `wat_gchain_*` trio and the
+## two enum-span helpers). Every one of these is a PREDICATE ("is this node an X?") or a PROJECTION
+## ("give me X's k-th span"), never an emitter. For a form that is not the one it asks about, the
+## `false` / `{0,0}` / null-pointer default IS the answer: nothing is decided here for those forms,
+## and every caller qualifies the result (`.n != 0`, `.ok`, a null test) before reading it. That guard
+## is what keeps this band off the #659 shape. `expr_field_base` is the one NORMALIZER among them — it
+## returns its own input unchanged for a non-`Field` node, which is the identity a normalizer owes.
+## See the census note above `wat_local_ann_signed`.
 expr_call_name := fn(v : ptr(Expr)) -> WSpan {
   mut rs := 0
   mut rn := 0
   match deref(v) {
     Expr::Call(cs, cl, nn, ah) => { rs = cs ; rn = cl }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   WSpan(s = rs, n = rn)
 }
@@ -1435,7 +1567,10 @@ expr_field_base := fn(v : ptr(Expr)) -> ptr(Expr) {
   mut r := v
   match deref(v) {
     Expr::Field(base, fs, fl) => { r = base }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -1446,7 +1581,10 @@ expr_field_span := fn(v : ptr(Expr)) -> WSpan {
   mut rn := 0
   match deref(v) {
     Expr::Field(base, fs, fl) => { rs = fs ; rn = fl }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   WSpan(s = rs, n = rn)
 }
@@ -1509,6 +1647,8 @@ first_assign_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : pt
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -1611,6 +1751,8 @@ local_slot_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : us
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -1655,7 +1797,10 @@ expr_struct_name := fn(v : ptr(Expr)) -> WSpan {
   mut rn := 0
   match deref(v) {
     Expr::StructLit(ss, sn, nf, ah) => { rs = ss ; rn = sn }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   WSpan(s = rs, n = rn)
 }
@@ -1667,7 +1812,10 @@ expr_enum_name := fn(v : ptr(Expr)) -> WSpan {
   mut rn := 0
   match deref(v) {
     Expr::EnumLit(es, en, vs, vn, nf, ah) => { rs = es ; rn = en }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   WSpan(s = rs, n = rn)
 }
@@ -1678,7 +1826,10 @@ expr_enum_variant := fn(v : ptr(Expr)) -> WSpan {
   mut rn := 0
   match deref(v) {
     Expr::EnumLit(es, en, vs, vn, nf, ah) => { rs = vs ; rn = vn }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   WSpan(s = rs, n = rn)
 }
@@ -1727,6 +1878,8 @@ local_enum_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -1741,7 +1894,10 @@ expr_var_name := fn(v : ptr(Expr)) -> WSpan {
   mut rn := 0
   match deref(v) {
     Expr::Var(vs, vn) => { rs = vs ; rn = vn }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   WSpan(s = rs, n = rn)
 }
@@ -1835,7 +1991,10 @@ wat_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::If | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
   }
   r
 }
@@ -1944,6 +2103,8 @@ wat_local_enum_field_init := fn(params_head : ptr(mut Param), fn_head : ptr(mut 
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       Stmt::Match(msc, mah, mnx) => { s = mnx }
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -1966,7 +2127,10 @@ array_lit_nel := fn(v : ptr(Expr)) -> usize {
   mut r := 0
   match deref(v) {
     Expr::ArrayLit(al_n, al_e) => { r = al_n }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -2296,7 +2460,10 @@ wat_cf_offset_value := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a 
       if fwo >= 0 { return fwo * 8 }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 
@@ -2473,6 +2640,8 @@ wat_list_binds := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8)
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       Stmt::IndexAssign(ib, ii, iv, ianx) => { s = ianx }
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -2720,6 +2889,8 @@ is_array_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : us
         ## Num(0) sentinel, so its array-ness lives only in the source annotation.
         if (not r) and wat_ann_arr_nel(src, ans, anl, v) > 0 { r = true }
       }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
@@ -2755,6 +2926,8 @@ array_local_nel := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -2818,6 +2991,8 @@ array_local_stride := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -2868,6 +3043,8 @@ arr_elem_struct_span := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -3066,6 +3243,8 @@ wat_local_ann_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = wat_ann_span(src, ans, anl) }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
@@ -3431,6 +3610,20 @@ wat_loop_value_between := fn(target : usize) -> bool {
 ## The source start of an expression's leftmost written leaf. The parser intentionally erases
 ## word-sized `bitcast` targets, so the remaining `Num`/`Var`/`Call` node is the only position from which
 ## the WAT admission can recover the enclosing second argument without changing the shared AST.
+## BAND — THE VALUE-BREAK SCALAR CLASSIFIERS (`wat_expr_start`, `wat_break_scalar_var`,
+## `wat_break_scalar_expr`, `wat_loop_scalar_code`). PREDICATES and one span PROJECTION, and `false`
+## is again the conservative answer: an expression not proved to be a single-word scalar leaves the
+## named value-break path fail-loud rather than emitting a half-modelled value. Two things in this
+## band are not like the rest, and both are measured:
+##   • `wat_break_scalar_var`'s inner `match deref(d.value)` is the file's ONLY blind `Expr` arm. Its
+##     scrutinee is a field of `d := deref(decl_get(decls, i))` and the enum identity does not survive
+##     it: deleting the `_` is accepted at rc 0, and so is deleting it after inlining the scrutinee,
+##     after annotating `d : Decl`, or after annotating the pointer with a path-QUALIFIED type. Only
+##     `ve : ptr(Expr) = d.value` restores the check (rc 1 `type mismatch`), and that spelling
+##     disagreement is #697. The arm keeps its `_` until one of those two lands.
+##   • `wat_loop_scalar_code` spelled all 21 `Stmt` variants already, so its `_ => { s = 0 }` was
+##     unreachable by the enum's own text and is removed rather than rewritten.
+## See the census note above `wat_local_ann_signed`.
 wat_expr_start := fn(e : ptr(Expr)) -> usize {
   mut r := 0
   match deref(e) {
@@ -3451,7 +3644,8 @@ wat_expr_start := fn(e : ptr(Expr)) -> usize {
     Expr::Deref(inner) => { r = wat_expr_start(inner) }
     Expr::Unchecked(inner) => { r = wat_expr_start(inner) }
     Expr::Bitcast(inner, _ts, _tl) => { r = wat_expr_start(inner) }
-    _ => {}
+    Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit
+      | Expr::Try | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   r
 }
@@ -3515,6 +3709,9 @@ wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : ptr(mut Param),
     while i < cnt {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
+        ## #544 stage 1 — this `_` STAYS: `deref(d.value)` over a `Decl` bound from a call is blind, and so
+        ## is every annotation but `ve : ptr(Expr) = d.value` (#660/#680, spelling disagreement #697).
+        ## Deleting it is accepted SILENTLY, rc 0. See the band note above `wat_expr_start`.
         match deref(d.value) { Expr::Num(_v, _s, _n) => { return wat_break_scalar_expr(d.value, params_head, fn_head, src, a, decls, dep + 1) } _ => {} }
       }
       i = i + 1
@@ -3537,7 +3734,10 @@ wat_break_scalar_expr := fn(e : ptr(Expr), params_head : ptr(mut Param), fn_head
     Expr::Bitcast(_inner, ts, tl) => {
       if bitcast_target_is_narrow_scalar(src, ts, tl) or wat_bitcast_pointer_is_subword(src, ts, tl) { explicit_bitcast = true }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   start := wat_expr_start(e)
   if start == 0 or ((not explicit_bitcast) and erased_bitcast_at(src, start)) { return false }
@@ -3570,7 +3770,9 @@ wat_break_scalar_expr := fn(e : ptr(Expr), params_head : ptr(mut Param), fn_head
         r = wat_break_scalar_expr(inner, params_head, fn_head, src, a, decls, dep + 1)
       }
     }
-    _ => {}
+    Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   r
 }
@@ -3668,7 +3870,6 @@ wat_loop_scalar_code := fn(head : ptr(mut Stmt), depth : usize, params_head : pt
       Stmt::FieldPathAssign(_p, _v, nx) => { s = nx }
       Stmt::Continue(_d, nx) => { s = nx }
       Stmt::ExprStmt(_e, nx) => { s = nx }
-      _ => { s = 0 }
     }
   }
   code
@@ -3760,6 +3961,8 @@ local_struct_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -3842,7 +4045,10 @@ expr_struct_type_of := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head
       es := wat_arr_elem_struct(body_head, src, ibn.s, ibn.n, a, decls)
       rs = es.s ; rn = es.n
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   WSpan(s = rs, n = rn)
 }
@@ -4221,7 +4427,10 @@ print_call_info := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> PInfo {
         if sinfo.ok { r = PInfo(ok = true, ss = sinfo.ss, sl = sinfo.sl, lbl = sinfo.lbl, nl = ispl, ah = ah) }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -4233,7 +4442,10 @@ str_lit_span := fn(e : ptr(Expr)) -> SLSpan {
   mut r := SLSpan(ok = false, ss = 0, sl = 0, lbl = 0)
   match deref(e) {
     Expr::StrLit(ss, sl, lbl, _ps, _pn) => { r = SLSpan(ok = true, ss = ss, sl = sl, lbl = lbl) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -4634,7 +4846,10 @@ wat_store_union_span := fn(pe : ptr(Expr), params_head : ptr(mut Param), body_he
       pl := base_enum_type(params_head, body_head, src, vs, vn, a, decls, true)
       if pl.n != 0 and lower_layout::is_union_decl(decls, src, pl.s, pl.n) { return pl }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   WSpan(s = 0, n = 0)
 }
@@ -4731,6 +4946,8 @@ wat_bound_lambda := fn(body : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
       Stmt::Assign(as, al, v, nx) => {
         rhs = v
       }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
@@ -4748,6 +4965,22 @@ wat_bound_lambda := fn(body : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
   return 0 - 1
 }
 
+## BAND — THE EMITTERS (`emit_wat_expr` here, `emit_wat_stmts` below). These are the only arms in
+## this file where "nothing to emit" would be a MISSING LOWERING rather than an answer, and neither
+## of them emits nothing: both absorb their remaining forms into an `(unreachable)` trap carrying a
+## comment that names the reason, which is the located refusal `AGENTS.md` prefers to a wrong value.
+## Spelling the list out turns `emit_wat_expr`'s "everything else" into FOUR names — `AddrOf`,
+## `Deref`, `StrLit`, `Lambda` — the actual, reviewable inventory of what the WAT scalar kernel does
+## not model, and a new `Expr` variant is now a compile error right here, which is exactly where the
+## decision "does the kernel model this?" belongs. `emit_wat_stmts`' twin absorbs `DerefAssign` and
+## `AllocWith` and would read the same way, but it is a `Stmt` arm and therefore BLIND (#660/#680):
+## it keeps its `_` and its marker, and that inventory stays in this comment rather than in the code.
+## #673/#685: an OR-pattern arm body may hold a string literal again, and `seed/alatyr` was promoted
+## to 0.2.3 (`a46be2c`) carrying that fix, so the group arm below — whose body is
+## `push_str(sb, "(unreachable) (; unsupported expr ;)\n")` duplicated once per alternative — is
+## writable against the frozen seed, which is what builds `src/`. Verified rather than assumed: the
+## frozen seed checks AND builds this tree, rc 0 both.
+## See the census note above `wat_local_ann_signed`.
 emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
   match deref(e) {
     Expr::FnRef(fnpos, fms, fml) => {
@@ -5951,17 +6184,27 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       emit_wat_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
       WAT_CHK = ov
     }
-    _ => { push_str(sb, "(unreachable) (; unsupported expr ;)\n") }
+    Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Lambda => { push_str(sb, "(unreachable) (; unsupported expr ;)\n") }
   }
 }
 
 ## Does an expr-statement produce a value that must be `drop`ped? Everything does EXCEPT a call to a
 ## void fn (which leaves nothing on the stack).
+## BAND — THE DEFER / DROP PROBES (`exprstmt_needs_drop`, `wat_defer_action`, `wat_is_defer_blk`,
+## `wat_is_defer_blk_end`). PREDICATES and one PROJECTION over the `__defer*` call markers the lower
+## plants. `exprstmt_needs_drop` is the one whose default is `true`, not `false`, and that is the
+## conservative direction here: everything leaves a value on the WASM stack EXCEPT a call to a void
+## fn, so an unrecognised form is dropped rather than left to unbalance the stack.
+## See the census note above `wat_local_ann_signed`.
 exprstmt_needs_drop := fn(e : ptr(Expr), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena) -> bool {
   mut r := true
   match deref(e) {
     Expr::Call(cs, cl, nargs, args_head) => { if callee_is_void(decls, src, cs, cl, a) { r = false } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -6006,7 +6249,10 @@ wat_defer_action := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> ptr(Expr)
     Expr::Call(cs, cl, nn, ah) => {
       if str_at((src + cs), cl) == "__defer" and ah != 0 { r = arg_expr_at(ah, 0, a) }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -6020,7 +6266,10 @@ wat_is_defer_blk := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
       nm := str_at((src + cs), cl)
       if nm == "__deferblk" { r = true }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -6032,7 +6281,10 @@ wat_is_defer_blk_end := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
     Expr::Call(cs, cl, nn, ah) => {
       if str_at((src + cs), cl) == "__deferblkend" { r = true }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -6048,6 +6300,8 @@ wat_defer_blk_end := fn(start : usize, src : ptr(u8)) -> usize {
       Stmt::ExprStmt(e, nx) => {
         if wat_is_defer_blk_end(e, src) { r = s } else { s = wat_stmt_next(s) }
       }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = wat_stmt_next(s) }
     }
   }
@@ -6114,6 +6368,8 @@ arm_single_expr := fn(bs : usize, a : rt::Arena) -> ptr(Expr) {
     st := deref(stmt_p(Stmt, bs))
     match st {
       Stmt::ExprStmt(e, nx) => { if nx == 0 { r = e } }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
@@ -6128,6 +6384,8 @@ body_is_single_match := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
     st := deref(stmt_p(Stmt, head))
     match st {
       Stmt::Match(msc, mah, mnx) => { if mnx == 0 { r = true } }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => {}
     }
   }
@@ -7452,6 +7710,8 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         if not cfdone { push_str(sb, "    (unreachable) (; comptime-for fields: needs a struct mono instance ;)\n") }
         s = cnx
       }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { push_str(sb, "    (unreachable) (; unsupported stmt ;)\n") ; s = 0 }
     }
   }
@@ -7530,6 +7790,8 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
@@ -7666,6 +7928,8 @@ emit_wat_str_data_stmts := fn(head : ptr(mut Stmt), in out sb : rt::StrBuf, src 
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
+      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
+      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
       _ => { s = 0 }
     }
   }
