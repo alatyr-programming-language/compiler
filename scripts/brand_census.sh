@@ -248,6 +248,21 @@ main := fn() -> u64 {
 }
 AL
 
+  echo "  ARRAY ELEMENT at the DECLARED-RESULT sink, in BOTH walkers (#687). A trailing expression is"
+  echo "  judged at the check_fn declared-result site, an early return by ret_sink_err; both read the"
+  echo "  same Decl.ret_ts/ret_tl pair, which the parser records as the bare head token:"
+  pl_crossing array_decl_result B2 2 <<'AL'
+A := brand(u64)
+B := brand(u64)
+mk := fn() -> [A; 2] { [B(1), B(2)] }
+main := fn() -> u64 { return 0 }
+AL
+  pl_crossing array_decl_result_b1r B1R 2 <<'AL'
+A := brand(u64)
+mk := fn() -> [u64; 2] { [A(1), A(2)] }
+main := fn() -> u64 { return 0 }
+AL
+
   echo "  ARRAY ELEMENT at the MODULE-LEVEL declaration sink (the #674 composition):"
   pl_crossing array_module B2 2 <<'AL'
 A := brand(u64)
@@ -268,6 +283,15 @@ main := fn() -> u64 {
   return u64(sc) + u64(xs[0]) + u64(ys[1]) + u64(GL[0])
 }
 AL
+  # The DECLARED-RESULT sink written the legal way. `sinks=` is the whole point of this case: before
+  # #687 this program also reported zero rows, and it did so because the element walk was handed a
+  # one-byte annotation and returned without visiting anything. Two visited element sinks tell the
+  # two zeros apart.
+  pl_clean array_decl_result_legal 2 <<'AL'
+A := brand(u64)
+mk := fn() -> [A; 2] { [A(1), A(2)] }
+main := fn() -> u64 { return 0 }
+AL
   # Types §9.1/§9.2 give an integer literal its type from the annotation, so an all-literal array is
   # NOT a crossing — class B1U, which the refusal deliberately never touches. It is kept here as the
   # sharpest clean case there is: two visited element sinks, zero rows.
@@ -283,9 +307,10 @@ AL
   echo "  planted cases=$PL_CASES  failures=$PL_FAIL"
   if [ "$PL_FAIL" = 0 ]; then
     echo "*** brand census: the counter fires on the SCALAR and the ARRAY-ELEMENT surface, in both"
-    echo "    annotation spellings, in the fill form, across classes B1/B1R/B2/B3 and at the"
-    echo "    module-level sink — and stays silent on a legal program whose elements it provably"
-    echo "    visited. A zero from this instrument on those surfaces is a measurement. ***"
+    echo "    annotation spellings, in the fill form, across classes B1/B1R/B2/B3, at the"
+    echo "    module-level sink and at the DECLARED-RESULT sink — and stays silent on a legal"
+    echo "    program whose elements it provably visited. A zero from this instrument on those"
+    echo "    surfaces is a measurement. ***"
     return 0
   fi
   echo "*** brand census: $PL_FAIL of $PL_CASES planted cases did not behave — a zero from this"

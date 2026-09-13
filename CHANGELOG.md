@@ -122,6 +122,21 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A declared function result whose type is a fixed array no longer launders a sibling brand.**
+  `mk := fn() -> [A; 2] { [B(1), B(2)] }` for two sibling brands `A` and `B` used to check, build
+  and link at rc 0; it is now refused with the located implicit-brand-conversion diagnostic, on all
+  four emission surfaces, exactly as the scalar `fn() -> A { B(1) }` and the local
+  `xs : [2]A = [b, b]` already were. The early-`return` spelling of the same result
+  (`fn() -> [A; 2] { return [B(1), B(2)] }`) and the B1R direction (`fn() -> [u64; 2] { [A(1), A(2)] }`)
+  are closed with it. Types §4.2/§4.3 make every brand conversion explicit and §5.4:395-400 gives two
+  siblings over one block no conversion into each other at all, so this is a program the
+  specification declares invalid and accepting it was the defect — a PATCH, and someone whose code
+  stops compiling for this reason was relying on that bug. The explicit form is `A(u64(b))`. The
+  cause was neither the rule nor the classifier: the parser records a `[…]` result type as its `[`
+  head token, so the brand element walk was handed a one-byte annotation and found no element type
+  in it; the recovery lives at the brand judgement and leaves `Decl.ret_ts`/`ret_tl` untouched.
+  A legal `[A; 2]` result is unaffected and still compiles.
+
 ## 0.2.3 — 2026-09-11
 
 - **Seed promotion; no emitted byte moves.** The frozen bootstrap `seed/alatyr` advances from 0.2.2

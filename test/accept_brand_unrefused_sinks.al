@@ -9,7 +9,9 @@
 ## fed another brand, the struct-field STORE, a value read out of a branded FIELD, the payload of an
 ## ARITY-1 enum variant, every ELEMENT of an array literal at a `[N]T` / `[T; N]` sink and — since
 ## the MODULE-DECLARATION slice — a module-level annotated value declaration, including the
-## composition of the last two. These TWO sinks it does NOT reach, each for a stated reason:
+## composition of the last two — and, since #687, a DECLARED RESULT whose type is a fixed array,
+## in both the trailing-expression and the early-`return` spelling. This ONE sink it does NOT
+## reach, for a stated reason:
 ##
 ##   1. `F.P(b, 7)` and     — a MULTI-COMPONENT enum-variant payload. `src/ast.al`'s `FieldDecl`
 ##      `F.P(A(1), c)`        carries ONE `ts`/`tl` pair for the whole payload LIST, and
@@ -20,20 +22,14 @@
 ##                            per-component type list; that is not AST- or emission-neutral and is
 ##                            residual on #299, not part of the arity-1 slice.
 ##
-##   2. `mk := fn() -> [A; 2] {` — a DECLARED RESULT whose type is a FIXED ARRAY. The scalar
-##      `  [B(1), B(2)] }`        spelling `fn() -> A { B(1) }` is refused, and the array-literal
-##                                ELEMENT walk is alive at every other sink, so this is the
-##                                COMPOSITION of two working parts falling through. `src/parser.al`
-##                                captures the result-type HEAD TOKEN and extends it for a `::` path
-##                                and a `(…)` tuple but not for a `[…]` array, so `Decl.ret_tl` is
-##                                **1** — the single byte `[`. `resolve_ty` still answers tag 7 from
-##                                that first byte, the dispatcher does enter the element walk, and
-##                                `sema_brand_array_elem_span` then answers {0,0} because a one-byte
-##                                span has no element in it. The same truncated span reaches the
-##                                early-`return` sink, so `fn() -> [A; 2] { return [B(1), B(2)] }`
-##                                falls through the same way.
-##
-## FIVE entries LEFT this list, and they are the reason this fixture is worth keeping. `s.x = b`,
+## SIX entries LEFT this list, and they are the reason this fixture is worth keeping. The sixth is
+## the newest and the one that changes how the list should be read: `mk := fn() -> [A; 2] {`, a
+## DECLARED RESULT at a fixed-array type, was numbered here by the #687 unit and closed by the same
+## unit one commit later, so the entry existed for exactly as long as it took to make this fixture
+## go red. It was never on the list before that, and neither was the call ARGUMENT at an array
+## parameter beside it — both were found because the census instrument was REPAIRED (#679) and
+## started looking, not because anyone had written them down. The list is what someone measured,
+## never the boundary of the class. `s.x = b`,
 ## the struct-FIELD store, and `fld : u64 = s.x`, the B1R direction through a FIELD READ, were items
 ## 4 and 5 here; `E.One(b)`, the ARITY-1 enum payload, was item 3, listed on the belief that the
 ## parser "records no per-component payload type" — accurate only for components 2..n, since an
@@ -89,13 +85,6 @@ F := enum { P(A, u64), Q }
 ## of `test/accept_brand_module_array_legal.al`.
 G : A = A(1)
 GL : A = 5
-
-## (2) the DECLARED RESULT at a FIXED-ARRAY type. Kept at module level and never called, because a
-## `[A; 2]` result has no return ABI to read it back through: binding or indexing the call result
-## is a located lower trap (`only [u8; N] with 1 <= N <= 16 is supported`), so this crossing cannot
-## be asserted from `main` the way the others are. It is still ACCEPTED, BUILT and LINKED — that is
-## what this entry locks. `test/accept_brand_array_result_legal.al` carries the legal control.
-mk := fn() -> [A; 2] { [B(1), B(2)] }
 
 main := fn() -> u64 {
   b : B = B(2)

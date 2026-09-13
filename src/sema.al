@@ -2656,10 +2656,20 @@ brand_probe_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec
   }
   brand_probe_value_sink(dst, v, off, decls, upto, src, locals, nloc, a)
 }
-## The same sink at DECL level (a function's declared result), where no locals table exists: the
-## identity comes from the constructor / declared-callee sources only.
-brand_probe_sink_decl := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) {
+## The same sink at DECL level (a function's declared result). The SCALAR half keeps the decl-level
+## identity recovery it has always had — the constructor / declared-callee sources only, no locals
+## table — and a tag-7 declared type dispatches into the SAME shared element walk `brand_probe_sink`
+## uses, so the counter and the refuser answer the same question about this sink too. Before #687 the
+## scalar tag filter below returned on tag 7 here exactly as it did there, which is why a declared
+## `[A; 2]` result produced no row on any surface; the refusal beside this hook is already handed the
+## fn's `locals`, so the walk gets them here as well and the two ends judge one element list.
+brand_probe_sink_decl := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) {
   if SEMA_BRAND_DECLS == 0 { return }
+  if dst.tag == 7 {
+    ## In census mode the walk's CheckErr is always 0 and the rows have already gone to the channel.
+    z := sema_brand_array_elems(true, dst, v, off, decls, upto, src, locals, nloc, a)
+    return
+  }
   if dst.tag != 8 and dst.tag != 1 { return }
   BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
   act := sema_brand_ctor_ty(v, decls, upto, src)
@@ -2770,6 +2780,60 @@ sema_brand_array_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> VSpan
   while ee > es and (str_at((src + ee - 1), 1) == " " or str_at((src + ee - 1), 1) == "\n" or str_at((src + ee - 1), 1) == "\t" or str_at((src + ee - 1), 1) == "\r") { ee = ee - 1 }
   if ee > es { z = VSpan(s = es, n = ee - es) }
   z
+}
+## The COMPLETE fixed-array RETURN annotation, and the reason the declared-result and early-`return`
+## brand sinks could not see one. `src/parser.al` captures the result type as its HEAD TOKEN and then
+## widens that token for a `::` path and for a `(…)` tuple — but not for a `[…]` array, so a
+## `mk := fn() -> [A; 2]` records `Decl.ret_tl` = **1**: the single byte `[`. `resolve_ty` still
+## answers tag 7 from that first byte, so `sema_brand_sink_err` DID dispatch into the element walk and
+## the walk then read an element span out of one byte and got {0,0}. Measured on `main` a65e873:
+## `mk := fn() -> [A; 2] { [B(1), B(2)] }` checked at rc 0 with `sinks=0`, while the same crossing at
+## an annotated local, a module declaration and an arity-1 enum payload was refused and counted.
+##
+## The recovery is kept HERE, at the brand judgement, and the parser's `ret_ts`/`ret_tl` contract is
+## left exactly as it is: `fn_returns_struct`, `fixed_array_byte_return_len`, `agg_scalar_bad`,
+## `ann_lit_range_bad` and `fmt` all read that pair, and widening it parser-wide is a tag-7 behaviour
+## change far away from brands. That is the SAME call the two existing recoveries of this one parser
+## property made, and sema can reuse neither: `lower::fixed_array_return_span` lives in `lower.al`,
+## which sema must not import (the `conv_kind` precedent below), and `fmt::skip_balanced_group` lives
+## in the formatter. The three stay independent leaves; this one is the smallest of them, because it
+## only has to answer a return annotation that the parser already accepted.
+##
+## Fail-OPEN by construction: a span that is already complete, one that does not open with `[`, and a
+## group that does not close inside the bounded window all answer the span they were given, so the
+## judgement below is exactly the one it makes today. Bounded and EOF-stopped so a truncated source
+## cannot walk off the buffer.
+SEMA_BRAND_ANN_WINDOW : usize = 256
+sema_brand_ret_ann_span := fn(src : ptr(u8), ts : usize, tl : usize) -> VSpan {
+  z := VSpan(s = ts, n = tl)
+  if tl == 0 { return VSpan(s = 0, n = 0) }
+  if tl >= 3 { return z }
+  if bytes(str_at((src + ts), 1))[0] != 91 { return z }             ## '['
+  lim := ts + SEMA_BRAND_ANN_WINDOW
+  mut p := ts
+  mut depth := 0
+  mut r := VSpan(s = 0, n = 0)
+  while p < lim {
+    b := bytes(str_at((src + p), 1))[0]
+    if b == 0 { p = lim }                                           ## EOF — malformed, stay open
+    else if b == 91 { depth = depth + 1 }                           ## '['
+    else if b == 93 {                                               ## ']'
+      depth = depth - 1
+      if depth == 0 { r = VSpan(s = ts, n = p + 1 - ts); p = lim }
+    }
+    if p < lim { p = p + 1 }
+  }
+  if r.n == 0 { return z }
+  r
+}
+## The declared RETURN type as the brand judgement sees it — `resolve_ty` over the complete annotation
+## above. ONE decision, TWO consumers: the declared-result TAIL sink in `check_fn` and the early
+## `return` sink in `sema_brand_ret_err`, which are the only two sinks whose declared type comes from
+## a fn's `ret_ts`/`ret_tl` pair and therefore the only two this truncation could reach.
+sema_brand_ret_ty := fn(src : ptr(u8), rts : usize, rtl : usize, decls : ptr(rt::Vec), upto : usize) -> Ty {
+  sp := sema_brand_ret_ann_span(src, rts, rtl)
+  if sp.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  resolve_ty(src, sp.s, sp.n, decls, upto)
 }
 ## The ARRAY-LITERAL ELEMENT sink: `xs : [2]A = [b, b]`. `resolve_ty` answers tag 7 for the WHOLE
 ## `[2]A` annotation and extracts no element type, so there was no declared sink type to judge an
@@ -2887,7 +2951,9 @@ sema_brand_span := fn(prim : usize, fallback : usize) -> usize {
 sema_brand_ret_err := fn(rts : usize, rtl : usize, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   if SEMA_BRAND_DECLS == 0 { return 0 }
   if rtl == 0 { return 0 }
-  dst := resolve_ty(src, rts, rtl, decls, upto)
+  ## The COMPLETE annotation, not the recorded head token: `fn() -> [A; 2] { return [B(1), B(2)] }`
+  ## reaches here with `rtl` = 1 (`[`), which resolves to tag 7 with no element in it (#687).
+  dst := sema_brand_ret_ty(src, rts, rtl, decls, upto)
   sema_brand_sink_err(dst, v, off, decls, upto, src, locals, nloc, a)
 }
 ## A STRUCT-LITERAL field sink, which is the one #561's census could not reach: `check_expr`'s big
@@ -11896,13 +11962,19 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         mut tail_ty := bt
         tcall := expr_call_result_ty(d.value, decls, upto, src)
         if tcall.tag != 0 { tail_ty = tcall }
-        ## #299 census hook (no refusal) — the declared result is a value sink; `locals` is not in
-        ## scope at the decl level, so the recovery uses the constructor/callee sources only.
-        brand_probe_sink_decl(rett, d.value, s_of(d.value, a), decls, upto, src)
-        ## …and the refusal (Issue #299). Unlike the census hook above this one is handed `locals`, so a
-        ## tail expression that is a plain annotated LOCAL (`fn() -> A { b }` for a `b : B`) is judged
-        ## too: #561's decl-level hook saw only constructors and declared callees and reported 0 there.
-        tbe := sema_brand_sink_err(rett, d.value, sema_brand_span(s_of(d.value, a), d.name_start), decls, upto, src, ptr(locals), nloc, a)
+        ## #687 — the brand judgement reads the COMPLETE return annotation, which `rett` above is not:
+        ## the parser records a `[…]` result type as its `[` head token, so `rett` for `-> [A; 2]` is
+        ## tag 7 over ONE byte and the element walk found nothing to judge. `rett` itself is left
+        ## alone; `ty_compat`/`tag_compat` below read it and this unit moves neither.
+        brett := sema_brand_ret_ty(src, d.ret_ts, d.ret_tl, decls, upto)
+        ## #299 census hook (no refusal) — the declared result is a value sink; the SCALAR half of the
+        ## recovery uses the constructor/callee sources only, and a tag-7 result dispatches into the
+        ## shared element walk, which is handed the same `locals` as the refusal beside it.
+        brand_probe_sink_decl(brett, d.value, s_of(d.value, a), decls, upto, src, ptr(locals), nloc, a)
+        ## …and the refusal (Issue #299). Unlike the census hook's scalar half this one is handed
+        ## `locals`, so a tail expression that is a plain annotated LOCAL (`fn() -> A { b }` for a
+        ## `b : B`) is judged too: #561's decl-level hook saw only constructors and declared callees.
+        tbe := sema_brand_sink_err(brett, d.value, sema_brand_span(s_of(d.value, a), d.name_start), decls, upto, src, ptr(locals), nloc, a)
         if tbe != 0 { err = tbe; failed = true }
         ptrint_probe_site("RESULT-TAIL", "tailexpr", true, tail_ty.tag, rett.tag, s_of(d.value, a), src)
         if not ty_compat(tail_ty, rett, src) { err = mismatch_err(s_of(d.value, a), 0); failed = true }
