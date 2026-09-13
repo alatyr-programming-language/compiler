@@ -136,6 +136,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   head token, so the brand element walk was handed a one-byte annotation and found no element type
   in it; the recovery lives at the brand judgement and leaves `Decl.ret_ts`/`ret_tl` untouched.
   A legal `[A; 2]` result is unaffected and still compiles.
+- **A field access on an `enum`-typed value is refused, with a location.** An enum value is a
+  discriminant plus the payload of ONE variant; it has no member table, so `v.a` on an `enum` names
+  nothing. The compiler accepted it anyway, in **seven of seven** measured positions — tail, local
+  initializer, call argument, binary operand, `return`, `if` condition and the `v.a = 5` **store** —
+  on `check` and on `build` alike, with no diagnostic on any surface. The read answered a fabricated
+  `0` and the store was dropped. Two rows make that a wrong **value** rather than a missing message:
+  `v.a + 5` exited **5** on a `B(11, 22)` value, and `if v.a == 0 { return 7 }` exited **7**, so
+  control flow was chosen by a word the program never wrote. **Newly rejected:** `<enum value>.name`
+  in any position, as a located `check` diagnostic (`… at line N in <module>`) on all four backends
+  and on all four entry points (`check`, `-o`, and the `wat`/`aarch64`/`riscv64` emit verbs, which
+  emit nothing). Someone whose code stops compiling for this reason was reading a zero the language
+  never promised; reach the payload with `match` and its binding patterns. **Unchanged:** a field on
+  a struct, a struct field whose *type* is an enum, `match` on an enum, and a raw `union` member
+  read — a union shares the front end's aggregate kind with an enum but Types §6.3 gives it named
+  members, so it is excluded explicitly. A census of the refusal over `src/`, `lib/` and all 2 182
+  tracked `.al` files found **0** sites once unions were excluded (seven union member reads before,
+  in five landed fixtures, which is exactly why the exclusion exists).
 
 ## 0.2.3 — 2026-09-11
 

@@ -234,6 +234,16 @@ unresolved_qual_head_err := fn(s : usize, n : usize) -> CheckErr {
   if hn > UNRESOLVED_QUAL_HEAD_LEN_CAP { hn = UNRESOLVED_QUAL_HEAD_LEN_CAP }
   UNRESOLVED_QUAL_HEAD_DIAG_MARKER + diag_span(s) * 128 + hn
 }
+## Issue #693 / Types §6.2 + §9.4 — a FIELD ACCESS whose OWNER is an ENUM VALUE. An enum value is a
+## discriminant plus the payload of ONE variant; it has no field table at all, so `v.a` names nothing,
+## whatever `a` happens to spell in a neighbouring struct. Measured on the parent, the read answered a
+## fabricated `0` in five value positions and in an `if` condition, and the store was dropped — a clean
+## compile choosing control flow on a word the program never wrote. That is a TARGET-INDEPENDENT rule
+## about an ill-formed program, so it belongs in `check`: one refusal for all four backends. Keep the
+## class between the unresolved-`::`-head and CT windows so only the former's upper bound moves and
+## every other decoded CheckErr range stays byte-identical.
+ENUM_FIELD_ACCESS_DIAG_MARKER := 6902000000000000000
+enum_field_access_err := fn(s : usize) -> CheckErr { ENUM_FIELD_ACCESS_DIAG_MARKER + diag_span(s) * 4 }
 ## Issue #221 / Modules §3 — a qualified read of a private module constant deserves a stable reason,
 ## while the surrounding visibility walk still returns a source offset for every other declaration kind.
 ## Keep this class between the direct multidimensional-field fence and the comptime classes so every
@@ -5637,6 +5647,21 @@ sema_struct_owner_name_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(
   if (tag == 3 or tag == 9) and lt.nl != 0 { return VSpan(s = lt.ns, n = lt.nl) }
   global_struct_type_span(decls, src, s, n)
 }
+## Issue #693 — the direct-NAME counterpart of the enum-owner question, for a statement write place.
+## The hidden enum tag 10 is the reliable recording an inferred `mut v := E.B(…)` binding leaves; the
+## surfaced tag 4 is what an explicit `v : E` annotation records. Both mean the same thing here: the
+## place names an enum value, which has no fields to write.
+sema_name_owner_is_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> bool {
+  if nloc == 0 { return false }
+  if not local_in(locals, nloc, src, s, n) { return false }
+  lt := local_ty(locals, nloc, src, s, n)
+  mut tag : u8 = lt.tag
+  if tag >= 128 and tag != 255 { tag = tag - 128 }
+  if tag != 4 and tag != 10 { return false }
+  ## the union exclusion, for the reason `sema_enum_owner_field_err` records.
+  if lt.nl != 0 and is_union_decl(decls, src, lt.ns, lt.nl) { return false }
+  true
+}
 ## A bare/qualified assignment target may be a global owned by another package module. The complete
 ## module-visibility walk runs after `check_stmts`, but this early local-name fence must not turn a valid
 ## ancestor global (or the existing later visibility diagnostic for a private sibling global) into a new
@@ -5671,6 +5696,30 @@ sema_struct_owner_span := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usiz
     if ct.tag == 3 and ct.nl != 0 { r = VSpan(s = ct.ns, n = ct.nl) }
   }
   r
+}
+## Issue #693 — the question BEFORE "which field": does the owner have fields AT ALL? `value_agg_ty`
+## is the confident user-aggregate recovery the rest of this file already trusts (it maps the hidden
+## enum tag 10 an inferred `v := E.B(…)` binding records back to the real tag 4, and it types a direct
+## `EnumLit` and a nullary `E.V` written over an enum TYPE name). Tag 4 there means the owner IS an
+## enum value, and then NO field name is valid. Everything else — unknown, scalar, `str`, slice,
+## pointer, struct — is left exactly as it was, so this adds a refusal and removes none.
+##
+## The prelude namespaces are skipped for the same reason `sema_field_name_missing` skips them:
+## `Ordering.acquire` / `Arch.x86_64` are type/associated accesses, not value reads.
+sema_enum_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  if is_prelude_ns_var(base, src) { return 0 }
+  bt := value_agg_ty(base, decls, upto, src, locals, nloc)
+  if bt.tag != 4 { return 0 }
+  ## A RAW UNION shares `kind == 3` — and therefore tag 4 — with an enum in this front end, and a
+  ## union MEMBER READ is exactly how a union is used (`u.a`, `u.p.x`). The #508-style census over
+  ## `src/` + `lib/` + every tracked fixture found SEVEN such sites and nothing else, in
+  ## `test/union_roundtrip.al`, `test/union_copy.al`, `test/union_struct_member.al`,
+  ## `test/union_reinterpret.al` and `test/fmt_unchecked_postfix.al`. Types §6.3 gives a union its own
+  ## canonical representation with named members; §6.2's "no field table" argument is about an enum's
+  ## discriminant-plus-one-variant layout and does not reach it. The same exclusion, for the same
+  ## reason and citing the same §6.3, is already made by the enum-variant arity fence above.
+  if bt.nl != 0 and is_union_decl(decls, src, bt.ns, bt.nl) { return 0 }
+  enum_field_access_err(fs)
 }
 ## The direct/local/global field-name fence. A known struct must contain the selected field; otherwise
 ## the old `field_ty` returned unknown and the lower read/stored word zero. Keep prelude namespace and
@@ -6868,6 +6917,14 @@ expr_statement_has_unbound_m := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
       if not is_prelude_ns_var(base, src) and not (bv.n != 0 and type_name_known(decls, src, bv.s, bv.n)) {
         bad = expr_statement_has_unbound_m(base, decls, upto, src, a, locals, nloc, fldck)
       }
+      ## Issue #693 — the ENUM-OWNER refusal is deliberately NOT gated on `fldck`. That flag narrows
+      ## the COLLISION-BLIND field-NAME fence, which can mistake a valid read for a missing field when
+      ## a library generic shares the struct's name (#508's measured residual). This question does not
+      ## consult a field table at all — an enum has none — so the operand walk an `if`/`while`
+      ## condition takes must ask it too, and the `if` row is exactly where the fabricated zero was
+      ## measured choosing a branch.
+      efe := sema_enum_owner_field_err(base, fs, decls, upto, src, locals, nloc)
+      if efe != 0 { mark_failed(locals, efe); bad = true }
       if fldck and not bad and sema_field_name_missing(base, fs, fl, decls, upto, src, locals, nloc, a) { bad = true }
       bad
     }
@@ -7035,6 +7092,10 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
     Expr::Field(base, fs, fl) => {
       mut bad := false
       if not is_prelude_ns_var(base, src) { bad = expr_has_unbound(base, decls, upto, src, a, locals, nloc) }
+      ## Issue #693 — the same enum-owner refusal on the full walk. Both walks reach `Expr::Field`
+      ## from different callers and neither subsumes the other.
+      efe := sema_enum_owner_field_err(base, fs, decls, upto, src, locals, nloc)
+      if efe != 0 { mark_failed(locals, efe); bad = true }
       if not bad and sema_field_name_missing(base, fs, fl, decls, upto, src, locals, nloc, a) { bad = true }
       bad
     }
@@ -10314,6 +10375,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if declared(decls, upto, src, bns, bnl) {
         } else if local_in(locals, cnt, src, bns, bnl) {
         } else { return Result(usize, CheckErr).Err(unbound_err(bns, bnl)) }
+        ## Issue #693 — a write is a SEPARATE path from a read: the parser stores `v.a = 5` as two name
+        ## spans, so no expression walker ever sees the place and the read-side refusal above cannot
+        ## reach it. Measured on the parent, this row built at rc 0 and dropped the store silently.
+        ## `sema_name_owner_is_enum` asks the same question `value_agg_ty` answers for an expression
+        ## owner, over the recorded local type a name place carries.
+        if sema_name_owner_is_enum(decls, src, locals, cnt, bns, bnl) {
+          return Result(usize, CheckErr).Err(enum_field_access_err(fns))
+        }
         ## A known struct write must name one of that struct's declared fields. The parser stores this
         ## write as separate base/field spans, so the expression walker cannot validate it for us.
         bowner := sema_struct_owner_name_span(decls, upto, src, locals, cnt, bns, bnl)

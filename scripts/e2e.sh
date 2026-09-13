@@ -10723,6 +10723,57 @@ run_a64 accept_block_scoped_signed_local 42
 run_rv64 accept_block_scoped_signed_local 42
 run_wat accept_block_scoped_signed_local 42
 check_accept accept_block_scoped_signed_local
+## Issue #693 — a FIELD ACCESS on an ENUM-typed value. Seven positions, reads and a store alike, were
+## accepted by `check` and by `build` for the life of the compiler: the read answered a fabricated 0
+## and the store was dropped, with no diagnostic on any surface. Two of the seven make it a wrong
+## VALUE rather than a missing message — `v.a + 5` exited 5 (so the read really was 0 on a
+## `B(11, 22)` value) and `if v.a == 0` exited 7 (so control flow was chosen by that zero) — and the
+## store row exited 42 with the write silently discarded. Every parent exit status quoted in the
+## fixture headers was read OUTSIDE a pipeline; the first pass of the original measurement read them
+## through a pipe and reported the opposite verdict.
+##
+## Each row is asserted TWICE, because the two surfaces fail differently: `build_reject_has` drives
+## `-o` and additionally proves no artifact was left behind, `check_reject_has` drives the
+## type-check-only verb and additionally proves nothing reached stdout. The needle carries the class,
+## the line and the module, so a refusal that loses its location fails the row.
+build_reject_has issue693_enum_field_tail "not through a field name at line 12 in issue693_enum_field_tail"
+build_reject_has issue693_enum_field_local_init "not through a field name at line 7 in issue693_enum_field_local_init"
+build_reject_has issue693_enum_field_call_arg "not through a field name at line 8 in issue693_enum_field_call_arg"
+build_reject_has issue693_enum_field_binop "not through a field name at line 10 in issue693_enum_field_binop"
+build_reject_has issue693_enum_field_return "not through a field name at line 7 in issue693_enum_field_return"
+build_reject_has issue693_enum_field_if_cond "not through a field name at line 14 in issue693_enum_field_if_cond"
+build_reject_has issue693_enum_field_store "not through a field name at line 10 in issue693_enum_field_store"
+check_reject_has issue693_enum_field_tail "not through a field name at line 12 in issue693_enum_field_tail"
+check_reject_has issue693_enum_field_local_init "not through a field name at line 7 in issue693_enum_field_local_init"
+check_reject_has issue693_enum_field_call_arg "not through a field name at line 8 in issue693_enum_field_call_arg"
+check_reject_has issue693_enum_field_binop "not through a field name at line 10 in issue693_enum_field_binop"
+check_reject_has issue693_enum_field_return "not through a field name at line 7 in issue693_enum_field_return"
+check_reject_has issue693_enum_field_if_cond "not through a field name at line 14 in issue693_enum_field_if_cond"
+check_reject_has issue693_enum_field_store "not through a field name at line 10 in issue693_enum_field_store"
+## The three EMIT-to-stdout surfaces, on the two rows that travel DIFFERENT paths through the checker:
+## the tail READ is judged by the expression walk, the STORE by the statement place. A reject fixture
+## alone does not prove the non-x86 surfaces refuse (AGENTS.md, "What the gates prove"), and these
+## rows additionally assert that nothing was emitted to stdout.
+emit_reject_has wat issue693_enum_field_tail "not through a field name at line 12 in issue693_enum_field_tail"
+emit_reject_has aarch64 issue693_enum_field_tail "not through a field name at line 12 in issue693_enum_field_tail"
+emit_reject_has riscv64 issue693_enum_field_tail "not through a field name at line 12 in issue693_enum_field_tail"
+emit_reject_has wat issue693_enum_field_store "not through a field name at line 10 in issue693_enum_field_store"
+emit_reject_has aarch64 issue693_enum_field_store "not through a field name at line 10 in issue693_enum_field_store"
+emit_reject_has riscv64 issue693_enum_field_store "not through a field name at line 10 in issue693_enum_field_store"
+## The four CONTROLS. Each is green on the parent AND on this branch — that is the point: they are
+## what makes the seven rejections above a narrowing rather than a blunt instrument. The struct read
+## keeps its member table; the enum-INSIDE-a-struct row is the neighbouring class of #447/#448/#449/
+## #462/#465/#504 and is untouched; `match` is the access form an enum actually has; and the raw
+## union is the shape the census found, which shares the front end's aggregate kind with an enum and
+## must NOT be refused (Types §6.3).
+run issue693_struct_field_control 55
+check_accept issue693_struct_field_control
+run issue693_enum_in_struct_field_control 61
+check_accept issue693_enum_in_struct_field_control
+run issue693_match_control 33
+check_accept issue693_match_control
+run issue693_union_member_control 77
+check_accept issue693_union_member_control
 ## The over-reach fence for the predicate's other direction is the four fixtures whose desugared callee
 ## span IS synthesized and which must keep COMPILING and answering their own values —
 ## `ambient_alloc_scalar` and `ambient_alloc_attr` (42, four backends), `map_capture` (42, `run_x86`
