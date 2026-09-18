@@ -932,16 +932,22 @@ interface_summary_sidecar := fn(in out a : rt::Arena, out : str) -> usize {
 }
 
 link_exe_split := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize, glen : usize, spanbase : usize, entry : str, libnames : str, any_dyn : bool, lflags : str) -> usize {
-  ## The per-module .o split is DISABLED (safe no-op) pending a base-emit codegen fix: under some heap
-  ## layouts a mis-addressed store in this path corrupts a live StrBuf cap (→ `rt: StrBuf overflow`).
-  ## It is fail-loud / never a silent miscompile, and the split's own payoff is <2% (perf showed as+ld is
-  ## ~0.67 s of a ~28 s build — the compiler's OWN execution dominates). The wild write is UN-OBSERVABLE:
-  ## it evaporates under gdb, rr (Zen), and any diagnostic recompile (each shifts the codegen lottery), so
-  ## it needs a probe-free static audit or a non-Zen rr host. Until then, always take the proven single-`.s`
-  ## `link_exe`; the split body below is retained (dead) so re-enabling is a one-line delete of this guard.
-  ## See memory `link-exe-split-selfhost-miscompile`. `ALATYR_OSPLIT=1` therefore builds correctly (no split).
-  ## The disabling guard is GONE: the "un-pinnable codegen fault" was a 64-byte name StrBuf overflowing
-  ## for any `out` path >= 54 bytes (see the two `out.len + 64` sizings below). Fail-loud, deterministic.
+  ## The per-module `.o` split is LIVE and OPT-IN. It runs only when the caller supplied a span table,
+  ## which `ALATYR_OSPLIT=1` is what arranges (the opt-in is read at the `ALATYR_OSPLIT` site further
+  ## down this file); an ordinary build passes `spanbase == 0`, takes the `nspan <= 1` arm below, and
+  ## gets the proven single-`.s` `link_exe`, byte-identical to the pre-split build. Foreign libraries
+  ## also fall back: the split + `cc`/`-l` path is a later slice.
+  ##
+  ## HISTORY, because this comment used to say the opposite and a reader could act on it. The split was
+  ## once disabled by an unconditional guard, pending a base-emit codegen fault that corrupted a live
+  ## StrBuf cap (→ `rt: StrBuf overflow`) under some heap layouts and evaporated under every probe. That
+  ## fault was FOUND and fixed — a 64-byte name StrBuf overflowing for any `out` path >= 54 bytes, see
+  ## the two `out.len + 64` sizings below — and the guard was removed with it. So `ALATYR_OSPLIT=1` now
+  ## DOES split, where the old text promised it did not.
+  ##
+  ## Worth knowing before reaching for it: the split's payoff is <2%. `perf` measured `as` + `ld` at
+  ## ~0.67 s of a ~28 s build — the compiler's OWN execution dominates, so parallelising or splitting
+  ## the toolchain calls is not where a faster build comes from.
   mut nspan := 0
   if spanbase != 0 { nspan = rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 0) }
   if nspan <= 1 { return link_exe(a, out, gbase, glen, entry, libnames, any_dyn, lflags) }
