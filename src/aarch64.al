@@ -7369,9 +7369,17 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         ## struct construct: store each positional field value at base + k*8.
         stys := expr_struct_lit_ns(v)
         styn := expr_struct_lit_nl(v)
-        slitstd := isslit and poff >= 0 and layout_kind_is_byte(layout_kind(decls, src, stys, styn, a))
+        ## A module global whose initializer is a STRUCT LITERAL is not what `a64_is_global` reports —
+        ## that predicate answers only for scalar and float globals — and `a64_local_off` still hands
+        ## back a non-negative frame offset for its name. So every arm below that keys on `poff >= 0`
+        ## would materialize the literal into STACK slots nothing reads back, leaving the global at its
+        ## initializer with no diagnostic (#704). Decide the destination first, then gate on it.
+        slitgspan := a64_global_agg_struct_span(decls, src, ns, nl)
+        slitaggglob := slitgspan.n != 0
+        slitframe := poff >= 0 and (not slitaggglob)
+        slitstd := isslit and slitframe and layout_kind_is_byte(layout_kind(decls, src, stys, styn, a))
         if slitstd { _stdw := a64_std_store_struct(v, poff, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-        slitok := isslit and (not slitstd) and poff >= 0 and a64_struct_all_scalar(decls, src, stys, styn, a)
+        slitok := isslit and (not slitstd) and slitframe and a64_struct_all_scalar(decls, src, stys, styn, a)
         if slitok {
           mut g := ex_struct_lit_args(v)
           mut k := 0
@@ -7389,7 +7397,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         ## FLATTENED value directly into p's frame slots by writing each field at its RUNNING byte offset via
         ## the recursive multi-word writer (so a nested struct/enum field lands in full and later fields stay
         ## aligned). Disjoint from slitok (that gate requires all-scalar). Only fires for a real struct decl.
-        slitnest := isslit and (not slitstd) and (not slitok) and poff >= 0 and struct_decl_of(decls, src, stys, styn) >= 0
+        slitnest := isslit and (not slitstd) and (not slitok) and slitframe and struct_decl_of(decls, src, stys, styn) >= 0
         if slitnest {
           mut sg := ex_struct_lit_args(v)
           mut soff := poff
@@ -7400,7 +7408,26 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             sg = sga.next
           }
         }
-        if isslit and (not slitstd) and (not slitok) and (not slitnest) { push_str(sb, "  brk #0 // unsupported struct construct\n") }
+        ## The same all-scalar store, addressed at the global's `.data` label instead of the frame.
+        ## The address is recomputed per field, AFTER the field value is in x0: a field expression is
+        ## arbitrary and may clobber any scratch register, which is why the scalar global store above
+        ## also emits its `adrp`/`add` pair after the value rather than before.
+        slitglob := isslit and slitaggglob and a64_struct_all_scalar(decls, src, stys, styn, a)
+        if slitglob {
+          mut gg := ex_struct_lit_args(v)
+          mut gk := 0
+          while gg != 0 {
+            gga := deref(arg_p(gg))
+            if not a64_emit_enum_param_disc(gga.e, sb, a, src, params_head, body_head, decls) { emit_a64_expr(gga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+            push_str(sb, "  adrp x9, ") ; push_str(sb, gname) ; push_str(sb, "\n  add x9, x9, :lo12:") ; push_str(sb, gname)
+            push_str(sb, "\n  str x0, [x9, #") ; push_int(sb, gk * 8) ; push_str(sb, "]\n")
+            gk += 1
+            gg = gga.next
+          }
+        }
+        ## Still fail-loud for what is left — a NESTED struct literal into a global has no writer yet.
+        ## A trap is the acceptable outcome exactly where a wrong value is not.
+        if isslit and (not slitstd) and (not slitok) and (not slitnest) and (not slitglob) { push_str(sb, "  brk #0 // unsupported struct construct\n") }
         ## enum construct: store variant discriminant at word 0, then each payload arg at word 1+.
         vidx := variant_index(decls, src, expr_enum_lit_ns(v), expr_enum_lit_nl(v), expr_enum_variant_ns(v), expr_enum_variant_nl(v), a)
         ## enum local construct `s := E.V(p…)`: disc at word 0, then each payload arg via the shared
