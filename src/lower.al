@@ -12943,6 +12943,26 @@ sret_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::
   }
 }
 
+## Does this call write its result through a hidden pointer the CALLER must supply? TWO predicates
+## answer that, for different callees: `sret_ret_call` above reads a CONCRETE decl's declared return,
+## and `gen_ret_sret_span` resolves a GENERIC instance's return through the call's own type argument
+## (a generic's declared return is its type PARAMETER, so the first predicate is false for every
+## instantiation no matter how wide).
+##
+## Every site that already knew it wanted a destination asks both — the binding path
+## (`lower::assign`), argument materialization, the tail forward, match-scrutinee staging. Every site
+## that merely EVALUATES a call as a value asked at most the first, and the generic branch of the
+## plain `Expr::Call` lowering asked neither. That is how a discarded wide-SRET call reached
+## `emit_call_args` with `cx.sret_call == -1`, so no hidden pointer was passed and the callee wrote
+## the whole struct through whatever %rdi held — the first user argument, for a generic (#711).
+##
+## One question, asked in one place. A future value-evaluation site that forgets to publish a
+## destination is still a defect, but it can no longer answer this question by halves.
+call_needs_sret_dst := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+  if sret_ret_call(e, decls, src, a) { return true }
+  gen_ret_sret_span(e, decls, src, a).n != 0
+}
+
 ## Is `e` a `Call` to a fn returning a WIDE enum (disc + payload > 7 words, SRET)? The caller allocates
 ## the destination enum LOCAL (via `enum_ret_call_d` in collect_slots — unchanged), passes its address
 ## as the hidden %rdi, and the callee writes the whole enum through it. The wide-enum dual of `sret_ret_call`.
@@ -21556,7 +21576,12 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
     emit_str_pair(rv, sb, cx, a, nl)
     push_str(sb, "  popq %rdx\n  popq %rax\n")
   } else {
+    ## The enclosing fn's return is none of the shapes above, but the VALUE being returned may still
+    ## be a wide-SRET call — the two are unrelated conventions. Same missing destination (#711).
+    ov_sd := cx.sret_call
+    if call_needs_sret_dst(rv, cx.decls, cx.src, a) { cx.sret_call = agg_alloc(cx) }
     emit_gas(rv, sb, cx, a, nl)
+    cx.sret_call = ov_sd
     push_str(sb, "  popq %rax\n")
   }
   push_str(sb, "  jmp ")
@@ -22985,7 +23010,7 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : ptr(mut Stmt), head : ptr(mut Stmt),
         ##
         ## Reserve a scratch block and publish it exactly as the binding path does. Nothing reads it
         ## back; it exists so the callee has a legal address to write through.
-        if sret_ret_call(e, cx.decls, cx.src, a) {
+        if call_needs_sret_dst(e, cx.decls, cx.src, a) {
           ov := cx.sret_call
           cx.sret_call = agg_alloc(cx)
           emit_gas(e, sb, cx, a, nl)
@@ -25827,7 +25852,14 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
     emit_str_pair(d.value, sb, ptr(cx), deref(p.mar), nl)
     push_str(sb, "  popq %rdx\n  popq %rax\n")
   } else {
+    ## The TRAILING value of a fn whose own return is none of the shapes above — including a fn with
+    ## no declared return at all, where `sink := fn() { mk() }`'s call is the trailing EXPRESSION (the
+    ## parser only makes a bare call a `Stmt::ExprStmt` when something follows it), so it never
+    ## reaches the discard arm. Publish a destination for a wide-SRET callee here too (#711).
+    ov_sd := cx.sret_call
+    if call_needs_sret_dst(d.value, p.decls, p.src, deref(p.mar)) { cx.sret_call = agg_alloc(ptr(cx)) }
     emit_gas(d.value, sb, ptr(cx), deref(p.mar), nl)
+    cx.sret_call = ov_sd
     push_str(sb, "  popq %rax\n")
     ## an f64/f32-returning fn delivers its value in %xmm0 (the SSE return register).
     if rfloat { push_str(sb, "  movq %rax, %xmm0\n") }

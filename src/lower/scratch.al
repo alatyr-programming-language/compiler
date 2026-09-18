@@ -377,6 +377,14 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
     Expr::Bitcast(inner, _bcs, _bcl) => { m = scan_agg_arg_expr(src, decls, inner, a) }
     _ => {}
   }
+  ## `e` ITSELF may be a wide-SRET call whose result is not bound to anything — discarded as a
+  ## statement, returned, or a void fn's trailing expression. Those sites now reserve a pool block
+  ## for the destination the callee writes through (#711), and a block that is taken must be a block
+  ## that was counted: without this the reservation was sized from ARGUMENTS alone and `agg_alloc`
+  ## aborted with "aggregate-value call-arg temp pool overflow" on the very programs the fix exists
+  ## to make work. Additive, not `imax`: the call's own destination is live ACROSS the evaluation of
+  ## its arguments, so it needs a block of its own beside theirs.
+  if sret_ret_call(e, decls, src, a) { m = m + 1 }
   m
 }
 ## The max aggregate-value-argument count of any single call within a statement list `head`.
