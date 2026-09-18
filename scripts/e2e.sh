@@ -6721,9 +6721,9 @@ run unchecked_mixed_signedness 42
 ## an `unchecked` arithmetic expression. All four backends now return 42; this used to be a normal-exit
 ## silent wrong value (3) on a64, rv64 and wasm.
 run unchecked_literal_unsignedness 42
-run_x86 signedness_array_elem 42
-run_x86 signedness_slice_elem 42
-run_x86 signedness_slice_local 42
+run signedness_array_elem 42
+run signedness_slice_elem 42
+run signedness_slice_local 42
 run_x86 signedness_slice_variadic 42
 ## the components that CANNOT be done that way stay LOUD rather than silently wrong: nested tuples, str /
 ## float / struct / enum components, and ordering (`<`) over a tuple. A local plain-struct aggregate

@@ -35,7 +35,7 @@ stmt_p := ast::stmt_p
 cmp_operand_bitcast_kind := lower_layout::cmp_operand_bitcast_kind
 (const_denoted_value, const_denote_ns, const_denote_nl) := lower_layout
 (param_ann_signed, param_ann_unsigned, named_param_is_float, callee_ret_is_float) := lower_layout
-(callee_ret_is_signed, arrty_elem_signed, lit_arith_i64) := lower_layout
+(callee_ret_is_signed, arrty_elem_signed, arrty_elem_unsigned, lit_arith_i64) := lower_layout
 (ct_kind_of_name, ct_num_kind_of_name, ct_scalar_num_kind, ct_type_kind, std_ty_aggregate, struct_plain, ty_is_scalar) := lower_layout
 (decl_tparam_count, decl_tparam_pos, decl_leading_tparam_run, generic_gi, gen_call_ok, param_tuple_open_at, param_tuple_allscalar_n, arrty_semi, arg_list_count) := lower_layout
 (ex_is_index, ex_index_base, ex_index_idx, ex_is_field, ex_is_num_lit, ex_is_zero_lit) := lower_layout
@@ -2986,6 +2986,49 @@ rv_unchecked_init_unsigned := fn(v : ptr(Expr), params_head : ptr(mut Param), bo
   }
   r
 }
+## The UNSIGNED-direction twin of `rv_hole_index_signed` below. An `xs[i]` read carries no
+## annotation of its own, so the ELEMENT type of the base's DECLARED type is the only place its
+## signedness is written. Without this reading, `us[0] < us[1]` over a `[u64; 2]` proved neither
+## operand unsigned, the comparison kept its always-SIGNED condition, and a word above 2^63 ordered
+## as NEGATIVE — `0 < 18446744073709551615` answered FALSE on a valid binary with a normal exit
+## (#707). Three bases are recovered, each from a span this file already resolves: a LOCAL fixed
+## array, a `Slice(T)` PARAMETER, and a `Slice(T)` LOCAL through its annotation.
+##
+## Two bases are deliberately NOT recovered and keep the signed default rather than guessing: an
+## array FIELD of a struct (`r.u[0]`), whose base is an `Expr::Field` that only `rv_place_ty` can
+## type and which needs `decls` — not a parameter of this predicate; and a module-level GLOBAL array,
+## for which no backend retains a declared type span at all. This family only ever moves an operand
+## signed -> unsigned on PROOF, so an unrecovered base must stay signed.
+rv_index_elem_unsigned := fn(bse : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
+  bs := ex_var_ns(bse)
+  bn := ex_var_nl(bse)
+  mut r := false
+  if bn != 0 {
+    an := rv_local_arrty_span(body_head, src, bs, bn, a)
+    if arrty_elem_unsigned(src, an.s, an.n) { r = true }
+    if r == false { sp := rv_slice_param_elem_span(params_head, src, bs, bn) ; if sp.n != 0 { if scalar_name_is_unsigned(src, sp.s, sp.n) { r = true } } }
+    ## A `Slice(T)` LOCAL. Its element type is written ONLY in the annotation at its declaration,
+    ## so neither the fixed-array span above nor the param lookup can see it. `rv_slice_elem_span`
+    ## is no use either: it scans the source FORWARD from a name to a `: Slice(T)`, and the name it
+    ## would get here is the one at the USE site (`xs[0]`), which has no annotation after it.
+    ## `rv_local_ann_span` already walks to the DECLARATION and answers its annotation span, so the
+    ## element is parsed out of that span directly — the same byte scan `lower::slice_local_
+    ## signedness_type_span` performs on x86_64 after reaching the declaration through its SlotEntry.
+    if r == false {
+      la := rv_local_ann_span(body_head, src, bs, bn, a)
+      if la.n > 6 {
+        if str_at((src + la.s), 6) == "Slice(" {
+          es := la.s + 6
+          mut ee := es
+          lend := la.s + la.n
+          while ee < lend and str_at((src + ee), 1) != ")" { ee = ee + 1 }
+          if ee > es and ee < lend { if scalar_name_is_unsigned(src, es, ee - es) { r = true } }
+        }
+      }
+    }
+  }
+  r
+}
 rv_operand_unsigned := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bool {
   mut r := false
   match deref(e) {
@@ -3024,8 +3067,9 @@ rv_operand_unsigned := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head
         if ur and ex_is_num_lit(bl) { r = true }
       }
     }
+    Expr::Index(bse, ix) => { if rv_index_elem_unsigned(bse, params_head, body_head, src, a) { r = true } }
     Expr::Num | Expr::BoolLit | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
       | Expr::Bitcast | Expr::Loop => {}
   }

@@ -2664,6 +2664,16 @@ pub arrty_elem_signed := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   if es.n == 0 { return false }
   scalar_name_is_signed(src, es.s, es.n)
 }
+## The UNSIGNED twin of the above, and deliberately its own predicate rather than a negation:
+## `not arrty_elem_signed(…)` is ALSO true for a non-array span, a non-scalar element and `{0,0}`,
+## and this family only ever moves an operand signed -> unsigned on PROOF, never on the absence of
+## one. Keeping the two separate is what preserves the conservative character the comparison
+## predicates depend on.
+pub arrty_elem_unsigned := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
+  es := arr_field_elem_span(src, ts, tl)
+  if es.n == 0 { return false }
+  scalar_name_is_unsigned(src, es.s, es.n)
+}
 
 ## An INTEGER-LITERAL leaf for `lit_arith_i64` below: a `Num`, an arithmetic combination of them, or
 ## either inside an `unchecked` scope (a VERIFICATION mode, never a type — and the shape the parser
