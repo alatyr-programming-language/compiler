@@ -6011,7 +6011,7 @@ run nested_struct_global 42
 ## SCALAR globals, so the aggregate path is fixpoint-neutral. x86_64-only (the aggregate-global whole-
 ## assign `.data` copy is emitted by the x86 lower; the a64/rv64/wasm scalar-kernel backends do not model
 ## it and would silently miscompile it) → run_x86 (sweep-excluded), like the other agg-global-layout tests.
-run_x86 global_agg_struct_whole_assign 42
+run global_agg_struct_whole_assign 42
 run_x86 global_agg_array_whole_assign 42
 run_x86 global_agg_enum_whole_assign 42
 run_x86 global_str 42
