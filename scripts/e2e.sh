@@ -7514,6 +7514,12 @@ run when_guard_arch 42
 ## = 16 → 16+26 = 42 (66 if the false decl survived). ENUM: `Sh.Answer(u64) when x86_64` kept, `when
 ## aarch64` variant dropped; builds+runs to 42 with the false-guarded enum excluded.
 run_x86 when_guard_binding 42
+## The SAME fixture on aarch64 answers 100, and that is its DESIGNED answer, not a divergence: it
+## declares `val : u64 = 42 when target.arch == Arch.x86_64` and `val : u64 = 100 when
+## target.arch == Arch.aarch64`, so the comptime guard selects a different binding per target.
+## Registering it here states that per-target answer instead of leaving the corpus walk to record an
+## unexplained disagreement (#683), and puts the fixture into the sweeps' corpus on both.
+run_a64 when_guard_binding 100
 run_x86 when_guard_struct 42
 run_x86 when_guard_enum 42
 ## CT-4/CT-5: a comptime PREDICATE on a GENERIC fn (`when size(T) <= 8`) gates INSTANTIATION — the
