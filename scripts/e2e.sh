@@ -7513,6 +7513,10 @@ run when_guard_arch 42
 ## → 42. STRUCT: 2-field `Cfg when x86_64` (kept) + 5-field `Cfg when aarch64` (dropped LAST); `Cfg.size()`
 ## = 16 → 16+26 = 42 (66 if the false decl survived). ENUM: `Sh.Answer(u64) when x86_64` kept, `when
 ## aarch64` variant dropped; builds+runs to 42 with the false-guarded enum excluded.
+## #711: a discarded wide-SRET call needs a destination. x86-only for now — aarch64's bare-statement
+## arm has the identical gap (it never sets `A64_SRET_DST_ON`), so registering this cross-backend
+## would assert a fix that only one backend has.
+run_x86 sret_discard_statement 42
 run_x86 when_guard_binding 42
 ## The SAME fixture on aarch64 answers 100, and that is its DESIGNED answer, not a divergence: it
 ## declares `val : u64 = 42 when target.arch == Arch.x86_64` and `val : u64 = 100 when

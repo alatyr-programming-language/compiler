@@ -22974,7 +22974,25 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : ptr(mut Stmt), head : ptr(mut Stmt),
         ## epilogue instead of discarding it (the value-`match`-arm path the lean parser can't form).
         emit_return_value(e, sb, cx, a, nl)
       } else {
-        emit_gas(e, sb, cx, a, nl)
+        ## A call whose result is DISCARDED still needs somewhere to PUT it. A wide-SRET callee writes
+        ## the whole struct through the hidden pointer the SysV convention places in %rdi, and in
+        ## statement position no binding publishes a destination — so `emit_call_args` read
+        ## `cx.sret_call == -1`, skipped its `leaq …, %rdi`, and emitted the `call` anyway. The callee
+        ## then wrote the entire struct through whatever %rdi happened to hold (#711). That faulted
+        ## only when no earlier wide-SRET call in the same frame had left a usable pointer behind,
+        ## which is why `mk()` alone segfaulted while `d := mk()` before it did not — the masking was
+        ## the previous call's destination slot, still live.
+        ##
+        ## Reserve a scratch block and publish it exactly as the binding path does. Nothing reads it
+        ## back; it exists so the callee has a legal address to write through.
+        if sret_ret_call(e, cx.decls, cx.src, a) {
+          ov := cx.sret_call
+          cx.sret_call = agg_alloc(cx)
+          emit_gas(e, sb, cx, a, nl)
+          cx.sret_call = ov
+        } else {
+          emit_gas(e, sb, cx, a, nl)
+        }
         push_str(sb, "  popq %rax\n")
       }
     }
