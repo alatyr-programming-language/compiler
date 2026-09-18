@@ -245,6 +245,45 @@ if [ "$ig_cover" != 1 ]; then
   fail=1
 fi
 
+# The CROSS-BACKEND report (#683). Like the idiom gate it needs no compiler — it is a join over
+# scripts/corpus.manifest, which the CORPUS stage above has already checked against the tree on this
+# same run — so it cannot collide with another lane over target/debug/alatyr.
+#
+# Unlike the idiom gate it carries NO baseline, and a FINDING never sets `fail`. That asymmetry is
+# deliberate. What the report names is real, undeclared cross-backend divergence that nobody has read
+# yet; #683's triage counted 18 paths of it. Gating on that today would be permanently red, and
+# blessing the 18 into a baseline to get green is exactly the failure #683 was filed about — the
+# manifest has been freezing these disagreements AS the expected state all along.
+#
+# What DOES set `fail` is the detector being broken or silent about its own coverage:
+#   * its planted-defect self-test must pass — AGENTS.md: "a green gate that never fails its own
+#     planted defect is not evidence", and a report nobody has seen fire is decoration;
+#   * it must print its proof-of-work line, so "found nothing" can be told apart from "walked
+#     nothing" — the same rule, and the same failure mode, as `idiom gate: files=` above.
+echo "### CROSS-BACKEND (manifest divergence report, reporting only, findings never gate) ###"
+XB_LOG="$LOGDIR/full_xbackend.log"
+bash scripts/xbackend_report.sh --self-test > "$XB_LOG" 2>&1
+xb_st_rc=$?
+bash scripts/xbackend_report.sh --quiet >> "$XB_LOG" 2>&1
+xb_rc=$?
+grep -E "^(xbackend_report self-test:|xbackend report:)" "$XB_LOG"
+if [ "$xb_st_rc" != 0 ]; then
+  echo "  the cross-backend report FAILED ITS OWN planted-defect self-test — its findings, and its"
+  echo "  silence, prove nothing (from $XB_LOG):"
+  grep -E "^  FAIL " "$XB_LOG" | head -5 | sed 's/^/    /'
+  fail=1
+fi
+if [ "$xb_rc" = 2 ]; then
+  echo "  the cross-backend report could not read scripts/corpus.manifest (from $XB_LOG)"
+  fail=1
+fi
+xb_cover="$(grep -cE "^xbackend report: paths=" "$XB_LOG")"
+if [ "$xb_cover" != 1 ]; then
+  echo "  (scripts/xbackend_report.sh printed no 'xbackend report: paths=' proof-of-work line — what"
+  echo "   it walked is unknown, treating as a failure)"
+  fail=1
+fi
+
 echo "### SWEEPS (conditional) ###"
 bash scripts/sweeps.sh "${SWEEP_ARGS[@]}" 2>&1 | tee "$LOGDIR/full_sweeps.log"
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
