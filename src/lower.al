@@ -93,7 +93,7 @@ ecallee_is := ast::ecallee_is
 ## them too, and the child builds them through the §3/TYPE-ANCESTOR chain.
 (agg_field_of, agg_arr_fill_count, slot_elem_stride_bytes, field_place_parts, standard_field_path, std_idx_path, std_idx_leaf_is_agg, std_idx_byte_field_eek, std_idx_one, resolve_idx_field_place, emit_addr_of, field_read_agg, emit_elem_copy_in, emit_index_addr) := place
 (emit_rodata_decl) := rodata
-(scan_str_arg_expr, scan_str_arg_stmts, scan_agg_width_expr, scan_agg_width_stmts, scan_agg_arg_expr, scan_agg_arg_stmts) := scratch
+(scan_str_arg_expr, scan_str_arg_stmts, scan_agg_width_expr, scan_agg_width_stmts, scan_agg_arg_expr, scan_agg_arg_stmts, agg_unbound_sret_block) := scratch
 
 ## Name-imports for the two output primitives this back end emits on nearly every line — a
 ## stack-machine emitter is one long sequence of `push_str`/`push_int` into the `StrBuf`, so
@@ -12943,6 +12943,33 @@ sret_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::
   }
 }
 
+## Does this call write its result through a hidden pointer the CALLER must supply? TWO predicates
+## answer that, for different callees: `sret_ret_call` above reads a CONCRETE decl's declared return,
+## and `gen_ret_sret_span` resolves a GENERIC instance's return through the call's own type argument
+## (a generic's declared return is its type PARAMETER, so the first predicate is false for every
+## instantiation no matter how wide).
+##
+## Every site that already knew it wanted a destination asks both — the binding path
+## (`lower::assign`), argument materialization, the tail forward, match-scrutinee staging. Every site
+## that merely EVALUATES a call as a value asked at most the first, and the generic branch of the
+## plain `Expr::Call` lowering asked neither. That is how a discarded wide-SRET call reached
+## `emit_call_args` with `cx.sret_call == -1`, so no hidden pointer was passed and the callee wrote
+## the whole struct through whatever %rdi held — the first user argument, for a generic (#711).
+##
+## One question, asked in one place. A future value-evaluation site that forgets to publish a
+## destination is still a defect, but it can no longer answer this question by halves.
+## GENERIC instances are NOT asked here, and the reason is a constraint rather than a choice: the
+## pool RESERVATION that must match every allocation is scanned in `lower::scratch`, which cannot
+## reach `gen_ret_sret_span` — that predicate stands on `lower.al`'s decl-name index (`dni_*`),
+## `callee_name_span` and `type_arg_span`, and `scratch` is imported BY `lower`, not the reverse.
+## Asking it here while the reservation cannot would take a block nobody counted, and `agg_alloc`
+## aborts the whole emission on that — measured, it turned the very programs this fixes into
+## compile failures. Emission and reservation must ask the same question; today that question is
+## `sret_ret_call`. Making the generic half reachable is a module-structure change (#711).
+call_needs_sret_dst := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
+  sret_ret_call(e, decls, src, a)
+}
+
 ## Is `e` a `Call` to a fn returning a WIDE enum (disc + payload > 7 words, SRET)? The caller allocates
 ## the destination enum LOCAL (via `enum_ret_call_d` in collect_slots — unchanged), passes its address
 ## as the hidden %rdi, and the callee writes the whole enum through it. The wide-enum dual of `sret_ret_call`.
@@ -21556,7 +21583,12 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
     emit_str_pair(rv, sb, cx, a, nl)
     push_str(sb, "  popq %rdx\n  popq %rax\n")
   } else {
+    ## The enclosing fn's return is none of the shapes above, but the VALUE being returned may still
+    ## be a wide-SRET call — the two are unrelated conventions. Same missing destination (#711).
+    ov_sd := cx.sret_call
+    if call_needs_sret_dst(rv, cx.decls, cx.src, a) { cx.sret_call = agg_alloc(cx) }
     emit_gas(rv, sb, cx, a, nl)
+    cx.sret_call = ov_sd
     push_str(sb, "  popq %rax\n")
   }
   push_str(sb, "  jmp ")
@@ -22985,7 +23017,7 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : ptr(mut Stmt), head : ptr(mut Stmt),
         ##
         ## Reserve a scratch block and publish it exactly as the binding path does. Nothing reads it
         ## back; it exists so the callee has a legal address to write through.
-        if sret_ret_call(e, cx.decls, cx.src, a) {
+        if call_needs_sret_dst(e, cx.decls, cx.src, a) {
           ov := cx.sret_call
           cx.sret_call = agg_alloc(cx)
           emit_gas(e, sb, cx, a, nl)
@@ -24875,7 +24907,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
     ## Width is measured from THIS function's own materialization paths below, not from a
     ## program-global declaration maximum. The IR barrier frame must mirror the text frame exactly.
     ir_agg_w = imax(1, imax(scan_agg_width_stmts(d.body_stmts, p.decls, p.src, deref(p.mar)), scan_agg_width_expr(d.value, p.decls, p.src, deref(p.mar))))
-    aggpeak := imax(scan_agg_arg_stmts(p.src, p.decls, d.body_stmts, deref(p.mar)), scan_agg_arg_expr(p.src, p.decls, d.value, deref(p.mar)))
+    aggpeak := imax(scan_agg_arg_stmts(p.src, p.decls, d.body_stmts, deref(p.mar)), scan_agg_arg_expr(p.src, p.decls, d.value, deref(p.mar)) + agg_unbound_sret_block(p.src, p.decls, d.value, deref(p.mar)))
     aggblocks := imax(1, aggpeak)
     ir_agg_next = i64(svec_len(ptr(slots)))
     aggpoolw := aggblocks * ir_agg_w
@@ -25343,7 +25375,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## AGGREGATE width is per-function: only materializations reachable from this body/value path can
   ## consume this function's pool. `aggpeak` remains the independent nested-call block-count scan.
   aggw := imax(1, imax(scan_agg_width_stmts(d.body_stmts, p.decls, p.src, deref(p.mar)), scan_agg_width_expr(d.value, p.decls, p.src, deref(p.mar))))
-  aggpeak := imax(scan_agg_arg_stmts(p.src, p.decls, d.body_stmts, deref(p.mar)), scan_agg_arg_expr(p.src, p.decls, d.value, deref(p.mar)))
+  aggpeak := imax(scan_agg_arg_stmts(p.src, p.decls, d.body_stmts, deref(p.mar)), scan_agg_arg_expr(p.src, p.decls, d.value, deref(p.mar)) + agg_unbound_sret_block(p.src, p.decls, d.value, deref(p.mar)))
   mut aggblocks := imax(1, aggpeak)
   ## ONE EXTRA block for a fn that returns a WIDE (> 7-word) struct or a WIDE (disc + payload > 7-word)
   ## ENUM AND passes at least one aggregate-VALUE argument somewhere: `emit_struct_to_sret` /
@@ -25827,7 +25859,14 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
     emit_str_pair(d.value, sb, ptr(cx), deref(p.mar), nl)
     push_str(sb, "  popq %rdx\n  popq %rax\n")
   } else {
+    ## The TRAILING value of a fn whose own return is none of the shapes above — including a fn with
+    ## no declared return at all, where `sink := fn() { mk() }`'s call is the trailing EXPRESSION (the
+    ## parser only makes a bare call a `Stmt::ExprStmt` when something follows it), so it never
+    ## reaches the discard arm. Publish a destination for a wide-SRET callee here too (#711).
+    ov_sd := cx.sret_call
+    if call_needs_sret_dst(d.value, p.decls, p.src, deref(p.mar)) { cx.sret_call = agg_alloc(ptr(cx)) }
     emit_gas(d.value, sb, ptr(cx), deref(p.mar), nl)
+    cx.sret_call = ov_sd
     push_str(sb, "  popq %rax\n")
     ## an f64/f32-returning fn delivers its value in %xmm0 (the SSE return register).
     if rfloat { push_str(sb, "  movq %rax, %xmm0\n") }
