@@ -377,15 +377,21 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
     Expr::Bitcast(inner, _bcs, _bcl) => { m = scan_agg_arg_expr(src, decls, inner, a) }
     _ => {}
   }
-  ## `e` ITSELF may be a wide-SRET call whose result is not bound to anything — discarded as a
-  ## statement, returned, or a void fn's trailing expression. Those sites now reserve a pool block
-  ## for the destination the callee writes through (#711), and a block that is taken must be a block
-  ## that was counted: without this the reservation was sized from ARGUMENTS alone and `agg_alloc`
-  ## aborted with "aggregate-value call-arg temp pool overflow" on the very programs the fix exists
-  ## to make work. Additive, not `imax`: the call's own destination is live ACROSS the evaluation of
-  ## its arguments, so it needs a block of its own beside theirs.
-  if sret_ret_call(e, decls, src, a) { m = m + 1 }
   m
+}
+## One block for a wide-SRET call whose result is NOT BOUND — discarded as a statement, returned, or
+## a void fn's trailing expression. Those three sites reserve the destination the callee writes
+## through (#711), and a block that is taken must be a block that was counted, or `agg_alloc` aborts
+## with "aggregate-value call-arg temp pool overflow".
+##
+## Deliberately NOT folded into `scan_agg_arg_expr`: that scanner also runs over a BINDING's
+## right-hand side, and a bound call takes a frame SLOT rather than a pool block. Counting it there
+## reserved a block per bound call too — measured, that grew the frame of every such function in
+## `src/` (`subq $624` -> `subq $688` and friends) and broke the fixpoint for no behavioural gain.
+## Ask this only where the value has nowhere else to live.
+pub agg_unbound_sret_block := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), a : rt::Arena) -> usize {
+  if sret_ret_call(e, decls, src, a) { return 1 }
+  0
 }
 ## The max aggregate-value-argument count of any single call within a statement list `head`.
 pub scan_agg_arg_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), a : rt::Arena) -> usize {
@@ -401,10 +407,10 @@ pub scan_agg_arg_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut
       Stmt::AllocWith(ae, b, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, b, a)); s = nx }
       Stmt::Break(_bv, _bd, nx) => { s = nx }
       Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, e, a)); s = nx }
+      Stmt::ExprStmt(e, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, e, a) + agg_unbound_sret_block(src, decls, e, a)); s = nx }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, fv, a)); s = nx }
       Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, fpv, a)); s = nx }
-      Stmt::Return(rv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, rv, a)); s = nx }
+      Stmt::Return(rv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, rv, a) + agg_unbound_sret_block(src, decls, rv, a)); s = nx }
       Stmt::DerefAssign(ptr, val, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, ptr, a), scan_agg_arg_expr(src, decls, val, a))); s = nx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, ib, a), imax(scan_agg_arg_expr(src, decls, ii, a), scan_agg_arg_expr(src, decls, iv, a)))); s = nx }
       Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, fia, a), imax(scan_agg_arg_expr(src, decls, fii, a), scan_agg_arg_expr(src, decls, fiv, a)))); s = nx }

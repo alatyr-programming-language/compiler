@@ -93,7 +93,7 @@ ecallee_is := ast::ecallee_is
 ## them too, and the child builds them through the §3/TYPE-ANCESTOR chain.
 (agg_field_of, agg_arr_fill_count, slot_elem_stride_bytes, field_place_parts, standard_field_path, std_idx_path, std_idx_leaf_is_agg, std_idx_byte_field_eek, std_idx_one, resolve_idx_field_place, emit_addr_of, field_read_agg, emit_elem_copy_in, emit_index_addr) := place
 (emit_rodata_decl) := rodata
-(scan_str_arg_expr, scan_str_arg_stmts, scan_agg_width_expr, scan_agg_width_stmts, scan_agg_arg_expr, scan_agg_arg_stmts) := scratch
+(scan_str_arg_expr, scan_str_arg_stmts, scan_agg_width_expr, scan_agg_width_stmts, scan_agg_arg_expr, scan_agg_arg_stmts, agg_unbound_sret_block) := scratch
 
 ## Name-imports for the two output primitives this back end emits on nearly every line — a
 ## stack-machine emitter is one long sequence of `push_str`/`push_int` into the `StrBuf`, so
@@ -12958,9 +12958,16 @@ sret_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::
 ##
 ## One question, asked in one place. A future value-evaluation site that forgets to publish a
 ## destination is still a defect, but it can no longer answer this question by halves.
+## GENERIC instances are NOT asked here, and the reason is a constraint rather than a choice: the
+## pool RESERVATION that must match every allocation is scanned in `lower::scratch`, which cannot
+## reach `gen_ret_sret_span` — that predicate stands on `lower.al`'s decl-name index (`dni_*`),
+## `callee_name_span` and `type_arg_span`, and `scratch` is imported BY `lower`, not the reverse.
+## Asking it here while the reservation cannot would take a block nobody counted, and `agg_alloc`
+## aborts the whole emission on that — measured, it turned the very programs this fixes into
+## compile failures. Emission and reservation must ask the same question; today that question is
+## `sret_ret_call`. Making the generic half reachable is a module-structure change (#711).
 call_needs_sret_dst := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  if sret_ret_call(e, decls, src, a) { return true }
-  gen_ret_sret_span(e, decls, src, a).n != 0
+  sret_ret_call(e, decls, src, a)
 }
 
 ## Is `e` a `Call` to a fn returning a WIDE enum (disc + payload > 7 words, SRET)? The caller allocates
@@ -24900,7 +24907,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
     ## Width is measured from THIS function's own materialization paths below, not from a
     ## program-global declaration maximum. The IR barrier frame must mirror the text frame exactly.
     ir_agg_w = imax(1, imax(scan_agg_width_stmts(d.body_stmts, p.decls, p.src, deref(p.mar)), scan_agg_width_expr(d.value, p.decls, p.src, deref(p.mar))))
-    aggpeak := imax(scan_agg_arg_stmts(p.src, p.decls, d.body_stmts, deref(p.mar)), scan_agg_arg_expr(p.src, p.decls, d.value, deref(p.mar)))
+    aggpeak := imax(scan_agg_arg_stmts(p.src, p.decls, d.body_stmts, deref(p.mar)), scan_agg_arg_expr(p.src, p.decls, d.value, deref(p.mar)) + agg_unbound_sret_block(p.src, p.decls, d.value, deref(p.mar)))
     aggblocks := imax(1, aggpeak)
     ir_agg_next = i64(svec_len(ptr(slots)))
     aggpoolw := aggblocks * ir_agg_w
@@ -25368,7 +25375,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## AGGREGATE width is per-function: only materializations reachable from this body/value path can
   ## consume this function's pool. `aggpeak` remains the independent nested-call block-count scan.
   aggw := imax(1, imax(scan_agg_width_stmts(d.body_stmts, p.decls, p.src, deref(p.mar)), scan_agg_width_expr(d.value, p.decls, p.src, deref(p.mar))))
-  aggpeak := imax(scan_agg_arg_stmts(p.src, p.decls, d.body_stmts, deref(p.mar)), scan_agg_arg_expr(p.src, p.decls, d.value, deref(p.mar)))
+  aggpeak := imax(scan_agg_arg_stmts(p.src, p.decls, d.body_stmts, deref(p.mar)), scan_agg_arg_expr(p.src, p.decls, d.value, deref(p.mar)) + agg_unbound_sret_block(p.src, p.decls, d.value, deref(p.mar)))
   mut aggblocks := imax(1, aggpeak)
   ## ONE EXTRA block for a fn that returns a WIDE (> 7-word) struct or a WIDE (disc + payload > 7-word)
   ## ENUM AND passes at least one aggregate-VALUE argument somewhere: `emit_struct_to_sret` /
