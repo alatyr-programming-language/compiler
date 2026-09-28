@@ -135,8 +135,10 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   program the specification declares invalid, and accepting it was the defect — a PATCH, and someone
   whose code stops compiling for this reason was relying on that bug. The explicit form is
   `s.t.y = A(u64(b))`. The rule and the classifier already existed; the sink had simply never been
-  reached. A brand crossing at this sink is now also counted by the #299 census, which was blind
-  to it (#688).
+  reached, and the #299 census reported `sinks=0` here — the nested sink was not merely uncounted,
+  it was never visited. The same blindness is what #688 records, but at a different sink, the
+  struct-literal `S(f = b)`, which reaches the refusal through its own hook and is not touched
+  here.
 
 - **A declared function result whose type is a fixed array no longer launders a sibling brand.**
   `mk := fn() -> [A; 2] { [B(1), B(2)] }` for two sibling brands `A` and `B` used to check, build
