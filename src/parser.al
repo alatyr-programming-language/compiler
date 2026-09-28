@@ -3543,18 +3543,10 @@ p_stmt := fn(in out pc : PC) -> usize {
     ## struct/enum literal or a typed var, but NOT for a bare `Num` — so for that case pass an EXPLICIT
     ## `isize` type argument (`alloc_into(isize, a, init)`, the working explicit-T path); otherwise keep
     ## the implicit-T form (`alloc_into(a, init)`).
-    mut is_num := false
-    ## #544 stage 1 — a PREDICATE: every form but a bare `Num` keeps the implicit-T call. This arm was
-    ## blind until #680 — `init_e := p_or(pc)` binds through an unannotated local and the enum identity
-    ## was lost before the arm check asked for it — so it kept its `_`. Deleting that `_` is now refused
-    ## at this line, so the absorbed variants are spelled out and a new `Expr` variant must be placed.
-    match deref(init_e) {
-      Expr::Num(nv, ns, nn) => { is_num = true }
-      Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-        | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-        | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-        | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-    }
+    ## #716 — asked through `expr_is_num`, whose `match deref(e)` is over a pointer PARAMETER. Written
+    ## inline over `init_e := p_or(pc)`, an unannotated local, the x86_64 lowering could not type the
+    ## scrutinee and compared every arm against tag 0 — right for `Num` only because it is variant 0.
+    is_num := expr_is_num(init_e)
     if is_num {
       ts := synth_ident_span(pc, "isize")
       ty_e := newnode(pc.arena, Expr.Var(ts, 5))
