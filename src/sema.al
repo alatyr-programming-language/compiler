@@ -269,6 +269,30 @@ comptime_cond_err := fn(s : usize) -> CheckErr { COMPTIME_COND_DIAG_MARKER + dia
 ## is intentionally not surfaced through the ordinary `check_expr` carrier or `ty_compat`.
 pub Ty := struct { tag : u8, ns : usize, nl : usize }
 
+## Issue #583 slice 1 — the KIND a `Ty` tag byte encodes, as an enum, so a decision over kinds is a
+## `match` the exhaustiveness check can hold to account: a new kind is refused at every such `match`
+## instead of falling through an integer comparison. `TyHiddenStruct`/`TyHiddenEnum` (9/10), `TyWrapper`
+## (11) and `TyTupleMark` (12) are the local-only markers documented above; `TyOther` is every byte no
+## kind names (a `Local`'s `+128` mutability flag, the `255` poison, a census code). The tag byte stays
+## the stored form until slice 7; `ty_kind_of_tag` is the ONE place that reads it as a kind.
+pub TyKind := enum { TyUnknown, TyInt, TyBool, TyStruct, TyEnum, TyPtr, TyStr, TyArray, TyBrand, TyHiddenStruct, TyHiddenEnum, TyWrapper, TyTupleMark, TyOther }
+ty_kind_of_tag := fn(tag : u8) -> TyKind {
+  if tag == 0 { return TyKind.TyUnknown }
+  if tag == 1 { return TyKind.TyInt }
+  if tag == 2 { return TyKind.TyBool }
+  if tag == 3 { return TyKind.TyStruct }
+  if tag == 4 { return TyKind.TyEnum }
+  if tag == 5 { return TyKind.TyPtr }
+  if tag == 6 { return TyKind.TyStr }
+  if tag == 7 { return TyKind.TyArray }
+  if tag == 8 { return TyKind.TyBrand }
+  if tag == 9 { return TyKind.TyHiddenStruct }
+  if tag == 10 { return TyKind.TyHiddenEnum }
+  if tag == 11 { return TyKind.TyWrapper }
+  if tag == 12 { return TyKind.TyTupleMark }
+  TyKind.TyOther
+}
+
 ## Are two types compatible? Unknown (tag 0) is compatible with anything (poison-tolerant —
 ## an unresolved sub-expression must not cascade a spurious mismatch). Two known scalar types
 ## match iff their tags are equal. Aggregate aliases are canonicalized by `resolve_ty` and the
@@ -291,20 +315,45 @@ pub Ty := struct { tag : u8, ns : usize, nl : usize }
 ## rather than two conditionals to find. The BODY is unchanged, so `tag_compat` decides exactly what
 ## it decided before: this is the same relation under a name.
 ptrint_seam := fn(x : u8, y : u8) -> bool {
-  if x == 1 and y == 5 { return true }
-  if x == 5 and y == 1 { return true }
-  false
+  ## Bound first: two enum-valued calls as direct arguments overflow the frozen seed's aggregate
+  ## call-argument temp pool (measured: `selfhost: aggregate-value call-arg temp pool overflow`).
+  kx := ty_kind_of_tag(x)
+  ky := ty_kind_of_tag(y)
+  ty_kind_seam(kx, ky)
+}
+## Issue #583 slice 1 — the #529 seam over kinds: a `TyInt` and a `TyPtr`, in either order. Every arm is
+## spelled out, so a new kind has to be placed here by hand.
+ty_kind_seam := fn(a : TyKind, b : TyKind) -> bool {
+  match a {
+    TyInt => { match b { TyPtr => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } } }
+    TyPtr => { match b { TyInt => { true }; TyUnknown | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } } }
+    TyUnknown | TyBool | TyStruct | TyEnum | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false }
+  }
+}
+## Issue #583 slice 1 — compatibility of two DIFFERENT tag bytes, decided over their kinds. `TyUnknown`
+## is compatible with anything (poison-tolerant); the only other compatible pair is the #529 seam.
+ty_kinds_compat := fn(a : TyKind, b : TyKind) -> bool {
+  match a {
+    TyUnknown => { true }
+    TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => {
+      match b {
+        TyUnknown => { true }
+        TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { ty_kind_seam(a, b) }
+      }
+    }
+  }
 }
 tag_compat := fn(x : u8, y : u8) -> bool {
   ## Issue #529 census: the UNCLASSIFIED totals, taken at the one funnel every compatibility site
   ## reaches. `seam` here counts INVOCATIONS, not places; the classified rows below count places, and
   ## the difference between them is the census's own blind spot rather than a rounding error.
   ptrint_probe_call(x, y)
-  if x == 0 { return true }
-  if y == 0 { return true }
+  ## The identical byte first: the same kind, and for `TyOther` the same flag bits, which a kind alone
+  ## would not tell apart. Everything else is a decision over kinds (#583).
   if x == y { return true }
-  if ptrint_seam(x, y) { return true }
-  false
+  kx := ty_kind_of_tag(x)
+  ky := ty_kind_of_tag(y)
+  ty_kinds_compat(kx, ky)
 }
 ty_eq := fn(a : Ty, b : Ty, src : ptr(u8)) -> bool {
   ## Types §4.1/§5.4 — equal-layout user brands are equal only when their declaration names match.
