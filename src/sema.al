@@ -7866,21 +7866,62 @@ sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : p
   not ty_compat(actual, dst, src)
 }
 
-## TYP-6 bounded nested-place slice — resolve exactly `root.first.second` through the two declared
-## struct layers before comparing the stored value with the leaf destination. Array, pointer, slice,
-## deeper, and unknown-owner paths stay poison-tolerant for their separate residual slices.
-sema_nested_field_path_value_bad := fn(path : NestedPath, checked : Ty, v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> bool {
-  if path.sl == 0 { return false }
+## The DECLARED TYPE of the leaf of a bounded two-tier nested field path `root.first.second`, tag 0
+## when any layer is unknown. Extracted from `sema_nested_field_path_value_bad` below so that the
+## aggregate conformance and the brand judgement share ONE walk of the two struct layers — the
+## one-traversal, two-consumers shape #679 established for the array-element sink, and for the same
+## reason: a second field walk is a second decision, and `scripts/idiom_gate.sh` exists to catch that.
+## The CALLER resolves once and hands the same `Ty` to both consumers.
+sema_nested_field_leaf_ty := fn(path : NestedPath, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> Ty {
+  mut z := Ty(tag = 0, ns = 0, nl = 0)
+  if path.sl == 0 { return z }
   owner := sema_struct_owner_name_span(decls, upto, src, locals, nloc, path.rs, path.rn)
-  if owner.n == 0 { return false }
+  if owner.n == 0 { return z }
   first_span := sema_field_ann_span(decls, upto, src, owner.s, owner.n, path.fs, path.fl, a)
-  if first_span.n == 0 { return false }
+  if first_span.n == 0 { return z }
   first_ty := resolve_ty(src, first_span.s, first_span.n, decls, upto)
-  if first_ty.tag != 3 or first_ty.nl == 0 { return false }
+  if first_ty.tag != 3 or first_ty.nl == 0 { return z }
   leaf_span := sema_field_ann_span(decls, upto, src, first_ty.ns, first_ty.nl, path.ss, path.sl, a)
-  if leaf_span.n == 0 { return false }
-  leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
+  if leaf_span.n == 0 { return z }
+  resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
+}
+
+## TYP-6 bounded nested-place slice — compare the stored value with the leaf destination of exactly
+## `root.first.second`. Array, pointer, slice, deeper, and unknown-owner paths stay poison-tolerant for
+## their separate residual slices.
+##
+## This is the AGGREGATE half, and it ends in `sema_direct_place_value_bad` → `ty_compat`, where every
+## tag-8 brand is compatible with every other: it cannot see a brand crossing at all. That is issue #299,
+## and `sema_nested_field_brand_err` beside it is the half that does, over the SAME resolved leaf the
+## caller passes to both.
+sema_nested_field_path_value_bad := fn(path : NestedPath, leaf_ty : Ty, checked : Ty, v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
   sema_direct_place_value_bad(leaf_ty, checked, v, src, locals, nloc, "PLACE-NESTED", path.rs)
+}
+
+## Issue #299 / Types §4.2-§4.3 + §5.4 — the NESTED field STORE sink, `s.t.y = b`. The flat spelling
+## beside it (`s.x = b`) has been refused since PR #593, and its own header calls a field store "the
+## LAST unhooked way to launder a sibling into a brand-typed slot". It was not the last one: the
+## nested path reaches the identical `A`-typed slot through `Stmt::FieldPathAssign`, a DIFFERENT
+## statement shape whose conformance runs through the TYP-6 walker beside it and ends in `ty_compat`.
+## Measured on `main` ee65ac7: `s.t.y = b` checked at rc 0, built at rc 0 and RAN TO 2 — the sibling
+## `B(2)` written into the `A`-typed leaf and read back out — while the flat `s.x = b` was refused at
+## rc 1. Every refusal of the flat form was therefore cosmetic: one extra `.t` in the path walked
+## around all of them.
+##
+## The leaf destination needs NO new type recovery — `sema_nested_field_leaf_ty`, resolved once by the
+## caller for the aggregate check beside it, already answers tag 8 with the declaring brand's own name
+## span, which is what `sema_brand_class` judges on. Same classifier, same refuser, same census hook
+## the flat sink uses; this sink only had to be reached.
+##
+## Poison-tolerant where the walk is: a chain deeper than the two tiers `expr_nested_path` models, an
+## unknown owner, or an unresolved leaf answers tag 0 and `sema_brand_sink_err` accepts, so this cannot
+## widen the slice into the paths #299 leaves residual. Located at the stored VALUE when the AST records
+## its span, else at the LEAF field name — not the root, which is three tokens from the crossing.
+sema_nested_field_brand_err := fn(path : NestedPath, leaf_ty : Ty, v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
+  if SEMA_BRAND_DECLS == 0 { return 0 }
+  off := sema_brand_span(s_of(v, a), path.ss)
+  brand_probe_sink(leaf_ty, v, off, decls, upto, src, locals, nloc, a)
+  sema_brand_sink_err(leaf_ty, v, off, decls, upto, src, locals, nloc, a)
 }
 
 ## Resolve the declared type of a pointer-rooted field chain. The recursion mirrors the place grammar:
@@ -10443,9 +10484,20 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         cvp := check_expr_da(fpv, decls, upto, src, a, locals, cnt, da)?
         np := expr_nested_path(pl)
-        if sema_nested_field_path_value_bad(np, cvp, fpv, decls, upto, src, locals, cnt, a) {
+        ## The leaf destination is resolved ONCE and handed to both consumers — the aggregate conformance
+        ## beside it and the brand judgement under it — because a second walk of the same two struct
+        ## layers is a second decision. That is #679's shape, arrived at for #679's reason: the flat
+        ## field store at `Stmt::FieldAssign` was hooked for #299 and this arm was not, so `s.t.y = b`
+        ## laundered a sibling into the same `A`-typed slot the flat refusal had just closed.
+        np_leaf := sema_nested_field_leaf_ty(np, decls, upto, src, locals, cnt, a)
+        if sema_nested_field_path_value_bad(np, np_leaf, cvp, fpv, src, locals, cnt) {
           mark_failed(locals, mismatch_err(np.ss, 0))
         }
+        ## Issue #299 — the brand judgement at this same sink, over the same leaf, through the same
+        ## classifier and census hook the flat `Stmt::FieldAssign` store uses. `sema_direct_place_value_bad`
+        ## above cannot see it: every tag-8 brand is compatible with every other there.
+        nbe := sema_nested_field_brand_err(np, np_leaf, fpv, decls, upto, src, locals, cnt, a)
+        if nbe != 0 { mark_failed(locals, nbe) }
         if sema_pointer_field_path_value_bad(pl, cvp, fpv, decls, upto, src, locals, cnt, a) {
           pfield := expr_field_span(pl)
           mark_failed(locals, mismatch_err(pfield.s, 0))

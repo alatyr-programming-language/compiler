@@ -122,6 +122,22 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A nested field store no longer launders a sibling brand.** `s.t.y = b` into a field declared
+  `A`, for a sibling `b : B`, used to check at rc 0, build at rc 0 and **run to the foreign value**
+  (measured: it returned 2 where the slot held `A(4)`). It is now refused with the located
+  implicit-brand-conversion diagnostic at the crossing, on all four emission surfaces. The flat
+  spelling beside it (`s.x = b`) has been refused since PR #593, and that fixture called it "the LAST
+  unhooked way to launder a sibling into a brand-typed slot" — it was not the last one: one extra
+  `.t` in the path reached the identical slot through a different statement shape whose conformance
+  ends in `tag_compat`, where every brand is compatible with every other, so every refusal of the
+  flat form could be walked around. Types §4.2/§4.3 make every brand conversion explicit and
+  §5.4:395-400 gives two siblings over one block no conversion into each other at all: this is a
+  program the specification declares invalid, and accepting it was the defect — a PATCH, and someone
+  whose code stops compiling for this reason was relying on that bug. The explicit form is
+  `s.t.y = A(u64(b))`. The rule and the classifier already existed; the sink had simply never been
+  reached. A brand crossing at this sink is now also counted by the #299 census, which was blind
+  to it (#688).
+
 - **A declared function result whose type is a fixed array no longer launders a sibling brand.**
   `mk := fn() -> [A; 2] { [B(1), B(2)] }` for two sibling brands `A` and `B` used to check, build
   and link at rc 0; it is now refused with the located implicit-brand-conversion diagnostic, on all

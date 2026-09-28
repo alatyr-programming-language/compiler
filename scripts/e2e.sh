@@ -1389,6 +1389,107 @@ issue299_brand_identity_test() {
 ## unchanged and still classifies every crossing; that is what these rows still prove, and it is why
 ## the rows are asserted at all: a classifier that stopped seeing a crossing would make the next
 ## census read zero for the wrong reason.
+## Issue #299 / Types §4.2-§4.3 + §5.4 — the NESTED field STORE sink, `s.t.y = b`. PR #593 refused
+## the FLAT spelling (`s.x = b`) and its fixture called that "the LAST unhooked way to launder a
+## sibling into a brand-typed slot". It was not the last one: the nested path reaches the identical
+## `A`-typed slot through `Stmt::FieldPathAssign`, whose conformance runs through a different walker
+## (`sema_nested_field_path_value_bad`) that ends in `ty_compat`, where every tag-8 brand is
+## compatible with every other. Measured on `main` ee65ac7 the parent compiled this program at rc 0
+## and it RAN TO 2 — the sibling `B(2)` written into the `A`-typed leaf and read back out.
+##
+## The program is written in this row's scratch directory, not under `test/`, for the reason #310's
+## row above gives: a tracked fixture would add four rows to `scripts/corpus.manifest`, which is a
+## maintainer-owned oracle and a lane never touches. What it costs is the manifest's per-file row for
+## this shape, and that is the oracle's own coverage question, not a reason to skip the refusal.
+##
+## It checks BOTH directions and the instrument beside them, because a refusal with no control passes
+## on a fence that refuses everything: the crossing must be refused and LOCATED, the same path written
+## explicitly must still build and RUN, and the census must COUNT the nested sink it now reaches —
+## zero rows here is what #688 calls a blind instrument.
+issue299_nested_field_store_test() {
+  local d="$T/issue299_nested_field_store"
+  rm -rf "$d"
+  mkdir -p "$d" || { echo "FAIL issue299_nested_field_store: scratch"; fail=1; return; }
+  ## Line 8 is the crossing; the diagnostic must point there and not at the root `s` two tokens away.
+  printf '%s\n' \
+    'A := brand(u64)' \
+    'B := brand(u64)' \
+    'Inner := struct { y : A }' \
+    'Outer := struct { t : Inner }' \
+    'main := fn() -> u64 {' \
+    '  b : B = B(2)' \
+    '  mut s := Outer(t = Inner(y = A(4)))' \
+    '  s.t.y = b' \
+    '  return u64(s.t.y)' \
+    '}' > "$d/nested.al"
+  printf '%s\n' \
+    'A := brand(u64)' \
+    'Inner := struct { y : A }' \
+    'Outer := struct { t : Inner }' \
+    'main := fn() -> u64 {' \
+    '  mut s := Outer(t = Inner(y = A(4)))' \
+    '  s.t.y = A(6)' \
+    '  return u64(s.t.y)' \
+    '}' > "$d/nested_legal.al"
+
+  ## (1) the refusal, located at the crossing.
+  local co="$d/nested.check.out" ce="$d/nested.check.err"
+  "$CC" check "$d/nested.al" >"$co" 2>"$ce"; local crc=$?
+  if [ "$crc" = 0 ] || [ -s "$co" ] || ! grep -qF "implicit brand conversion" "$ce" || ! grep -qF "at line 8" "$ce"; then
+    echo "FAIL issue299/nested-store(check): rc=$crc or diagnostic mismatch [$(<"$ce")]"; fail=1
+  else
+    echo "ok   issue299/nested-store(check): a sibling brand into a nested brand field is refused at line 8"
+  fi
+
+  ## (2) all four backends REFUSE it. The rule is decided in `check` and is target-independent, so an
+  ## x86-only refusal would prove one surface and name four; the emitted stream must stay empty.
+  local b be rc
+  for b in wat aarch64 riscv64; do
+    be="$d/nested.$b.emit.err"
+    "$CC" "$b" "$d/nested.al" >"$d/nested.$b.emit.out" 2>"$be"; rc=$?
+    if [ "$rc" = 0 ] || [ -s "$d/nested.$b.emit.out" ] || ! grep -qF "implicit brand conversion" "$be"; then
+      echo "FAIL issue299/nested-store($b): rc=$rc emitted=$(wc -c <"$d/nested.$b.emit.out") bytes [$(<"$be")]"; fail=1
+    else
+      echo "ok   issue299/nested-store($b): rejected, nothing emitted"
+    fi
+  done
+
+  ## (3) the CONTROL, both directions. A fence that refuses every nested store passes (1) and (2) too,
+  ## so the explicit spelling must BUILD and RUN to its own value — 6, which is not 4, proving the
+  ## store happened — and must count ZERO census rows.
+  local bo="$d/nested_legal.bin"
+  "$CC" -o "$bo" "$d/nested_legal.al" >/dev/null 2>"$d/nested_legal.build.err"; local lrc=$?
+  if [ "$lrc" != 0 ] || [ ! -x "$bo" ]; then
+    echo "FAIL issue299/nested-store(legal-build): rc=$lrc [$(<"$d/nested_legal.build.err")]"; fail=1; return
+  fi
+  _e2e_exec "$bo" >/dev/null 2>&1; local got=$?
+  if _e2e_runtime_failure "issue299/nested-store" "$got"; then return; fi
+  if [ "$got" != 6 ]; then echo "FAIL issue299/nested-store(legal-run): got $got want 6"; fail=1; else
+    echo "ok   issue299/nested-store: the explicit same-brand store still builds, runs and writes 6"
+  fi
+
+  ## (4) the census reaches the sink it was blind to (#688): the refused crossing still produces one
+  ## B2 row naming the nested store, and the legal program produces none while its `sinks=` counter
+  ## proves the nested sink was VISITED and judged clean. Without that counter the two zeros —
+  ## "nothing crossed" and "nothing was ever looked at" — are the same number.
+  "$CC" check "$d/nested.al" 99>"$d/nested.rows" >/dev/null 2>&1
+  local nrows; nrows=$(grep '^#299 ' "$d/nested.rows" | grep -vc ' SUMMARY ')
+  if [ "$nrows" != 1 ] || ! grep -qF '#299 B2' "$d/nested.rows" || ! grep -qF 's.t.y = b' "$d/nested.rows"; then
+    echo "FAIL issue299/nested-store(census): rows=$nrows want 1 class B2 [$(<"$d/nested.rows")]"; fail=1
+  else
+    echo "ok   issue299/nested-store(census): the nested field store produces one counted B2 row"
+  fi
+  "$CC" check "$d/nested_legal.al" 99>"$d/nested_legal.rows" >/dev/null 2>&1
+  local lrows lsinks
+  lrows=$(grep '^#299 ' "$d/nested_legal.rows" | grep -vc ' SUMMARY ')
+  lsinks=$(sed -n 's/^#299 SUMMARY .* sinks=\([0-9]*\) .*/\1/p' "$d/nested_legal.rows" | tail -1)
+  if [ "$lrows" != 0 ] || [ -z "$lsinks" ] || [ "$lsinks" -lt 1 ]; then
+    echo "FAIL issue299/nested-store(census-legal): rows=$lrows sinks=${lsinks:-none} want rows=0 sinks>=1 [$(<"$d/nested_legal.rows")]"; fail=1
+  else
+    echo "ok   issue299/nested-store(census-legal): zero rows with sinks=$lsinks visited, so the zero means clean"
+  fi
+}
+
 issue299_brand_probe_census_test() {
   local d="$T/issue299_brand_probe"
   rm -rf "$d"
@@ -6337,6 +6438,7 @@ check_accept accept_ann_global_conforming
 run accept_ann_call_overloaded 9
 check_accept accept_ann_brand_and_generic
 issue299_brand_identity_test
+issue299_nested_field_store_test
 issue299_brand_probe_census_test
 issue299_brand_refusal_matrix_test
 issue564_ctor_literal_range_test
