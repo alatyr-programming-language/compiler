@@ -3544,11 +3544,17 @@ p_stmt := fn(in out pc : PC) -> usize {
     ## `isize` type argument (`alloc_into(isize, a, init)`, the working explicit-T path); otherwise keep
     ## the implicit-T form (`alloc_into(a, init)`).
     mut is_num := false
-    ## #544 stage 1 — this `_` STAYS. `init_e := p_or(pc)` binds through an unannotated local, and
-    ## the enum identity is lost before the arm check asks for it: deleting the `_` is accepted
-    ## SILENTLY (rc 0), so writing the variants out would buy the appearance of enforcement and none
-    ## of it. #680 (the non-generic-callee half of #660); measured five ways in that issue's thread.
-    match deref(init_e) { Expr::Num(nv, ns, nn) => { is_num = true } _ => {} }
+    ## #544 stage 1 — a PREDICATE: every form but a bare `Num` keeps the implicit-T call. This arm was
+    ## blind until #680 — `init_e := p_or(pc)` binds through an unannotated local and the enum identity
+    ## was lost before the arm check asked for it — so it kept its `_`. Deleting that `_` is now refused
+    ## at this line, so the absorbed variants are spelled out and a new `Expr` variant must be placed.
+    match deref(init_e) {
+      Expr::Num(nv, ns, nn) => { is_num = true }
+      Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+        | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+        | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+        | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+    }
     if is_num {
       ts := synth_ident_span(pc, "isize")
       ty_e := newnode(pc.arena, Expr.Var(ts, 5))

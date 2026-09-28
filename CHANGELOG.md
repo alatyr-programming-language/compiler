@@ -122,6 +122,18 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
+  `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
+  and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness
+  check entirely, so a `match` missing a variant and carrying no `_` compiled at rc 0 and, on the
+  missing variant, took no arm. Each is now refused with the located `type mismatch` the annotated
+  spellings already produced, on all four emission surfaces. The callee is read only when exactly one
+  declaration answers and its declared result names an enum or a pointer to one, so an overloaded or
+  generic callee stays unchecked rather than guessed (#660 is the generic half). A program that relied
+  on the gap is one §5.1 already declares invalid — a PATCH, and a build that newly fails names the
+  `match` to complete. Inside this compiler the only such `match` was `comptime::fold`, which named 17
+  of `Expr`'s 24 variants; it now names all of them (#680).
+
 - **A nested field store no longer launders a sibling brand.** `s.t.y = b` into a field declared
   `A`, for a sibling `b : B`, used to check at rc 0, build at rc 0 and **run to the foreign value**
   (measured: it returned 2 where the slot held `A(4)`). It is now refused with the located

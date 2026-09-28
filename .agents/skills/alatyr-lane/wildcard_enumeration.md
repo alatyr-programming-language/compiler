@@ -59,9 +59,9 @@ non-enumerable arms at both.
 
 ## 0 · Before you take a file
 
-Three blind classes have been measured; TWO of them have since been fixed and are kept here as worked
+Four blind classes have been measured; THREE of them have since been fixed and are kept here as worked
 examples, because a fixed class still tells you what to re-measure and how. In a blind class,
-enumerating buys nothing while *deleting* writes a wrong value. Check your file against all three
+enumerating buys nothing while *deleting* writes a wrong value. Check your file against all four
 before claiming it:
 
 - **#655 — FIXED on `main`; like #656 below, a worked example now, not a warning.**
@@ -104,9 +104,20 @@ before claiming it:
 Re-measured a third time on `src/parser.al` (`60338f4`, compiler built from that tree): **21 caught
 of 24**, and all three blind arms are the per-arm class — two are `#660`'s `match x` over
 `x := deref(stmt_p(Stmt, st))`, and the third, `parser.al:3418`, binds `init_e := p_or(pc)` where
-`p_or` is **not generic** and returns a concrete `ptr(mut Expr)`. So the boundary is the binding
-through an unannotated local, not the genericity of the callee; #680 carries the five-row table for
-both spellings. Check a candidate file for BOTH shapes, not only for `stmt_p`.
+`p_or` is **not generic** and returns a concrete `ptr(mut Expr)`.
+
+- **#680 — FIXED; the non-generic half of the per-arm class.** A scrutinee whose enum type arrives
+  through a call or a `deref` is now resolved however it is spelled: `c := g()`, `p := f()` then
+  `match deref(p)`, `match deref(f())`, `x := deref(f())`, `x := deref(p)` with `p` annotated or not.
+  The callee is read through `sema_value_enum_ty`, which answers only for a SOLE declaration whose
+  declared result names an enum (or a pointer to one). Measured with a compiler built from the fixed
+  tree, the whole-tree over-reach was **one** site — `comptime::fold`, dead code whose `match` over
+  `Expr` named 17 of 24 variants with no `_` — and `parser.al`'s third arm (now `:3551`) is refused
+  at its own line when its `_` is deleted, where the parent accepts it silently; it is enumerated.
+  **What stays blind is the GENERIC callee** — `stmt_p(Stmt, st)` declares `-> ptr(mut T)`, and `T`
+  is not an enum until it is substituted. That is #660, and it is every one of `src/aarch64.al`'s 24
+  and eight of `src/lower/`'s 13; the other five there were never classified and may be #680's shape,
+  so re-measure them. Until #660 lands, annotate (bare, see above) or leave the `_`.
 
 `comptime.al` is blocked, not merely deprioritised. `aarch64.al` is not, any
 more: it was taken as the second file of this stage (`Refs #544`, 38 of its 39 caught arms enumerated)

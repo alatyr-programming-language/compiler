@@ -5979,6 +5979,53 @@ sema_builtin_str_integer_cast_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   lbv_lit_tag(ga.e) == 6
 }
 
+## Issue #680 — the POINTER `Ty` (tag 5 + the pointee's type-NAME span) of a pointer-valued expression:
+## a `Var` naming a local recorded as a pointer, or a direct `Call` whose declared result is one.
+## Unknown otherwise. The call half reads the callee's DECLARED result through `sole_fn_ret_ty` — one
+## declaration or no answer, since this feeds a refusal — so it is byte for byte what annotating the
+## binding with that same result type would have recorded.
+sema_ptr_expr_ty := fn(pe : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Ty {
+  unknown := Ty(tag = 0, ns = 0, nl = 0)
+  if unchecked bitcast(usize, pe) == 0 { return unknown }
+  pv := expr_var_span(pe)
+  if pv.n != 0 {
+    if nloc == 0 or not local_in(locals, nloc, src, pv.s, pv.n) { return unknown }
+    lt := local_ty(locals, nloc, src, pv.s, pv.n)
+    mut ltag : u8 = lt.tag
+    if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
+    if ltag == 5 and lt.nl != 0 { return Ty(tag = 5, ns = lt.ns, nl = lt.nl) }
+    return unknown
+  }
+  ct := sole_fn_ret_ty(pe, decls, rt::vec_len(deref(decls)), src)
+  if ct.tag == 5 and ct.nl != 0 { return ct }
+  unknown
+}
+
+## Issue #680 — the enum `Ty` a pointer `Ty` points at, else unknown. Resolved over the FULL `decls`
+## length for the reason `match_scrut_enum_ty` gives below.
+sema_enum_pointee := fn(pt : Ty, decls : ptr(rt::Vec), src : ptr(u8)) -> Ty {
+  unknown := Ty(tag = 0, ns = 0, nl = 0)
+  if pt.tag != 5 or pt.nl == 0 { return unknown }
+  et := resolve_ty(src, pt.ns, pt.nl, decls, rt::vec_len(deref(decls)))
+  if et.tag == 4 and et.nl != 0 { return Ty(tag = 4, ns = et.ns, nl = et.nl) }
+  unknown
+}
+
+## Issue #680 — the enum `Ty` of an enum-valued expression that no local records: a `deref` of a
+## pointer-valued expression (`sema_ptr_expr_ty`) or a direct call to a sole declaration whose result
+## is an enum. One question for the two places that ask it: the `match` scrutinee below, and an unannotated
+## `x := <expr>` binding, which before this recorded no enum type at all, so every later `match x`
+## skipped the exhaustiveness check (`x := deref(stmt_p(Stmt, st))`, `init_e := p_or(pc)`).
+sema_value_enum_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Ty {
+  unknown := Ty(tag = 0, ns = 0, nl = 0)
+  if unchecked bitcast(usize, v) == 0 { return unknown }
+  di := expr_deref_inner(v)
+  if unchecked bitcast(usize, di) != 0 { return sema_enum_pointee(sema_ptr_expr_ty(di, decls, src, locals, nloc), decls, src) }
+  ct := sole_fn_ret_ty(v, decls, rt::vec_len(deref(decls)), src)
+  if ct.tag == 4 and ct.nl != 0 { return Ty(tag = 4, ns = ct.ns, nl = ct.nl) }
+  unknown
+}
+
 ## §5.1 (CF-1) — the enum `Ty` (tag 4 + the enum's type-NAME span) of a `match` SCRUTINEE, resolved
 ## from the scrutinee's TYPE however that type was obtained, else tag 0 (fail-open). Issue #557: the
 ## two exhaustiveness sites used to open with `expr_var_span(scrutinee)` + `local_ty`, so the check
@@ -5989,10 +6036,12 @@ sema_builtin_str_integer_cast_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
 ## EXISTING resolver rather than inventing type flow, and every one of them stays poison-tolerant:
 ##   * `value_agg_ty`         — an `EnumLit`, a nullary `E.V` variant, and a `Var` local recorded as an
 ##                              aggregate (tags 4 and the hidden 10 alike).
-##   * `Deref(Var)`           — the pointer local's `Ty` (tag 5) carries its POINTEE type-name span.
+##   * `Deref(p)`             — the pointer's `Ty` (tag 5) carries its POINTEE type-name span, whether
+##                              `p` is a pointer local or a call returning one (#680).
 ##   * `Field(base, f)`       — the owner struct via `sema_struct_owner_span`, then the field's own
 ##                              declared type annotation.
-##   * a direct/UFCS `Call`   — the callee's declared return type.
+##   * a direct `Call`        — the SOLE callee declaration's return type (#680: an overload set gives
+##                              no answer rather than the last declaration's).
 ## The declaration scan is the FULL `decls` length, not the `upto` name-resolution prefix: exhaustiveness
 ## is a property of the enum's declaration, not of where the enum happens to sort among the package's
 ## modules, and the prefix made the same program compile or not depending on a file NAME (#557's
@@ -6005,21 +6054,10 @@ match_scrut_enum_ty := fn(sc : ptr(Expr), decls : ptr(rt::Vec), upto : usize, sr
   ## (1) literal / nullary-variant / recorded local aggregate.
   va := value_agg_ty(sc, decls, ncnt, src, locals, nloc)
   if va.tag == 4 and va.nl != 0 { return Ty(tag = 4, ns = va.ns, nl = va.nl) }
-  ## (2) `deref(p)` where `p` is a local `ptr(E)` — the compiler's own `match deref(v)` idiom.
+  ## (2) `deref(p)` where `p` is a local `ptr(E)` — the compiler's own `match deref(v)` idiom — or a
+  ## call returning one (`match deref(p_or(pc))`, #680).
   di := expr_deref_inner(sc)
-  if unchecked bitcast(usize, di) != 0 {
-    dv := expr_var_span(di)
-    if dv.n != 0 and nloc != 0 and local_in(locals, nloc, src, dv.s, dv.n) {
-      dt := local_ty(locals, nloc, src, dv.s, dv.n)
-      mut dtag : u8 = dt.tag
-      if dtag >= 128 and dtag != 255 { dtag = dtag - 128 }
-      if dtag == 5 and dt.nl != 0 {
-        pt := resolve_ty(src, dt.ns, dt.nl, decls, ncnt)
-        if pt.tag == 4 and pt.nl != 0 { return Ty(tag = 4, ns = pt.ns, nl = pt.nl) }
-      }
-    }
-    return unknown
-  }
+  if unchecked bitcast(usize, di) != 0 { return sema_value_enum_ty(sc, decls, src, locals, nloc) }
   ## (3) a struct FIELD read whose declared type is an enum.
   fsp := expr_field_span(sc)
   if fsp.n != 0 {
@@ -6037,9 +6075,7 @@ match_scrut_enum_ty := fn(sc : ptr(Expr), decls : ptr(rt::Vec), upto : usize, sr
     return unknown
   }
   ## (4) a direct/UFCS call whose declared result is an enum.
-  ct := expr_call_result_ty(sc, decls, ncnt, src)
-  if ct.tag == 4 and ct.nl != 0 { return Ty(tag = 4, ns = ct.ns, nl = ct.nl) }
-  unknown
+  sema_value_enum_ty(sc, decls, src, locals, nloc)
 }
 
 ## Does the arm list leave a variant of enum [ens,enl) uncovered? ALL-PLAIN arms only (a `_` wildcard,
@@ -10344,6 +10380,19 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
               }
             }
           }
+          ## Issue #680 — a CALL returning a pointer to an ENUM (`init_e := p_or(pc)`) records the
+          ## callee's declared pointer type, exactly what `init_e : ptr(mut Expr) = p_or(pc)` records, so
+          ## a later `match deref(init_e)` is checked for exhaustiveness. The packed carrier may hand the
+          ## call back as tag 0, so the tag is filled as well as the name. Enum pointees only, as narrow
+          ## as #656's twin: a struct pointee also feeds `ty_compat`'s pointer discrimination.
+          if ann.n == 0 and bind_nl == 0 and (bind_tag == 0 or bind_tag == 5) and expr_call_callee_span(v).n != 0 {
+            cpt := sema_ptr_expr_ty(v, decls, src, locals, cnt)
+            if sema_enum_pointee(cpt, decls, src).tag == 4 {
+              bind_tag = 5
+              bind_ns = cpt.ns
+              bind_nl = cpt.nl
+            }
+          }
           if dt.tag != 0 { bind_tag = dt.tag; bind_ns = dt.ns; bind_nl = dt.nl }
           ## Issue #656 — the POINTER twin of #557's late enum annotation (below): `p : ptr(E)` where
           ## `E` is declared in a later-sorted module. Fills only the pointee NAME the `upto` prefix
@@ -10375,6 +10424,19 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             else {
               afe := expr_array_first(v)
               if unchecked bitcast(usize, afe) != 0 and value_is_scalar_lit(afe) { bind_tag = 7 }
+            }
+          }
+          ## Issue #680 — an unannotated ENUM value bound from a call or a `deref` (`c := g(0)`,
+          ## `x := deref(stmt_p(Stmt, st))`, `x := deref(p)`) recorded no enum name, so every later
+          ## `match x` skipped the exhaustiveness check. Record it under the HIDDEN enum tag 10, the one
+          ## an inferred `c := C.R` already uses, when nothing else recorded a tag; a public tag 4 that
+          ## arrived without its name keeps its tag and only gains the name.
+          if ann.n == 0 and bind_nl == 0 and (bind_tag == 0 or bind_tag == 4) {
+            vet := sema_value_enum_ty(v, decls, src, locals, cnt)
+            if vet.tag == 4 {
+              if bind_tag == 0 { bind_tag = 10 }
+              bind_ns = vet.ns
+              bind_nl = vet.nl
             }
           }
           ## Issue #5 / TYP-6 — preserve the exact direct two-word tuple residual as a hidden local
