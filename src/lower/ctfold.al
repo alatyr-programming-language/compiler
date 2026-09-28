@@ -130,7 +130,10 @@ comptime_scalar_value := fn(e : ptr(Expr), cx : ptr(LCtx)) -> ComptimeScalar {
       ## visible to the checker with #655; revisit when #667 lands.
       return ComptimeScalar(known = false, value = 0)
     }
-    _ => { return ComptimeScalar(known = false, value = 0) }
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { return ComptimeScalar(known = false, value = 0) }
   }
 }
 
@@ -281,7 +284,10 @@ build_cmp_rhs_text := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> str {
       }
       return ""
     }
-    _ => { return "" }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { return "" }
   }
 }
 
@@ -296,7 +302,10 @@ build_lhs_flag_name := fn(l : ptr(Expr), src : ptr(u8)) -> CSpan {
       if lvn.n != 0 and str_at((src + lvn.s), lvn.n) == "build" { return CSpan(s = lfs, n = lfl) }
       return CSpan(s = 0, n = 0)
     }
-    _ => { return CSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return CSpan(s = 0, n = 0) }
   }
 }
 
@@ -324,7 +333,10 @@ pub emit_build_flag_value := fn(name : str, in out sb : strbuf::StrBuf) {
 comptime_query_is_str_lit := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::StrLit(_s, _n, _l, _ps, _pn) => { true }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## The supported scalar `v.(f)` projection inside a `comptime for f in typeinfo(S).fields` body.
@@ -345,7 +357,10 @@ comptime_query_comp_field_type := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Aren
       if ft.n == 0 { return CSpan(s = 0, n = 0) }
       ft
     }
-    _ => { CSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CSpan(s = 0, n = 0) }
   }
 }
 comptime_query_arg_ok := fn(e : ptr(Expr), pm : ptr(mut Param), cx : ptr(LCtx), a : rt::Arena) -> bool {
@@ -499,7 +514,8 @@ pub comptime_query_expr_ok := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena, t
       if not comptime_query_expr_ok(base, cx, a, types) { false }
       else { comptime_query_comp_field_type(e, cx, a).n != 0 }
     }
-    _ => { false }
+    Expr::Match | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::Index | Expr::Try | Expr::Slice
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## The `<Base>.<name>` pair of a qualified reference (`Arch.x86_64`, `Os.linux`, `Env.gnu`,
@@ -515,7 +531,10 @@ qual_ref_name := fn(e : ptr(Expr), src : ptr(u8)) -> QRef {
       if vn.n != 0 { return QRef(bs = vn.s, bl = vn.n, s = fs, n = fl) }
       QRef(bs = 0, bl = 0, s = 0, n = 0)
     }
-    _ => { QRef(bs = 0, bl = 0, s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { QRef(bs = 0, bl = 0, s = 0, n = 0) }
   }
 }
 
@@ -816,7 +835,9 @@ pub comptime_cond_src_off := fn(e : ptr(Expr)) -> usize {
     }
     Expr::Match(msc, mah) => { comptime_cond_src_off(msc) }
     Expr::Unchecked(inner) => { comptime_cond_src_off(inner) }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::If | Expr::StructLit | Expr::EnumLit | Expr::AddrOf
+      | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 
@@ -1064,7 +1085,9 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
       }
       return -1
     }
-    _ => { return -1 }
+    Expr::Num | Expr::If | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return -1 }
   }
 }
 
@@ -1187,7 +1210,10 @@ ct_bound_fold := fn(e : ptr(Expr), cx : ptr(LCtx)) -> i64 {
         if op == 29 { res = unchecked (lv % rv) }
       }
     }
-    _ => {}
+    Expr::BoolLit | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }

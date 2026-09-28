@@ -111,7 +111,9 @@ pub ir_lower_expr := fn(e : ptr(Expr), cx : ptr(LCtx), unch : bool) -> IROperand
     ## a SCALAR field read of a by-ref struct param (predicate-validated) → a BARRIER: the whole `e` is
     ## emitted by the text `emit_gas` at render, so it takes the same path as the text-machine build.
     Expr::Field(fb, ffs, ffl) => { ir_lower_barrier(e, cx) }
-    _ => { panic("selfhost: regalloc emit — unsupported value expr in scalar-leaf IR path"); IROperand(k = 1, v = 0) }
+    Expr::If | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { panic("selfhost: regalloc emit — unsupported value expr in scalar-leaf IR path"); IROperand(k = 1, v = 0) }
   }
 }
 
@@ -125,7 +127,9 @@ ir_u64_identity_arg := fn(e : ptr(Expr)) -> bool {
     Expr::BoolLit(v) => { true }
     Expr::Unchecked(inner) => { ir_u64_identity_arg(inner) }
     Expr::Bitcast(inner, _s, _n) => { ir_u64_identity_arg(inner) }
-    _ => { false }
+    Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { false }
   }
 }
 
@@ -141,7 +145,10 @@ ir_usize_identity_arg := fn(src : ptr(u8), e : ptr(Expr)) -> bool {
       }
       false
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -419,7 +426,10 @@ ir_lower_cond := fn(c : ptr(Expr), lfalse : usize, cx : ptr(LCtx), unch : bool) 
         panic("selfhost: regalloc emit — unsupported condition op in scalar-leaf IR path")
       }
     }
-    _ => {
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef | Expr::Loop => {
       ## a plain scalar/bool value used as a condition: false when zero.
       o := ir_to_reg(ir_lower_expr(c, cx, unch))
       regalloc::ra_ir_emit(4, o.k, o.v, 1, 0)                        ## cmp val, $0
@@ -551,7 +561,10 @@ ir_find_accum := fn(cx : ptr(LCtx), fns : usize, fnl : usize, fb : ptr(mut Stmt)
         }
         s = nx
       }
-      _ => { s = 0 }                                             ## non-Assign top-level stmt ⇒ stop (surgical)
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { s = 0 }                                             ## non-Assign top-level stmt ⇒ stop (surgical)
     }
   }
   if count == 1 {
@@ -618,7 +631,10 @@ ir_is_call_rhs := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { true }
     Expr::Unchecked(inner) => { ir_is_call_rhs(inner) }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## The TAIL segment (after the last `::`) of a callee name span — a decl's own name is just the tail, so a
@@ -658,7 +674,10 @@ ir_is_vecbuild_call := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr)) ->
       }
       false
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Does the CALL RHS `e` resolve (by TAIL name) to a fn whose RETURN type base name is "Vec"? (→ `v` is an
@@ -680,7 +699,10 @@ ir_call_returns_vec := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr)) ->
       }
       false
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Record a GENERAL STATEMENT BARRIER for the statement at handle `sp` — emit a full-clobber op 24 carrying
@@ -718,7 +740,8 @@ ir_rd_expr := fn(src : ptr(u8), e : ptr(Expr)) {
     Expr::If(c, t, f) => { ir_rd_expr(src, c); ir_rd_expr(src, t); ir_rd_expr(src, f) }
     Expr::Call(cs, cl, na, ah) => { mut g := ah; while g != 0 { ga := deref(arg_p(g)); ir_rd_expr(src, ga.e); g = ga.next } }
     Expr::StructLit(ns, nl, nf, fh) => { mut g := fh; while g != 0 { ga := deref(arg_p(g)); ir_rd_expr(src, ga.e); g = ga.next } }
-    _ => { IRRD_OK = false }
+    Expr::Match | Expr::EnumLit | Expr::ArrayLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef | Expr::Loop => { IRRD_OK = false }
   }
 }
 ## Collect every Var READ across a statement LIST (a barriered `while` body); an unhandled stmt → give up.
@@ -734,7 +757,9 @@ ir_rd_stmts := fn(src : ptr(u8), head : ptr(mut Stmt)) {
       Stmt::Loop(b, nx) => { ir_rd_stmts(src, b); s = nx }
       Stmt::Unchecked(b, nx) => { ir_rd_stmts(src, b); s = nx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { ir_rd_expr(src, flo); if unchecked bitcast(usize, fhi) != 0 { ir_rd_expr(src, fhi) } ; ir_rd_stmts(src, fb); s = nx }
-      _ => { IRRD_OK = false; s = 0 }
+      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { IRRD_OK = false; s = 0 }
     }
   }
 }
@@ -748,7 +773,10 @@ ir_collect_barrier_reads := fn(src : ptr(u8), sp : usize) {
     Stmt::Assign(ns, nl, v, nx) => { ir_rd_expr(src, v) }
     Stmt::ExprStmt(e, nx) => { ir_rd_expr(src, e) }
     Stmt::While(c, b, nx) => { ir_rd_expr(src, c); ir_rd_stmts(src, b) }
-    _ => { IRRD_OK = false }
+    Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For | Stmt::DerefAssign
+      | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break
+      | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange
+      | Stmt::Unchecked | Stmt::AllocWith => { IRRD_OK = false }
   }
 }
 ## The vreg id already assigned to a NAMED var (-1 = not modeled yet — a frame-resident build target or a
@@ -812,7 +840,9 @@ ir_stmts_have_vecbuild := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut
       Stmt::While(c, b, nx) => { if ir_stmts_have_vecbuild(src, decls, b) { r = true } ; s = nx }
       Stmt::Loop(b, nx) => { if ir_stmts_have_vecbuild(src, decls, b) { r = true } ; s = nx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if ir_stmts_have_vecbuild(src, decls, fb) { r = true } ; s = nx }
-      _ => { s = 0 }
+      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { s = 0 }
     }
   }
   r
@@ -931,7 +961,9 @@ pub ir_lower_stmts := fn(head : ptr(mut Stmt), cx : ptr(LCtx), unch : bool) {
         }
       }
       Stmt::Unchecked(b, nx) => { ir_lower_stmts(b, cx, true); s = nx }
-      _ => { panic("selfhost: regalloc emit — unsupported statement in scalar-leaf IR path"); s = 0 }
+      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { panic("selfhost: regalloc emit — unsupported statement in scalar-leaf IR path"); s = 0 }
     }
   }
 }
@@ -1250,7 +1282,10 @@ ir_field_barrier_ok := fn(src : ptr(u8), decls : ptr(rt::Vec), base : ptr(Expr),
       btn := base_type_name(src, IRSP_TS[usize(idx)], IRSP_TL[usize(idx)])
       struct_field_index(decls, src, btn.s, btn.n, fs, fl, mar) >= 0
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -1292,7 +1327,9 @@ ir_collect_binds := fn(head : ptr(mut Stmt)) {
       Stmt::Return(rv, nx) => { s = nx }
       ## an unhandled stmt kind: STOP (`nx` is NOT bound in the `_` arm — reading it would be garbage,
       ## an unbounded-pointer walk). The fn will be rejected by `ir_check_stmts` anyway.
-      _ => { s = 0 }
+      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { s = 0 }
     }
   }
 }
@@ -1370,7 +1407,9 @@ ir_check_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), unch : b
     Expr::Field(fb, ffs, ffl) => {
       if ir_field_barrier_ok(src, decls, fb, ffs, ffl) { IRP_NBARR = IRP_NBARR + 1 } else { IRP_OK = false }
     }
-    _ => { IRP_OK = false }
+    Expr::If | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { IRP_OK = false }
   }
 }
 ## Verify a modeled CALL: the callee must resolve to a UNIQUE, NON-generic, NON-variadic, NON-overloaded,
@@ -1448,7 +1487,9 @@ ir_check_cond := fn(src : ptr(u8), decls : ptr(rt::Vec), c : ptr(Expr), unch : b
     Expr::Var(s, n) => { if (not ir_bound_has(src, s, n)) or ir_name_is_global(decls, src, s, n) or ir_sp_idx(src, s, n) >= 0 or ir_slice_param_idx(src, s, n) >= 0 or ir_array_local_idx(src, s, n) >= 0 or ir_vec_local_idx(src, s, n) >= 0 or ir_fr_idx(src, s, n) >= 0 { IRP_OK = false } }
     Expr::BoolLit(v) => {}
     Expr::Num(v, s, n) => {}
-    _ => { IRP_OK = false }
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { IRP_OK = false }
   }
 }
 ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), unch : bool) {
@@ -1613,7 +1654,9 @@ ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), 
       Stmt::Return(rv, nx) => { IRP_SAWMODEL = true; ir_check_expr(src, decls, rv, unch); s = nx }
       Stmt::Unchecked(b, nx) => { ir_check_stmts(src, decls, b, true); s = nx }
       ## an unhandled stmt kind → reject + STOP (`nx` is NOT bound in the `_` arm; walking it is garbage).
-      _ => { IRP_OK = false; s = 0 }
+      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { IRP_OK = false; s = 0 }
     }
   }
 }
