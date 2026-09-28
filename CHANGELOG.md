@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A call operand has its callee's signedness on aarch64, riscv64 and wasm.** Their operand
+  signedness oracles recognised only the conversion names (`i64(x)`), so `f() / 9` for an `f`
+  returning a negative `i64` gave the unsigned quotient, `f() % 8` the unsigned remainder, and
+  `f() > big` for an `f` returning `u64` compared signed — three silent wrong values that x86_64 got
+  right. They now ask the callee's declared result, as x86_64 does (#725). Found by the new program
+  generator.
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness
