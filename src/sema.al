@@ -7532,13 +7532,18 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## is what the garbage was being read as.
   match deref(e) {
     Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
-      | Expr::FloatLit | Expr::Slice => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::BoolLit | Expr::Bin | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit
-      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+      | Expr::FloatLit | Expr::Slice | Expr::Bin => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::BoolLit | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
   }
 }
 
+## #716 — an operand kind `check_expr`'s `Bin` arm leaves to the lowering: a struct, enum or array (a
+## user operator overload or a generic numeric aggregate), their hidden local twins, and a brand.
+sema_bin_operand_deferred := fn(t : Ty) -> bool {
+  t.tag == 3 or t.tag == 4 or t.tag == 7 or t.tag == 8 or t.tag == 9 or t.tag == 10
+}
 ## Issue #716 — the per-variant arms of `check_expr`, over a pointer PARAMETER so the lowering
 ## types the scrutinee. Only the variants `check_expr` routes here are ever checked by their arm; the
 ## others are written, and have never run.
@@ -7577,6 +7582,16 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     Expr::Bin(op, l, r) => {
       tl := check_expr(l, decls, upto, src, a, locals, nloc)?
       tr := check_expr(r, decls, upto, src, a, locals, nloc)?
+      ## #716 — this arm ran for the first time when `check_expr`'s dispatch was typed, and it was
+      ## written for kernel scalars only. An AGGREGATE operand (a struct, enum or array: 3/4/7 and the
+      ## hidden 9/10) is a user OPERATOR overload (`@inline < := fn(a : Ver, b : Ver) -> u64`) or a
+      ## generic `uint(N)` op, whose operand and result types the lowering resolves; and a BRAND
+      ## operand's operator set is #299's open question. Neither is judged here: UNKNOWN, as every
+      ## `Bin` was before this arm ran. Measured: without this, four valid corpus programs were refused.
+      if sema_bin_operand_deferred(tl) or sema_bin_operand_deferred(tr) {
+        du := Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
+        return du
+      }
       ## A comparison (kinds 20/24/25/26/27/28) yields bool; its operands must agree.
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         ptrint_probe_site("OP-CMP", "bincmp", false, tl.tag, tr.tag, s_of(l, a), src)

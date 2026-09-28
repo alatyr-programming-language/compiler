@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`check` now type-checks binary operators.** `check_expr`'s `Bin` arm had never run (#716): the
+  lowering compared its dispatch against tag 0, so only integer literals reached their arm. It
+  runs now, with operator overloads on user types, generic `uint(N)` operands and brand operands
+  left to the lowering as before. Two programs the specification already declared invalid are
+  refused: a `bool` used as an arithmetic operand (`(10 > 3) + 41` — write `u64(10 > 3) + 41`,
+  Types §4.2/§4.3), and a comparison operator-function declared to return anything but `bool`
+  (Stdlib §2.6); two corpus fixtures were corrected accordingly.
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness
