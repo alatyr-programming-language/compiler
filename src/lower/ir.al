@@ -1176,11 +1176,10 @@ ir_arraylit_all_const := fn(ehead : ptr(mut Arg)) -> bool {
   mut ok := true
   while g != 0 {
     ga := deref(arg_p(g))
-    match deref(ga.e) {
-      Expr::Num(v, s, n) => {}
-      Expr::BoolLit(v) => {}
-      _ => { ok = false }
-    }
+    ## #716 — `expr_is_numlit` answers exactly `Num` or `BoolLit`, over a pointer PARAMETER. The
+    ## inline `match deref(ga.e)` it replaces was lowered against tag 0, so a `BoolLit` element
+    ## compared equal to nothing and was taken for a non-constant.
+    if not expr_is_numlit(ga.e) { ok = false }
     g = ga.next
   }
   ok
@@ -1525,7 +1524,11 @@ ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), 
       Stmt::ExprStmt(e, nx) => {
         ls := stmt_label_span(s)
         mut is_jmp := false
-        match deref(e) { Expr::Call(cs, cl, na, ah) => { is_jmp = str_at((src + cs), cl) == "jmp" } _ => {} }
+        ## #716 — asked through `call_callee_span`, whose `match deref(p)` is over a pointer PARAMETER.
+        ## Written inline over the payload binding `e`, the lowering could not type the scrutinee and
+        ## compared the `Call` arm against tag 0, so `is_jmp` was never true.
+        jcs := call_callee_span(e)
+        if jcs.n != 0 { is_jmp = str_at((src + jcs.s), jcs.n) == "jmp" }
         if ls.n != 0 or is_jmp { IRP_OK = false
         } else if ir_is_call_rhs(e) and IRP_NGBAR < 16 {
           IRP_NGBAR = IRP_NGBAR + 1

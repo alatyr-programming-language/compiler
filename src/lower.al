@@ -2753,6 +2753,28 @@ const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(r
   if found < 0 { return z }
   arg_expr_at(struct_lit_fields(mcv), usize(found), a)
 }
+## #716 — `v`, or, when `v` selects a field of a module-level const struct (`app.version`), that
+## field's compile-time value expression. One normalizer for the two places that classify an assignment
+## RHS by shape: `emit_st_assign` and `collect_slots`. The `match` is over this PARAMETER on purpose:
+## `collect_slots` wrote it inline over a payload binding, which the lowering could not type, so its
+## `Field` arm was compared against tag 0 and never taken — the slot was sized for the unresolved
+## field (one scalar word) while `emit_st_assign` stored the resolved value (a two-word `str`).
+const_field_rhs := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> ptr(Expr) {
+  match deref(v) {
+    Expr::Field(base, fs, fl) => {
+      cv := const_struct_field(base, fs, fl, decls, src, a)
+      if unchecked bitcast(usize, cv) != 0 { return cv }
+    }
+    ## NOT A FIELD SELECTION: there is no `<const struct>.<field>` to materialize, and `v` is the
+    ## answer. A NORMALIZER arm — a new `Expr` variant needs an entry above only if it can name a
+    ## module-level const struct field.
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  v
+}
 ## The DECLARATION index of field `[fs, fl)` within struct type `[ss, sl)` (-1 if absent) — the shared
 ## field-ordering that struct layout, const-struct field reads, and mutable struct-global fields use.
 struct_field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), ss : usize, sl : usize, fs : usize, fl : usize, a : rt::Arena) -> i64 {
@@ -22590,7 +22612,7 @@ guard_cmp := fn(op : i64, l : i64, r : i64) -> i64 {
 ## `body_stmts` that is not a lone `return`) is NOT a single foldable expr → `0` (the caller FAIL-SAFES to
 ## "cannot fold" = the guard is kept ACTIVE; a full comptime fn-body interpreter is a separate build).
 guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
-  match deref(stmt_p(Stmt, bs)) {
+  match deref(bs) {
     Stmt::Return(e, next) => {
       if unchecked bitcast(usize, next) == 0 { return e }
       unchecked bitcast(ptr(Expr), 0)
