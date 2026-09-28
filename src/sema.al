@@ -8102,11 +8102,15 @@ ann_lit_range_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) ->
 ## to have no fractional part.  This is deliberately a separate predicate rather than a
 ## new literal tag: the ordinary checker keeps float values poison-tolerant and the lower's
 ## aggregate/ABI paths already recognize Expr::FloatLit independently.
-float_lit_into_integer_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) -> bool {
-  if tl == 0 { return false }
+## Is `e` a float-spelled literal (`Expr::FloatLit`)?
+sema_is_float_lit := fn(e : ptr(Expr)) -> bool {
   mut is_float := false
   match deref(e) { Expr::FloatLit(_s, _n) => { is_float = true } _ => {} }
-  if not is_float { return false }
+  is_float
+}
+float_lit_into_integer_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) -> bool {
+  if tl == 0 { return false }
+  if not sema_is_float_lit(e) { return false }
   w := str_at((src + ts), tl)
   w == "u8" or w == "u16" or w == "u32" or w == "u64" or w == "usize" or w == "u128" or w == "i8" or w == "i16" or w == "i32" or w == "i64" or w == "isize" or w == "i128"
 }
@@ -8208,17 +8212,28 @@ default_lit_range_bad := fn(src : ptr(u8), e : ptr(Expr)) -> bool {
 ## `num_lit_out_of_range` never judges them out of range — they are listed only to stop the brand
 ## scan early. The brand hop is skipped entirely when the program declares no user brand.
 ctor_int_target_name := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize) -> VSpan {
+  k := sema_brand_kernel_span(decls, upto, src, s, n)
+  if k.n == 0 { return k }
+  nm := str_at((src + k.s), k.n)
+  if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" or nm == "usize" { return k }
+  if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" or nm == "isize" { return k }
+  VSpan(s = 0, n = 0)
+}
+
+## The name a type name bottoms out in once every DIRECT user brand is followed (`N := brand(u8)` →
+## `u8`; a chain of brands to its last link), at most 8 links so a malformed or self-referential chain
+## cannot loop ({0,0} then). A name that is not a user brand — a kernel type, a PRELUDE brand
+## (`bool`, `char`, `f32`, `f64`), anything else — is its own answer. One walk for the constructor
+## rule above and the annotation rule of #563.
+sema_brand_kernel_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize) -> VSpan {
   mut cs := s
   mut cn := n
   mut hops : usize = 0
   while hops < 8 {
-    nm := str_at((src + cs), cn)
-    if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" or nm == "usize" { return VSpan(s = cs, n = cn) }
-    if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" or nm == "isize" { return VSpan(s = cs, n = cn) }
-    if SEMA_BRAND_DECLS == 0 { return VSpan(s = 0, n = 0) }
-    if sema_brand_is_prelude(src, cs, cn) { return VSpan(s = 0, n = 0) }
+    if SEMA_BRAND_DECLS == 0 { return VSpan(s = cs, n = cn) }
+    if sema_brand_is_prelude(src, cs, cn) { return VSpan(s = cs, n = cn) }
     bu := sema_brand_underlying(decls, upto, src, cs, cn)
-    if bu.n == 0 { return VSpan(s = 0, n = 0) }
+    if bu.n == 0 { return VSpan(s = cs, n = cn) }
     cs = bu.s
     cn = bu.n
     hops += 1
@@ -10212,7 +10227,26 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         } else {
           mut bad_decl := false
           if ann.n != 0 { ptrint_probe_site("BIND", "annbind", true, tv.tag, dt.tag, ns, src) }
-          if ann.n != 0 { bad_decl = not tag_compat(dt.tag, tv.tag) }
+          ## Issue #563 — Types §9.2 names an annotation as one of the two forms that GIVE a literal its
+          ## type, so a LITERAL meeting a BRAND annotation (`a : A = 41`, `A := brand(u64)`) is not a brand
+          ## crossing and not a tag mismatch: it is judged — kind, format and range — against the kernel
+          ## type the brand bottoms out in, exactly as `A(41)` already is. The literal rules below read
+          ## `lit_ts`/`lit_tl` and `lit_dtag`; for every other annotation those are the annotation's own.
+          ## Measured on the parent: `a : A = 41` refused, `a : A = 1.5` ran to 1, `a : A = "x"` ran.
+          mut lit_ts := ann.s
+          mut lit_tl := ann.n
+          mut lit_dtag : u8 = dt.tag
+          mut brand_lit := false
+          if ann.n != 0 and dt.tag == 8 and (lbv_lit_tag(v) != 0 or sema_is_float_lit(v)) {
+            bk := sema_brand_kernel_span(decls, upto, src, ann.s, ann.n)
+            if bk.n != 0 and not (bk.s == ann.s and bk.n == ann.n) {
+              lit_ts = bk.s
+              lit_tl = bk.n
+              lit_dtag = resolve_ty(src, bk.s, bk.n, decls, upto).tag
+              brand_lit = true
+            }
+          }
+          if ann.n != 0 and not brand_lit { bad_decl = not tag_compat(dt.tag, tv.tag) }
           ## #299 census hooks (no refusal): an annotated binding is the declared sink; an INFERRED
           ## binding from a brand constructor is the identity the recorded local type drops.
           if ann.n != 0 { brand_probe_sink(dt, v, ns, decls, upto, src, locals, cnt, a) }
@@ -10232,15 +10266,15 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## Declarations §3.1 assignability, on the RELIABLE literal tag (`ann_lit_incompatible`) —
           ## `tv.tag` above is 0 for a literal whose `check_expr` arm does not dispatch, so the
           ## annotation constrained nothing. Located at the binding's own name span.
-          if ann.n != 0 and ann_lit_incompatible(dt.tag, lbv_lit_tag(v)) { bad_decl = true }
+          if ann.n != 0 and ann_lit_incompatible(lit_dtag, lbv_lit_tag(v)) { bad_decl = true }
           ## TYP-13: a float-spelled literal is never an integer initializer, while an integer
           ## literal in f32/f64 context must be exactly representable in that format.
-          if ann.n != 0 and float_lit_into_integer_bad(src, ann.s, ann.n, v) { bad_decl = true }
-          if ann.n != 0 and int_lit_into_float_bad(src, ann.s, ann.n, v) { bad_decl = true }
+          if ann.n != 0 and float_lit_into_integer_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
+          if ann.n != 0 and int_lit_into_float_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
           ## Types §9.1 REPRESENTABILITY, on the annotation's type NAME (the width `dt.tag` collapsed
           ## away): `x : u8 = 300` / `x : i8 = 200` / `x : u32 = 5_000_000_000` were all accepted in
           ## silence and truncated at run time.
-          if ann.n != 0 and ann_lit_range_bad(src, ann.s, ann.n, v) { bad_decl = true }
+          if ann.n != 0 and ann_lit_range_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
           ## With no annotation the literal takes the target's native SIGNED type (Types §9.1 /
           ## Declarations §3.4). A negative `Num` payload is the parser's 64-bit representation of a
           ## written non-negative literal at or above 2^63; reject it before the untyped binding can

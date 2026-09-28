@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A literal takes its type from a brand annotation.** `a : A = 41` for `A := brand(u64)` was refused
+  as a type mismatch although Types §9.2 makes the annotation what types the literal, as `A(41)`
+  already did; it is accepted now. The literal is judged against the kernel type the brand
+  bottoms out in, so representability still holds (`n : N = 300` for `N := brand(u8)` stays a
+  located error), and two forms that compiled and RAN before are refused: `a : A = 1.5` (it ran to
+  1) and `a : A = "x"` (#563).
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness

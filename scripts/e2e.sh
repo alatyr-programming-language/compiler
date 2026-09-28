@@ -6610,6 +6610,16 @@ check_accept accept_brand_require_identity
 run accept_brand_require_identity 42
 check_accept accept_brand_unrefused_sinks
 run accept_brand_unrefused_sinks 42
+## Issue #563 — a literal meeting a brand annotation is judged against the brand's kernel type: accepted
+## where it fits (refused on the parent), refused where it does not fit, is float-spelled, or is a `str`
+## (the last two ran on the parent, to 1 and to 1).
+check_accept accept_brand_literal_annotation
+run accept_brand_literal_annotation 42
+check_located reject_brand_literal_range 5
+check_located reject_brand_float_literal_int 5
+check_located reject_brand_str_literal 5
+build_reject reject_brand_float_literal_int
+build_reject reject_brand_str_literal
 ## The LEGAL half of the composition row above. Its assertions are deliberately SPLIT across two
 ## scopes — module scope proves the element walker ACCEPTS a legal `[2]A`, the local proves the value
 ## path is right — because #674 makes a module-level array of a BRAND read all-zero today. The
