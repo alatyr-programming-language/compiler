@@ -147,6 +147,36 @@ pub standard_field_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::
     _ => { StdFieldPath(ok = false, root = 0, bo = 0, ts = 0, tl = 0) }
   }
 }
+## #716 — the array-FIELD half of `std_idx_path`'s `Index` arm: `s.items[i]` where `items` is a fixed
+## array field of a plain local struct. Its own function so the `match` is over a PARAMETER; written
+## inline over the `Index` arm's payload binding `arr`, the lowering could not type the scrutinee,
+## compared the `Field` arm against tag 0, and the path below was never taken.
+std_idx_field_elem := fn(arr : ptr(Expr), idx : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> StdIdxPath {
+  z := unchecked bitcast(ptr(Expr), 0)
+  match deref(arr) {
+    Expr::Field(fbase, afs, afl) => {
+      fav := var_name_span(fbase)
+      if fav.n != 0 {
+        faent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, fav.s, fav.n)))
+        if streq(src, faent.ns, faent.nl, fav.s, fav.n) and faent.ek == 2 and not faent.is_ref and faent.snl != 0 {
+          faft := field_type_span(decls, src, faent.sns, faent.snl, afs, afl, a)
+          faes := array_elem_span(src, faft.s, faft.n)
+          fabn := base_type_name(src, faes.s, faes.n)
+          if faes.n != 0 and fabn.n == faes.n and parse_arr_len(src, faft.s, faft.n) > 0 and std_array_direct_scalar_byte_tier(decls, src, faes.s, faes.n, a) {
+            return StdIdxPath(ok = true, arr = arr, idx = idx, bo = 0, ts = faes.s, tl = faes.n)
+          }
+        }
+      }
+    }
+    ## Not a field of a local struct: `std_idx_path` goes on to its slot-rooted routes. A PREDICATE-
+    ## like projection — `ok = false` is the answer, not a missing lowering.
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  StdIdxPath(ok = false, arr = z, idx = z, bo = 0, ts = 0, tl = 0)
+}
 pub std_idx_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> StdIdxPath {
   z := unchecked bitcast(ptr(Expr), 0)
   match deref(e) {
@@ -157,23 +187,8 @@ pub std_idx_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), s
       ## and field-offset machinery used by local arrays. Keep this bounded to a non-generic,
       ## direct-scalar element and a statically sized field: Slice fields, packed/nested/aggregate
       ## elements, generic instances, globals and word-tier elements retain their existing routes.
-      match deref(arr) {
-        Expr::Field(fbase, afs, afl) => {
-          fav := var_name_span(fbase)
-          if fav.n != 0 {
-            faent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, fav.s, fav.n)))
-            if streq(src, faent.ns, faent.nl, fav.s, fav.n) and faent.ek == 2 and not faent.is_ref and faent.snl != 0 {
-              faft := field_type_span(decls, src, faent.sns, faent.snl, afs, afl, a)
-              faes := array_elem_span(src, faft.s, faft.n)
-              fabn := base_type_name(src, faes.s, faes.n)
-              if faes.n != 0 and fabn.n == faes.n and parse_arr_len(src, faft.s, faft.n) > 0 and std_array_direct_scalar_byte_tier(decls, src, faes.s, faes.n, a) {
-                return StdIdxPath(ok = true, arr = arr, idx = idx, bo = 0, ts = faes.s, tl = faes.n)
-              }
-            }
-          }
-        }
-        _ => {}
-      }
+      fap := std_idx_field_elem(arr, idx, slots, decls, src, a)
+      if fap.ok { return fap }
       ent := deref(svec_at(SlotEntry, slots, index_base_entry(arr, slots, src)))
       ## A Slice(P) local and parameter are both represented by an `is_ref` slot, but their element
       ## address is still the same byte-strided view that the standard-layout resolver must inspect.

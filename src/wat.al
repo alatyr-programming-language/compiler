@@ -812,6 +812,21 @@ wat_is_float_local := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
   }
   r
 }
+## #716 — is `e` an integer literal (`Expr::Num`)? A PREDICATE, asked over this PARAMETER so the
+## lowering can type the scrutinee: `wat_break_scalar_var` wrote it inline as `match deref(d.value)`,
+## which was lowered against tag 0 and answered correctly only because `Num` is variant 0.
+wat_is_num_lit := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Num(_v, _s, _n) => { r = true }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+
 ## BAND — THE CONSTANT / FLOAT CLASSIFIERS (`wat_int_const_expr`, `wat_is_float_expr`). Both are
 ## PREDICATES over a shape, and `false` is the conservative answer: an expression not proved constant
 ## is emitted, and one not proved float takes the integer path, which is the representation the WAT
@@ -3753,10 +3768,7 @@ wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : ptr(mut Param),
     while i < cnt {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
-        ## #544 stage 1 — this `_` STAYS: `deref(d.value)` over a `Decl` bound from a call is blind, and so
-        ## is every annotation but `ve : ptr(Expr) = d.value` (#660/#680, spelling disagreement #697).
-        ## Deleting it is accepted SILENTLY, rc 0. See the band note above `wat_expr_start`.
-        match deref(d.value) { Expr::Num(_v, _s, _n) => { return wat_break_scalar_expr(d.value, params_head, fn_head, src, a, decls, dep + 1) } _ => {} }
+        if wat_is_num_lit(d.value) { return wat_break_scalar_expr(d.value, params_head, fn_head, src, a, decls, dep + 1) }
       }
       i = i + 1
     }
