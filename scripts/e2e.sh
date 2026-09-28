@@ -1322,7 +1322,9 @@ issue298_immutable_places_test() {
 ## sources stay in the row's private scratch directory: the negative branch must fail only after the
 ## resolver stops returning UNKNOWN for the two declared brands, while the same-brand control remains
 ## accepted. No conversion-lattice, generic-payload, alias, wrapper, lowering, or oracle behavior is
-## asserted here.
+## asserted here. The control converts explicitly (`u64(if … { a } else { a })`): returning the brand
+## `A` from a `u64` function is §4.2's implicit brand -> underlying crossing, refused once
+## `check_expr`'s `If` arm reports the join's type (#716); it was accepted only while that arm never ran.
 issue299_brand_identity_test() {
   local d="$T/issue299_brand_identity"
   rm -rf "$d"
@@ -1339,7 +1341,7 @@ issue299_brand_identity_test() {
     'A := brand(u64)' \
     'main := fn() -> u64 {' \
     '  a : A = A(1)' \
-    '  return if true { a } else { a }' \
+    '  return u64(if true { a } else { a })' \
     '}' > "$d/same.al"
 
   local src="$d/sibling.al" co="$d/sibling.check.out" ce="$d/sibling.check.err"
