@@ -6284,7 +6284,10 @@ check_build_located reject_immutable_write 3 "immutable binding"
 ## is one answer for four backends and `emit_reject_has` proves nothing reaches stdout either.
 ## `reject_immutable_write`'s wording above is deliberately unchanged: where the FIRST failing
 ## AND-step is the binding itself, that fence still owns the diagnostic.
-check_build_located reject_str_elem_immutable 13 "str element store"
+## `reject_str_elem_immutable` binds with `:=`, so ITS first failing AND-step is the binding: it
+## reported `str element store` only while `check_expr` answered a string literal UNKNOWN and the
+## binding fence could not see the local's type (#716). The `mut` spellings below own the pointee step.
+check_build_located reject_str_elem_immutable 13 "immutable binding"
 check_build_located reject_str_elem_mut_binding 11 "str element store"
 check_build_located reject_str_elem_annotated_mut 12 "str element store"
 ## …and through a second NAME. The alias copies the two-word view, not the bytes, so it inherits
@@ -6292,9 +6295,9 @@ check_build_located reject_str_elem_annotated_mut 12 "str element store"
 ## of `s`, INCLUDING a `str` parameter whose own direct `s[i] = v` the older fence already refused.
 check_build_located reject_str_elem_alias 13 "str element store"
 check_build_located reject_str_elem_param_alias 11 "str element store"
-emit_reject_has aarch64 reject_str_elem_immutable "str element store"
-emit_reject_has riscv64 reject_str_elem_immutable "str element store"
-emit_reject_has wat reject_str_elem_immutable "str element store"
+emit_reject_has aarch64 reject_str_elem_immutable "immutable binding"
+emit_reject_has riscv64 reject_str_elem_immutable "immutable binding"
+emit_reject_has wat reject_str_elem_immutable "immutable binding"
 emit_reject_has aarch64 reject_str_elem_mut_binding "str element store"
 emit_reject_has riscv64 reject_str_elem_mut_binding "str element store"
 emit_reject_has wat reject_str_elem_mut_binding "str element store"
