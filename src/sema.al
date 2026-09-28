@@ -5979,6 +5979,72 @@ sema_builtin_str_integer_cast_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   lbv_lit_tag(ga.e) == 6
 }
 
+## Issue #660 — a direct call to the SOLE function of its name that is GENERIC and declares its result
+## as one of its own `T : type` parameters, `-> T` or `-> ptr([mut] T)`: the TYPE ARGUMENT written at
+## T's position (`id(C, p)` → `C`), and whether the result is the pointer form. Else `n == 0`. This is
+## the substitution `sole_fn_ret_ty` cannot make — it resolves `-> ptr(mut T)` to a pointer with an
+## unknown pointee — so a `match` over such a call's result, or over a local bound from it, skipped
+## the exhaustiveness check. A type argument is read only when it is a bare name (`expr_var_span`).
+SemaGenRes := struct { s : usize, n : usize, is_ptr : bool }
+sema_generic_result_arg := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> SemaGenRes {
+  z := SemaGenRes(s = 0, n = 0, is_ptr = false)
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 { return z }
+  cnt := rt::vec_len(deref(decls))
+  th := sema_name_hash(src, cs.s, cs.n)
+  mut jc := sni_lo(cnt, th)
+  jce := sni_hi(cnt, th)
+  mut hits := 0
+  mut di := 0
+  while jc < jce {
+    i := sni_at(cnt, jc)
+    jc = jc + 1
+    if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
+      d := deref(decl_get(decls, i))
+      if d.kind == 1 and streq(src, d.name_start, d.name_len, cs.s, cs.n) { hits = hits + 1; di = i }
+    }
+  }
+  if hits != 1 { return z }
+  d := deref(decl_get(decls, di))
+  if not d.is_generic or d.ret_tl == 0 { return z }
+  ## The result spelling: `T`, or `ptr(`[`mut `]`T)`.
+  mut rs := d.ret_ts
+  mut rn := d.ret_tl
+  mut is_ptr := false
+  if str_at((src + rs), 4) == "ptr(" {
+    is_ptr = true
+    mut p := rs + 4
+    while _sws1(src, p) { p += 1 }
+    if str_at((src + p), 4) == "mut " { p += 4 }
+    while _sws1(src, p) { p += 1 }
+    q := p
+    while _sident1(src, p) { p += 1 }
+    rs = q
+    rn = p - q
+    while _sws1(src, p) { p += 1 }
+    if rn == 0 or str_at((src + p), 1) != ")" { return z }
+  }
+  mut k := 0
+  mut pp := d.params_head
+  mut found := false
+  while pp != 0 and not found {
+    pm := deref(param_p(pp))
+    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, rs, rn) { found = true } else { k += 1; pp = pm.next }
+  }
+  if not found { return z }
+  mut g := expr_call_args_head(e)
+  mut j := 0
+  while g != 0 and j < k {
+    ga := deref(arg_p(g))
+    g = ga.next
+    j += 1
+  }
+  if g == 0 { return z }
+  av := expr_var_span(deref(arg_p(g)).e)
+  if av.n == 0 { return z }
+  SemaGenRes(s = av.s, n = av.n, is_ptr = is_ptr)
+}
+
 ## Issue #680 — the POINTER `Ty` (tag 5 + the pointee's type-NAME span) of a pointer-valued expression:
 ## a `Var` naming a local recorded as a pointer, or a direct `Call` whose declared result is one.
 ## Unknown otherwise. The call half reads the callee's DECLARED result through `sole_fn_ret_ty` — one
@@ -5998,6 +6064,9 @@ sema_ptr_expr_ty := fn(pe : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), loca
   }
   ct := sole_fn_ret_ty(pe, decls, rt::vec_len(deref(decls)), src)
   if ct.tag == 5 and ct.nl != 0 { return ct }
+  ## Issue #660 — `-> ptr(mut T)` of a generic callee: the pointee is the type argument at T.
+  gr := sema_generic_result_arg(pe, decls, src)
+  if gr.is_ptr and gr.n != 0 { return Ty(tag = 5, ns = gr.s, nl = gr.n) }
   unknown
 }
 
@@ -6023,6 +6092,12 @@ sema_value_enum_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), loc
   if unchecked bitcast(usize, di) != 0 { return sema_enum_pointee(sema_ptr_expr_ty(di, decls, src, locals, nloc), decls, src) }
   ct := sole_fn_ret_ty(v, decls, rt::vec_len(deref(decls)), src)
   if ct.tag == 4 and ct.nl != 0 { return Ty(tag = 4, ns = ct.ns, nl = ct.nl) }
+  ## Issue #660 — `-> T` of a generic callee: the value's type is the type argument at T.
+  gr := sema_generic_result_arg(v, decls, src)
+  if not gr.is_ptr and gr.n != 0 {
+    gt := resolve_ty(src, gr.s, gr.n, decls, rt::vec_len(deref(decls)))
+    if gt.tag == 4 and gt.nl != 0 { return Ty(tag = 4, ns = gt.ns, nl = gt.nl) }
+  }
   unknown
 }
 

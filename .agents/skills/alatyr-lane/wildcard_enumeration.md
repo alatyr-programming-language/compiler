@@ -90,8 +90,12 @@ before claiming it:
   **39 caught of 63**, where #662's parent answered **0 of 63**. The class is gone; the file was not
   finished by fixing it. Its remaining **24** are blind for the third reason below, and that reason
   is per ARM, not per file: all 24 are `match st` over `st := deref(stmt_p(Stmt, <h>))`.
-- **#660** — a single *site* is blind when its scrutinee's enum type arrives through a generic
-  function's return type. This one is per-arm, not per-file, and it has a workaround: annotating the
+- **#660 — FIXED; its premise was half wrong, which is worth knowing.** A single *site* was blind
+  when its scrutinee's enum type arrived through a call. The shape this stage kept meeting,
+  `st := deref(stmt_p(Stmt, …))`, is NOT generic in its result — `ast::stmt_p` declares
+  `-> ptr(mut Stmt)` — and #680 made it visible; a truly generic result (`-> T`, `-> ptr(mut T)`) is
+  resolved from the type argument at T's position since #660. Re-measure an arm this bullet used to
+  cover rather than trusting the note beside it. Historical text follows. This one is per-arm, not per-file, and it has a workaround: annotating the
   local (`stmt : Stmt = …`) or the pointer (`sp : ptr(mut Stmt) = …`) restores the check. **Spell the
   annotation BARE.** Measured on `src/wat.al`: over the same caught site, `ee : ptr(Expr) = e`
   keeps the check (deleting the arm → rc 1 `type mismatch`) while `ee : ptr(ast::Expr) = e` — the
