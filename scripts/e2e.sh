@@ -6356,10 +6356,31 @@ check_accept issue557_wildcard_six_shapes
 run issue557_wildcard_six_shapes 42
 check_accept issue557_or_pattern_six_shapes
 run issue557_or_pattern_six_shapes 42
-# The fail-open control: where the scrutinee's type genuinely does not resolve, skipping the check is
-# still correct. This is #557's measured residual, not a decision that the shape may stay unchecked.
-check_accept issue557_unresolved_scrutinee_open
-run issue557_unresolved_scrutinee_open 42
+# Issue #680 / Control Flow §5.1 — #557's residual: a scrutinee whose enum type arrives through a CALL
+# or a `deref` and an unannotated local. Every one of the six built cleanly on the parent and ran to 42
+# taking the `R` arm; the first is #557's former fail-open fixture, renamed now that it is refused. The
+# needle names the line, as #557's rows do.
+build_reject_has issue680_nonexh_value_local "type mismatch at line 13"
+check_reject issue680_nonexh_value_local
+build_reject_has issue680_nonexh_ptr_local "type mismatch at line 13"
+check_reject issue680_nonexh_ptr_local
+build_reject_has issue680_nonexh_deref_call "type mismatch at line 12"
+check_reject issue680_nonexh_deref_call
+build_reject_has issue680_nonexh_value_of_deref_call "type mismatch at line 13"
+check_reject issue680_nonexh_value_of_deref_call
+build_reject_has issue680_nonexh_value_of_deref_ptr "type mismatch at line 14"
+check_reject issue680_nonexh_value_of_deref_ptr
+build_reject_has issue680_nonexh_value_of_deref_annptr "type mismatch at line 14"
+check_reject issue680_nonexh_value_of_deref_annptr
+# `init_e := p_or(pc)` is the compiler's own spelling of the pointer-local shape; the three non-x86
+# emitters are asked directly, since a reject fixture alone proves only the x86 surface.
+emit_reject_has wat issue680_nonexh_ptr_local "type mismatch at line 13"
+emit_reject_has aarch64 issue680_nonexh_ptr_local "type mismatch at line 13"
+emit_reject_has riscv64 issue680_nonexh_ptr_local "type mismatch at line 13"
+# The over-rejection control: all six spellings complete and `_`-free, plus a generic `Result` result
+# through a call-bound local and a direct call, both of which must stay accepted.
+check_accept issue680_exhaustive_six_shapes
+run issue680_exhaustive_six_shapes 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42

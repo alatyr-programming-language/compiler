@@ -262,5 +262,29 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
       gux := fold(inner)
       newnode(Expr.Unchecked(gux))
     }
+    ## Issue #680 — the seven variants this `match` never named. With no arm and no `_` a `match` that
+    ## takes no arm yields −1, so any of them reaching `fold` came back as a wild pointer; the
+    ## exhaustiveness check now sees `node := deref(e)` and refuses the gap instead. None of them is a
+    ## constant to reduce: leaves are copied, and expression children are folded and rebuilt in place.
+    ## `Lambda` and `Loop` keep their statement-list payloads, which `fold` does not walk.
+    Expr::FloatLit(fls, fln) => { newnode(Expr.FloatLit(fls, fln)) }
+    Expr::Slice(sb, slo, shi) => {
+      gsb := fold(sb)
+      gslo := fold(slo)
+      gshi := fold(shi)
+      newnode(Expr.Slice(gsb, gslo, gshi))
+    }
+    Expr::CompField(cfb, cfi) => {
+      gcfb := fold(cfb)
+      gcfi := fold(cfi)
+      newnode(Expr.CompField(gcfb, gcfi))
+    }
+    Expr::Lambda(lpos, lparams, lrts, lrtl, lbody, lval) => { newnode(Expr.Lambda(lpos, lparams, lrts, lrtl, lbody, lval)) }
+    Expr::FnRef(frs, frn, frp) => { newnode(Expr.FnRef(frs, frn, frp)) }
+    Expr::Bitcast(bci, bcs, bcn) => {
+      gbci := fold(bci)
+      newnode(Expr.Bitcast(gbci, bcs, bcn))
+    }
+    Expr::Loop(lpb) => { newnode(Expr.Loop(lpb)) }
   }
 }
