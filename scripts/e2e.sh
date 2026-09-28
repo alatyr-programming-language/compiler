@@ -7517,6 +7517,13 @@ run when_guard_arch 42
 ## arm has the identical gap (it never sets `A64_SRET_DST_ON`), so registering this cross-backend
 ## would assert a fix that only one backend has.
 run_x86 sret_discard_statement 42
+## #711 generic half: the SAME shape through a GENERIC callee (`-> T` instantiated with a 9-word
+## struct), UNMASKED — the bare generic call is first and binds nothing before it, so no stale
+## destination in %rdi can stand in for the missing one. `rv64_sret_call_paths.al` only reaches this
+## shape masked (it binds two wide-SRET results first), which is why the fix could look done while the
+## generic half still segfaulted. x86-only for the same reason as above: aarch64's ExprStmt arm never
+## sets `A64_SRET_DST_ON` (#714), so this traps there; riscv64 and wasm already publish a destination.
+run_x86 sret_discard_generic 42
 run_x86 when_guard_binding 42
 ## The SAME fixture on aarch64 answers 100, and that is its DESIGNED answer, not a divergence: it
 ## declares `val : u64 = 42 when target.arch == Arch.x86_64` and `val : u64 = 100 when
@@ -8679,6 +8686,11 @@ run_rv64 gen_sret_wide_return 26
 ## rv64 SRET call boundary: bare discard, eight-real-argument overflow after hidden a0, generic `-> T`,
 ## and a generic call receiving a nested wide-SRET aggregate argument.
 run_rv64 rv64_sret_call_paths 67
+## #711: x86_64 now answers the SAME 67 as riscv64 and wasm. Before the fix the x86_64 row was 139
+## (SIGSEGV) — the discarded wide-SRET calls (concrete `direct` and generic `generic_make`) got no
+## destination, so the callee wrote 72 bytes through a stale %rdi. Registering x86_64 locks that in;
+## aarch64 is left out (its ExprStmt arm never sets `A64_SRET_DST_ON` — #714 — so it traps at 133).
+run_x86 rv64_sret_call_paths 67
 ## a generic type reference keeps only its HEAD in the AST (`Box`, with `(…)` left in src), and no seam ever
 ## handed a RESOLVED application span to subst_field_ty — so `Box(T)`'s field was sized as ONE word on both the
 ## callee's return and the caller's binding. With a struct type-arg the value read 0; with an ENUM type-arg the

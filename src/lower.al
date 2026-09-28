@@ -12958,16 +12958,17 @@ sret_ret_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::
 ##
 ## One question, asked in one place. A future value-evaluation site that forgets to publish a
 ## destination is still a defect, but it can no longer answer this question by halves.
-## GENERIC instances are NOT asked here, and the reason is a constraint rather than a choice: the
-## pool RESERVATION that must match every allocation is scanned in `lower::scratch`, which cannot
-## reach `gen_ret_sret_span` — that predicate stands on `lower.al`'s decl-name index (`dni_*`),
-## `callee_name_span` and `type_arg_span`, and `scratch` is imported BY `lower`, not the reverse.
-## Asking it here while the reservation cannot would take a block nobody counted, and `agg_alloc`
-## aborts the whole emission on that — measured, it turned the very programs this fixes into
-## compile failures. Emission and reservation must ask the same question; today that question is
-## `sret_ret_call`. Making the generic half reachable is a module-structure change (#711).
+##
+## The pool RESERVATION that must match every allocation is scanned in `lower::scratch`, and it asks
+## the SAME two predicates (its `agg_unbound_sret_block` counts the block, its `agg_value_words` sizes
+## the width). That reachability was once doubted — "scratch is imported BY lower, not the reverse"
+## — but the import edge is not what a child uses: `lower::scratch` is a DESCENDANT of `lower`
+## (Modules §3) and reaches `lower.al`'s non-`pub` items through the ancestor chain, exactly as it
+## already reaches `sret_ret_call` (line 393 of scratch.al) and as its sibling `lower::collect_slots`
+## already reaches `gen_ret_sret_span` (collect_slots.al:244). An uncounted block aborts the whole
+## emission (`agg_alloc`), so the reservation must ask what the emission asks — and it does.
 call_needs_sret_dst := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  sret_ret_call(e, decls, src, a)
+  sret_ret_call(e, decls, src, a) or gen_ret_sret_span(e, decls, src, a).n != 0
 }
 
 ## Is `e` a `Call` to a fn returning a WIDE enum (disc + payload > 7 words, SRET)? The caller allocates
@@ -21585,10 +21586,19 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
   } else {
     ## The enclosing fn's return is none of the shapes above, but the VALUE being returned may still
     ## be a wide-SRET call — the two are unrelated conventions. Same missing destination (#711).
+    ## The destination is a one-shot temporary (this branch is for a NON-aggregate return, so the
+    ## struct is discarded after the call) — reclaim it after the call so a second unbound wide-SRET
+    ## call in the same fn reuses the single reserved block instead of overflowing the `imax` pool.
     ov_sd := cx.sret_call
-    if call_needs_sret_dst(rv, cx.decls, cx.src, a) { cx.sret_call = agg_alloc(cx) }
-    emit_gas(rv, sb, cx, a, nl)
-    cx.sret_call = ov_sd
+    if call_needs_sret_dst(rv, cx.decls, cx.src, a) {
+      ov_next := cx.agg_next
+      cx.sret_call = agg_alloc(cx)
+      emit_gas(rv, sb, cx, a, nl)
+      cx.sret_call = ov_sd
+      cx.agg_next = ov_next
+    } else {
+      emit_gas(rv, sb, cx, a, nl)
+    }
     push_str(sb, "  popq %rax\n")
   }
   push_str(sb, "  jmp ")
@@ -23017,11 +23027,21 @@ emit_st_expr_stmt := fn(e : ptr(Expr), nx : ptr(mut Stmt), head : ptr(mut Stmt),
         ##
         ## Reserve a scratch block and publish it exactly as the binding path does. Nothing reads it
         ## back; it exists so the callee has a legal address to write through.
+        ##
+        ## RECLAIM it after the call (restore `cx.agg_next` to its pre-allocation value), exactly as
+        ## `emit_call_args` reclaims its arg blocks. The block is a one-shot temporary — the callee
+        ## writes through it during the call and nothing reads it after — so two unbound wide-SRET
+        ## calls in one fn must REUSE the single reserved block, not each take a fresh one. Without
+        ## the reclaim the bump pointer advanced past every call and the second unbound call overflowed
+        ## the `imax`-sized pool (the "aggregate-value call-arg temp pool overflow" the concrete-only
+        ## form of this fix used to hit the moment a fn held two bare wide-SRET calls).
         if call_needs_sret_dst(e, cx.decls, cx.src, a) {
           ov := cx.sret_call
+          ov_next := cx.agg_next
           cx.sret_call = agg_alloc(cx)
           emit_gas(e, sb, cx, a, nl)
           cx.sret_call = ov
+          cx.agg_next = ov_next
         } else {
           emit_gas(e, sb, cx, a, nl)
         }
@@ -25863,10 +25883,18 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
     ## no declared return at all, where `sink := fn() { mk() }`'s call is the trailing EXPRESSION (the
     ## parser only makes a bare call a `Stmt::ExprStmt` when something follows it), so it never
     ## reaches the discard arm. Publish a destination for a wide-SRET callee here too (#711).
+    ## The destination is a one-shot temporary (non-aggregate return → the struct is discarded after
+    ## the call) — reclaim it so the single reserved block is reusable, not exhausted per call.
     ov_sd := cx.sret_call
-    if call_needs_sret_dst(d.value, p.decls, p.src, deref(p.mar)) { cx.sret_call = agg_alloc(ptr(cx)) }
-    emit_gas(d.value, sb, ptr(cx), deref(p.mar), nl)
-    cx.sret_call = ov_sd
+    if call_needs_sret_dst(d.value, p.decls, p.src, deref(p.mar)) {
+      ov_next := cx.agg_next
+      cx.sret_call = agg_alloc(ptr(cx))
+      emit_gas(d.value, sb, ptr(cx), deref(p.mar), nl)
+      cx.sret_call = ov_sd
+      cx.agg_next = ov_next
+    } else {
+      emit_gas(d.value, sb, ptr(cx), deref(p.mar), nl)
+    }
     push_str(sb, "  popq %rax\n")
     ## an f64/f32-returning fn delivers its value in %xmm0 (the SSE return register).
     if rfloat { push_str(sb, "  movq %rax, %xmm0\n") }

@@ -158,7 +158,7 @@ is_global_agg_arg := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
 ## pointer destination), so two of them in one call need two DISTINCT blocks. `src/`+`lib/` declare no
 ## wide-enum-returning fn → `aggpeak` is unchanged there → fixpoint-neutral.
 arg_is_agg_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  require_agg_blocks(e, decls, src, a) != 0 or struct_lit_info(e).is_s or enum_lit_info(e).is_e or array_lit_info(e).is_a or struct_ret_call(e, decls, src, a) or sret_ret_call(e, decls, src, a) or enum_sret_ret_call(e, decls, src, a) or fixed_array_byte_return_len(e, decls, src, a) >= 1 or is_global_agg_arg(e, decls, src, a)
+  require_agg_blocks(e, decls, src, a) != 0 or struct_lit_info(e).is_s or enum_lit_info(e).is_e or array_lit_info(e).is_a or struct_ret_call(e, decls, src, a) or sret_ret_call(e, decls, src, a) or gen_ret_sret_span(e, decls, src, a).n != 0 or enum_sret_ret_call(e, decls, src, a) or fixed_array_byte_return_len(e, decls, src, a) >= 1 or is_global_agg_arg(e, decls, src, a)
 }
 
 ## WIDTH of one expression that can be MATERIALIZED into the aggregate-value pool. This is deliberately
@@ -200,6 +200,19 @@ agg_value_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
     cs := call_ret_struct_span(e, decls, src, a)
     w := struct_words(decls, src, cs.s, cs.n, a)
     if w == 0 { panic("selfhost: aggregate-value scratch width could not resolve struct-return call") }
+    return w
+  }
+  ## The GENERIC wide-SRET dual of the branch above: a discarded/returned/trailing call to a generic
+  ## callee whose return resolves (through its type argument) to a struct too wide for the register
+  ## budget. Its hidden-result destination is a pool block that must be as WIDE as the struct, or the
+  ## callee writes past it and clobbers the frame (#711). `gen_ret_sret_span` returns the struct's
+  ## type-name span, so `struct_words` on it is the width — the same measurement the concrete branch
+  ## takes through `call_ret_struct_span`. Mutually exclusive with the branch above (a callee is
+  ## either concrete or generic), and 0 for the self-host (no generic fn returns its type param there).
+  gss := gen_ret_sret_span(e, decls, src, a)
+  if gss.n != 0 {
+    w := struct_words(decls, src, gss.s, gss.n, a)
+    if w == 0 { panic("selfhost: aggregate-value scratch width could not resolve generic wide-SRET return call") }
     return w
   }
   if enum_sret_ret_call(e, decls, src, a) or enum_ret_call_d(e, decls, src, a) {
@@ -389,8 +402,15 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
 ## reserved a block per bound call too — measured, that grew the frame of every such function in
 ## `src/` (`subq $624` -> `subq $688` and friends) and broke the fixpoint for no behavioural gain.
 ## Ask this only where the value has nowhere else to live.
+##
+## The predicate is the SAME question the emission asks (`call_needs_sret_dst` in lower.al): the
+## concrete `sret_ret_call` OR the generic `gen_ret_sret_span`. The generic half is reachable here
+## through the ancestor chain exactly as `sret_ret_call` is (this file is a DESCENDANT of `lower`,
+## Modules §3 — the sibling `lower::collect_slots` already calls `gen_ret_sret_span` by bare name).
+## Emission and reservation must ask the same question; a block taken by one half and counted by
+## neither is the compile failure the concrete-only version of this fix used to produce.
 pub agg_unbound_sret_block := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), a : rt::Arena) -> usize {
-  if sret_ret_call(e, decls, src, a) { return 1 }
+  if sret_ret_call(e, decls, src, a) or gen_ret_sret_span(e, decls, src, a).n != 0 { return 1 }
   0
 }
 ## The max aggregate-value-argument count of any single call within a statement list `head`.
