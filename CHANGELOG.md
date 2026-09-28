@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **Every component of an enum-variant payload is a brand sink.** `F.P(b, 7)` for `P(A, u64)` and a
+  sibling `b : B`, and `F.P(7, b)` for `P(u64, A)`, compiled and ran to the crossed values: only an
+  arity-1 variant's payload was judged, because the declaration records one type span for the whole
+  list. Each component is now judged against its own declared type (Types §4.2/§5.4), and the #299
+  census counts it — the last sink `accept_brand_unrefused_sinks` listed as open.
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness

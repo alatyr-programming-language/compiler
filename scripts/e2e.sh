@@ -6610,6 +6610,16 @@ check_accept accept_brand_require_identity
 run accept_brand_require_identity 42
 check_accept accept_brand_unrefused_sinks
 run accept_brand_unrefused_sinks 42
+## Issue #299 — EVERY component of an enum-variant payload is a brand sink, not only an arity-1
+## variant's one; the parent ran all three of these to the crossed values (9, 9, 4).
+build_reject_has reject_brand_payload_component_sink "implicit brand conversion"
+build_reject_has reject_brand_payload_component2_sink "implicit brand conversion"
+build_reject_has reject_brand_payload_component2_b1r "implicit brand conversion"
+emit_reject_has wat reject_brand_payload_component2_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_payload_component2_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_payload_component2_sink "implicit brand conversion"
+check_accept accept_brand_payload_components
+run accept_brand_payload_components 42
 ## The LEGAL half of the composition row above. Its assertions are deliberately SPLIT across two
 ## scopes — module scope proves the element walker ACCEPTS a legal `[2]A`, the local proves the value
 ## path is right — because #674 makes a module-level array of a BRAND read all-zero today. The
