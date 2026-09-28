@@ -2975,7 +2975,20 @@ sema_brand_ret_err := fn(rts : usize, rtl : usize, v : ptr(Expr), off : usize, d
 ## single-focus accessor (`expr_struct_lit_head`, the `expr_var_span`/`expr_agg_lit` idiom) that does
 ## dispatch. It recurses into a field value that is itself a struct literal, because the nested node is
 ## never handed to `check_expr` at all for the same reason.
+##
+## Issue #688 — ONE traversal, TWO consumers, as `sema_brand_array_elems` is: `census` selects the
+## per-field judgement (the counting hook or the refusing one) and nothing else, so the census counts
+## exactly the field sinks the refusal refuses at. It did not before — the refusal reached this sink
+## through this separately hooked walk and the census had no counterpart, so `S(f = b)` for a sibling
+## `b` was refused while the census channel received zero rows.
 sema_brand_struct_field_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  sema_brand_struct_fields(false, e, decls, upto, src, a, locals, nloc)
+}
+## The census end of the same walk (#688).
+brand_probe_struct_fields := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) {
+  z := sema_brand_struct_fields(true, e, decls, upto, src, a, locals, nloc)
+}
+sema_brand_struct_fields := fn(census : bool, e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> CheckErr {
   if SEMA_BRAND_DECLS == 0 { return 0 }
   al := expr_struct_lit_name(e)
   if al.n == 0 { return 0 }
@@ -2989,9 +3002,13 @@ sema_brand_struct_field_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : us
     if fld != 0 {
       fd := deref(fld_p(fld))
       ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
-      fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
-      if fe != 0 and err == 0 { err = fe }
-      ne := sema_brand_struct_field_err(sa.e, decls, upto, src, a, locals, nloc)
+      if census {
+        brand_probe_sink(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+      } else {
+        fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+        if fe != 0 and err == 0 { err = fe }
+      }
+      ne := sema_brand_struct_fields(census, sa.e, decls, upto, src, a, locals, nloc)
       if ne != 0 and err == 0 { err = ne }
       fld = fd.next
     }
@@ -7191,6 +7208,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   }
   bce := sema_brand_ctor_arg_err(e, s_of(e, a), decls, upto, src, locals, nloc, a)
   if bce != 0 { return Result(Ty, CheckErr).Err(bce) }
+  ## #299 census hook at the struct-literal field sink (#688), before the refusal, like every other sink.
+  brand_probe_struct_fields(e, decls, upto, src, a, locals, nloc)
   bsf := sema_brand_struct_field_err(e, decls, upto, src, a, locals, nloc)
   if bsf != 0 { return Result(Ty, CheckErr).Err(bsf) }
   ## …and the CONDITION of an `if`-as-EXPRESSION, the one sub-expression that path never hands to
