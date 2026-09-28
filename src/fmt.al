@@ -1884,7 +1884,6 @@ emit_fmt_expr_core := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a
     ## Defensive: `FnRef` is produced only by the driver's post-parse lift, which the fmt path never
     ## runs — so this is unreachable, but keeps the match total over the runtime `Expr` enum.
     Expr::FnRef(fnpos, fms, fml) => { push_str(sb, "fn() {}") }
-    _ => { panic("selfhost: fmt — unsupported expression form") }
   }
 }
 
@@ -2513,7 +2512,6 @@ fmt_name_seen_before := fn(head : ptr(mut Stmt), upto : usize, ns : usize, nl : 
       Stmt::Continue(_cd, nx) => { s = nx }
       Stmt::Unchecked(ub, nx) => { s = nx }
       Stmt::AllocWith(ae, awb, nx) => { s = nx }
-      _ => { s = 0 }
     }
   }
   seen
@@ -3202,7 +3200,6 @@ emit_fmt_stmts := fn(list : ptr(mut Stmt), body_head : ptr(mut Stmt), in out sb 
         push_str(sb, "}\n")
         s = nx
       }
-      _ => { panic("selfhost: fmt — unsupported statement form") }
     }
   }
 }
