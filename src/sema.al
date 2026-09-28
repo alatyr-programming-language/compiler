@@ -293,6 +293,21 @@ ty_kind_of_tag := fn(tag : u8) -> TyKind {
   TyKind.TyOther
 }
 
+## Issue #583 slice 3 — a `Local`'s tag byte without its `+128` mutability flag; the 255 poison byte
+## is left as it is. The one spelling of the strip that 45 sites wrote out by hand.
+tag_unflag := fn(tag : u8) -> u8 {
+  if tag >= 128 and tag != 255 { return tag - 128 }
+  tag
+}
+tag_is_hidden_struct := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyHiddenStruct => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_hidden_enum := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyHiddenEnum => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_tuple_mark := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyTupleMark => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyOther => { false } }
+}
 ## Issue #583 slice 2 — the kind questions the checker asks of a tag byte, one exhaustive `match` each,
 ## so a new `TyKind` must be answered in every one of them. A `Local`'s flagged byte (`+128`, `255`)
 ## decodes to `TyOther` and answers false everywhere, exactly as the integer comparisons it replaces did.
@@ -2660,12 +2675,11 @@ sema_brand_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src
   vs := expr_var_span(v)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
     raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut lt : u8 = raw.tag
-    if lt >= 128 and lt != 255 { lt = lt - 128 }
+    mut lt : u8 = tag_unflag(raw.tag)
     if lt == 255 { lt = 0 }
-    if lt == 9 { lt = 3 }
-    if lt == 10 { lt = 4 }
-    if lt == 12 { lt = 0 }
+    if tag_is_hidden_struct(lt) { lt = 3 }
+    if tag_is_hidden_enum(lt) { lt = 4 }
+    if tag_is_tuple_mark(lt) { lt = 0 }
     r = Ty(tag = lt, ns = raw.ns, nl = raw.nl)
   }
   r
@@ -3100,7 +3114,7 @@ late_enum_ann_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Ve
   if tl == 0 { return unknown }
   ncnt := rt::vec_len(deref(decls))
   if ncnt <= upto { return unknown }
-  if resolve_ty(src, ts, tl, decls, upto).tag != 0 { return unknown }
+  if not tag_is_unknown(resolve_ty(src, ts, tl, decls, upto).tag) { return unknown }
   full := resolve_ty(src, ts, tl, decls, ncnt)
   if tag_is_enum(full.tag) and full.nl != 0 { return full }
   unknown
@@ -3747,9 +3761,8 @@ sema_addr_local_struct_ptr_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(L
   root := expr_var_span(inner)
   if root.n == 0 or nloc == 0 or not local_in(locals, nloc, src, root.s, root.n) { return none }
   raw := local_ty(locals, nloc, src, root.s, root.n)
-  mut tag : u8 = raw.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if (tag == 3 or tag == 9) and raw.nl != 0 { return Ty(tag = 5, ns = raw.ns, nl = raw.nl) }
+  mut tag : u8 = tag_unflag(raw.tag)
+  if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and raw.nl != 0 { return Ty(tag = 5, ns = raw.ns, nl = raw.nl) }
   none
 }
 ## The POINTEE expression of a `deref(p)` place (null otherwise). A small single-focus match, for the
@@ -4421,15 +4434,14 @@ value_agg_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
   vs := expr_var_span(v)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
     raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut lt : u8 = raw.tag
-    if lt >= 128 and lt != 255 { lt = lt - 128 }
+    mut lt : u8 = tag_unflag(raw.tag)
     ## HIDDEN aggregate tags 9 (struct) / 10 (enum) are recorded by `Stmt::Assign` for a StructLit/EnumLit
     ## binding — hidden so `check_expr`'s Var resolution (which surfaces only 3/4/5) leaves them tag 0,
     ## keeping the OVERLOAD-NAIVE existing arg-vs-param checks tolerant (else `overload_three` false-rejects
     ## once struct args become known). Map them back to the real struct(3)/enum(4) tag here. A call-return
     ## struct is recorded as the real tag 3 and is treated identically.
-    if lt == 3 or lt == 9 { return Ty(tag = 3, ns = raw.ns, nl = raw.nl) }
-    if lt == 4 or lt == 10 { return Ty(tag = 4, ns = raw.ns, nl = raw.nl) }
+    if tag_is_struct(lt) or tag_is_hidden_struct(lt) { return Ty(tag = 3, ns = raw.ns, nl = raw.nl) }
+    if tag_is_enum(lt) or tag_is_hidden_enum(lt) { return Ty(tag = 4, ns = raw.ns, nl = raw.nl) }
   }
   Ty(tag = 0, ns = 0, nl = 0)
 }
@@ -4720,9 +4732,8 @@ sema_wrapper_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, s
   vs := expr_var_span(v)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
     raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut tag : u8 = raw.tag
-    if tag >= 128 and tag != 255 { tag = tag - 128 }
-    if tag == 11 { return Ty(tag = 11, ns = raw.ns, nl = raw.nl) }
+    mut tag : u8 = tag_unflag(raw.tag)
+    if tag_is_wrapper(tag) { return Ty(tag = 11, ns = raw.ns, nl = raw.nl) }
   }
   Ty(tag = 0, ns = 0, nl = 0)
 }
@@ -4947,8 +4958,8 @@ s3a_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   if ev.n != 0 {
     lt := local_ty(locals, nloc, src, ev.s, ev.n)
     mut tag := lt.tag
-    if tag >= 128 and tag != 255 { tag = tag - 128 }
-    if (tag == 3 or tag == 9) and lt.nl != 0 { r = VSpan(s = lt.ns, n = lt.nl) }
+    tag = tag_unflag(tag)
+    if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and lt.nl != 0 { r = VSpan(s = lt.ns, n = lt.nl) }
   } else {
     fs := expr_field_span(e)
     if fs.n != 0 {
@@ -5298,8 +5309,8 @@ array_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> VSpan {
 
 array_elem_ty := fn(src : ptr(u8), ty : Ty, decls : ptr(rt::Vec), upto : usize) -> Ty {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 { return Ty(tag = 0, ns = 0, nl = 0) }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) { return Ty(tag = 0, ns = 0, nl = 0) }
   sp := array_elem_span(src, ty.ns, ty.nl)
   resolve_ty(src, sp.s, sp.n, decls, upto)
 }
@@ -5428,8 +5439,8 @@ sema_direct_slice_field_elem_ty := fn(base : ptr(Expr), decls : ptr(rt::Vec), up
 ## Unknown/non-struct types stay conservative: the root marker is not discharged.
 da_seed_fields := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag == 3 and ty.nl != 0 {
+  tag = tag_unflag(tag)
+  if tag_is_struct(tag) and ty.nl != 0 {
     di := type_decl_index(decls, upto, src, ty.ns, ty.nl)
     if di != 0 {
       d := deref(decl_get(decls, di - 1))
@@ -5447,8 +5458,8 @@ da_seed_fields := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : p
 ## lengths stay conservative by retaining the root marker, rather than allocating unbounded DA state.
 da_seed_array := fn(in out da : DA, src : ptr(u8), rs : usize, rn : usize, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) { return }
   n := array_type_count(src, ty.ns, ty.nl)
   if n < 0 or n > 256 { return }
   da_remove_root(da, src, rs, rn)
@@ -5463,8 +5474,8 @@ da_seed_array := fn(in out da : DA, src : ptr(u8), rs : usize, rn : usize, ty : 
 ## remain conservative and therefore do not discharge any DA entry.
 da_assign_array := fn(in out da : DA, src : ptr(u8), rs : usize, rn : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) or ix < 0 { return }
   n := array_type_count(src, ty.ns, ty.nl)
   if n < 0 or ix >= n { return }
   avec_remove(da_avec_value(da), src, rs, rn, usize(ix))
@@ -5476,14 +5487,14 @@ da_assign_array := fn(in out da : DA, src : ptr(u8), rs : usize, rn : usize, ix 
 ## that field of that element. Dynamic/out-of-range indices and non-struct elements remain conservative.
 da_assign_array_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) or ix < 0 { return }
   n := array_type_count(src, ty.ns, ty.nl)
   if n < 0 or n > 256 or ix >= n { return }
   et := array_elem_ty(src, ty, decls, upto)
   mut etag := et.tag
-  if etag >= 128 and etag != 255 { etag = etag - 128 }
-  if etag != 3 or et.nl == 0 { return }
+  etag = tag_unflag(etag)
+  if not tag_is_struct(etag) or et.nl == 0 { return }
   if da_has_array(ptr(da), src, rs, rn, usize(ix)) {
     avec_remove(da_avec_value(da), src, rs, rn, usize(ix))
     di := type_decl_index(decls, upto, src, et.ns, et.nl)
@@ -5506,8 +5517,8 @@ da_assign_array_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, 
 ## can have left a NAVec marker for the selected index, which is expanded just for that element.
 da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ss : usize, sln : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 3 or ty.nl == 0 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_struct(tag) or ty.nl == 0 or ix < 0 { return }
   if da_has_root(ptr(da), src, rs, rn) {
     da_remove_root(da, src, rs, rn)
     da_seed_fields(da, decls, upto, src, rs, rn, ty)
@@ -5515,14 +5526,14 @@ da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : 
   fsp := sema_field_ann_span(decls, upto, src, ty.ns, ty.nl, fs, fln, unchecked bitcast(ptr(mut rt::Arena), da.arena))
   ft := resolve_ty(src, fsp.s, fsp.n, decls, upto)
   mut ftag := ft.tag
-  if ftag >= 128 and ftag != 255 { ftag = ftag - 128 }
-  if ftag != 7 { return }
+  ftag = tag_unflag(ftag)
+  if not tag_is_array(ftag) { return }
   n := array_type_count(src, ft.ns, ft.nl)
   if n < 0 or n > 256 or ix >= n { return }
   et := array_elem_ty(src, ft, decls, upto)
   mut etag := et.tag
-  if etag >= 128 and etag != 255 { etag = etag - 128 }
-  if etag != 3 or et.nl == 0 { return }
+  etag = tag_unflag(etag)
+  if not tag_is_struct(etag) or et.nl == 0 { return }
   if da_has_field(ptr(da), src, rs, rn, fs, fln) {
     fvec_remove(da_fvec_value(da), src, rs, rn, fs, fln)
     di := type_decl_index(decls, upto, src, et.ns, et.nl)
@@ -5561,14 +5572,14 @@ da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : 
 ## element fields, sibling leaf fields, and whole aggregate reads stay unreadied until explicitly written.
 da_assign_array_elem_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ss : usize, sln : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) or ix < 0 { return }
   n := array_type_count(src, ty.ns, ty.nl)
   if n < 0 or n > 256 or ix >= n { return }
   et := array_elem_ty(src, ty, decls, upto)
   mut etag := et.tag
-  if etag >= 128 and etag != 255 { etag = etag - 128 }
-  if etag != 3 or et.nl == 0 { return }
+  etag = tag_unflag(etag)
+  if not tag_is_struct(etag) or et.nl == 0 { return }
   if da_has_array(ptr(da), src, rs, rn, usize(ix)) {
     avec_remove(da_avec_value(da), src, rs, rn, usize(ix))
     di := type_decl_index(decls, upto, src, et.ns, et.nl)
@@ -5585,8 +5596,8 @@ da_assign_array_elem_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), up
   fsp := sema_field_ann_span(decls, upto, src, et.ns, et.nl, fs, fln, unchecked bitcast(ptr(mut rt::Arena), da.arena))
   ft := resolve_ty(src, fsp.s, fsp.n, decls, upto)
   mut ftag := ft.tag
-  if ftag >= 128 and ftag != 255 { ftag = ftag - 128 }
-  if ftag != 3 or ft.nl == 0 { return }
+  ftag = tag_unflag(ftag)
+  if not tag_is_struct(ftag) or ft.nl == 0 { return }
   if da_has_nested_array(ptr(da), src, rs, rn, fs, fln, usize(ix)) {
     navec_remove(da_navec_value(da), src, rs, rn, fs, fln, usize(ix))
     di2 := type_decl_index(decls, upto, src, ft.ns, ft.nl)
@@ -5608,8 +5619,8 @@ da_assign_array_elem_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), up
 ## the supported one-field scalar-array shape is represented here; deeper and dynamic paths stay conservative.
 da_assign_nested_array := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 3 or ty.nl == 0 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_struct(tag) or ty.nl == 0 or ix < 0 { return }
   if da_has_root(ptr(da), src, rs, rn) {
     da_remove_root(da, src, rs, rn)
     da_seed_fields(da, decls, upto, src, rs, rn, ty)
@@ -5618,8 +5629,8 @@ da_assign_nested_array := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize,
     fsp := sema_field_ann_span(decls, upto, src, ty.ns, ty.nl, fs, fln, unchecked bitcast(ptr(mut rt::Arena), da.arena))
     ft := resolve_ty(src, fsp.s, fsp.n, decls, upto)
     mut ftag := ft.tag
-    if ftag >= 128 and ftag != 255 { ftag = ftag - 128 }
-    if ftag == 7 {
+    ftag = tag_unflag(ftag)
+    if tag_is_array(ftag) {
       n := array_type_count(src, ft.ns, ft.nl)
       if n >= 0 and n <= 256 and ix < n {
         fvec_remove(da_fvec_value(da), src, rs, rn, fs, fln)
@@ -5654,8 +5665,8 @@ da_assign_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : 
 ## remain conservative because they never remove the root or an unreadied prefix.
 da_assign_path := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), np : NestedPath, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 3 or ty.nl == 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_struct(tag) or ty.nl == 0 { return }
   if da_has_root(ptr(da), src, np.rs, np.rn) {
     da_remove_root(da, src, np.rs, np.rn)
     da_seed_fields(da, decls, upto, src, np.rs, np.rn, ty)
@@ -5664,9 +5675,9 @@ da_assign_path := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : p
     fsp := sema_field_ann_span(decls, upto, src, ty.ns, ty.nl, np.fs, np.fl, unchecked bitcast(ptr(mut rt::Arena), da.arena))
     ft := resolve_ty(src, fsp.s, fsp.n, decls, upto)
     mut ftag := ft.tag
-    if ftag >= 128 and ftag != 255 { ftag = ftag - 128 }
+    ftag = tag_unflag(ftag)
     fvec_remove(da_fvec_value(da), src, np.rs, np.rn, np.fs, np.fl)
-    if ftag == 3 and ft.nl != 0 {
+    if tag_is_struct(ftag) and ft.nl != 0 {
       di := type_decl_index(decls, upto, src, ft.ns, ft.nl)
       if di != 0 {
         d := deref(decl_get(decls, di - 1))
@@ -5725,9 +5736,8 @@ global_struct_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
 ## the global fallback covers a module-level annotated or inferred struct. Other types remain unknown.
 sema_struct_owner_name_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> VSpan {
   lt := local_ty(locals, nloc, src, s, n)
-  mut tag : u8 = lt.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if (tag == 3 or tag == 9) and lt.nl != 0 { return VSpan(s = lt.ns, n = lt.nl) }
+  mut tag : u8 = tag_unflag(lt.tag)
+  if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and lt.nl != 0 { return VSpan(s = lt.ns, n = lt.nl) }
   global_struct_type_span(decls, src, s, n)
 }
 ## Issue #693 — the direct-NAME counterpart of the enum-owner question, for a statement write place.
@@ -5738,9 +5748,8 @@ sema_name_owner_is_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(
   if nloc == 0 { return false }
   if not local_in(locals, nloc, src, s, n) { return false }
   lt := local_ty(locals, nloc, src, s, n)
-  mut tag : u8 = lt.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 4 and tag != 10 { return false }
+  mut tag : u8 = tag_unflag(lt.tag)
+  if not tag_is_enum(tag) and not tag_is_hidden_enum(tag) { return false }
   ## the union exclusion, for the reason `sema_enum_owner_field_err` records.
   if lt.nl != 0 and is_union_decl(decls, src, lt.ns, lt.nl) { return false }
   true
@@ -6074,9 +6083,8 @@ sema_ptr_expr_ty := fn(pe : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), loca
   if pv.n != 0 {
     if nloc == 0 or not local_in(locals, nloc, src, pv.s, pv.n) { return unknown }
     lt := local_ty(locals, nloc, src, pv.s, pv.n)
-    mut ltag : u8 = lt.tag
-    if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
-    if ltag == 5 and lt.nl != 0 { return Ty(tag = 5, ns = lt.ns, nl = lt.nl) }
+    mut ltag : u8 = tag_unflag(lt.tag)
+    if tag_is_ptr(ltag) and lt.nl != 0 { return Ty(tag = 5, ns = lt.ns, nl = lt.nl) }
     return unknown
   }
   ct := sole_fn_ret_ty(pe, decls, rt::vec_len(deref(decls)), src)
@@ -6375,7 +6383,7 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
     Expr::Field(base, fs, fl) => {
       fb := expr_var_span(base)
       if fb.n == 0 or (nloc != 0 and local_in(locals, nloc, src, fb.s, fb.n)) { 0 }
-      else if resolve_ty(src, fb.s, fb.n, decls, upto).tag == 4 and comptime_enum_variant_zero(decls, upto, src, fb.s, fb.n, fs, fl) { 4 }
+      else if tag_is_enum(resolve_ty(src, fb.s, fb.n, decls, upto).tag) and comptime_enum_variant_zero(decls, upto, src, fb.s, fb.n, fs, fl) { 4 }
       else { 0 }
     }
     Expr::EnumLit(es, el, vs, vl, np, _ah) => {
@@ -6386,11 +6394,10 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
       if nloc != 0 { found_local = local_in(locals, nloc, src, vs, vl) }
       if found_local {
         raw := local_ty(locals, nloc, src, vs, vl)
-        mut tag : u8 = raw.tag
-        if tag >= 128 and tag != 255 { tag = tag - 128 }
+        mut tag : u8 = tag_unflag(raw.tag)
         if not sema_local_is_comptime(src, local_at(locals, nloc, src, vs, vl)) { return 0 }
-        if tag == 1 or tag == 2 or tag == 4 { return tag }
-        if tag == 10 { return 4 }
+        if tag_is_int(tag) or tag_is_bool(tag) or tag_is_enum(tag) { return tag }
+        if tag_is_hidden_enum(tag) { return 4 }
         return 0
       }
       mut i := 0
@@ -6431,7 +6438,7 @@ comptime_binding_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, s
   mut want : u8 = 0
   if comptime_integer_type_name(src, ann.s, ann.n) { want = 1 }
   else if str_at((src + ann.s), ann.n) == "bool" { want = 2 }
-  else if resolve_ty(src, ann.s, ann.n, decls, upto).tag == 4 { want = 4 }
+  else if tag_is_enum(resolve_ty(src, ann.s, ann.n, decls, upto).tag) { want = 4 }
   if want == got { return got }
   0
 }
@@ -7375,15 +7382,14 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   evs := expr_var_span(e)
   if evs.n != 0 and nloc != 0 and local_in(locals, nloc, src, evs.s, evs.n) {
     raw := local_ty(locals, nloc, src, evs.s, evs.n)
-    mut ltag : u8 = raw.tag
-    if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
+    mut ltag : u8 = tag_unflag(raw.tag)
     mut rtag : u8 = 0
   ## surface a CONCRETE tag for a struct/enum (3/4), pointer (5), or direct user brand (8) local —
   ## pointers and brands carry their nominal name in ns/nl, so `ty_compat`/`ty_eq` can distinguish
   ## incompatible identities. Scalars/str/bool stay tolerant (tag 0); an unknown pointee/brand name
   ## remains tolerant inside the corresponding comparison, so this does not widen rejection beyond
   ## a resolved identity.
-  if ltag == 3 or ltag == 4 or ltag == 5 or ltag == 8 { rtag = ltag }
+  if tag_is_struct(ltag) or tag_is_enum(ltag) or tag_is_ptr(ltag) or tag_is_brand(ltag) { rtag = ltag }
     return Result(Ty, CheckErr).Ok(Ty(tag = rtag, ns = raw.ns, nl = raw.nl))
   }
   ## A direct `local[N]` over a fixed `[T; N]` is the one indexed shape whose bound is already
@@ -7526,10 +7532,9 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       avs := expr_var_span(ga.e)
       argloc := avs.n != 0 and local_in(locals, nloc, src, avs.s, avs.n)
       at := local_ty(locals, nloc, src, avs.s, avs.n)
-      mut atag : u8 = at.tag
-      if atag >= 128 and atag != 255 { atag = atag - 128 }
+      mut atag : u8 = tag_unflag(at.tag)
       pt := callee_param_ty(decls, upto, src, ecs.s, ecs.n, apidx, a)
-      known := argloc and atag == 5 and tag_is_ptr(pt.tag) and at.nl != 0 and pt.nl != 0
+      known := argloc and tag_is_ptr(atag) and tag_is_ptr(pt.tag) and at.nl != 0 and pt.nl != 0
       if known { if not streq(src, at.ns, at.nl, pt.ns, pt.nl) { mark_failed(locals, mismatch_err(avs.s, 0)) } }
       apidx += 1
       gg = ga.next
@@ -7596,11 +7601,10 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     msv := expr_var_span(emp.scrut)
     if msv.n != 0 and nloc != 0 and local_in(locals, nloc, src, msv.s, msv.n) {
       msty := local_ty(locals, nloc, src, msv.s, msv.n)
-      mut mstag : u8 = msty.tag
-      if mstag >= 128 and mstag != 255 { mstag = mstag - 128 }
+      mut mstag : u8 = tag_unflag(msty.tag)
       ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` value-match must cover its finite
       ## domain (else poison the check). Fail-open for anything else (see scalar_coverage_gap).
-      if (mstag == 1 or mstag == 2) and scalar_coverage_gap(emp.head, mstag, msty.ns, msty.nl, src) {
+      if (tag_is_int(mstag) or tag_is_bool(mstag)) and scalar_coverage_gap(emp.head, mstag, msty.ns, msty.nl, src) {
         mark_failed(locals, mismatch_err(s_of(emp.scrut, a), 0))
       }
     }
@@ -7623,12 +7627,11 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       if nloc != 0 { found_local = local_in(locals, nloc, src, s, n) }
       if found_local {
         raw := local_ty(locals, nloc, src, s, n)
-        mut ltag : u8 = raw.tag
-        if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
+        mut ltag : u8 = tag_unflag(raw.tag)
         ## Issue #5's hidden tuple marker is only for the direct builtin-conversion fence. Keep it
         ## UNKNOWN in ordinary compatibility so tuple parameters and unrelated expression paths retain
         ## their pre-existing conservative behavior.
-        if ltag == 12 { ltag = 0 }
+        if tag_is_tuple_mark(ltag) { ltag = 0 }
         Result(Ty, CheckErr).Ok(Ty(tag = ltag, ns = raw.ns, nl = raw.nl))
       } else if upto == 0 {
         Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
@@ -7960,20 +7963,18 @@ lbv_lit_tag := fn(e : ptr(Expr)) -> u8 {
 ## the caller is the only thing that knows which. Passing them beats four copies of the seam test.
 sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, cls : str, off : usize) -> bool {
   mut actual := checked
-  mut atag : u8 = actual.tag
-  if atag >= 128 and atag != 255 { atag = atag - 128 }
-  if atag == 9 { atag = 3 }
-  if atag == 10 { atag = 4 }
+  mut atag : u8 = tag_unflag(actual.tag)
+  if tag_is_hidden_struct(atag) { atag = 3 }
+  if tag_is_hidden_enum(atag) { atag = 4 }
   actual = Ty(tag = atag, ns = actual.ns, nl = actual.nl)
   if tag_is_unknown(actual.tag) {
     vs := expr_var_span(v)
     if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
       raw := local_ty(locals, nloc, src, vs.s, vs.n)
-      mut rtag : u8 = raw.tag
-      if rtag >= 128 and rtag != 255 { rtag = rtag - 128 }
-      if rtag == 9 { rtag = 3 }
-      if rtag == 10 { rtag = 4 }
-      if rtag != 0 and rtag != 255 { actual = Ty(tag = rtag, ns = raw.ns, nl = raw.nl) }
+      mut rtag : u8 = tag_unflag(raw.tag)
+      if tag_is_hidden_struct(rtag) { rtag = 3 }
+      if tag_is_hidden_enum(rtag) { rtag = 4 }
+      if not tag_is_unknown(rtag) and rtag != 255 { actual = Ty(tag = rtag, ns = raw.ns, nl = raw.nl) }
     }
   }
   if tag_is_unknown(actual.tag) {
@@ -8054,9 +8055,8 @@ sema_pointer_rooted_field_ty := fn(place : ptr(Expr), decls : ptr(rt::Vec), upto
     mut pty := Ty(tag = 0, ns = 0, nl = 0)
     if root.n != 0 { pty = local_ty(locals, nloc, src, root.s, root.n) }
     else { pty = expr_call_result_ty(inner, decls, upto, src) }
-    mut ptag : u8 = pty.tag
-    if ptag >= 128 and ptag != 255 { ptag = ptag - 128 }
-    if ptag == 5 and pty.nl != 0 { return Ty(tag = 3, ns = pty.ns, nl = pty.nl) }
+    mut ptag : u8 = tag_unflag(pty.tag)
+    if tag_is_ptr(ptag) and pty.nl != 0 { return Ty(tag = 3, ns = pty.ns, nl = pty.nl) }
     return Ty(tag = 0, ns = 0, nl = 0)
   }
   field := expr_field_span(place)
@@ -8095,13 +8095,11 @@ sema_array_nested_field_path_value_bad := fn(path : ArrayNestedPath, checked : T
   array_span := sema_field_ann_span(decls, upto, src, owner.s, owner.n, path.fs, path.fl, a)
   if array_span.n == 0 { return false }
   array_ty := resolve_ty(src, array_span.s, array_span.n, decls, upto)
-  mut array_tag : u8 = array_ty.tag
-  if array_tag >= 128 and array_tag != 255 { array_tag = array_tag - 128 }
-  if array_tag != 7 { return false }
+  mut array_tag : u8 = tag_unflag(array_ty.tag)
+  if not tag_is_array(array_tag) { return false }
   elem_ty := array_elem_ty(src, array_ty, decls, upto)
-  mut elem_tag : u8 = elem_ty.tag
-  if elem_tag >= 128 and elem_tag != 255 { elem_tag = elem_tag - 128 }
-  if elem_tag != 3 or elem_ty.nl == 0 { return false }
+  mut elem_tag : u8 = tag_unflag(elem_ty.tag)
+  if not tag_is_struct(elem_tag) or elem_ty.nl == 0 { return false }
   leaf_span := sema_field_ann_span(decls, upto, src, elem_ty.ns, elem_ty.nl, path.ss, path.sl, a)
   if leaf_span.n == 0 { return false }
   leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
@@ -8827,7 +8825,7 @@ ct_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), name_st
 ## untouched; `ct_guard_err` also preserves the `unchecked` escape semantics.
 ct_array_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), decls : ptr(rt::Vec), upto : usize) -> CheckErr {
   esp := array_elem_span(src, ts, tl)
-  if esp.n == 0 or resolve_ty(src, esp.s, esp.n, decls, upto).tag != 1 { return 0 }
+  if esp.n == 0 or not tag_is_int(resolve_ty(src, esp.s, esp.n, decls, upto).tag) { return 0 }
   match deref(e) {
     Expr::ArrayLit(nel, ah) => {
       mut g := ah
@@ -9098,10 +9096,9 @@ lbv_known_tag := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
   vs := expr_var_span(e)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
     raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut tag : u8 = raw.tag
-    if tag >= 128 and tag != 255 { tag = tag - 128 }
-    if tag == 9 { tag = 3 }
-    if tag == 10 { tag = 4 }
+    mut tag : u8 = tag_unflag(raw.tag)
+    if tag_is_hidden_struct(tag) { tag = 3 }
+    if tag_is_hidden_enum(tag) { tag = 4 }
     if tag != 255 { return tag }
   }
   rv := check_expr(e, decls, upto, src, a, locals, nloc)
@@ -9686,9 +9683,8 @@ fixed_array_index_oob := fn(base : ptr(Expr), idx : ptr(Expr), src : ptr(u8), lo
   bv := expr_var_span(base)
   if bv.n == 0 or not local_in(locals, nloc, src, bv.s, bv.n) { return false }
   bt := local_ty(locals, nloc, src, bv.s, bv.n)
-  mut tag : u8 = bt.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 { return false }
+  mut tag : u8 = tag_unflag(bt.tag)
+  if not tag_is_array(tag) { return false }
   n := array_type_count(src, bt.ns, bt.nl)
   if n < 0 { return false }
   iv := expr_num_lit_val(idx)
@@ -10276,13 +10272,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## operator after `assign_is_reassign` has recovered its spelling.
           if sema_local_name_is_comptime(src, locals, cnt, ns, nl) { mark_failed(locals, immutable_err(ns)) }
           if raw.tag < 128 and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or raw.tag == 255 { mark_failed(locals, immutable_err(ns)) }
-          mut xtag : u8 = raw.tag
-          if xtag >= 128 and xtag != 255 { xtag = xtag - 128 }
+          mut xtag : u8 = tag_unflag(raw.tag)
           ## normalize the HIDDEN aggregate tags (9 struct / 10 enum, set for a StructLit/EnumLit binding)
           ## back to their real struct(3)/enum(4) tag for the reassign type-match — else `tag_compat(9, 3)`
           ## false-rejects a valid `mut r := S(...)  … r = <struct value>` (a real tag-3 RHS).
-          if xtag == 9 { xtag = 3 }
-          if xtag == 10 { xtag = 4 }
+          if tag_is_hidden_struct(xtag) { xtag = 3 }
+          if tag_is_hidden_enum(xtag) { xtag = 4 }
           xt := Ty(tag = xtag, ns = raw.ns, nl = raw.nl)
           ptrint_probe_site("REASSIGN", "reassign", true, tv.tag, xt.tag, ns, src)
           if not tag_compat(xt.tag, tv.tag) { mark_failed(locals, mismatch_err(ns, 0)) }
@@ -10352,7 +10347,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## AddrOf is a payload-heavy arm that the frozen bootstrap may skip in check_expr's large
           ## match, returning UNKNOWN instead of its invariant pointer tag. The dedicated accessor is
           ## the reliable AST fact: every Expr::AddrOf has type ptr(_), independently of its pointee.
-          if bind_tag == 0 and unchecked bitcast(usize, ain) != 0 { bind_tag = 5 }
+          if tag_is_unknown(bind_tag) and unchecked bitcast(usize, ain) != 0 { bind_tag = 5 }
           if unchecked bitcast(usize, ain) != 0 and expr_field_span(ain).n != 0 { bind_prov = prov_field_ptr() }
           ## A range-slice local is a view, so its write permission follows the backing place rather
           ## than the view's own copied pair. `prov_view` names that provenance; its element kind is
@@ -10445,15 +10440,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## a direct AddrOf(Var-local-struct) → the addressed local's recorded nominal type; otherwise DROP
           ## to unknown (0/0, poison-tolerant). The AddrOf recovery is intentionally struct-only: it supplies
           ## the exact fact needed by recursive pointer-field place typing without widening other consumers.
-          if bind_tag == 5 {
+          if tag_is_ptr(bind_tag) {
             bind_ns = 0
             bind_nl = 0
             rvs := expr_var_span(v)
             if rvs.n != 0 {
               rlt := local_ty(locals, cnt, src, rvs.s, rvs.n)
-              mut rltag : u8 = rlt.tag
-              if rltag >= 128 and rltag != 255 { rltag = rltag - 128 }
-              if rltag == 5 { bind_ns = rlt.ns; bind_nl = rlt.nl; bind_prov = local_prov(locals, cnt, src, rvs.s, rvs.n) }
+              mut rltag : u8 = tag_unflag(rlt.tag)
+              if tag_is_ptr(rltag) { bind_ns = rlt.ns; bind_nl = rlt.nl; bind_prov = local_prov(locals, cnt, src, rvs.s, rvs.n) }
             }
             if bind_nl == 0 {
               apt := sema_addr_local_struct_ptr_ty(v, src, locals, cnt)
@@ -10468,9 +10462,9 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## a later `match deref(init_e)` is checked for exhaustiveness. The packed carrier may hand the
           ## call back as tag 0, so the tag is filled as well as the name. Enum pointees only, as narrow
           ## as #656's twin: a struct pointee also feeds `ty_compat`'s pointer discrimination.
-          if ann.n == 0 and bind_nl == 0 and (bind_tag == 0 or bind_tag == 5) and expr_call_callee_span(v).n != 0 {
+          if ann.n == 0 and bind_nl == 0 and (tag_is_unknown(bind_tag) or tag_is_ptr(bind_tag)) and expr_call_callee_span(v).n != 0 {
             cpt := sema_ptr_expr_ty(v, decls, src, locals, cnt)
-            if sema_enum_pointee(cpt, decls, src).tag == 4 {
+            if tag_is_enum(sema_enum_pointee(cpt, decls, src).tag) {
               bind_tag = 5
               bind_ns = cpt.ns
               bind_nl = cpt.nl
@@ -10497,7 +10491,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## so recover it exactly like tag 0 instead of recording a nameless struct local. An ARRAY literal
           ## of SCALAR-LITERAL elements is tagged 7 (scalar-element array) so a whole-aggregate store into
           ## `xs[i]` is rejected. An annotation / call-return with a reliable payload still wins.
-          if bind_tag == 0 or (bind_tag == 3 and bind_nl == 0) {
+          if tag_is_unknown(bind_tag) or (tag_is_struct(bind_tag) and bind_nl == 0) {
             ## HIDDEN tags 9 (struct) / 10 (enum): `value_agg_ty` maps them back, but `check_expr`'s Var
             ## resolution does NOT surface them, so the overload-naive existing arg checks stay tolerant.
             ## Covers a StructLit / EnumLit / nullary-enum-variant RHS (and a Var aliasing such a local).
@@ -10514,10 +10508,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## `match x` skipped the exhaustiveness check. Record it under the HIDDEN enum tag 10, the one
           ## an inferred `c := C.R` already uses, when nothing else recorded a tag; a public tag 4 that
           ## arrived without its name keeps its tag and only gains the name.
-          if ann.n == 0 and bind_nl == 0 and (bind_tag == 0 or bind_tag == 4) {
+          if ann.n == 0 and bind_nl == 0 and (tag_is_unknown(bind_tag) or tag_is_enum(bind_tag)) {
             vet := sema_value_enum_ty(v, decls, src, locals, cnt)
             if tag_is_enum(vet.tag) {
-              if bind_tag == 0 { bind_tag = 10 }
+              if tag_is_unknown(bind_tag) { bind_tag = 10 }
               bind_ns = vet.ns
               bind_nl = vet.nl
             }
@@ -10611,9 +10605,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## declared type span, then check the stored value against it. Poison-tolerant (a non-struct or
         ## unknown base → no fire).
         bfe := local_ty(locals, cnt, src, bns, bnl)
-        mut bftag : u8 = bfe.tag
-        if bftag >= 128 and bftag != 255 { bftag = bftag - 128 }
-        if (bftag == 3 or bftag == 9) and bfe.nl != 0 {
+        mut bftag : u8 = tag_unflag(bfe.tag)
+        if (tag_is_struct(bftag) or tag_is_hidden_struct(bftag)) and bfe.nl != 0 {
           ftsp := sema_field_ann_span(decls, upto, src, bfe.ns, bfe.nl, fns, fnl, a)
           if agg_scalar_bad(ftsp.s, ftsp.n, fv, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(bns, 0)) }
           da_assign_field(deref(da), decls, upto, src, bns, bnl, fns, fnl, Ty(tag = 3, ns = bfe.ns, nl = bfe.nl))
@@ -10818,11 +10811,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         sv := expr_var_span(sc)
         if sv.n != 0 and cnt != 0 and local_in(locals, cnt, src, sv.s, sv.n) {
           sty := local_ty(locals, cnt, src, sv.s, sv.n)
-          mut stag : u8 = sty.tag
-          if stag >= 128 and stag != 255 { stag = stag - 128 }
+          mut stag : u8 = tag_unflag(sty.tag)
           ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` scalar match must cover its
           ## finite domain (else a compile error). Fail-open for anything else (see scalar_coverage_gap).
-          if (stag == 1 or stag == 2) and scalar_coverage_gap(ah, stag, sty.ns, sty.nl, src) {
+          if (tag_is_int(stag) or tag_is_bool(stag)) and scalar_coverage_gap(ah, stag, sty.ns, sty.nl, src) {
             return Result(usize, CheckErr).Err(mismatch_err(s_of(sc, a), 0))
           }
         }
@@ -10881,9 +10873,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           if expr_is_num_lit(ii) {
             da_assign_array(deref(da), src, ibv.s, ibv.n, expr_num_lit_val(ii), iae)
           }
-          mut iatag : u8 = iae.tag
-          if iatag >= 128 and iatag != 255 { iatag = iatag - 128 }
-          if iatag == 7 and (iae.nl == 0 or array_elem_scalar(src, iae.ns, iae.nl)) {
+          mut iatag : u8 = tag_unflag(iae.tag)
+          if tag_is_array(iatag) and (iae.nl == 0 or array_elem_scalar(src, iae.ns, iae.nl)) {
             va := value_agg_ty(iv, decls, upto, src, locals, cnt)
             if tag_is_struct(va.tag) or tag_is_enum(va.tag) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
           }
@@ -11656,9 +11647,8 @@ type_is_owning := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), tns : us
 ## `@owning` type. False for scalars / unresolved / non-owning aggregates.
 local_is_owning := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), xs : usize, xl : usize, decls : ptr(rt::Vec), upto : usize) -> bool {
   lt := local_ty(locals, nloc, src, xs, xl)
-  mut base : u8 = lt.tag
-  if base >= 128 and base != 255 { base = base - 128 }
-  if base != 3 and base != 4 { return false }
+  mut base : u8 = tag_unflag(lt.tag)
+  if not tag_is_struct(base) and not tag_is_enum(base) { return false }
   type_is_owning(decls, upto, src, lt.ns, lt.nl)
 }
 
@@ -11890,15 +11880,14 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
     ## half of this pair is the `prov_array_param()` setter in `check_fn`).
     if prov == prov_array_param() { return 0 }
     raw := local_ty(locals, nloc, src, root.s, root.n)
-    mut tag : u8 = raw.tag
-    if tag >= 128 and tag != 255 { tag = tag - 128 }
+    mut tag : u8 = tag_unflag(raw.tag)
     ## Pointer/deref places have a separate pointer mutability contract. Pattern/loop bindings and
     ## other unresolved locals are deliberately unknown, so this fence must not turn them into false
     ## rejects. `Slice(T)` parameters are borrowed views whose element permission is not expressible
     ## until the separate `[mut T]` work; retain their established writable-view behavior here.
-    if tag == 0 or tag == 5 or tag == 255 { return 0 }
+    if tag_is_unknown(tag) or tag_is_ptr(tag) or tag == 255 { return 0 }
     if raw.nl != 0 and str_at((src + raw.ns), raw.nl) == "Slice" { return 0 }
-    if tag != 0 and raw.tag < 128 { return 1 }
+    if not tag_is_unknown(tag) and raw.tag < 128 { return 1 }
     return 0
   }
   if sema_global_name_anywhere(decls, src, root.s, root.n) and not is_mod_mut_global(decls, src, root.s, root.n) { return 2 }
@@ -11918,9 +11907,8 @@ sema_place_is_str_view := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), ro
   if not local_in(locals, nloc, src, root.s, root.n) { return false }
   if local_prov(locals, nloc, src, root.s, root.n) == prov_str_view() { return true }
   raw := local_ty(locals, nloc, src, root.s, root.n)
-  mut tag : u8 = raw.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  tag == 6
+  mut tag : u8 = tag_unflag(raw.tag)
+  tag_is_str(tag)
 }
 
 ## A direct field write is a first write only while its root or exact field marker remains unreadied.
@@ -12088,13 +12076,13 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     ## Issue #557 — an enum parameter whose type is declared in a later-sorted module; recorded under
     ## the hidden enum tag 10 so only `value_agg_ty`'s consumers see it (see `late_enum_ann_ty`).
     lpe := late_enum_ann_ty(src, pm.ts, pm.tl, decls, upto)
-    if ptag == 0 and tag_is_enum(lpe.tag) { ptag = 10; pt = lpe }
+    if tag_is_unknown(ptag) and tag_is_enum(lpe.tag) { ptag = 10; pt = lpe }
     ## Issue #656 — the POINTER twin of the line above: `e : ptr(E)` whose pointee enum is declared in
     ## a LATER-sorted module. The tag is already 5 and stays 5; only the pointee NAME the `upto` prefix
     ## could not see is filled in, so the recording becomes identical to the one an earlier-sorted
     ## enum's module already produces (see `late_enum_ptr_ty`).
     lpp := late_enum_ptr_ty(src, pm.ts, pm.tl, decls, upto)
-    if ptag == 5 and pt.nl == 0 and tag_is_ptr(lpp.tag) { pt = lpp }
+    if tag_is_ptr(ptag) and pt.nl == 0 and tag_is_ptr(lpp.tag) { pt = lpp }
     if pm.pmode == 2 { ptag = ptag + 128 }
     ## Array-shaped parameters are already caller-backed places in the existing ABI (pmode 1: a
     ## `[T; N]` and the tuple parameters that share that representation); keep their element writes
@@ -12793,9 +12781,8 @@ sema_builtin_aggregate_conversion_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec),
   if vs.n == 0 or nloc == 0 or not local_in(locals, nloc, src, vs.s, vs.n) { return false }
   lv := deref(locals)
   raw := local_ty(locals, nloc, src, vs.s, vs.n)
-  mut ltag : u8 = raw.tag
-  if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
-  if ltag == 12 { return not sema_tuple_conversion_exists(decls, upto, src, cs.s, cs.n, lv.mod_s, lv.mod_l) }
+  mut ltag : u8 = tag_unflag(raw.tag)
+  if tag_is_tuple_mark(ltag) { return not sema_tuple_conversion_exists(decls, upto, src, cs.s, cs.n, lv.mod_s, lv.mod_l) }
   agg := value_agg_ty(a0.e, decls, upto, src, locals, nloc)
   if not tag_is_struct(agg.tag) and not tag_is_enum(agg.tag) { return false }
   not sema_aggregate_conversion_exists(decls, upto, src, cs.s, cs.n, agg, lv.mod_s, lv.mod_l)
