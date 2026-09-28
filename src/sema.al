@@ -37,7 +37,7 @@ stmt_label_span := ast::stmt_label_span
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
 ## does not depend on sema → no import cycle. (`struct_decl_of`/`base_type_name`/`brand_underlying` added
 ## for the is-KIND + field-COUNT fold — they classify the resolved type exactly as the lower's own fold.)
-(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc, is_union_decl) := lower_layout
+(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, qualified_type_decl, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc, is_union_decl) := lower_layout
 ## §8 `@repr(T)` tag-type primitives (shared with `lower::validate_repr`) for the LOCATED @repr reject:
 ## sema classifies an enum's `@repr(T)` tag exactly as the build's `validate_repr` does (same span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
@@ -421,6 +421,9 @@ mut PTRINT_LOST : usize = 0
 mut PTRINT_MOD_NS : usize = 0
 mut PTRINT_MOD_NL : usize = 0
 mut PTRINT_DECL_NS : usize = 0
+## Issue #697 — the parameter list of the declaration `check_decl` is checking (as a word), so a local
+## annotation can tell the enclosing function's `T : type` parameters from unknown type names.
+mut SEMA_DECL_PARAMS : usize = 0
 mut PTRINT_DECL_NL : usize = 0
 ## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF for
 ## one that is closed or opened read-only, and touches no memory in either case.
@@ -2234,7 +2237,41 @@ ptr_pointee_span := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Ve
       if kok and streq(src, d.name_start, d.name_len, ns2, nl2) { r = VSpan(s = ns2, n = nl2) }
     }
   }
+  ## Issue #697 — a PATH-QUALIFIED pointee (`ptr(ast::Expr)`) names the same declaration as the bare
+  ## spelling, and records that declaration's own name span: byte for byte what the bare spelling
+  ## records, so `ty_compat`'s pointee comparison sees one identity, not two spellings. Resolved by
+  ## `sema_qual_type_decl` below.
+  if r.n == 0 {
+    qi := sema_qual_type_decl(decls, src, ns2, nl2, ncnt)
+    if qi >= 0 {
+      qd := deref(decl_get(decls, usize(qi)))
+      r = VSpan(s = qd.name_start, n = qd.name_len)
+    }
+  }
   return r
+}
+
+## Issue #697 — the declaration a PATH-QUALIFIED type spelling names, through
+## `lower_layout::qualified_type_decl` (the reader `qualified_type_name_known` answers from, module
+## aliases included), but only when its NAME is unique among the struct/enum declarations; else -1.
+## A resolved `Ty` carries the declaration's name span and no module, and every later lookup (field
+## types, variant lists) goes by that name — so for `rt::StrBuf`, with a second `StrBuf` in
+## `alloc::strbuf`, a resolved identity would be read back as the wrong struct. Unknown, as before,
+## is the sound answer there. The declaration must also lie inside `ncnt`, the same name-resolution
+## prefix a bare spelling is resolved under: field and variant lookups use that prefix too, so a type
+## resolved past it has no fields to read (measured: `rt::StrBuf` in `cli`, where `rt` sorts later).
+sema_qual_type_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ncnt : usize) -> i64 {
+  qi := qualified_type_decl(decls, src, s, n)
+  if qi < 0 or usize(qi) >= ncnt { return -1 }
+  qd := deref(decl_get(decls, usize(qi)))
+  cnt := rt::vec_len(deref(decls))
+  mut same := 0
+  for i in 0..cnt {
+    d := deref(decl_get(decls, i))
+    if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, qd.name_start, qd.name_len) { same += 1 }
+  }
+  if same != 1 { return -1 }
+  qi
 }
 
 resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), ncnt : usize) -> Ty {
@@ -2322,6 +2359,15 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
         }
       }
       j += 1
+    }
+  }
+  ## Issue #697 — `ast::Expr` is `Expr`: resolve a path-qualified name to its declaration.
+  if r.tag == 0 {
+    qi := sema_qual_type_decl(decls, src, bn.s, bn.n, ncnt)
+    if qi >= 0 {
+      qd := deref(decl_get(decls, usize(qi)))
+      if qd.kind == 2 { r = Ty(tag = 3, ns = qd.name_start, nl = qd.name_len) }
+      if qd.kind == 3 { r = Ty(tag = 4, ns = qd.name_start, nl = qd.name_len) }
     }
   }
   r
@@ -10132,6 +10178,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if call_atomic_ordering_bad(v, src, a) { mark_failed(locals, mismatch_err(s_of(v, a), 0)) }
         if expr_has_unbound(v, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(v, decls, upto, src, a, locals, cnt)) }
         ann := local_type_span(src, ns, nl)
+        ## Issue #697 — an annotation naming no type is a located refusal, never an annotation that
+        ## silently constrains nothing.
+        if not assign_is_reassign(src, ns, nl) and ann.n != 0 {
+          lau := sema_local_ann_type_unknown(unchecked bitcast(ptr(mut Param), SEMA_DECL_PARAMS), decls, src, ann.s, ann.n)
+          if lau != 0 { mark_failed(locals, lau) }
+        }
         ## Issue #215 bounded fallback: reject the exact direct annotation in the shared semantic pass,
         ## so `check`, build, and all emit-to-stdout backends cannot accept a silent wrong value/trap.
         ## Reassignments and every non-local shape remain outside this local declaration fence.
@@ -12226,6 +12278,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
 ## no expressions to check (skip).
 check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> Result(usize, CheckErr) {
   ptrint_probe_decl(d)
+  SEMA_DECL_PARAMS = unchecked bitcast(usize, d.params_head)
   if d.kind == 1 { return check_fn(d, decls, upto, src, a) }
   if d.kind == 0 {
     mut failed_word := 0
@@ -14075,15 +14128,6 @@ sema_slice_sugar_reject := fn(d : Decl, src : ptr(u8)) -> usize {
 ## parser stores only the HEAD of multi-token annotations (`ptr`, `fn`, `Box`, …), so this validator
 ## deliberately handles ONLY a single bare identifier. Generic/qualified/pointer/function forms keep
 ## their existing validators; a `T : type` parameter is an abstract type, not an unknown name.
-sema_fn_type_param_name := fn(d : Decl, src : ptr(u8), s : usize, n : usize) -> bool {
-  mut pp := d.params_head
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, s, n) { return true }
-    pp = pm.next
-  }
-  false
-}
 
 ## A plain type alias such as CheckErr := usize is recorded as a kind-0 decl with alias_ts/alias_tl,
 ## but lower_layout::type_name_known intentionally answers only built-ins and aggregate aliases. Keep
@@ -14107,7 +14151,7 @@ sema_type_alias_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   false
 }
 
-sema_signature_type_head_unknown := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
+sema_signature_type_head_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
   if n == 0 or not _sident1(src, s) { return 0 }
   mut i := 1
   while i < n {
@@ -14120,7 +14164,7 @@ sema_signature_type_head_unknown := fn(d : Decl, decls : ptr(rt::Vec), src : ptr
   ## A parser-recorded tail of `mod::Type` has the separator immediately before it; a complete
   ## qualified return span is caught by the same splitter. Visibility/identity remains separate.
   if sema_gref_split(src, s, n).qual { return 0 }
-  if sema_fn_type_param_name(d, src, s, n) { return 0 }
+  if sema_param_type_name(ph, src, s, n) { return 0 }
   ## The parser keeps only the head for `ptr(T)`, `fn(...) -> R`, and generic constructors. Do not
   ## turn those multi-token forms into a bare-name decision merely because their head is unresolved.
   mut p := s + n
@@ -14142,15 +14186,55 @@ sema_signature_type_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) 
   mut pp := d.params_head
   while pp != 0 {
     pm := deref(param_p(pp))
-    r0 := sema_signature_type_head_unknown(d, decls, src, pm.ts, pm.tl)
+    r0 := sema_signature_type_head_unknown(d.params_head, decls, src, pm.ts, pm.tl)
     if r0 != 0 { return r0 }
     pp = pm.next
   }
   if d.ret_tl != 0 {
-    r1 := sema_signature_type_head_unknown(d, decls, src, d.ret_ts, d.ret_tl)
+    r1 := sema_signature_type_head_unknown(d.params_head, decls, src, d.ret_ts, d.ret_tl)
     if r1 != 0 { return r1 }
   }
   0
+}
+
+## Issue #697 — a LOCAL annotation that names no type. The signature fence above refused an unknown
+## parameter or result type, while `x : NoSuchType = 42` and `p : ptr(NoSuchType) = …` checked at rc 0:
+## the annotation resolved to nothing, so it constrained nothing, and a `match` over the binding lost
+## its exhaustiveness check without a word. The same head test answers for the annotation's head, and
+## for the pointee of a `ptr(…)` annotation, bare or path-qualified (see the qualified branch for how
+## little a path is trusted). `ph` is the enclosing function's parameter list, so its own `T : type`
+## parameters stay names rather than references.
+sema_local_ann_type_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> usize {
+  if tl == 0 { return 0 }
+  r0 := sema_signature_type_head_unknown(ph, decls, src, ts, tl)
+  if r0 != 0 { return r0 }
+  if str_at((src + ts), 3) != "ptr" { return 0 }
+  mut p := ts + 3
+  while _sws1(src, p) { p += 1 }
+  if str_at((src + p), 1) != "(" { return 0 }
+  p += 1
+  while _sws1(src, p) { p += 1 }
+  if str_at((src + p), 4) == "mut " { p += 4 }
+  while _sws1(src, p) { p += 1 }
+  ps := p
+  mut scanning := true
+  while scanning {
+    c := str_at((src + p), 1)
+    if c == " " or c == ")" or c == "," or c == "(" or c == "\n" or c == "\t" or c == "\r" { scanning = false } else { p += 1 }
+  }
+  pn := p - ps
+  if pn == 0 { return 0 }
+  pg := sema_gref_split(src, ps, pn)
+  if pg.qual {
+    ## A path-qualified pointee is refused only when its last segment names no type ANYWHERE — no
+    ## struct/enum, alias or brand. Which module the head names is visibility's question (§3), and
+    ## `qualified_type_name_known` does not yet answer it for a multi-segment library path
+    ## (`base::alloc::AllocError` reads as unknown), so it cannot be the basis of a refusal.
+    if type_name_known(decls, src, pg.ns, pg.nl) or sema_type_alias_known(decls, src, pg.ns, pg.nl) { return 0 }
+    if brand_underlying(decls, src, pg.ns, pg.nl).n != 0 { return 0 }
+    return located_err(ps)
+  }
+  sema_signature_type_head_unknown(ph, decls, src, ps, pn)
 }
 
 ## Validate only the newly supported surface: module-qualified arguments of a generic type appearing
@@ -14659,9 +14743,9 @@ sema_vis_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, c
 ## #403 — a generic declaration's TYPE PARAMETER is a name, not a nominal type reference. `Result`'s
 ## `T`/`E` and `derive::eq`'s `T` are spelled in the SAME type positions a nominal name occupies, and a
 ## user package that happens to declare a private `T := struct {…}` would otherwise make the LIBRARY's
-## own signature a §3 violation (measured: 27 corpus fixtures). `sema_signature_type_head_unknown`
-## already carries this exemption as `sema_fn_type_param_name`; this is the same test against a param
-## list the caller passes explicitly, so the body walk (which has no enclosing declaration) can pass 0.
+## own signature a §3 violation (measured: 27 corpus fixtures). The caller passes the param list
+## explicitly, so the body walk (which has no enclosing declaration) can pass 0; the signature fence
+## `sema_signature_type_head_unknown` asks through this one test too (#697 removed its private copy).
 sema_param_type_name := fn(ph : ptr(mut Param), src : ptr(u8), s : usize, n : usize) -> bool {
   mut pp := ph
   while pp != 0 {

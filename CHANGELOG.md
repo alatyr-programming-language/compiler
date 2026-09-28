@@ -122,6 +122,15 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A path-qualified type annotation names its type, and an annotation naming no type is refused.**
+  `q : ptr(zkinds::Kind) = p` resolved `zkinds::Kind` to nothing, so a `match deref(q)` missing a
+  variant compiled at rc 0 while the bare `ptr(Kind)` spelling was refused (Control Flow §5.1); a
+  qualified name now resolves to the same declaration, in either module order. And a local annotation
+  whose type exists nowhere — `x : NoSuchType = 42`, `p : ptr(NoSuchType)`, `p : ptr(m::NoSuchType)` —
+  checked at rc 0 and constrained nothing; it is now refused at its line, as a parameter spelled the
+  same way already was. A qualified name is resolved only when its type name is unique among the
+  package's types and declared inside the current name-resolution prefix, and a qualified path into
+  a library module is not yet resolved, so both stay unchecked rather than guessed (#697).
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness

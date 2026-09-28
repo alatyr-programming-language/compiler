@@ -98,8 +98,10 @@ before claiming it:
   path-qualified spelling of the same type — turns it OFF (rc 0, silent), and `ee := e`, no
   annotation at all, keeps it. A bogus name in that slot, `ptr(ast::NoSuchTypeQQ)` or
   `ptr(NoSuchTypeQQ)`, is also accepted at rc 0, so the annotation is not being resolved rather than
-  resolved to something else; that is **#697**. The consequence for this stage is practical: a
-  follow-up table run with the qualified spelling reports "annotation does not help" and is wrong.
+  resolved to something else; that was **#697**, now fixed: `ptr(ast::Expr)` keeps the check like
+  `ptr(Expr)`, and a bogus name is refused at its line. A qualified path into a LIBRARY module is
+  still not resolved, and neither is one whose type name is declared twice (`rt::StrBuf`), so the
+  bare spelling remains the one to write when the point is to switch the check on.
 
 Re-measured a third time on `src/parser.al` (`60338f4`, compiler built from that tree): **21 caught
 of 24**, and all three blind arms are the per-arm class — two are `#660`'s `match x` over

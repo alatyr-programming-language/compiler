@@ -4084,13 +4084,23 @@ pub qualified_enum_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize,
 pub qualified_type_name_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
   qh := type_path_head(src, s, n)
   if qh.n == 0 { return type_name_known(decls, src, s, n) }
+  qualified_type_decl(decls, src, s, n) >= 0
+}
+
+## The index of the struct/enum declaration a PATH-QUALIFIED type spelling (`ast::Expr`, or through a
+## module alias `strbuf::StrBuf`) names, else -1; -1 as well for an unqualified spelling. One answer for
+## `qualified_type_name_known` and for `sema::resolve_ty` (#697), which before this resolved every
+## qualified annotation to nothing.
+pub qualified_type_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> i64 {
+  qh := type_path_head(src, s, n)
+  if qh.n == 0 { return -1 }
   nm := name_tail(src, s, n)
   cnt := rt::vec_len(deref(decls))
   mut i := 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, nm.s, nm.n)
-       and type_module_eq(src, d.mod_start, d.mod_len, qh.s, qh.n) { return true }
+       and type_module_eq(src, d.mod_start, d.mod_len, qh.s, qh.n) { return i64(i) }
     i += 1
   }
   ah := qualified_module_alias(decls, src, qh.s, qh.n)
@@ -4099,11 +4109,11 @@ pub qualified_type_name_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usi
     while i < cnt {
       d := deref(decl_get(decls, i))
       if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, nm.s, nm.n)
-         and type_module_eq(src, d.mod_start, d.mod_len, ah.s, ah.n) { return true }
+         and type_module_eq(src, d.mod_start, d.mod_len, ah.s, ah.n) { return i64(i) }
       i += 1
     }
   }
-  false
+  -1
 }
 
 ## RAW UNION discrimination (spec Types §6.3). A `union { m(T), … }` parses into the SAME kind-3
