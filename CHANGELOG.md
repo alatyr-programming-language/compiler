@@ -128,7 +128,9 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   left to the lowering as before. Two programs the specification already declared invalid are
   refused: a `bool` used as an arithmetic operand (`(10 > 3) + 41` — write `u64(10 > 3) + 41`,
   Types §4.2/§4.3), and a comparison operator-function declared to return anything but `bool`
-  (Stdlib §2.6); two corpus fixtures were corrected accordingly.
+  (Stdlib §2.6); two corpus fixtures were corrected accordingly. With the `Unchecked`, `Bitcast`,
+  `Loop`, `Lambda`, `FnRef`, `CompField` and `BoolLit` arms also running, a `bitcast` of a `bool`
+  to a word (`bitcast(i64, u < 0)`) is refused too — `bitcast` needs equal bit width (Types §4.4).
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness
