@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A sibling brand no longer crosses through a fixed array.** `take([b, c])` for
+  `take := fn(xs : [A; 2])` and a sibling `b, c : B`, `take(bs)` for `bs : [B; 2]`, and
+  `ys : [A; 2] = bs` all checked at rc 0 and ran to the foreign values (Types §4.2/§5.4). An array
+  parameter is recorded by its element type, so the brand judge never saw an array; and a whole array
+  value was never judged, only array literals. Both are refused at the crossing now, and the #299
+  census counts them (#698).
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness

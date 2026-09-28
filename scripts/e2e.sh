@@ -6610,6 +6610,19 @@ check_accept accept_brand_require_identity
 run accept_brand_require_identity 42
 check_accept accept_brand_unrefused_sinks
 run accept_brand_unrefused_sinks 42
+## Issue #698 — an ARRAY parameter (`xs : [A; 2]`) and a whole array LOCAL at a `[A; N]` sink. The
+## parent built all three and ran them to the sibling's values (32, 32, 22).
+build_reject_has reject_brand_array_param_literal "implicit brand conversion"
+check_reject reject_brand_array_param_literal
+build_reject_has reject_brand_array_param_local "implicit brand conversion"
+check_reject reject_brand_array_param_local
+build_reject_has reject_brand_array_bind_local "implicit brand conversion"
+check_reject reject_brand_array_bind_local
+emit_reject_has wat reject_brand_array_param_literal "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_array_param_literal "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_array_param_literal "implicit brand conversion"
+check_accept accept_brand_array_param
+run accept_brand_array_param 42
 ## The LEGAL half of the composition row above. Its assertions are deliberately SPLIT across two
 ## scopes — module scope proves the element walker ACCEPTS a legal `[2]A`, the local proves the value
 ## path is right — because #674 makes a module-level array of a BRAND read all-zero today. The
