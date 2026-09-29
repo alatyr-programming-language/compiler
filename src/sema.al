@@ -7652,11 +7652,11 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## written arm; every other variant answers UNKNOWN (tag 0, poison-tolerant) — explicitly, which
   ## is what the garbage was being read as.
   match deref(e) {
-    Expr::Num => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
-      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
-      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+    Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::BoolLit | Expr::Bin | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
   }
 }
 
