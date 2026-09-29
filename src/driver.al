@@ -530,7 +530,7 @@ d_lift_stmts := fn(head : ptr(mut Stmt), ms : usize, ml : usize, in out decls : 
       Stmt::CompMatch(sc, ah, nx) => { d_lift_arms(ah, ms, ml, decls, na, tar) }
       Stmt::Break | Stmt::Continue => {}
     }
-    s = d_next_stmt(s, na)
+    s = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, s), na))
   }
 }
 
@@ -685,7 +685,7 @@ d_local_type_span := fn(head : ptr(mut Stmt), cs : usize, cl : usize, decls : rt
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
         | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
   r
 }
@@ -785,7 +785,7 @@ d_cap_locals := fn(head : ptr(mut Stmt), na : ptr(mut rt::Arena), locals : ptr(r
       Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Collect the free vars over a lambda body's STATEMENTS (calls `d_cap_free` on each stmt's exprs).
@@ -826,7 +826,7 @@ d_cap_free_stmts := fn(head : ptr(mut Stmt), ph : ptr(mut Param), na : ptr(mut r
       Stmt::CompMatch(sc, ah, nx) => { d_cap_free(sc, ph, na, decls, src, locals, caps, body, hardreject) }
       Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## ESCAPE: does name `[s,n)` appear as an `Expr::Var` in `e`? (Call callee is a name span, not a Var.)
@@ -878,7 +878,7 @@ d_stmts_use_var := fn(head : ptr(mut Stmt), s : usize, n : usize, na : ptr(mut r
       Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
         | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## CALL REWRITE — append a trailing `Var(cap)` Arg per capture to every direct call `f(...)` in `e`.
@@ -956,7 +956,7 @@ d_stmts_rw_calls := fn(head : ptr(mut Stmt), fs : usize, fl : usize, caps : ptr(
       Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
         | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## ---- FN-6 §6.2 — capturing closure through a LOOP / NON-FORWARDING higher-order fn (HOF) ----
@@ -1044,7 +1044,7 @@ d_scan_hof_stmts := fn(head : ptr(mut Stmt), fs : usize, fl : usize, na : ptr(mu
       Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
         | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Count `Call` occurrences whose callee is `[cs,cl)` in expr `e` (guards the single-call-site rewrite).
@@ -1096,7 +1096,7 @@ d_count_calls_stmts := fn(head : ptr(mut Stmt), cs : usize, cl : usize, na : ptr
       Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
         | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 d_count_prog_calls := fn(cs : usize, cl : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
@@ -1299,7 +1299,7 @@ d_stmts_rw_hof_site := fn(head : ptr(mut Stmt), hs : usize, hl : usize, fs : usi
       Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
         | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Attempt §6.2 HOF specialization for a capturing closure `[fs,fl)` (fnpos = its `fn` src offset =
@@ -1479,7 +1479,7 @@ d_uses_dyn_over_stmts := fn(head : ptr(mut Stmt), fs : usize, fl : usize, na : p
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
         | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 d_try_capture := fn(fs : usize, fl : usize, v : ptr(Expr), body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : ptr(mut Param), src : ptr(u8)) {
@@ -1806,7 +1806,7 @@ d_rewrite_fwd_stmts := fn(head : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
         | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## FN-11 escape check (Memory §5.3.1). A `dyn` value is a two-word `{code, env}` fat pair whose `env`
@@ -1844,7 +1844,7 @@ d_name_is_dyn_local := fn(head : ptr(mut Stmt), na : ptr(mut rt::Arena), src : p
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
         | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Does expr `e` reference a `dyn` local (of `body`) as an `Expr::Var` value? A `Call` walks only its
@@ -1895,7 +1895,7 @@ d_stmts_dyn_escape := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), na : ptr(mu
       Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
         | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 
@@ -1917,7 +1917,7 @@ d_capture_pass := fn(body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt
         | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 
@@ -1983,7 +1983,7 @@ d_insert_arg := fn(ah : ptr(mut Arg), k : usize, ae : ptr(Expr), na : ptr(mut rt
   gn := deref(arg_p(g)).next
   parser::set_arg_next(na, newarg, gn)
   parser::set_arg_next(na, g, newarg)
-  ah
+  unchecked bitcast(usize, ah)
 }
 ## If Call `e` (span cs,cl; nargs; arg head ah) omits its allocator param, splice `ptr(amb)` at it.
 d_elide_call := fn(e : ptr(Expr), cs : usize, cl : usize, nargs : usize, ah : ptr(mut Arg), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
@@ -2035,7 +2035,7 @@ d_elide_alloc_stmts := fn(head : ptr(mut Stmt), amb : usize, decls : rt::Vec, na
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
         | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 
@@ -2213,7 +2213,7 @@ d_local_binding := fn(head : ptr(mut Stmt), src : ptr(u8), vs : usize, vl : usiz
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
         | Stmt::CompFor | Stmt::CompForRange => {}
     }
-    s = d_next_stmt(s, na)
+    s = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, s), na))
   }
   r
 }
@@ -2446,7 +2446,7 @@ d_iterfor_try := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr)
 d_iterfor_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), ph : ptr(mut Param), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
   mut s := head
   while s != 0 {
-    nxt := d_next_stmt(s, na)
+    nxt := d_next_stmt(unchecked bitcast(usize, s), na)
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::For(fns, fnl, flo, fhi, fb, fnx) => {
@@ -2466,7 +2466,7 @@ d_iterfor_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), ph : ptr(mut P
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
-    s = nxt
+    s = unchecked bitcast(ptr(mut Stmt), nxt)
   }
 }
 
@@ -3544,7 +3544,7 @@ d_manifest_rewrite_stmts := fn(head : ptr(mut Stmt), allow : bool, in out nstr :
       Stmt::CompMatch(sc, ah, nx) => { d_manifest_rewrite_expr(sc, allow, nstr, src, na); d_manifest_rewrite_arms(ah, allow, nstr, src, na) }
       Stmt::Continue => {}
     }
-    s = d_next_stmt(s, na)
+    s = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, s), na))
   }
 }
 
@@ -5667,7 +5667,7 @@ d_qual_stmts := fn(head : ptr(mut Stmt), ms : usize, ml : usize, decls : rt::Vec
       Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
         | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Walk every fn body (+ trailing return expr) of the decls currently flagged in `keep` — or of ALL
@@ -5880,7 +5880,7 @@ d_aggcmp_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), decls : rt::Vec
         | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    st = d_next_stmt(st, na)
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## 1 iff any fn of the ENTRY module `[ems,eml)` compares aggregates with `==` / `!=`.
