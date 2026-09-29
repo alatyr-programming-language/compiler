@@ -389,7 +389,7 @@ pub ends_with := fn(s : str, suffix : str) -> bool {
 pub strip_prefix := fn(s : str, prefix : str) -> str {
   if not starts_with(s, prefix) { return s }
   p := unchecked bitcast(ptr(u8), bitcast(usize, s.ptr) + prefix.len)
-  str_at(p, s.len - prefix.len)
+  str_at(unchecked bitcast(usize, p), s.len - prefix.len)
 }
 
 ## `strip_suffix` — `s` with a trailing `suffix` removed if it is present, else `s` UNCHANGED. A `str`
@@ -407,7 +407,7 @@ pub trim_start_matches := fn(s : str, b : u8) -> str {
   mut i : usize = 0
   while i < s.len and bs[i] == b { i += 1 }
   p := unchecked bitcast(ptr(u8), bitcast(usize, s.ptr) + i)
-  str_at(p, s.len - i)
+  str_at(unchecked bitcast(usize, p), s.len - i)
 }
 pub trim_end_matches := fn(s : str, b : u8) -> str {
   bs := bytes(s)
@@ -430,7 +430,7 @@ pub trim_start := fn(s : str) -> str {
   mut i : usize = 0
   while i < s.len and is_ascii_ws(bs[i]) { i += 1 }
   p := unchecked bitcast(ptr(u8), bitcast(usize, s.ptr) + i)
-  str_at(p, s.len - i)
+  str_at(unchecked bitcast(usize, p), s.len - i)
 }
 
 ## `s` with trailing ASCII whitespace removed (keeps the start, so no pointer arithmetic).
