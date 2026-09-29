@@ -10537,6 +10537,10 @@ run_wat wasm_nested_call 42
 run_wat wasm_if 42
 run_wat wasm_bool 42
 run_wat wasm_cmp_value 42
+## #716 — `bool` is not an arithmetic operand (Types §4.2/§4.3); `check_expr`'s `Bin` arm refuses it
+## now that it runs. The parent accepted this and ran it to 42.
+check_reject reject_bool_int_arith
+build_reject reject_bool_int_arith
 run_wat wasm_locals 42
 run_wat wasm_local_mix 42
 run_wat wasm_reassign 42
