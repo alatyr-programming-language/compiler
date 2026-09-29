@@ -134,6 +134,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   same way already was. A qualified name is resolved only when its type name is unique among the
   package's types and declared inside the current name-resolution prefix, and a qualified path into
   a library module is not yet resolved, so both stay unchecked rather than guessed (#697).
+- **A `match` over a generic call's result is checked for exhaustiveness.** A generic function that
+  declares its result as one of its own type parameters — `id := fn(T : type, p : ptr(mut T)) ->
+  ptr(mut T)`, `pass := fn(T : type, v : T) -> T` — left the scrutinee's type unknown, so
+  `match deref(id(C, p))`, `x := deref(id(C, p))` and `c := pass(C, v)` skipped Control Flow §5.1
+  and a missing variant compiled at rc 0. The type argument at that parameter's position is now the
+  type, for a sole declaration and a bare type-name argument (#660).
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness

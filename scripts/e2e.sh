@@ -6407,6 +6407,17 @@ emit_reject_has riscv64 issue680_nonexh_ptr_local "type mismatch at line 13"
 # through a call-bound local and a direct call, both of which must stay accepted.
 check_accept issue680_exhaustive_six_shapes
 run issue680_exhaustive_six_shapes 42
+# Issue #660 / Control Flow §5.1 — a GENERIC callee whose result is one of its own type parameters
+# (`-> T`, `-> ptr(mut T)`): the scrutinee's type is the type argument at T's position. All three built
+# and ran to 42 on the parent with `B` uncovered.
+build_reject_has issue660_nonexh_generic_ptr_local "type mismatch at line 9"
+check_reject issue660_nonexh_generic_ptr_local
+build_reject_has issue660_nonexh_generic_ptr_inline "type mismatch at line 7"
+check_reject issue660_nonexh_generic_ptr_inline
+build_reject_has issue660_nonexh_generic_value "type mismatch at line 7"
+check_reject issue660_nonexh_generic_value
+check_accept issue660_exhaustive_generic
+run issue660_exhaustive_generic 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42
