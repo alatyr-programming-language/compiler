@@ -484,6 +484,15 @@ if [ "$DOCS_RC" -eq 1 ]; then
 fi
 ```
 
+The same gate may run remotely: push the merged object (and later the object with its oracle commit)
+to a `gate/<name>` branch and `.github/workflows/gate.yml` runs `scripts/full.sh --force-sweeps` on a
+GitHub-hosted x86_64 runner. Read its `gate.log` artifact — the verdict is the `*** FULL GATE` line
+for that exact commit, never the check's colour — and `explain.txt` for the joined transitions. When
+they are the predicted ones, the run's `corpus.manifest` artifact IS the regenerated oracle: commit it
+alone and push that object to `gate/<name>` for the final run. Several `gate/*` branches run at once,
+so a chain of landings can be gated speculatively (`main+A`, `main+A+B`, …) and published in order.
+Delete the `gate/*` branch after the landing. Never gate on an emulated x86_64.
+
 Then, as separate statements — **never chained to the push**:
 
 ```sh

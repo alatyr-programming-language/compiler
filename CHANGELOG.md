@@ -127,6 +127,43 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   arity-1 variant's payload was judged, because the declaration records one type span for the whole
   list. Each component is now judged against its own declared type (Types §4.2/§5.4), and the #299
   census counts it — the last sink `accept_brand_unrefused_sinks` listed as open.
+- **The full gate can run on a GitHub-hosted runner.** `.github/workflows/gate.yml` runs
+  `scripts/full.sh --force-sweeps` on every push to a `gate/**` branch and publishes the log and the
+  generated corpus manifest; it holds no write token, and landing stays the integrator's (#748).
+- **A path-qualified type annotation names its type, and an annotation naming no type is refused.**
+  `q : ptr(zkinds::Kind) = p` resolved `zkinds::Kind` to nothing, so a `match deref(q)` missing a
+  variant compiled at rc 0 while the bare `ptr(Kind)` spelling was refused (Control Flow §5.1); a
+  qualified name now resolves to the same declaration, in either module order. And a local annotation
+  whose type exists nowhere — `x : NoSuchType = 42`, `p : ptr(NoSuchType)`, `p : ptr(m::NoSuchType)` —
+  checked at rc 0 and constrained nothing; it is now refused at its line, as a parameter spelled the
+  same way already was. A qualified name is resolved only when its type name is unique among the
+  package's types and declared inside the current name-resolution prefix, and a qualified path into
+  a library module is not yet resolved, so both stay unchecked rather than guessed (#697).
+- **A `match` over a generic call's result is checked for exhaustiveness.** A generic function that
+  declares its result as one of its own type parameters — `id := fn(T : type, p : ptr(mut T)) ->
+  ptr(mut T)`, `pass := fn(T : type, v : T) -> T` — left the scrutinee's type unknown, so
+  `match deref(id(C, p))`, `x := deref(id(C, p))` and `c := pass(C, v)` skipped Control Flow §5.1
+  and a missing variant compiled at rc 0. The type argument at that parameter's position is now the
+  type, for a sole declaration and a bare type-name argument (#660).
+- **`match deref(q)` over an annotated pointer-to-enum local dispatches on the enum.** The x86_64
+  lowering typed `p : ptr(E)` only as a PARAMETER, so `q : ptr(E) = p` then `match deref(q)` compared
+  every arm against 0 and returned the wrong arm's value for any variant but the first (1 instead of
+  42 in the new fixture, silently). The local is now bound as the parameter is, bare or
+  path-qualified `E` alike (#716).
+- **An enum `match` the x86_64 lowering cannot type is refused instead of miscompiled.** A variant arm
+  over a scrutinee whose enum type the lowering could not see — `match deref(ptr(mut x))` over a
+  local, a value bound from it, `deref` of a call — was compared against tag 0: the first variant
+  matched by coincidence and every other variant took no arm, silently. The compiler did this to
+  itself at 57 arms, `sema::check_expr`'s whole dispatch among them. Those sites are rewritten
+  (PRs under #716), and the fallback is now a located refusal whose diagnostic names the spelling
+  that works (`match deref(p)` over an annotated pointer parameter) (#716).
+- **`check` now type-checks binary operators.** `check_expr`'s `Bin` arm had never run (#716): the
+  lowering compared its dispatch against tag 0, so only integer literals reached their arm. It
+  runs now, with operator overloads on user types, generic `uint(N)` operands and brand operands
+  left to the lowering as before. Two programs the specification already declared invalid are
+  refused: a `bool` used as an arithmetic operand (`(10 > 3) + 41` — write `u64(10 > 3) + 41`,
+  Types §4.2/§4.3), and a comparison operator-function declared to return anything but `bool`
+  (Stdlib §2.6); two corpus fixtures were corrected accordingly.
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness
@@ -138,6 +175,17 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   on the gap is one §5.1 already declares invalid — a PATCH, and a build that newly fails names the
   `match` to complete. Inside this compiler the only such `match` was `comptime::fold`, which named 17
   of `Expr`'s 24 variants; it now names all of them (#680).
+- **Eight `match` sites in the compiler that never took their arms now do.** The x86_64 lowering
+  compares a `match` arm that names an enum variant against **tag 0** whenever it cannot see the
+  scrutinee's enum type (#716), and eight sites in the compiler's own source were written in exactly
+  such a spelling — an inline `match deref(<payload binding or call>)`. Each is now asked through a
+  function whose `match` is over a pointer parameter, which the lowering types. Two of them were
+  user-visible. A local bound from a module-const struct's `str` field (`v := APP.name`) got a
+  one-word slot for a two-word value, so passing or aliasing it read the wrong length (a program
+  that should answer 42 answered 41 or 37). And a named `when`-predicate written as a lone
+  `return <expr>` was never folded, so a FALSE bound was silently dropped and the instance it
+  forbids was built and run; it is now refused at the call, as the trailing-expression spelling
+  already was.
 
 - **A nested field store no longer launders a sibling brand.** `s.t.y = b` into a field declared
   `A`, for a sibling `b : B`, used to check at rc 0, build at rc 0 and **run to the foreign value**

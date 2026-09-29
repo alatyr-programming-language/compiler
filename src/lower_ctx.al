@@ -77,17 +77,14 @@ pub is_slice_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
     stmt := deref(stmt_p(Stmt, d))
     match stmt {
       Stmt::Assign(ans, anl, v, nx) => { if lower_layout::ex_is_slice(v) { r = true } }
-      ## #544 stage 1 leaves THIS wildcard alone, deliberately, and it is the only one left in the
-      ## file. Exhaustiveness does not see this `match`: the scrutinee's type arrives through the
-      ## GENERIC `ast::stmt_p(T, ...) -> ptr(mut T)` instantiated at `T = Stmt`, and measured on this
-      ## function, removing the wildcard gives rc 0 and no diagnostic, while annotating the local
-      ## (`stmt : Stmt = ...`) or the pointer (`sp : ptr(mut Stmt) = ...`) gives rc 1 at this line
-      ## (#660, five-row table). Spelling out the twenty absorbed `Stmt` variants here would cost the
-      ## lines and buy nothing, because a 22nd `Stmt` variant still would not be refused; and #544's
-      ## census measured that a `match` with no arm taken returns -1 on a clean compile, so a blind
-      ## site is where a mechanical sweep writes a silent wrong value. Enumerate this one when #660
-      ## lands, together with a non-vacuity check that names this line.
-      _ => {}
+      ## #544 stage 1 — a PREDICATE: every other statement form is "not a slice local". This arm kept
+      ## its `_` while the scrutinee's type was invisible to the exhaustiveness check (`stmt :=
+      ## deref(stmt_p(Stmt, d))`); since #680 deleting it is refused at the `match` line, where the
+      ## parent accepted it silently, so the absorbed variants are spelled out (#660).
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r

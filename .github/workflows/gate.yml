@@ -1,0 +1,85 @@
+# The authoritative full gate, run on a GitHub-hosted x86_64 runner (AGENTS.md "Gates").
+#
+# It is a REMOTE GATE MACHINE, not a landing bot: it runs `scripts/full.sh --force-sweeps` on the
+# exact commit pushed to a `gate/**` branch and publishes the evidence. Merging, the oracle commit and
+# the leased push to `main` stay with the integrator (`alatyr-integrate`), who reads these artifacts.
+# The job holds no write token: the code under test is the pushed tree, so it runs with read-only
+# contents permission and never sees a secret.
+#
+# Artifacts, for every run including a red one:
+#   gate.log            the complete full.sh output (its verdict is the last `*** FULL GATE` line)
+#   target/*.log        the per-stage logs full.sh writes
+#   corpus.manifest     the manifest this run GENERATED (byte-for-byte what `--write` would commit)
+#   explain.txt         `corpus_manifest.sh --explain` of the committed manifest against it
+name: gate
+
+on:
+  push:
+    branches: ['gate/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `wildcard_arm_check.sh` measures against `git merge-base origin/main HEAD`, and the
+          # corpus checks enumerate the git index, so the full history and `origin/main` are needed.
+          fetch-depth: 0
+
+      - name: Make room for the nix store
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build the dev shell
+        run: nix develop -c true
+
+      - name: Full gate
+        env:
+          # The e2e runtime ceiling bounds a child that does not terminate; it is not a stopwatch
+          # (scripts/e2e.sh, #537). This 4-core runner runs `fmt_large_input`'s 1.77 s child (on the
+          # 12-core gate machine) past 10 s on both attempts, so the ceiling is scaled here — it still
+          # kills a genuine hang, 60 s later.
+          ALATYR_E2E_RUNTIME_TIMEOUT: 60s
+        run: |
+          ulimit -c 0
+          set -o pipefail
+          echo "gate object: $(git rev-parse HEAD)  base: $(git merge-base origin/main HEAD)  runner: $(nproc) cpu"
+          nix develop -c bash scripts/full.sh --force-sweeps 2>&1 | tee gate.log
+
+      - name: Explain the corpus manifest
+        if: always()
+        run: |
+          if [ -f target/corpus-manifest/corpus.manifest ]; then
+            cp target/corpus-manifest/corpus.manifest corpus.manifest
+            nix develop -c bash scripts/corpus_manifest.sh --explain scripts/corpus.manifest corpus.manifest > explain.txt 2>&1 || true
+            { echo '### corpus manifest'; echo '```'; head -c 60000 explain.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          grep -E '^\*\*\*' gate.log >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-${{ github.sha }}
+          path: |
+            gate.log
+            explain.txt
+            corpus.manifest
+            target/*.log
+          if-no-files-found: warn
+          retention-days: 30

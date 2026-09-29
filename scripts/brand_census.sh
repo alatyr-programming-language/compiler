@@ -271,6 +271,19 @@ G : [2]A = [B(1), B(2)]
 main := fn() -> u64 { return u64(G[0]) }
 AL
 
+  echo "  STRUCT-LITERAL FIELD (#688) — the refusal reached it through its own walk and the census did not:"
+  pl_crossing struct_field B2 1 <<'AL'
+A := brand(u64)
+B := brand(u64)
+S := struct { f : A }
+main := fn() -> u64 {
+  b : B = B(2)
+  x : S = S(f = A(1))
+  y := S(f = b)
+  return u64(x.f)
+}
+AL
+
   echo "  ENUM-VARIANT PAYLOAD, a component past the first (#299's last listed sink):"
   pl_crossing payload_component2 B2 1 <<'AL'
 A := brand(u64)
@@ -312,6 +325,16 @@ A := brand(u64)
 main := fn() -> u64 {
   xs : [2]A = [1, 2]
   return u64(xs[0])
+}
+AL
+
+  # The struct-literal field written the legal way: two visited field sinks (and the binding's own).
+  pl_clean struct_field_legal 2 <<'AL'
+A := brand(u64)
+S := struct { f : A, g : u64 }
+main := fn() -> u64 {
+  x := S(f = A(1), g = 2)
+  return u64(x.f) + x.g
 }
 AL
 

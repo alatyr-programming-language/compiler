@@ -1322,7 +1322,9 @@ issue298_immutable_places_test() {
 ## sources stay in the row's private scratch directory: the negative branch must fail only after the
 ## resolver stops returning UNKNOWN for the two declared brands, while the same-brand control remains
 ## accepted. No conversion-lattice, generic-payload, alias, wrapper, lowering, or oracle behavior is
-## asserted here.
+## asserted here. The control converts explicitly (`u64(if … { a } else { a })`): returning the brand
+## `A` from a `u64` function is §4.2's implicit brand -> underlying crossing, refused once
+## `check_expr`'s `If` arm reports the join's type (#716); it was accepted only while that arm never ran.
 issue299_brand_identity_test() {
   local d="$T/issue299_brand_identity"
   rm -rf "$d"
@@ -1339,7 +1341,7 @@ issue299_brand_identity_test() {
     'A := brand(u64)' \
     'main := fn() -> u64 {' \
     '  a : A = A(1)' \
-    '  return if true { a } else { a }' \
+    '  return u64(if true { a } else { a })' \
     '}' > "$d/same.al"
 
   local src="$d/sibling.al" co="$d/sibling.check.out" ce="$d/sibling.check.err"
@@ -3965,6 +3967,32 @@ EOF
   done
 }
 
+## Issue #697 / Control Flow §5.1 — a PATH-QUALIFIED annotation (`q : ptr(zkinds::Kind)`) names the
+## same enum as the bare spelling, so a `match deref(q)` missing a variant is refused, whichever way the
+## two modules sort. The parent resolved every qualified annotation to nothing: all four checked rc 0.
+## The needle names the `match` line; no fixture header quotes it.
+issue697_qualified_test() {
+  src="$E2E_TEST/issue697_qualified_annotation"
+  d="$T/issue697_qualified_annotation"
+  [ -d "$src" ] || { echo "FAIL issue697_qualified: fixture tree missing"; fail=1; return; }
+  cp -r "$src" "$d" || { echo "FAIL issue697_qualified: could not snapshot fixture"; fail=1; return; }
+  for spec in "late_nonexh:6" "early_nonexh:5"; do
+    name="${spec%%:*}"; line="${spec##*:}"
+    msg="$( cd "$d/$name" && "$CC" check package.al 2>&1 >/dev/null )"; rc=$?
+    case "$rc:$msg" in
+      1:*"type mismatch at line $line in main"*) echo "ok   issue697_qualified/$name: refused at line $line" ;;
+      *) echo "FAIL issue697_qualified/$name: rc=$rc want 1 at line $line, got: $msg"; fail=1 ;;
+    esac
+  done
+  for name in late_exh early_exh; do
+    ( cd "$d/$name" && "$CC" check package.al ) >/dev/null 2>&1; rc=$?
+    if [ "$rc" = 0 ]; then echo "ok   issue697_qualified/$name: check accepted"; else echo "FAIL issue697_qualified/$name: check rc=$rc"; fail=1; fi
+    _e2e_exec_in "$d/$name" "$CC" run package.al >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "issue697_qualified/$name(run)" "$got"; then return; fi
+    if [ "$got" = 42 ]; then echo "ok   issue697_qualified/$name: run 42"; else echo "FAIL issue697_qualified/$name: run=$got want=42"; fail=1; fi
+  done
+}
+
 ## Modules §1/§4 + Types §4.1 — same-named nominal enums must never let declaration order choose a
 ## variant layout. The fixture lives outside test/package because it is also part of the corpus; copy it
 ## into this row's private scratch before every build. Both unequal-count orders must preserve the
@@ -6381,6 +6409,28 @@ emit_reject_has riscv64 issue680_nonexh_ptr_local "type mismatch at line 13"
 # through a call-bound local and a direct call, both of which must stay accepted.
 check_accept issue680_exhaustive_six_shapes
 run issue680_exhaustive_six_shapes 42
+# Issue #660 / Control Flow §5.1 — a GENERIC callee whose result is one of its own type parameters
+# (`-> T`, `-> ptr(mut T)`): the scrutinee's type is the type argument at T's position. All three built
+# and ran to 42 on the parent with `B` uncovered.
+build_reject_has issue660_nonexh_generic_ptr_local "type mismatch at line 9"
+check_reject issue660_nonexh_generic_ptr_local
+build_reject_has issue660_nonexh_generic_ptr_inline "type mismatch at line 7"
+check_reject issue660_nonexh_generic_ptr_inline
+build_reject_has issue660_nonexh_generic_value "type mismatch at line 7"
+check_reject issue660_nonexh_generic_value
+check_accept issue660_exhaustive_generic
+run issue660_exhaustive_generic 42
+# Issue #716 — a `match` arm naming an enum variant, over a scrutinee whose enum type the x86_64
+# lowering cannot see, compared against tag 0: the first variant matched by coincidence and every
+# other took no arm. The three built and ran to 1 on the parent; each is now a located refusal. The
+# control is the spelling the diagnostic recommends.
+build_reject_has reject_enum_match_deref_local "cannot see the scrutinee's enum type"
+build_reject_has reject_enum_match_value_of_deref "cannot see the scrutinee's enum type"
+build_reject_has reject_enum_match_generic_deref "cannot see the scrutinee's enum type"
+run accept_enum_match_param_deref 42
+# …and the same `match deref(q)` over an ANNOTATED pointer-to-enum LOCAL, which the lowering now
+# binds like the parameter; `G` is variant 1, so the parent's integer path returned 1 here, silently.
+run accept_enum_match_deref_annotated_local 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42
@@ -7192,6 +7242,7 @@ qualified_generic_package_test
 standard_tuple_global_module_test
 ambig_pub_test
 ambig_enum_collision_test
+issue697_qualified_test
 check_located reject_qualified_generic_unknown 3
 no_input_diag_test
 tool16_no_vendor_test
@@ -7708,6 +7759,26 @@ build_reject when_named_pred_reject
 ## by `check` with a LOCATED diagnostic at the call site (line 15), not only at link. Same faithful-subset
 ## boundary as the size/is-kind forms (a not-yet-monomorphized arg stays admitted).
 check_located when_named_pred_reject 15
+## Issue #697 — a local annotation naming no type is refused at its line, bare, as a `ptr` pointee, and
+## as a path-qualified pointee; the parent accepted all three at rc 0.
+check_located issue697_unknown_ann_bare 5
+check_located issue697_unknown_ann_ptr 4
+check_located issue697_unknown_ann_ptr_qual 4
+build_reject issue697_unknown_ann_bare
+build_reject issue697_unknown_ann_ptr
+build_reject issue697_unknown_ann_ptr_qual
+## Issue #716 — the same named predicate written as a lone `return <expr>` body. The body reader matched
+## `deref(stmt_p(Stmt, bs))`, which the lowering compared against tag 0, so the parent took a `return` for
+## "not foldable" and silently kept the FALSE instance (`pick(Big, 42)` ran to 42). The TRUE twin keeps
+## the refusal honest.
+build_reject issue716_named_pred_return_reject
+check_located issue716_named_pred_return_reject 10
+run_x86 issue716_named_pred_return 42
+## Issue #716 — a local bound from a module-const struct's `str` field was given ONE slot word by
+## `collect_slots` (its inline `Field` arm was compared against tag 0) while the store wrote two. The
+## parent ran these to 41 and 37.
+run issue716_const_str_field_local 42
+run issue716_const_str_field_alias 42
 ## CT-4/CT-5: a structural FIELD-COUNT bound — `when typeinfo(T).fields.len >= 2` (the spec's
 ## `TypeInfo.Struct{fields:[Field]}` surface, appendix §4.1), the count folded per-instance. ACCEPT:
 ## `pick(S,42)` (S a 2-field struct → 2 >= 2 → 42). REJECT: `pick(One,42)` (1-field struct → 1 < 2). The
@@ -10476,6 +10547,10 @@ run_wat wasm_nested_call 42
 run_wat wasm_if 42
 run_wat wasm_bool 42
 run_wat wasm_cmp_value 42
+## #716 — `bool` is not an arithmetic operand (Types §4.2/§4.3); `check_expr`'s `Bin` arm refuses it
+## now that it runs. The parent accepted this and ran it to 42.
+check_reject reject_bool_int_arith
+build_reject reject_bool_int_arith
 run_wat wasm_locals 42
 run_wat wasm_local_mix 42
 run_wat wasm_reassign 42
