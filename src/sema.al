@@ -2726,13 +2726,14 @@ sema_brand_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src
   if not tag_is_unknown(ft.tag) { return ft }
   vs := expr_var_span(v)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
-    raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut lt : u8 = tag_unflag(raw.tag)
-    if lt == 255 { lt = 0 }
+    raw := local_lookup(locals, nloc, src, vs.s, vs.n)
+    mut lt : u8 = raw.ty.tag
+    raw_ns := raw.ty.ns
+    raw_nl := raw.ty.nl
     if tag_is_hidden_struct(lt) { lt = 3 }
     if tag_is_hidden_enum(lt) { lt = 4 }
     if tag_is_tuple_mark(lt) { lt = 0 }
-    r = Ty(tag = lt, ns = raw.ns, nl = raw.nl)
+    r = Ty(tag = lt, ns = raw_ns, nl = raw_nl)
   }
   r
 }
@@ -3602,21 +3603,39 @@ field_ty := fn(d : Decl, src : ptr(u8), fs : usize, fl : usize, decls : ptr(rt::
 ## its synthesized type (so a `Var` reference resolves the name AND its `Ty`).
 pub Local := struct { ns : usize, nl : usize, tag : u8, prov : u8, tns : usize, tnl : usize }
 
-## The `Ty` of the local named [s, s+n) among the first `nloc` locals; tag 99 in the returned
-## `Ty` is impossible — instead the bool result distinguishes found. Returns the found local's
-## `Ty` via the out param shape: we return a `Ty` and use tag-found via a sentinel. To keep it
-## simple and pointer-free, `local_ty` returns a `Ty` whose tag is 255 when NOT found.
-local_ty := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : usize) -> Ty {
-  mut r := Ty(tag = 255, ns = 0, nl = 0)
+## Issue #583 slice 7a — what the local named [s, s+n) among the first `upto` locals records, with its
+## tag byte's three meanings pulled apart. The byte used to come back raw, so one `Ty` carried the type,
+## the `+128` `mut` flag and a `255` that meant BOTH "no such local" and "a poisoned local", and every
+## reader had to strip or compare the flags by hand — one that forgot compared a `mut` local's byte
+## against a kind and lost. Here `found` answers the lookup, `poison` the 255 byte, `mutable` the flag,
+## and `ty` is the unflagged type: UNKNOWN (tag 0) when the local is absent or poisoned, so a kind
+## predicate over `ty.tag` never sees a storage flag. The LAST matching push wins, as a later binding
+## of the same name shadows an earlier one. Callers copy `ty`'s three scalars into locals before using
+## them: under the frozen seed a nested read inside a `match` arm's constructor measured wrong (the
+## `check_expr_arms` `Var` arm handed `ty_eq` a name span no local recorded, refusing `if c { a } else
+## { a }`), and `lk.ty` passed whole as an argument is refused outright.
+LocalTy := struct { found : bool, poison : bool, mutable : bool, ty : Ty }
+local_lookup := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : usize) -> LocalTy {
+  mut found := false
+  mut raw : u8 = 0
+  mut tns : usize = 0
+  mut tnl : usize = 0
   mut i := 0
   while i < upto {
     l := lvec_at(locals, i)
     if streq(src, l.ns, l.nl, s, n) {
-      r = Ty(tag = l.tag, ns = l.tns, nl = l.tnl)
+      found = true
+      raw = l.tag
+      tns = l.tns
+      tnl = l.tnl
     }
     i += 1
   }
-  r
+  if not found { return LocalTy(found = false, poison = false, mutable = false, ty = Ty(tag = 0, ns = 0, nl = 0)) }
+  if tag_is_poison(raw) { return LocalTy(found = true, poison = true, mutable = false, ty = Ty(tag = 0, ns = 0, nl = 0)) }
+  mf := not tag_is_plain(raw)
+  bt : u8 = tag_unflag(raw)
+  LocalTy(found = true, poison = false, mutable = mf, ty = Ty(tag = bt, ns = tns, nl = tnl))
 }
 
 ## Issue #626 — `Local.prov`, and the ONLY place in this compiler that encodes or decodes it.
@@ -3745,9 +3764,17 @@ sema_direct_brand_if_mismatch := fn(e : ptr(Expr), src : ptr(u8), locals : ptr(L
   rs := expr_var_span(ip.else_e)
   if ls.n == 0 or rs.n == 0 { return 0 }
   if not local_in(locals, nloc, src, ls.s, ls.n) or not local_in(locals, nloc, src, rs.s, rs.n) { return 0 }
-  lt := local_ty(locals, nloc, src, ls.s, ls.n)
-  rt := local_ty(locals, nloc, src, rs.s, rs.n)
-  if tag_is_brand(lt.tag) and tag_is_brand(rt.tag) and not streq(src, lt.ns, lt.nl, rt.ns, rt.nl) { return rs.s }
+  ## Issue #583 slice 7a — ask the UNFLAGGED type: a `mut` brand local's raw byte is 136, which no
+  ## kind predicate calls a brand, so a `mut` sibling used to slip past this guard.
+  llt := local_lookup(locals, nloc, src, ls.s, ls.n)
+  ltag : u8 = llt.ty.tag
+  lns := llt.ty.ns
+  lnl := llt.ty.nl
+  rlt := local_lookup(locals, nloc, src, rs.s, rs.n)
+  rtag : u8 = rlt.ty.tag
+  rns := rlt.ty.ns
+  rnl := rlt.ty.nl
+  if tag_is_brand(ltag) and tag_is_brand(rtag) and not streq(src, lns, lnl, rns, rnl) { return rs.s }
   0
 }
 
@@ -3847,9 +3874,11 @@ sema_addr_local_struct_ptr_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(L
   if unchecked bitcast(usize, inner) == 0 { return none }
   root := expr_var_span(inner)
   if root.n == 0 or nloc == 0 or not local_in(locals, nloc, src, root.s, root.n) { return none }
-  raw := local_ty(locals, nloc, src, root.s, root.n)
-  mut tag : u8 = tag_unflag(raw.tag)
-  if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and raw.nl != 0 { return Ty(tag = 5, ns = raw.ns, nl = raw.nl) }
+  raw := local_lookup(locals, nloc, src, root.s, root.n)
+  tag : u8 = raw.ty.tag
+  raw_ns := raw.ty.ns
+  raw_nl := raw.ty.nl
+  if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and raw_nl != 0 { return Ty(tag = 5, ns = raw_ns, nl = raw_nl) }
   none
 }
 ## The POINTEE expression of a `deref(p)` place (null otherwise). A small single-focus match, for the
@@ -4595,15 +4624,17 @@ value_agg_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
   }
   vs := expr_var_span(v)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
-    raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut lt : u8 = tag_unflag(raw.tag)
+    raw := local_lookup(locals, nloc, src, vs.s, vs.n)
+    lt : u8 = raw.ty.tag
+    raw_ns := raw.ty.ns
+    raw_nl := raw.ty.nl
     ## HIDDEN aggregate tags 9 (struct) / 10 (enum) are recorded by `Stmt::Assign` for a StructLit/EnumLit
     ## binding — hidden so `check_expr`'s Var resolution (which surfaces only 3/4/5) leaves them tag 0,
     ## keeping the OVERLOAD-NAIVE existing arg-vs-param checks tolerant (else `overload_three` false-rejects
     ## once struct args become known). Map them back to the real struct(3)/enum(4) tag here. A call-return
     ## struct is recorded as the real tag 3 and is treated identically.
-    if tag_is_struct(lt) or tag_is_hidden_struct(lt) { return Ty(tag = 3, ns = raw.ns, nl = raw.nl) }
-    if tag_is_enum(lt) or tag_is_hidden_enum(lt) { return Ty(tag = 4, ns = raw.ns, nl = raw.nl) }
+    if tag_is_struct(lt) or tag_is_hidden_struct(lt) { return Ty(tag = 3, ns = raw_ns, nl = raw_nl) }
+    if tag_is_enum(lt) or tag_is_hidden_enum(lt) { return Ty(tag = 4, ns = raw_ns, nl = raw_nl) }
   }
   Ty(tag = 0, ns = 0, nl = 0)
 }
@@ -4896,9 +4927,11 @@ sema_wrapper_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, s
   }
   vs := expr_var_span(v)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
-    raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut tag : u8 = tag_unflag(raw.tag)
-    if tag_is_wrapper(tag) { return Ty(tag = 11, ns = raw.ns, nl = raw.nl) }
+    raw := local_lookup(locals, nloc, src, vs.s, vs.n)
+    tag : u8 = raw.ty.tag
+    raw_ns := raw.ty.ns
+    raw_nl := raw.ty.nl
+    if tag_is_wrapper(tag) { return Ty(tag = 11, ns = raw_ns, nl = raw_nl) }
   }
   Ty(tag = 0, ns = 0, nl = 0)
 }
@@ -5126,10 +5159,11 @@ s3a_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   mut r := VSpan(s = 0, n = 0)
   ev := expr_var_span(e)
   if ev.n != 0 {
-    lt := local_ty(locals, nloc, src, ev.s, ev.n)
-    mut tag := lt.tag
-    tag = tag_unflag(tag)
-    if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and lt.nl != 0 { r = VSpan(s = lt.ns, n = lt.nl) }
+    lt := local_lookup(locals, nloc, src, ev.s, ev.n)
+    tag : u8 = lt.ty.tag
+    lt_ns := lt.ty.ns
+    lt_nl := lt.ty.nl
+    if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and lt_nl != 0 { r = VSpan(s = lt_ns, n = lt_nl) }
   } else {
     fs := expr_field_span(e)
     if fs.n != 0 {
@@ -5490,7 +5524,7 @@ array_elem_ty := fn(src : ptr(u8), ty : Ty, decls : ptr(rt::Vec), upto : usize) 
 
 ## Recover the element type for the two compiler-known indexed places whose binding carries enough
 ## source evidence: a fixed array recorded in `Ty`, or an explicitly annotated `Slice(T)` local/param.
-## `Slice` is nominal (tag 3), so its element argument is not retained by `local_ty`; recover it from
+## `Slice` is nominal (tag 3), so its element argument is not retained by `local_lookup`; recover it from
 ## the parser-independent annotation span exactly as the other bootstrap-sensitive generic-type checks
 ## do. Inferred views and generic/ambiguous arguments remain UNKNOWN rather than inventing a type.
 sema_direct_index_elem_ty := fn(src : ptr(u8), local : Local, decls : ptr(rt::Vec), upto : usize) -> Ty {
@@ -5554,7 +5588,11 @@ sema_range_slice_elem_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec),
   if unchecked bitcast(usize, base) == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   bv := expr_var_span(base)
   if bv.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
-  bt := local_ty(locals, nloc, src, bv.s, bv.n)
+  blt := local_lookup(locals, nloc, src, bv.s, bv.n)
+  blt_tag : u8 = blt.ty.tag
+  blt_ns := blt.ty.ns
+  blt_nl := blt.ty.nl
+  bt : Ty = Ty(tag = blt_tag, ns = blt_ns, nl = blt_nl)
   declared := array_elem_ty(src, bt, decls, upto)
   if not tag_is_unknown(declared.tag) { return declared }
   laet := prov_lit_array_elem(local_prov(locals, nloc, src, bv.s, bv.n))
@@ -5911,9 +5949,11 @@ global_struct_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
 ## base as a name span instead of an `Expr`. Hidden tag 9 is the reliable inferred-struct recording;
 ## the global fallback covers a module-level annotated or inferred struct. Other types remain unknown.
 sema_struct_owner_name_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> VSpan {
-  lt := local_ty(locals, nloc, src, s, n)
-  mut tag : u8 = tag_unflag(lt.tag)
-  if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and lt.nl != 0 { return VSpan(s = lt.ns, n = lt.nl) }
+  lt := local_lookup(locals, nloc, src, s, n)
+  tag : u8 = lt.ty.tag
+  lt_ns := lt.ty.ns
+  lt_nl := lt.ty.nl
+  if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and lt_nl != 0 { return VSpan(s = lt_ns, n = lt_nl) }
   global_struct_type_span(decls, src, s, n)
 }
 ## Issue #693 — the direct-NAME counterpart of the enum-owner question, for a statement write place.
@@ -5923,11 +5963,13 @@ sema_struct_owner_name_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(
 sema_name_owner_is_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> bool {
   if nloc == 0 { return false }
   if not local_in(locals, nloc, src, s, n) { return false }
-  lt := local_ty(locals, nloc, src, s, n)
-  mut tag : u8 = tag_unflag(lt.tag)
+  lt := local_lookup(locals, nloc, src, s, n)
+  tag : u8 = lt.ty.tag
+  lt_ns := lt.ty.ns
+  lt_nl := lt.ty.nl
   if not tag_is_enum(tag) and not tag_is_hidden_enum(tag) { return false }
   ## the union exclusion, for the reason `sema_enum_owner_field_err` records.
-  if lt.nl != 0 and is_union_decl(decls, src, lt.ns, lt.nl) { return false }
+  if lt_nl != 0 and is_union_decl(decls, src, lt_ns, lt_nl) { return false }
   true
 }
 ## A bare/qualified assignment target may be a global owned by another package module. The complete
@@ -6328,9 +6370,11 @@ sema_ptr_expr_ty := fn(pe : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), loca
   pv := expr_var_span(pe)
   if pv.n != 0 {
     if nloc == 0 or not local_in(locals, nloc, src, pv.s, pv.n) { return unknown }
-    lt := local_ty(locals, nloc, src, pv.s, pv.n)
-    mut ltag : u8 = tag_unflag(lt.tag)
-    if tag_is_ptr(ltag) and lt.nl != 0 { return Ty(tag = 5, ns = lt.ns, nl = lt.nl) }
+    lt := local_lookup(locals, nloc, src, pv.s, pv.n)
+    ltag : u8 = lt.ty.tag
+    lt_ns := lt.ty.ns
+    lt_nl := lt.ty.nl
+    if tag_is_ptr(ltag) and lt_nl != 0 { return Ty(tag = 5, ns = lt_ns, nl = lt_nl) }
     return unknown
   }
   ct := sole_fn_ret_ty(pe, decls, rt::vec_len(deref(decls)), src)
@@ -6648,8 +6692,8 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
       mut found_local := false
       if nloc != 0 { found_local = local_in(locals, nloc, src, vs, vl) }
       if found_local {
-        raw := local_ty(locals, nloc, src, vs, vl)
-        mut tag : u8 = tag_unflag(raw.tag)
+        raw := local_lookup(locals, nloc, src, vs, vl)
+        tag : u8 = raw.ty.tag
         if not sema_local_is_comptime(src, local_at(locals, nloc, src, vs, vl)) { return 0 }
         if tag_is_int(tag) or tag_is_bool(tag) or tag_is_enum(tag) { return tag }
         if tag_is_hidden_enum(tag) { return 4 }
@@ -6673,7 +6717,7 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
   }
 }
 
-## Recover the local record for a name.  `local_ty` intentionally returns only a `Ty`; the comptime
+## Recover the local record for a name.  `local_lookup` intentionally returns only a `LocalTy`; the comptime
 ## classifier also needs the declaration span to distinguish a comptime local from a runtime local.
 local_at := fn(locals : ptr(LVec), upto : usize, src : ptr(u8), s : usize, n : usize) -> Local {
   mut result := Local(ns = 0, nl = 0, tag = 255, prov = 0, tns = 0, tnl = 0)
@@ -7652,8 +7696,10 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## `return`, NOT inside a match arm — safe under the seed.)
   evs := expr_var_span(e)
   if evs.n != 0 and nloc != 0 and local_in(locals, nloc, src, evs.s, evs.n) {
-    raw := local_ty(locals, nloc, src, evs.s, evs.n)
-    mut ltag : u8 = tag_unflag(raw.tag)
+    raw := local_lookup(locals, nloc, src, evs.s, evs.n)
+    ltag : u8 = raw.ty.tag
+    raw_ns := raw.ty.ns
+    raw_nl := raw.ty.nl
     mut rtag : u8 = 0
   ## surface a CONCRETE tag for a struct/enum (3/4), pointer (5), or direct user brand (8) local —
   ## pointers and brands carry their nominal name in ns/nl, so `ty_compat`/`ty_eq` can distinguish
@@ -7661,7 +7707,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## remains tolerant inside the corresponding comparison, so this does not widen rejection beyond
   ## a resolved identity.
   if tag_is_struct(ltag) or tag_is_enum(ltag) or tag_is_ptr(ltag) or tag_is_brand(ltag) { rtag = ltag }
-    return Result(Ty, CheckErr).Ok(Ty(tag = rtag, ns = raw.ns, nl = raw.nl))
+    return Result(Ty, CheckErr).Ok(Ty(tag = rtag, ns = raw_ns, nl = raw_nl))
   }
   ## A direct `local[N]` over a fixed `[T; N]` is the one indexed shape whose bound is already
   ## available to the common checker. Keep this before the large payload match so the frozen seed,
@@ -7802,11 +7848,13 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ga := deref(arg_p(gg))
       avs := expr_var_span(ga.e)
       argloc := avs.n != 0 and local_in(locals, nloc, src, avs.s, avs.n)
-      at := local_ty(locals, nloc, src, avs.s, avs.n)
-      mut atag : u8 = tag_unflag(at.tag)
+      at := local_lookup(locals, nloc, src, avs.s, avs.n)
+      atag : u8 = at.ty.tag
+      at_ns := at.ty.ns
+      at_nl := at.ty.nl
       pt := callee_param_ty(decls, upto, src, ecs.s, ecs.n, apidx, a)
-      known := argloc and tag_is_ptr(atag) and tag_is_ptr(pt.tag) and at.nl != 0 and pt.nl != 0
-      if known { if not streq(src, at.ns, at.nl, pt.ns, pt.nl) { mark_failed(locals, mismatch_err(avs.s, 0)) } }
+      known := argloc and tag_is_ptr(atag) and tag_is_ptr(pt.tag) and at_nl != 0 and pt.nl != 0
+      if known { if not streq(src, at_ns, at_nl, pt.ns, pt.nl) { mark_failed(locals, mismatch_err(avs.s, 0)) } }
       apidx += 1
       gg = ga.next
     }
@@ -7871,11 +7919,13 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     }
     msv := expr_var_span(emp.scrut)
     if msv.n != 0 and nloc != 0 and local_in(locals, nloc, src, msv.s, msv.n) {
-      msty := local_ty(locals, nloc, src, msv.s, msv.n)
-      mut mstag : u8 = tag_unflag(msty.tag)
+      msty := local_lookup(locals, nloc, src, msv.s, msv.n)
+      mstag : u8 = msty.ty.tag
+      msty_ns := msty.ty.ns
+      msty_nl := msty.ty.nl
       ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` value-match must cover its finite
       ## domain (else poison the check). Fail-open for anything else (see scalar_coverage_gap).
-      if (tag_is_int(mstag) or tag_is_bool(mstag)) and scalar_coverage_gap(emp.head, mstag, msty.ns, msty.nl, src) {
+      if (tag_is_int(mstag) or tag_is_bool(mstag)) and scalar_coverage_gap(emp.head, mstag, msty_ns, msty_nl, src) {
         mark_failed(locals, mismatch_err(s_of(emp.scrut, a), 0))
       }
     }
@@ -7925,13 +7975,15 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       mut found_local := false
       if nloc != 0 { found_local = local_in(locals, nloc, src, s, n) }
       if found_local {
-        raw := local_ty(locals, nloc, src, s, n)
-        mut ltag : u8 = tag_unflag(raw.tag)
+        raw := local_lookup(locals, nloc, src, s, n)
+        mut ltag : u8 = raw.ty.tag
+        raw_ns := raw.ty.ns
+        raw_nl := raw.ty.nl
         ## Issue #5's hidden tuple marker is only for the direct builtin-conversion fence. Keep it
         ## UNKNOWN in ordinary compatibility so tuple parameters and unrelated expression paths retain
         ## their pre-existing conservative behavior.
         if tag_is_tuple_mark(ltag) { ltag = 0 }
-        Result(Ty, CheckErr).Ok(Ty(tag = ltag, ns = raw.ns, nl = raw.nl))
+        Result(Ty, CheckErr).Ok(Ty(tag = ltag, ns = raw_ns, nl = raw_nl))
       } else if upto == 0 {
         Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
       } else {
@@ -8279,11 +8331,13 @@ sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : p
   if tag_is_unknown(actual.tag) {
     vs := expr_var_span(v)
     if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
-      raw := local_ty(locals, nloc, src, vs.s, vs.n)
-      mut rtag : u8 = tag_unflag(raw.tag)
+      raw := local_lookup(locals, nloc, src, vs.s, vs.n)
+      mut rtag : u8 = raw.ty.tag
+      raw_ns := raw.ty.ns
+      raw_nl := raw.ty.nl
       if tag_is_hidden_struct(rtag) { rtag = 3 }
       if tag_is_hidden_enum(rtag) { rtag = 4 }
-      if not tag_is_unknown(rtag) and not tag_is_poison(rtag) { actual = Ty(tag = rtag, ns = raw.ns, nl = raw.nl) }
+      if not tag_is_unknown(rtag) { actual = Ty(tag = rtag, ns = raw_ns, nl = raw_nl) }
     }
   }
   if tag_is_unknown(actual.tag) {
@@ -8362,7 +8416,13 @@ sema_pointer_rooted_field_ty := fn(place : ptr(Expr), decls : ptr(rt::Vec), upto
   if unchecked bitcast(usize, inner) != 0 {
     root := expr_var_span(inner)
     mut pty := Ty(tag = 0, ns = 0, nl = 0)
-    if root.n != 0 { pty = local_ty(locals, nloc, src, root.s, root.n) }
+    if root.n != 0 {
+      plt := local_lookup(locals, nloc, src, root.s, root.n)
+      plt_tag : u8 = plt.ty.tag
+      plt_ns := plt.ty.ns
+      plt_nl := plt.ty.nl
+      pty = Ty(tag = plt_tag, ns = plt_ns, nl = plt_nl)
+    }
     else { pty = expr_call_result_ty(inner, decls, upto, src) }
     mut ptag : u8 = tag_unflag(pty.tag)
     if tag_is_ptr(ptag) and pty.nl != 0 { return Ty(tag = 3, ns = pty.ns, nl = pty.nl) }
@@ -9428,11 +9488,11 @@ lbv_known_tag := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
   ## expression checker for calls, arithmetic, fields, and branch expressions.
   vs := expr_var_span(e)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
-    raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut tag : u8 = tag_unflag(raw.tag)
+    raw := local_lookup(locals, nloc, src, vs.s, vs.n)
+    mut tag : u8 = raw.ty.tag
     if tag_is_hidden_struct(tag) { tag = 3 }
     if tag_is_hidden_enum(tag) { tag = 4 }
-    if tag != 255 { return tag }
+    if raw.found and not raw.poison { return tag }
   }
   rv := check_expr(e, decls, upto, src, a, locals, nloc)
   match rv {
@@ -10021,10 +10081,12 @@ fixed_array_index_oob := fn(base : ptr(Expr), idx : ptr(Expr), src : ptr(u8), lo
   if unchecked bitcast(usize, locals) == 0 or nloc == 0 or not expr_is_num_lit(idx) { return false }
   bv := expr_var_span(base)
   if bv.n == 0 or not local_in(locals, nloc, src, bv.s, bv.n) { return false }
-  bt := local_ty(locals, nloc, src, bv.s, bv.n)
-  mut tag : u8 = tag_unflag(bt.tag)
+  bt := local_lookup(locals, nloc, src, bv.s, bv.n)
+  tag : u8 = bt.ty.tag
+  bt_ns := bt.ty.ns
+  bt_nl := bt.ty.nl
   if not tag_is_array(tag) { return false }
-  n := array_type_count(src, bt.ns, bt.nl)
+  n := array_type_count(src, bt_ns, bt_nl)
   if n < 0 { return false }
   iv := expr_num_lit_val(idx)
   iv < 0 or iv >= n
@@ -10615,7 +10677,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## re-typing the name; the lower compiles both, e.g. two sibling `for` loops each `d := …`). So
         ## only a `=` (reassign) to an existing local takes the immutable/type-match path; a `:=` (even
         ## of an existing name) takes the fresh-binding path below, re-pushing the current type (the
-        ## LAST push wins in `local_ty`). Without this, the second `d :=` false-fired "immutable write".
+        ## LAST push wins in `local_lookup`). Without this, the second `d :=` false-fired "immutable write".
         if is_mod_mut_global(decls, src, ns, nl) and assign_is_reassign(src, ns, nl) and not local_in(locals, cnt, src, ns, nl) {
           ## a `=` write to a module-level `mut` GLOBAL (`A64_CHK = ov`, `A64_SUB_ITS = …`): a `static`
           ## place the global's own `mut` authorizes writing — NOT a local. Do not push it as a fake local
@@ -10628,21 +10690,24 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           if agg_scalar_bad(gsp.s, gsp.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
           if global_nonlit_struct_assign_bad(decls, upto, src, ns, nl, v, tv, locals, cnt) { mark_failed(locals, global_agg_err(ns)) }
         } else if local_in(locals, cnt, src, ns, nl) and assign_is_reassign(src, ns, nl) {
-          raw := local_ty(locals, cnt, src, ns, nl)
+          raw := local_lookup(locals, cnt, src, ns, nl)
+          raw_tag : u8 = raw.ty.tag
+          raw_ns := raw.ty.ns
+          raw_nl := raw.ty.nl
           ## Declarations §3.1 / Memory §1.6 — an existing local without `mut` is a validly typed
           ## place, but it is not writable. Use the dedicated located diagnostic instead of
           ## `mismatch_err`: the assignment's type already agrees, and the useful fact is the write
           ## permission at this source span. The same branch handles plain `=` and every compound
           ## operator after `assign_is_reassign` has recovered its spelling.
           if sema_local_name_is_comptime(src, locals, cnt, ns, nl) { mark_failed(locals, immutable_err(ns)) }
-          if tag_is_plain(raw.tag) and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or tag_is_poison(raw.tag) { mark_failed(locals, immutable_err(ns)) }
-          mut xtag : u8 = tag_unflag(raw.tag)
+          if not raw.mutable and not raw.poison and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or raw.poison { mark_failed(locals, immutable_err(ns)) }
+          mut xtag : u8 = raw_tag
           ## normalize the HIDDEN aggregate tags (9 struct / 10 enum, set for a StructLit/EnumLit binding)
           ## back to their real struct(3)/enum(4) tag for the reassign type-match — else `tag_compat(9, 3)`
           ## false-rejects a valid `mut r := S(...)  … r = <struct value>` (a real tag-3 RHS).
           if tag_is_hidden_struct(xtag) { xtag = 3 }
           if tag_is_hidden_enum(xtag) { xtag = 4 }
-          xt := Ty(tag = xtag, ns = raw.ns, nl = raw.nl)
+          xt := Ty(tag = xtag, ns = raw_ns, nl = raw_nl)
           ptrint_probe_site("REASSIGN", "reassign", true, tv.tag, xt.tag, ns, src)
           if not tag_compat(xt.tag, tv.tag) { mark_failed(locals, mismatch_err(ns, 0)) }
           ## Issue #299 — a `=` write to an existing local is the same value sink as its `:=` binding:
@@ -10809,9 +10874,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             bind_nl = 0
             rvs := expr_var_span(v)
             if rvs.n != 0 {
-              rlt := local_ty(locals, cnt, src, rvs.s, rvs.n)
-              mut rltag : u8 = tag_unflag(rlt.tag)
-              if tag_is_ptr(rltag) { bind_ns = rlt.ns; bind_nl = rlt.nl; bind_prov = local_prov(locals, cnt, src, rvs.s, rvs.n) }
+              rlt := local_lookup(locals, cnt, src, rvs.s, rvs.n)
+              rltag : u8 = rlt.ty.tag
+              rlt_ns := rlt.ty.ns
+              rlt_nl := rlt.ty.nl
+              if tag_is_ptr(rltag) { bind_ns = rlt_ns; bind_nl = rlt_nl; bind_prov = local_prov(locals, cnt, src, rvs.s, rvs.n) }
             }
             if bind_nl == 0 {
               apt := sema_addr_local_struct_ptr_ty(v, src, locals, cnt)
@@ -10968,12 +11035,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## Resolve the base's struct type NAME from its recorded local tag (3 = struct), then the field's
         ## declared type span, then check the stored value against it. Poison-tolerant (a non-struct or
         ## unknown base → no fire).
-        bfe := local_ty(locals, cnt, src, bns, bnl)
-        mut bftag : u8 = tag_unflag(bfe.tag)
-        if (tag_is_struct(bftag) or tag_is_hidden_struct(bftag)) and bfe.nl != 0 {
-          ftsp := sema_field_ann_span(decls, upto, src, bfe.ns, bfe.nl, fns, fnl, a)
+        bfe := local_lookup(locals, cnt, src, bns, bnl)
+        bftag : u8 = bfe.ty.tag
+        bfe_ns := bfe.ty.ns
+        bfe_nl := bfe.ty.nl
+        if (tag_is_struct(bftag) or tag_is_hidden_struct(bftag)) and bfe_nl != 0 {
+          ftsp := sema_field_ann_span(decls, upto, src, bfe_ns, bfe_nl, fns, fnl, a)
           if agg_scalar_bad(ftsp.s, ftsp.n, fv, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(bns, 0)) }
-          da_assign_field(deref(da), decls, upto, src, bns, bnl, fns, fnl, Ty(tag = 3, ns = bfe.ns, nl = bfe.nl))
+          da_assign_field(deref(da), decls, upto, src, bns, bnl, fns, fnl, Ty(tag = 3, ns = bfe_ns, nl = bfe_nl))
         }
         cur = nx
       }
@@ -11025,16 +11094,29 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         if pperm == 2 or (pperm == 1 and not p_unready) { mark_failed(locals, immutable_err(proot.s)) }
         if aep.ok {
-          aty1 := local_ty(locals, cnt, src, aep.rs, aep.rn)
+          alt1 := local_lookup(locals, cnt, src, aep.rs, aep.rn)
+          alt1_tag : u8 = alt1.ty.tag
+          alt1_ns := alt1.ty.ns
+          alt1_nl := alt1.ty.nl
+          aty1 : Ty = Ty(tag = alt1_tag, ns = alt1_ns, nl = alt1_nl)
           da_assign_array_elem_nested_field(deref(da), decls, upto, src, aep.rs, aep.rn, aep.fs, aep.fl, aep.ss, aep.sl, i64(aep.ix), aty1)
         }
         if anp.ok {
-          aty0 := local_ty(locals, cnt, src, anp.rs, anp.rn)
+          alt0 := local_lookup(locals, cnt, src, anp.rs, anp.rn)
+          alt0_tag : u8 = alt0.ty.tag
+          alt0_ns := alt0.ty.ns
+          alt0_nl := alt0.ty.nl
+          aty0 : Ty = Ty(tag = alt0_tag, ns = alt0_ns, nl = alt0_nl)
           da_assign_array_nested_field(deref(da), decls, upto, src, anp.rs, anp.rn, anp.fs, anp.fl, anp.ss, anp.sl, i64(anp.ix), aty0)
         }
         if np.sl != 0 {
-          mut rt := local_ty(locals, cnt, src, np.rs, np.rn)
-          if tag_is_poison(rt.tag) {
+          ## A root that is no local here is a module global: its declared type drives the DA walk.
+          nlt := local_lookup(locals, cnt, src, np.rs, np.rn)
+          nlt_tag : u8 = nlt.ty.tag
+          nlt_ns := nlt.ty.ns
+          nlt_nl := nlt.ty.nl
+          mut rt := Ty(tag = nlt_tag, ns = nlt_ns, nl = nlt_nl)
+          if not nlt.found {
             gts := global_type_span(decls, src, np.rs, np.rn)
             if gts.n != 0 { rt = resolve_ty(src, gts.s, gts.n, decls, upto) }
           }
@@ -11158,7 +11240,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## EXHAUSTIVENESS (§60/CF-1): a `match` on a KNOWN enum whose arms are ALL plain variant patterns
         ## (no `_` wildcard / comptime / lit arm — `wild != 0`) must cover EVERY variant; an uncovered
         ## variant is a `Mismatch`. The scrutinee's enum type comes from `match_scrut_enum_ty`, which
-        ## resolves it from the EXPRESSION — a parameter or annotated local (`local_ty`, whose by-value
+        ## resolves it from the EXPRESSION — a parameter or annotated local (`local_lookup`, whose by-value
         ## `Ty` preserves the type-NAME span ns/nl, unlike `cs`, whose `Result(Ty, CheckErr)` payload
         ## truncates it to the tag), an inferred enum-literal binding, `deref(p)`, a field read, or a
         ## call result. Fail-open: fires only when the enum type AND its declaration are found AND a
@@ -11174,11 +11256,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         sv := expr_var_span(sc)
         if sv.n != 0 and cnt != 0 and local_in(locals, cnt, src, sv.s, sv.n) {
-          sty := local_ty(locals, cnt, src, sv.s, sv.n)
-          mut stag : u8 = tag_unflag(sty.tag)
+          sty := local_lookup(locals, cnt, src, sv.s, sv.n)
+          stag : u8 = sty.ty.tag
+          sty_ns := sty.ty.ns
+          sty_nl := sty.ty.nl
           ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` scalar match must cover its
           ## finite domain (else a compile error). Fail-open for anything else (see scalar_coverage_gap).
-          if (tag_is_int(stag) or tag_is_bool(stag)) and scalar_coverage_gap(ah, stag, sty.ns, sty.nl, src) {
+          if (tag_is_int(stag) or tag_is_bool(stag)) and scalar_coverage_gap(ah, stag, sty_ns, sty_nl, src) {
             return Result(usize, CheckErr).Err(mismatch_err(s_of(sc, a), 0))
           }
         }
@@ -11253,8 +11337,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             frv := expr_var_span(fbv)
             ffv := expr_field_span(ib)
             if frv.n != 0 and ffv.n != 0 {
-              mut rte := local_ty(locals, cnt, src, frv.s, frv.n)
-              if tag_is_poison(rte.tag) {
+              flt := local_lookup(locals, cnt, src, frv.s, frv.n)
+              flt_tag : u8 = flt.ty.tag
+              flt_ns := flt.ty.ns
+              flt_nl := flt.ty.nl
+              mut rte := Ty(tag = flt_tag, ns = flt_ns, nl = flt_nl)
+              if not flt.found {
                 gts2 := global_type_span(decls, src, frv.s, frv.n)
                 if gts2.n != 0 { rte = resolve_ty(src, gts2.s, gts2.n, decls, upto) }
               }
@@ -11309,13 +11397,21 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if ifperm == 2 or (ifperm == 1 and not if_unready) { mark_failed(locals, immutable_err(ifroot.s)) }
         iav := expr_var_span(fia)
         if iav.n != 0 and expr_is_num_lit(fii) {
-          aty := local_ty(locals, cnt, src, iav.s, iav.n)
+          alt := local_lookup(locals, cnt, src, iav.s, iav.n)
+          alt_tag : u8 = alt.ty.tag
+          alt_ns := alt.ty.ns
+          alt_nl := alt.ty.nl
+          aty : Ty = Ty(tag = alt_tag, ns = alt_ns, nl = alt_nl)
           da_assign_array_field(deref(da), decls, upto, src, iav.s, iav.n, ifs, ifl, expr_num_lit_val(fii), aty)
         } else if unchecked bitcast(usize, expr_field_base(fia)) != 0 and expr_is_num_lit(fii) {
           arrroot := expr_var_span(expr_field_base(fia))
           arrfield := expr_field_span(fia)
           if arrroot.n != 0 and arrfield.n != 0 {
-            aty2 := local_ty(locals, cnt, src, arrroot.s, arrroot.n)
+            alt2 := local_lookup(locals, cnt, src, arrroot.s, arrroot.n)
+            alt2_tag : u8 = alt2.ty.tag
+            alt2_ns := alt2.ty.ns
+            alt2_nl := alt2.ty.nl
+            aty2 : Ty = Ty(tag = alt2_tag, ns = alt2_ns, nl = alt2_nl)
             da_assign_array_nested_field(deref(da), decls, upto, src, arrroot.s, arrroot.n, arrfield.s, arrfield.n, ifs, ifl, expr_num_lit_val(fii), aty2)
           }
         }
@@ -12027,10 +12123,12 @@ type_is_owning := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), tns : us
 ## reliable for call-values via the return-type-name recovery at the `Assign` binding) resolves to an
 ## `@owning` type. False for scalars / unresolved / non-owning aggregates.
 local_is_owning := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), xs : usize, xl : usize, decls : ptr(rt::Vec), upto : usize) -> bool {
-  lt := local_ty(locals, nloc, src, xs, xl)
-  mut base : u8 = tag_unflag(lt.tag)
+  lt := local_lookup(locals, nloc, src, xs, xl)
+  base : u8 = lt.ty.tag
+  lt_ns := lt.ty.ns
+  lt_nl := lt.ty.nl
   if not tag_is_struct(base) and not tag_is_enum(base) { return false }
-  type_is_owning(decls, upto, src, lt.ns, lt.nl)
+  type_is_owning(decls, upto, src, lt_ns, lt_nl)
 }
 
 ## Does expr `e` USE the var `[xs, xl)` — CONSERVATIVELY for leak-detection: any form not fully understood
@@ -12276,15 +12374,17 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
     ## until #626; the two concepts are separate values now and each states its own case (the other
     ## half of this pair is the `prov_array_param()` setter in `check_fn`).
     if prov == prov_array_param() { return 0 }
-    raw := local_ty(locals, nloc, src, root.s, root.n)
-    mut tag : u8 = tag_unflag(raw.tag)
+    raw := local_lookup(locals, nloc, src, root.s, root.n)
+    tag : u8 = raw.ty.tag
+    raw_ns := raw.ty.ns
+    raw_nl := raw.ty.nl
     ## Pointer/deref places have a separate pointer mutability contract. Pattern/loop bindings and
     ## other unresolved locals are deliberately unknown, so this fence must not turn them into false
     ## rejects. `Slice(T)` parameters are borrowed views whose element permission is not expressible
     ## until the separate `[mut T]` work; retain their established writable-view behavior here.
-    if tag_is_unknown(tag) or tag_is_ptr(tag) or tag == 255 { return 0 }
-    if raw.nl != 0 and str_at((src + raw.ns), raw.nl) == "Slice" { return 0 }
-    if not tag_is_unknown(tag) and tag_is_plain(raw.tag) { return 1 }
+    if not raw.found or raw.poison or tag_is_unknown(tag) or tag_is_ptr(tag) { return 0 }
+    if raw_nl != 0 and str_at((src + raw_ns), raw_nl) == "Slice" { return 0 }
+    if not raw.mutable { return 1 }
     return 0
   }
   if sema_global_name_anywhere(decls, src, root.s, root.n) and not is_mod_mut_global(decls, src, root.s, root.n) { return 2 }
@@ -12303,8 +12403,8 @@ sema_place_is_str_view := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), ro
   if root.n == 0 { return false }
   if not local_in(locals, nloc, src, root.s, root.n) { return false }
   if local_prov(locals, nloc, src, root.s, root.n) == prov_str_view() { return true }
-  raw := local_ty(locals, nloc, src, root.s, root.n)
-  mut tag : u8 = tag_unflag(raw.tag)
+  raw := local_lookup(locals, nloc, src, root.s, root.n)
+  tag : u8 = raw.ty.tag
   tag_is_str(tag)
 }
 
@@ -13191,8 +13291,8 @@ sema_builtin_aggregate_conversion_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec),
   vs := expr_var_span(a0.e)
   if vs.n == 0 or nloc == 0 or not local_in(locals, nloc, src, vs.s, vs.n) { return false }
   lv := deref(locals)
-  raw := local_ty(locals, nloc, src, vs.s, vs.n)
-  mut ltag : u8 = tag_unflag(raw.tag)
+  raw := local_lookup(locals, nloc, src, vs.s, vs.n)
+  ltag : u8 = raw.ty.tag
   if tag_is_tuple_mark(ltag) { return not sema_tuple_conversion_exists(decls, upto, src, cs.s, cs.n, lv.mod_s, lv.mod_l) }
   agg := value_agg_ty(a0.e, decls, upto, src, locals, nloc)
   if not tag_is_struct(agg.tag) and not tag_is_enum(agg.tag) { return false }

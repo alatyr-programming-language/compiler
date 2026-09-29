@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A `mut` brand local counts as a brand at the direct `if`-branch guard.** `if c { a } else { b }`
+  over two sibling-brand locals (Types §5.4) is refused when both are plain, but the guard read each
+  local's raw tag byte, `+128` `mut` flag included, so with a `mut` binding on either side the crossing
+  checked, built and ran at rc 0. A local lookup now answers found, poisoned, `mut` and the unflagged
+  type as separate facts (`LocalTy`), and every one of its readers asks the fact it means (#583).
 - **The full gate can run on a GitHub-hosted runner.** `.github/workflows/gate.yml` runs
   `scripts/full.sh --force-sweeps` on every push to a `gate/**` branch and publishes the log and the
   generated corpus manifest; it holds no write token, and landing stays the integrator's (#748).
