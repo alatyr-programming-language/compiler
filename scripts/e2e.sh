@@ -1596,9 +1596,9 @@ issue299_brand_probe_census_test() {
 ## line, plus the controls that prove it is not over-reach.
 ##
 ## Every value is built with `A(1)`/`B(2)`/`C(3)`, never as an annotated integer literal. Written the
-## way #299's own table wrote them (`b : B = 2`), five of its six rows come back refused by a
-## DIFFERENT defect (#563) that fires before the sink is judged and masks it — the `lit_mask` row
-## below asserts that mask is still #563's and not this refusal's.
+## way #299's own table wrote them (`b : B = 2`), five of its six rows used to come back refused by a
+## DIFFERENT defect (#563) that fired before the sink was judged; #563 is fixed, and the `lit_mask`
+## row below asserts that a literal at its own brand annotation stays accepted.
 ##
 ## The programs live in this row's private scratch directory, so the four-backend corpus oracle gains
 ## no row for a matrix whose whole point is one `check`-level verdict per shape. The tracked
@@ -1963,12 +1963,12 @@ main := fn() -> u64 {
   return 42
 }' 42
 
-  ## ---- CONTROL 4: the #563 MASK is still #563's ------------------------------------------------
+  ## ---- CONTROL 4: a literal at its OWN brand annotation is accepted ---------------------------
   ## `a : A = 41` is an integer literal meeting its own annotation, which Types §9.1/§9.2 make one of
-  ## the two forms that GIVE a literal its type — not a conversion between two typed values. It is
-  ## refused today by a different defect (#563). This row asserts the refusal is NOT this class: if
-  ## the brand fence ever starts claiming that sink, #299 will have absorbed #563's bug and the
-  ## measurement of every row above becomes unattributable.
+  ## the two forms that GIVE a literal its type — not a conversion between two typed values. It was
+  ## refused by a different defect, #563, which masked this matrix's rows written with literals; since
+  ## #563 it is accepted. This row asserts it STAYS accepted: a brand-class refusal here would mean
+  ## #299's fence claimed a literal sink, and any other refusal would be #563 back.
   local ls="$d/lit_mask.al" lc="$d/lit_mask.ce"
   printf '%s\n%s\n' "$pro" 'main := fn() -> u64 {
   a : A = 41
@@ -1976,14 +1976,14 @@ main := fn() -> u64 {
 }' > "$ls"
   "$CC" check "$ls" >/dev/null 2>"$lc"; local lrc=$?
   if [ "$lrc" = 0 ]; then
-    echo "FAIL issue299/lit_mask: \`a : A = 41\` is accepted — #563 changed; re-read this row"
-    nfail=$((nfail+1))
+    nok=$((nok+1))
   elif grep -qF "implicit brand conversion" "$lc"; then
     echo "FAIL issue299/lit_mask: the literal sink is refused by the BRAND class; §9.1/§9.2 make it a"
-    echo "     literal taking its annotated type, and #563 owns that refusal, not #299"
+    echo "     literal taking its annotated type, not a brand crossing"
     nfail=$((nfail+1))
   else
-    nok=$((nok+1))
+    echo "FAIL issue299/lit_mask: \`a : A = 41\` is refused again ($(head -c 80 "$lc")) — #563 regressed"
+    nfail=$((nfail+1))
   fi
   ## …and the constructor spelling of the same literal is accepted, which is what removes the mask.
   _brand_accept literal_through_constructor 'main := fn() -> u64 {
@@ -6678,6 +6678,16 @@ emit_reject_has aarch64 reject_brand_array_param_literal "implicit brand convers
 emit_reject_has riscv64 reject_brand_array_param_literal "implicit brand conversion"
 check_accept accept_brand_array_param
 run accept_brand_array_param 42
+## Issue #563 — a literal meeting a brand annotation is judged against the brand's kernel type: accepted
+## where it fits (refused on the parent), refused where it does not fit, is float-spelled, or is a `str`
+## (the last two ran on the parent, to 1 and to 1).
+check_accept accept_brand_literal_annotation
+run accept_brand_literal_annotation 42
+check_located reject_brand_literal_range 5
+check_located reject_brand_float_literal_int 5
+check_located reject_brand_str_literal 5
+build_reject reject_brand_float_literal_int
+build_reject reject_brand_str_literal
 ## The LEGAL half of the composition row above. Its assertions are deliberately SPLIT across two
 ## scopes — module scope proves the element walker ACCEPTS a legal `[2]A`, the local proves the value
 ## path is right — because #674 makes a module-level array of a BRAND read all-zero today. The

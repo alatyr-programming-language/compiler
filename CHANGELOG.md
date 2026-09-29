@@ -128,6 +128,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   parameter is recorded by its element type, so the brand judge never saw an array; and a whole array
   value was never judged, only array literals. Both are refused at the crossing now, and the #299
   census counts them (#698).
+- **A literal takes its type from a brand annotation.** `a : A = 41` for `A := brand(u64)` was refused
+  as a type mismatch although Types §9.2 makes the annotation what types the literal, as `A(41)`
+  already did; it is accepted now. The literal is judged against the kernel type the brand
+  bottoms out in, so representability still holds (`n : N = 300` for `N := brand(u8)` stays a
+  located error), and two forms that compiled and RAN before are refused: `a : A = 1.5` (it ran to
+  1) and `a : A = "x"` (#563).
 - **The full gate can run on a GitHub-hosted runner.** `.github/workflows/gate.yml` runs
   `scripts/full.sh --force-sweeps` on every push to a `gate/**` branch and publishes the log and the
   generated corpus manifest; it holds no write token, and landing stays the integrator's (#748).
