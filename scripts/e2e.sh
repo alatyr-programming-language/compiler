@@ -1596,9 +1596,9 @@ issue299_brand_probe_census_test() {
 ## line, plus the controls that prove it is not over-reach.
 ##
 ## Every value is built with `A(1)`/`B(2)`/`C(3)`, never as an annotated integer literal. Written the
-## way #299's own table wrote them (`b : B = 2`), five of its six rows come back refused by a
-## DIFFERENT defect (#563) that fires before the sink is judged and masks it — the `lit_mask` row
-## below asserts that mask is still #563's and not this refusal's.
+## way #299's own table wrote them (`b : B = 2`), five of its six rows used to come back refused by a
+## DIFFERENT defect (#563) that fired before the sink was judged; #563 is fixed, and the `lit_mask`
+## row below asserts that a literal at its own brand annotation stays accepted.
 ##
 ## The programs live in this row's private scratch directory, so the four-backend corpus oracle gains
 ## no row for a matrix whose whole point is one `check`-level verdict per shape. The tracked
@@ -1625,7 +1625,9 @@ take_r := fn(x : u64) -> u64 { x }'
   ## wording ("unbound name") names nothing unbound, a diagnostic-quality defect of the #563 family.
   ## Those rows pass the older needle explicitly rather than being left out: the VERDICT is correct
   ## there, only the class wording is wrong, and asserting it pins today's behaviour so a later
-  ## re-classification is a decision somebody makes rather than a silent drift.
+  ## re-classification is a decision somebody makes rather than a silent drift. #716 made it for
+  ## `brand_into_raw_arg`: that compare now reports a located `type mismatch` at the argument. The
+  ## sibling laundered through `A(b)` is still refused as `unbound name`, by a different path.
   _brand_reject() { # case, body, want-line [, needle]
     local n="$1" body="$2" line="$3" ndl="${4:-implicit brand conversion}"
     local src="$d/$n.al" co="$d/$n.co" ce="$d/$n.ce" bo="$d/$n.bin" be="$d/$n.be"
@@ -1817,7 +1819,7 @@ main := fn() -> u64 { return u64(G) }' 7
   _brand_reject brand_into_raw_arg 'main := fn() -> u64 {
   a : A = A(1)
   return take_r(a)
-}' 8 'unbound name'
+}' 8 'type mismatch'
   _brand_reject sibling_ctor_arg_in_call 'main := fn() -> u64 {
   b : B = B(2)
   return take_a(A(b))
@@ -1961,12 +1963,12 @@ main := fn() -> u64 {
   return 42
 }' 42
 
-  ## ---- CONTROL 4: the #563 MASK is still #563's ------------------------------------------------
+  ## ---- CONTROL 4: a literal at its OWN brand annotation is accepted ---------------------------
   ## `a : A = 41` is an integer literal meeting its own annotation, which Types §9.1/§9.2 make one of
-  ## the two forms that GIVE a literal its type — not a conversion between two typed values. It is
-  ## refused today by a different defect (#563). This row asserts the refusal is NOT this class: if
-  ## the brand fence ever starts claiming that sink, #299 will have absorbed #563's bug and the
-  ## measurement of every row above becomes unattributable.
+  ## the two forms that GIVE a literal its type — not a conversion between two typed values. It was
+  ## refused by a different defect, #563, which masked this matrix's rows written with literals; since
+  ## #563 it is accepted. This row asserts it STAYS accepted: a brand-class refusal here would mean
+  ## #299's fence claimed a literal sink, and any other refusal would be #563 back.
   local ls="$d/lit_mask.al" lc="$d/lit_mask.ce"
   printf '%s\n%s\n' "$pro" 'main := fn() -> u64 {
   a : A = 41
@@ -1974,14 +1976,14 @@ main := fn() -> u64 {
 }' > "$ls"
   "$CC" check "$ls" >/dev/null 2>"$lc"; local lrc=$?
   if [ "$lrc" = 0 ]; then
-    echo "FAIL issue299/lit_mask: \`a : A = 41\` is accepted — #563 changed; re-read this row"
-    nfail=$((nfail+1))
+    nok=$((nok+1))
   elif grep -qF "implicit brand conversion" "$lc"; then
     echo "FAIL issue299/lit_mask: the literal sink is refused by the BRAND class; §9.1/§9.2 make it a"
-    echo "     literal taking its annotated type, and #563 owns that refusal, not #299"
+    echo "     literal taking its annotated type, not a brand crossing"
     nfail=$((nfail+1))
   else
-    nok=$((nok+1))
+    echo "FAIL issue299/lit_mask: \`a : A = 41\` is refused again ($(head -c 80 "$lc")) — #563 regressed"
+    nfail=$((nfail+1))
   fi
   ## …and the constructor spelling of the same literal is accepted, which is what removes the mask.
   _brand_accept literal_through_constructor 'main := fn() -> u64 {
@@ -6308,7 +6310,10 @@ check_build_located reject_immutable_write 3 "immutable binding"
 ## is one answer for four backends and `emit_reject_has` proves nothing reaches stdout either.
 ## `reject_immutable_write`'s wording above is deliberately unchanged: where the FIRST failing
 ## AND-step is the binding itself, that fence still owns the diagnostic.
-check_build_located reject_str_elem_immutable 13 "str element store"
+## `reject_str_elem_immutable` binds with `:=`, so ITS first failing AND-step is the binding: it
+## reported `str element store` only while `check_expr` answered a string literal UNKNOWN and the
+## binding fence could not see the local's type (#716). The `mut` spellings below own the pointee step.
+check_build_located reject_str_elem_immutable 13 "immutable binding"
 check_build_located reject_str_elem_mut_binding 11 "str element store"
 check_build_located reject_str_elem_annotated_mut 12 "str element store"
 ## …and through a second NAME. The alias copies the two-word view, not the bytes, so it inherits
@@ -6316,9 +6321,9 @@ check_build_located reject_str_elem_annotated_mut 12 "str element store"
 ## of `s`, INCLUDING a `str` parameter whose own direct `s[i] = v` the older fence already refused.
 check_build_located reject_str_elem_alias 13 "str element store"
 check_build_located reject_str_elem_param_alias 11 "str element store"
-emit_reject_has aarch64 reject_str_elem_immutable "str element store"
-emit_reject_has riscv64 reject_str_elem_immutable "str element store"
-emit_reject_has wat reject_str_elem_immutable "str element store"
+emit_reject_has aarch64 reject_str_elem_immutable "immutable binding"
+emit_reject_has riscv64 reject_str_elem_immutable "immutable binding"
+emit_reject_has wat reject_str_elem_immutable "immutable binding"
 emit_reject_has aarch64 reject_str_elem_mut_binding "str element store"
 emit_reject_has riscv64 reject_str_elem_mut_binding "str element store"
 emit_reject_has wat reject_str_elem_mut_binding "str element store"
@@ -6668,6 +6673,39 @@ check_accept accept_brand_require_identity
 run accept_brand_require_identity 42
 check_accept accept_brand_unrefused_sinks
 run accept_brand_unrefused_sinks 42
+## Issue #698 — an ARRAY parameter (`xs : [A; 2]`) and a whole array LOCAL at a `[A; N]` sink. The
+## parent built all three and ran them to the sibling's values (32, 32, 22).
+build_reject_has reject_brand_array_param_literal "implicit brand conversion"
+check_reject reject_brand_array_param_literal
+build_reject_has reject_brand_array_param_local "implicit brand conversion"
+check_reject reject_brand_array_param_local
+build_reject_has reject_brand_array_bind_local "implicit brand conversion"
+check_reject reject_brand_array_bind_local
+emit_reject_has wat reject_brand_array_param_literal "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_array_param_literal "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_array_param_literal "implicit brand conversion"
+check_accept accept_brand_array_param
+run accept_brand_array_param 42
+## Issue #563 — a literal meeting a brand annotation is judged against the brand's kernel type: accepted
+## where it fits (refused on the parent), refused where it does not fit, is float-spelled, or is a `str`
+## (the last two ran on the parent, to 1 and to 1).
+check_accept accept_brand_literal_annotation
+run accept_brand_literal_annotation 42
+check_located reject_brand_literal_range 5
+check_located reject_brand_float_literal_int 5
+check_located reject_brand_str_literal 5
+build_reject reject_brand_float_literal_int
+build_reject reject_brand_str_literal
+## Issue #299 — EVERY component of an enum-variant payload is a brand sink, not only an arity-1
+## variant's one; the parent ran all three of these to the crossed values (9, 9, 4).
+build_reject_has reject_brand_payload_component_sink "implicit brand conversion"
+build_reject_has reject_brand_payload_component2_sink "implicit brand conversion"
+build_reject_has reject_brand_payload_component2_b1r "implicit brand conversion"
+emit_reject_has wat reject_brand_payload_component2_sink "implicit brand conversion"
+emit_reject_has aarch64 reject_brand_payload_component2_sink "implicit brand conversion"
+emit_reject_has riscv64 reject_brand_payload_component2_sink "implicit brand conversion"
+check_accept accept_brand_payload_components
+run accept_brand_payload_components 42
 ## The LEGAL half of the composition row above. Its assertions are deliberately SPLIT across two
 ## scopes — module scope proves the element walker ACCEPTS a legal `[2]A`, the local proves the value
 ## path is right — because #674 makes a module-level array of a BRAND read all-zero today. The
@@ -10549,6 +10587,24 @@ run_wat wasm_cmp_value 42
 ## now that it runs. The parent accepted this and ran it to 42.
 check_reject reject_bool_int_arith
 build_reject reject_bool_int_arith
+## #716 — `bitcast(i64, <bool>)` is not an equal-width reinterpretation (Types §4.4); once the operand's
+## `bool` type is computed the `i64` function refuses it. The parent accepted it.
+check_reject reject_bitcast_bool_to_word
+## Issue #725 — a CALL used as an arithmetic or comparison operand takes the callee's declared result
+## signedness on every backend. On the parent aarch64/riscv64/wasm divided a negative `i64` result
+## unsigned (185 / 1), took its `%` unsigned (103), and compared a `u64` result signed (1).
+run issue725_call_div_signed 42
+run_wat issue725_call_div_signed 42
+run_a64 issue725_call_div_signed 42
+run_rv64 issue725_call_div_signed 42
+run issue725_call_mod_signed 42
+run_wat issue725_call_mod_signed 42
+run_a64 issue725_call_mod_signed 42
+run_rv64 issue725_call_mod_signed 42
+run issue725_call_cmp_unsigned 42
+run_wat issue725_call_cmp_unsigned 42
+run_a64 issue725_call_cmp_unsigned 42
+run_rv64 issue725_call_cmp_unsigned 42
 run_wat wasm_locals 42
 run_wat wasm_local_mix 42
 run_wat wasm_reassign 42

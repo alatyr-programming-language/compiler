@@ -529,6 +529,32 @@ mut PTRINT_DECL_NS : usize = 0
 ## annotation can tell the enclosing function's `T : type` parameters from unknown type names.
 mut SEMA_DECL_PARAMS : usize = 0
 mut PTRINT_DECL_NL : usize = 0
+## Issue #529 step (d) — the `unchecked` GRANT column. Memory §4.5 makes a pointer fabricated from an
+## integer ill-formed OUTSIDE an `unchecked` grant, so a place already inside one differs in kind from
+## a place that is not: the first needs only its implicit crossing spelled out, the second is a new
+## grant to review. `PTRINT_GRANT` is the LEXICAL nesting depth of the check walk inside the two grant
+## forms — a `Stmt::Unchecked` block and an `Expr::Unchecked` operand — raised on entry and RESTORED
+## (not decremented) on exit, at the three walkers that carry hooks (`check_stmts`, `check_expr_arms`,
+## `expr_has_unbound`). It is instrument-only state: no verdict reads it, and `ptrint_probe_decl`
+## zeroes it per declaration, so a refused walk that returned early inside a block cannot leak `in`
+## into the next declaration. PTRINT_GRANTED counts the rows that were emitted at depth > 0.
+##
+## Its known limit, reported rather than guessed: the depth says where the HOOK fired, and a hook
+## fires at the SINK. `p : ptr(u8) = unchecked h` walks `h` at depth 1 but compares the binding at
+## depth 0, so a place whose VALUE is itself an `unchecked <e>` wrapper reads `out`. The spec text
+## decides whether such a place is granted; the census only records the lexical fact.
+mut PTRINT_GRANT : usize = 0
+mut PTRINT_GRANTED : usize = 0
+ptrint_grant_enter := fn() -> usize {
+  g := PTRINT_GRANT
+  PTRINT_GRANT = g + 1
+  g
+}
+ptrint_grant_leave := fn(g : usize) { PTRINT_GRANT = g }
+ptrint_grant_name := fn() -> str {
+  if PTRINT_GRANT == 0 { return "out" }
+  "in"
+}
 ## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF for
 ## one that is closed or opened read-only, and touches no memory in either case.
 ptrint_probe_open := fn() -> bool { rt::sys_write(1, ptrint_probe_fd(), 0, 0) == 0 }
@@ -561,6 +587,7 @@ ptrint_probe_decl := fn(d : Decl) {
   PTRINT_MOD_NL = d.mod_len
   PTRINT_DECL_NS = d.name_start
   PTRINT_DECL_NL = d.name_len
+  PTRINT_GRANT = 0
 }
 ## The unclassified totals, at the funnel.
 ptrint_probe_call := fn(x : u8, y : u8) {
@@ -595,6 +622,7 @@ ptrint_dir_name := fn(directional : bool, vt : u8, st : u8) -> str {
 ptrint_probe_site := fn(cls : str, site : str, directional : bool, vt : u8, st : u8, off : usize, src : ptr(u8)) {
   if not ptrint_seam(vt, st) { return }
   PTRINT_ROWS = PTRINT_ROWS + 1
+  if PTRINT_GRANT != 0 { PTRINT_GRANTED = PTRINT_GRANTED + 1 }
   if ptrint_probe_open() {
     mut pa := rt::Arena(base = 0, off = 0, cap = 0)
     mut sb := ptrint_probe_buf(pa)
@@ -614,6 +642,8 @@ ptrint_probe_site := fn(cls : str, site : str, directional : bool, vt : u8, st :
     dns := PTRINT_DECL_NS
     dnl := PTRINT_DECL_NL
     if dnl == 0 { e0 := rt::push_str(sb, "-") } else { e1 := rt::push_str(sb, str_at((src + dns), dnl)) }
+    g0 := rt::push_str(sb, " ")
+    g1 := rt::push_str(sb, ptrint_grant_name())
     m3 := rt::push_str(sb, " |")
     ls := brand_probe_line(src, off)
     w9 := rt::push_str(sb, str_at((src + ls.s), ls.n))
@@ -635,6 +665,8 @@ ptrint_probe_summary := fn() {
     w5 := rt::push_int(sb, i64(PTRINT_SEAM))
     w6 := rt::push_str(sb, " rows=")
     w7 := rt::push_int(sb, i64(PTRINT_ROWS))
+    g0 := rt::push_str(sb, " granted=")
+    g1 := rt::push_int(sb, i64(PTRINT_GRANTED))
     w8 := rt::push_str(sb, " break=")
     w9 := rt::push_int(sb, i64(PTRINT_BREAK))
     a0 := rt::push_str(sb, " arith_ptr_operand=")
@@ -2788,8 +2820,15 @@ brand_probe_class_name := fn(c : usize) -> str {
 brand_probe_value_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) {
   if SEMA_BRAND_DECLS == 0 { return }
   if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return }
-  BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
   act := sema_brand_value_ty(v, decls, upto, src, locals, nloc, a)
+  brand_probe_ty_sink(dst, act, off, decls, upto, src)
+}
+## The census half of one value sink once the value's brand identity `act` is known — shared by
+## `brand_probe_value_sink` and the whole-array walk (#698), which knows an element TYPE, not an
+## element expression.
+brand_probe_ty_sink := fn(dst : Ty, act : Ty, off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) {
+  if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return }
+  BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
   if not tag_is_brand(act.tag) and not tag_is_brand(dst.tag) { return }
   c := sema_brand_class(dst, act, decls, upto, src)
   if c != 0 { brand_probe_row(brand_probe_class_name(c), off, src) }
@@ -2897,6 +2936,12 @@ sema_brand_value_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : pt
   if SEMA_BRAND_DECLS == 0 { return 0 }
   if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return 0 }
   act := sema_brand_value_ty(v, decls, upto, src, locals, nloc, a)
+  sema_brand_ty_sink_err(dst, act, off, decls, upto, src)
+}
+## The refusing half of one value sink once the value's brand identity `act` is known — the twin of
+## `brand_probe_ty_sink`, and the one place both value-sink shapes decide (#698).
+sema_brand_ty_sink_err := fn(dst : Ty, act : Ty, off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> CheckErr {
+  if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return 0 }
   if not tag_is_brand(act.tag) and not tag_is_brand(dst.tag) { return 0 }
   if sema_brand_refuse_class(dst, act, decls, upto, src) == 0 { return 0 }
   brand_conversion_err(off)
@@ -3030,6 +3075,28 @@ sema_brand_array_elems := fn(census : bool, dst : Ty, v : ptr(Expr), off : usize
   if not tag_is_brand(et.tag) and not tag_is_int(et.tag) { return 0 }
   mut g := expr_array_lit_head(v)
   mut err : CheckErr = 0
+  ## Issue #698 — a WHOLE array value, not a literal: a local recorded as a fixed array
+  ## (`bs : [B; 2]`) has its element type in its annotation, so its elements are judged by TYPE
+  ## against the sink's element type. Before this `ys : [A; 2] = bs` and `take(bs)` for
+  ## `take := fn(xs : [A; 2])` let every element of a sibling brand through.
+  if g == 0 {
+    vv := expr_var_span(v)
+    if vv.n != 0 and nloc != 0 and local_in(locals, nloc, src, vv.s, vv.n) {
+      vlk := local_lookup(locals, nloc, src, vv.s, vv.n)
+      vtag : u8 = vlk.ty.tag
+      vns := vlk.ty.ns
+      vnl := vlk.ty.nl
+      if tag_is_array(vtag) and vnl != 0 {
+        vsp := sema_brand_array_elem_span(src, vns, vnl)
+        if vsp.n != 0 {
+          vet := resolve_ty(src, vsp.s, vsp.n, decls, upto)
+          if census { brand_probe_ty_sink(et, vet, off, decls, upto, src) }
+          else { err = sema_brand_ty_sink_err(et, vet, off, decls, upto, src) }
+        }
+      }
+    }
+    return err
+  }
   while g != 0 {
     ea := deref(arg_p(g))
     eoff := sema_brand_span(s_of(ea.e, a), off)
@@ -3046,6 +3113,25 @@ sema_brand_array_elems := fn(census : bool, dst : Ty, v : ptr(Expr), off : usize
 ## The REFUSING end of that walk — the entry `sema_brand_sink_err` dispatches a tag-7 sink into.
 sema_brand_array_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   sema_brand_array_elems(false, dst, v, off, decls, upto, src, locals, nloc, a)
+}
+## Issue #698 — the brand sink type of a call parameter. The parser records an array parameter
+## `xs : [T; N]` by its ELEMENT span `T` (`Param.pmode == 1`), so `callee_param_ty` answers `T`'s type.
+## When the source around that span is a fixed-array annotation — `[` before it and `; N ]` after —
+## this answers the whole annotation as the tag-7 array `Ty` a local `xs : [T; N]` would record, so
+## the brand judge walks the argument's elements; otherwise `pty` unchanged. A slice `[T]` has no `;`
+## and is left alone.
+sema_array_param_brand_ty := fn(pty : Ty, src : ptr(u8), ts : usize, tl : usize) -> Ty {
+  if tl == 0 or ts == 0 { return pty }
+  mut p := ts
+  while p > 0 and _sws1(src, p - 1) { p -= 1 }
+  if p == 0 or str_at((src + p - 1), 1) != "[" { return pty }
+  open := p - 1
+  mut q := ts + tl
+  while _sws1(src, q) { q += 1 }
+  if str_at((src + q), 1) != ";" { return pty }
+  while str_at((src + q), 1) != "]" and str_at((src + q), 1) != "\n" and str_at((src + q), 1) != ")" { q += 1 }
+  if str_at((src + q), 1) != "]" { return pty }
+  Ty(tag = 7, ns = open, nl = q + 1 - open)
 }
 ## The value-sink DISPATCHER every hooked sink calls. A tag-7 declared type is an array annotation
 ## whose ELEMENTS are the value sinks; every other declared type is judged directly. One entry, so a
@@ -6603,29 +6689,47 @@ sema_enum_variant_arity := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
   EnumVariantArity(known = known, fits = fits, want = want, ts = ts, tl = tl, amb = amb)
 }
 
-## Issue #299 — the ENUM-VARIANT PAYLOAD sink, for a variant of arity ONE, as `resolve_ty` gives it
-## (tag 0 = no judgeable sink). `FieldDecl` stores ONE payload type span per variant, filled from the
-## FIRST component (`src/parser.al`'s `if marity == 0`), so an arity-1 variant's declared payload type
-## IS in the AST and an arity->=2 variant's components 2..n are NOT: judging only `want == 1` refuses
-## exactly the shape whose sink type exists and leaves the multi-component residual untouched rather
-## than judging component 2 against component 1's type. `amb` and a `fits` mismatch stay fail-open —
-## the arity reject above already owns a count disagreement, and an ambiguous head has no one sink.
-sema_enum_payload_one_ty := fn(eva : EnumVariantArity, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> Ty {
+## Issue #299 — the declared type of payload COMPONENT `k` of the variant `eva` found, else unknown.
+## `FieldDecl` records one type span for the whole payload list — the FIRST component's (the parser fills
+## it under `if marity == 0`) — so components 1..n had no recorded sink type and a sibling brand crossed
+## `F.P(b, 7)` for `P(A, u64)` unjudged. The span `eva.ts` still sits at the start of the declaration's
+## own `(T0, T1, …)` list in the source, so component `k` is read from there: `k` top-level commas on,
+## up to the next top-level comma or the closing parenthesis.
+sema_enum_payload_ty := fn(eva : EnumVariantArity, k : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> Ty {
   unknown := Ty(tag = 0, ns = 0, nl = 0)
-  if eva.known == false { return unknown }
-  if eva.amb { return unknown }
-  if eva.fits == false { return unknown }
-  if eva.want != 1 { return unknown }
-  if eva.tl == 0 { return unknown }
-  resolve_ty(src, eva.ts, eva.tl, decls, upto)
-}
-## …and that variant's ONE supplied payload value, as the `Arg` node's address (0 = not exactly one).
-## The list is recovered through `expr_enum_lit_head` for the scar #2 reason stated there.
-sema_enum_payload_one_arg := fn(e : ptr(Expr)) -> usize {
-  h := expr_enum_lit_head(e)
-  if h == 0 { return 0 }
-  if (deref(arg_p(h))).next != 0 { return 0 }
-  h
+  if eva.known == false or eva.amb or eva.fits == false or eva.tl == 0 or k >= eva.want { return unknown }
+  if k == 0 { return resolve_ty(src, eva.ts, eva.tl, decls, upto) }
+  mut p := eva.ts
+  mut depth : usize = 0
+  mut seen : usize = 0
+  while seen < k {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" { depth += 1 }
+    else if c == "]" and depth > 0 { depth -= 1 }
+    else if c == ")" {
+      if depth == 0 { return unknown }
+      depth -= 1
+    }
+    else if c == "," and depth == 0 { seen += 1 }
+    else if c == "\n" or c == "{" or c == "}" { return unknown }
+    p += 1
+  }
+  while _sws1(src, p) { p += 1 }
+  q0 := p
+  depth = 0
+  mut going := true
+  while going {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" { depth += 1; p += 1 }
+    else if (c == ")" or c == "]") and depth > 0 { depth -= 1; p += 1 }
+    else if (c == "," or c == ")") and depth == 0 { going = false }
+    else if c == "\n" or c == "{" or c == "}" { return unknown }
+    else { p += 1 }
+  }
+  mut q1 := p
+  while q1 > q0 and _sws1(src, q1 - 1) { q1 -= 1 }
+  if q1 == q0 { return unknown }
+  resolve_ty(src, q0, q1 - q0, decls, upto)
 }
 
 ## The bounded scalar `comptime` slice (Comptime §2.2 / §9.1) accepts only a NULLARY user-enum
@@ -7505,7 +7609,15 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
               Result::Ok(av) => {
                 pt := callee_param_ty(decls, upto, src, cs, cl, ai, a)
                 ptrint_probe_site("ARG", "unbound", true, av.tag, pt.tag, s_of(ga.e, a), src)
-                if not tag_compat(av.tag, pt.tag) { bad = true }
+                ## A conformance failure, not an unbound name: poison the check with a located MISMATCH
+                ## at the argument, and leave `bad` to the unbound walk it reports (#716 — a revived
+                ## literal arm gives this compare a known tag it never had). `s_of` has no span for a
+                ## literal argument, so it is located at the call, where the unbound report put it.
+                if not tag_compat(av.tag, pt.tag) {
+                  mut asp := s_of(ga.e, a)
+                  if asp == 0 and not ast::span_is_synthetic(cs) { asp = cs }
+                  mark_failed(locals, mismatch_err(asp, 0))
+                }
               }
               Result::Err(e0) => { bad = true }
             }
@@ -7548,7 +7660,12 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
     }
     Expr::Index(base, idx) => { expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(idx, decls, upto, src, a, locals, nloc) }
     Expr::Try(inner) => { expr_has_unbound(inner, decls, upto, src, a, locals, nloc) }
-    Expr::Unchecked(inner) => { expr_has_unbound(inner, decls, upto, src, a, locals, nloc) }
+    Expr::Unchecked(inner) => {
+      ug := ptrint_grant_enter()
+      ub := expr_has_unbound(inner, decls, upto, src, a, locals, nloc)
+      ptrint_grant_leave(ug)
+      ub
+    }
     Expr::Slice(base, lo, hi) => { expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(lo, decls, upto, src, a, locals, nloc) or expr_has_unbound(hi, decls, upto, src, a, locals, nloc) }
     Expr::CompField(base, idx) => { expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(idx, decls, upto, src, a, locals, nloc) }
     ## FN-6 — a lifted-lambda code pointer (`FnRef`) binds no names; a `Lambda` is lifted before check.
@@ -7808,16 +7925,23 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## #299 census hook (no refusal): the ENUM-VARIANT PAYLOAD sink of an arity-1 variant, judged
       ## from the very declaration the arity verdict above already found. Inert unless the program
       ## declares a brand of its own.
-      epty0 := sema_enum_payload_one_ty(eva0, decls, upto, src)
-      eph0 := sema_enum_payload_one_arg(e)
-      if not tag_is_unknown(epty0.tag) and eph0 != 0 {
+      ## Every COMPONENT of the payload, not only an arity-1 variant's one (#299's last listed sink):
+      ## component `k` is judged against the declaration's `k`-th type, read by `sema_enum_payload_ty`.
+      mut eph0 := expr_enum_lit_head(e)
+      mut epk0 : usize = 0
+      while eph0 != 0 {
         epa0 := deref(arg_p(eph0))
-        brand_probe_sink(epty0, epa0.e, s_of(epa0.e, a), decls, upto, src, locals, nloc, a)
-        ## …and the REFUSAL at the same sink. Poisons rather than returning, so the arity verdict
-        ## above and the ordinary walk below still run. Located at the offending payload VALUE's own
-        ## span, falling back to the variant name — the span this arm's other diagnostics point at.
-        epe0 := sema_brand_sink_err(epty0, epa0.e, sema_brand_span(s_of(epa0.e, a), eparts0.vs), decls, upto, src, locals, nloc, a)
-        if epe0 != 0 { mark_failed(locals, epe0) }
+        epty0 := sema_enum_payload_ty(eva0, epk0, decls, upto, src)
+        if not tag_is_unknown(epty0.tag) {
+          brand_probe_sink(epty0, epa0.e, s_of(epa0.e, a), decls, upto, src, locals, nloc, a)
+          ## …and the REFUSAL at the same sink. Poisons rather than returning, so the arity verdict
+          ## above and the ordinary walk below still run. Located at the offending payload VALUE's own
+          ## span, falling back to the variant name — the span this arm's other diagnostics point at.
+          epe0 := sema_brand_sink_err(epty0, epa0.e, sema_brand_span(s_of(epa0.e, a), eparts0.vs), decls, upto, src, locals, nloc, a)
+          if epe0 != 0 { mark_failed(locals, epe0) }
+        }
+        epk0 += 1
+        eph0 = epa0.next
       }
     }
   }
@@ -7884,12 +8008,18 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## intentionally accepted by the existing checker/lower seam. The conformance gap this lane
       ## closes is a value-result mismatch (`S`/`str`/scalar), not pointer-to-aggregate ABI plumbing.
       pty0 := callee_param_ty(decls, upto, src, ecs.s, ecs.n, apix, a)
+      ## Issue #698 — an ARRAY parameter (`xs : [A; 2]`) records only its ELEMENT type span, so
+      ## `pty0` is the element's type and the brand judge compared `A` against the whole argument —
+      ## an array literal, whose identity it cannot name — and let `[b, c]` of a sibling `B` through.
+      ## The brand sink is handed the whole `[A; N]` annotation instead, which `sema_brand_sink_err`
+      ## already walks element by element for an annotated array binding.
+      bpty0 := sema_array_param_brand_ty(pty0, src, psp.s, psp.n)
       ## #299 census hook (no refusal): this argument's declared parameter type against the value's
       ## recovered brand identity. Inert unless the program declares a brand of its own.
-      brand_probe_sink(pty0, ca.e, s_of(ca.e, a), decls, upto, src, locals, nloc, a)
+      brand_probe_sink(bpty0, ca.e, s_of(ca.e, a), decls, upto, src, locals, nloc, a)
       ## …and the refusal at the same sink (Issue #299). Poisons rather than returning: the argument
       ## walk must finish so every offending argument of the call is counted by the census beside it.
-      cbe := sema_brand_sink_err(pty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc, a)
+      cbe := sema_brand_sink_err(bpty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc, a)
       if cbe != 0 { mark_failed(locals, cbe) }
       if not tag_is_unknown(crt0.tag) and not (tag_is_ptr(crt0.tag) and tag_is_struct(pty0.tag)) {
         if not tag_is_unknown(pty0.tag) { ptrint_probe_site("ARG", "premat", true, crt0.tag, pty0.tag, s_of(ca.e, a), src) }
@@ -7940,10 +8070,9 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## is what the garbage was being read as.
   match deref(e) {
     Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
-      | Expr::FloatLit | Expr::Slice | Expr::Bin => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::BoolLit | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref
-      | Expr::StrLit | Expr::ArrayLit | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+      | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
   }
 }
 
@@ -8189,7 +8318,13 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
     }
     ## A string literal `"…"` has the `str` type (tag 6). No sub-expression to check.
-    Expr::StrLit(s, n, lbl, _ps, _pn) => { Result(Ty, CheckErr).Ok(Ty(tag = 6, ns = 0, nl = 0)) }
+    ## #716 — `embed(path)` (Comptime §2.4) folds to this same node, with the path span in the last two
+    ## fields, and its surface type is `[u8; N]`, not `str`: typed `str`, this arm refused
+    ## `b : [u8; 4] = embed(…)` the first time it ran. An embed answers UNKNOWN, as it always did.
+    Expr::StrLit(s, n, lbl, _ps, _pn) => {
+      if _pn != 0 { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+      else { Result(Ty, CheckErr).Ok(Ty(tag = 6, ns = 0, nl = 0)) }
+    }
     ## `[e0, …, eN]` — an array literal: each element expression is checked; the value's type
     ## is array (tag 7). Per-element type agreement is DEFERRED (the toy arrays hold word-sized
     ## ints; element-type tracking is not load-bearing for the supported grammar).
@@ -8233,7 +8368,13 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     Expr::Lambda(fnpos, lph, lrts, lrtl, lbh, lval) => {
       Result(Ty, CheckErr).Ok(Ty(tag = 1, ns = 0, nl = 0))
     }
-    Expr::Bitcast(binner, bps, bpl) => { check_expr(binner, decls, upto, src, a, locals, nloc) }
+    ## #716 — a `bitcast` has its TARGET's type, not its operand's: written as the operand's type this
+    ## arm, run for the first time, refused `unchecked bitcast(i64, u < 0)` in an `i64` function
+    ## (`bitcast_cmp_signedness`). The operand is still checked for its own errors.
+    Expr::Bitcast(binner, bps, bpl) => {
+      bci := check_expr(binner, decls, upto, src, a, locals, nloc)?
+      Result(Ty, CheckErr).Ok(resolve_ty(src, bps, bpl, decls, upto))
+    }
     ## `inner?` — the tryable `?` operator. The inner expression is checked; it must be a
     ## tryable ENUM value (tag 4) — a known non-enum inner is a `Mismatch` (an unknown inner,
     ## e.g. a call whose return type isn't a captured enum, is poison-tolerant). The `?`
@@ -8249,7 +8390,12 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     }
     ## `unchecked <inner>` — verification-mode scope (Types §4.2). The TYPE is the inner's type
     ## (fully transparent); the mode affects only the lower's guard emission.
-    Expr::Unchecked(inner) => { check_expr(inner, decls, upto, src, a, locals, nloc) }
+    Expr::Unchecked(inner) => {
+      ug := ptrint_grant_enter()
+      ur := check_expr(inner, decls, upto, src, a, locals, nloc)
+      ptrint_grant_leave(ug)
+      ur
+    }
     ## `loop { … }` in VALUE position (loop-as-expression, §7.2). Reuse the established break-value
     ## walker so a typed sink sees the loop's common reachable-break type instead of UNKNOWN. A loop with
     ## no value break remains UNKNOWN (Never is bottom here), while a known incompatible pair returns the
@@ -8552,11 +8698,15 @@ ann_lit_range_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) ->
 ## to have no fractional part.  This is deliberately a separate predicate rather than a
 ## new literal tag: the ordinary checker keeps float values poison-tolerant and the lower's
 ## aggregate/ABI paths already recognize Expr::FloatLit independently.
-float_lit_into_integer_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) -> bool {
-  if tl == 0 { return false }
+## Is `e` a float-spelled literal (`Expr::FloatLit`)?
+sema_is_float_lit := fn(e : ptr(Expr)) -> bool {
   mut is_float := false
   match deref(e) { Expr::FloatLit(_s, _n) => { is_float = true } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
-  if not is_float { return false }
+  is_float
+}
+float_lit_into_integer_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) -> bool {
+  if tl == 0 { return false }
+  if not sema_is_float_lit(e) { return false }
   w := str_at((src + ts), tl)
   w == "u8" or w == "u16" or w == "u32" or w == "u64" or w == "usize" or w == "u128" or w == "i8" or w == "i16" or w == "i32" or w == "i64" or w == "isize" or w == "i128"
 }
@@ -8658,17 +8808,28 @@ default_lit_range_bad := fn(src : ptr(u8), e : ptr(Expr)) -> bool {
 ## `num_lit_out_of_range` never judges them out of range — they are listed only to stop the brand
 ## scan early. The brand hop is skipped entirely when the program declares no user brand.
 ctor_int_target_name := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize) -> VSpan {
+  k := sema_brand_kernel_span(decls, upto, src, s, n)
+  if k.n == 0 { return k }
+  nm := str_at((src + k.s), k.n)
+  if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" or nm == "usize" { return k }
+  if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" or nm == "isize" { return k }
+  VSpan(s = 0, n = 0)
+}
+
+## The name a type name bottoms out in once every DIRECT user brand is followed (`N := brand(u8)` →
+## `u8`; a chain of brands to its last link), at most 8 links so a malformed or self-referential chain
+## cannot loop ({0,0} then). A name that is not a user brand — a kernel type, a PRELUDE brand
+## (`bool`, `char`, `f32`, `f64`), anything else — is its own answer. One walk for the constructor
+## rule above and the annotation rule of #563.
+sema_brand_kernel_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize) -> VSpan {
   mut cs := s
   mut cn := n
   mut hops : usize = 0
   while hops < 8 {
-    nm := str_at((src + cs), cn)
-    if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" or nm == "usize" { return VSpan(s = cs, n = cn) }
-    if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" or nm == "isize" { return VSpan(s = cs, n = cn) }
-    if SEMA_BRAND_DECLS == 0 { return VSpan(s = 0, n = 0) }
-    if sema_brand_is_prelude(src, cs, cn) { return VSpan(s = 0, n = 0) }
+    if SEMA_BRAND_DECLS == 0 { return VSpan(s = cs, n = cn) }
+    if sema_brand_is_prelude(src, cs, cn) { return VSpan(s = cs, n = cn) }
     bu := sema_brand_underlying(decls, upto, src, cs, cn)
-    if bu.n == 0 { return VSpan(s = 0, n = 0) }
+    if bu.n == 0 { return VSpan(s = cs, n = cn) }
     cs = bu.s
     cn = bu.n
     hops += 1
@@ -10719,7 +10880,26 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         } else {
           mut bad_decl := false
           if ann.n != 0 { ptrint_probe_site("BIND", "annbind", true, tv.tag, dt.tag, ns, src) }
-          if ann.n != 0 { bad_decl = not tag_compat(dt.tag, tv.tag) }
+          ## Issue #563 — Types §9.2 names an annotation as one of the two forms that GIVE a literal its
+          ## type, so a LITERAL meeting a BRAND annotation (`a : A = 41`, `A := brand(u64)`) is not a brand
+          ## crossing and not a tag mismatch: it is judged — kind, format and range — against the kernel
+          ## type the brand bottoms out in, exactly as `A(41)` already is. The literal rules below read
+          ## `lit_ts`/`lit_tl` and `lit_dtag`; for every other annotation those are the annotation's own.
+          ## Measured on the parent: `a : A = 41` refused, `a : A = 1.5` ran to 1, `a : A = "x"` ran.
+          mut lit_ts := ann.s
+          mut lit_tl := ann.n
+          mut lit_dtag : u8 = dt.tag
+          mut brand_lit := false
+          if ann.n != 0 and tag_is_brand(dt.tag) and (lbv_lit_tag(v) != 0 or sema_is_float_lit(v)) {
+            bk := sema_brand_kernel_span(decls, upto, src, ann.s, ann.n)
+            if bk.n != 0 and not (bk.s == ann.s and bk.n == ann.n) {
+              lit_ts = bk.s
+              lit_tl = bk.n
+              lit_dtag = resolve_ty(src, bk.s, bk.n, decls, upto).tag
+              brand_lit = true
+            }
+          }
+          if ann.n != 0 and not brand_lit { bad_decl = not tag_compat(dt.tag, tv.tag) }
           ## #299 census hooks (no refusal): an annotated binding is the declared sink; an INFERRED
           ## binding from a brand constructor is the identity the recorded local type drops.
           if ann.n != 0 { brand_probe_sink(dt, v, ns, decls, upto, src, locals, cnt, a) }
@@ -10739,15 +10919,15 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## Declarations §3.1 assignability, on the RELIABLE literal tag (`ann_lit_incompatible`) —
           ## `tv.tag` above is 0 for a literal whose `check_expr` arm does not dispatch, so the
           ## annotation constrained nothing. Located at the binding's own name span.
-          if ann.n != 0 and ann_lit_incompatible(dt.tag, lbv_lit_tag(v)) { bad_decl = true }
+          if ann.n != 0 and ann_lit_incompatible(lit_dtag, lbv_lit_tag(v)) { bad_decl = true }
           ## TYP-13: a float-spelled literal is never an integer initializer, while an integer
           ## literal in f32/f64 context must be exactly representable in that format.
-          if ann.n != 0 and float_lit_into_integer_bad(src, ann.s, ann.n, v) { bad_decl = true }
-          if ann.n != 0 and int_lit_into_float_bad(src, ann.s, ann.n, v) { bad_decl = true }
+          if ann.n != 0 and float_lit_into_integer_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
+          if ann.n != 0 and int_lit_into_float_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
           ## Types §9.1 REPRESENTABILITY, on the annotation's type NAME (the width `dt.tag` collapsed
           ## away): `x : u8 = 300` / `x : i8 = 200` / `x : u32 = 5_000_000_000` were all accepted in
           ## silence and truncated at run time.
-          if ann.n != 0 and ann_lit_range_bad(src, ann.s, ann.n, v) { bad_decl = true }
+          if ann.n != 0 and ann_lit_range_bad(src, lit_ts, lit_tl, v) { bad_decl = true }
           ## With no annotation the literal takes the target's native SIGNED type (Types §9.1 /
           ## Declarations §3.4). A negative `Num` payload is the parser's 64-bit representation of a
           ## written non-negative literal at or above 2^63; reject it before the untyped binding can
@@ -11450,7 +11630,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cur = nx
       }
       Stmt::Unchecked(b, nx) => {
-        cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        ## #529 grant column: restore the depth BEFORE the `?`, so an early return cannot leak it.
+        ug := ptrint_grant_enter()
+        ur := check_stmts(b, decls, upto, src, a, locals, cnt, da)
+        ptrint_grant_leave(ug)
+        cnt = ur?
         cur = nx
       }
       Stmt::AllocWith(ae, b, nx) => {
@@ -16419,6 +16603,8 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   PTRINT_MOD_NL = 0
   PTRINT_DECL_NS = 0
   PTRINT_DECL_NL = 0
+  PTRINT_GRANT = 0
+  PTRINT_GRANTED = 0
   BRAND_PROBE_SINKS = 0
   BRAND_PROBE_HITS = 0
   BRAND_PROBE_LOST = 0

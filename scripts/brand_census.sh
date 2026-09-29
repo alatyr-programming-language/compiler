@@ -271,6 +271,27 @@ G : [2]A = [B(1), B(2)]
 main := fn() -> u64 { return u64(G[0]) }
 AL
 
+  echo "  ARRAY at a CALL ARGUMENT whose parameter is a fixed array, and a WHOLE array value (#698): the"
+  echo "  parameter records only its element type, and a whole array local is judged by its element TYPE:"
+  pl_crossing array_param_literal B2 2 <<'AL'
+A := brand(u64)
+B := brand(u64)
+take := fn(xs : [A; 2]) -> u64 { return u64(xs[0]) }
+main := fn() -> u64 {
+  b : B = B(2)
+  return take([b, b])
+}
+AL
+  pl_crossing array_whole_local B2 1 <<'AL'
+A := brand(u64)
+B := brand(u64)
+main := fn() -> u64 {
+  bs : [B; 2] = [B(1), B(2)]
+  ys : [A; 2] = bs
+  return u64(ys[0])
+}
+AL
+
   echo "  STRUCT-LITERAL FIELD (#688) — the refusal reached it through its own walk and the census did not:"
   pl_crossing struct_field B2 1 <<'AL'
 A := brand(u64)
@@ -281,6 +302,18 @@ main := fn() -> u64 {
   x : S = S(f = A(1))
   y := S(f = b)
   return u64(x.f)
+}
+AL
+
+  echo "  ENUM-VARIANT PAYLOAD, a component past the first (#299's last listed sink):"
+  pl_crossing payload_component2 B2 1 <<'AL'
+A := brand(u64)
+B := brand(u64)
+F := enum { P(u64, A), Q }
+main := fn() -> u64 {
+  b : B = B(2)
+  f := F.P(7, b)
+  return 0
 }
 AL
 
@@ -316,6 +349,20 @@ main := fn() -> u64 {
 }
 AL
 
+  # #698 written the legal way: two literal elements and one whole local at an array PARAMETER,
+  # plus the binding that makes the local. Five visited sinks; the calls are bound directly because a
+  # call nested in a binary operator is not visited by `check_expr` until #716 revives its arm.
+  pl_clean array_param_legal 5 <<'AL'
+A := brand(u64)
+take := fn(xs : [A; 2]) -> u64 { return u64(xs[0]) }
+main := fn() -> u64 {
+  as : [A; 2] = [A(1), A(2)]
+  r1 := take([A(3), A(4)])
+  r2 := take(as)
+  return r1 + r2
+}
+AL
+
   # The struct-literal field written the legal way: two visited field sinks (and the binding's own).
   pl_clean struct_field_legal 2 <<'AL'
 A := brand(u64)
@@ -331,7 +378,7 @@ AL
   if [ "$PL_FAIL" = 0 ]; then
     echo "*** brand census: the counter fires on the SCALAR and the ARRAY-ELEMENT surface, in both"
     echo "    annotation spellings, in the fill form, across classes B1/B1R/B2/B3, at the"
-    echo "    module-level sink and at the DECLARED-RESULT sink — and stays silent on a legal"
+    echo "    module-level sink, at the DECLARED-RESULT sink and at an array PARAMETER — and stays silent on a legal"
     echo "    program whose elements it provably visited. A zero from this instrument on those"
     echo "    surfaces is a measurement. ***"
     return 0

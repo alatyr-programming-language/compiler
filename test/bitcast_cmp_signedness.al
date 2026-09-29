@@ -51,7 +51,10 @@ below_ten := fn(off : usize) -> bool { unchecked bitcast(u64, off) < 10 }
 ## Control: the target here reinterprets the comparison's BOOL result, so `u` keeps its own `usize`
 ## reading and `u < 0` stays false. A reverse source scan without a forward boundary answers `i64`
 ## for `u` and turns this true.
-cast_of_cmp := fn(u : usize) -> i64 { unchecked bitcast(i64, u < 0) }
+## (#716: this was `unchecked bitcast(i64, u < 0)`. A `bool` is one byte and `bitcast` needs equal bit
+## width (Types §4.2/§4.4), so that spelling is ill-formed; it was accepted only while `check_expr`'s
+## `Bin` and `Unchecked` arms never ran. `i64(b)` is the numeric conversion the control needs.)
+cast_of_cmp := fn(u : usize) -> i64 { i64(u < 0) }
 
 main := fn() -> u64 {
   hi : usize = 18446744073709551610      ## bit 63 set; the signed reading is -6

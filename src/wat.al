@@ -336,7 +336,7 @@ wat_operand_signed_dep := fn(e : ptr(Expr), params_head : ptr(mut Param), body_h
       ## un-annotated `d := m - 1` — recover the signed result type from the ARITHMETIC RHS (#651).
       if r == false { rhs := wat_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if wat_bin_init_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
     }
-    Expr::Call(cs, cl, na, ah) => { cn := str_at((src + cs), cl) ; if cn == "i8" or cn == "i16" or cn == "i32" or cn == "i64" or cn == "isize" { r = true } }
+    Expr::Call(cs, cl, na, ah) => { if lower_layout::call_value_signed(src, cs, cl) { r = true } }
     ## An ARITHMETIC `Bin` used DIRECTLY as an operand (`(a - b) + c`) carries its operands' type by
     ## the same rule as a `Bin`-inferred binding — the two halves of `0 + d + p` (#651).
     Expr::Bin(bop, obl, obr) => { if wat_bin_init_signed(e, params_head, body_head, src, a, dep + 1) { r = true } }
@@ -434,7 +434,7 @@ wat_operand_unsigned := fn(e : ptr(Expr), params_head : ptr(mut Param), body_hea
       ## (mirrors the SIGNED side's `wat_shift_call_signed` recovery above).
       if r == false { rhs := wat_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if wat_unchecked_init_unsigned(rhs, params_head, body_head, src, a) { r = true } } }
     }
-    Expr::Call(cs, cl, na, ah) => { cn := str_at((src + cs), cl) ; if cn == "u8" or cn == "u16" or cn == "u32" or cn == "u64" or cn == "usize" { r = true } }
+    Expr::Call(cs, cl, na, ah) => { if lower_layout::call_value_unsigned(src, cs, cl) { r = true } }
     ## The two SHAPES that CARRY an operand's unsignedness but have no annotation of their own, so the
     ## source scan above could never prove them unsigned and the comparison fell back to the always-
     ## SIGNED `i64.lt_s`/`gt_s`/`le_s`/`ge_s` — a `u64` word above 2^63 then ordered as NEGATIVE and
@@ -7778,8 +7778,13 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         if not cfdone { push_str(sb, "    (unreachable) (; comptime-for fields: needs a struct mono instance ;)\n") }
         s = cnx
       }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
+      ## #464 residual — this `_` STAYS until a seed promotion, and only for that reason. The scrutinee
+      ## is no longer blind (#660/#680/#716 type it), so the group arm of the Stmt variants it absorbs
+      ## is correct and ready; but its body holds a string literal, and the frozen `seed/alatyr`
+      ## predates #673's fix (PR #685), so a group arm here would define one `.Lstr` label once per
+      ## alternative and `as` would refuse the self-build. `.agents/skills/alatyr-lane/
+      ## wildcard_enumeration.md` §3 records the measurement; enumerate this arm, with a non-vacuity
+      ## check naming this line, in the first change after the seed is promoted.
       _ => { push_str(sb, "    (unreachable) (; unsupported stmt ;)\n") ; s = 0 }
     }
   }
@@ -8185,6 +8190,7 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
 }
 
 pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), src_n : usize, a : rt::Arena) {
+  lower_layout::set_call_signedness_decls(decls)       ## #725: call operands take the callee's result signedness
   WAT_SRC_N = src_n
   WAT_PRINT_I64 = false
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any import/global/func emission,

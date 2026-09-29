@@ -127,6 +127,23 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   local's raw tag byte, `+128` `mut` flag included, so with a `mut` binding on either side the crossing
   checked, built and ran at rc 0. A local lookup now answers found, poisoned, `mut` and the unflagged
   type as separate facts (`LocalTy`), and every one of its readers asks the fact it means (#583).
+- **A sibling brand no longer crosses through a fixed array.** `take([b, c])` for
+  `take := fn(xs : [A; 2])` and a sibling `b, c : B`, `take(bs)` for `bs : [B; 2]`, and
+  `ys : [A; 2] = bs` all checked at rc 0 and ran to the foreign values (Types §4.2/§5.4). An array
+  parameter is recorded by its element type, so the brand judge never saw an array; and a whole array
+  value was never judged, only array literals. Both are refused at the crossing now, and the #299
+  census counts them (#698).
+- **A literal takes its type from a brand annotation.** `a : A = 41` for `A := brand(u64)` was refused
+  as a type mismatch although Types §9.2 makes the annotation what types the literal, as `A(41)`
+  already did; it is accepted now. The literal is judged against the kernel type the brand
+  bottoms out in, so representability still holds (`n : N = 300` for `N := brand(u8)` stays a
+  located error), and two forms that compiled and RAN before are refused: `a : A = 1.5` (it ran to
+  1) and `a : A = "x"` (#563).
+- **Every component of an enum-variant payload is a brand sink.** `F.P(b, 7)` for `P(A, u64)` and a
+  sibling `b : B`, and `F.P(7, b)` for `P(u64, A)`, compiled and ran to the crossed values: only an
+  arity-1 variant's payload was judged, because the declaration records one type span for the whole
+  list. Each component is now judged against its own declared type (Types §4.2/§5.4), and the #299
+  census counts it — the last sink `accept_brand_unrefused_sinks` listed as open.
 - **The full gate can run on a GitHub-hosted runner.** `.github/workflows/gate.yml` runs
   `scripts/full.sh --force-sweeps` on every push to a `gate/**` branch and publishes the log and the
   generated corpus manifest; it holds no write token, and landing stays the integrator's (#748).
@@ -163,7 +180,15 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   left to the lowering as before. Two programs the specification already declared invalid are
   refused: a `bool` used as an arithmetic operand (`(10 > 3) + 41` — write `u64(10 > 3) + 41`,
   Types §4.2/§4.3), and a comparison operator-function declared to return anything but `bool`
-  (Stdlib §2.6); two corpus fixtures were corrected accordingly.
+  (Stdlib §2.6); two corpus fixtures were corrected accordingly. With the `Unchecked`, `Bitcast`,
+  `Loop`, `Lambda`, `FnRef`, `CompField` and `BoolLit` arms also running, a `bitcast` of a `bool`
+  to a word (`bitcast(i64, u < 0)`) is refused too — `bitcast` needs equal bit width (Types §4.4).
+- **A call operand has its callee's signedness on aarch64, riscv64 and wasm.** Their operand
+  signedness oracles recognised only the conversion names (`i64(x)`), so `f() / 9` for an `f`
+  returning a negative `i64` gave the unsigned quotient, `f() % 8` the unsigned remainder, and
+  `f() > big` for an `f` returning `u64` compared signed — three silent wrong values that x86_64 got
+  right. They now ask the callee's declared result, as x86_64 does (#725). Found by the new program
+  generator.
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness
