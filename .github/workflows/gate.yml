@@ -50,6 +50,12 @@ jobs:
         run: nix develop -c true
 
       - name: Full gate
+        env:
+          # The e2e runtime ceiling bounds a child that does not terminate; it is not a stopwatch
+          # (scripts/e2e.sh, #537). This 4-core runner runs `fmt_large_input`'s 1.77 s child (on the
+          # 12-core gate machine) past 10 s on both attempts, so the ceiling is scaled here — it still
+          # kills a genuine hang, 60 s later.
+          ALATYR_E2E_RUNTIME_TIMEOUT: 60s
         run: |
           ulimit -c 0
           set -o pipefail
