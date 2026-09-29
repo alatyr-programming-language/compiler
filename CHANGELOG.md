@@ -151,6 +151,17 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   on the gap is one §5.1 already declares invalid — a PATCH, and a build that newly fails names the
   `match` to complete. Inside this compiler the only such `match` was `comptime::fold`, which named 17
   of `Expr`'s 24 variants; it now names all of them (#680).
+- **Eight `match` sites in the compiler that never took their arms now do.** The x86_64 lowering
+  compares a `match` arm that names an enum variant against **tag 0** whenever it cannot see the
+  scrutinee's enum type (#716), and eight sites in the compiler's own source were written in exactly
+  such a spelling — an inline `match deref(<payload binding or call>)`. Each is now asked through a
+  function whose `match` is over a pointer parameter, which the lowering types. Two of them were
+  user-visible. A local bound from a module-const struct's `str` field (`v := APP.name`) got a
+  one-word slot for a two-word value, so passing or aliasing it read the wrong length (a program
+  that should answer 42 answered 41 or 37). And a named `when`-predicate written as a lone
+  `return <expr>` was never folded, so a FALSE bound was silently dropped and the instance it
+  forbids was built and run; it is now refused at the call, as the trailing-expression spelling
+  already was.
 
 - **A nested field store no longer launders a sibling brand.** `s.t.y = b` into a field declared
   `A`, for a sibling `b : B`, used to check at rc 0, build at rc 0 and **run to the foreign value**

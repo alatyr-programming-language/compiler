@@ -13000,7 +13000,7 @@ sema_guard_field_count := fn(e : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt::
 ## The SINGLE trailing bool expr of a candidate NAMED predicate body (a trailing-expr body OR a lone
 ## `return <expr>`); null otherwise. Byte-mirror of `lower::guard_stmt_ret_expr`/`guard_pred_body_expr`.
 sema_guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
-  match deref(stmt_p(Stmt, bs)) {
+  match deref(bs) {
     Stmt::Return(e, next) => {
       if unchecked bitcast(usize, next) == 0 { return e }
       unchecked bitcast(ptr(Expr), 0)

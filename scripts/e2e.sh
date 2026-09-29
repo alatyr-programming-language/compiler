@@ -7744,6 +7744,18 @@ check_located issue697_unknown_ann_ptr_qual 4
 build_reject issue697_unknown_ann_bare
 build_reject issue697_unknown_ann_ptr
 build_reject issue697_unknown_ann_ptr_qual
+## Issue #716 — the same named predicate written as a lone `return <expr>` body. The body reader matched
+## `deref(stmt_p(Stmt, bs))`, which the lowering compared against tag 0, so the parent took a `return` for
+## "not foldable" and silently kept the FALSE instance (`pick(Big, 42)` ran to 42). The TRUE twin keeps
+## the refusal honest.
+build_reject issue716_named_pred_return_reject
+check_located issue716_named_pred_return_reject 10
+run_x86 issue716_named_pred_return 42
+## Issue #716 — a local bound from a module-const struct's `str` field was given ONE slot word by
+## `collect_slots` (its inline `Field` arm was compared against tag 0) while the store wrote two. The
+## parent ran these to 41 and 37.
+run issue716_const_str_field_local 42
+run issue716_const_str_field_alias 42
 ## CT-4/CT-5: a structural FIELD-COUNT bound — `when typeinfo(T).fields.len >= 2` (the spec's
 ## `TypeInfo.Struct{fields:[Field]}` surface, appendix §4.1), the count folded per-instance. ACCEPT:
 ## `pick(S,42)` (S a 2-field struct → 2 >= 2 → 42). REJECT: `pick(One,42)` (1-field struct → 1 < 2). The
