@@ -7926,7 +7926,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## Resolve a LOCAL `Var`'s type BEFORE the big `match deref(e)` below — that match uses the bound-deref
   ## form, which does not dispatch this payload-heavy arm under the seed (scar #2). Surface a CONCRETE
   ## tag ONLY for a USER enum/struct local (tag 3/4) — enough to reject `x : <scalar> = <enum-local>` and
-  ## `return <enum-local>` against a scalar return — and keep scalars/ptr/str/bool tolerant (tag 0), so
+  ## `return <enum-local>` against a scalar return — and keep scalars/str tolerant (tag 0; see below), so
   ## the still-incomplete positive type model does not reintroduce wrong-rejects. (A fn-body-level
   ## `return`, NOT inside a match arm — safe under the seed.)
   evs := expr_var_span(e)
@@ -7938,10 +7938,13 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     mut rtag := TyKind.TyUnknown
   ## surface a CONCRETE tag for a struct/enum (3/4), pointer (5), or direct user brand (8) local —
   ## pointers and brands carry their nominal name in ns/nl, so `ty_compat`/`ty_eq` can distinguish
-  ## incompatible identities. Scalars/str/bool stay tolerant (tag 0); an unknown pointee/brand name
+  ## incompatible identities. A `bool` local (tag 2) is surfaced too (#726): with every `check_expr`
+  ## arm running, `b := true; f(b)` into a `u64` parameter was the one spelling of the bool→integer
+  ## crossing the argument compare still could not see (Types §4.2/§4.3; the literal `f(true)` was
+  ## already refused). Integer/str locals stay tolerant (tag 0); an unknown pointee/brand name
   ## remains tolerant inside the corresponding comparison, so this does not widen rejection beyond
   ## a resolved identity.
-  if kind_is_struct(ltag) or kind_is_enum(ltag) or kind_is_ptr(ltag) or kind_is_brand(ltag) { rtag = ltag }
+  if kind_is_struct(ltag) or kind_is_enum(ltag) or kind_is_ptr(ltag) or kind_is_brand(ltag) or kind_is_bool(ltag) { rtag = ltag }
     return Result(Ty, CheckErr).Ok(Ty(kind = rtag, ns = raw_ns, nl = raw_nl))
   }
   ## A direct `local[N]` over a fixed `[T; N]` is the one indexed shape whose bound is already

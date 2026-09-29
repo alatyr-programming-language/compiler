@@ -6901,6 +6901,10 @@ check_located reject_call_arg_array_num 6
 check_located reject_call_arg_struct_str 9
 check_located reject_call_arg_num_array 8
 check_located reject_call_arg_bool_array 5
+## #726 — the same refusal for a `bool` LOCAL argument: `check_expr` now answers a local's recorded
+## `bool`, so the argument compare sees it. The parent accepted it and ran it to 1.
+check_located reject_call_arg_bool_local 9
+build_reject reject_call_arg_bool_local
 check_accept accept_call_arg_conform
 ## check-only ON PURPOSE: running it would lock a pre-existing overload-set link failure.
 check_accept accept_call_arg_conform_wide
