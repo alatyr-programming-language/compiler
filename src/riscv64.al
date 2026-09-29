@@ -281,7 +281,7 @@ rv_local_struct_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   rs
@@ -342,7 +342,7 @@ rv_local_struct_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   rn
@@ -1319,7 +1319,7 @@ rv_local_enum_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   rs
@@ -1355,7 +1355,7 @@ rv_local_enum_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   rn
@@ -1480,7 +1480,7 @@ rv_array_nel := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, 
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   r
@@ -1552,7 +1552,7 @@ rv_arr_elem_struct_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   ## not a body local — a struct-element `Slice(P)` PARAM base takes its element struct from the annotation.
@@ -1599,7 +1599,7 @@ rv_iter_stride := fn(head : ptr(mut Stmt), src : ptr(u8), e : ptr(Expr), a : rt:
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   ## not a body local — a struct/enum-element `Slice(E)` PARAM base has its stride from the param annotation.
@@ -1753,16 +1753,16 @@ rv_first_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8
   while s != 0 and res == 0 {
     st := deref(stmt_p(Stmt, s))
     match st {
-      Stmt::Assign(ans, anl, v, nx) => { if streq(src, ans, anl, ns, nl) { res = s } ; s = nx }
+      Stmt::Assign(ans, anl, v, nx) => { if streq(src, ans, anl, ns, nl) { res = unchecked bitcast(usize, s) } ; s = nx }
       Stmt::While(c, b, nx) => { res = rv_first_handle(b, ns, nl, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { res = rv_first_handle(th, ns, nl, src, a) ; if res == 0 { res = rv_first_handle(el, ns, nl, src, a) } ; s = nx }
       Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 and res == 0 { am := deref(arm_p(arm)) ; res = rv_first_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next } ; s = mnx }
       ## a `for i in lo..hi` DECLARES the loop var `i`: this For is its first handle; otherwise recurse the body.
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if streq(src, fns, fnl, ns, nl) { res = s } else { res = rv_first_handle(fb, ns, nl, src, a) } ; s = nx }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if streq(src, fns, fnl, ns, nl) { res = unchecked bitcast(usize, s) } else { res = rv_first_handle(fb, ns, nl, src, a) } ; s = nx }
       ## a `comptime for i in lo..hi` DECLARES the loop var `i` (like a range `for`): this CompForRange is
       ## its first handle; otherwise recurse the body. CONTINUE past (a `_ => s = 0` would mis-resolve a
       ## local declared after the unrolled loop → silent miscompile).
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if streq(src, rvs, rvl, ns, nl) { res = s } else { res = rv_first_handle(rb, ns, nl, src, a) } ; s = nx }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if streq(src, rvs, rvl, ns, nl) { res = unchecked bitcast(usize, s) } else { res = rv_first_handle(rb, ns, nl, src, a) } ; s = nx }
       ## a `comptime if` folds to ONE branch but its locals live in the fn frame — recurse BOTH branches
       ## (mirroring rv_local_scan's both-branch scan) and CONTINUE past it, so a local declared after a
       ## CompIf is still found (a `_ => s = 0` would stop the scan and mis-resolve it → silent miscompile).
@@ -1782,7 +1782,7 @@ rv_first_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8
       ## a `deref(p) = v` store declares no local but MUST NOT terminate the scan.
       Stmt::DerefAssign(dpe, dval, dnx) => { s = dnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   res
@@ -1890,7 +1890,7 @@ rv_local_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : usiz
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(dpe, dval, dnx) => { s = dnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   if found { result } else { b }
@@ -1945,7 +1945,7 @@ rv_slarg_count := fn(list : ptr(mut Stmt)) -> i64 {
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   c
@@ -1998,7 +1998,7 @@ rv_aggval_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls 
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   c
@@ -2043,7 +2043,7 @@ rv_sret_discard_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, 
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   c
@@ -2111,7 +2111,7 @@ rv_match_tmp_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> 
       Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   mx
@@ -3671,7 +3671,7 @@ rv_array_is_float := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl
       Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::Match | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   r
@@ -7938,7 +7938,7 @@ emit_rv_str_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
 }
@@ -7984,7 +7984,7 @@ emit_rv_float_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::FieldPathAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::FieldPathAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
 }

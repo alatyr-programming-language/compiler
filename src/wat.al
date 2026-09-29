@@ -796,7 +796,7 @@ wat_array_is_float := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::Match | Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   r
@@ -1687,16 +1687,16 @@ first_assign_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : pt
   while s != 0 and res == 0 {
     st := deref(stmt_p(Stmt, s))
     match st {
-      Stmt::Assign(ans, anl, v, nx) => { if (not local_is_comptime(src, ans)) and streq(src, ans, anl, ns, nl) { res = s } ; s = nx }
+      Stmt::Assign(ans, anl, v, nx) => { if (not local_is_comptime(src, ans)) and streq(src, ans, anl, ns, nl) { res = unchecked bitcast(usize, s) } ; s = nx }
       Stmt::While(c, b, nx) => { res = first_assign_handle(b, ns, nl, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { res = first_assign_handle(th, ns, nl, src, a) ; if res == 0 { res = first_assign_handle(el, ns, nl, src, a) } ; s = nx }
       Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 and res == 0 { am := deref(arm_p(arm)) ; res = first_assign_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next } ; s = mnx }
       ## a `for i in lo..hi` DECLARES the loop var `i`: this For is its first handle; otherwise recurse the body.
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if streq(src, fns, fnl, ns, nl) { res = s } else { res = first_assign_handle(fb, ns, nl, src, a) } ; s = nx }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if streq(src, fns, fnl, ns, nl) { res = unchecked bitcast(usize, s) } else { res = first_assign_handle(fb, ns, nl, src, a) } ; s = nx }
       ## a `comptime for i in lo..hi` DECLARES the loop var `i` (like a range `for`): this CompForRange is
       ## its first handle; otherwise recurse the body. CONTINUE past (a `_ => s = 0` would mis-resolve a
       ## local declared after the unrolled loop → silent miscompile).
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if streq(src, rvs, rvl, ns, nl) { res = s } else { res = first_assign_handle(rb, ns, nl, src, a) } ; s = nx }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if streq(src, rvs, rvl, ns, nl) { res = unchecked bitcast(usize, s) } else { res = first_assign_handle(rb, ns, nl, src, a) } ; s = nx }
       ## a `comptime if` folds to ONE branch but its locals live in the fn frame — recurse BOTH branches
       ## (mirroring local_slot_scan's both-branch scan) and CONTINUE past it, so a local declared after a
       ## CompIf is still found (a `_ => s = 0` would stop the scan and mis-resolve it → silent miscompile).
@@ -1716,7 +1716,7 @@ first_assign_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : pt
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   res
@@ -1819,7 +1819,7 @@ local_slot_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : us
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   if found { result } else { b }
@@ -1945,7 +1945,7 @@ local_enum_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   WSpan(s = rs, n = rn)
@@ -2169,7 +2169,7 @@ wat_local_enum_field_init := fn(params_head : ptr(mut Param), fn_head : ptr(mut 
       Stmt::Match(msc, mah, mnx) => { s = mnx }
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   r
@@ -2705,7 +2705,7 @@ wat_list_binds := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8)
       Stmt::IndexAssign(ib, ii, iv, ianx) => { s = ianx }
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   r
@@ -2992,7 +2992,7 @@ array_local_nel := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   r
@@ -3056,7 +3056,7 @@ array_local_stride := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   ## not a body local — a struct/enum-element `Slice(E)` PARAM base has its stride from the param annotation.
@@ -3107,7 +3107,7 @@ arr_elem_struct_span := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   ## not a body local — a struct-element `Slice(P)` PARAM base takes its element struct from the annotation.
@@ -4023,7 +4023,7 @@ local_struct_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   WSpan(s = rs, n = rn)
@@ -7864,7 +7864,7 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   ## DEFER (§9.3): the pending-cleanup stack is PER FUNCTION — start empty (a previous fn's leftovers
@@ -8001,7 +8001,7 @@ emit_wat_str_data_stmts := fn(head : ptr(mut Stmt), in out sb : rt::StrBuf, src 
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
 }
