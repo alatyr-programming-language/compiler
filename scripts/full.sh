@@ -245,6 +245,28 @@ if [ "$ig_cover" != 1 ]; then
   fail=1
 fi
 
+# The #299 BRAND CENSUS's planted non-vacuity (`scripts/brand_census.sh planted`). The census counts
+# brand crossings on file descriptor 99 and is what #544 stage 0's refusals were licensed by, so a
+# blind counter is not a harmless one: #679 was a counter that could not fire on any array element,
+# and it survived four slices because nothing ran its self-test. `planted` feeds it known crossings,
+# which must produce rows of the named class, and legal programs, which must produce none while
+# proving by their `sinks=` count that they were visited. It uses the Stage2 compiler the fixpoint
+# step leaves at target/debug/alatyr and writes only under target/brand_census.
+echo "### BRAND CENSUS (planted: crossings must count, legal programs must not) ###"
+BC_LOG="$LOGDIR/full_brand_census.log"
+bash scripts/brand_census.sh planted > "$BC_LOG" 2>&1
+bc_rc=$?
+grep -E "^  planted cases=|^\*\*\* brand census" "$BC_LOG"
+if [ "$bc_rc" != 0 ]; then
+  echo "  FAILURES (from $BC_LOG):"; grep -E " BAD | BLIND " "$BC_LOG" | head -20 | sed 's/^/    /'
+  fail=1
+fi
+if ! grep -qE "^  planted cases=[0-9]+  failures=0$" "$BC_LOG"; then
+  echo "  (scripts/brand_census.sh printed no 'planted cases=N  failures=0' line — what it ran is unknown,"
+  echo "   treating as a failure)"
+  fail=1
+fi
+
 # The CROSS-BACKEND report (#683). Like the idiom gate it needs no compiler — it is a join over
 # scripts/corpus.manifest, which the CORPUS stage above has already checked against the tree on this
 # same run — so it cannot collide with another lane over target/debug/alatyr.

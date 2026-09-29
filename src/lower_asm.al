@@ -116,7 +116,10 @@ pub is_raw_instr_call := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> bool
         if dv.n != 0 { x86_gpreg(str_at((src + dv.s), dv.n)) != "" } else { false }
       } else { false }
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -219,6 +222,9 @@ pub emit_raw_instr := fn(e : ptr(Expr), in out sb : rt::StrBuf, cx : ptr(LCtx), 
         push_str(sb, "\n")
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }

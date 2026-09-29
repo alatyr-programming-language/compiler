@@ -224,9 +224,11 @@ wat_local_ann_signed := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_signed(src, ans + anl) { r = true } }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -241,9 +243,11 @@ wat_local_rhs := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize,
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = v }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -351,9 +355,11 @@ wat_local_ann_unsigned := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -553,9 +559,11 @@ wat_local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = ann_scan_narrow(src, ans + anl) }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -787,9 +795,8 @@ wat_array_is_float := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   r
@@ -805,13 +812,30 @@ wat_is_float_local := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
         if ann_scan_float(src, ans + anl) { r = true }
         if wat_is_float_expr(v, body_head, src, a, params_head, decls, dep + 1) { r = true }
       }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
 }
+## #716 — is `e` an integer literal (`Expr::Num`)? A PREDICATE, asked over this PARAMETER so the
+## lowering can type the scrutinee: `wat_break_scalar_var` wrote it inline as `match deref(d.value)`,
+## which was lowered against tag 0 and answered correctly only because `Num` is variant 0.
+wat_is_num_lit := fn(e : ptr(Expr)) -> bool {
+  mut r := false
+  match deref(e) {
+    Expr::Num(_v, _s, _n) => { r = true }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+
 ## BAND — THE CONSTANT / FLOAT CLASSIFIERS (`wat_int_const_expr`, `wat_is_float_expr`). Both are
 ## PREDICATES over a shape, and `false` is the conservative answer: an expression not proved constant
 ## is emitted, and one not proved float takes the integer path, which is the representation the WAT
@@ -1691,9 +1715,8 @@ first_assign_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : pt
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   res
@@ -1795,9 +1818,8 @@ local_slot_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : us
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   if found { result } else { b }
@@ -1922,9 +1944,8 @@ local_enum_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   WSpan(s = rs, n = rn)
@@ -2147,9 +2168,8 @@ wat_local_enum_field_init := fn(params_head : ptr(mut Param), fn_head : ptr(mut 
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       Stmt::Match(msc, mah, mnx) => { s = mnx }
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   r
@@ -2684,9 +2704,8 @@ wat_list_binds := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8)
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       Stmt::IndexAssign(ib, ii, iv, ianx) => { s = ianx }
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   r
@@ -2933,9 +2952,11 @@ is_array_local := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : us
         ## Num(0) sentinel, so its array-ness lives only in the source annotation.
         if (not r) and wat_ann_arr_nel(src, ans, anl, v) > 0 { r = true }
       }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -2970,9 +2991,8 @@ array_local_nel := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   r
@@ -3035,9 +3055,8 @@ array_local_stride := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl 
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   ## not a body local — a struct/enum-element `Slice(E)` PARAM base has its stride from the param annotation.
@@ -3087,9 +3106,8 @@ arr_elem_struct_span := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   ## not a body local — a struct-element `Slice(P)` PARAM base takes its element struct from the annotation.
@@ -3287,9 +3305,11 @@ wat_local_ann_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = wat_ann_span(src, ans, anl) }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -3753,10 +3773,7 @@ wat_break_scalar_var := fn(ns : usize, nl : usize, params_head : ptr(mut Param),
     while i < cnt {
       d := deref(decl_get(decls, i))
       if d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) {
-        ## #544 stage 1 — this `_` STAYS: `deref(d.value)` over a `Decl` bound from a call is blind, and so
-        ## is every annotation but `ve : ptr(Expr) = d.value` (#660/#680, spelling disagreement #697).
-        ## Deleting it is accepted SILENTLY, rc 0. See the band note above `wat_expr_start`.
-        match deref(d.value) { Expr::Num(_v, _s, _n) => { return wat_break_scalar_expr(d.value, params_head, fn_head, src, a, decls, dep + 1) } _ => {} }
+        if wat_is_num_lit(d.value) { return wat_break_scalar_expr(d.value, params_head, fn_head, src, a, decls, dep + 1) }
       }
       i = i + 1
     }
@@ -4005,9 +4022,8 @@ local_struct_type := fn(fn_head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   WSpan(s = rs, n = rn)
@@ -4990,9 +5006,11 @@ wat_bound_lambda := fn(body : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
       Stmt::Assign(as, al, v, nx) => {
         rhs = v
       }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   if unchecked bitcast(usize, rhs) != 0 {
@@ -6344,9 +6362,11 @@ wat_defer_blk_end := fn(start : usize, src : ptr(u8)) -> usize {
       Stmt::ExprStmt(e, nx) => {
         if wat_is_defer_blk_end(e, src) { r = s } else { s = wat_stmt_next(s) }
       }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = wat_stmt_next(s) }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match
+        | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+        | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::CompIf
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { s = wat_stmt_next(s) }
     }
   }
   r
@@ -6412,9 +6432,11 @@ arm_single_expr := fn(bs : usize, a : rt::Arena) -> ptr(Expr) {
     st := deref(stmt_p(Stmt, bs))
     match st {
       Stmt::ExprStmt(e, nx) => { if nx == 0 { r = e } }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match
+        | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+        | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::CompIf
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -6428,9 +6450,11 @@ body_is_single_match := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
     st := deref(stmt_p(Stmt, head))
     match st {
       Stmt::Match(msc, mah, mnx) => { if mnx == 0 { r = true } }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -7834,9 +7858,8 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   ## DEFER (§9.3): the pending-cleanup stack is PER FUNCTION — start empty (a previous fn's leftovers
@@ -7972,9 +7995,8 @@ emit_wat_str_data_stmts := fn(head : ptr(mut Stmt), in out sb : rt::StrBuf, src 
       ## `xs[i].f = v` declares no local but MUST NOT terminate the scan (a `_ => s = 0` would
       ## hide every local declared after it → a wrong WASM slot / a missed type. See first_assign_handle.
       Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, ifnx) => { s = ifnx }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::IndexAssign | Stmt::CompFor | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
 }

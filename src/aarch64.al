@@ -392,8 +392,8 @@ a64_local_struct_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : 
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   rs
@@ -457,8 +457,8 @@ a64_local_struct_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : 
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   rn
@@ -1411,8 +1411,8 @@ a64_local_enum_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : us
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   rs
@@ -1450,8 +1450,8 @@ a64_local_enum_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : us
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   rn
@@ -1540,8 +1540,11 @@ a64_is_array_local := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
         ## sentinel, so its array-ness lives only in the source annotation (a64_ann_arr_nel).
         if (not r) and a64_ann_arr_nel(src, ans, anl, v) > 0 { r = true }
       }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -1614,8 +1617,8 @@ a64_arr_elem_struct_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, 
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   ## not a body local — a struct-element `Slice(P)` PARAM base takes its element struct from the annotation.
@@ -1663,8 +1666,8 @@ a64_iter_stride := fn(head : ptr(mut Stmt), src : ptr(u8), e : ptr(Expr), a : rt
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   ## not a body local — a struct/enum-element `Slice(E)` PARAM base has its stride from the param annotation.
@@ -1711,8 +1714,8 @@ a64_array_nel := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize,
       Stmt::IndexAssign(_iab, _iai, _iav, ianx) => { s = ianx }
       Stmt::FieldPathAssign(_fpp, _fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   r
@@ -2104,8 +2107,8 @@ a64_first_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       ## a `deref(p) = v` store declares no local but MUST NOT terminate the scan.
       Stmt::DerefAssign(dpe, dval, dnx) => { s = dnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   res
@@ -2222,8 +2225,8 @@ a64_local_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : usi
       Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
       Stmt::DerefAssign(dpe, dval, dnx) => { s = dnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   if found { result } else { b }
@@ -2280,8 +2283,8 @@ a64_slarg_count := fn(list : ptr(mut Stmt)) -> i64 {
       Stmt::Unchecked(ub, unx) => { c = c + a64_slarg_count(ub) ; s = unx }
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   c
@@ -2338,8 +2341,8 @@ a64_aggval_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls
       Stmt::Unchecked(ub, unx) => { c = c + a64_aggval_words(ub, src, a, decls) ; s = unx }
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   c
@@ -2410,8 +2413,8 @@ a64_match_tmp_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) ->
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   mx
@@ -3161,8 +3164,11 @@ a64_local_ann_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = ann_span(src, ans, anl) }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -3621,8 +3627,11 @@ a64_local_ann_signed := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl :
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_signed(src, ans + anl) { r = true } }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -3643,8 +3652,11 @@ a64_local_rhs := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize,
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = v }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -3754,8 +3766,11 @@ a64_local_ann_unsigned := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_unsigned(src, ans + anl) { r = true } }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -3956,8 +3971,11 @@ a64_local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { r = ann_scan_narrow(src, ans + anl) }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -4425,8 +4443,8 @@ a64_array_is_float := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       Stmt::DerefAssign(_dpe, _dval, dnx) => { s = dnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { s = fpnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
   r
@@ -4439,8 +4457,11 @@ a64_is_float_local := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
     st := deref(stmt_p(Stmt, d))
     match st {
       Stmt::Assign(ans, anl, v, nx) => { if ann_scan_float(src, ans + anl) { r = true } ; if a64_is_float_expr(v, body_head, src, a, params_head, decls, dep + 1) { r = true } }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -4689,8 +4710,11 @@ a64_bound_lambda := fn(body : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
       Stmt::Assign(as, al, v, nx) => {
         rhs = v
       }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => {}
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   if unchecked bitcast(usize, rhs) != 0 {
@@ -8434,8 +8458,8 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         if not cfdone { push_str(sb, "  brk #0 // comptime-for fields: needs a struct mono instance\n") }
         s = nx
       }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { push_str(sb, "  brk #0 // unsupported statement\n") ; s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::AllocWith => { push_str(sb, "  brk #0 // unsupported statement\n") ; s = 0 }
     }
   }
 }
@@ -8880,8 +8904,8 @@ emit_a64_str_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(
       Stmt::Unchecked(ub, unx) => { emit_a64_str_data(ub, sb, src, a) ; s = unx }
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
 }
@@ -8927,8 +8951,8 @@ emit_a64_float_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : pt
       Stmt::Unchecked(ub, unx) => { emit_a64_float_data(ub, sb, src, a) ; s = unx }
       Stmt::Break(_bv, _bd, bnx) => { s = bnx }
       Stmt::Continue(_cd, cnx) => { s = cnx }
-      ## #544 stage 1: this `_` is BLIND and deliberately kept — the #660/#557 `match st` class; see the band note.
-      _ => { s = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::DerefAssign | Stmt::FieldPathAssign | Stmt::CompMatch | Stmt::AllocWith => { s = 0 }
     }
   }
 }
