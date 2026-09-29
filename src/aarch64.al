@@ -3747,7 +3747,7 @@ a64_operand_signed_dep := fn(e : ptr(Expr), params_head : ptr(mut Param), body_h
       ## un-annotated `d := m - 1` — recover the signed result type from the ARITHMETIC RHS (#651).
       if r == false { rhs := a64_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if a64_bin_init_signed(rhs, params_head, body_head, src, a, dep + 1) { r = true } } }
     }
-    Expr::Call(cs, cl, na, ah) => { cn := str_at((src + cs), cl) ; if cn == "i8" or cn == "i16" or cn == "i32" or cn == "i64" or cn == "isize" { r = true } }
+    Expr::Call(cs, cl, na, ah) => { if lower_layout::call_value_signed(src, cs, cl) { r = true } }
     ## An ARITHMETIC `Bin` used DIRECTLY as an operand (`(a - b) + c`) carries its operands' type by
     ## the same rule as a `Bin`-inferred binding — the two halves of `0 + d + p` (#651).
     Expr::Bin(bop, obl, obr) => { if a64_bin_init_signed(e, params_head, body_head, src, a, dep + 1) { r = true } }
@@ -3845,7 +3845,7 @@ a64_operand_unsigned := fn(e : ptr(Expr), params_head : ptr(mut Param), body_hea
       ## (mirrors the SIGNED side's `a64_shift_call_signed` recovery two functions above).
       if r == false { rhs := a64_local_rhs(body_head, src, s, n, a); if unchecked bitcast(usize, rhs) != 0 { if a64_unchecked_init_unsigned(rhs, params_head, body_head, src, a) { r = true } } }
     }
-    Expr::Call(cs, cl, na, ah) => { cn := str_at((src + cs), cl) ; if cn == "u8" or cn == "u16" or cn == "u32" or cn == "u64" or cn == "usize" { r = true } }
+    Expr::Call(cs, cl, na, ah) => { if lower_layout::call_value_unsigned(src, cs, cl) { r = true } }
     ## The two SHAPES that CARRY an operand's unsignedness but have no annotation of their own, so the
     ## source scan above could never prove them unsigned and the comparison fell back to the always-
     ## SIGNED condition (`lt`/`gt`/`le`/`ge`) — a `u64` word above 2^63 then ordered as NEGATIVE and
@@ -9055,6 +9055,7 @@ a64_emit_test_runner := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
 }
 
 pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), src_n : usize, a : rt::Arena) {
+  lower_layout::set_call_signedness_decls(decls)       ## #725: call operands take the callee's result signedness
   A64_SRC_N = src_n
   A64_PRINT_I64 = false
   ## COMPTIME `when`-GUARD gating (Comptime §7.1/§9; CT-5) — BEFORE any callee resolution or emission,

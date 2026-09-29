@@ -2656,6 +2656,41 @@ pub callee_ret_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
 ## `callee_ret_is_float` above, and sticky-true across same-named declarations for the same reason:
 ## the answer must not depend on declaration order. x86_64 reads the same fact via
 ## `lower::call_ret_ty_span`.
+## Issue #725 — the signedness of a CALL used as an operand, for the three non-x86 emitters. Their
+## operand oracles answered only the integer CONVERSION names (`i64(x)`, `u8(x)`), so a call to an
+## ordinary function returning `i64` was divided and compared as unsigned, and one returning `u64` was
+## compared as signed: `f() / 9` for a negative `f()` answered the unsigned quotient on aarch64, riscv64
+## and wasm, and `f() > big` for `big : u64 = 2^64 - 5` answered true. x86_64 asks the callee's declared
+## result, and now so do they. The emitters publish the program's `decls` here on entry
+## (`set_call_signedness_decls`), because their oracles carry no `decls` parameter.
+mut CALL_SIGNEDNESS_DECLS : usize = 0
+pub set_call_signedness_decls := fn(decls : ptr(rt::Vec)) {
+  CALL_SIGNEDNESS_DECLS = unchecked bitcast(usize, decls)
+}
+pub call_value_signed := fn(src : ptr(u8), cs : usize, cl : usize) -> bool {
+  cn := str_at((src + cs), cl)
+  if cn == "i8" or cn == "i16" or cn == "i32" or cn == "i64" or cn == "isize" { return true }
+  if CALL_SIGNEDNESS_DECLS == 0 { return false }
+  callee_ret_is_signed(unchecked bitcast(ptr(rt::Vec), CALL_SIGNEDNESS_DECLS), src, cs, cl)
+}
+pub call_value_unsigned := fn(src : ptr(u8), cs : usize, cl : usize) -> bool {
+  cn := str_at((src + cs), cl)
+  if cn == "u8" or cn == "u16" or cn == "u32" or cn == "u64" or cn == "usize" { return true }
+  if CALL_SIGNEDNESS_DECLS == 0 { return false }
+  callee_ret_is_unsigned(unchecked bitcast(ptr(rt::Vec), CALL_SIGNEDNESS_DECLS), src, cs, cl)
+}
+## The unsigned twin of `callee_ret_is_signed`.
+pub callee_ret_is_unsigned := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  mut r := false
+  while i < cnt {
+    d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
+    if d.is_fn and d.name_len != 0 { if streq(src, d.name_start, d.name_len, cs, cl) { if scalar_name_is_unsigned(src, d.ret_ts, d.ret_tl) { r = true } } }
+    i += 1
+  }
+  r
+}
 pub callee_ret_is_signed := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
   mut i := 0

@@ -10549,6 +10549,21 @@ build_reject reject_bool_int_arith
 ## #716 — `bitcast(i64, <bool>)` is not an equal-width reinterpretation (Types §4.4); once the operand's
 ## `bool` type is computed the `i64` function refuses it. The parent accepted it.
 check_reject reject_bitcast_bool_to_word
+## Issue #725 — a CALL used as an arithmetic or comparison operand takes the callee's declared result
+## signedness on every backend. On the parent aarch64/riscv64/wasm divided a negative `i64` result
+## unsigned (185 / 1), took its `%` unsigned (103), and compared a `u64` result signed (1).
+run issue725_call_div_signed 42
+run_wat issue725_call_div_signed 42
+run_a64 issue725_call_div_signed 42
+run_rv64 issue725_call_div_signed 42
+run issue725_call_mod_signed 42
+run_wat issue725_call_mod_signed 42
+run_a64 issue725_call_mod_signed 42
+run_rv64 issue725_call_mod_signed 42
+run issue725_call_cmp_unsigned 42
+run_wat issue725_call_cmp_unsigned 42
+run_a64 issue725_call_cmp_unsigned 42
+run_rv64 issue725_call_cmp_unsigned 42
 run_wat wasm_locals 42
 run_wat wasm_local_mix 42
 run_wat wasm_reassign 42
