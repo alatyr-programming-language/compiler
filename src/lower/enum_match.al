@@ -501,7 +501,7 @@ pub expand_variant_arms := fn(head : ptr(mut Stmt), es : usize, el : usize, cx :
     if scm.wild == 2 or scm.wild == 3 { has2 = true }
     sc = scm.next
   }
-  if has2 == false { return head }
+  if has2 == false { return unchecked bitcast(usize, head) }
   mut nh := 0
   mut nt := 0
   mut arm := head

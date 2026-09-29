@@ -564,7 +564,7 @@ ir_find_accum := fn(cx : ptr(LCtx), fns : usize, fnl : usize, fb : ptr(mut Stmt)
       Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
         | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
         | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { s = 0 }                                             ## non-Assign top-level stmt ⇒ stop (surgical)
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }                                             ## non-Assign top-level stmt ⇒ stop (surgical)
     }
   }
   if count == 1 {
@@ -759,7 +759,7 @@ ir_rd_stmts := fn(src : ptr(u8), head : ptr(mut Stmt)) {
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { ir_rd_expr(src, flo); if unchecked bitcast(usize, fhi) != 0 { ir_rd_expr(src, fhi) } ; ir_rd_stmts(src, fb); s = nx }
       Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { IRRD_OK = false; s = 0 }
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { IRRD_OK = false; s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
 }
@@ -842,7 +842,7 @@ ir_stmts_have_vecbuild := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if ir_stmts_have_vecbuild(src, decls, fb) { r = true } ; s = nx }
       Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { s = 0 }
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
   r
@@ -963,7 +963,7 @@ pub ir_lower_stmts := fn(head : ptr(mut Stmt), cx : ptr(LCtx), unch : bool) {
       Stmt::Unchecked(b, nx) => { ir_lower_stmts(b, cx, true); s = nx }
       Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
-        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { panic("selfhost: regalloc emit — unsupported statement in scalar-leaf IR path"); s = 0 }
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { panic("selfhost: regalloc emit — unsupported statement in scalar-leaf IR path"); s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
 }
@@ -1328,7 +1328,7 @@ ir_collect_binds := fn(head : ptr(mut Stmt)) {
       ## an unbounded-pointer walk). The fn will be rejected by `ir_check_stmts` anyway.
       Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
-        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { s = 0 }
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
 }
@@ -1642,7 +1642,7 @@ ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), 
             ir_bound_add(fns, fnl)                          ## the loop element var is a fresh scalar local
             ir_check_stmts(src, decls, fb, unch)
             s = nx
-          } else { IRP_OK = false; s = 0 }
+          } else { IRP_OK = false; s = unchecked bitcast(ptr(mut Stmt), 0) }
         }
         else {
           IRP_NCTRL = IRP_NCTRL + 1
@@ -1659,7 +1659,7 @@ ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), 
       ## an unhandled stmt kind → reject + STOP (`nx` is NOT bound in the `_` arm; walking it is garbage).
       Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
-        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { IRP_OK = false; s = 0 }
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { IRP_OK = false; s = unchecked bitcast(ptr(mut Stmt), 0) }
     }
   }
 }
