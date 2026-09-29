@@ -60,7 +60,10 @@ call_rhs_concrete_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -130,7 +133,10 @@ pub block_decl_type := fn(head : ptr(mut Stmt), ns2 : usize, nl2 : usize, src : 
         }
         s = nx
       }
-      _ => {}
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
     if isas == false { s = lower_stmt_nx(s, a) }
   }

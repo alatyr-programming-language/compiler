@@ -37,7 +37,7 @@ stmt_label_span := ast::stmt_label_span
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
 ## does not depend on sema → no import cycle. (`struct_decl_of`/`base_type_name`/`brand_underlying` added
 ## for the is-KIND + field-COUNT fold — they classify the resolved type exactly as the lower's own fold.)
-(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc, is_union_decl) := lower_layout
+(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, qualified_type_decl, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc, is_union_decl) := lower_layout
 ## §8 `@repr(T)` tag-type primitives (shared with `lower::validate_repr`) for the LOCATED @repr reject:
 ## sema classifies an enum's `@repr(T)` tag exactly as the build's `validate_repr` does (same span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
@@ -269,6 +269,85 @@ comptime_cond_err := fn(s : usize) -> CheckErr { COMPTIME_COND_DIAG_MARKER + dia
 ## is intentionally not surfaced through the ordinary `check_expr` carrier or `ty_compat`.
 pub Ty := struct { tag : u8, ns : usize, nl : usize }
 
+## Issue #583 slice 1 — the KIND a `Ty` tag byte encodes, as an enum, so a decision over kinds is a
+## `match` the exhaustiveness check can hold to account: a new kind is refused at every such `match`
+## instead of falling through an integer comparison. `TyHiddenStruct`/`TyHiddenEnum` (9/10), `TyWrapper`
+## (11) and `TyTupleMark` (12) are the local-only markers documented above; `TyOther` is every byte no
+## kind names (a `Local`'s `+128` mutability flag, the `255` poison, a census code). The tag byte stays
+## the stored form until slice 7; `ty_kind_of_tag` is the ONE place that reads it as a kind.
+pub TyKind := enum { TyUnknown, TyInt, TyBool, TyStruct, TyEnum, TyPtr, TyStr, TyArray, TyBrand, TyHiddenStruct, TyHiddenEnum, TyWrapper, TyTupleMark, TyOther }
+ty_kind_of_tag := fn(tag : u8) -> TyKind {
+  if tag == 0 { return TyKind.TyUnknown }
+  if tag == 1 { return TyKind.TyInt }
+  if tag == 2 { return TyKind.TyBool }
+  if tag == 3 { return TyKind.TyStruct }
+  if tag == 4 { return TyKind.TyEnum }
+  if tag == 5 { return TyKind.TyPtr }
+  if tag == 6 { return TyKind.TyStr }
+  if tag == 7 { return TyKind.TyArray }
+  if tag == 8 { return TyKind.TyBrand }
+  if tag == 9 { return TyKind.TyHiddenStruct }
+  if tag == 10 { return TyKind.TyHiddenEnum }
+  if tag == 11 { return TyKind.TyWrapper }
+  if tag == 12 { return TyKind.TyTupleMark }
+  TyKind.TyOther
+}
+
+## Issue #583 slice 6 — a `Local`'s tag byte also carries STORAGE FLAGS the kind predicates never see:
+## `+128` marks a `mut` binding and 255 poisons one (a failed binding every later read must reject).
+## These are the only places that spell those numbers.
+tag_is_poison := fn(tag : u8) -> bool { tag == 255 }
+tag_is_plain := fn(tag : u8) -> bool { tag < 128 }
+tag_with_mut := fn(tag : u8) -> u8 { tag + 128 }
+## Issue #583 slice 3 — a `Local`'s tag byte without its `+128` mutability flag; the 255 poison byte
+## is left as it is. The one spelling of the strip that 45 sites wrote out by hand.
+tag_unflag := fn(tag : u8) -> u8 {
+  if tag >= 128 and tag != 255 { return tag - 128 }
+  tag
+}
+tag_is_hidden_struct := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyHiddenStruct => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_hidden_enum := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyHiddenEnum => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_tuple_mark := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyTupleMark => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyOther => { false } }
+}
+## Issue #583 slice 2 — the kind questions the checker asks of a tag byte, one exhaustive `match` each,
+## so a new `TyKind` must be answered in every one of them. A `Local`'s flagged byte (`+128`, `255`)
+## decodes to `TyOther` and answers false everywhere, exactly as the integer comparisons it replaces did.
+tag_is_unknown := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyUnknown => { true }; TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_int := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyInt => { true }; TyUnknown | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_bool := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyBool => { true }; TyUnknown | TyInt | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_struct := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyStruct => { true }; TyUnknown | TyInt | TyBool | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_enum := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyEnum => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_ptr := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyPtr => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_str := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyStr => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_array := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyArray => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_brand := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyBrand => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } }
+}
+tag_is_wrapper := fn(tag : u8) -> bool {
+  match ty_kind_of_tag(tag) { TyWrapper => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyTupleMark | TyOther => { false } }
+}
+
 ## Are two types compatible? Unknown (tag 0) is compatible with anything (poison-tolerant —
 ## an unresolved sub-expression must not cascade a spurious mismatch). Two known scalar types
 ## match iff their tags are equal. Aggregate aliases are canonicalized by `resolve_ty` and the
@@ -291,25 +370,50 @@ pub Ty := struct { tag : u8, ns : usize, nl : usize }
 ## rather than two conditionals to find. The BODY is unchanged, so `tag_compat` decides exactly what
 ## it decided before: this is the same relation under a name.
 ptrint_seam := fn(x : u8, y : u8) -> bool {
-  if x == 1 and y == 5 { return true }
-  if x == 5 and y == 1 { return true }
-  false
+  ## Bound first: two enum-valued calls as direct arguments overflow the frozen seed's aggregate
+  ## call-argument temp pool (measured: `selfhost: aggregate-value call-arg temp pool overflow`).
+  kx := ty_kind_of_tag(x)
+  ky := ty_kind_of_tag(y)
+  ty_kind_seam(kx, ky)
+}
+## Issue #583 slice 1 — the #529 seam over kinds: a `TyInt` and a `TyPtr`, in either order. Every arm is
+## spelled out, so a new kind has to be placed here by hand.
+ty_kind_seam := fn(a : TyKind, b : TyKind) -> bool {
+  match a {
+    TyInt => { match b { TyPtr => { true }; TyUnknown | TyInt | TyBool | TyStruct | TyEnum | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } } }
+    TyPtr => { match b { TyInt => { true }; TyUnknown | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false } } }
+    TyUnknown | TyBool | TyStruct | TyEnum | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { false }
+  }
+}
+## Issue #583 slice 1 — compatibility of two DIFFERENT tag bytes, decided over their kinds. `TyUnknown`
+## is compatible with anything (poison-tolerant); the only other compatible pair is the #529 seam.
+ty_kinds_compat := fn(a : TyKind, b : TyKind) -> bool {
+  match a {
+    TyUnknown => { true }
+    TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => {
+      match b {
+        TyUnknown => { true }
+        TyInt | TyBool | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum | TyWrapper | TyTupleMark | TyOther => { ty_kind_seam(a, b) }
+      }
+    }
+  }
 }
 tag_compat := fn(x : u8, y : u8) -> bool {
   ## Issue #529 census: the UNCLASSIFIED totals, taken at the one funnel every compatibility site
   ## reaches. `seam` here counts INVOCATIONS, not places; the classified rows below count places, and
   ## the difference between them is the census's own blind spot rather than a rounding error.
   ptrint_probe_call(x, y)
-  if x == 0 { return true }
-  if y == 0 { return true }
+  ## The identical byte first: the same kind, and for `TyOther` the same flag bits, which a kind alone
+  ## would not tell apart. Everything else is a decision over kinds (#583).
   if x == y { return true }
-  if ptrint_seam(x, y) { return true }
-  false
+  kx := ty_kind_of_tag(x)
+  ky := ty_kind_of_tag(y)
+  ty_kinds_compat(kx, ky)
 }
 ty_eq := fn(a : Ty, b : Ty, src : ptr(u8)) -> bool {
   ## Types §4.1/§5.4 — equal-layout user brands are equal only when their declaration names match.
   ## This is nominal identity, not the conversion lattice; `ty_compat` remains the deferred boundary.
-  if a.tag == 8 and b.tag == 8 {
+  if tag_is_brand(a.tag) and tag_is_brand(b.tag) {
     if a.nl == 0 or b.nl == 0 { return true }
     return streq(src, a.ns, a.nl, b.ns, b.nl)
   }
@@ -324,13 +428,13 @@ ty_eq := fn(a : Ty, b : Ty, src : ptr(u8)) -> bool {
 ## non-pointer, falls back to `ty_eq` — so the check fires ONLY on two clearly-distinct named
 ## aggregates and never FALSE-rejects (I11: correct-or-reject, never a spurious reject).
 ty_compat := fn(a : Ty, b : Ty, src : ptr(u8)) -> bool {
-  if a.tag == 0 { return true }
-  if b.tag == 0 { return true }
+  if tag_is_unknown(a.tag) { return true }
+  if tag_is_unknown(b.tag) { return true }
   if not tag_compat(a.tag, b.tag) { return false }
   ## pointee discrimination applies ONLY when BOTH sides are pointers (tag 5); an int↔ptr pair (the
   ## handle seam) is accepted above and must NOT reach the pointee-name compare (an int's ns/nl is its
   ## own scalar-type-name span, which would spuriously fail the `streq`).
-  bothptr := a.tag == 5 and b.tag == 5 and a.nl != 0 and b.nl != 0
+  bothptr := tag_is_ptr(a.tag) and tag_is_ptr(b.tag) and a.nl != 0 and b.nl != 0
   if bothptr { return streq(src, a.ns, a.nl, b.ns, b.nl) }
   return true
 }
@@ -421,6 +525,9 @@ mut PTRINT_LOST : usize = 0
 mut PTRINT_MOD_NS : usize = 0
 mut PTRINT_MOD_NL : usize = 0
 mut PTRINT_DECL_NS : usize = 0
+## Issue #697 — the parameter list of the declaration `check_decl` is checking (as a word), so a local
+## annotation can tell the enclosing function's `T : type` parameters from unknown type names.
+mut SEMA_DECL_PARAMS : usize = 0
 mut PTRINT_DECL_NL : usize = 0
 ## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF for
 ## one that is closed or opened read-only, and touches no memory in either case.
@@ -2125,7 +2232,7 @@ da_bad_expr := fn(e : ptr(Expr), da : ptr(DA), src : ptr(u8)) -> bool {
     Expr::Unchecked(inner) => { da_bad_expr(inner, da, src) }
     Expr::Bitcast(inner, ts, tl) => { da_bad_expr(inner, da, src) }
     Expr::Loop(b) => { false }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::Lambda | Expr::FnRef => { false }
   }
 }
 
@@ -2234,7 +2341,41 @@ ptr_pointee_span := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Ve
       if kok and streq(src, d.name_start, d.name_len, ns2, nl2) { r = VSpan(s = ns2, n = nl2) }
     }
   }
+  ## Issue #697 — a PATH-QUALIFIED pointee (`ptr(ast::Expr)`) names the same declaration as the bare
+  ## spelling, and records that declaration's own name span: byte for byte what the bare spelling
+  ## records, so `ty_compat`'s pointee comparison sees one identity, not two spellings. Resolved by
+  ## `sema_qual_type_decl` below.
+  if r.n == 0 {
+    qi := sema_qual_type_decl(decls, src, ns2, nl2, ncnt)
+    if qi >= 0 {
+      qd := deref(decl_get(decls, usize(qi)))
+      r = VSpan(s = qd.name_start, n = qd.name_len)
+    }
+  }
   return r
+}
+
+## Issue #697 — the declaration a PATH-QUALIFIED type spelling names, through
+## `lower_layout::qualified_type_decl` (the reader `qualified_type_name_known` answers from, module
+## aliases included), but only when its NAME is unique among the struct/enum declarations; else -1.
+## A resolved `Ty` carries the declaration's name span and no module, and every later lookup (field
+## types, variant lists) goes by that name — so for `rt::StrBuf`, with a second `StrBuf` in
+## `alloc::strbuf`, a resolved identity would be read back as the wrong struct. Unknown, as before,
+## is the sound answer there. The declaration must also lie inside `ncnt`, the same name-resolution
+## prefix a bare spelling is resolved under: field and variant lookups use that prefix too, so a type
+## resolved past it has no fields to read (measured: `rt::StrBuf` in `cli`, where `rt` sorts later).
+sema_qual_type_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ncnt : usize) -> i64 {
+  qi := qualified_type_decl(decls, src, s, n)
+  if qi < 0 or usize(qi) >= ncnt { return -1 }
+  qd := deref(decl_get(decls, usize(qi)))
+  cnt := rt::vec_len(deref(decls))
+  mut same := 0
+  for i in 0..cnt {
+    d := deref(decl_get(decls, i))
+    if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, qd.name_start, qd.name_len) { same += 1 }
+  }
+  if same != 1 { return -1 }
+  qi
 }
 
 resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), ncnt : usize) -> Ty {
@@ -2309,7 +2450,7 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
       }
     }
   }
-  if r.tag == 0 and alias_tl != 0 {
+  if tag_is_unknown(r.tag) and alias_tl != 0 {
     at := base_type_name(src, alias_ts, alias_tl)
     mut j := 0
     while j < ncnt {
@@ -2322,6 +2463,15 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
         }
       }
       j += 1
+    }
+  }
+  ## Issue #697 — `ast::Expr` is `Expr`: resolve a path-qualified name to its declaration.
+  if tag_is_unknown(r.tag) {
+    qi := sema_qual_type_decl(decls, src, bn.s, bn.n, ncnt)
+    if qi >= 0 {
+      qd := deref(decl_get(decls, usize(qi)))
+      if qd.kind == 2 { r = Ty(tag = 3, ns = qd.name_start, nl = qd.name_len) }
+      if qd.kind == 3 { r = Ty(tag = 4, ns = qd.name_start, nl = qd.name_len) }
     }
   }
   r
@@ -2569,27 +2719,26 @@ sema_brand_field_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src
 }
 sema_brand_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> Ty {
   ct := sema_brand_ctor_ty(v, decls, upto, src)
-  if ct.tag != 0 { return ct }
+  if not tag_is_unknown(ct.tag) { return ct }
   mut r := Ty(tag = 0, ns = 0, nl = 0)
   if unchecked bitcast(usize, v) == 0 { return r }
   ft := sema_brand_field_ty(v, decls, upto, src, locals, nloc, a)
-  if ft.tag != 0 { return ft }
+  if not tag_is_unknown(ft.tag) { return ft }
   vs := expr_var_span(v)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
     raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut lt : u8 = raw.tag
-    if lt >= 128 and lt != 255 { lt = lt - 128 }
+    mut lt : u8 = tag_unflag(raw.tag)
     if lt == 255 { lt = 0 }
-    if lt == 9 { lt = 3 }
-    if lt == 10 { lt = 4 }
-    if lt == 12 { lt = 0 }
+    if tag_is_hidden_struct(lt) { lt = 3 }
+    if tag_is_hidden_enum(lt) { lt = 4 }
+    if tag_is_tuple_mark(lt) { lt = 0 }
     r = Ty(tag = lt, ns = raw.ns, nl = raw.nl)
   }
   r
 }
 ## §4.2's class for the pair (declared sink, actual value). 0 = nothing to report.
 sema_brand_class := fn(dst : Ty, act : Ty, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> usize {
-  if dst.tag == 8 and act.tag == 8 {
+  if tag_is_brand(dst.tag) and tag_is_brand(act.tag) {
     if dst.nl == 0 { return 0 }
     if act.nl == 0 { return 0 }
     if streq(src, dst.ns, dst.nl, act.ns, act.nl) { return 0 }
@@ -2598,11 +2747,11 @@ sema_brand_class := fn(dst : Ty, act : Ty, decls : ptr(rt::Vec), upto : usize, s
     if du.n != 0 and au.n != 0 and streq(src, du.s, du.n, au.s, au.n) == false { return 3 }
     return 2
   }
-  if dst.tag == 8 and act.tag == 1 {
+  if tag_is_brand(dst.tag) and tag_is_int(act.tag) {
     if act.nl == 0 { return 5 }
     return 1
   }
-  if dst.tag == 1 and act.tag == 8 {
+  if tag_is_int(dst.tag) and tag_is_brand(act.tag) {
     if dst.nl == 0 { return 0 }
     return 4
   }
@@ -2637,7 +2786,7 @@ brand_probe_class_name := fn(c : usize) -> str {
 ## sinks, and the entry below dispatches it into the same element walk the refusal uses.
 brand_probe_value_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) {
   if SEMA_BRAND_DECLS == 0 { return }
-  if dst.tag != 8 and dst.tag != 1 { return }
+  if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return }
   act := sema_brand_value_ty(v, decls, upto, src, locals, nloc, a)
   brand_probe_ty_sink(dst, act, off, decls, upto, src)
 }
@@ -2645,9 +2794,9 @@ brand_probe_value_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(r
 ## `brand_probe_value_sink` and the whole-array walk (#698), which knows an element TYPE, not an
 ## element expression.
 brand_probe_ty_sink := fn(dst : Ty, act : Ty, off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) {
-  if dst.tag != 8 and dst.tag != 1 { return }
+  if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return }
   BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
-  if act.tag != 8 and dst.tag != 8 { return }
+  if not tag_is_brand(act.tag) and not tag_is_brand(dst.tag) { return }
   c := sema_brand_class(dst, act, decls, upto, src)
   if c != 0 { brand_probe_row(brand_probe_class_name(c), off, src) }
 }
@@ -2665,7 +2814,7 @@ brand_probe_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec
   ## First, and before the tag dispatch, so a BRANDLESS program still pays nothing per sink — the
   ## cost property the instrument's header states and the self-build depends on.
   if SEMA_BRAND_DECLS == 0 { return }
-  if dst.tag == 7 {
+  if tag_is_array(dst.tag) {
     ## The walk's CheckErr result is the refusal's answer and is not one here: in census mode it is
     ## always 0 and the rows have already gone to the channel.
     z := sema_brand_array_elems(true, dst, v, off, decls, upto, src, locals, nloc, a)
@@ -2682,15 +2831,15 @@ brand_probe_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec
 ## fn's `locals`, so the walk gets them here as well and the two ends judge one element list.
 brand_probe_sink_decl := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) {
   if SEMA_BRAND_DECLS == 0 { return }
-  if dst.tag == 7 {
+  if tag_is_array(dst.tag) {
     ## In census mode the walk's CheckErr is always 0 and the rows have already gone to the channel.
     z := sema_brand_array_elems(true, dst, v, off, decls, upto, src, locals, nloc, a)
     return
   }
-  if dst.tag != 8 and dst.tag != 1 { return }
+  if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return }
   BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
   act := sema_brand_ctor_ty(v, decls, upto, src)
-  if act.tag != 8 and dst.tag != 8 { return }
+  if not tag_is_brand(act.tag) and not tag_is_brand(dst.tag) { return }
   c := sema_brand_class(dst, act, decls, upto, src)
   if c != 0 { brand_probe_row(brand_probe_class_name(c), off, src) }
 }
@@ -2698,9 +2847,9 @@ brand_probe_sink_decl := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt
 brand_probe_binop := fn(l : ptr(Expr), r : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) {
   if SEMA_BRAND_DECLS == 0 { return }
   tl := sema_brand_value_ty(l, decls, upto, src, locals, nloc, a)
-  if tl.tag != 8 { return }
+  if not tag_is_brand(tl.tag) { return }
   tr := sema_brand_value_ty(r, decls, upto, src, locals, nloc, a)
-  if tr.tag != 8 { return }
+  if not tag_is_brand(tr.tag) { return }
   if tl.nl == 0 { return }
   if tr.nl == 0 { return }
   if streq(src, tl.ns, tl.nl, tr.ns, tr.nl) { return }
@@ -2740,8 +2889,8 @@ brand_probe_blind := fn(v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto :
 ## crossings across the 18 tracked `require_*`/`fmt_decl_*` fixtures. #562 owns giving those types
 ## their own identity; this unit owes only that it does not pretend they are brands.
 sema_brand_refuse_class := fn(dst : Ty, act : Ty, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> usize {
-  if dst.tag == 8 and sema_brand_underlying(decls, upto, src, dst.ns, dst.nl).n == 0 { return 0 }
-  if act.tag == 8 and sema_brand_underlying(decls, upto, src, act.ns, act.nl).n == 0 { return 0 }
+  if tag_is_brand(dst.tag) and sema_brand_underlying(decls, upto, src, dst.ns, dst.nl).n == 0 { return 0 }
+  if tag_is_brand(act.tag) and sema_brand_underlying(decls, upto, src, act.ns, act.nl).n == 0 { return 0 }
   c := sema_brand_class(dst, act, decls, upto, src)
   if c == 5 { return 0 }
   c
@@ -2752,15 +2901,15 @@ sema_brand_refuse_class := fn(dst : Ty, act : Ty, decls : ptr(rt::Vec), upto : u
 ## `off`, the offending value's own source offset (Tooling §5: a diagnostic carries a span).
 sema_brand_value_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   if SEMA_BRAND_DECLS == 0 { return 0 }
-  if dst.tag != 8 and dst.tag != 1 { return 0 }
+  if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return 0 }
   act := sema_brand_value_ty(v, decls, upto, src, locals, nloc, a)
   sema_brand_ty_sink_err(dst, act, off, decls, upto, src)
 }
 ## The refusing half of one value sink once the value's brand identity `act` is known — the twin of
 ## `brand_probe_ty_sink`, and the one place both value-sink shapes decide (#698).
 sema_brand_ty_sink_err := fn(dst : Ty, act : Ty, off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> CheckErr {
-  if dst.tag != 8 and dst.tag != 1 { return 0 }
-  if act.tag != 8 and dst.tag != 8 { return 0 }
+  if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return 0 }
+  if not tag_is_brand(act.tag) and not tag_is_brand(dst.tag) { return 0 }
   if sema_brand_refuse_class(dst, act, decls, upto, src) == 0 { return 0 }
   brand_conversion_err(off)
 }
@@ -2890,7 +3039,7 @@ sema_brand_array_elems := fn(census : bool, dst : Ty, v : ptr(Expr), off : usize
   sp := sema_brand_array_elem_span(src, dst.ns, dst.nl)
   if sp.n == 0 { return 0 }
   et := resolve_ty(src, sp.s, sp.n, decls, upto)
-  if et.tag != 8 and et.tag != 1 { return 0 }
+  if not tag_is_brand(et.tag) and not tag_is_int(et.tag) { return 0 }
   mut g := expr_array_lit_head(v)
   mut err : CheckErr = 0
   ## Issue #698 — a WHOLE array value, not a literal: a local recorded as a fixed array
@@ -2901,9 +3050,7 @@ sema_brand_array_elems := fn(census : bool, dst : Ty, v : ptr(Expr), off : usize
     vv := expr_var_span(v)
     if vv.n != 0 and nloc != 0 and local_in(locals, nloc, src, vv.s, vv.n) {
       vl := local_ty(locals, nloc, src, vv.s, vv.n)
-      mut vtag : u8 = vl.tag
-      if vtag >= 128 and vtag != 255 { vtag = vtag - 128 }
-      if vtag == 7 and vl.nl != 0 {
+      if tag_is_array(tag_unflag(vl.tag)) and vl.nl != 0 {
         vsp := sema_brand_array_elem_span(src, vl.ns, vl.nl)
         if vsp.n != 0 {
           vet := resolve_ty(src, vsp.s, vsp.n, decls, upto)
@@ -2954,7 +3101,7 @@ sema_array_param_brand_ty := fn(pty : Ty, src : ptr(u8), ts : usize, tl : usize)
 ## whose ELEMENTS are the value sinks; every other declared type is judged directly. One entry, so a
 ## sink that is hooked once is hooked for both shapes and no call site learns about arrays.
 sema_brand_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
-  if dst.tag == 7 { return sema_brand_array_sink_err(dst, v, off, decls, upto, src, locals, nloc, a) }
+  if tag_is_array(dst.tag) { return sema_brand_array_sink_err(dst, v, off, decls, upto, src, locals, nloc, a) }
   sema_brand_value_sink_err(dst, v, off, decls, upto, src, locals, nloc, a)
 }
 ## The same judgement for one binary operator whose two operands are two DIFFERENT brands. §5.4 gives
@@ -2966,9 +3113,9 @@ sema_brand_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::
 sema_brand_binop_err := fn(l : ptr(Expr), r : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   if SEMA_BRAND_DECLS == 0 { return 0 }
   tl := sema_brand_value_ty(l, decls, upto, src, locals, nloc, a)
-  if tl.tag != 8 { return 0 }
+  if not tag_is_brand(tl.tag) { return 0 }
   tr := sema_brand_value_ty(r, decls, upto, src, locals, nloc, a)
-  if tr.tag != 8 { return 0 }
+  if not tag_is_brand(tr.tag) { return 0 }
   if sema_brand_refuse_class(tl, tr, decls, upto, src) == 0 { return 0 }
   brand_conversion_err(off)
 }
@@ -2995,7 +3142,7 @@ sema_brand_ctor_arg_err := fn(e : ptr(Expr), off : usize, decls : ptr(rt::Vec), 
   if ah == 0 { return 0 }
   arg := deref(arg_p(ah))
   at := sema_brand_value_ty(arg.e, decls, upto, src, locals, nloc, a)
-  if at.tag != 8 { return 0 }
+  if not tag_is_brand(at.tag) { return 0 }
   dst := Ty(tag = 8, ns = cs.s, nl = cs.n)
   if sema_brand_refuse_class(dst, at, decls, upto, src) == 0 { return 0 }
   brand_conversion_err(off)
@@ -3028,7 +3175,20 @@ sema_brand_ret_err := fn(rts : usize, rtl : usize, v : ptr(Expr), off : usize, d
 ## single-focus accessor (`expr_struct_lit_head`, the `expr_var_span`/`expr_agg_lit` idiom) that does
 ## dispatch. It recurses into a field value that is itself a struct literal, because the nested node is
 ## never handed to `check_expr` at all for the same reason.
+##
+## Issue #688 — ONE traversal, TWO consumers, as `sema_brand_array_elems` is: `census` selects the
+## per-field judgement (the counting hook or the refusing one) and nothing else, so the census counts
+## exactly the field sinks the refusal refuses at. It did not before — the refusal reached this sink
+## through this separately hooked walk and the census had no counterpart, so `S(f = b)` for a sibling
+## `b` was refused while the census channel received zero rows.
 sema_brand_struct_field_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  sema_brand_struct_fields(false, e, decls, upto, src, a, locals, nloc)
+}
+## The census end of the same walk (#688).
+brand_probe_struct_fields := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) {
+  z := sema_brand_struct_fields(true, e, decls, upto, src, a, locals, nloc)
+}
+sema_brand_struct_fields := fn(census : bool, e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> CheckErr {
   if SEMA_BRAND_DECLS == 0 { return 0 }
   al := expr_struct_lit_name(e)
   if al.n == 0 { return 0 }
@@ -3042,9 +3202,13 @@ sema_brand_struct_field_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : us
     if fld != 0 {
       fd := deref(fld_p(fld))
       ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
-      fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
-      if fe != 0 and err == 0 { err = fe }
-      ne := sema_brand_struct_field_err(sa.e, decls, upto, src, a, locals, nloc)
+      if census {
+        brand_probe_sink(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+      } else {
+        fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+        if fe != 0 and err == 0 { err = fe }
+      }
+      ne := sema_brand_struct_fields(census, sa.e, decls, upto, src, a, locals, nloc)
       if ne != 0 and err == 0 { err = ne }
       fld = fd.next
     }
@@ -3070,9 +3234,9 @@ late_enum_ann_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Ve
   if tl == 0 { return unknown }
   ncnt := rt::vec_len(deref(decls))
   if ncnt <= upto { return unknown }
-  if resolve_ty(src, ts, tl, decls, upto).tag != 0 { return unknown }
+  if not tag_is_unknown(resolve_ty(src, ts, tl, decls, upto).tag) { return unknown }
   full := resolve_ty(src, ts, tl, decls, ncnt)
-  if full.tag == 4 and full.nl != 0 { return full }
+  if tag_is_enum(full.tag) and full.nl != 0 { return full }
   unknown
 }
 
@@ -3100,12 +3264,12 @@ late_enum_ptr_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Ve
   ncnt := rt::vec_len(deref(decls))
   if ncnt <= upto { return unknown }
   pre := resolve_ty(src, ts, tl, decls, upto)
-  if pre.tag != 5 { return unknown }
+  if not tag_is_ptr(pre.tag) { return unknown }
   if pre.nl != 0 { return unknown }
   sp := ptr_pointee_span(src, ts, tl, decls, ncnt)
   if sp.n == 0 { return unknown }
   full := resolve_ty(src, sp.s, sp.n, decls, ncnt)
-  if full.tag != 4 { return unknown }
+  if not tag_is_enum(full.tag) { return unknown }
   if full.nl == 0 { return unknown }
   Ty(tag = 5, ns = sp.s, nl = sp.n)
 }
@@ -3121,7 +3285,10 @@ is_prelude_ns_var := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
       nm := str_at((src + s), n)
       nm == "Ordering" or nm == "Arch" or nm == "target" or nm == "verify" or nm == "build"
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Is the name [s, s+n) declared among the first `upto` bindings (the prefix in scope)?
@@ -3631,7 +3798,7 @@ sema_direct_brand_if_mismatch := fn(e : ptr(Expr), src : ptr(u8), locals : ptr(L
   if not local_in(locals, nloc, src, ls.s, ls.n) or not local_in(locals, nloc, src, rs.s, rs.n) { return 0 }
   lt := local_ty(locals, nloc, src, ls.s, ls.n)
   rt := local_ty(locals, nloc, src, rs.s, rs.n)
-  if lt.tag == 8 and rt.tag == 8 and not streq(src, lt.ns, lt.nl, rt.ns, rt.nl) { return rs.s }
+  if tag_is_brand(lt.tag) and tag_is_brand(rt.tag) and not streq(src, lt.ns, lt.nl, rt.ns, rt.nl) { return rs.s }
   0
 }
 
@@ -3670,7 +3837,10 @@ VSpan := struct { s : usize, n : usize }
 expr_var_span := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Var(s, n) => { VSpan(s = s, n = n) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -3681,7 +3851,10 @@ field_path_root_var := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Var(s, n) => { VSpan(s = s, n = n) }
     Expr::Field(base, fs, fl) => { field_path_root_var(base) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -3690,19 +3863,28 @@ NestedPath := struct { rs : usize, rn : usize, fs : usize, fl : usize, ss : usiz
 expr_field_base := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Field(base, fs, fl) => { base }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 expr_field_span := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Field(base, fs, fl) => { VSpan(s = fs, n = fl) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 expr_addr_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::AddrOf(inner) => { inner }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 ## Recover a pointer's pointee identity only for the proven inferred-binding shape
@@ -3717,9 +3899,8 @@ sema_addr_local_struct_ptr_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(L
   root := expr_var_span(inner)
   if root.n == 0 or nloc == 0 or not local_in(locals, nloc, src, root.s, root.n) { return none }
   raw := local_ty(locals, nloc, src, root.s, root.n)
-  mut tag : u8 = raw.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if (tag == 3 or tag == 9) and raw.nl != 0 { return Ty(tag = 5, ns = raw.ns, nl = raw.nl) }
+  mut tag : u8 = tag_unflag(raw.tag)
+  if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and raw.nl != 0 { return Ty(tag = 5, ns = raw.ns, nl = raw.nl) }
   none
 }
 ## The POINTEE expression of a `deref(p)` place (null otherwise). A small single-focus match, for the
@@ -3728,14 +3909,20 @@ sema_addr_local_struct_ptr_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(L
 expr_deref_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Deref(inner) => { inner }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 field_path_deref_var := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Field(base, fs, fl) => { field_path_deref_var(base) }
     Expr::Deref(inner) => { expr_var_span(inner) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## The operand of an `unchecked(…)` wrapper, else 0 — the pre-match accessor the #580 head walk
@@ -3744,19 +3931,28 @@ field_path_deref_var := fn(e : ptr(Expr)) -> VSpan {
 expr_unchecked_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Unchecked(inner) => { inner }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 expr_index_base := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Index(base, ix) => { base }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 expr_index_index := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Index(base, ix) => { ix }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 expr_nested_path := fn(e : ptr(Expr)) -> NestedPath {
@@ -3841,7 +4037,10 @@ expr_array_elem_nested_path := fn(e : ptr(Expr)) -> ArrayNestedPath {
 expr_call_callee_span := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { VSpan(s = cs, n = cl) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -3851,7 +4050,10 @@ expr_call_callee_span := fn(e : ptr(Expr)) -> VSpan {
 expr_call_args_head := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { ah }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 
@@ -3877,7 +4079,10 @@ sema_direct_call_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 expr_call_arity := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { na }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 
@@ -3918,7 +4123,10 @@ sema_generic_inst_type_span := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
       if cp == 0 { return VSpan(s = 0, n = 0) }
       VSpan(s = cs, n = cp + 1 - cs)
     }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -3950,7 +4158,10 @@ EnumParts := struct { is_enum : bool, es : usize, el : usize, vs : usize, vl : u
 expr_enum_parts := fn(e : ptr(Expr)) -> EnumParts {
   match deref(e) {
     Expr::EnumLit(es, el, vs, vl, np, ah) => { EnumParts(is_enum = true, es = es, el = el, vs = vs, vl = vl, np = np) }
-    _ => { EnumParts(is_enum = false, es = 0, el = 0, vs = 0, vl = 0, np = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { EnumParts(is_enum = false, es = 0, el = 0, vs = 0, vl = 0, np = 0) }
   }
 }
 
@@ -3963,7 +4174,10 @@ MatchParts := struct { is_match : bool, scrut : ptr(Expr), head : ptr(mut Stmt) 
 expr_match_parts := fn(e : ptr(Expr)) -> MatchParts {
   match deref(e) {
     Expr::Match(scrut, head) => { MatchParts(is_match = true, scrut = scrut, head = head) }
-    _ => { MatchParts(is_match = false, scrut = unchecked bitcast(ptr(Expr), 0), head = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MatchParts(is_match = false, scrut = unchecked bitcast(ptr(Expr), 0), head = 0) }
   }
 }
 
@@ -3975,14 +4189,20 @@ IfParts := struct { is_if : bool, cond : ptr(Expr), then_e : ptr(Expr), else_e :
 expr_if_parts := fn(e : ptr(Expr)) -> IfParts {
   match deref(e) {
     Expr::If(c, t, f) => { IfParts(is_if = true, cond = c, then_e = t, else_e = f) }
-    _ => { IfParts(is_if = false, cond = unchecked bitcast(ptr(Expr), 0), then_e = unchecked bitcast(ptr(Expr), 0), else_e = unchecked bitcast(ptr(Expr), 0)) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { IfParts(is_if = false, cond = unchecked bitcast(ptr(Expr), 0), then_e = unchecked bitcast(ptr(Expr), 0), else_e = unchecked bitcast(ptr(Expr), 0)) }
   }
 }
 
 expr_loop_body := fn(e : ptr(Expr)) -> ptr(mut Stmt) {
   match deref(e) {
     Expr::Loop(b) => { b }
-    _ => { unchecked bitcast(ptr(mut Stmt), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast => { unchecked bitcast(ptr(mut Stmt), 0) }
   }
 }
 
@@ -4053,7 +4273,10 @@ expr_agg_lit := fn(e : ptr(Expr)) -> AggLit {
   match deref(e) {
     Expr::StructLit(scs, scl, snf, sfh) => { AggLit(is_agg = true, s = scs, n = scl) }
     Expr::EnumLit(ets, etl, evs, evl, enp, eph) => { AggLit(is_agg = true, s = ets, n = etl) }
-    _ => { AggLit(is_agg = false, s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { AggLit(is_agg = false, s = 0, n = 0) }
   }
 }
 ## The FIELD-ARGUMENT list head of a `StructLit` value expression (0 otherwise), and its TYPE-NAME
@@ -4065,13 +4288,19 @@ expr_agg_lit := fn(e : ptr(Expr)) -> AggLit {
 expr_struct_lit_head := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::StructLit(scs, scl, snf, sfh) => { sfh }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 expr_struct_lit_name := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::StructLit(scs, scl, snf, sfh) => { VSpan(s = scs, n = scl) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## The PAYLOAD-ARGUMENT list head of an `EnumLit` value expression (0 otherwise). Same scar #2 idiom
@@ -4083,7 +4312,10 @@ expr_struct_lit_name := fn(e : ptr(Expr)) -> VSpan {
 expr_enum_lit_head := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::EnumLit(ets, etl, evs, evl, enp, eph) => { eph }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 ## True only for the parser's generic-construction shape `Name(type-args)(field = value, …)`.
@@ -4151,7 +4383,10 @@ sema_unknown_type_ctor_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : us
   mut is_struct := false
   match deref(e) {
     Expr::StructLit(scs0, scl0, snf0, sfh0) => { is_struct = true }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   if not is_struct { return VSpan(s = 0, n = 0) }
   if not sema_generic_ctor_shape(src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
@@ -4181,7 +4416,10 @@ sema_manifest_value_ctor_span := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
   mut is_struct := false
   match deref(e) {
     Expr::StructLit(scs, scl, snf, sfh) => { is_struct = true }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   if not is_struct { return VSpan(s = 0, n = 0) }
   if lit.n == 7 and str_at((src + lit.s), 7) == "Package" { return VSpan(s = lit.s, n = lit.n) }
@@ -4194,7 +4432,10 @@ sema_manifest_value_ctor_span := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
 expr_field_base_var := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Field(base, fs, fl) => { expr_var_span(base) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## The ELEMENT-list head (arena handle) of an `ArrayLit` value expression, else 0 — the same
@@ -4206,7 +4447,10 @@ expr_field_base_var := fn(e : ptr(Expr)) -> VSpan {
 expr_array_lit_head := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::ArrayLit(nel, eh) => { eh }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 ## The FIRST element expr of an `ArrayLit` (null if not an array / empty) — a scalar-element array is
@@ -4216,7 +4460,10 @@ expr_array_first := fn(e : ptr(Expr)) -> ptr(Expr) {
     Expr::ArrayLit(nel, eh) => {
       if unchecked bitcast(usize, eh) != 0 { (deref(arg_p(eh))).e } else { unchecked bitcast(ptr(Expr), 0) }
     }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 ## True iff e is the initialized local-array shape whose first element is a direct literal of a
@@ -4262,7 +4509,7 @@ sema_local_multidim_array := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
   p0 := sema_local_type_trivia(src, ts, end)
   if p0 >= end { return false }
   resolved := resolve_ty(src, p0, end - p0, decls, upto)
-  if resolved.tag != 7 { return false }
+  if not tag_is_array(resolved.tag) { return false }
   mut p := p0
   if str_at((src + p), 1) != "[" { return false }
   p += 1
@@ -4319,7 +4566,10 @@ value_is_scalar_lit := fn(v : ptr(Expr)) -> bool {
   match deref(v) {
     Expr::Num(x, s, n) => { true }
     Expr::BoolLit(x) => { true }
-    _ => { false }
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## The exact value shape selected by issue #5: a two-element tuple literal whose components are direct
@@ -4330,7 +4580,10 @@ sema_num_literal_start := fn(e : ptr(Expr)) -> usize {
   mut r := 0
   match deref(e) {
     Expr::Num(v, s, n) => { r = s }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -4357,7 +4610,10 @@ sema_two_word_tuple_literal := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
       }
       open
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Is `[s,n)` a BUILTIN SCALAR type NAME (int width / float / bool / char)? Mirrors the retired emit
@@ -4375,7 +4631,7 @@ value_agg_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
   al := expr_agg_lit(v)
   if al.is_agg {
     aty := resolve_ty(src, al.s, al.n, decls, upto)
-    if aty.tag == 3 or aty.tag == 4 { return aty }
+    if tag_is_struct(aty.tag) or tag_is_enum(aty.tag) { return aty }
     return Ty(tag = 0, ns = 0, nl = 0)
   }
   ## NULLARY enum variant `EnumType.Variant` (a Field over an enum TYPE name, NOT a value local): an enum
@@ -4385,21 +4641,20 @@ value_agg_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
     fb_local := nloc != 0 and local_in(locals, nloc, src, fb.s, fb.n)
     if not fb_local {
       bt := resolve_ty(src, fb.s, fb.n, decls, upto)
-      if bt.tag == 4 { return Ty(tag = 4, ns = fb.s, nl = fb.n) }
+      if tag_is_enum(bt.tag) { return Ty(tag = 4, ns = fb.s, nl = fb.n) }
     }
   }
   vs := expr_var_span(v)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
     raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut lt : u8 = raw.tag
-    if lt >= 128 and lt != 255 { lt = lt - 128 }
+    mut lt : u8 = tag_unflag(raw.tag)
     ## HIDDEN aggregate tags 9 (struct) / 10 (enum) are recorded by `Stmt::Assign` for a StructLit/EnumLit
     ## binding — hidden so `check_expr`'s Var resolution (which surfaces only 3/4/5) leaves them tag 0,
     ## keeping the OVERLOAD-NAIVE existing arg-vs-param checks tolerant (else `overload_three` false-rejects
     ## once struct args become known). Map them back to the real struct(3)/enum(4) tag here. A call-return
     ## struct is recorded as the real tag 3 and is treated identically.
-    if lt == 3 or lt == 9 { return Ty(tag = 3, ns = raw.ns, nl = raw.nl) }
-    if lt == 4 or lt == 10 { return Ty(tag = 4, ns = raw.ns, nl = raw.nl) }
+    if tag_is_struct(lt) or tag_is_hidden_struct(lt) { return Ty(tag = 3, ns = raw.ns, nl = raw.nl) }
+    if tag_is_enum(lt) or tag_is_hidden_enum(lt) { return Ty(tag = 4, ns = raw.ns, nl = raw.nl) }
   }
   Ty(tag = 0, ns = 0, nl = 0)
 }
@@ -4414,7 +4669,10 @@ BinParts := struct { is_bin : bool, op : u8, left : ptr(Expr), right : ptr(Expr)
 expr_bin_parts := fn(e : ptr(Expr)) -> BinParts {
   match deref(e) {
     Expr::Bin(op, l, r) => { BinParts(is_bin = true, op = op, left = l, right = r) }
-    _ => { BinParts(is_bin = false, op = 0, left = unchecked bitcast(ptr(Expr), 0), right = unchecked bitcast(ptr(Expr), 0)) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { BinParts(is_bin = false, op = 0, left = unchecked bitcast(ptr(Expr), 0), right = unchecked bitcast(ptr(Expr), 0)) }
   }
 }
 sema_op_symbol := fn(op : u8) -> str {
@@ -4465,8 +4723,8 @@ bin_aggregate_arithmetic_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
   ## Keep aggregate+aggregate and explicitly declared aggregate+scalar operator overloads (OP-1)
   ## untouched. This lane only closes a scalar literal beside an aggregate when no matching operator
   ## declaration exists — the exact silent word-zero case.
-  if (lt.tag == 3 or lt.tag == 4) and value_is_scalar_lit(bp.right) and not sema_operator_overload_exists(decls, src, bp.op, lt) { bad = true }
-  if (right_ty.tag == 3 or right_ty.tag == 4) and value_is_scalar_lit(bp.left) and not sema_operator_overload_exists(decls, src, bp.op, right_ty) { bad = true }
+  if (tag_is_struct(lt.tag) or tag_is_enum(lt.tag)) and value_is_scalar_lit(bp.right) and not sema_operator_overload_exists(decls, src, bp.op, lt) { bad = true }
+  if (tag_is_struct(right_ty.tag) or tag_is_enum(right_ty.tag)) and value_is_scalar_lit(bp.left) and not sema_operator_overload_exists(decls, src, bp.op, right_ty) { bad = true }
   bad
 }
 ## A CONFIDENT aggregate↔scalar mismatch between a declared SINK type NAME `[ss,sn)` and a VALUE `v`, in
@@ -4478,10 +4736,10 @@ agg_scalar_bad := fn(ss : usize, sn : usize, v : ptr(Expr), decls : ptr(rt::Vec)
   mut bad := false
   if is_builtin_scalar_name(src, ss, sn) {
     va := value_agg_ty(v, decls, upto, src, locals, nloc)
-    if va.tag == 3 or va.tag == 4 { bad = true }
+    if tag_is_struct(va.tag) or tag_is_enum(va.tag) { bad = true }
   }
   st := resolve_ty(src, ss, sn, decls, upto)
-  if st.tag == 3 or st.tag == 4 {
+  if tag_is_struct(st.tag) or tag_is_enum(st.tag) {
     if value_is_scalar_lit(v) { bad = true }
   }
   bad
@@ -4690,9 +4948,8 @@ sema_wrapper_value_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, s
   vs := expr_var_span(v)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
     raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut tag : u8 = raw.tag
-    if tag >= 128 and tag != 255 { tag = tag - 128 }
-    if tag == 11 { return Ty(tag = 11, ns = raw.ns, nl = raw.nl) }
+    mut tag : u8 = tag_unflag(raw.tag)
+    if tag_is_wrapper(tag) { return Ty(tag = 11, ns = raw.ns, nl = raw.nl) }
   }
   Ty(tag = 0, ns = 0, nl = 0)
 }
@@ -4712,7 +4969,7 @@ sema_wrapper_payload_arg_bad := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : u
   cd := deref(decl_get(decls, usize(di)))
   if not sema_wrapper_value_type_concrete(decls, upto, src, psp.s, psp.n, cd.mod_start, cd.mod_len) { return false }
   wt := sema_wrapper_value_ty(v, decls, upto, src, locals, nloc)
-  wt.tag == 11
+  tag_is_wrapper(wt.tag)
 }
 
 ## A true result means exactly "wrapper value into a concrete by-value local annotation". The same
@@ -4724,7 +4981,7 @@ sema_wrapper_payload_arg_bad := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : u
 sema_wrapper_payload_binding_bad := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, ann_s : usize, ann_n : usize) -> bool {
   if ann_n == 0 { return false }
   wt := sema_wrapper_value_ty(v, decls, upto, src, locals, nloc)
-  if wt.tag != 11 { return false }
+  if not tag_is_wrapper(wt.tag) { return false }
   lv := deref(locals)
   sema_wrapper_value_type_concrete(decls, upto, src, ann_s, ann_n, lv.mod_s, lv.mod_l)
 }
@@ -4738,7 +4995,7 @@ sema_wrapper_payload_sink_err := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : 
   cs := expr_call_callee_span(v)
   if cs.n == 0 or ecallee_is(cs.s) or not sema_direct_named_call(src, cs.s, cs.n) { return 0 }
   wt := sema_wrapper_value_ty(v, decls, upto, src, locals, nloc)
-  if wt.tag != 11 { return 0 }
+  if not tag_is_wrapper(wt.tag) { return 0 }
   lv := deref(locals)
   if sema_wrapper_value_type_concrete(decls, upto, src, rts, rtl, lv.mod_s, lv.mod_l) { return mismatch_err(s_of(v, a), 0) }
   0
@@ -4771,7 +5028,9 @@ sema_wrapper_payload_returns_err := fn(head : ptr(mut Stmt), rts : usize, rtl : 
           arm = am.next
         }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -4820,7 +5079,10 @@ sema_literal_class := fn(e : ptr(Expr)) -> u8 {
     Expr::Num(v, s, n) => { 1 }
     Expr::BoolLit(v) => { 1 }
     Expr::FloatLit(s, n) => { 2 }
-    _ => { 0 }
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 literal_overload_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, args_head : ptr(mut Arg), mod_s : usize, mod_l : usize) -> bool {
@@ -4917,8 +5179,8 @@ s3a_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   if ev.n != 0 {
     lt := local_ty(locals, nloc, src, ev.s, ev.n)
     mut tag := lt.tag
-    if tag >= 128 and tag != 255 { tag = tag - 128 }
-    if (tag == 3 or tag == 9) and lt.nl != 0 { r = VSpan(s = lt.ns, n = lt.nl) }
+    tag = tag_unflag(tag)
+    if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and lt.nl != 0 { r = VSpan(s = lt.ns, n = lt.nl) }
   } else {
     fs := expr_field_span(e)
     if fs.n != 0 {
@@ -4927,7 +5189,7 @@ s3a_struct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       if bt.n != 0 {
         ft := sema_field_ann_span(decls, upto, src, bt.s, bt.n, fs.s, fs.n, a)
         rt0 := resolve_ty(src, ft.s, ft.n, decls, upto)
-        if rt0.tag == 3 { r = VSpan(s = rt0.ns, n = rt0.nl) }
+        if tag_is_struct(rt0.tag) { r = VSpan(s = rt0.ns, n = rt0.nl) }
       }
     }
   }
@@ -5083,7 +5345,7 @@ s3a_expr_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
     }
     Expr::Bitcast(inner, ts, tl) => { bad = s3a_expr_bad(inner, decls, upto, src, a, locals, nloc) }
     Expr::Loop(body) => { bad = s3a_stmts_bad(body, decls, upto, src, a, locals, nloc) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::FnRef => {}
   }
   bad
 }
@@ -5159,7 +5421,7 @@ s3a_stmts_bad := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, sr
         bad = s3a_expr_bad(e, decls, upto, src, a, locals, nloc)
         if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
       }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -5184,7 +5446,10 @@ s3a_return_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         arm = am.next
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   bad
 }
@@ -5268,8 +5533,8 @@ array_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> VSpan {
 
 array_elem_ty := fn(src : ptr(u8), ty : Ty, decls : ptr(rt::Vec), upto : usize) -> Ty {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 { return Ty(tag = 0, ns = 0, nl = 0) }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) { return Ty(tag = 0, ns = 0, nl = 0) }
   sp := array_elem_span(src, ty.ns, ty.nl)
   resolve_ty(src, sp.s, sp.n, decls, upto)
 }
@@ -5282,7 +5547,7 @@ array_elem_ty := fn(src : ptr(u8), ty : Ty, decls : ptr(rt::Vec), upto : usize) 
 sema_direct_index_elem_ty := fn(src : ptr(u8), local : Local, decls : ptr(rt::Vec), upto : usize) -> Ty {
   ty := Ty(tag = local.tag, ns = local.tns, nl = local.tnl)
   ae := array_elem_ty(src, ty, decls, upto)
-  if ae.tag != 0 { return ae }
+  if not tag_is_unknown(ae.tag) { return ae }
   ann := local_type_span(src, local.ns, local.nl)
   if ann.n != 0 {
     bn := base_type_name(src, ann.s, ann.n)
@@ -5323,7 +5588,10 @@ sema_array_literal_elem_tag := fn(v : ptr(Expr)) -> u8 {
         g = a.next
       }
     }
-    _ => { return 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 }
   }
   r
 }
@@ -5339,7 +5607,7 @@ sema_range_slice_elem_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(LVec),
   if bv.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   bt := local_ty(locals, nloc, src, bv.s, bv.n)
   declared := array_elem_ty(src, bt, decls, upto)
-  if declared.tag != 0 { return declared }
+  if not tag_is_unknown(declared.tag) { return declared }
   laet := prov_lit_array_elem(local_prov(locals, nloc, src, bv.s, bv.n))
   if laet != 0 { return Ty(tag = laet, ns = 0, nl = 0) }
   Ty(tag = 0, ns = 0, nl = 0)
@@ -5398,8 +5666,8 @@ sema_direct_slice_field_elem_ty := fn(base : ptr(Expr), decls : ptr(rt::Vec), up
 ## Unknown/non-struct types stay conservative: the root marker is not discharged.
 da_seed_fields := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag == 3 and ty.nl != 0 {
+  tag = tag_unflag(tag)
+  if tag_is_struct(tag) and ty.nl != 0 {
     di := type_decl_index(decls, upto, src, ty.ns, ty.nl)
     if di != 0 {
       d := deref(decl_get(decls, di - 1))
@@ -5417,8 +5685,8 @@ da_seed_fields := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : p
 ## lengths stay conservative by retaining the root marker, rather than allocating unbounded DA state.
 da_seed_array := fn(in out da : DA, src : ptr(u8), rs : usize, rn : usize, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) { return }
   n := array_type_count(src, ty.ns, ty.nl)
   if n < 0 or n > 256 { return }
   da_remove_root(da, src, rs, rn)
@@ -5433,8 +5701,8 @@ da_seed_array := fn(in out da : DA, src : ptr(u8), rs : usize, rn : usize, ty : 
 ## remain conservative and therefore do not discharge any DA entry.
 da_assign_array := fn(in out da : DA, src : ptr(u8), rs : usize, rn : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) or ix < 0 { return }
   n := array_type_count(src, ty.ns, ty.nl)
   if n < 0 or ix >= n { return }
   avec_remove(da_avec_value(da), src, rs, rn, usize(ix))
@@ -5446,14 +5714,14 @@ da_assign_array := fn(in out da : DA, src : ptr(u8), rs : usize, rn : usize, ix 
 ## that field of that element. Dynamic/out-of-range indices and non-struct elements remain conservative.
 da_assign_array_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) or ix < 0 { return }
   n := array_type_count(src, ty.ns, ty.nl)
   if n < 0 or n > 256 or ix >= n { return }
   et := array_elem_ty(src, ty, decls, upto)
   mut etag := et.tag
-  if etag >= 128 and etag != 255 { etag = etag - 128 }
-  if etag != 3 or et.nl == 0 { return }
+  etag = tag_unflag(etag)
+  if not tag_is_struct(etag) or et.nl == 0 { return }
   if da_has_array(ptr(da), src, rs, rn, usize(ix)) {
     avec_remove(da_avec_value(da), src, rs, rn, usize(ix))
     di := type_decl_index(decls, upto, src, et.ns, et.nl)
@@ -5476,8 +5744,8 @@ da_assign_array_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, 
 ## can have left a NAVec marker for the selected index, which is expanded just for that element.
 da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ss : usize, sln : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 3 or ty.nl == 0 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_struct(tag) or ty.nl == 0 or ix < 0 { return }
   if da_has_root(ptr(da), src, rs, rn) {
     da_remove_root(da, src, rs, rn)
     da_seed_fields(da, decls, upto, src, rs, rn, ty)
@@ -5485,14 +5753,14 @@ da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : 
   fsp := sema_field_ann_span(decls, upto, src, ty.ns, ty.nl, fs, fln, unchecked bitcast(ptr(mut rt::Arena), da.arena))
   ft := resolve_ty(src, fsp.s, fsp.n, decls, upto)
   mut ftag := ft.tag
-  if ftag >= 128 and ftag != 255 { ftag = ftag - 128 }
-  if ftag != 7 { return }
+  ftag = tag_unflag(ftag)
+  if not tag_is_array(ftag) { return }
   n := array_type_count(src, ft.ns, ft.nl)
   if n < 0 or n > 256 or ix >= n { return }
   et := array_elem_ty(src, ft, decls, upto)
   mut etag := et.tag
-  if etag >= 128 and etag != 255 { etag = etag - 128 }
-  if etag != 3 or et.nl == 0 { return }
+  etag = tag_unflag(etag)
+  if not tag_is_struct(etag) or et.nl == 0 { return }
   if da_has_field(ptr(da), src, rs, rn, fs, fln) {
     fvec_remove(da_fvec_value(da), src, rs, rn, fs, fln)
     di := type_decl_index(decls, upto, src, et.ns, et.nl)
@@ -5531,14 +5799,14 @@ da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : 
 ## element fields, sibling leaf fields, and whole aggregate reads stay unreadied until explicitly written.
 da_assign_array_elem_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ss : usize, sln : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_array(tag) or ix < 0 { return }
   n := array_type_count(src, ty.ns, ty.nl)
   if n < 0 or n > 256 or ix >= n { return }
   et := array_elem_ty(src, ty, decls, upto)
   mut etag := et.tag
-  if etag >= 128 and etag != 255 { etag = etag - 128 }
-  if etag != 3 or et.nl == 0 { return }
+  etag = tag_unflag(etag)
+  if not tag_is_struct(etag) or et.nl == 0 { return }
   if da_has_array(ptr(da), src, rs, rn, usize(ix)) {
     avec_remove(da_avec_value(da), src, rs, rn, usize(ix))
     di := type_decl_index(decls, upto, src, et.ns, et.nl)
@@ -5555,8 +5823,8 @@ da_assign_array_elem_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), up
   fsp := sema_field_ann_span(decls, upto, src, et.ns, et.nl, fs, fln, unchecked bitcast(ptr(mut rt::Arena), da.arena))
   ft := resolve_ty(src, fsp.s, fsp.n, decls, upto)
   mut ftag := ft.tag
-  if ftag >= 128 and ftag != 255 { ftag = ftag - 128 }
-  if ftag != 3 or ft.nl == 0 { return }
+  ftag = tag_unflag(ftag)
+  if not tag_is_struct(ftag) or ft.nl == 0 { return }
   if da_has_nested_array(ptr(da), src, rs, rn, fs, fln, usize(ix)) {
     navec_remove(da_navec_value(da), src, rs, rn, fs, fln, usize(ix))
     di2 := type_decl_index(decls, upto, src, ft.ns, ft.nl)
@@ -5578,8 +5846,8 @@ da_assign_array_elem_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), up
 ## the supported one-field scalar-array shape is represented here; deeper and dynamic paths stay conservative.
 da_assign_nested_array := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), rs : usize, rn : usize, fs : usize, fln : usize, ix : i64, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 3 or ty.nl == 0 or ix < 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_struct(tag) or ty.nl == 0 or ix < 0 { return }
   if da_has_root(ptr(da), src, rs, rn) {
     da_remove_root(da, src, rs, rn)
     da_seed_fields(da, decls, upto, src, rs, rn, ty)
@@ -5588,8 +5856,8 @@ da_assign_nested_array := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize,
     fsp := sema_field_ann_span(decls, upto, src, ty.ns, ty.nl, fs, fln, unchecked bitcast(ptr(mut rt::Arena), da.arena))
     ft := resolve_ty(src, fsp.s, fsp.n, decls, upto)
     mut ftag := ft.tag
-    if ftag >= 128 and ftag != 255 { ftag = ftag - 128 }
-    if ftag == 7 {
+    ftag = tag_unflag(ftag)
+    if tag_is_array(ftag) {
       n := array_type_count(src, ft.ns, ft.nl)
       if n >= 0 and n <= 256 and ix < n {
         fvec_remove(da_fvec_value(da), src, rs, rn, fs, fln)
@@ -5624,8 +5892,8 @@ da_assign_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : 
 ## remain conservative because they never remove the root or an unreadied prefix.
 da_assign_path := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), np : NestedPath, ty : Ty) {
   mut tag := ty.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 3 or ty.nl == 0 { return }
+  tag = tag_unflag(tag)
+  if not tag_is_struct(tag) or ty.nl == 0 { return }
   if da_has_root(ptr(da), src, np.rs, np.rn) {
     da_remove_root(da, src, np.rs, np.rn)
     da_seed_fields(da, decls, upto, src, np.rs, np.rn, ty)
@@ -5634,9 +5902,9 @@ da_assign_path := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : p
     fsp := sema_field_ann_span(decls, upto, src, ty.ns, ty.nl, np.fs, np.fl, unchecked bitcast(ptr(mut rt::Arena), da.arena))
     ft := resolve_ty(src, fsp.s, fsp.n, decls, upto)
     mut ftag := ft.tag
-    if ftag >= 128 and ftag != 255 { ftag = ftag - 128 }
+    ftag = tag_unflag(ftag)
     fvec_remove(da_fvec_value(da), src, np.rs, np.rn, np.fs, np.fl)
-    if ftag == 3 and ft.nl != 0 {
+    if tag_is_struct(ftag) and ft.nl != 0 {
       di := type_decl_index(decls, upto, src, ft.ns, ft.nl)
       if di != 0 {
         d := deref(decl_get(decls, di - 1))
@@ -5683,7 +5951,7 @@ global_struct_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
         lit := expr_agg_lit(d.value)
         if lit.is_agg and struct_decl_of(decls, src, lit.s, lit.n) >= 0 { return VSpan(s = lit.s, n = lit.n) }
         call_ty := expr_call_result_ty(d.value, decls, cnt, src)
-        if call_ty.tag == 3 and call_ty.nl != 0 { return VSpan(s = call_ty.ns, n = call_ty.nl) }
+        if tag_is_struct(call_ty.tag) and call_ty.nl != 0 { return VSpan(s = call_ty.ns, n = call_ty.nl) }
       }
     }
     i += 1
@@ -5695,9 +5963,8 @@ global_struct_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
 ## the global fallback covers a module-level annotated or inferred struct. Other types remain unknown.
 sema_struct_owner_name_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, s : usize, n : usize) -> VSpan {
   lt := local_ty(locals, nloc, src, s, n)
-  mut tag : u8 = lt.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if (tag == 3 or tag == 9) and lt.nl != 0 { return VSpan(s = lt.ns, n = lt.nl) }
+  mut tag : u8 = tag_unflag(lt.tag)
+  if (tag_is_struct(tag) or tag_is_hidden_struct(tag)) and lt.nl != 0 { return VSpan(s = lt.ns, n = lt.nl) }
   global_struct_type_span(decls, src, s, n)
 }
 ## Issue #693 — the direct-NAME counterpart of the enum-owner question, for a statement write place.
@@ -5708,9 +5975,8 @@ sema_name_owner_is_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(
   if nloc == 0 { return false }
   if not local_in(locals, nloc, src, s, n) { return false }
   lt := local_ty(locals, nloc, src, s, n)
-  mut tag : u8 = lt.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 4 and tag != 10 { return false }
+  mut tag : u8 = tag_unflag(lt.tag)
+  if not tag_is_enum(tag) and not tag_is_hidden_enum(tag) { return false }
   ## the union exclusion, for the reason `sema_enum_owner_field_err` records.
   if lt.nl != 0 and is_union_decl(decls, src, lt.ns, lt.nl) { return false }
   true
@@ -5746,7 +6012,7 @@ sema_struct_owner_span := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usiz
   }
   if r.n == 0 {
     ct := expr_call_result_ty(base, decls, upto, src)
-    if ct.tag == 3 and ct.nl != 0 { r = VSpan(s = ct.ns, n = ct.nl) }
+    if tag_is_struct(ct.tag) and ct.nl != 0 { r = VSpan(s = ct.ns, n = ct.nl) }
   }
   r
 }
@@ -5762,7 +6028,7 @@ sema_struct_owner_span := fn(base : ptr(Expr), decls : ptr(rt::Vec), upto : usiz
 sema_enum_owner_field_err := fn(base : ptr(Expr), fs : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> CheckErr {
   if is_prelude_ns_var(base, src) { return 0 }
   bt := value_agg_ty(base, decls, upto, src, locals, nloc)
-  if bt.tag != 4 { return 0 }
+  if not tag_is_enum(bt.tag) { return 0 }
   ## A RAW UNION shares `kind == 3` — and therefore tag 4 — with an enum in this front end, and a
   ## union MEMBER READ is exactly how a union is used (`u.a`, `u.p.x`). The #508-style census over
   ## `src/` + `lib/` + every tracked fixture found SEVEN such sites and nothing else, in
@@ -5791,9 +6057,9 @@ sema_field_name_missing := fn(base : ptr(Expr), fs : usize, fl : usize, decls : 
 global_nonlit_struct_assign_bad := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, v : ptr(Expr), tv : Ty, locals : ptr(LVec), nloc : usize) -> bool {
   if expr_agg_lit(v).is_agg { return false }
   mut vt := tv
-  if vt.tag != 3 { vt = value_agg_ty(v, decls, upto, src, locals, nloc) }
-  if vt.tag != 3 { vt = expr_call_result_ty(v, decls, upto, src) }
-  if vt.tag != 3 { return false }
+  if not tag_is_struct(vt.tag) { vt = value_agg_ty(v, decls, upto, src, locals, nloc) }
+  if not tag_is_struct(vt.tag) { vt = expr_call_result_ty(v, decls, upto, src) }
+  if not tag_is_struct(vt.tag) { return false }
   global_struct_type_span(decls, src, s, n).n != 0
 }
 ## The explicit byte-array component accepted by the standard tuple-local tier (Types §6.1). This is
@@ -5881,7 +6147,9 @@ ret_sink_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(r
           arm = am.next
         }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -5916,7 +6184,9 @@ ct_return_guard_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls 
           arm = am.next
         }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     if got != 0 { return got }
     cur = stmt_next_at(cur, a)
@@ -6032,6 +6302,72 @@ sema_builtin_str_integer_cast_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   lbv_lit_tag(ga.e) == 6
 }
 
+## Issue #660 — a direct call to the SOLE function of its name that is GENERIC and declares its result
+## as one of its own `T : type` parameters, `-> T` or `-> ptr([mut] T)`: the TYPE ARGUMENT written at
+## T's position (`id(C, p)` → `C`), and whether the result is the pointer form. Else `n == 0`. This is
+## the substitution `sole_fn_ret_ty` cannot make — it resolves `-> ptr(mut T)` to a pointer with an
+## unknown pointee — so a `match` over such a call's result, or over a local bound from it, skipped
+## the exhaustiveness check. A type argument is read only when it is a bare name (`expr_var_span`).
+SemaGenRes := struct { s : usize, n : usize, is_ptr : bool }
+sema_generic_result_arg := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> SemaGenRes {
+  z := SemaGenRes(s = 0, n = 0, is_ptr = false)
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 { return z }
+  cnt := rt::vec_len(deref(decls))
+  th := sema_name_hash(src, cs.s, cs.n)
+  mut jc := sni_lo(cnt, th)
+  jce := sni_hi(cnt, th)
+  mut hits := 0
+  mut di := 0
+  while jc < jce {
+    i := sni_at(cnt, jc)
+    jc = jc + 1
+    if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
+      d := deref(decl_get(decls, i))
+      if d.kind == 1 and streq(src, d.name_start, d.name_len, cs.s, cs.n) { hits = hits + 1; di = i }
+    }
+  }
+  if hits != 1 { return z }
+  d := deref(decl_get(decls, di))
+  if not d.is_generic or d.ret_tl == 0 { return z }
+  ## The result spelling: `T`, or `ptr(`[`mut `]`T)`.
+  mut rs := d.ret_ts
+  mut rn := d.ret_tl
+  mut is_ptr := false
+  if str_at((src + rs), 4) == "ptr(" {
+    is_ptr = true
+    mut p := rs + 4
+    while _sws1(src, p) { p += 1 }
+    if str_at((src + p), 4) == "mut " { p += 4 }
+    while _sws1(src, p) { p += 1 }
+    q := p
+    while _sident1(src, p) { p += 1 }
+    rs = q
+    rn = p - q
+    while _sws1(src, p) { p += 1 }
+    if rn == 0 or str_at((src + p), 1) != ")" { return z }
+  }
+  mut k := 0
+  mut pp := d.params_head
+  mut found := false
+  while pp != 0 and not found {
+    pm := deref(param_p(pp))
+    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, rs, rn) { found = true } else { k += 1; pp = pm.next }
+  }
+  if not found { return z }
+  mut g := expr_call_args_head(e)
+  mut j := 0
+  while g != 0 and j < k {
+    ga := deref(arg_p(g))
+    g = ga.next
+    j += 1
+  }
+  if g == 0 { return z }
+  av := expr_var_span(deref(arg_p(g)).e)
+  if av.n == 0 { return z }
+  SemaGenRes(s = av.s, n = av.n, is_ptr = is_ptr)
+}
+
 ## Issue #680 — the POINTER `Ty` (tag 5 + the pointee's type-NAME span) of a pointer-valued expression:
 ## a `Var` naming a local recorded as a pointer, or a direct `Call` whose declared result is one.
 ## Unknown otherwise. The call half reads the callee's DECLARED result through `sole_fn_ret_ty` — one
@@ -6044,13 +6380,15 @@ sema_ptr_expr_ty := fn(pe : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), loca
   if pv.n != 0 {
     if nloc == 0 or not local_in(locals, nloc, src, pv.s, pv.n) { return unknown }
     lt := local_ty(locals, nloc, src, pv.s, pv.n)
-    mut ltag : u8 = lt.tag
-    if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
-    if ltag == 5 and lt.nl != 0 { return Ty(tag = 5, ns = lt.ns, nl = lt.nl) }
+    mut ltag : u8 = tag_unflag(lt.tag)
+    if tag_is_ptr(ltag) and lt.nl != 0 { return Ty(tag = 5, ns = lt.ns, nl = lt.nl) }
     return unknown
   }
   ct := sole_fn_ret_ty(pe, decls, rt::vec_len(deref(decls)), src)
-  if ct.tag == 5 and ct.nl != 0 { return ct }
+  if tag_is_ptr(ct.tag) and ct.nl != 0 { return ct }
+  ## Issue #660 — `-> ptr(mut T)` of a generic callee: the pointee is the type argument at T.
+  gr := sema_generic_result_arg(pe, decls, src)
+  if gr.is_ptr and gr.n != 0 { return Ty(tag = 5, ns = gr.s, nl = gr.n) }
   unknown
 }
 
@@ -6058,9 +6396,9 @@ sema_ptr_expr_ty := fn(pe : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), loca
 ## length for the reason `match_scrut_enum_ty` gives below.
 sema_enum_pointee := fn(pt : Ty, decls : ptr(rt::Vec), src : ptr(u8)) -> Ty {
   unknown := Ty(tag = 0, ns = 0, nl = 0)
-  if pt.tag != 5 or pt.nl == 0 { return unknown }
+  if not tag_is_ptr(pt.tag) or pt.nl == 0 { return unknown }
   et := resolve_ty(src, pt.ns, pt.nl, decls, rt::vec_len(deref(decls)))
-  if et.tag == 4 and et.nl != 0 { return Ty(tag = 4, ns = et.ns, nl = et.nl) }
+  if tag_is_enum(et.tag) and et.nl != 0 { return Ty(tag = 4, ns = et.ns, nl = et.nl) }
   unknown
 }
 
@@ -6075,7 +6413,13 @@ sema_value_enum_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), loc
   di := expr_deref_inner(v)
   if unchecked bitcast(usize, di) != 0 { return sema_enum_pointee(sema_ptr_expr_ty(di, decls, src, locals, nloc), decls, src) }
   ct := sole_fn_ret_ty(v, decls, rt::vec_len(deref(decls)), src)
-  if ct.tag == 4 and ct.nl != 0 { return Ty(tag = 4, ns = ct.ns, nl = ct.nl) }
+  if tag_is_enum(ct.tag) and ct.nl != 0 { return Ty(tag = 4, ns = ct.ns, nl = ct.nl) }
+  ## Issue #660 — `-> T` of a generic callee: the value's type is the type argument at T.
+  gr := sema_generic_result_arg(v, decls, src)
+  if not gr.is_ptr and gr.n != 0 {
+    gt := resolve_ty(src, gr.s, gr.n, decls, rt::vec_len(deref(decls)))
+    if tag_is_enum(gt.tag) and gt.nl != 0 { return Ty(tag = 4, ns = gt.ns, nl = gt.nl) }
+  }
   unknown
 }
 
@@ -6106,7 +6450,7 @@ match_scrut_enum_ty := fn(sc : ptr(Expr), decls : ptr(rt::Vec), upto : usize, sr
   ncnt := rt::vec_len(deref(decls))
   ## (1) literal / nullary-variant / recorded local aggregate.
   va := value_agg_ty(sc, decls, ncnt, src, locals, nloc)
-  if va.tag == 4 and va.nl != 0 { return Ty(tag = 4, ns = va.ns, nl = va.nl) }
+  if tag_is_enum(va.tag) and va.nl != 0 { return Ty(tag = 4, ns = va.ns, nl = va.nl) }
   ## (2) `deref(p)` where `p` is a local `ptr(E)` — the compiler's own `match deref(v)` idiom — or a
   ## call returning one (`match deref(p_or(pc))`, #680).
   di := expr_deref_inner(sc)
@@ -6121,7 +6465,7 @@ match_scrut_enum_ty := fn(sc : ptr(Expr), decls : ptr(rt::Vec), upto : usize, sr
         fann := sema_field_ann_span(decls, ncnt, src, owner.s, owner.n, fsp.s, fsp.n, a)
         if fann.n != 0 {
           ft := resolve_ty(src, fann.s, fann.n, decls, ncnt)
-          if ft.tag == 4 and ft.nl != 0 { return Ty(tag = 4, ns = ft.ns, nl = ft.nl) }
+          if tag_is_enum(ft.tag) and ft.nl != 0 { return Ty(tag = 4, ns = ft.ns, nl = ft.nl) }
         }
       }
     }
@@ -6345,7 +6689,7 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
     Expr::Field(base, fs, fl) => {
       fb := expr_var_span(base)
       if fb.n == 0 or (nloc != 0 and local_in(locals, nloc, src, fb.s, fb.n)) { 0 }
-      else if resolve_ty(src, fb.s, fb.n, decls, upto).tag == 4 and comptime_enum_variant_zero(decls, upto, src, fb.s, fb.n, fs, fl) { 4 }
+      else if tag_is_enum(resolve_ty(src, fb.s, fb.n, decls, upto).tag) and comptime_enum_variant_zero(decls, upto, src, fb.s, fb.n, fs, fl) { 4 }
       else { 0 }
     }
     Expr::EnumLit(es, el, vs, vl, np, _ah) => {
@@ -6356,11 +6700,10 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
       if nloc != 0 { found_local = local_in(locals, nloc, src, vs, vl) }
       if found_local {
         raw := local_ty(locals, nloc, src, vs, vl)
-        mut tag : u8 = raw.tag
-        if tag >= 128 and tag != 255 { tag = tag - 128 }
+        mut tag : u8 = tag_unflag(raw.tag)
         if not sema_local_is_comptime(src, local_at(locals, nloc, src, vs, vl)) { return 0 }
-        if tag == 1 or tag == 2 or tag == 4 { return tag }
-        if tag == 10 { return 4 }
+        if tag_is_int(tag) or tag_is_bool(tag) or tag_is_enum(tag) { return tag }
+        if tag_is_hidden_enum(tag) { return 4 }
         return 0
       }
       mut i := 0
@@ -6375,7 +6718,9 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
       }
       result
     }
-    _ => { 0 }
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 
@@ -6401,7 +6746,7 @@ comptime_binding_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, s
   mut want : u8 = 0
   if comptime_integer_type_name(src, ann.s, ann.n) { want = 1 }
   else if str_at((src + ann.s), ann.n) == "bool" { want = 2 }
-  else if resolve_ty(src, ann.s, ann.n, decls, upto).tag == 4 { want = 4 }
+  else if tag_is_enum(resolve_ty(src, ann.s, ann.n, decls, upto).tag) { want = 4 }
   if want == got { return got }
   0
 }
@@ -6732,7 +7077,10 @@ sema_type_arg_ok := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bo
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   if ok { return true }
   mut es : usize = 0
@@ -6829,7 +7177,10 @@ field_variant_name := fn(e : ptr(Expr), src : ptr(u8)) -> str {
   match deref(e) {
     Expr::Field(base, fs, fl) => { if is_prelude_ns_var(base, src) { str_at((src + fs), fl) } else { "" } }
     Expr::EnumLit(es, el, vs, vl, np, ph) => { if str_at((src + es), el) == "Ordering" { str_at((src + vs), vl) } else { "" } }
-    _ => { "" }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { "" }
   }
 }
 ## The `Ordering.<variant>` name of the arg at index `i` of a call's arg list, else "".
@@ -6889,7 +7240,10 @@ atomic_ordering_bad := fn(cs : usize, cl : usize, ah : ptr(mut Arg), src : ptr(u
 call_atomic_ordering_bad := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { atomic_ordering_bad(cs, cl, ah, src, a) }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Name-resolution prepass for one expression. It is deliberately scalar: the self-host ABI can
@@ -6904,7 +7258,10 @@ bitcast_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   mut r := unchecked bitcast(ptr(Expr), 0)
   match deref(e) {
     Expr::Bitcast(inner, ps, pl) => { r = inner }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   r
 }
@@ -7244,6 +7601,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   }
   bce := sema_brand_ctor_arg_err(e, s_of(e, a), decls, upto, src, locals, nloc, a)
   if bce != 0 { return Result(Ty, CheckErr).Err(bce) }
+  ## #299 census hook at the struct-literal field sink (#688), before the refusal, like every other sink.
+  brand_probe_struct_fields(e, decls, upto, src, a, locals, nloc)
   bsf := sema_brand_struct_field_err(e, decls, upto, src, a, locals, nloc)
   if bsf != 0 { return Result(Ty, CheckErr).Err(bsf) }
   ## …and the CONDITION of an `if`-as-EXPRESSION, the one sub-expression that path never hands to
@@ -7277,7 +7636,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   if unchecked bitcast(usize, leb0) != 0 {
     lcode0 := lbv_stmts(leb0, 0, decls, upto, src, a, locals, nloc)
     ltag0 := lbv_code_tag(lcode0)
-    if ltag0 == 250 { return Result(Ty, CheckErr).Err(mismatch_err(lbv_code_span(lcode0), 0)) }
+    if ltag0 == LBV_CONFLICT { return Result(Ty, CheckErr).Err(mismatch_err(lbv_code_span(lcode0), 0)) }
     return Result(Ty, CheckErr).Ok(Ty(tag = ltag0, ns = 0, nl = 0))
   }
   ## Capability queries are call-shaped builtins whose operand is inspected without runtime evaluation and
@@ -7345,15 +7704,14 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   evs := expr_var_span(e)
   if evs.n != 0 and nloc != 0 and local_in(locals, nloc, src, evs.s, evs.n) {
     raw := local_ty(locals, nloc, src, evs.s, evs.n)
-    mut ltag : u8 = raw.tag
-    if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
+    mut ltag : u8 = tag_unflag(raw.tag)
     mut rtag : u8 = 0
   ## surface a CONCRETE tag for a struct/enum (3/4), pointer (5), or direct user brand (8) local —
   ## pointers and brands carry their nominal name in ns/nl, so `ty_compat`/`ty_eq` can distinguish
   ## incompatible identities. Scalars/str/bool stay tolerant (tag 0); an unknown pointee/brand name
   ## remains tolerant inside the corresponding comparison, so this does not widen rejection beyond
   ## a resolved identity.
-  if ltag == 3 or ltag == 4 or ltag == 5 or ltag == 8 { rtag = ltag }
+  if tag_is_struct(ltag) or tag_is_enum(ltag) or tag_is_ptr(ltag) or tag_is_brand(ltag) { rtag = ltag }
     return Result(Ty, CheckErr).Ok(Ty(tag = rtag, ns = raw.ns, nl = raw.nl))
   }
   ## A direct `local[N]` over a fixed `[T; N]` is the one indexed shape whose bound is already
@@ -7457,7 +7815,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## declares a brand of its own.
       epty0 := sema_enum_payload_one_ty(eva0, decls, upto, src)
       eph0 := sema_enum_payload_one_arg(e)
-      if epty0.tag != 0 and eph0 != 0 {
+      if not tag_is_unknown(epty0.tag) and eph0 != 0 {
         epa0 := deref(arg_p(eph0))
         brand_probe_sink(epty0, epa0.e, s_of(epa0.e, a), decls, upto, src, locals, nloc, a)
         ## …and the REFUSAL at the same sink. Poisons rather than returning, so the arity verdict
@@ -7496,10 +7854,9 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       avs := expr_var_span(ga.e)
       argloc := avs.n != 0 and local_in(locals, nloc, src, avs.s, avs.n)
       at := local_ty(locals, nloc, src, avs.s, avs.n)
-      mut atag : u8 = at.tag
-      if atag >= 128 and atag != 255 { atag = atag - 128 }
+      mut atag : u8 = tag_unflag(at.tag)
       pt := callee_param_ty(decls, upto, src, ecs.s, ecs.n, apidx, a)
-      known := argloc and atag == 5 and pt.tag == 5 and at.nl != 0 and pt.nl != 0
+      known := argloc and tag_is_ptr(atag) and tag_is_ptr(pt.tag) and at.nl != 0 and pt.nl != 0
       if known { if not streq(src, at.ns, at.nl, pt.ns, pt.nl) { mark_failed(locals, mismatch_err(avs.s, 0)) } }
       apidx += 1
       gg = ga.next
@@ -7543,9 +7900,9 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## walk must finish so every offending argument of the call is counted by the census beside it.
       cbe := sema_brand_sink_err(bpty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc, a)
       if cbe != 0 { mark_failed(locals, cbe) }
-      if crt0.tag != 0 and not (crt0.tag == 5 and pty0.tag == 3) {
-        if pty0.tag != 0 { ptrint_probe_site("ARG", "premat", true, crt0.tag, pty0.tag, s_of(ca.e, a), src) }
-        if pty0.tag != 0 and not ty_compat(crt0, pty0, src) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
+      if not tag_is_unknown(crt0.tag) and not (tag_is_ptr(crt0.tag) and tag_is_struct(pty0.tag)) {
+        if not tag_is_unknown(pty0.tag) { ptrint_probe_site("ARG", "premat", true, crt0.tag, pty0.tag, s_of(ca.e, a), src) }
+        if not tag_is_unknown(pty0.tag) and not ty_compat(crt0, pty0, src) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
       }
       apix += 1
       ag = ca.next
@@ -7564,7 +7921,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     ## Issue #557 — the scrutinee's enum type is resolved from the EXPRESSION, not from the one bare-`Var`
     ## spelling the old code understood; `match_scrut_enum_ty` documents the branches and stays fail-open.
     mety := match_scrut_enum_ty(emp.scrut, decls, upto, src, locals, nloc, a)
-    if mety.tag == 4 and mety.nl != 0 and arms_all_plain(emp.head) {
+    if tag_is_enum(mety.tag) and mety.nl != 0 and arms_all_plain(emp.head) {
       if enum_coverage_gap(emp.head, decls, src, mety.ns, mety.nl) {
         mark_failed(locals, mismatch_err(match_scrut_span(emp.scrut, a), 0))
       }
@@ -7572,17 +7929,44 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     msv := expr_var_span(emp.scrut)
     if msv.n != 0 and nloc != 0 and local_in(locals, nloc, src, msv.s, msv.n) {
       msty := local_ty(locals, nloc, src, msv.s, msv.n)
-      mut mstag : u8 = msty.tag
-      if mstag >= 128 and mstag != 255 { mstag = mstag - 128 }
+      mut mstag : u8 = tag_unflag(msty.tag)
       ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` value-match must cover its finite
       ## domain (else poison the check). Fail-open for anything else (see scalar_coverage_gap).
-      if (mstag == 1 or mstag == 2) and scalar_coverage_gap(emp.head, mstag, msty.ns, msty.nl, src) {
+      if (tag_is_int(mstag) or tag_is_bool(mstag)) and scalar_coverage_gap(emp.head, mstag, msty.ns, msty.nl, src) {
         mark_failed(locals, mismatch_err(s_of(emp.scrut, a), 0))
       }
     }
   }
-  node := deref(e)
-  match node {
+  ## Issue #716 — the big `match` below used to be written `node := deref(e) ; match node`, which
+  ## the x86_64 lowering could not type: it compared every arm against tag 0, so only `Expr::Num`
+  ## (variant 0) was ever taken and every other expression fell off the end with a garbage `Result`.
+  ## That is the "big-match arm is not dispatched under the seed" note this file repeats (scar #2).
+  ## The arms now live in `check_expr_arms`, whose `match deref(e)` the lowering types, and they are
+  ## switched on one variant at a time: a variant listed in the first arm here is checked by its
+  ## written arm; every other variant answers UNKNOWN (tag 0, poison-tolerant) — explicitly, which
+  ## is what the garbage was being read as.
+  match deref(e) {
+    Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::Bin => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::BoolLit | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+  }
+}
+
+## #716 — an operand kind `check_expr`'s `Bin` arm leaves to the lowering: a struct, enum or array (a
+## user operator overload or a generic numeric aggregate), their hidden local twins, and a brand.
+sema_bin_operand_deferred := fn(t : Ty) -> bool {
+  match ty_kind_of_tag(t.tag) {
+    TyStruct | TyEnum | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum => { true }
+    TyUnknown | TyInt | TyBool | TyPtr | TyStr | TyWrapper | TyTupleMark | TyOther => { false }
+  }
+}
+## Issue #716 — the per-variant arms of `check_expr`, over a pointer PARAMETER so the lowering
+## types the scrutinee. Only the variants `check_expr` routes here are ever checked by their arm; the
+## others are written, and have never run.
+check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> Result(Ty, CheckErr) {
+  match deref(e) {
     Expr::Num(v, s, n) => { Result(Ty, CheckErr).Ok(Ty(tag = 1, ns = 0, nl = 0)) }
     ## FN-6 — a lifted-lambda code pointer is a word-sized scalar value (tag 1). (`Lambda` is lifted to
     ## `FnRef` by the driver's pass before `check`, so only `FnRef` reaches here.)
@@ -7599,12 +7983,11 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       if nloc != 0 { found_local = local_in(locals, nloc, src, s, n) }
       if found_local {
         raw := local_ty(locals, nloc, src, s, n)
-        mut ltag : u8 = raw.tag
-        if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
+        mut ltag : u8 = tag_unflag(raw.tag)
         ## Issue #5's hidden tuple marker is only for the direct builtin-conversion fence. Keep it
         ## UNKNOWN in ordinary compatibility so tuple parameters and unrelated expression paths retain
         ## their pre-existing conservative behavior.
-        if ltag == 12 { ltag = 0 }
+        if tag_is_tuple_mark(ltag) { ltag = 0 }
         Result(Ty, CheckErr).Ok(Ty(tag = ltag, ns = raw.ns, nl = raw.nl))
       } else if upto == 0 {
         Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
@@ -7616,6 +7999,16 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     Expr::Bin(op, l, r) => {
       tl := check_expr(l, decls, upto, src, a, locals, nloc)?
       tr := check_expr(r, decls, upto, src, a, locals, nloc)?
+      ## #716 — this arm ran for the first time when `check_expr`'s dispatch was typed, and it was
+      ## written for kernel scalars only. An AGGREGATE operand (a struct, enum or array: 3/4/7 and the
+      ## hidden 9/10) is a user OPERATOR overload (`@inline < := fn(a : Ver, b : Ver) -> u64`) or a
+      ## generic `uint(N)` op, whose operand and result types the lowering resolves; and a BRAND
+      ## operand's operator set is #299's open question. Neither is judged here: UNKNOWN, as every
+      ## `Bin` was before this arm ran. Measured: without this, four valid corpus programs were refused.
+      if sema_bin_operand_deferred(tl) or sema_bin_operand_deferred(tr) {
+        du := Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
+        return du
+      }
       ## A comparison (kinds 20/24/25/26/27/28) yields bool; its operands must agree.
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         ptrint_probe_site("OP-CMP", "bincmp", false, tl.tag, tr.tag, s_of(l, a), src)
@@ -7625,23 +8018,23 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         ## boolean `and`/`or`: both operands must be bool (tag 2) → bool. (`not` is op 42,
         ## a prefix unary parsed as `Bin(42, x, x)` — both slots are the SAME operand, so
         ## checking the left covers it; result bool.)
-        bad_bl := tl.tag != 0 and tl.tag != 2
-        bad_br := tr.tag != 0 and tr.tag != 2
+        bad_bl := not tag_is_unknown(tl.tag) and not tag_is_bool(tl.tag)
+        bad_br := not tag_is_unknown(tr.tag) and not tag_is_bool(tr.tag)
         if bad_bl { Result(Ty, CheckErr).Err(mismatch_err(s_of(l, a), 0)) }
         else if bad_br { Result(Ty, CheckErr).Err(mismatch_err(s_of(r, a), 0)) }
         else { Result(Ty, CheckErr).Ok(Ty(tag = 2, ns = 0, nl = 0)) }
       } else if op == 42 {
         ## boolean `not`: the operand must be bool → bool.
-        bad_n := tl.tag != 0 and tl.tag != 2
+        bad_n := not tag_is_unknown(tl.tag) and not tag_is_bool(tl.tag)
         if bad_n { Result(Ty, CheckErr).Err(mismatch_err(s_of(l, a), 0)) }
         else { Result(Ty, CheckErr).Ok(Ty(tag = 2, ns = 0, nl = 0)) }
       } else {
         ## arithmetic: both operands must be int OR a pointer (the usize↔ptr handle seam — `base + off`,
         ## `p - q` for pointer distance; MEM-7/8, I11) → int. A ptr operand is accepted like an int; the
         ## result stays int (tag 1), which `tag_compat` treats as compatible with a ptr slot downstream.
-        if tl.tag == 5 or tr.tag == 5 { PTRINT_ARITH = PTRINT_ARITH + 1 }
-        bad_l := tl.tag != 0 and tl.tag != 1 and tl.tag != 5
-        bad_r := tr.tag != 0 and tr.tag != 1 and tr.tag != 5
+        if tag_is_ptr(tl.tag) or tag_is_ptr(tr.tag) { PTRINT_ARITH = PTRINT_ARITH + 1 }
+        bad_l := not tag_is_unknown(tl.tag) and not tag_is_int(tl.tag) and not tag_is_ptr(tl.tag)
+        bad_r := not tag_is_unknown(tr.tag) and not tag_is_int(tr.tag) and not tag_is_ptr(tr.tag)
         if bad_l { Result(Ty, CheckErr).Err(mismatch_err(s_of(l, a), 0)) }
         else if bad_r { Result(Ty, CheckErr).Err(mismatch_err(s_of(r, a), 0)) }
         else { Result(Ty, CheckErr).Ok(Ty(tag = 1, ns = 0, nl = 0)) }
@@ -7650,7 +8043,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     Expr::If(c, t, f) => {
       cc := check_expr(c, decls, upto, src, a, locals, nloc)?
       ## the condition must be bool (a known non-bool is a `Mismatch`; unknown is poison-tolerant).
-      if cc.tag != 0 and cc.tag != 2 { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(c, a), 0)); return er }
+      if not tag_is_unknown(cc.tag) and not tag_is_bool(cc.tag) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(c, a), 0)); return er }
       tt := check_expr(t, decls, upto, src, a, locals, nloc)?
       tf := check_expr(f, decls, upto, src, a, locals, nloc)?
       ptrint_probe_site("OP-IF", "ifarm", false, tt.tag, tf.tag, s_of(f, a), src)
@@ -7749,7 +8142,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         sg = sa.next
       }
       st := resolve_ty(src, scs, scl, decls, upto)
-      if st.tag == 3 { return Result(Ty, CheckErr).Ok(st) }
+      if tag_is_struct(st.tag) { return Result(Ty, CheckErr).Ok(st) }
       Result(Ty, CheckErr).Ok(Ty(tag = 3, ns = scs, nl = scl))
     }
     ## `base.f` — a field read: the base must be a struct; the result is `f`'s declared type.
@@ -7759,13 +8152,13 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## valid `atomic`/`comptime`-arch program while `build` accepts it (check/build parity, §1 item 5).
       if is_prelude_ns_var(base, src) { pu := Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)); return pu }
       tb := check_expr(base, decls, upto, src, a, locals, nloc)?
-      if tb.tag == 0 { unk := Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)); return unk }
+      if tag_is_unknown(tb.tag) { unk := Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)); return unk }
       ## Only a clear NON-aggregate scalar (int/bool) genuinely has no fields → mismatch. A `str` carries
       ## the `.ptr`/`.len` pseudo-fields, an array/slice `.len`, and a `ptr(T)` AUTO-DEREFS to the pointee
       ## struct's fields (the self-host reads `node.next` directly on a `ptr(mut Stmt)`) — accept those:
       ## str/slice yield a tolerant unknown (tag 0), a ptr resolves against its known pointee struct.
-      if tb.tag == 1 or tb.tag == 2 { er := Result(Ty, CheckErr).Err(mismatch_err(fs, fl)); return er }
-      if tb.tag != 3 and tb.tag != 5 { unk := Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)); return unk }
+      if tag_is_int(tb.tag) or tag_is_bool(tb.tag) { er := Result(Ty, CheckErr).Err(mismatch_err(fs, fl)); return er }
+      if not tag_is_struct(tb.tag) and not tag_is_ptr(tb.tag) { unk := Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)); return unk }
       di := type_decl_index(decls, upto, src, tb.ns, tb.nl)
       if di == 0 { unk := Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)); return unk }
       sd := deref(decl_at(Decl, rt::vec_get(deref(decls), di - 1)))
@@ -7783,7 +8176,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         eg = ea.next
       }
       et := resolve_ty(src, es, el, decls, upto)
-      if et.tag == 4 { return Result(Ty, CheckErr).Ok(et) }
+      if tag_is_enum(et.tag) { return Result(Ty, CheckErr).Ok(et) }
       Result(Ty, CheckErr).Ok(Ty(tag = 4, ns = es, nl = el))
     }
     ## `ptr(<place>)` — take the address of a place. The inner place is checked (its name
@@ -7821,7 +8214,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     Expr::Index(ibase, iidx) => {
       tb := check_expr(ibase, decls, upto, src, a, locals, nloc)?
       ti := check_expr(iidx, decls, upto, src, a, locals, nloc)?
-      if ti.tag != 0 and ti.tag != 1 { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(iidx, a), 0)); return er }
+      if not tag_is_unknown(ti.tag) and not tag_is_int(ti.tag) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(iidx, a), 0)); return er }
       Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
     }
     ## Remaining expression forms are deliberately conservative but must still be explicit. Keeping
@@ -7833,8 +8226,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       bs := check_expr(sbase, decls, upto, src, a, locals, nloc)?
       lo := check_expr(slo, decls, upto, src, a, locals, nloc)?
       hi := check_expr(shi, decls, upto, src, a, locals, nloc)?
-      if lo.tag != 0 and lo.tag != 1 { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(slo, a), 0)); return er }
-      if hi.tag != 0 and hi.tag != 1 { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(shi, a), 0)); return er }
+      if not tag_is_unknown(lo.tag) and not tag_is_int(lo.tag) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(slo, a), 0)); return er }
+      if not tag_is_unknown(hi.tag) and not tag_is_int(hi.tag) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(shi, a), 0)); return er }
       Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
     }
     Expr::CompField(cfbase, cfidx) => {
@@ -7856,7 +8249,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     ## delivers the failure enum through the fn's enum-return convention), not re-checked here.
     Expr::Try(inner) => {
       ttr := check_expr(inner, decls, upto, src, a, locals, nloc)?
-      if ttr.tag != 0 and ttr.tag != 4 { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(inner, a), 0)); return er }
+      if not tag_is_unknown(ttr.tag) and not tag_is_enum(ttr.tag) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(inner, a), 0)); return er }
       Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
     }
     ## `unchecked <inner>` — verification-mode scope (Types §4.2). The TYPE is the inner's type
@@ -7869,7 +8262,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     Expr::Loop(b) => {
       lcode := lbv_stmts(b, 0, decls, upto, src, a, locals, nloc)
       ltag := lbv_code_tag(lcode)
-      if ltag == 250 { Result(Ty, CheckErr).Err(mismatch_err(lbv_code_span(lcode), 0)) }
+      if ltag == LBV_CONFLICT { Result(Ty, CheckErr).Err(mismatch_err(lbv_code_span(lcode), 0)) }
       else { Result(Ty, CheckErr).Ok(Ty(tag = ltag, ns = 0, nl = 0)) }
     }
   }
@@ -7880,7 +8273,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
 ## aggregate param has no frame home of its own — the documented non-place-return shape).
 unify := fn(a : Ty, b : Ty) -> Ty {
   mut r : Ty = a
-  if a.tag == 0 { r = b }
+  if tag_is_unknown(a.tag) { r = b }
   r
 }
 
@@ -7936,27 +8329,25 @@ lbv_lit_tag := fn(e : ptr(Expr)) -> u8 {
 ## the caller is the only thing that knows which. Passing them beats four copies of the seam test.
 sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, cls : str, off : usize) -> bool {
   mut actual := checked
-  mut atag : u8 = actual.tag
-  if atag >= 128 and atag != 255 { atag = atag - 128 }
-  if atag == 9 { atag = 3 }
-  if atag == 10 { atag = 4 }
+  mut atag : u8 = tag_unflag(actual.tag)
+  if tag_is_hidden_struct(atag) { atag = 3 }
+  if tag_is_hidden_enum(atag) { atag = 4 }
   actual = Ty(tag = atag, ns = actual.ns, nl = actual.nl)
-  if actual.tag == 0 {
+  if tag_is_unknown(actual.tag) {
     vs := expr_var_span(v)
     if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
       raw := local_ty(locals, nloc, src, vs.s, vs.n)
-      mut rtag : u8 = raw.tag
-      if rtag >= 128 and rtag != 255 { rtag = rtag - 128 }
-      if rtag == 9 { rtag = 3 }
-      if rtag == 10 { rtag = 4 }
-      if rtag != 0 and rtag != 255 { actual = Ty(tag = rtag, ns = raw.ns, nl = raw.nl) }
+      mut rtag : u8 = tag_unflag(raw.tag)
+      if tag_is_hidden_struct(rtag) { rtag = 3 }
+      if tag_is_hidden_enum(rtag) { rtag = 4 }
+      if not tag_is_unknown(rtag) and not tag_is_poison(rtag) { actual = Ty(tag = rtag, ns = raw.ns, nl = raw.nl) }
     }
   }
-  if actual.tag == 0 {
+  if tag_is_unknown(actual.tag) {
     ltag := lbv_lit_tag(v)
     if ltag != 0 { actual = Ty(tag = ltag, ns = 0, nl = 0) }
   }
-  if dst.tag == 0 or actual.tag == 0 { return false }
+  if tag_is_unknown(dst.tag) or tag_is_unknown(actual.tag) { return false }
   ptrint_probe_site(cls, "place", true, actual.tag, dst.tag, off, src)
   not ty_compat(actual, dst, src)
 }
@@ -7975,7 +8366,7 @@ sema_nested_field_leaf_ty := fn(path : NestedPath, decls : ptr(rt::Vec), upto : 
   first_span := sema_field_ann_span(decls, upto, src, owner.s, owner.n, path.fs, path.fl, a)
   if first_span.n == 0 { return z }
   first_ty := resolve_ty(src, first_span.s, first_span.n, decls, upto)
-  if first_ty.tag != 3 or first_ty.nl == 0 { return z }
+  if not tag_is_struct(first_ty.tag) or first_ty.nl == 0 { return z }
   leaf_span := sema_field_ann_span(decls, upto, src, first_ty.ns, first_ty.nl, path.ss, path.sl, a)
   if leaf_span.n == 0 { return z }
   resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
@@ -8030,16 +8421,15 @@ sema_pointer_rooted_field_ty := fn(place : ptr(Expr), decls : ptr(rt::Vec), upto
     mut pty := Ty(tag = 0, ns = 0, nl = 0)
     if root.n != 0 { pty = local_ty(locals, nloc, src, root.s, root.n) }
     else { pty = expr_call_result_ty(inner, decls, upto, src) }
-    mut ptag : u8 = pty.tag
-    if ptag >= 128 and ptag != 255 { ptag = ptag - 128 }
-    if ptag == 5 and pty.nl != 0 { return Ty(tag = 3, ns = pty.ns, nl = pty.nl) }
+    mut ptag : u8 = tag_unflag(pty.tag)
+    if tag_is_ptr(ptag) and pty.nl != 0 { return Ty(tag = 3, ns = pty.ns, nl = pty.nl) }
     return Ty(tag = 0, ns = 0, nl = 0)
   }
   field := expr_field_span(place)
   base := expr_field_base(place)
   if field.n == 0 or unchecked bitcast(usize, base) == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   owner := sema_pointer_rooted_field_ty(base, decls, upto, src, locals, nloc, a)
-  if owner.tag != 3 or owner.nl == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
+  if not tag_is_struct(owner.tag) or owner.nl == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   ann := sema_field_ann_span(decls, upto, src, owner.ns, owner.nl, field.s, field.n, a)
   if ann.n == 0 { return Ty(tag = 0, ns = 0, nl = 0) }
   resolve_ty(src, ann.s, ann.n, decls, upto)
@@ -8053,7 +8443,7 @@ sema_pointer_field_path_value_bad := fn(place : ptr(Expr), checked : Ty, v : ptr
   base := expr_field_base(place)
   if field.n == 0 or unchecked bitcast(usize, base) == 0 { return false }
   owner := sema_pointer_rooted_field_ty(base, decls, upto, src, locals, nloc, a)
-  if owner.tag != 3 or owner.nl == 0 { return false }
+  if not tag_is_struct(owner.tag) or owner.nl == 0 { return false }
   leaf_span := sema_field_ann_span(decls, upto, src, owner.ns, owner.nl, field.s, field.n, a)
   if leaf_span.n == 0 { return false }
   leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
@@ -8071,13 +8461,11 @@ sema_array_nested_field_path_value_bad := fn(path : ArrayNestedPath, checked : T
   array_span := sema_field_ann_span(decls, upto, src, owner.s, owner.n, path.fs, path.fl, a)
   if array_span.n == 0 { return false }
   array_ty := resolve_ty(src, array_span.s, array_span.n, decls, upto)
-  mut array_tag : u8 = array_ty.tag
-  if array_tag >= 128 and array_tag != 255 { array_tag = array_tag - 128 }
-  if array_tag != 7 { return false }
+  mut array_tag : u8 = tag_unflag(array_ty.tag)
+  if not tag_is_array(array_tag) { return false }
   elem_ty := array_elem_ty(src, array_ty, decls, upto)
-  mut elem_tag : u8 = elem_ty.tag
-  if elem_tag >= 128 and elem_tag != 255 { elem_tag = elem_tag - 128 }
-  if elem_tag != 3 or elem_ty.nl == 0 { return false }
+  mut elem_tag : u8 = tag_unflag(elem_ty.tag)
+  if not tag_is_struct(elem_tag) or elem_ty.nl == 0 { return false }
   leaf_span := sema_field_ann_span(decls, upto, src, elem_ty.ns, elem_ty.nl, path.ss, path.sl, a)
   if leaf_span.n == 0 { return false }
   leaf_ty := resolve_ty(src, leaf_span.s, leaf_span.n, decls, upto)
@@ -8164,7 +8552,7 @@ ann_lit_range_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) ->
 float_lit_into_integer_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) -> bool {
   if tl == 0 { return false }
   mut is_float := false
-  match deref(e) { Expr::FloatLit(_s, _n) => { is_float = true } _ => {} }
+  match deref(e) { Expr::FloatLit(_s, _n) => { is_float = true } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   if not is_float { return false }
   w := str_at((src + ts), tl)
   w == "u8" or w == "u16" or w == "u32" or w == "u64" or w == "usize" or w == "u128" or w == "i8" or w == "i16" or w == "i32" or w == "i64" or w == "isize" or w == "i128"
@@ -8639,7 +9027,10 @@ ct_named_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       }
       if hits != 1 { out = unchecked bitcast(ptr(Expr), 0) }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   out
 }
@@ -8654,7 +9045,10 @@ ct_is_const := fn(e : ptr(Expr)) -> bool {
         if op == 17 and ct_is_zero_lit(l) { res = false }
       }
     }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8667,7 +9061,10 @@ ct_is_const_env := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     Expr::Bin(op, l, r) => {
       if op == 16 or op == 17 or op == 18 { if ct_is_const_env(l, decls, upto, src) and ct_is_const_env(r, decls, upto, src) { res = true }; if op == 17 and ct_is_zero_lit(l) { res = false } }
     }
-    _ => {}
+    Expr::BoolLit | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8685,7 +9082,10 @@ ct_val := fn(e : ptr(Expr), w : str) -> i64 {
       if op == 17 { res = unchecked (lv - rv) }
       if op == 18 { res = unchecked (lv * rv) }
     }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8696,7 +9096,10 @@ ct_val_env := fn(e : ptr(Expr), w : str, decls : ptr(rt::Vec), upto : usize, src
     Expr::Num(v, s, n) => { res = v }
     Expr::Var(_s, _n) => { v := ct_named_value(e, decls, upto, src); if unchecked bitcast(usize, v) != 0 { res = ct_val_env(v, w, decls, upto, src) } }
     Expr::Bin(op, l, r) => { lv := ct_val_env(l, w, decls, upto, src); rv := ct_val_env(r, w, decls, upto, src); if op == 16 { res = unchecked (lv + rv) }; if op == 17 { res = unchecked (lv - rv) }; if op == 18 { res = unchecked (lv * rv) } }
-    _ => {}
+    Expr::BoolLit | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8713,7 +9116,10 @@ ct_span := fn(e : ptr(Expr)) -> usize {
       if res == 0 { res = ct_span(r) }
     }
     Expr::Call(cs, cl, na, ah) => { res = cs }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8775,7 +9181,10 @@ ct_check := fn(e : ptr(Expr), w : str, chk : bool, src : ptr(u8), decls : ptr(rt
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8803,7 +9212,7 @@ ct_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), name_st
 ## untouched; `ct_guard_err` also preserves the `unchecked` escape semantics.
 ct_array_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), decls : ptr(rt::Vec), upto : usize) -> CheckErr {
   esp := array_elem_span(src, ts, tl)
-  if esp.n == 0 or resolve_ty(src, esp.s, esp.n, decls, upto).tag != 1 { return 0 }
+  if esp.n == 0 or not tag_is_int(resolve_ty(src, esp.s, esp.n, decls, upto).tag) { return 0 }
   match deref(e) {
     Expr::ArrayLit(nel, ah) => {
       mut g := ah
@@ -8814,7 +9223,10 @@ ct_array_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), d
         g = ga.next
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   0
 }
@@ -8868,7 +9280,7 @@ call_arg_ct_guard_err := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s
   psp := call_arg_ct_param_span(decls, upto, src, s, n, pidx)
   if psp.n == 0 { return 0 }
   pt := resolve_ty(src, psp.s, psp.n, decls, upto)
-  if pt.tag != 1 { return 0 }
+  if not tag_is_int(pt.tag) { return 0 }
   ct_guard_err(src, psp.s, psp.n, e, 0, decls, upto)
 }
 
@@ -9074,10 +9486,9 @@ lbv_known_tag := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
   vs := expr_var_span(e)
   if vs.n != 0 and nloc != 0 and local_in(locals, nloc, src, vs.s, vs.n) {
     raw := local_ty(locals, nloc, src, vs.s, vs.n)
-    mut tag : u8 = raw.tag
-    if tag >= 128 and tag != 255 { tag = tag - 128 }
-    if tag == 9 { tag = 3 }
-    if tag == 10 { tag = 4 }
+    mut tag : u8 = tag_unflag(raw.tag)
+    if tag_is_hidden_struct(tag) { tag = 3 }
+    if tag_is_hidden_enum(tag) { tag = 4 }
     if tag != 255 { return tag }
   }
   rv := check_expr(e, decls, upto, src, a, locals, nloc)
@@ -9160,7 +9571,7 @@ lbv_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
     Expr::Lambda(_vs, _ph, _ps, _pl, _nl, _body) => { false }
     Expr::FnRef(_fpos, _fms, _fml) => { false }
     Expr::Bitcast(inner, _ps, _pl) => { lbv_expr(inner, decls, upto, src, a, locals, nloc) }
-  Expr::Loop(b) => { lbv_code_tag(lbv_stmts(b, 0, decls, upto, src, a, locals, nloc)) == 250 }
+  Expr::Loop(b) => { lbv_code_is_conflict(lbv_stmts(b, 0, decls, upto, src, a, locals, nloc)) }
   }
 }
 
@@ -9169,17 +9580,21 @@ lbv_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
 ## KNOWN-incompatible pair (spec §7.2 "ill-formed"). For 250, the high bytes carry the offending
 ## break value's source span when one is available, moving the public diagnostic from function name to
 ## break site without changing unknown/poison behavior. `tag_compat` is the sema compatibility relation.
+## Issue #583 slice 6 — the break-value walk's CONFLICT code: two reachable `break v` of known,
+## incompatible types. It rides the low byte beside the real tags 1..7, so it is spelled once here.
+LBV_CONFLICT : u8 = 250
+lbv_code_is_conflict := fn(code : usize) -> bool { lbv_code_tag(code) == LBV_CONFLICT }
 lbv_code := fn(tag : u8, span : usize) -> usize { return usize(tag) + span * 256 }
 lbv_code_tag := fn(code : usize) -> u8 { return u8(code % 256) }
 lbv_code_span := fn(code : usize) -> usize { return code / 256 }
 lbv_merge := fn(acc : usize, t : u8, span : usize) -> usize {
   at := lbv_code_tag(acc)
-  if at == 250 { return acc }
+  if at == LBV_CONFLICT { return acc }
   if t == 0 { return acc }
   if at == 0 { return lbv_code(t, span) }
   if ptrint_seam(at, t) { PTRINT_BREAK = PTRINT_BREAK + 1 }
   if tag_compat(at, t) { return acc }
-  lbv_code(250, span)
+  lbv_code(LBV_CONFLICT, span)
 }
 lbv_merge_code := fn(acc : usize, code : usize) -> usize { return lbv_merge(acc, lbv_code_tag(code), lbv_code_span(code)) }
 
@@ -9260,7 +9675,7 @@ lbv_expr_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
 
 lbv_expr_conflict := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> usize {
   code := lbv_expr_code(e, decls, upto, src, a, locals, nloc)
-  if lbv_code_tag(code) == 250 { return code }
+  if lbv_code_is_conflict(code) { return code }
   return 0
 }
 
@@ -9290,35 +9705,35 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::Assign(_ns, _nl, v, nx) => {
         ec = lbv_expr_conflict(v, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::While(cx, b, nx) => {
         ec = lbv_expr_conflict(cx, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
           acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
         st = nx
       }
       Stmt::FieldAssign(_bns, _bnl, _fns, _fnl, fv, nx) => {
         ec = lbv_expr_conflict(fv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::Return(rv, nx) => {
         ec = lbv_expr_conflict(rv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::If(cx, th, el, nx) => {
         ec = lbv_expr_conflict(cx, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
           acc = lbv_merge_code(acc, lbv_stmts(th, c, decls, upto, src, a, locals, nloc))
           acc = lbv_merge_code(acc, lbv_stmts(el, c, decls, upto, src, a, locals, nloc))
         st = nx
       }
       Stmt::Match(sc, ah, nx) => {
         ec = lbv_expr_conflict(sc, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         mut arm := ah
         while unchecked bitcast(usize, arm) != 0 {
           am := deref(arm_p(arm))
@@ -9329,46 +9744,46 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::For(_fns, _fnl, lo, hi, b, nx) => {
         ec = lbv_expr_conflict(lo, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ## a FOR-IN `for x in <iterable>` has a NULL `hi` (the very shape `check_expr` guards against) —
         ## only the range form `lo .. hi` walks the high bound.
         if unchecked bitcast(usize, hi) != 0 {
           ec = lbv_expr_conflict(hi, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         }
           acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
         st = nx
       }
       Stmt::DerefAssign(p, v, nx) => {
         ec = lbv_expr_conflict(p, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(v, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::IndexAssign(ib, ii, iv, nx) => {
         ec = lbv_expr_conflict(ib, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(ii, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(iv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::IndexFieldAssign(fia, fii, _ifs, _ifl, fiv, nx) => {
         ec = lbv_expr_conflict(fia, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(fii, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(fiv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::FieldPathAssign(pl, fpv, nx) => {
         ## The left side is a write place, not a value read. DA handles unreadied-place legality;
         ## break-value consistency only needs to inspect the stored value.
         ec = lbv_expr_conflict(fpv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::Loop(b, nx) => {
@@ -9378,12 +9793,12 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       Stmt::Continue(_cd, nx) => { st = nx }
       Stmt::ExprStmt(e, nx) => {
         ec = lbv_expr_conflict(e, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::CompIf(cc, cthen, celse, nx) => {
         ec = lbv_expr_conflict(cc, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
           acc = lbv_merge_code(acc, lbv_stmts(cthen, c, decls, upto, src, a, locals, nloc))
           acc = lbv_merge_code(acc, lbv_stmts(celse, c, decls, upto, src, a, locals, nloc))
         st = nx
@@ -9394,7 +9809,7 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::CompMatch(cmsc, cmah, nx) => {
         ec = lbv_expr_conflict(cmsc, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         mut cam := cmah
         while unchecked bitcast(usize, cam) != 0 {
           cm := deref(arm_p(cam))
@@ -9405,12 +9820,12 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::CompForRange(_rvs, _rvl, rlo, rhi, rb, nx) => {
         ec = lbv_expr_conflict(rlo, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ## a PACK-iter `comptime for a in args` (a no-`..` form) parses to a CompForRange with a NULL
         ## `rhi` — guard it exactly like the runtime for-in above.
         if unchecked bitcast(usize, rhi) != 0 {
           ec = lbv_expr_conflict(rhi, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         }
           acc = lbv_merge_code(acc, lbv_stmts(rb, c, decls, upto, src, a, locals, nloc))
         st = nx
@@ -9421,7 +9836,7 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::AllocWith(ae, b, nx) => {
         ec = lbv_expr_conflict(ae, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
           acc = lbv_merge_code(acc, lbv_stmts(b, c, decls, upto, src, a, locals, nloc))
         st = nx
       }
@@ -9463,7 +9878,9 @@ s_of := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> usize {
     Expr::StructLit(ss, sl, sn, sh) => { if ast::span_is_synthetic(ss) { s_of_arg(sh, a) } else { ss } }
     Expr::EnumLit(es0, el0, evs, evl, enp, eph) => { if ast::span_is_synthetic(es0) { s_of_arg(eph, a) } else { es0 } }
     Expr::Field(fb, ffs, ffl) => { if ast::span_is_synthetic(ffs) { 0 } else { ffs } }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 
@@ -9642,14 +10059,14 @@ unbound_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
 ## Is `e` an integer LITERAL (`Num`)? (single-level match — seed-safe)
 expr_is_num_lit := fn(e : ptr(Expr)) -> bool {
   mut r := false
-  match deref(e) { Expr::Num(v, s, n) => { r = true } _ => {} }
+  match deref(e) { Expr::Num(v, s, n) => { r = true } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
 
 ## The value of an integer-literal `Num` expr, else 0.
 expr_num_lit_val := fn(e : ptr(Expr)) -> i64 {
   mut r := 0
-  match deref(e) { Expr::Num(v, s, n) => { r = v } _ => {} }
+  match deref(e) { Expr::Num(v, s, n) => { r = v } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
 
@@ -9662,9 +10079,8 @@ fixed_array_index_oob := fn(base : ptr(Expr), idx : ptr(Expr), src : ptr(u8), lo
   bv := expr_var_span(base)
   if bv.n == 0 or not local_in(locals, nloc, src, bv.s, bv.n) { return false }
   bt := local_ty(locals, nloc, src, bv.s, bv.n)
-  mut tag : u8 = bt.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  if tag != 7 { return false }
+  mut tag : u8 = tag_unflag(bt.tag)
+  if not tag_is_array(tag) { return false }
   n := array_type_count(src, bt.ns, bt.nl)
   if n < 0 { return false }
   iv := expr_num_lit_val(idx)
@@ -9674,7 +10090,7 @@ fixed_array_index_oob := fn(base : ptr(Expr), idx : ptr(Expr), src : ptr(u8), lo
 ## The source start of a numeric literal, for a located reject at the offending index token.
 expr_num_lit_start := fn(e : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(e) { Expr::Num(v, s, n) => { r = s } _ => {} }
+  match deref(e) { Expr::Num(v, s, n) => { r = s } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
 
@@ -9707,7 +10123,9 @@ expr_mentions_var := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a 
       while g != 0 { ga := deref(arg_p(g)) ; if expr_mentions_var(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
       r
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Match | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { false }
   }
 }
 
@@ -9799,7 +10217,7 @@ sema_comptime_cond_runtime_local := fn(e : ptr(Expr), src : ptr(u8), locals : pt
     Expr::Unchecked(inner) => { out = sema_comptime_cond_runtime_local(inner, src, locals, nloc) }
     Expr::Lambda(pos, ph, rts, rtl, bh, val) => { out = sema_comptime_cond_runtime_local(val, src, locals, nloc) }
     Expr::Bitcast(inner, ts, tl) => { out = sema_comptime_cond_runtime_local(inner, src, locals, nloc) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::FnRef | Expr::Loop => {}
   }
   out
 }
@@ -9847,7 +10265,10 @@ expr_discharge_var := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena)) -
       vm := str_at((src + vs), vl)
       if vm == "forget" or (vl >= 5 and str_at((src + vs + vl - 5), 5) == "_free") { res = VSpan(s = es, n = el) }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -9862,7 +10283,10 @@ stmt_forget_var := fn(h : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> VSpan
   match st {
     Stmt::ExprStmt(e, nx) => { res = expr_discharge_var(e, src, a) }
     Stmt::Assign(ns, nl, v, nx) => { res = expr_discharge_var(v, src, a) }
-    _ => {}
+    Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+      | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+      | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+      | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
   }
   res
 }
@@ -9917,7 +10341,7 @@ stmt_mentions_var := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : pt
     Stmt::CompFor(ns, nl, iv, b, nx) => { res = stmts_mention_var(b, src, xs, xl, a) }
     Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { res = expr_mentions_var(lo, src, xs, xl, a) or expr_mentions_var(hi, src, xs, xl, a) or stmts_mention_var(b, src, xs, xl, a) }
     Stmt::CompMatch(sc, ah, nx) => { res = expr_mentions_var(sc, src, xs, xl, a) or arms_mention_var(ah, src, xs, xl, a) }
-    _ => {}
+    Stmt::Break | Stmt::Continue => {}
   }
   res
 }
@@ -9935,7 +10359,10 @@ sema_comptime_cont_state := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, 
       Stmt::Assign(ns, nl, v, nx) => {
         if not assign_is_reassign(src, ns, nl) and not binding_is_comptime(src, ns) and streq(src, ns, nl, xs, xl) { return 2 }
       }
-      _ => {}
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -9979,7 +10406,8 @@ sema_comptime_branch_escape_stmts := fn(head : ptr(mut Stmt), cont : ptr(mut Stm
       Stmt::CompMatch(sc, ah, nx) => { out = sema_comptime_branch_escape_arms(ah, cont, src, locals, nloc, a) }
       Stmt::Unchecked(b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
       Stmt::AllocWith(e, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -10035,7 +10463,8 @@ sema_lambda_binds_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, x
       Stmt::CompMatch(sc, ah, nx) => { hit = sema_lambda_binds_arms(ah, src, xs, xl, a) }
       Stmt::Unchecked(b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
       Stmt::AllocWith(e, b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -10077,7 +10506,10 @@ sema_plain_fn_capture_span := fn(ts : usize, tl : usize, e : ptr(Expr), src : pt
   mut bad := 0
   match deref(e) {
     Expr::Lambda(pos, ph, rts, rtl, bh, val) => { bad = sema_lambda_capture_span(ph, bh, val, src, locals, nloc, a); if bad != 0 { bad = pos } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   bad
 }
@@ -10103,7 +10535,10 @@ sema_plain_fn_capture_struct := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
         g = ga.next
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   bad
 }
@@ -10176,12 +10611,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## backend can treat the nested array as a word-strided scalar array.
           if local_is_mut(src, ns) and sema_local_multidim_array(decls, upto, src, ann0.s, ann0.n) { return Result(usize, CheckErr).Err(local_multidim_array_err(ns)) }
           dt0 := resolve_ty(src, ann0.s, ann0.n, decls, upto)
-          if dt0.tag == 0 { return Result(usize, CheckErr).Err(located_err(ns)) }
+          if tag_is_unknown(dt0.tag) { return Result(usize, CheckErr).Err(located_err(ns)) }
           mut bt0 : u8 = dt0.tag
-          if local_is_mut(src, ns) { bt0 = bt0 + 128 }
+          if local_is_mut(src, ns) { bt0 = tag_with_mut(bt0) }
           lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bt0, prov = 0, tns = dt0.ns, tnl = dt0.nl))
           da_push_root(da, ns, nl)
-          if dt0.tag == 7 { da_seed_array(deref(da), src, ns, nl, dt0) }
+          if tag_is_array(dt0.tag) { da_seed_array(deref(da), src, ns, nl, dt0) }
           cnt += 1
           cur = nx
           continue
@@ -10191,6 +10626,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if call_atomic_ordering_bad(v, src, a) { mark_failed(locals, mismatch_err(s_of(v, a), 0)) }
         if expr_has_unbound(v, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(v, decls, upto, src, a, locals, cnt)) }
         ann := local_type_span(src, ns, nl)
+        ## Issue #697 — an annotation naming no type is a located refusal, never an annotation that
+        ## silently constrains nothing.
+        if not assign_is_reassign(src, ns, nl) and ann.n != 0 {
+          lau := sema_local_ann_type_unknown(unchecked bitcast(ptr(mut Param), SEMA_DECL_PARAMS), decls, src, ann.s, ann.n)
+          if lau != 0 { mark_failed(locals, lau) }
+        }
         ## Issue #215 bounded fallback: reject the exact direct annotation in the shared semantic pass,
         ## so `check`, build, and all emit-to-stdout backends cannot accept a silent wrong value/trap.
         ## Reassignments and every non-local shape remain outside this local declaration fence.
@@ -10251,14 +10692,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## permission at this source span. The same branch handles plain `=` and every compound
           ## operator after `assign_is_reassign` has recovered its spelling.
           if sema_local_name_is_comptime(src, locals, cnt, ns, nl) { mark_failed(locals, immutable_err(ns)) }
-          if raw.tag < 128 and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or raw.tag == 255 { mark_failed(locals, immutable_err(ns)) }
-          mut xtag : u8 = raw.tag
-          if xtag >= 128 and xtag != 255 { xtag = xtag - 128 }
+          if tag_is_plain(raw.tag) and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or tag_is_poison(raw.tag) { mark_failed(locals, immutable_err(ns)) }
+          mut xtag : u8 = tag_unflag(raw.tag)
           ## normalize the HIDDEN aggregate tags (9 struct / 10 enum, set for a StructLit/EnumLit binding)
           ## back to their real struct(3)/enum(4) tag for the reassign type-match — else `tag_compat(9, 3)`
           ## false-rejects a valid `mut r := S(...)  … r = <struct value>` (a real tag-3 RHS).
-          if xtag == 9 { xtag = 3 }
-          if xtag == 10 { xtag = 4 }
+          if tag_is_hidden_struct(xtag) { xtag = 3 }
+          if tag_is_hidden_enum(xtag) { xtag = 4 }
           xt := Ty(tag = xtag, ns = raw.ns, nl = raw.nl)
           ptrint_probe_site("REASSIGN", "reassign", true, tv.tag, xt.tag, ns, src)
           if not tag_compat(xt.tag, tv.tag) { mark_failed(locals, mismatch_err(ns, 0)) }
@@ -10328,7 +10768,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## AddrOf is a payload-heavy arm that the frozen bootstrap may skip in check_expr's large
           ## match, returning UNKNOWN instead of its invariant pointer tag. The dedicated accessor is
           ## the reliable AST fact: every Expr::AddrOf has type ptr(_), independently of its pointee.
-          if bind_tag == 0 and unchecked bitcast(usize, ain) != 0 { bind_tag = 5 }
+          if tag_is_unknown(bind_tag) and unchecked bitcast(usize, ain) != 0 { bind_tag = 5 }
           if unchecked bitcast(usize, ain) != 0 and expr_field_span(ain).n != 0 { bind_prov = prov_field_ptr() }
           ## A range-slice local is a view, so its write permission follows the backing place rather
           ## than the view's own copied pair. `prov_view` names that provenance; its element kind is
@@ -10387,7 +10827,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## only `sema_direct_index_elem_ty` consumes this span or scalar tag under slice provenance.
           if prov_is_view(bind_prov) {
             set := sema_range_slice_elem_ty(v, src, locals, cnt, decls, upto)
-            if set.tag != 0 {
+            if not tag_is_unknown(set.tag) {
               if set.nl != 0 { bind_ns = set.ns; bind_nl = set.nl }
               else { bind_prov = prov_view(prov_view_backing_imm(bind_prov), set.tag) }
             }
@@ -10404,13 +10844,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             ## a struct, so this suffices for leak-detection while leaving ENUM locals untouched (recording a
             ## call-created enum's generic return-type name — e.g. `Result(U, E)` — would make the match
             ## exhaustiveness check mis-resolve its variants and spuriously reject; found via result_and_then).
-            if crt.tag == 3 and crt.nl != 0 { bind_tag = crt.tag; bind_ns = crt.ns; bind_nl = crt.nl }
+            if tag_is_struct(crt.tag) and crt.nl != 0 { bind_tag = crt.tag; bind_ns = crt.ns; bind_nl = crt.nl }
             ## Issue #269: preserve a separate concrete wrapper marker for the one bounded local form.
             ## Do not turn it into ordinary enum type information — existing match/exhaustiveness paths
             ## deliberately remain unaware of generic `Option`/`Result` identities.
             lvwrap := deref(locals)
             wrt := sema_wrapper_return_ty(decls, upto, src, ccs.s, ccs.n, expr_call_arity(v), lvwrap.mod_s, lvwrap.mod_l)
-            if wrt.tag == 11 { bind_tag = wrt.tag; bind_ns = wrt.ns; bind_nl = wrt.nl }
+            if tag_is_wrapper(wrt.tag) { bind_tag = wrt.tag; bind_ns = wrt.ns; bind_nl = wrt.nl }
           }
           ## POINTER value (tag 5): the pointee NAME drives `ty_compat`'s ptr(X)-vs-ptr(Y) discrimination,
           ## but `tv.ns/tv.nl` came back through the truncating `Result(Ty,…)` (see above) → GARBAGE. A
@@ -10421,19 +10861,18 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## a direct AddrOf(Var-local-struct) → the addressed local's recorded nominal type; otherwise DROP
           ## to unknown (0/0, poison-tolerant). The AddrOf recovery is intentionally struct-only: it supplies
           ## the exact fact needed by recursive pointer-field place typing without widening other consumers.
-          if bind_tag == 5 {
+          if tag_is_ptr(bind_tag) {
             bind_ns = 0
             bind_nl = 0
             rvs := expr_var_span(v)
             if rvs.n != 0 {
               rlt := local_ty(locals, cnt, src, rvs.s, rvs.n)
-              mut rltag : u8 = rlt.tag
-              if rltag >= 128 and rltag != 255 { rltag = rltag - 128 }
-              if rltag == 5 { bind_ns = rlt.ns; bind_nl = rlt.nl; bind_prov = local_prov(locals, cnt, src, rvs.s, rvs.n) }
+              mut rltag : u8 = tag_unflag(rlt.tag)
+              if tag_is_ptr(rltag) { bind_ns = rlt.ns; bind_nl = rlt.nl; bind_prov = local_prov(locals, cnt, src, rvs.s, rvs.n) }
             }
             if bind_nl == 0 {
               apt := sema_addr_local_struct_ptr_ty(v, src, locals, cnt)
-              if apt.tag == 5 {
+              if tag_is_ptr(apt.tag) {
                 bind_ns = apt.ns
                 bind_nl = apt.nl
               }
@@ -10444,26 +10883,26 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## a later `match deref(init_e)` is checked for exhaustiveness. The packed carrier may hand the
           ## call back as tag 0, so the tag is filled as well as the name. Enum pointees only, as narrow
           ## as #656's twin: a struct pointee also feeds `ty_compat`'s pointer discrimination.
-          if ann.n == 0 and bind_nl == 0 and (bind_tag == 0 or bind_tag == 5) and expr_call_callee_span(v).n != 0 {
+          if ann.n == 0 and bind_nl == 0 and (tag_is_unknown(bind_tag) or tag_is_ptr(bind_tag)) and expr_call_callee_span(v).n != 0 {
             cpt := sema_ptr_expr_ty(v, decls, src, locals, cnt)
-            if sema_enum_pointee(cpt, decls, src).tag == 4 {
+            if tag_is_enum(sema_enum_pointee(cpt, decls, src).tag) {
               bind_tag = 5
               bind_ns = cpt.ns
               bind_nl = cpt.nl
             }
           }
-          if dt.tag != 0 { bind_tag = dt.tag; bind_ns = dt.ns; bind_nl = dt.nl }
+          if not tag_is_unknown(dt.tag) { bind_tag = dt.tag; bind_ns = dt.ns; bind_nl = dt.nl }
           ## Issue #656 — the POINTER twin of #557's late enum annotation (below): `p : ptr(E)` where
           ## `E` is declared in a later-sorted module. Fills only the pointee NAME the `upto` prefix
           ## could not resolve; the recorded tag is unchanged (see `late_enum_ptr_ty`).
-          if dt.tag == 5 and dt.nl == 0 and ann.n != 0 {
+          if tag_is_ptr(dt.tag) and dt.nl == 0 and ann.n != 0 {
             lpp := late_enum_ptr_ty(src, ann.s, ann.n, decls, upto)
-            if lpp.tag == 5 { bind_ns = lpp.ns; bind_nl = lpp.nl }
+            if tag_is_ptr(lpp.tag) { bind_ns = lpp.ns; bind_nl = lpp.nl }
           }
           ## Issue #557 — the same late-declared enum annotation, on an annotated local binding.
-          if dt.tag == 0 and ann.n != 0 {
+          if tag_is_unknown(dt.tag) and ann.n != 0 {
             lae := late_enum_ann_ty(src, ann.s, ann.n, decls, upto)
-            if lae.tag == 4 { bind_tag = 10; bind_ns = lae.ns; bind_nl = lae.nl }
+            if tag_is_enum(lae.tag) { bind_tag = 10; bind_ns = lae.ns; bind_nl = lae.nl }
           }
           ## RELIABLE aggregate recording (scar #2: StructLit/EnumLit don't dispatch check_expr's big
           ## match, so `tv.tag` came back 0). Recover the aggregate type NAME + tag straight from the
@@ -10473,13 +10912,13 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## so recover it exactly like tag 0 instead of recording a nameless struct local. An ARRAY literal
           ## of SCALAR-LITERAL elements is tagged 7 (scalar-element array) so a whole-aggregate store into
           ## `xs[i]` is rejected. An annotation / call-return with a reliable payload still wins.
-          if bind_tag == 0 or (bind_tag == 3 and bind_nl == 0) {
+          if tag_is_unknown(bind_tag) or (tag_is_struct(bind_tag) and bind_nl == 0) {
             ## HIDDEN tags 9 (struct) / 10 (enum): `value_agg_ty` maps them back, but `check_expr`'s Var
             ## resolution does NOT surface them, so the overload-naive existing arg checks stay tolerant.
             ## Covers a StructLit / EnumLit / nullary-enum-variant RHS (and a Var aliasing such a local).
             vag := value_agg_ty(v, decls, upto, src, locals, cnt)
-            if vag.tag == 3 { bind_tag = 9; bind_ns = vag.ns; bind_nl = vag.nl }
-            else if vag.tag == 4 { bind_tag = 10; bind_ns = vag.ns; bind_nl = vag.nl }
+            if tag_is_struct(vag.tag) { bind_tag = 9; bind_ns = vag.ns; bind_nl = vag.nl }
+            else if tag_is_enum(vag.tag) { bind_tag = 10; bind_ns = vag.ns; bind_nl = vag.nl }
             else {
               afe := expr_array_first(v)
               if unchecked bitcast(usize, afe) != 0 and value_is_scalar_lit(afe) { bind_tag = 7 }
@@ -10490,10 +10929,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## `match x` skipped the exhaustiveness check. Record it under the HIDDEN enum tag 10, the one
           ## an inferred `c := C.R` already uses, when nothing else recorded a tag; a public tag 4 that
           ## arrived without its name keeps its tag and only gains the name.
-          if ann.n == 0 and bind_nl == 0 and (bind_tag == 0 or bind_tag == 4) {
+          if ann.n == 0 and bind_nl == 0 and (tag_is_unknown(bind_tag) or tag_is_enum(bind_tag)) {
             vet := sema_value_enum_ty(v, decls, src, locals, cnt)
-            if vet.tag == 4 {
-              if bind_tag == 0 { bind_tag = 10 }
+            if tag_is_enum(vet.tag) {
+              if tag_is_unknown(bind_tag) { bind_tag = 10 }
               bind_ns = vet.ns
               bind_nl = vet.nl
             }
@@ -10511,7 +10950,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## ANNOTATED-local conformance (both directions): `x : <scalar> = <aggregate>` or `x :
           ## <aggregate> = <scalar-literal>` — covers the float/char sink the tag-only `bad_decl` misses.
           if agg_scalar_bad(ann.s, ann.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
-          if local_is_mut(src, ns) { bind_tag = bind_tag + 128 }
+          if local_is_mut(src, ns) { bind_tag = tag_with_mut(bind_tag) }
           lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bind_tag, prov = bind_prov, tns = bind_ns, tnl = bind_nl))
           cnt += 1
         }
@@ -10529,7 +10968,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
         ## the loop condition must be bool (a known non-bool is a `Mismatch`).
-        if cc.tag != 0 and cc.tag != 2 { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
+        if not tag_is_unknown(cc.tag) and not tag_is_bool(cc.tag) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
         cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
         cur = nx
       }
@@ -10587,9 +11026,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## declared type span, then check the stored value against it. Poison-tolerant (a non-struct or
         ## unknown base → no fire).
         bfe := local_ty(locals, cnt, src, bns, bnl)
-        mut bftag : u8 = bfe.tag
-        if bftag >= 128 and bftag != 255 { bftag = bftag - 128 }
-        if (bftag == 3 or bftag == 9) and bfe.nl != 0 {
+        mut bftag : u8 = tag_unflag(bfe.tag)
+        if (tag_is_struct(bftag) or tag_is_hidden_struct(bftag)) and bfe.nl != 0 {
           ftsp := sema_field_ann_span(decls, upto, src, bfe.ns, bfe.nl, fns, fnl, a)
           if agg_scalar_bad(ftsp.s, ftsp.n, fv, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(bns, 0)) }
           da_assign_field(deref(da), decls, upto, src, bns, bnl, fns, fnl, Ty(tag = 3, ns = bfe.ns, nl = bfe.nl))
@@ -10653,7 +11091,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         if np.sl != 0 {
           mut rt := local_ty(locals, cnt, src, np.rs, np.rn)
-          if rt.tag == 255 {
+          if tag_is_poison(rt.tag) {
             gts := global_type_span(decls, src, np.rs, np.rn)
             if gts.n != 0 { rt = resolve_ty(src, gts.s, gts.n, decls, upto) }
           }
@@ -10691,8 +11129,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             ## carrier surfaced UNKNOWN for the payload-heavy call node. Recover that result before
             ## accepting an early `return make_str()` from a scalar-returning function.
             rcall := expr_call_result_ty(rv, decls, upto, src)
-            if ret_tag != 0 and rcall.tag != 0 { ptrint_probe_site("RESULT-RET", "retcall", true, rcall.tag, u8(ret_tag), s_of(rv, a), src) }
-            if ret_tag != 0 and rcall.tag != 0 and not tag_compat(rcall.tag, u8(ret_tag)) {
+            if ret_tag != 0 and not tag_is_unknown(rcall.tag) { ptrint_probe_site("RESULT-RET", "retcall", true, rcall.tag, u8(ret_tag), s_of(rv, a), src) }
+            if ret_tag != 0 and not tag_is_unknown(rcall.tag) and not tag_compat(rcall.tag, u8(ret_tag)) {
               return Result(usize, CheckErr).Err(mismatch_err(s_of(rv, a), 0))
             }
           }
@@ -10706,7 +11144,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         cc := check_expr_da(c, decls, upto, src, a, locals, cnt, da)?
         ## the condition must be bool (a known non-bool is a `Mismatch`).
-        if cc.tag != 0 and cc.tag != 2 { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
+        if not tag_is_unknown(cc.tag) and not tag_is_bool(cc.tag) { return Result(usize, CheckErr).Err(mismatch_err(s_of(c, a), 0)) }
         ## A branch-local comptime name cannot safely be read after this join while the current
         ## bounded lower uses a flat function-local map. Allow an explicit direct ordinary rebind in
         ## the continuation, but reject a bare post-join read instead of selecting one branch's value.
@@ -10786,7 +11224,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## Issue #557 — the scrutinee's enum type is resolved from the EXPRESSION, not from the one
         ## bare-`Var` spelling the old code understood; `match_scrut_enum_ty` documents the branches.
         ety := match_scrut_enum_ty(sc, decls, upto, src, locals, cnt, a)
-        if ety.tag == 4 and ety.nl != 0 and arms_all_plain(ah) {
+        if tag_is_enum(ety.tag) and ety.nl != 0 and arms_all_plain(ah) {
           if enum_coverage_gap(ah, decls, src, ety.ns, ety.nl) {
             return Result(usize, CheckErr).Err(mismatch_err(match_scrut_span(sc, a), 0))
           }
@@ -10794,11 +11232,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         sv := expr_var_span(sc)
         if sv.n != 0 and cnt != 0 and local_in(locals, cnt, src, sv.s, sv.n) {
           sty := local_ty(locals, cnt, src, sv.s, sv.n)
-          mut stag : u8 = sty.tag
-          if stag >= 128 and stag != 255 { stag = stag - 128 }
+          mut stag : u8 = tag_unflag(sty.tag)
           ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` scalar match must cover its
           ## finite domain (else a compile error). Fail-open for anything else (see scalar_coverage_gap).
-          if (stag == 1 or stag == 2) and scalar_coverage_gap(ah, stag, sty.ns, sty.nl, src) {
+          if (tag_is_int(stag) or tag_is_bool(stag)) and scalar_coverage_gap(ah, stag, sty.ns, sty.nl, src) {
             return Result(usize, CheckErr).Err(mismatch_err(s_of(sc, a), 0))
           }
         }
@@ -10831,7 +11268,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(ii)))
         }
         cii := check_expr_da(ii, decls, upto, src, a, locals, cnt, da)?
-        if cii.tag != 0 and cii.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(ii, a), 0)) }
+        if not tag_is_unknown(cii.tag) and not tag_is_int(cii.tag) { return Result(usize, CheckErr).Err(mismatch_err(s_of(ii, a), 0)) }
         civ := check_expr_da(iv, decls, upto, src, a, locals, cnt, da)?
         ## Issue #298 — `base[index] = value` is writable only when the base's root binding is
         ## mutable. The DA query preserves the language's single first assignment for an uninitialized
@@ -10857,11 +11294,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           if expr_is_num_lit(ii) {
             da_assign_array(deref(da), src, ibv.s, ibv.n, expr_num_lit_val(ii), iae)
           }
-          mut iatag : u8 = iae.tag
-          if iatag >= 128 and iatag != 255 { iatag = iatag - 128 }
-          if iatag == 7 and (iae.nl == 0 or array_elem_scalar(src, iae.ns, iae.nl)) {
+          mut iatag : u8 = tag_unflag(iae.tag)
+          if tag_is_array(iatag) and (iae.nl == 0 or array_elem_scalar(src, iae.ns, iae.nl)) {
             va := value_agg_ty(iv, decls, upto, src, locals, cnt)
-            if va.tag == 3 or va.tag == 4 { mark_failed(locals, mismatch_err(ibv.s, 0)) }
+            if tag_is_struct(va.tag) or tag_is_enum(va.tag) { mark_failed(locals, mismatch_err(ibv.s, 0)) }
           }
         } else {
           sfet := sema_direct_slice_field_elem_ty(ib, decls, upto, src, locals, cnt, a)
@@ -10875,7 +11311,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             ffv := expr_field_span(ib)
             if frv.n != 0 and ffv.n != 0 {
               mut rte := local_ty(locals, cnt, src, frv.s, frv.n)
-              if rte.tag == 255 {
+              if tag_is_poison(rte.tag) {
                 gts2 := global_type_span(decls, src, frv.s, frv.n)
                 if gts2.n != 0 { rte = resolve_ty(src, gts2.s, gts2.n, decls, upto) }
               }
@@ -10910,7 +11346,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           return Result(usize, CheckErr).Err(located_err(expr_num_lit_start(fii)))
         }
         cfi := check_expr_da(fii, decls, upto, src, a, locals, cnt, da)?
-        if cfi.tag != 0 and cfi.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(fii, a), 0)) }
+        if not tag_is_unknown(cfi.tag) and not tag_is_int(cfi.tag) { return Result(usize, CheckErr).Err(mismatch_err(s_of(fii, a), 0)) }
         cfv := check_expr_da(fiv, decls, upto, src, a, locals, cnt, da)?
         afp := expr_index_array_nested_path(fia, fii, ifs, ifl)
         if sema_array_nested_field_path_value_bad(afp, cfv, fiv, decls, upto, src, locals, cnt, a) {
@@ -10951,8 +11387,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if unchecked bitcast(usize, fhi) != 0 {
           tlo := check_expr_da(flo, decls, upto, src, a, locals, cnt, da)?
           thi := check_expr_da(fhi, decls, upto, src, a, locals, cnt, da)?
-          if tlo.tag != 0 and tlo.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(flo, a), 0)) }
-          if thi.tag != 0 and thi.tag != 1 { return Result(usize, CheckErr).Err(mismatch_err(s_of(fhi, a), 0)) }
+          if not tag_is_unknown(tlo.tag) and not tag_is_int(tlo.tag) { return Result(usize, CheckErr).Err(mismatch_err(s_of(flo, a), 0)) }
+          if not tag_is_unknown(thi.tag) and not tag_is_int(thi.tag) { return Result(usize, CheckErr).Err(mismatch_err(s_of(fhi, a), 0)) }
           vtag = 1
         } else {
           tf := check_expr_da(flo, decls, upto, src, a, locals, cnt, da)?
@@ -11107,7 +11543,10 @@ stmt_next_at := fn(h : usize, a : ptr(mut rt::Arena)) -> usize {
 expr_is_no_tail := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Num(v, s, n) => { v == 0 - 1 and n == 0 }
-    _ => { false }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -11179,7 +11618,8 @@ stmts_bad_loop_control := fn(head : ptr(mut Stmt), in_loop : bool, a : ptr(mut r
         }
         cur = nx
       }
-      _ => { cur = stmt_next_at(cur, a) }
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::ExprStmt | Stmt::CompForRange => { cur = stmt_next_at(cur, a) }
     }
   }
   bad
@@ -11230,7 +11670,10 @@ stmts_decl_before := fn(head : ptr(mut Stmt), upto : usize, src : ptr(u8), ns : 
       Stmt::Assign(ns2, nl2, v2, nx2) => {
         if ns2 != ns and sema_redecl_candidate(src, ns2, nl2) and streq(src, ns2, nl2, ns, nl) { hit = true }
       }
-      _ => { hit = hit }
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { hit = hit }
     }
     cur = stmt_next_at(cur, a)
     i += 1
@@ -11279,7 +11722,8 @@ stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut r
           arm2 = am2.next
         }
       }
-      _ => { bad = bad }
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => { bad = bad }
     }
     cur = stmt_next_at(cur, a)
     idx += 1
@@ -11345,7 +11789,8 @@ codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLa
         mut arm2 := ah
         while arm2 != 0 and err == 0 { am2 := deref(arm_p(arm2)); err = codepoint_collect_stmts(am2.body_stmts, labels, src, a); arm2 = am2.next }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -11383,7 +11828,8 @@ codepoint_check_stmts := fn(head : ptr(mut Stmt), labels : ptr(CodePointLabels),
         mut arm2 := ah
         while arm2 != 0 and err == 0 { am2 := deref(arm_p(arm2)); err = codepoint_check_stmts(am2.body_stmts, labels, src, a, unchecked_mode); arm2 = am2.next }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -11439,7 +11885,9 @@ stmts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
     ## this the missing-result check false-fired "invalid" on every unchecked-block-bodied fn.
     Stmt::Unchecked(b, nx) => { stmts_return(b, a) }
     Stmt::AllocWith(ae, b, nx) => { stmts_return(b, a) }
-    _ => { false }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::For | Stmt::DerefAssign
+      | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break
+      | Stmt::Continue | Stmt::ExprStmt | Stmt::CompFor | Stmt::CompForRange => { false }
   }
 }
 
@@ -11452,7 +11900,10 @@ stmt_starts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
   match st {
     Stmt::Return(rv, nx) => { true }
     Stmt::If(c, th, el, nx) => { el != 0 and stmt_starts_return(th, a) and stmt_starts_return(el, a) }
-    _ => { false }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Match | Stmt::For | Stmt::DerefAssign
+      | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break
+      | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+      | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { false }
   }
 }
 
@@ -11490,7 +11941,9 @@ stmts_tail_value := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
     ## the block (`addr := fn(…) -> ptr(u8) { unchecked { base + off } }`) — recurse into it.
     Stmt::Unchecked(b, nx) => { stmts_tail_value(b, a) }
     Stmt::AllocWith(ae, b, nx) => { stmts_tail_value(b, a) }
-    _ => { false }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::For | Stmt::DerefAssign
+      | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break
+      | Stmt::Continue | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { false }
   }
 }
 
@@ -11566,7 +12019,7 @@ sema_bad_typeinfo_field_expr := fn(e : ptr(Expr), src : ptr(u8), vs : usize, vl 
     Expr::Lambda(pos, ph, rs, rl, bs, value) => { bad = sema_bad_typeinfo_field_expr(value, src, vs, vl, a) }
     Expr::Bitcast(x, ts, tl) => { bad = sema_bad_typeinfo_field_expr(x, src, vs, vl, a) }
     Expr::Loop(body) => { bad = sema_bad_typeinfo_field_stmts(body, src, vs, vl, a) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::FnRef => {}
   }
   bad
 }
@@ -11601,7 +12054,7 @@ sema_bad_typeinfo_field_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), vs : us
       Stmt::CompForRange(rvs, rvl, lo, hi, b, nx) => { bad = sema_bad_typeinfo_field_expr(lo, src, vs, vl, a); if bad == 0 and hi != 0 { bad = sema_bad_typeinfo_field_expr(hi, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
       Stmt::Unchecked(b, nx) => { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) }
       Stmt::AllocWith(e, b, nx) => { bad = sema_bad_typeinfo_field_expr(e, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -11632,9 +12085,8 @@ type_is_owning := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), tns : us
 ## `@owning` type. False for scalars / unresolved / non-owning aggregates.
 local_is_owning := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), xs : usize, xl : usize, decls : ptr(rt::Vec), upto : usize) -> bool {
   lt := local_ty(locals, nloc, src, xs, xl)
-  mut base : u8 = lt.tag
-  if base >= 128 and base != 255 { base = base - 128 }
-  if base != 3 and base != 4 { return false }
+  mut base : u8 = tag_unflag(lt.tag)
+  if not tag_is_struct(base) and not tag_is_enum(base) { return false }
   type_is_owning(decls, upto, src, lt.ns, lt.nl)
 }
 
@@ -11680,7 +12132,8 @@ expr_uses_var_cons := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a
       while g != 0 { ga := deref(arg_p(g)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
       r
     }
-    _ => { true }   ## Match / any other form: not fully scanned → assume USED (never falsely flag a leak)
+    Expr::If | Expr::Match | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { true }   ## Match / any other form: not fully scanned → assume USED (never falsely flag a leak)
   }
 }
 
@@ -11708,7 +12161,8 @@ stmt_uses_var_cons := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : p
     Stmt::AllocWith(ae, b, nx) => { res = stmts_use_cons(b, src, xs, xl, a) }
     Stmt::For(fns, fnl, lo, hi, b, nx) => { res = expr_uses_var_cons(lo, src, xs, xl, a) or expr_uses_var_cons(hi, src, xs, xl, a) or stmts_use_cons(b, src, xs, xl, a) }
     Stmt::Match(sc, ah, nx) => { res = expr_uses_var_cons(sc, src, xs, xl, a) or arms_use_cons(ah, src, xs, xl, a) }
-    _ => { res = true }   ## comptime form / break / continue / unknown → assume USED (conservative)
+    Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+      | Stmt::CompForRange => { res = true }   ## comptime form / break / continue / unknown → assume USED (conservative)
   }
   res
 }
@@ -11740,7 +12194,10 @@ stmt_binding_var := fn(h : usize, a : ptr(mut rt::Arena)) -> VSpan {
   st := deref(stmt_p(Stmt, h))
   match st {
     Stmt::Assign(ns, nl, v, nx) => { res = VSpan(s = ns, n = nl) }
-    _ => {}
+    Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+      | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+      | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+      | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
   }
   res
 }
@@ -11777,7 +12234,10 @@ expr_is_local_addr := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, src : 
       vv := expr_var_span(inner)
       if vv.n != 0 and local_in(locals, nloc, src, vv.s, vv.n) { res = true }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -11790,7 +12250,10 @@ stmts_return_local_addr := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : u
     st := deref(stmt_p(Stmt, cur))
     match st {
       Stmt::Return(rv, nx) => { if expr_is_local_addr(rv, locals, nloc, src) { res = true } }
-      _ => {}
+      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -11833,7 +12296,9 @@ sema_place_root_var := fn(e : ptr(Expr)) -> VSpan {
     Expr::Slice(base, lo, hi) => { sema_place_root_var(base) }
     Expr::Unchecked(inner) => { sema_place_root_var(inner) }
     Expr::Bitcast(inner, ts, tl) => { sema_place_root_var(inner) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try
+      | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -11843,7 +12308,10 @@ sema_place_root_var := fn(e : ptr(Expr)) -> VSpan {
 sema_slice_base := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Slice(base, lo, hi) => { base }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 
@@ -11866,15 +12334,14 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
     ## half of this pair is the `prov_array_param()` setter in `check_fn`).
     if prov == prov_array_param() { return 0 }
     raw := local_ty(locals, nloc, src, root.s, root.n)
-    mut tag : u8 = raw.tag
-    if tag >= 128 and tag != 255 { tag = tag - 128 }
+    mut tag : u8 = tag_unflag(raw.tag)
     ## Pointer/deref places have a separate pointer mutability contract. Pattern/loop bindings and
     ## other unresolved locals are deliberately unknown, so this fence must not turn them into false
     ## rejects. `Slice(T)` parameters are borrowed views whose element permission is not expressible
     ## until the separate `[mut T]` work; retain their established writable-view behavior here.
-    if tag == 0 or tag == 5 or tag == 255 { return 0 }
+    if tag_is_unknown(tag) or tag_is_ptr(tag) or tag == 255 { return 0 }
     if raw.nl != 0 and str_at((src + raw.ns), raw.nl) == "Slice" { return 0 }
-    if tag != 0 and raw.tag < 128 { return 1 }
+    if not tag_is_unknown(tag) and tag_is_plain(raw.tag) { return 1 }
     return 0
   }
   if sema_global_name_anywhere(decls, src, root.s, root.n) and not is_mod_mut_global(decls, src, root.s, root.n) { return 2 }
@@ -11894,9 +12361,8 @@ sema_place_is_str_view := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), ro
   if not local_in(locals, nloc, src, root.s, root.n) { return false }
   if local_prov(locals, nloc, src, root.s, root.n) == prov_str_view() { return true }
   raw := local_ty(locals, nloc, src, root.s, root.n)
-  mut tag : u8 = raw.tag
-  if tag >= 128 and tag != 255 { tag = tag - 128 }
-  tag == 6
+  mut tag : u8 = tag_unflag(raw.tag)
+  tag_is_str(tag)
 }
 
 ## A direct field write is a first write only while its root or exact field marker remains unreadied.
@@ -12013,7 +12479,8 @@ stmts_store_escape := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize,
       Stmt::AllocWith(ae, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
       Stmt::For(fns, fnl, lo, hi, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
       Stmt::Match(sc, ah, nx) => { if arms_store_escape(ah, locals, nloc, src, a, decls, params_head) { res = true } }
-      _ => {}
+      Stmt::Return | Stmt::DerefAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -12064,14 +12531,14 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     ## Issue #557 — an enum parameter whose type is declared in a later-sorted module; recorded under
     ## the hidden enum tag 10 so only `value_agg_ty`'s consumers see it (see `late_enum_ann_ty`).
     lpe := late_enum_ann_ty(src, pm.ts, pm.tl, decls, upto)
-    if ptag == 0 and lpe.tag == 4 { ptag = 10; pt = lpe }
+    if tag_is_unknown(ptag) and tag_is_enum(lpe.tag) { ptag = 10; pt = lpe }
     ## Issue #656 — the POINTER twin of the line above: `e : ptr(E)` whose pointee enum is declared in
     ## a LATER-sorted module. The tag is already 5 and stays 5; only the pointee NAME the `upto` prefix
     ## could not see is filled in, so the recording becomes identical to the one an earlier-sorted
     ## enum's module already produces (see `late_enum_ptr_ty`).
     lpp := late_enum_ptr_ty(src, pm.ts, pm.tl, decls, upto)
-    if ptag == 5 and pt.nl == 0 and lpp.tag == 5 { pt = lpp }
-    if pm.pmode == 2 { ptag = ptag + 128 }
+    if tag_is_ptr(ptag) and pt.nl == 0 and tag_is_ptr(lpp.tag) { pt = lpp }
+    if pm.pmode == 2 { ptag = tag_with_mut(ptag) }
     ## Array-shaped parameters are already caller-backed places in the existing ABI (pmode 1: a
     ## `[T; N]` and the tuple parameters that share that representation); keep their element writes
     ## compatible with the pre-existing aggregate-parameter contract. Scalar parameters still require
@@ -12094,7 +12561,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   while pp0 != 0 {
     pm0 := deref(param_p(pp0))
     pt0 := resolve_ty(src, pm0.ts, pm0.tl, decls, upto)
-    if pt0.tag == 3 and layout_kind_is_byte(layout_kind(decls, src, pt0.ns, pt0.nl, deref(a))) and std_struct_has_aggregate_field(decls, src, pt0.ns, pt0.nl, deref(a)) { pbad = pm0.ns }
+    if tag_is_struct(pt0.tag) and layout_kind_is_byte(layout_kind(decls, src, pt0.ns, pt0.nl, deref(a))) and std_struct_has_aggregate_field(decls, src, pt0.ns, pt0.nl, deref(a)) { pbad = pm0.ns }
     pp0 = pm0.next
   }
   if pbad != 0 { failed = true; err = located_err(pbad) }
@@ -12133,9 +12600,9 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   ## silent miscompile). Reject fail-loud on the check path (lower rejects on the build path). Nested
   ## `if`s, not `and` — the seed mis-lowers a comparison AND-ed condition here.
   if d.name_len == 0 {
-    if rett0.tag == 3 { failed = true; err = located_err(d.name_start) }
-    if rett0.tag == 4 { failed = true; err = located_err(d.name_start) }
-    if rett0.tag == 6 { failed = true; err = located_err(d.name_start) }
+    if tag_is_struct(rett0.tag) { failed = true; err = located_err(d.name_start) }
+    if tag_is_enum(rett0.tag) { failed = true; err = located_err(d.name_start) }
+    if tag_is_str(rett0.tag) { failed = true; err = located_err(d.name_start) }
   }
   mut nloc := d.arity
   ## the declared return type's tag — threaded into `check_stmts` so EVERY early `return <e>`
@@ -12171,7 +12638,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   ## 255 (no real loop), so stray fn-level breaks impose nothing. Poisoned checker results remain unknown.
   if failed == false {
     lbvc := lbv_stmts(d.body_stmts, 255, decls, upto, src, a, ptr(locals), nloc)
-    if lbv_code_tag(lbvc) == 250 {
+    if lbv_code_is_conflict(lbvc) {
       failed = true
       lsp := lbv_code_span(lbvc)
       if lsp != 0 { err = mismatch_err(lsp, 0) } else { err = mismatch_err(d.name_start, 0) }
@@ -12203,7 +12670,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         rett := resolve_ty(src, d.ret_ts, d.ret_tl, decls, upto)
         mut tail_ty := bt
         tcall := expr_call_result_ty(d.value, decls, upto, src)
-        if tcall.tag != 0 { tail_ty = tcall }
+        if not tag_is_unknown(tcall.tag) { tail_ty = tcall }
         ## #687 — the brand judgement reads the COMPLETE return annotation, which `rett` above is not:
         ## the parser records a `[…]` result type as its `[` head token, so `rett` for `-> [A; 2]` is
         ## tag 7 over ONE byte and the element walk found nothing to judge. `rett` itself is left
@@ -12224,8 +12691,8 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         ## explicit Stmt::Return for the ordinary tag check to see, while `lbv_lit_tag` knows the exact
         ## `StrLit` shape. Unknown tails stay poison-tolerant when the declared result is unresolved.
         rtail_lit := lbv_lit_tag(d.value)
-        if rtail_lit != 0 and rett.tag != 0 { ptrint_probe_site("RESULT-TAIL", "taillit", true, rtail_lit, rett.tag, s_of(d.value, a), src) }
-        if rtail_lit != 0 and rett.tag != 0 and not tag_compat(rtail_lit, rett.tag) { err = mismatch_err(s_of(d.value, a), 0); failed = true }
+        if rtail_lit != 0 and not tag_is_unknown(rett.tag) { ptrint_probe_site("RESULT-TAIL", "taillit", true, rtail_lit, rett.tag, s_of(d.value, a), src) }
+        if rtail_lit != 0 and not tag_is_unknown(rett.tag) and not tag_compat(rtail_lit, rett.tag) { err = mismatch_err(s_of(d.value, a), 0); failed = true }
       }
       Result::Err(e) => { err = e; failed = true }
     }
@@ -12285,6 +12752,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
 ## no expressions to check (skip).
 check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> Result(usize, CheckErr) {
   ptrint_probe_decl(d)
+  SEMA_DECL_PARAMS = unchecked bitcast(usize, d.params_head)
   if d.kind == 1 { return check_fn(d, decls, upto, src, a) }
   if d.kind == 0 {
     mut failed_word := 0
@@ -12417,7 +12885,10 @@ sema_qual_ref_name := fn(e : ptr(Expr), src : ptr(u8)) -> SemaQRef {
       if vn.n != 0 { return SemaQRef(bs = vn.s, bl = vn.n, s = fs, n = fl) }
       SemaQRef(bs = 0, bl = 0, s = 0, n = 0)
     }
-    _ => { SemaQRef(bs = 0, bl = 0, s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { SemaQRef(bs = 0, bl = 0, s = 0, n = 0) }
   }
 }
 
@@ -12514,7 +12985,10 @@ sema_arch_rhs_name := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
       vn := expr_var_span(b)
       if vn.n != 0 and str_at((src + vn.s), vn.n) == "Arch" { VSpan(s = fs, n = fl) } else { VSpan(s = 0, n = 0) }
     }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## Fold a DECLARATION `when`-guard predicate (Comptime §7.1/§9; CT-5) for the x86_64 build: 1 = TRUE
@@ -12558,7 +13032,10 @@ guard_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
       }
       return -1
     }
-    _ => { return -1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return -1 }
   }
 }
 ## True iff decl `d` carries a `when`-guard that folds FALSE for this (x86_64) build — the spec's
@@ -12648,7 +13125,10 @@ sema_guard_size_operand := fn(e : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt:
       }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 ## ─── IS-KIND / FIELD-COUNT / NAMED-PREDICATE fold support (CT-4/CT-5) — the remaining `guard_fold_inst`
@@ -12769,11 +13249,10 @@ sema_builtin_aggregate_conversion_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec),
   if vs.n == 0 or nloc == 0 or not local_in(locals, nloc, src, vs.s, vs.n) { return false }
   lv := deref(locals)
   raw := local_ty(locals, nloc, src, vs.s, vs.n)
-  mut ltag : u8 = raw.tag
-  if ltag >= 128 and ltag != 255 { ltag = ltag - 128 }
-  if ltag == 12 { return not sema_tuple_conversion_exists(decls, upto, src, cs.s, cs.n, lv.mod_s, lv.mod_l) }
+  mut ltag : u8 = tag_unflag(raw.tag)
+  if tag_is_tuple_mark(ltag) { return not sema_tuple_conversion_exists(decls, upto, src, cs.s, cs.n, lv.mod_s, lv.mod_l) }
   agg := value_agg_ty(a0.e, decls, upto, src, locals, nloc)
-  if agg.tag != 3 and agg.tag != 4 { return false }
+  if not tag_is_struct(agg.tag) and not tag_is_enum(agg.tag) { return false }
   not sema_aggregate_conversion_exists(decls, upto, src, cs.s, cs.n, agg, lv.mod_s, lv.mod_l)
 }
 ## Is `nm` a built-in SCALAR type spelling (a recognized concrete scalar — never a user type-param name)?
@@ -12853,7 +13332,10 @@ sema_guard_typeinfo_kind := fn(scrut : ptr(Expr), tp : ptr(SGuardTP), decls : pt
       }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 ## The RESOLVED concrete type a `typeinfo(U)` names (through `tp`), else `{0,0}` — mirrors
@@ -12868,7 +13350,10 @@ sema_guard_typeinfo_arg_type := fn(scrut : ptr(Expr), tp : ptr(SGuardTP), src : 
       }
       return VSpan(s = 0, n = 0)
     }
-    _ => { return VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return VSpan(s = 0, n = 0) }
   }
 }
 ## The declared FIELD count (struct) / VARIANT count (enum) of a concrete type `(rs,rn)` — the fold value of
@@ -12901,7 +13386,10 @@ sema_guard_type_member_count := fn(rs : usize, rn : usize, decls : ptr(rt::Vec),
 sema_guard_fields_typeinfo_arg := fn(e : ptr(Expr), tp : ptr(SGuardTP), src : ptr(u8)) -> VSpan {
   match deref(e) {
     Expr::Field(inner, ifs, ifl) => { sema_guard_typeinfo_arg_type(inner, tp, src) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## If `e` is `typeinfo(T).fields.len` / `.variants.len` / `typeinfo(T).n`, the resolved instance type's member
@@ -12925,18 +13413,24 @@ sema_guard_field_count := fn(e : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt::
       }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 ## The SINGLE trailing bool expr of a candidate NAMED predicate body (a trailing-expr body OR a lone
 ## `return <expr>`); null otherwise. Byte-mirror of `lower::guard_stmt_ret_expr`/`guard_pred_body_expr`.
 sema_guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
-  match deref(stmt_p(Stmt, bs)) {
+  match deref(bs) {
     Stmt::Return(e, next) => {
       if unchecked bitcast(usize, next) == 0 { return e }
       unchecked bitcast(ptr(Expr), 0)
     }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
+      | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+      | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+      | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 sema_guard_pred_body_expr := fn(bs : ptr(mut Stmt), val : ptr(Expr)) -> ptr(Expr) {
@@ -13066,7 +13560,10 @@ sema_guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt:
       }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 ## The source span at which to LOCATE a when-guard reject for a generic call `[cs,cl)` with args `ah`, or
@@ -13195,7 +13692,8 @@ stmts_have_comptime := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool 
       Stmt::Unchecked(b, n) => { if stmts_have_comptime(b, a) { result = true } }
       Stmt::AllocWith(ae, b, n) => { if stmts_have_comptime(b, a) { result = true } }
       Stmt::Match(sc, ah, n) => { if arms_have_comptime(ah, a) { result = true } }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -13265,7 +13763,10 @@ expr_is_alloc_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), cnt : usize, src :
     }
     Expr::Try(inner) => { expr_is_alloc_call(inner, decls, cnt, src) }
     Expr::Unchecked(inner) => { expr_is_alloc_call(inner, decls, cnt, src) }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -13291,7 +13792,9 @@ stmts_have_alloc := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize, 
       Stmt::Unchecked(b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
       Stmt::AllocWith(ae, b, n) => { result = true }
       Stmt::Match(sc, ah, n) => { if arms_have_alloc(ah, decls, cnt, src, a) { result = true } }
-      _ => {}
+      Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+        | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -13349,7 +13852,10 @@ expr_calls_syscall := fn(e : ptr(Expr), decls : ptr(rt::Vec), cnt : usize, src :
     Expr::Call(cs, cl, na, ah) => { callee_is_os_call(decls, cnt, src, cs, cl) }
     Expr::Try(inner) => { expr_calls_syscall(inner, decls, cnt, src) }
     Expr::Unchecked(inner) => { expr_calls_syscall(inner, decls, cnt, src) }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -13372,7 +13878,9 @@ stmts_call_syscall := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize
       Stmt::Unchecked(b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
       Stmt::AllocWith(ae, b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
       Stmt::Match(sc, ah, n) => { if arms_call_syscall(ah, decls, cnt, src, a) { result = true } }
-      _ => {}
+      Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+        | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -13402,7 +13910,10 @@ limit_parser_synthetic_zero := fn(e : ptr(Expr)) -> bool {
   mut result := false
   match deref(e) {
     Expr::Num(v, s, n) => { result = v == 0 and s == 0 and n == 0 }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   result
 }
@@ -13414,7 +13925,10 @@ limit_parser_unary_neg_body := fn(inner : ptr(Expr)) -> bool {
         result = limit_parser_synthetic_zero(l)
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   result
 }
@@ -13477,7 +13991,8 @@ expr_has_unchecked := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> bool {
     Expr::Try(inner) => { expr_has_unchecked(inner, a) }
     Expr::Slice(base, lo, hi) => { expr_has_unchecked(base, a) or expr_has_unchecked(lo, a) or expr_has_unchecked(hi, a) }
     Expr::CompField(base, idx) => { expr_has_unchecked(base, a) or expr_has_unchecked(idx, a) }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -13521,7 +14036,7 @@ stmts_have_unchecked := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool
       Stmt::CompFor(vs, vl, iv, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
       Stmt::CompMatch(sc, ah, n) => { if arms_have_unchecked(ah, a) { result = true } }
       Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
-      _ => {}
+      Stmt::Continue => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -13590,7 +14105,8 @@ expr_has_abstraction := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena))
       while g != 0 and bad == false { ga := deref(arg_p(g)); if expr_has_abstraction(ga.e, src, a) { bad = true }; g = ga.next }
       bad
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -13626,7 +14142,6 @@ stmts_have_abstraction := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt
       Stmt::CompFor(vs, vl, iv, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
       Stmt::CompMatch(sc, ah, n) => { if arms_have_abstraction(ah, src, a) { result = true } }
       Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
-      _ => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -14134,15 +14649,6 @@ sema_slice_sugar_reject := fn(d : Decl, src : ptr(u8)) -> usize {
 ## parser stores only the HEAD of multi-token annotations (`ptr`, `fn`, `Box`, …), so this validator
 ## deliberately handles ONLY a single bare identifier. Generic/qualified/pointer/function forms keep
 ## their existing validators; a `T : type` parameter is an abstract type, not an unknown name.
-sema_fn_type_param_name := fn(d : Decl, src : ptr(u8), s : usize, n : usize) -> bool {
-  mut pp := d.params_head
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, s, n) { return true }
-    pp = pm.next
-  }
-  false
-}
 
 ## A plain type alias such as CheckErr := usize is recorded as a kind-0 decl with alias_ts/alias_tl,
 ## but lower_layout::type_name_known intentionally answers only built-ins and aggregate aliases. Keep
@@ -14166,7 +14672,7 @@ sema_type_alias_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   false
 }
 
-sema_signature_type_head_unknown := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
+sema_signature_type_head_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
   if n == 0 or not _sident1(src, s) { return 0 }
   mut i := 1
   while i < n {
@@ -14179,7 +14685,7 @@ sema_signature_type_head_unknown := fn(d : Decl, decls : ptr(rt::Vec), src : ptr
   ## A parser-recorded tail of `mod::Type` has the separator immediately before it; a complete
   ## qualified return span is caught by the same splitter. Visibility/identity remains separate.
   if sema_gref_split(src, s, n).qual { return 0 }
-  if sema_fn_type_param_name(d, src, s, n) { return 0 }
+  if sema_param_type_name(ph, src, s, n) { return 0 }
   ## The parser keeps only the head for `ptr(T)`, `fn(...) -> R`, and generic constructors. Do not
   ## turn those multi-token forms into a bare-name decision merely because their head is unresolved.
   mut p := s + n
@@ -14201,15 +14707,55 @@ sema_signature_type_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) 
   mut pp := d.params_head
   while pp != 0 {
     pm := deref(param_p(pp))
-    r0 := sema_signature_type_head_unknown(d, decls, src, pm.ts, pm.tl)
+    r0 := sema_signature_type_head_unknown(d.params_head, decls, src, pm.ts, pm.tl)
     if r0 != 0 { return r0 }
     pp = pm.next
   }
   if d.ret_tl != 0 {
-    r1 := sema_signature_type_head_unknown(d, decls, src, d.ret_ts, d.ret_tl)
+    r1 := sema_signature_type_head_unknown(d.params_head, decls, src, d.ret_ts, d.ret_tl)
     if r1 != 0 { return r1 }
   }
   0
+}
+
+## Issue #697 — a LOCAL annotation that names no type. The signature fence above refused an unknown
+## parameter or result type, while `x : NoSuchType = 42` and `p : ptr(NoSuchType) = …` checked at rc 0:
+## the annotation resolved to nothing, so it constrained nothing, and a `match` over the binding lost
+## its exhaustiveness check without a word. The same head test answers for the annotation's head, and
+## for the pointee of a `ptr(…)` annotation, bare or path-qualified (see the qualified branch for how
+## little a path is trusted). `ph` is the enclosing function's parameter list, so its own `T : type`
+## parameters stay names rather than references.
+sema_local_ann_type_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> usize {
+  if tl == 0 { return 0 }
+  r0 := sema_signature_type_head_unknown(ph, decls, src, ts, tl)
+  if r0 != 0 { return r0 }
+  if str_at((src + ts), 3) != "ptr" { return 0 }
+  mut p := ts + 3
+  while _sws1(src, p) { p += 1 }
+  if str_at((src + p), 1) != "(" { return 0 }
+  p += 1
+  while _sws1(src, p) { p += 1 }
+  if str_at((src + p), 4) == "mut " { p += 4 }
+  while _sws1(src, p) { p += 1 }
+  ps := p
+  mut scanning := true
+  while scanning {
+    c := str_at((src + p), 1)
+    if c == " " or c == ")" or c == "," or c == "(" or c == "\n" or c == "\t" or c == "\r" { scanning = false } else { p += 1 }
+  }
+  pn := p - ps
+  if pn == 0 { return 0 }
+  pg := sema_gref_split(src, ps, pn)
+  if pg.qual {
+    ## A path-qualified pointee is refused only when its last segment names no type ANYWHERE — no
+    ## struct/enum, alias or brand. Which module the head names is visibility's question (§3), and
+    ## `qualified_type_name_known` does not yet answer it for a multi-segment library path
+    ## (`base::alloc::AllocError` reads as unknown), so it cannot be the basis of a refusal.
+    if type_name_known(decls, src, pg.ns, pg.nl) or sema_type_alias_known(decls, src, pg.ns, pg.nl) { return 0 }
+    if brand_underlying(decls, src, pg.ns, pg.nl).n != 0 { return 0 }
+    return located_err(ps)
+  }
+  sema_signature_type_head_unknown(ph, decls, src, ps, pn)
 }
 
 ## Validate only the newly supported surface: module-qualified arguments of a generic type appearing
@@ -14718,9 +15264,9 @@ sema_vis_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, c
 ## #403 — a generic declaration's TYPE PARAMETER is a name, not a nominal type reference. `Result`'s
 ## `T`/`E` and `derive::eq`'s `T` are spelled in the SAME type positions a nominal name occupies, and a
 ## user package that happens to declare a private `T := struct {…}` would otherwise make the LIBRARY's
-## own signature a §3 violation (measured: 27 corpus fixtures). `sema_signature_type_head_unknown`
-## already carries this exemption as `sema_fn_type_param_name`; this is the same test against a param
-## list the caller passes explicitly, so the body walk (which has no enclosing declaration) can pass 0.
+## own signature a §3 violation (measured: 27 corpus fixtures). The caller passes the param list
+## explicitly, so the body walk (which has no enclosing declaration) can pass 0; the signature fence
+## `sema_signature_type_head_unknown` asks through this one test too (#697 removed its private copy).
 sema_param_type_name := fn(ph : ptr(mut Param), src : ptr(u8), s : usize, n : usize) -> bool {
   mut pp := ph
   while pp != 0 {
@@ -15129,7 +15675,7 @@ sema_collect_expr := fn(e : ptr(Expr), locals : ptr(LVec), src : ptr(u8), a : pt
     Expr::Lambda(pos, ph, rts, rtl, bh, val) => { sema_collect_stmts(bh, locals, src, a); sema_collect_expr(val, locals, src, a) }
     Expr::Bitcast(inner, ts, tl) => { sema_collect_expr(inner, locals, src, a) }
     Expr::Loop(body) => { sema_collect_stmts(body, locals, src, a) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::FnRef => {}
   }
 }
 
@@ -15170,7 +15716,6 @@ sema_collect_stmts := fn(head : ptr(mut Stmt), locals : ptr(LVec), src : ptr(u8)
         mut arm := ah
         while arm != 0 { am := deref(arm_p(arm)); mut bd := am.binds_head; while bd != 0 { sema_collect_name(locals, src, bnd_ns(bd), bnd_nl(bd)); bd = bnd_next(bd) }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }
       }
-      _ => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -15497,7 +16042,8 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
     }
     Expr::Bitcast(inner, ts, tl) => { sema_enum_global_array_value_bad(inner, decls, upto, src, locals, nloc, a, false) }
     Expr::Loop(body) => { sema_enum_global_array_value_bad_stmts(body, decls, upto, src, locals, nloc, a) }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::Call | Expr::StrLit | Expr::Index
+      | Expr::FloatLit | Expr::FnRef => { 0 }
   }
 }
 
@@ -15609,7 +16155,7 @@ sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(r
           arm = am.next
         }
       }
-      _ => {}
+      Stmt::Continue => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -15760,7 +16306,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
     }
     Expr::Bitcast(inner, ts, tl) => { sema_vis_expr(inner, decls, src, cs, cl, locals, nloc, a) }
     Expr::Loop(body) => { sema_vis_stmts(body, decls, src, cs, cl, locals, nloc, a) }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::FnRef => { 0 }
   }
 }
 
@@ -15805,7 +16351,6 @@ sema_vis_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), 
         mut arm := ah
         while arm != 0 and r == 0 { am := deref(arm_p(arm)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }
       }
-      _ => {}
     }
     cur = stmt_next_at(cur, a)
   }

@@ -292,6 +292,19 @@ main := fn() -> u64 {
 }
 AL
 
+  echo "  STRUCT-LITERAL FIELD (#688) — the refusal reached it through its own walk and the census did not:"
+  pl_crossing struct_field B2 1 <<'AL'
+A := brand(u64)
+B := brand(u64)
+S := struct { f : A }
+main := fn() -> u64 {
+  b : B = B(2)
+  x : S = S(f = A(1))
+  y := S(f = b)
+  return u64(x.f)
+}
+AL
+
   echo
   echo "=== planted LEGAL programs — the other direction: no row, and proof the elements were seen ==="
   pl_clean array_legal 8 <<'AL'
@@ -335,6 +348,16 @@ main := fn() -> u64 {
   r1 := take([A(3), A(4)])
   r2 := take(as)
   return r1 + r2
+}
+AL
+
+  # The struct-literal field written the legal way: two visited field sinks (and the binding's own).
+  pl_clean struct_field_legal 2 <<'AL'
+A := brand(u64)
+S := struct { f : A, g : u64 }
+main := fn() -> u64 {
+  x := S(f = A(1), g = 2)
+  return u64(x.f) + x.g
 }
 AL
 

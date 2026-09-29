@@ -121,7 +121,10 @@ body_binding := fn(head : ptr(mut Stmt), ns2 : usize, nl2 : usize, src : ptr(u8)
         if streq(src, ans, anl, ns2, nl2) { r = BindInfo(rhs = v, ns = ans, nl = anl) }
         s = nx
       }
-      _ => {}
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
     if isas == false { s = lower_stmt_nx(s, a) }
   }
@@ -234,7 +237,10 @@ pub ind_call_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
       FNVR_S = res.s
       FNVR_N = res.n
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -275,7 +281,10 @@ pub fnfield_call_ret_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
