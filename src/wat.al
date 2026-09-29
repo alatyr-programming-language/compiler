@@ -7778,8 +7778,13 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         if not cfdone { push_str(sb, "    (unreachable) (; comptime-for fields: needs a struct mono instance ;)\n") }
         s = cnx
       }
-      ## #544 stage 1 — this `_` STAYS: `deref(stmt_p(Stmt, …))` is blind (#660/#680). Deleting it is
-      ## accepted SILENTLY, rc 0. See the census note above `wat_local_ann_signed`.
+      ## #464 residual — this `_` STAYS until a seed promotion, and only for that reason. The scrutinee
+      ## is no longer blind (#660/#680/#716 type it), so the group arm of the Stmt variants it absorbs
+      ## is correct and ready; but its body holds a string literal, and the frozen `seed/alatyr`
+      ## predates #673's fix (PR #685), so a group arm here would define one `.Lstr` label once per
+      ## alternative and `as` would refuse the self-build. `.agents/skills/alatyr-lane/
+      ## wildcard_enumeration.md` §3 records the measurement; enumerate this arm, with a non-vacuity
+      ## check naming this line, in the first change after the seed is promoted.
       _ => { push_str(sb, "    (unreachable) (; unsupported stmt ;)\n") ; s = 0 }
     }
   }

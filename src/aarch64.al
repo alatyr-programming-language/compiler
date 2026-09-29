@@ -5992,8 +5992,10 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
     ## ALTERNATIVE, and this body holds a string literal, so the eight absorbed variants (StructLit,
     ## EnumLit, StrLit, ArrayLit, Try, Slice, Lambda, Loop) produce EIGHT `.rodata` definitions under
     ## one `.Lstr<m>_<k>` label and `as` refuses the self-build. Measured, not inferred: the enumerated
-    ## form stops at `Error: symbol '.Lstr1_617' is already defined`, eight times. Enumerate this one
-    ## when #673 lands, with a non-vacuity check that names this line.
+    ## form stops at `Error: symbol '.Lstr1_617' is already defined`, eight times. #673 is fixed in
+    ## `src/` (PR #685), but the frozen `seed/alatyr` that builds `src/` predates the fix, so this arm
+    ## STAYS until a seed promotion (#464 residual; `.agents/skills/alatyr-lane/
+    ## wildcard_enumeration.md` §3). Enumerate it then, with a non-vacuity check that names this line.
     _ => { push_str(sb, "  brk #0 // unsupported expr\n") }
   }
 }
