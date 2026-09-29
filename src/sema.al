@@ -8178,20 +8178,14 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       }
     }
   }
-  ## Issue #716 — the big `match` below used to be written `node := deref(e) ; match node`, which
-  ## the x86_64 lowering could not type: it compared every arm against tag 0, so only `Expr::Num`
-  ## (variant 0) was ever taken and every other expression fell off the end with a garbage `Result`.
-  ## That is the "big-match arm is not dispatched under the seed" note this file repeats (scar #2).
-  ## The arms now live in `check_expr_arms`, whose `match deref(e)` the lowering types, and they are
-  ## switched on one variant at a time: a variant listed in the first arm here is checked by its
-  ## written arm; every other variant answers UNKNOWN (tag 0, poison-tolerant) — explicitly, which
-  ## is what the garbage was being read as.
-  match deref(e) {
-    Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
-      | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref | Expr::StructLit | Expr::EnumLit | Expr::ArrayLit | Expr::Call => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::Field => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
-  }
+  ## Issue #716 — this function's big `match` used to be written `node := deref(e) ; match node`,
+  ## which the x86_64 lowering could not type: it compared every arm against tag 0, so only
+  ## `Expr::Num` (variant 0) was ever taken and every other expression fell off the end with a garbage
+  ## `Result`. That is the "big-match arm is not dispatched under the seed" note this file repeats
+  ## (scar #2). The arms live in `check_expr_arms`, whose `match deref(e)` the lowering types; they
+  ## were switched on one variant at a time (#716, then #726 for the last six), and every variant now
+  ## reaches its own written arm.
+  check_expr_arms(e, decls, upto, src, a, locals, nloc)
 }
 
 ## #716 — an operand kind `check_expr`'s `Bin` arm leaves to the lowering: a struct, enum or array (a
@@ -8203,8 +8197,7 @@ sema_bin_operand_deferred := fn(t : Ty) -> bool {
   }
 }
 ## Issue #716 — the per-variant arms of `check_expr`, over a pointer PARAMETER so the lowering
-## types the scrutinee. Only the variants `check_expr` routes here are ever checked by their arm; the
-## others are written, and have never run.
+## types the scrutinee. Every variant is routed here (#726).
 check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> Result(Ty, CheckErr) {
   match deref(e) {
     Expr::Num(v, s, n) => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyInt, ns = 0, nl = 0)) }
@@ -8419,7 +8412,19 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       ## access, not a value — its type is opaque (tag 0, accepted). Without this `check` rejects every
       ## valid `atomic`/`comptime`-arch program while `build` accepts it (check/build parity, §1 item 5).
       if is_prelude_ns_var(base, src) { pu := Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)); return pu }
-      tb := check_expr(base, decls, upto, src, a, locals, nloc)?
+      ## #726 / #752 — the base's NAME is read below (`type_decl_index`), and `x := check_expr(…)?`
+      ## delivers only the carrier's first word: `tb.ns`/`tb.nl` were frame garbage, and the first
+      ## time this arm ran `check` died with SIGSEGV in the name lookup on 40 corpus programs. Bind
+      ## through an explicit `match`, which delivers the whole payload.
+      tbr := check_expr(base, decls, upto, src, a, locals, nloc)
+      mut tb := Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)
+      mut tberr : CheckErr = 0
+      mut tbfail := false
+      match tbr {
+        Result::Ok(tb0) => { tb = tb0 }
+        Result::Err(tbe) => { tberr = tbe; tbfail = true }
+      }
+      if tbfail { fe := Result(Ty, CheckErr).Err(tberr); return fe }
       if kind_is_unknown(tb.kind) { unk := Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)); return unk }
       ## Only a clear NON-aggregate scalar (int/bool) genuinely has no fields → mismatch. A `str` carries
       ## the `.ptr`/`.len` pseudo-fields, an array/slice `.len`, and a `ptr(T)` AUTO-DEREFS to the pointee
