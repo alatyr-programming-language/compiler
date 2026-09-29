@@ -119,7 +119,8 @@ of 24**, and all three blind arms are the per-arm class — two are `#660`'s `ma
   declared result names an enum (or a pointer to one). Measured with a compiler built from the fixed
   tree, the whole-tree over-reach was **one** site — `comptime::fold`, dead code whose `match` over
   `Expr` named 17 of 24 variants with no `_` — and `parser.al`'s third arm (now `:3551`) is refused
-  at its own line when its `_` is deleted, where the parent accepts it silently; it is enumerated.
+  at its own line when its `_` is deleted, where the parent accepts it silently; it was enumerated,
+  and since #716 it is `expr_is_num(init_e)` — the inline `match` was one the lowering could not type.
   **What stays blind is the GENERIC callee** — `stmt_p(Stmt, st)` declares `-> ptr(mut T)`, and `T`
   is not an enum until it is substituted. That is #660, and it is every one of `src/aarch64.al`'s 24
   and eight of `src/lower/`'s 13; the other five there were never classified and may be #680's shape,
