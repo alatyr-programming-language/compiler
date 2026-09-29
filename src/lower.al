@@ -11979,6 +11979,23 @@ deref_call_pointee_unresolved := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : p
   call_ret_pointee_unresolved(inner, decls, src, a)
 }
 
+## Issue #716 — the value an INTEGER-dispatched `match` arm compares against. Every x86_64 `match`
+## lowering resolves a variant arm (`G =>`, `Expr::Num(…) =>`) to its discriminant only when it
+## recognised the scrutinee as an enum; otherwise it falls to this integer path, where such an arm's
+## `lit` is 0. So an enum scrutinee the lowering could not type — `match deref(ptr(mut x))` over a
+## local, a `deref` of a call, a value local bound from either — compared EVERY arm against 0: the
+## first variant matched by coincidence and every other variant took no arm, silently. The compiler
+## did this to itself at 57 arms, `sema::check_expr`'s whole dispatch among them. A variant arm on
+## this path is the lowering failing to see the enum, never a pattern it can compare, so it is a
+## located refusal rather than a 0.
+int_arm_value := fn(am : Arm, src : ptr(u8)) -> i64 {
+  if am.vl != 0 {
+    lower_show_src_line(src, am.vs)
+    panic("selfhost: this `match` arm names an enum variant, but the lowering cannot see the scrutinee's enum type (the source line above), so it has no discriminant to compare against. Match over an annotated pointer parameter (`p : ptr(E)` then `match deref(p)`) or pass the value to a function that does (#716).")
+  }
+  am.lit
+}
+
 ## The LOCATED half of that boundary: write the offending source line to stderr (the lean lower's only
 ## diagnostic channel, `lower_show_src_line`), then reject. `ce` is the CALL whose returned pointee
 ## could not be resolved.
@@ -16874,7 +16891,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           hadwild = true
         } else {
           push_str(sb, "  movq $")
-          push_int(sb, am.lit)
+          push_int(sb, int_arm_value(am, cx.src))
           push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
           emit_label(sb, lbody)
           push_str(sb, "\n")
@@ -21356,7 +21373,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
           hadwild = true
         } else {
           push_str(sb, "  movq $")
-          push_int(sb, am.lit)
+          push_int(sb, int_arm_value(am, cx.src))
           push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
           emit_label(sb, lbody)
           push_str(sb, "\n")
@@ -21881,7 +21898,7 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Stmt), base : i6
       hadwild = true
     } else {
       push_str(sb, "  movq $")
-      push_int(sb, am.lit)
+      push_int(sb, int_arm_value(am, cx.src))
       push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
       emit_label(sb, lbody)
       push_str(sb, "\n")
@@ -22183,8 +22200,9 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
     } else {
       ## an enum scrutinee compares to the variant's discriminant index; an integer
       ## scrutinee compares to the arm's literal.
-      mut cmpv := am.lit
+      mut cmpv : i64 = 0
       if sise { cmpv = variant_index(cx.decls, cx.src, ses, sel, am.vs, am.vl, deref(cx.mar)) }
+      else { cmpv = int_arm_value(am, cx.src) }
       push_str(sb, "  movq $")
       push_int(sb, cmpv)
       push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")

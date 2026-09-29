@@ -6418,6 +6418,14 @@ build_reject_has issue660_nonexh_generic_value "type mismatch at line 7"
 check_reject issue660_nonexh_generic_value
 check_accept issue660_exhaustive_generic
 run issue660_exhaustive_generic 42
+# Issue #716 — a `match` arm naming an enum variant, over a scrutinee whose enum type the x86_64
+# lowering cannot see, compared against tag 0: the first variant matched by coincidence and every
+# other took no arm. The three built and ran to 1 on the parent; each is now a located refusal. The
+# control is the spelling the diagnostic recommends.
+build_reject_has reject_enum_match_deref_local "cannot see the scrutinee's enum type"
+build_reject_has reject_enum_match_value_of_deref "cannot see the scrutinee's enum type"
+build_reject_has reject_enum_match_generic_deref "cannot see the scrutinee's enum type"
+run accept_enum_match_param_deref 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42

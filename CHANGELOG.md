@@ -140,6 +140,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   `match deref(id(C, p))`, `x := deref(id(C, p))` and `c := pass(C, v)` skipped Control Flow §5.1
   and a missing variant compiled at rc 0. The type argument at that parameter's position is now the
   type, for a sole declaration and a bare type-name argument (#660).
+- **An enum `match` the x86_64 lowering cannot type is refused instead of miscompiled.** A variant arm
+  over a scrutinee whose enum type the lowering could not see — `match deref(ptr(mut x))` over a
+  local, a value bound from it, `deref` of a call — was compared against tag 0: the first variant
+  matched by coincidence and every other variant took no arm, silently. The compiler did this to
+  itself at 57 arms, `sema::check_expr`'s whole dispatch among them. Those sites are rewritten
+  (PRs under #716), and the fallback is now a located refusal whose diagnostic names the spelling
+  that works (`match deref(p)` over an annotated pointer parameter) (#716).
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness
