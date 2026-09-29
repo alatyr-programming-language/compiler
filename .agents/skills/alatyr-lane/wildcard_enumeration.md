@@ -90,16 +90,22 @@ before claiming it:
   **39 caught of 63**, where #662's parent answered **0 of 63**. The class is gone; the file was not
   finished by fixing it. Its remaining **24** are blind for the third reason below, and that reason
   is per ARM, not per file: all 24 are `match st` over `st := deref(stmt_p(Stmt, <h>))`.
-- **#660** — a single *site* is blind when its scrutinee's enum type arrives through a generic
-  function's return type. This one is per-arm, not per-file, and it has a workaround: annotating the
+- **#660 — FIXED; its premise was half wrong, which is worth knowing.** A single *site* was blind
+  when its scrutinee's enum type arrived through a call. The shape this stage kept meeting,
+  `st := deref(stmt_p(Stmt, …))`, is NOT generic in its result — `ast::stmt_p` declares
+  `-> ptr(mut Stmt)` — and #680 made it visible; a truly generic result (`-> T`, `-> ptr(mut T)`) is
+  resolved from the type argument at T's position since #660. Re-measure an arm this bullet used to
+  cover rather than trusting the note beside it. Historical text follows. This one is per-arm, not per-file, and it has a workaround: annotating the
   local (`stmt : Stmt = …`) or the pointer (`sp : ptr(mut Stmt) = …`) restores the check. **Spell the
   annotation BARE.** Measured on `src/wat.al`: over the same caught site, `ee : ptr(Expr) = e`
   keeps the check (deleting the arm → rc 1 `type mismatch`) while `ee : ptr(ast::Expr) = e` — the
   path-qualified spelling of the same type — turns it OFF (rc 0, silent), and `ee := e`, no
   annotation at all, keeps it. A bogus name in that slot, `ptr(ast::NoSuchTypeQQ)` or
   `ptr(NoSuchTypeQQ)`, is also accepted at rc 0, so the annotation is not being resolved rather than
-  resolved to something else; that is **#697**. The consequence for this stage is practical: a
-  follow-up table run with the qualified spelling reports "annotation does not help" and is wrong.
+  resolved to something else; that was **#697**, now fixed: `ptr(ast::Expr)` keeps the check like
+  `ptr(Expr)`, and a bogus name is refused at its line. A qualified path into a LIBRARY module is
+  still not resolved, and neither is one whose type name is declared twice (`rt::StrBuf`), so the
+  bare spelling remains the one to write when the point is to switch the check on.
 
 Re-measured a third time on `src/parser.al` (`60338f4`, compiler built from that tree): **21 caught
 of 24**, and all three blind arms are the per-arm class — two are `#660`'s `match x` over
@@ -113,7 +119,8 @@ of 24**, and all three blind arms are the per-arm class — two are `#660`'s `ma
   declared result names an enum (or a pointer to one). Measured with a compiler built from the fixed
   tree, the whole-tree over-reach was **one** site — `comptime::fold`, dead code whose `match` over
   `Expr` named 17 of 24 variants with no `_` — and `parser.al`'s third arm (now `:3551`) is refused
-  at its own line when its `_` is deleted, where the parent accepts it silently; it is enumerated.
+  at its own line when its `_` is deleted, where the parent accepts it silently; it was enumerated,
+  and since #716 it is `expr_is_num(init_e)` — the inline `match` was one the lowering could not type.
   **What stays blind is the GENERIC callee** — `stmt_p(Stmt, st)` declares `-> ptr(mut T)`, and `T`
   is not an enum until it is substituted. That is #660, and it is every one of `src/aarch64.al`'s 24
   and eight of `src/lower/`'s 13; the other five there were never classified and may be #680's shape,

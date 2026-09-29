@@ -322,7 +322,10 @@ d_array_lit := fn(e : ptr(Expr)) -> bool {
   mut r := false
   match deref(e) {
     Expr::ArrayLit(nel, ehead) => { r = true }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -486,7 +489,8 @@ d_lift_expr := fn(e : ptr(Expr), ms : usize, ml : usize, in out decls : rt::Vec,
     Expr::Index(b, ix) => { d_lift_expr(b, ms, ml, decls, na, tar); d_lift_expr(ix, ms, ml, decls, na, tar) }
     Expr::Field(b, fs, fl) => { d_lift_expr(b, ms, ml, decls, na, tar) }
     Expr::Slice(b, lo, hi) => { d_lift_expr(b, ms, ml, decls, na, tar); d_lift_expr(lo, ms, ml, decls, na, tar); d_lift_expr(hi, ms, ml, decls, na, tar) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::EnumLit
+      | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::CompField | Expr::FnRef | Expr::Loop => {}
   }
 }
 
@@ -524,7 +528,7 @@ d_lift_stmts := fn(head : ptr(mut Stmt), ms : usize, ml : usize, in out decls : 
       Stmt::CompFor(vs, vl, iv, b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
       Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
       Stmt::CompMatch(sc, ah, nx) => { d_lift_arms(ah, ms, ml, decls, na, tar) }
-      _ => {}
+      Stmt::Break | Stmt::Continue => {}
     }
     s = d_next_stmt(s, na)
   }
@@ -589,7 +593,10 @@ d_lit_type_span := fn(v : ptr(Expr), src : ptr(u8)) -> CSpan {
   match deref(v) {
     Expr::StructLit(ss, sl, nf, fh) => { CSpan(s = ss, n = sl) }
     Expr::EnumLit(es, el, vs, vl, np, ph) => { CSpan(s = es, n = el) }
-    _ => { CSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CSpan(s = 0, n = 0) }
   }
 }
 d_is_agg_type_name := fn(decls : rt::Vec, src : ptr(u8), ts : usize, tl : usize) -> bool {
@@ -616,7 +623,10 @@ d_call_ret_type_span := fn(v : ptr(Expr), decls : rt::Vec, src : ptr(u8)) -> CSp
         i = i + 1
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -671,7 +681,9 @@ d_local_type_span := fn(head : ptr(mut Stmt), cs : usize, cl : usize, decls : rt
       Stmt::Loop(b, nx) => { rl := d_local_type_span(b, cs, cl, decls, na, src); if rl.n != 0 { r = rl } }
       Stmt::Unchecked(b, nx) => { rl := d_local_type_span(b, cs, cl, decls, na, src); if rl.n != 0 { r = rl } }
       Stmt::AllocWith(ae, b, nx) => { rl := d_local_type_span(b, cs, cl, decls, na, src); if rl.n != 0 { r = rl } }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -704,7 +716,10 @@ d_flag_nonscalar_base := fn(b : ptr(Expr), ph : ptr(mut Param), na : ptr(mut rt:
         if ts.n == 0 { deref(hardreject) = true }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 d_cap_free := fn(e : ptr(Expr), ph : ptr(mut Param), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), caps : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
@@ -731,7 +746,9 @@ d_cap_free := fn(e : ptr(Expr), ph : ptr(mut Param), na : ptr(mut rt::Arena), de
         g = ga.next
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
+      | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
 }
 ## Collect the lambda body's INNER LOCAL names (`:=` binding LHS + `for` loop vars) into `locals`, so
@@ -765,7 +782,8 @@ d_cap_locals := fn(head : ptr(mut Stmt), na : ptr(mut rt::Arena), locals : ptr(r
       Stmt::CompMatch(sc, ah, nx) => { deref(unhandled) = true }
       Stmt::CompFor(vs, vl, iv, b, nx) => { deref(unhandled) = true }
       Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { deref(unhandled) = true }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -806,7 +824,7 @@ d_cap_free_stmts := fn(head : ptr(mut Stmt), ph : ptr(mut Param), na : ptr(mut r
       Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_cap_free(lo, ph, na, decls, src, locals, caps, body, hardreject) }; if unchecked bitcast(usize, hi) != 0 { d_cap_free(hi, ph, na, decls, src, locals, caps, body, hardreject) }; d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
       Stmt::CompFor(vs, vl, iv, b, nx) => { d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
       Stmt::CompMatch(sc, ah, nx) => { d_cap_free(sc, ph, na, decls, src, locals, caps, body, hardreject) }
-      _ => {}
+      Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -832,7 +850,9 @@ d_expr_uses_var := fn(e : ptr(Expr), s : usize, n : usize, na : ptr(mut rt::Aren
         g = ga.next
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
+      | Expr::ArrayLit | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
   }
 }
 d_stmts_use_var := fn(head : ptr(mut Stmt), s : usize, n : usize, na : ptr(mut rt::Arena), src : ptr(u8), found : ptr(mut bool)) {
@@ -855,7 +875,8 @@ d_stmts_use_var := fn(head : ptr(mut Stmt), s : usize, n : usize, na : ptr(mut r
       Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_uses_var(fpv, s, n, na, src, found) }
       Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { d_expr_uses_var(v, s, n, na, src, found) }
       Stmt::Match(sc, ah, nx) => { d_expr_uses_var(sc, s, n, na, src, found) }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+        | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -907,7 +928,9 @@ d_expr_rw_calls := fn(e : ptr(Expr), fs : usize, fl : usize, caps : ptr(rt::Vec)
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::EnumLit
+      | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 d_stmts_rw_calls := fn(head : ptr(mut Stmt), fs : usize, fl : usize, caps : ptr(rt::Vec), na : ptr(mut rt::Arena), src : ptr(u8)) {
@@ -930,7 +953,8 @@ d_stmts_rw_calls := fn(head : ptr(mut Stmt), fs : usize, fl : usize, caps : ptr(
       Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_rw_calls(fpv, fs, fl, caps, na, src) }
       Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_expr_rw_calls(v, fs, fl, caps, na, src) }
       Stmt::Match(sc, ah, nx) => { d_expr_rw_calls(sc, fs, fl, caps, na, src) }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+        | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -958,7 +982,10 @@ d_is_var_named := fn(e : ptr(Expr), fs : usize, fl : usize, src : ptr(u8)) -> us
   mut r := 0
   match deref(e) {
     Expr::Var(vs, vn) => { if str_at((src + vs), vn) == str_at((src + fs), fl) { r = 1 } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -989,7 +1016,9 @@ d_scan_hof_expr := fn(e : ptr(Expr), fs : usize, fl : usize, na : ptr(mut rt::Ar
         idx = idx + 1
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
+      | Expr::ArrayLit | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
   }
 }
 d_scan_hof_stmts := fn(head : ptr(mut Stmt), fs : usize, fl : usize, na : ptr(mut rt::Arena), src : ptr(u8), nt : ptr(mut usize), nf : ptr(mut usize), hs : ptr(mut usize), hl : ptr(mut usize), ap : ptr(mut usize)) {
@@ -1012,7 +1041,8 @@ d_scan_hof_stmts := fn(head : ptr(mut Stmt), fs : usize, fl : usize, na : ptr(mu
       Stmt::FieldPathAssign(pl, fpv, nx) => { d_scan_hof_expr(fpv, fs, fl, na, src, nt, nf, hs, hl, ap) }
       Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_scan_hof_expr(v, fs, fl, na, src, nt, nf, hs, hl, ap) }
       Stmt::Match(sc, ah, nx) => { d_scan_hof_expr(sc, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+        | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -1038,7 +1068,9 @@ d_count_calls_expr := fn(e : ptr(Expr), cs : usize, cl : usize, na : ptr(mut rt:
         g = ga.next
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::EnumLit
+      | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
 }
 d_count_calls_stmts := fn(head : ptr(mut Stmt), cs : usize, cl : usize, na : ptr(mut rt::Arena), src : ptr(u8), cnt : ptr(mut usize)) {
@@ -1061,7 +1093,8 @@ d_count_calls_stmts := fn(head : ptr(mut Stmt), cs : usize, cl : usize, na : ptr
       Stmt::FieldPathAssign(pl, fpv, nx) => { d_count_calls_expr(fpv, cs, cl, na, src, cnt) }
       Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_count_calls_expr(v, cs, cl, na, src, cnt) }
       Stmt::Match(sc, ah, nx) => { d_count_calls_expr(sc, cs, cl, na, src, cnt) }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+        | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -1238,7 +1271,9 @@ d_expr_rw_hof_site := fn(e : ptr(Expr), hs : usize, hl : usize, fs : usize, fl :
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::EnumLit
+      | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 d_stmts_rw_hof_site := fn(head : ptr(mut Stmt), hs : usize, hl : usize, fs : usize, fl : usize, ns : usize, nl : usize, caps : ptr(rt::Vec), na : ptr(mut rt::Arena), src : ptr(u8)) {
@@ -1261,7 +1296,8 @@ d_stmts_rw_hof_site := fn(head : ptr(mut Stmt), hs : usize, hl : usize, fs : usi
       Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_rw_hof_site(fpv, hs, hl, fs, fl, ns, nl, caps, na, src) }
       Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_expr_rw_hof_site(v, hs, hl, fs, fl, ns, nl, caps, na, src) }
       Stmt::Match(sc, ah, nx) => { d_expr_rw_hof_site(sc, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+        | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -1384,7 +1420,10 @@ d_single_return := fn(bh : usize, na : ptr(mut rt::Arena)) -> ptr(Expr) {
     st := deref(stmt_p(Stmt, bh))
     match st {
       Stmt::Return(rv, nx) => { if nx == 0 { r = rv } }
-      _ => {}
+      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
   }
   r
@@ -1395,7 +1434,10 @@ d_addr_is_var := fn(e : ptr(Expr), fs : usize, fl : usize, src : ptr(u8)) -> usi
   mut r := 0
   match deref(e) {
     Expr::AddrOf(inner) => { r = d_is_var_named(inner, fs, fl, src) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -1415,7 +1457,9 @@ d_uses_dyn_over_expr := fn(e : ptr(Expr), fs : usize, fl : usize, na : ptr(mut r
       mut g := ah
       while g != 0 { ga := deref(arg_p(g)); d_uses_dyn_over_expr(ga.e, fs, fl, na, src, res); g = ga.next }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::EnumLit
+      | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 d_uses_dyn_over_stmts := fn(head : ptr(mut Stmt), fs : usize, fl : usize, na : ptr(mut rt::Arena), src : ptr(u8), res : ptr(mut usize)) {
@@ -1431,7 +1475,9 @@ d_uses_dyn_over_stmts := fn(head : ptr(mut Stmt), fs : usize, fl : usize, na : p
       Stmt::Loop(b, nx) => { d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
       Stmt::Unchecked(b, nx) => { d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
       Stmt::AllocWith(ae, b, nx) => { d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Match | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -1498,7 +1544,10 @@ d_try_capture := fn(fs : usize, fl : usize, v : ptr(Expr), body : ptr(mut Stmt),
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 ## ---- FN-6 escaping closures via FORWARDING-HOF inlining (a slice of `dyn`, no fat-value ABI) ----
@@ -1511,13 +1560,19 @@ CallInfo := struct { is_call : bool, cs : usize, cl : usize, nargs : usize, ah :
 expr_call_info := fn(e : ptr(Expr)) -> CallInfo {
   match deref(e) {
     Expr::Call(cs, cl, nargs, ah) => { CallInfo(is_call = true, cs = cs, cl = cl, nargs = nargs, ah = ah) }
-    _ => { CallInfo(is_call = false, cs = 0, cl = 0, nargs = 0, ah = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CallInfo(is_call = false, cs = 0, cl = 0, nargs = 0, ah = 0) }
   }
 }
 d_var_span := fn(e : ptr(Expr)) -> CSpan {
   match deref(e) {
     Expr::Var(s, n) => { CSpan(s = s, n = n) }
-    _ => { CSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CSpan(s = 0, n = 0) }
   }
 }
 pm_next := fn(p : ptr(mut Param), na : ptr(mut rt::Arena)) -> ptr(mut Param) { deref(param_p(p)).next }
@@ -1729,7 +1784,9 @@ d_rewrite_fwd_expr := fn(e : ptr(Expr), decls : rt::Vec, na : ptr(mut rt::Arena)
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::Field | Expr::EnumLit | Expr::AddrOf
+      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 d_rewrite_fwd_stmts := fn(head : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
@@ -1745,7 +1802,9 @@ d_rewrite_fwd_stmts := fn(head : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt
       Stmt::Loop(b, nx) => { d_rewrite_fwd_stmts(b, decls, na, src) }
       Stmt::Unchecked(b, nx) => { d_rewrite_fwd_stmts(b, decls, na, src) }
       Stmt::AllocWith(ae, b, nx) => { d_rewrite_fwd_stmts(b, decls, na, src) }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Match | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -1781,7 +1840,9 @@ d_name_is_dyn_local := fn(head : ptr(mut Stmt), na : ptr(mut rt::Arena), src : p
       Stmt::Loop(b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
       Stmt::Unchecked(b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
       Stmt::AllocWith(ae, b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -1804,7 +1865,9 @@ d_expr_has_dynvar := fn(e : ptr(Expr), body : ptr(mut Stmt), na : ptr(mut rt::Ar
       mut g := ah
       while g != 0 { ga := deref(arg_p(g)); d_expr_has_dynvar(ga.e, body, na, src, res); g = ga.next }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
+      | Expr::ArrayLit | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
   }
 }
 ## Scan `head`'s statements for an escaping use of a `dyn` local (a `dyn`-named `Expr::Var` in any value
@@ -1829,7 +1892,8 @@ d_stmts_dyn_escape := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), na : ptr(mu
       Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_has_dynvar(fpv, body, na, src, res) }
       Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { d_expr_has_dynvar(v, body, na, src, res) }
       Stmt::Match(sc, ah, nx) => { d_expr_has_dynvar(sc, body, na, src, res) }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+        | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -1848,7 +1912,10 @@ d_capture_pass := fn(body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt
     x := deref(stmt_p(Stmt, st))
     match x {
       Stmt::Assign(fs, fl, v, nx) => { d_try_capture(fs, fl, v, body, fn_val, decls, na, eph, src) }
-      _ => {}
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -1945,7 +2012,9 @@ d_elide_alloc_expr := fn(e : ptr(Expr), amb : usize, decls : rt::Vec, na : ptr(m
       while g != 0 { ga := deref(arg_p(g)); d_elide_alloc_expr(ga.e, amb, decls, na, src); g = ga.next }
       if amb != 0 { d_elide_call(e, cs, cl, nargs, ah, amb, decls, na, src) }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 d_elide_alloc_stmts := fn(head : ptr(mut Stmt), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
@@ -1962,7 +2031,9 @@ d_elide_alloc_stmts := fn(head : ptr(mut Stmt), amb : usize, decls : rt::Vec, na
       Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_elide_alloc_expr(lo, amb, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_elide_alloc_expr(hi, amb, decls, na, src) }; d_elide_alloc_stmts(b, amb, decls, na, src) }
       Stmt::Unchecked(b, nx) => { d_elide_alloc_stmts(b, amb, decls, na, src) }
       Stmt::AllocWith(ae, b, nx) => { d_elide_alloc_stmts(b, unchecked bitcast(usize, ae), decls, na, src) }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -2138,7 +2209,9 @@ d_local_binding := fn(head : ptr(mut Stmt), src : ptr(u8), vs : usize, vl : usiz
         if r.nl == 0 { r9 := d_local_binding(el, src, vs, vl, na); if r9.nl != 0 { r = r9 } }
       }
       Stmt::CompMatch(sc, ah, nx) => { if r.nl == 0 { ra := d_local_binding_arms(ah, src, vs, vl, na); if ra.nl != 0 { r = ra } } }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompFor | Stmt::CompForRange => {}
     }
     s = d_next_stmt(s, na)
   }
@@ -2259,7 +2332,10 @@ d_expr_type_base := fn(e : ptr(Expr), decls : rt::Vec, src : ptr(u8), body : ptr
     Expr::StructLit(sns, snl, snn, sah) => { r = d_type_base_span(src, sns, snl) }
     Expr::Call(cs, cl, cnn, cah) => { r = d_call_ret_base(cs, cl, cnn, cah, decls, src, body, ph, na, depth) }
     Expr::Unchecked(inner) => { r = d_expr_type_base(inner, decls, src, body, ph, na, depth + 1) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
   }
   r
 }
@@ -2387,7 +2463,8 @@ d_iterfor_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), ph : ptr(mut P
       Stmt::CompFor(cvs, cvl, civ, cfb, cfnx) => { d_iterfor_stmts(cfb, body, ph, decls, src, na) }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb2, rnx) => { d_iterfor_stmts(rb2, body, ph, decls, src, na) }
       Stmt::CompMatch(csc, cah, cmnx) => { d_iterfor_arms(cah, body, ph, decls, src, na) }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
     s = nxt
   }
@@ -3425,7 +3502,8 @@ d_manifest_rewrite_expr := fn(e : ptr(Expr), allow : bool, in out nstr : usize, 
       d_manifest_rewrite_stmts(bh, allow, nstr, src, na)
       d_manifest_rewrite_expr(val, allow, nstr, src, na)
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::CompField
+      | Expr::FnRef | Expr::Loop => {}
   }
 }
 
@@ -3464,7 +3542,7 @@ d_manifest_rewrite_stmts := fn(head : ptr(mut Stmt), allow : bool, in out nstr :
       Stmt::CompFor(ns, nl, iv, b, nx) => { d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
       Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { d_manifest_rewrite_expr(lo, allow, nstr, src, na); d_manifest_rewrite_expr(hi, allow, nstr, src, na); d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
       Stmt::CompMatch(sc, ah, nx) => { d_manifest_rewrite_expr(sc, allow, nstr, src, na); d_manifest_rewrite_arms(ah, allow, nstr, src, na) }
-      _ => {}
+      Stmt::Continue => {}
     }
     s = d_next_stmt(s, na)
   }
@@ -5246,7 +5324,9 @@ d_ovl_local_type := fn(head : usize, vs : usize, vl : usize, na : ptr(mut rt::Ar
       Stmt::Unchecked(b, nx) => { ru := d_ovl_local_type(b, vs, vl, na, src) ; if ru.n != 0 { r = ru } }
       Stmt::AllocWith(ae, b, nx) => { ra := d_ovl_local_type(b, vs, vl, na, src) ; if ra.n != 0 { r = ra } }
       Stmt::CompIf(c, th, el, nx) => { rc := d_ovl_local_type(th, vs, vl, na, src) ; if rc.n != 0 { r = rc } else { rd := d_ovl_local_type(el, vs, vl, na, src) ; if rd.n != 0 { r = rd } } }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -5559,7 +5639,9 @@ d_qual_expr := fn(e : ptr(Expr), ms : usize, ml : usize, decls : rt::Vec, na : p
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::EnumLit
+      | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 d_qual_stmts := fn(head : ptr(mut Stmt), ms : usize, ml : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
@@ -5582,7 +5664,8 @@ d_qual_stmts := fn(head : ptr(mut Stmt), ms : usize, ml : usize, decls : rt::Vec
       Stmt::FieldPathAssign(pl, fpv, nx) => { d_qual_expr(fpv, ms, ml, decls, na, src) }
       Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_qual_expr(v, ms, ml, decls, na, src) }
       Stmt::Match(sc, ah, nx) => { d_qual_expr(sc, ms, ml, decls, na, src) }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+        | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }
@@ -5773,7 +5856,9 @@ d_aggcmp_expr := fn(e : ptr(Expr), body : ptr(mut Stmt), decls : rt::Vec, na : p
       mut g := ah
       while g != 0 { ga := deref(arg_p(g)); d_aggcmp_expr(ga.e, body, decls, na, src); g = ga.next }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
 d_aggcmp_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
@@ -5791,7 +5876,9 @@ d_aggcmp_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), decls : rt::Vec
       Stmt::Unchecked(b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
       Stmt::AllocWith(ae, b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
       Stmt::Match(sc, ah, nx) => { d_aggcmp_expr(sc, body, decls, na, src) }
-      _ => {}
+      Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+        | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     st = d_next_stmt(st, na)
   }

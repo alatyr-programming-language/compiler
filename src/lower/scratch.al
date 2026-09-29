@@ -90,7 +90,8 @@ pub scan_str_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
     Expr::Try(inner) => { m = scan_str_arg_expr(src, decls, inner, a) }
     Expr::Unchecked(inner) => { m = scan_str_arg_expr(src, decls, inner, a) }
     Expr::Bitcast(inner, _bcs, _bcl) => { m = scan_str_arg_expr(src, decls, inner, a) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   m
 }
@@ -265,7 +266,8 @@ pub scan_agg_width_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
     Expr::Try(inner) => { m = imax(m, scan_agg_width_expr(inner, decls, src, a)) }
     Expr::Unchecked(inner) => { m = imax(m, scan_agg_width_expr(inner, decls, src, a)) }
     Expr::Bitcast(inner, _bcs, _bcl) => { m = imax(m, scan_agg_width_expr(inner, decls, src, a)) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   m
 }
@@ -388,7 +390,8 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
     Expr::Try(inner) => { m = scan_agg_arg_expr(src, decls, inner, a) }
     Expr::Unchecked(inner) => { m = scan_agg_arg_expr(src, decls, inner, a) }
     Expr::Bitcast(inner, _bcs, _bcl) => { m = scan_agg_arg_expr(src, decls, inner, a) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   m
 }

@@ -37,7 +37,7 @@ stmt_label_span := ast::stmt_label_span
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
 ## does not depend on sema → no import cycle. (`struct_decl_of`/`base_type_name`/`brand_underlying` added
 ## for the is-KIND + field-COUNT fold — they classify the resolved type exactly as the lower's own fold.)
-(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc, is_union_decl) := lower_layout
+(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, qualified_type_decl, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc, is_union_decl) := lower_layout
 ## §8 `@repr(T)` tag-type primitives (shared with `lower::validate_repr`) for the LOCATED @repr reject:
 ## sema classifies an enum's `@repr(T)` tag exactly as the build's `validate_repr` does (same span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
@@ -504,6 +504,9 @@ mut PTRINT_LOST : usize = 0
 mut PTRINT_MOD_NS : usize = 0
 mut PTRINT_MOD_NL : usize = 0
 mut PTRINT_DECL_NS : usize = 0
+## Issue #697 — the parameter list of the declaration `check_decl` is checking (as a word), so a local
+## annotation can tell the enclosing function's `T : type` parameters from unknown type names.
+mut SEMA_DECL_PARAMS : usize = 0
 mut PTRINT_DECL_NL : usize = 0
 ## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF for
 ## one that is closed or opened read-only, and touches no memory in either case.
@@ -2208,7 +2211,7 @@ da_bad_expr := fn(e : ptr(Expr), da : ptr(DA), src : ptr(u8)) -> bool {
     Expr::Unchecked(inner) => { da_bad_expr(inner, da, src) }
     Expr::Bitcast(inner, ts, tl) => { da_bad_expr(inner, da, src) }
     Expr::Loop(b) => { false }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::Lambda | Expr::FnRef => { false }
   }
 }
 
@@ -2317,7 +2320,41 @@ ptr_pointee_span := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Ve
       if kok and streq(src, d.name_start, d.name_len, ns2, nl2) { r = VSpan(s = ns2, n = nl2) }
     }
   }
+  ## Issue #697 — a PATH-QUALIFIED pointee (`ptr(ast::Expr)`) names the same declaration as the bare
+  ## spelling, and records that declaration's own name span: byte for byte what the bare spelling
+  ## records, so `ty_compat`'s pointee comparison sees one identity, not two spellings. Resolved by
+  ## `sema_qual_type_decl` below.
+  if r.n == 0 {
+    qi := sema_qual_type_decl(decls, src, ns2, nl2, ncnt)
+    if qi >= 0 {
+      qd := deref(decl_get(decls, usize(qi)))
+      r = VSpan(s = qd.name_start, n = qd.name_len)
+    }
+  }
   return r
+}
+
+## Issue #697 — the declaration a PATH-QUALIFIED type spelling names, through
+## `lower_layout::qualified_type_decl` (the reader `qualified_type_name_known` answers from, module
+## aliases included), but only when its NAME is unique among the struct/enum declarations; else -1.
+## A resolved `Ty` carries the declaration's name span and no module, and every later lookup (field
+## types, variant lists) goes by that name — so for `rt::StrBuf`, with a second `StrBuf` in
+## `alloc::strbuf`, a resolved identity would be read back as the wrong struct. Unknown, as before,
+## is the sound answer there. The declaration must also lie inside `ncnt`, the same name-resolution
+## prefix a bare spelling is resolved under: field and variant lookups use that prefix too, so a type
+## resolved past it has no fields to read (measured: `rt::StrBuf` in `cli`, where `rt` sorts later).
+sema_qual_type_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, ncnt : usize) -> i64 {
+  qi := qualified_type_decl(decls, src, s, n)
+  if qi < 0 or usize(qi) >= ncnt { return -1 }
+  qd := deref(decl_get(decls, usize(qi)))
+  cnt := rt::vec_len(deref(decls))
+  mut same := 0
+  for i in 0..cnt {
+    d := deref(decl_get(decls, i))
+    if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, qd.name_start, qd.name_len) { same += 1 }
+  }
+  if same != 1 { return -1 }
+  qi
 }
 
 resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), ncnt : usize) -> Ty {
@@ -2405,6 +2442,15 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
         }
       }
       j += 1
+    }
+  }
+  ## Issue #697 — `ast::Expr` is `Expr`: resolve a path-qualified name to its declaration.
+  if r.tag == 0 {
+    qi := sema_qual_type_decl(decls, src, bn.s, bn.n, ncnt)
+    if qi >= 0 {
+      qd := deref(decl_get(decls, usize(qi)))
+      if qd.kind == 2 { r = Ty(tag = 3, ns = qd.name_start, nl = qd.name_len) }
+      if qd.kind == 3 { r = Ty(tag = 4, ns = qd.name_start, nl = qd.name_len) }
     }
   }
   r
@@ -3058,7 +3104,20 @@ sema_brand_ret_err := fn(rts : usize, rtl : usize, v : ptr(Expr), off : usize, d
 ## single-focus accessor (`expr_struct_lit_head`, the `expr_var_span`/`expr_agg_lit` idiom) that does
 ## dispatch. It recurses into a field value that is itself a struct literal, because the nested node is
 ## never handed to `check_expr` at all for the same reason.
+##
+## Issue #688 — ONE traversal, TWO consumers, as `sema_brand_array_elems` is: `census` selects the
+## per-field judgement (the counting hook or the refusing one) and nothing else, so the census counts
+## exactly the field sinks the refusal refuses at. It did not before — the refusal reached this sink
+## through this separately hooked walk and the census had no counterpart, so `S(f = b)` for a sibling
+## `b` was refused while the census channel received zero rows.
 sema_brand_struct_field_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> CheckErr {
+  sema_brand_struct_fields(false, e, decls, upto, src, a, locals, nloc)
+}
+## The census end of the same walk (#688).
+brand_probe_struct_fields := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) {
+  z := sema_brand_struct_fields(true, e, decls, upto, src, a, locals, nloc)
+}
+sema_brand_struct_fields := fn(census : bool, e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> CheckErr {
   if SEMA_BRAND_DECLS == 0 { return 0 }
   al := expr_struct_lit_name(e)
   if al.n == 0 { return 0 }
@@ -3072,9 +3131,13 @@ sema_brand_struct_field_err := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : us
     if fld != 0 {
       fd := deref(fld_p(fld))
       ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
-      fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
-      if fe != 0 and err == 0 { err = fe }
-      ne := sema_brand_struct_field_err(sa.e, decls, upto, src, a, locals, nloc)
+      if census {
+        brand_probe_sink(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+      } else {
+        fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+        if fe != 0 and err == 0 { err = fe }
+      }
+      ne := sema_brand_struct_fields(census, sa.e, decls, upto, src, a, locals, nloc)
       if ne != 0 and err == 0 { err = ne }
       fld = fd.next
     }
@@ -3151,7 +3214,10 @@ is_prelude_ns_var := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
       nm := str_at((src + s), n)
       nm == "Ordering" or nm == "Arch" or nm == "target" or nm == "verify" or nm == "build"
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Is the name [s, s+n) declared among the first `upto` bindings (the prefix in scope)?
@@ -3700,7 +3766,10 @@ VSpan := struct { s : usize, n : usize }
 expr_var_span := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Var(s, n) => { VSpan(s = s, n = n) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -3711,7 +3780,10 @@ field_path_root_var := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Var(s, n) => { VSpan(s = s, n = n) }
     Expr::Field(base, fs, fl) => { field_path_root_var(base) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -3720,19 +3792,28 @@ NestedPath := struct { rs : usize, rn : usize, fs : usize, fl : usize, ss : usiz
 expr_field_base := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Field(base, fs, fl) => { base }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 expr_field_span := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Field(base, fs, fl) => { VSpan(s = fs, n = fl) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 expr_addr_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::AddrOf(inner) => { inner }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 ## Recover a pointer's pointee identity only for the proven inferred-binding shape
@@ -3758,14 +3839,20 @@ sema_addr_local_struct_ptr_ty := fn(v : ptr(Expr), src : ptr(u8), locals : ptr(L
 expr_deref_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Deref(inner) => { inner }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 field_path_deref_var := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Field(base, fs, fl) => { field_path_deref_var(base) }
     Expr::Deref(inner) => { expr_var_span(inner) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## The operand of an `unchecked(…)` wrapper, else 0 — the pre-match accessor the #580 head walk
@@ -3774,19 +3861,28 @@ field_path_deref_var := fn(e : ptr(Expr)) -> VSpan {
 expr_unchecked_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Unchecked(inner) => { inner }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 expr_index_base := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Index(base, ix) => { base }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 expr_index_index := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Index(base, ix) => { ix }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 expr_nested_path := fn(e : ptr(Expr)) -> NestedPath {
@@ -3871,7 +3967,10 @@ expr_array_elem_nested_path := fn(e : ptr(Expr)) -> ArrayNestedPath {
 expr_call_callee_span := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { VSpan(s = cs, n = cl) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -3881,7 +3980,10 @@ expr_call_callee_span := fn(e : ptr(Expr)) -> VSpan {
 expr_call_args_head := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { ah }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 
@@ -3907,7 +4009,10 @@ sema_direct_call_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 expr_call_arity := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { na }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 
@@ -3948,7 +4053,10 @@ sema_generic_inst_type_span := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
       if cp == 0 { return VSpan(s = 0, n = 0) }
       VSpan(s = cs, n = cp + 1 - cs)
     }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -3980,7 +4088,10 @@ EnumParts := struct { is_enum : bool, es : usize, el : usize, vs : usize, vl : u
 expr_enum_parts := fn(e : ptr(Expr)) -> EnumParts {
   match deref(e) {
     Expr::EnumLit(es, el, vs, vl, np, ah) => { EnumParts(is_enum = true, es = es, el = el, vs = vs, vl = vl, np = np) }
-    _ => { EnumParts(is_enum = false, es = 0, el = 0, vs = 0, vl = 0, np = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { EnumParts(is_enum = false, es = 0, el = 0, vs = 0, vl = 0, np = 0) }
   }
 }
 
@@ -3993,7 +4104,10 @@ MatchParts := struct { is_match : bool, scrut : ptr(Expr), head : ptr(mut Stmt) 
 expr_match_parts := fn(e : ptr(Expr)) -> MatchParts {
   match deref(e) {
     Expr::Match(scrut, head) => { MatchParts(is_match = true, scrut = scrut, head = head) }
-    _ => { MatchParts(is_match = false, scrut = unchecked bitcast(ptr(Expr), 0), head = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MatchParts(is_match = false, scrut = unchecked bitcast(ptr(Expr), 0), head = 0) }
   }
 }
 
@@ -4005,14 +4119,20 @@ IfParts := struct { is_if : bool, cond : ptr(Expr), then_e : ptr(Expr), else_e :
 expr_if_parts := fn(e : ptr(Expr)) -> IfParts {
   match deref(e) {
     Expr::If(c, t, f) => { IfParts(is_if = true, cond = c, then_e = t, else_e = f) }
-    _ => { IfParts(is_if = false, cond = unchecked bitcast(ptr(Expr), 0), then_e = unchecked bitcast(ptr(Expr), 0), else_e = unchecked bitcast(ptr(Expr), 0)) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { IfParts(is_if = false, cond = unchecked bitcast(ptr(Expr), 0), then_e = unchecked bitcast(ptr(Expr), 0), else_e = unchecked bitcast(ptr(Expr), 0)) }
   }
 }
 
 expr_loop_body := fn(e : ptr(Expr)) -> ptr(mut Stmt) {
   match deref(e) {
     Expr::Loop(b) => { b }
-    _ => { unchecked bitcast(ptr(mut Stmt), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast => { unchecked bitcast(ptr(mut Stmt), 0) }
   }
 }
 
@@ -4083,7 +4203,10 @@ expr_agg_lit := fn(e : ptr(Expr)) -> AggLit {
   match deref(e) {
     Expr::StructLit(scs, scl, snf, sfh) => { AggLit(is_agg = true, s = scs, n = scl) }
     Expr::EnumLit(ets, etl, evs, evl, enp, eph) => { AggLit(is_agg = true, s = ets, n = etl) }
-    _ => { AggLit(is_agg = false, s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { AggLit(is_agg = false, s = 0, n = 0) }
   }
 }
 ## The FIELD-ARGUMENT list head of a `StructLit` value expression (0 otherwise), and its TYPE-NAME
@@ -4095,13 +4218,19 @@ expr_agg_lit := fn(e : ptr(Expr)) -> AggLit {
 expr_struct_lit_head := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::StructLit(scs, scl, snf, sfh) => { sfh }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 expr_struct_lit_name := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::StructLit(scs, scl, snf, sfh) => { VSpan(s = scs, n = scl) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## The PAYLOAD-ARGUMENT list head of an `EnumLit` value expression (0 otherwise). Same scar #2 idiom
@@ -4113,7 +4242,10 @@ expr_struct_lit_name := fn(e : ptr(Expr)) -> VSpan {
 expr_enum_lit_head := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::EnumLit(ets, etl, evs, evl, enp, eph) => { eph }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 ## True only for the parser's generic-construction shape `Name(type-args)(field = value, …)`.
@@ -4181,7 +4313,10 @@ sema_unknown_type_ctor_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : us
   mut is_struct := false
   match deref(e) {
     Expr::StructLit(scs0, scl0, snf0, sfh0) => { is_struct = true }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   if not is_struct { return VSpan(s = 0, n = 0) }
   if not sema_generic_ctor_shape(src, lit.s, lit.n) { return VSpan(s = 0, n = 0) }
@@ -4211,7 +4346,10 @@ sema_manifest_value_ctor_span := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
   mut is_struct := false
   match deref(e) {
     Expr::StructLit(scs, scl, snf, sfh) => { is_struct = true }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   if not is_struct { return VSpan(s = 0, n = 0) }
   if lit.n == 7 and str_at((src + lit.s), 7) == "Package" { return VSpan(s = lit.s, n = lit.n) }
@@ -4224,7 +4362,10 @@ sema_manifest_value_ctor_span := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
 expr_field_base_var := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Field(base, fs, fl) => { expr_var_span(base) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## The ELEMENT-list head (arena handle) of an `ArrayLit` value expression, else 0 — the same
@@ -4236,7 +4377,10 @@ expr_field_base_var := fn(e : ptr(Expr)) -> VSpan {
 expr_array_lit_head := fn(e : ptr(Expr)) -> usize {
   match deref(e) {
     Expr::ArrayLit(nel, eh) => { eh }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 ## The FIRST element expr of an `ArrayLit` (null if not an array / empty) — a scalar-element array is
@@ -4246,7 +4390,10 @@ expr_array_first := fn(e : ptr(Expr)) -> ptr(Expr) {
     Expr::ArrayLit(nel, eh) => {
       if unchecked bitcast(usize, eh) != 0 { (deref(arg_p(eh))).e } else { unchecked bitcast(ptr(Expr), 0) }
     }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 ## True iff e is the initialized local-array shape whose first element is a direct literal of a
@@ -4349,7 +4496,10 @@ value_is_scalar_lit := fn(v : ptr(Expr)) -> bool {
   match deref(v) {
     Expr::Num(x, s, n) => { true }
     Expr::BoolLit(x) => { true }
-    _ => { false }
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## The exact value shape selected by issue #5: a two-element tuple literal whose components are direct
@@ -4360,7 +4510,10 @@ sema_num_literal_start := fn(e : ptr(Expr)) -> usize {
   mut r := 0
   match deref(e) {
     Expr::Num(v, s, n) => { r = s }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -4387,7 +4540,10 @@ sema_two_word_tuple_literal := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
       }
       open
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Is `[s,n)` a BUILTIN SCALAR type NAME (int width / float / bool / char)? Mirrors the retired emit
@@ -4444,7 +4600,10 @@ BinParts := struct { is_bin : bool, op : u8, left : ptr(Expr), right : ptr(Expr)
 expr_bin_parts := fn(e : ptr(Expr)) -> BinParts {
   match deref(e) {
     Expr::Bin(op, l, r) => { BinParts(is_bin = true, op = op, left = l, right = r) }
-    _ => { BinParts(is_bin = false, op = 0, left = unchecked bitcast(ptr(Expr), 0), right = unchecked bitcast(ptr(Expr), 0)) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { BinParts(is_bin = false, op = 0, left = unchecked bitcast(ptr(Expr), 0), right = unchecked bitcast(ptr(Expr), 0)) }
   }
 }
 sema_op_symbol := fn(op : u8) -> str {
@@ -4801,7 +4960,9 @@ sema_wrapper_payload_returns_err := fn(head : ptr(mut Stmt), rts : usize, rtl : 
           arm = am.next
         }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -4850,7 +5011,10 @@ sema_literal_class := fn(e : ptr(Expr)) -> u8 {
     Expr::Num(v, s, n) => { 1 }
     Expr::BoolLit(v) => { 1 }
     Expr::FloatLit(s, n) => { 2 }
-    _ => { 0 }
+    Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 literal_overload_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, args_head : ptr(mut Arg), mod_s : usize, mod_l : usize) -> bool {
@@ -5113,7 +5277,7 @@ s3a_expr_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
     }
     Expr::Bitcast(inner, ts, tl) => { bad = s3a_expr_bad(inner, decls, upto, src, a, locals, nloc) }
     Expr::Loop(body) => { bad = s3a_stmts_bad(body, decls, upto, src, a, locals, nloc) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::FnRef => {}
   }
   bad
 }
@@ -5189,7 +5353,7 @@ s3a_stmts_bad := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, sr
         bad = s3a_expr_bad(e, decls, upto, src, a, locals, nloc)
         if bad == 0 { bad = s3a_stmts_bad(b, decls, upto, src, a, locals, nloc) }
       }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -5214,7 +5378,10 @@ s3a_return_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         arm = am.next
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   bad
 }
@@ -5353,7 +5520,10 @@ sema_array_literal_elem_tag := fn(v : ptr(Expr)) -> u8 {
         g = a.next
       }
     }
-    _ => { return 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 }
   }
   r
 }
@@ -5911,7 +6081,9 @@ ret_sink_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(r
           arm = am.next
         }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -5946,7 +6118,9 @@ ct_return_guard_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls 
           arm = am.next
         }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     if got != 0 { return got }
     cur = stmt_next_at(cur, a)
@@ -6062,6 +6236,72 @@ sema_builtin_str_integer_cast_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   lbv_lit_tag(ga.e) == 6
 }
 
+## Issue #660 — a direct call to the SOLE function of its name that is GENERIC and declares its result
+## as one of its own `T : type` parameters, `-> T` or `-> ptr([mut] T)`: the TYPE ARGUMENT written at
+## T's position (`id(C, p)` → `C`), and whether the result is the pointer form. Else `n == 0`. This is
+## the substitution `sole_fn_ret_ty` cannot make — it resolves `-> ptr(mut T)` to a pointer with an
+## unknown pointee — so a `match` over such a call's result, or over a local bound from it, skipped
+## the exhaustiveness check. A type argument is read only when it is a bare name (`expr_var_span`).
+SemaGenRes := struct { s : usize, n : usize, is_ptr : bool }
+sema_generic_result_arg := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> SemaGenRes {
+  z := SemaGenRes(s = 0, n = 0, is_ptr = false)
+  cs := expr_call_callee_span(e)
+  if cs.n == 0 { return z }
+  cnt := rt::vec_len(deref(decls))
+  th := sema_name_hash(src, cs.s, cs.n)
+  mut jc := sni_lo(cnt, th)
+  jce := sni_hi(cnt, th)
+  mut hits := 0
+  mut di := 0
+  while jc < jce {
+    i := sni_at(cnt, jc)
+    jc = jc + 1
+    if SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th {
+      d := deref(decl_get(decls, i))
+      if d.kind == 1 and streq(src, d.name_start, d.name_len, cs.s, cs.n) { hits = hits + 1; di = i }
+    }
+  }
+  if hits != 1 { return z }
+  d := deref(decl_get(decls, di))
+  if not d.is_generic or d.ret_tl == 0 { return z }
+  ## The result spelling: `T`, or `ptr(`[`mut `]`T)`.
+  mut rs := d.ret_ts
+  mut rn := d.ret_tl
+  mut is_ptr := false
+  if str_at((src + rs), 4) == "ptr(" {
+    is_ptr = true
+    mut p := rs + 4
+    while _sws1(src, p) { p += 1 }
+    if str_at((src + p), 4) == "mut " { p += 4 }
+    while _sws1(src, p) { p += 1 }
+    q := p
+    while _sident1(src, p) { p += 1 }
+    rs = q
+    rn = p - q
+    while _sws1(src, p) { p += 1 }
+    if rn == 0 or str_at((src + p), 1) != ")" { return z }
+  }
+  mut k := 0
+  mut pp := d.params_head
+  mut found := false
+  while pp != 0 and not found {
+    pm := deref(param_p(pp))
+    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, rs, rn) { found = true } else { k += 1; pp = pm.next }
+  }
+  if not found { return z }
+  mut g := expr_call_args_head(e)
+  mut j := 0
+  while g != 0 and j < k {
+    ga := deref(arg_p(g))
+    g = ga.next
+    j += 1
+  }
+  if g == 0 { return z }
+  av := expr_var_span(deref(arg_p(g)).e)
+  if av.n == 0 { return z }
+  SemaGenRes(s = av.s, n = av.n, is_ptr = is_ptr)
+}
+
 ## Issue #680 — the POINTER `Ty` (tag 5 + the pointee's type-NAME span) of a pointer-valued expression:
 ## a `Var` naming a local recorded as a pointer, or a direct `Call` whose declared result is one.
 ## Unknown otherwise. The call half reads the callee's DECLARED result through `sole_fn_ret_ty` — one
@@ -6081,6 +6321,9 @@ sema_ptr_expr_ty := fn(pe : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), loca
   }
   ct := sole_fn_ret_ty(pe, decls, rt::vec_len(deref(decls)), src)
   if tag_is_ptr(ct.tag) and ct.nl != 0 { return ct }
+  ## Issue #660 — `-> ptr(mut T)` of a generic callee: the pointee is the type argument at T.
+  gr := sema_generic_result_arg(pe, decls, src)
+  if gr.is_ptr and gr.n != 0 { return Ty(tag = 5, ns = gr.s, nl = gr.n) }
   unknown
 }
 
@@ -6106,6 +6349,12 @@ sema_value_enum_ty := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), loc
   if unchecked bitcast(usize, di) != 0 { return sema_enum_pointee(sema_ptr_expr_ty(di, decls, src, locals, nloc), decls, src) }
   ct := sole_fn_ret_ty(v, decls, rt::vec_len(deref(decls)), src)
   if tag_is_enum(ct.tag) and ct.nl != 0 { return Ty(tag = 4, ns = ct.ns, nl = ct.nl) }
+  ## Issue #660 — `-> T` of a generic callee: the value's type is the type argument at T.
+  gr := sema_generic_result_arg(v, decls, src)
+  if not gr.is_ptr and gr.n != 0 {
+    gt := resolve_ty(src, gr.s, gr.n, decls, rt::vec_len(deref(decls)))
+    if tag_is_enum(gt.tag) and gt.nl != 0 { return Ty(tag = 4, ns = gt.ns, nl = gt.nl) }
+  }
   unknown
 }
 
@@ -6405,7 +6654,9 @@ comptime_expr_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
       }
       result
     }
-    _ => { 0 }
+    Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 
@@ -6762,7 +7013,10 @@ sema_type_arg_ok := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bo
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   if ok { return true }
   mut es : usize = 0
@@ -6859,7 +7113,10 @@ field_variant_name := fn(e : ptr(Expr), src : ptr(u8)) -> str {
   match deref(e) {
     Expr::Field(base, fs, fl) => { if is_prelude_ns_var(base, src) { str_at((src + fs), fl) } else { "" } }
     Expr::EnumLit(es, el, vs, vl, np, ph) => { if str_at((src + es), el) == "Ordering" { str_at((src + vs), vl) } else { "" } }
-    _ => { "" }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { "" }
   }
 }
 ## The `Ordering.<variant>` name of the arg at index `i` of a call's arg list, else "".
@@ -6919,7 +7176,10 @@ atomic_ordering_bad := fn(cs : usize, cl : usize, ah : ptr(mut Arg), src : ptr(u
 call_atomic_ordering_bad := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { atomic_ordering_bad(cs, cl, ah, src, a) }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 ## Name-resolution prepass for one expression. It is deliberately scalar: the self-host ABI can
@@ -6934,7 +7194,10 @@ bitcast_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   mut r := unchecked bitcast(ptr(Expr), 0)
   match deref(e) {
     Expr::Bitcast(inner, ps, pl) => { r = inner }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   r
 }
@@ -7274,6 +7537,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   }
   bce := sema_brand_ctor_arg_err(e, s_of(e, a), decls, upto, src, locals, nloc, a)
   if bce != 0 { return Result(Ty, CheckErr).Err(bce) }
+  ## #299 census hook at the struct-literal field sink (#688), before the refusal, like every other sink.
+  brand_probe_struct_fields(e, decls, upto, src, a, locals, nloc)
   bsf := sema_brand_struct_field_err(e, decls, upto, src, a, locals, nloc)
   if bsf != 0 { return Result(Ty, CheckErr).Err(bsf) }
   ## …and the CONDITION of an `if`-as-EXPRESSION, the one sub-expression that path never hands to
@@ -7605,8 +7870,33 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       }
     }
   }
-  node := deref(e)
-  match node {
+  ## Issue #716 — the big `match` below used to be written `node := deref(e) ; match node`, which
+  ## the x86_64 lowering could not type: it compared every arm against tag 0, so only `Expr::Num`
+  ## (variant 0) was ever taken and every other expression fell off the end with a garbage `Result`.
+  ## That is the "big-match arm is not dispatched under the seed" note this file repeats (scar #2).
+  ## The arms now live in `check_expr_arms`, whose `match deref(e)` the lowering types, and they are
+  ## switched on one variant at a time: a variant listed in the first arm here is checked by its
+  ## written arm; every other variant answers UNKNOWN (tag 0, poison-tolerant) — explicitly, which
+  ## is what the garbage was being read as.
+  match deref(e) {
+    Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::Bin => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::BoolLit | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+  }
+}
+
+## #716 — an operand kind `check_expr`'s `Bin` arm leaves to the lowering: a struct, enum or array (a
+## user operator overload or a generic numeric aggregate), their hidden local twins, and a brand.
+sema_bin_operand_deferred := fn(t : Ty) -> bool {
+  t.tag == 3 or t.tag == 4 or t.tag == 7 or t.tag == 8 or t.tag == 9 or t.tag == 10
+}
+## Issue #716 — the per-variant arms of `check_expr`, over a pointer PARAMETER so the lowering
+## types the scrutinee. Only the variants `check_expr` routes here are ever checked by their arm; the
+## others are written, and have never run.
+check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> Result(Ty, CheckErr) {
+  match deref(e) {
     Expr::Num(v, s, n) => { Result(Ty, CheckErr).Ok(Ty(tag = 1, ns = 0, nl = 0)) }
     ## FN-6 — a lifted-lambda code pointer is a word-sized scalar value (tag 1). (`Lambda` is lifted to
     ## `FnRef` by the driver's pass before `check`, so only `FnRef` reaches here.)
@@ -7640,6 +7930,16 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     Expr::Bin(op, l, r) => {
       tl := check_expr(l, decls, upto, src, a, locals, nloc)?
       tr := check_expr(r, decls, upto, src, a, locals, nloc)?
+      ## #716 — this arm ran for the first time when `check_expr`'s dispatch was typed, and it was
+      ## written for kernel scalars only. An AGGREGATE operand (a struct, enum or array: 3/4/7 and the
+      ## hidden 9/10) is a user OPERATOR overload (`@inline < := fn(a : Ver, b : Ver) -> u64`) or a
+      ## generic `uint(N)` op, whose operand and result types the lowering resolves; and a BRAND
+      ## operand's operator set is #299's open question. Neither is judged here: UNKNOWN, as every
+      ## `Bin` was before this arm ran. Measured: without this, four valid corpus programs were refused.
+      if sema_bin_operand_deferred(tl) or sema_bin_operand_deferred(tr) {
+        du := Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
+        return du
+      }
       ## A comparison (kinds 20/24/25/26/27/28) yields bool; its operands must agree.
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         ptrint_probe_site("OP-CMP", "bincmp", false, tl.tag, tr.tag, s_of(l, a), src)
@@ -8188,7 +8488,7 @@ ann_lit_range_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) ->
 float_lit_into_integer_bad := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) -> bool {
   if tl == 0 { return false }
   mut is_float := false
-  match deref(e) { Expr::FloatLit(_s, _n) => { is_float = true } _ => {} }
+  match deref(e) { Expr::FloatLit(_s, _n) => { is_float = true } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   if not is_float { return false }
   w := str_at((src + ts), tl)
   w == "u8" or w == "u16" or w == "u32" or w == "u64" or w == "usize" or w == "u128" or w == "i8" or w == "i16" or w == "i32" or w == "i64" or w == "isize" or w == "i128"
@@ -8663,7 +8963,10 @@ ct_named_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       }
       if hits != 1 { out = unchecked bitcast(ptr(Expr), 0) }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   out
 }
@@ -8678,7 +8981,10 @@ ct_is_const := fn(e : ptr(Expr)) -> bool {
         if op == 17 and ct_is_zero_lit(l) { res = false }
       }
     }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8691,7 +8997,10 @@ ct_is_const_env := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     Expr::Bin(op, l, r) => {
       if op == 16 or op == 17 or op == 18 { if ct_is_const_env(l, decls, upto, src) and ct_is_const_env(r, decls, upto, src) { res = true }; if op == 17 and ct_is_zero_lit(l) { res = false } }
     }
-    _ => {}
+    Expr::BoolLit | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8709,7 +9018,10 @@ ct_val := fn(e : ptr(Expr), w : str) -> i64 {
       if op == 17 { res = unchecked (lv - rv) }
       if op == 18 { res = unchecked (lv * rv) }
     }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8720,7 +9032,10 @@ ct_val_env := fn(e : ptr(Expr), w : str, decls : ptr(rt::Vec), upto : usize, src
     Expr::Num(v, s, n) => { res = v }
     Expr::Var(_s, _n) => { v := ct_named_value(e, decls, upto, src); if unchecked bitcast(usize, v) != 0 { res = ct_val_env(v, w, decls, upto, src) } }
     Expr::Bin(op, l, r) => { lv := ct_val_env(l, w, decls, upto, src); rv := ct_val_env(r, w, decls, upto, src); if op == 16 { res = unchecked (lv + rv) }; if op == 17 { res = unchecked (lv - rv) }; if op == 18 { res = unchecked (lv * rv) } }
-    _ => {}
+    Expr::BoolLit | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8737,7 +9052,10 @@ ct_span := fn(e : ptr(Expr)) -> usize {
       if res == 0 { res = ct_span(r) }
     }
     Expr::Call(cs, cl, na, ah) => { res = cs }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8799,7 +9117,10 @@ ct_check := fn(e : ptr(Expr), w : str, chk : bool, src : ptr(u8), decls : ptr(rt
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -8838,7 +9159,10 @@ ct_array_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), d
         g = ga.next
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   0
 }
@@ -9487,7 +9811,9 @@ s_of := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> usize {
     Expr::StructLit(ss, sl, sn, sh) => { if ast::span_is_synthetic(ss) { s_of_arg(sh, a) } else { ss } }
     Expr::EnumLit(es0, el0, evs, evl, enp, eph) => { if ast::span_is_synthetic(es0) { s_of_arg(eph, a) } else { es0 } }
     Expr::Field(fb, ffs, ffl) => { if ast::span_is_synthetic(ffs) { 0 } else { ffs } }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
 
@@ -9666,14 +9992,14 @@ unbound_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
 ## Is `e` an integer LITERAL (`Num`)? (single-level match — seed-safe)
 expr_is_num_lit := fn(e : ptr(Expr)) -> bool {
   mut r := false
-  match deref(e) { Expr::Num(v, s, n) => { r = true } _ => {} }
+  match deref(e) { Expr::Num(v, s, n) => { r = true } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
 
 ## The value of an integer-literal `Num` expr, else 0.
 expr_num_lit_val := fn(e : ptr(Expr)) -> i64 {
   mut r := 0
-  match deref(e) { Expr::Num(v, s, n) => { r = v } _ => {} }
+  match deref(e) { Expr::Num(v, s, n) => { r = v } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
 
@@ -9698,7 +10024,7 @@ fixed_array_index_oob := fn(base : ptr(Expr), idx : ptr(Expr), src : ptr(u8), lo
 ## The source start of a numeric literal, for a located reject at the offending index token.
 expr_num_lit_start := fn(e : ptr(Expr)) -> usize {
   mut r := 0
-  match deref(e) { Expr::Num(v, s, n) => { r = s } _ => {} }
+  match deref(e) { Expr::Num(v, s, n) => { r = s } Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
 
@@ -9731,7 +10057,9 @@ expr_mentions_var := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a 
       while g != 0 { ga := deref(arg_p(g)) ; if expr_mentions_var(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
       r
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Match | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => { false }
   }
 }
 
@@ -9823,7 +10151,7 @@ sema_comptime_cond_runtime_local := fn(e : ptr(Expr), src : ptr(u8), locals : pt
     Expr::Unchecked(inner) => { out = sema_comptime_cond_runtime_local(inner, src, locals, nloc) }
     Expr::Lambda(pos, ph, rts, rtl, bh, val) => { out = sema_comptime_cond_runtime_local(val, src, locals, nloc) }
     Expr::Bitcast(inner, ts, tl) => { out = sema_comptime_cond_runtime_local(inner, src, locals, nloc) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::FnRef | Expr::Loop => {}
   }
   out
 }
@@ -9871,7 +10199,10 @@ expr_discharge_var := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena)) -
       vm := str_at((src + vs), vl)
       if vm == "forget" or (vl >= 5 and str_at((src + vs + vl - 5), 5) == "_free") { res = VSpan(s = es, n = el) }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -9886,7 +10217,10 @@ stmt_forget_var := fn(h : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> VSpan
   match st {
     Stmt::ExprStmt(e, nx) => { res = expr_discharge_var(e, src, a) }
     Stmt::Assign(ns, nl, v, nx) => { res = expr_discharge_var(v, src, a) }
-    _ => {}
+    Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+      | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+      | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+      | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
   }
   res
 }
@@ -9941,7 +10275,7 @@ stmt_mentions_var := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : pt
     Stmt::CompFor(ns, nl, iv, b, nx) => { res = stmts_mention_var(b, src, xs, xl, a) }
     Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { res = expr_mentions_var(lo, src, xs, xl, a) or expr_mentions_var(hi, src, xs, xl, a) or stmts_mention_var(b, src, xs, xl, a) }
     Stmt::CompMatch(sc, ah, nx) => { res = expr_mentions_var(sc, src, xs, xl, a) or arms_mention_var(ah, src, xs, xl, a) }
-    _ => {}
+    Stmt::Break | Stmt::Continue => {}
   }
   res
 }
@@ -9959,7 +10293,10 @@ sema_comptime_cont_state := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, 
       Stmt::Assign(ns, nl, v, nx) => {
         if not assign_is_reassign(src, ns, nl) and not binding_is_comptime(src, ns) and streq(src, ns, nl, xs, xl) { return 2 }
       }
-      _ => {}
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -10003,7 +10340,8 @@ sema_comptime_branch_escape_stmts := fn(head : ptr(mut Stmt), cont : ptr(mut Stm
       Stmt::CompMatch(sc, ah, nx) => { out = sema_comptime_branch_escape_arms(ah, cont, src, locals, nloc, a) }
       Stmt::Unchecked(b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
       Stmt::AllocWith(e, b, nx) => { out = sema_comptime_branch_escape_stmts(b, cont, src, locals, nloc, a) }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -10059,7 +10397,8 @@ sema_lambda_binds_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, x
       Stmt::CompMatch(sc, ah, nx) => { hit = sema_lambda_binds_arms(ah, src, xs, xl, a) }
       Stmt::Unchecked(b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
       Stmt::AllocWith(e, b, nx) => { hit = sema_lambda_binds_stmts(b, src, xs, xl, a) }
-      _ => {}
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -10101,7 +10440,10 @@ sema_plain_fn_capture_span := fn(ts : usize, tl : usize, e : ptr(Expr), src : pt
   mut bad := 0
   match deref(e) {
     Expr::Lambda(pos, ph, rts, rtl, bh, val) => { bad = sema_lambda_capture_span(ph, bh, val, src, locals, nloc, a); if bad != 0 { bad = pos } }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   bad
 }
@@ -10127,7 +10469,10 @@ sema_plain_fn_capture_struct := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
         g = ga.next
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   bad
 }
@@ -10215,6 +10560,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if call_atomic_ordering_bad(v, src, a) { mark_failed(locals, mismatch_err(s_of(v, a), 0)) }
         if expr_has_unbound(v, decls, upto, src, a, locals, cnt) { mark_failed(locals, unbound_code(v, decls, upto, src, a, locals, cnt)) }
         ann := local_type_span(src, ns, nl)
+        ## Issue #697 — an annotation naming no type is a located refusal, never an annotation that
+        ## silently constrains nothing.
+        if not assign_is_reassign(src, ns, nl) and ann.n != 0 {
+          lau := sema_local_ann_type_unknown(unchecked bitcast(ptr(mut Param), SEMA_DECL_PARAMS), decls, src, ann.s, ann.n)
+          if lau != 0 { mark_failed(locals, lau) }
+        }
         ## Issue #215 bounded fallback: reject the exact direct annotation in the shared semantic pass,
         ## so `check`, build, and all emit-to-stdout backends cannot accept a silent wrong value/trap.
         ## Reassignments and every non-local shape remain outside this local declaration fence.
@@ -11131,7 +11482,10 @@ stmt_next_at := fn(h : usize, a : ptr(mut rt::Arena)) -> usize {
 expr_is_no_tail := fn(e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Num(v, s, n) => { v == 0 - 1 and n == 0 }
-    _ => { false }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -11203,7 +11557,8 @@ stmts_bad_loop_control := fn(head : ptr(mut Stmt), in_loop : bool, a : ptr(mut r
         }
         cur = nx
       }
-      _ => { cur = stmt_next_at(cur, a) }
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::ExprStmt | Stmt::CompForRange => { cur = stmt_next_at(cur, a) }
     }
   }
   bad
@@ -11254,7 +11609,10 @@ stmts_decl_before := fn(head : ptr(mut Stmt), upto : usize, src : ptr(u8), ns : 
       Stmt::Assign(ns2, nl2, v2, nx2) => {
         if ns2 != ns and sema_redecl_candidate(src, ns2, nl2) and streq(src, ns2, nl2, ns, nl) { hit = true }
       }
-      _ => { hit = hit }
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { hit = hit }
     }
     cur = stmt_next_at(cur, a)
     i += 1
@@ -11303,7 +11661,8 @@ stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut r
           arm2 = am2.next
         }
       }
-      _ => { bad = bad }
+      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => { bad = bad }
     }
     cur = stmt_next_at(cur, a)
     idx += 1
@@ -11369,7 +11728,8 @@ codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLa
         mut arm2 := ah
         while arm2 != 0 and err == 0 { am2 := deref(arm_p(arm2)); err = codepoint_collect_stmts(am2.body_stmts, labels, src, a); arm2 = am2.next }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -11407,7 +11767,8 @@ codepoint_check_stmts := fn(head : ptr(mut Stmt), labels : ptr(CodePointLabels),
         mut arm2 := ah
         while arm2 != 0 and err == 0 { am2 := deref(arm_p(arm2)); err = codepoint_check_stmts(am2.body_stmts, labels, src, a, unchecked_mode); arm2 = am2.next }
       }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -11463,7 +11824,9 @@ stmts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
     ## this the missing-result check false-fired "invalid" on every unchecked-block-bodied fn.
     Stmt::Unchecked(b, nx) => { stmts_return(b, a) }
     Stmt::AllocWith(ae, b, nx) => { stmts_return(b, a) }
-    _ => { false }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::For | Stmt::DerefAssign
+      | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break
+      | Stmt::Continue | Stmt::ExprStmt | Stmt::CompFor | Stmt::CompForRange => { false }
   }
 }
 
@@ -11476,7 +11839,10 @@ stmt_starts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
   match st {
     Stmt::Return(rv, nx) => { true }
     Stmt::If(c, th, el, nx) => { el != 0 and stmt_starts_return(th, a) and stmt_starts_return(el, a) }
-    _ => { false }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Match | Stmt::For | Stmt::DerefAssign
+      | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break
+      | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+      | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { false }
   }
 }
 
@@ -11514,7 +11880,9 @@ stmts_tail_value := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
     ## the block (`addr := fn(…) -> ptr(u8) { unchecked { base + off } }`) — recurse into it.
     Stmt::Unchecked(b, nx) => { stmts_tail_value(b, a) }
     Stmt::AllocWith(ae, b, nx) => { stmts_tail_value(b, a) }
-    _ => { false }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::For | Stmt::DerefAssign
+      | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break
+      | Stmt::Continue | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { false }
   }
 }
 
@@ -11590,7 +11958,7 @@ sema_bad_typeinfo_field_expr := fn(e : ptr(Expr), src : ptr(u8), vs : usize, vl 
     Expr::Lambda(pos, ph, rs, rl, bs, value) => { bad = sema_bad_typeinfo_field_expr(value, src, vs, vl, a) }
     Expr::Bitcast(x, ts, tl) => { bad = sema_bad_typeinfo_field_expr(x, src, vs, vl, a) }
     Expr::Loop(body) => { bad = sema_bad_typeinfo_field_stmts(body, src, vs, vl, a) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::FnRef => {}
   }
   bad
 }
@@ -11625,7 +11993,7 @@ sema_bad_typeinfo_field_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), vs : us
       Stmt::CompForRange(rvs, rvl, lo, hi, b, nx) => { bad = sema_bad_typeinfo_field_expr(lo, src, vs, vl, a); if bad == 0 and hi != 0 { bad = sema_bad_typeinfo_field_expr(hi, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
       Stmt::Unchecked(b, nx) => { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) }
       Stmt::AllocWith(e, b, nx) => { bad = sema_bad_typeinfo_field_expr(e, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
-      _ => {}
+      Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -11704,7 +12072,8 @@ expr_uses_var_cons := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a
       while g != 0 { ga := deref(arg_p(g)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
       r
     }
-    _ => { true }   ## Match / any other form: not fully scanned → assume USED (never falsely flag a leak)
+    Expr::If | Expr::Match | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { true }   ## Match / any other form: not fully scanned → assume USED (never falsely flag a leak)
   }
 }
 
@@ -11732,7 +12101,8 @@ stmt_uses_var_cons := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : p
     Stmt::AllocWith(ae, b, nx) => { res = stmts_use_cons(b, src, xs, xl, a) }
     Stmt::For(fns, fnl, lo, hi, b, nx) => { res = expr_uses_var_cons(lo, src, xs, xl, a) or expr_uses_var_cons(hi, src, xs, xl, a) or stmts_use_cons(b, src, xs, xl, a) }
     Stmt::Match(sc, ah, nx) => { res = expr_uses_var_cons(sc, src, xs, xl, a) or arms_use_cons(ah, src, xs, xl, a) }
-    _ => { res = true }   ## comptime form / break / continue / unknown → assume USED (conservative)
+    Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+      | Stmt::CompForRange => { res = true }   ## comptime form / break / continue / unknown → assume USED (conservative)
   }
   res
 }
@@ -11764,7 +12134,10 @@ stmt_binding_var := fn(h : usize, a : ptr(mut rt::Arena)) -> VSpan {
   st := deref(stmt_p(Stmt, h))
   match st {
     Stmt::Assign(ns, nl, v, nx) => { res = VSpan(s = ns, n = nl) }
-    _ => {}
+    Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+      | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+      | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+      | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
   }
   res
 }
@@ -11801,7 +12174,10 @@ expr_is_local_addr := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, src : 
       vv := expr_var_span(inner)
       if vv.n != 0 and local_in(locals, nloc, src, vv.s, vv.n) { res = true }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -11814,7 +12190,10 @@ stmts_return_local_addr := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : u
     st := deref(stmt_p(Stmt, cur))
     match st {
       Stmt::Return(rv, nx) => { if expr_is_local_addr(rv, locals, nloc, src) { res = true } }
-      _ => {}
+      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -11857,7 +12236,9 @@ sema_place_root_var := fn(e : ptr(Expr)) -> VSpan {
     Expr::Slice(base, lo, hi) => { sema_place_root_var(base) }
     Expr::Unchecked(inner) => { sema_place_root_var(inner) }
     Expr::Bitcast(inner, ts, tl) => { sema_place_root_var(inner) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try
+      | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 
@@ -11867,7 +12248,10 @@ sema_place_root_var := fn(e : ptr(Expr)) -> VSpan {
 sema_slice_base := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::Slice(base, lo, hi) => { base }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 
@@ -12037,7 +12421,8 @@ stmts_store_escape := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize,
       Stmt::AllocWith(ae, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
       Stmt::For(fns, fnl, lo, hi, b, nx) => { if stmts_store_escape(b, locals, nloc, src, a, decls, params_head) { res = true } }
       Stmt::Match(sc, ah, nx) => { if arms_store_escape(ah, locals, nloc, src, a, decls, params_head) { res = true } }
-      _ => {}
+      Stmt::Return | Stmt::DerefAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -12309,6 +12694,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
 ## no expressions to check (skip).
 check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> Result(usize, CheckErr) {
   ptrint_probe_decl(d)
+  SEMA_DECL_PARAMS = unchecked bitcast(usize, d.params_head)
   if d.kind == 1 { return check_fn(d, decls, upto, src, a) }
   if d.kind == 0 {
     mut failed_word := 0
@@ -12441,7 +12827,10 @@ sema_qual_ref_name := fn(e : ptr(Expr), src : ptr(u8)) -> SemaQRef {
       if vn.n != 0 { return SemaQRef(bs = vn.s, bl = vn.n, s = fs, n = fl) }
       SemaQRef(bs = 0, bl = 0, s = 0, n = 0)
     }
-    _ => { SemaQRef(bs = 0, bl = 0, s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { SemaQRef(bs = 0, bl = 0, s = 0, n = 0) }
   }
 }
 
@@ -12538,7 +12927,10 @@ sema_arch_rhs_name := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
       vn := expr_var_span(b)
       if vn.n != 0 and str_at((src + vn.s), vn.n) == "Arch" { VSpan(s = fs, n = fl) } else { VSpan(s = 0, n = 0) }
     }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## Fold a DECLARATION `when`-guard predicate (Comptime §7.1/§9; CT-5) for the x86_64 build: 1 = TRUE
@@ -12582,7 +12974,10 @@ guard_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
       }
       return -1
     }
-    _ => { return -1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return -1 }
   }
 }
 ## True iff decl `d` carries a `when`-guard that folds FALSE for this (x86_64) build — the spec's
@@ -12672,7 +13067,10 @@ sema_guard_size_operand := fn(e : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt:
       }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 ## ─── IS-KIND / FIELD-COUNT / NAMED-PREDICATE fold support (CT-4/CT-5) — the remaining `guard_fold_inst`
@@ -12877,7 +13275,10 @@ sema_guard_typeinfo_kind := fn(scrut : ptr(Expr), tp : ptr(SGuardTP), decls : pt
       }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 ## The RESOLVED concrete type a `typeinfo(U)` names (through `tp`), else `{0,0}` — mirrors
@@ -12892,7 +13293,10 @@ sema_guard_typeinfo_arg_type := fn(scrut : ptr(Expr), tp : ptr(SGuardTP), src : 
       }
       return VSpan(s = 0, n = 0)
     }
-    _ => { return VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return VSpan(s = 0, n = 0) }
   }
 }
 ## The declared FIELD count (struct) / VARIANT count (enum) of a concrete type `(rs,rn)` — the fold value of
@@ -12925,7 +13329,10 @@ sema_guard_type_member_count := fn(rs : usize, rn : usize, decls : ptr(rt::Vec),
 sema_guard_fields_typeinfo_arg := fn(e : ptr(Expr), tp : ptr(SGuardTP), src : ptr(u8)) -> VSpan {
   match deref(e) {
     Expr::Field(inner, ifs, ifl) => { sema_guard_typeinfo_arg_type(inner, tp, src) }
-    _ => { VSpan(s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
   }
 }
 ## If `e` is `typeinfo(T).fields.len` / `.variants.len` / `typeinfo(T).n`, the resolved instance type's member
@@ -12949,18 +13356,24 @@ sema_guard_field_count := fn(e : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt::
       }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 ## The SINGLE trailing bool expr of a candidate NAMED predicate body (a trailing-expr body OR a lone
 ## `return <expr>`); null otherwise. Byte-mirror of `lower::guard_stmt_ret_expr`/`guard_pred_body_expr`.
 sema_guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
-  match deref(stmt_p(Stmt, bs)) {
+  match deref(bs) {
     Stmt::Return(e, next) => {
       if unchecked bitcast(usize, next) == 0 { return e }
       unchecked bitcast(ptr(Expr), 0)
     }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
+      | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+      | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+      | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 sema_guard_pred_body_expr := fn(bs : ptr(mut Stmt), val : ptr(Expr)) -> ptr(Expr) {
@@ -13090,7 +13503,10 @@ sema_guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt:
       }
       return 0 - 1
     }
-    _ => { return 0 - 1 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { return 0 - 1 }
   }
 }
 ## The source span at which to LOCATE a when-guard reject for a generic call `[cs,cl)` with args `ah`, or
@@ -13219,7 +13635,8 @@ stmts_have_comptime := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool 
       Stmt::Unchecked(b, n) => { if stmts_have_comptime(b, a) { result = true } }
       Stmt::AllocWith(ae, b, n) => { if stmts_have_comptime(b, a) { result = true } }
       Stmt::Match(sc, ah, n) => { if arms_have_comptime(ah, a) { result = true } }
-      _ => {}
+      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -13289,7 +13706,10 @@ expr_is_alloc_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), cnt : usize, src :
     }
     Expr::Try(inner) => { expr_is_alloc_call(inner, decls, cnt, src) }
     Expr::Unchecked(inner) => { expr_is_alloc_call(inner, decls, cnt, src) }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -13315,7 +13735,9 @@ stmts_have_alloc := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize, 
       Stmt::Unchecked(b, n) => { if stmts_have_alloc(b, decls, cnt, src, a) { result = true } }
       Stmt::AllocWith(ae, b, n) => { result = true }
       Stmt::Match(sc, ah, n) => { if arms_have_alloc(ah, decls, cnt, src, a) { result = true } }
-      _ => {}
+      Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+        | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -13373,7 +13795,10 @@ expr_calls_syscall := fn(e : ptr(Expr), decls : ptr(rt::Vec), cnt : usize, src :
     Expr::Call(cs, cl, na, ah) => { callee_is_os_call(decls, cnt, src, cs, cl) }
     Expr::Try(inner) => { expr_calls_syscall(inner, decls, cnt, src) }
     Expr::Unchecked(inner) => { expr_calls_syscall(inner, decls, cnt, src) }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -13396,7 +13821,9 @@ stmts_call_syscall := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize
       Stmt::Unchecked(b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
       Stmt::AllocWith(ae, b, n) => { if stmts_call_syscall(b, decls, cnt, src, a) { result = true } }
       Stmt::Match(sc, ah, n) => { if arms_call_syscall(ah, decls, cnt, src, a) { result = true } }
-      _ => {}
+      Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+        | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -13426,7 +13853,10 @@ limit_parser_synthetic_zero := fn(e : ptr(Expr)) -> bool {
   mut result := false
   match deref(e) {
     Expr::Num(v, s, n) => { result = v == 0 and s == 0 and n == 0 }
-    _ => {}
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   result
 }
@@ -13438,7 +13868,10 @@ limit_parser_unary_neg_body := fn(inner : ptr(Expr)) -> bool {
         result = limit_parser_synthetic_zero(l)
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   result
 }
@@ -13501,7 +13934,8 @@ expr_has_unchecked := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> bool {
     Expr::Try(inner) => { expr_has_unchecked(inner, a) }
     Expr::Slice(base, lo, hi) => { expr_has_unchecked(base, a) or expr_has_unchecked(lo, a) or expr_has_unchecked(hi, a) }
     Expr::CompField(base, idx) => { expr_has_unchecked(base, a) or expr_has_unchecked(idx, a) }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -13545,7 +13979,7 @@ stmts_have_unchecked := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool
       Stmt::CompFor(vs, vl, iv, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
       Stmt::CompMatch(sc, ah, n) => { if arms_have_unchecked(ah, a) { result = true } }
       Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
-      _ => {}
+      Stmt::Continue => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -13614,7 +14048,8 @@ expr_has_abstraction := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena))
       while g != 0 and bad == false { ga := deref(arg_p(g)); if expr_has_abstraction(ga.e, src, a) { bad = true }; g = ga.next }
       bad
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 
@@ -13650,7 +14085,6 @@ stmts_have_abstraction := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt
       Stmt::CompFor(vs, vl, iv, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
       Stmt::CompMatch(sc, ah, n) => { if arms_have_abstraction(ah, src, a) { result = true } }
       Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
-      _ => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -14158,15 +14592,6 @@ sema_slice_sugar_reject := fn(d : Decl, src : ptr(u8)) -> usize {
 ## parser stores only the HEAD of multi-token annotations (`ptr`, `fn`, `Box`, …), so this validator
 ## deliberately handles ONLY a single bare identifier. Generic/qualified/pointer/function forms keep
 ## their existing validators; a `T : type` parameter is an abstract type, not an unknown name.
-sema_fn_type_param_name := fn(d : Decl, src : ptr(u8), s : usize, n : usize) -> bool {
-  mut pp := d.params_head
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, s, n) { return true }
-    pp = pm.next
-  }
-  false
-}
 
 ## A plain type alias such as CheckErr := usize is recorded as a kind-0 decl with alias_ts/alias_tl,
 ## but lower_layout::type_name_known intentionally answers only built-ins and aggregate aliases. Keep
@@ -14190,7 +14615,7 @@ sema_type_alias_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   false
 }
 
-sema_signature_type_head_unknown := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
+sema_signature_type_head_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
   if n == 0 or not _sident1(src, s) { return 0 }
   mut i := 1
   while i < n {
@@ -14203,7 +14628,7 @@ sema_signature_type_head_unknown := fn(d : Decl, decls : ptr(rt::Vec), src : ptr
   ## A parser-recorded tail of `mod::Type` has the separator immediately before it; a complete
   ## qualified return span is caught by the same splitter. Visibility/identity remains separate.
   if sema_gref_split(src, s, n).qual { return 0 }
-  if sema_fn_type_param_name(d, src, s, n) { return 0 }
+  if sema_param_type_name(ph, src, s, n) { return 0 }
   ## The parser keeps only the head for `ptr(T)`, `fn(...) -> R`, and generic constructors. Do not
   ## turn those multi-token forms into a bare-name decision merely because their head is unresolved.
   mut p := s + n
@@ -14225,15 +14650,55 @@ sema_signature_type_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) 
   mut pp := d.params_head
   while pp != 0 {
     pm := deref(param_p(pp))
-    r0 := sema_signature_type_head_unknown(d, decls, src, pm.ts, pm.tl)
+    r0 := sema_signature_type_head_unknown(d.params_head, decls, src, pm.ts, pm.tl)
     if r0 != 0 { return r0 }
     pp = pm.next
   }
   if d.ret_tl != 0 {
-    r1 := sema_signature_type_head_unknown(d, decls, src, d.ret_ts, d.ret_tl)
+    r1 := sema_signature_type_head_unknown(d.params_head, decls, src, d.ret_ts, d.ret_tl)
     if r1 != 0 { return r1 }
   }
   0
+}
+
+## Issue #697 — a LOCAL annotation that names no type. The signature fence above refused an unknown
+## parameter or result type, while `x : NoSuchType = 42` and `p : ptr(NoSuchType) = …` checked at rc 0:
+## the annotation resolved to nothing, so it constrained nothing, and a `match` over the binding lost
+## its exhaustiveness check without a word. The same head test answers for the annotation's head, and
+## for the pointee of a `ptr(…)` annotation, bare or path-qualified (see the qualified branch for how
+## little a path is trusted). `ph` is the enclosing function's parameter list, so its own `T : type`
+## parameters stay names rather than references.
+sema_local_ann_type_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> usize {
+  if tl == 0 { return 0 }
+  r0 := sema_signature_type_head_unknown(ph, decls, src, ts, tl)
+  if r0 != 0 { return r0 }
+  if str_at((src + ts), 3) != "ptr" { return 0 }
+  mut p := ts + 3
+  while _sws1(src, p) { p += 1 }
+  if str_at((src + p), 1) != "(" { return 0 }
+  p += 1
+  while _sws1(src, p) { p += 1 }
+  if str_at((src + p), 4) == "mut " { p += 4 }
+  while _sws1(src, p) { p += 1 }
+  ps := p
+  mut scanning := true
+  while scanning {
+    c := str_at((src + p), 1)
+    if c == " " or c == ")" or c == "," or c == "(" or c == "\n" or c == "\t" or c == "\r" { scanning = false } else { p += 1 }
+  }
+  pn := p - ps
+  if pn == 0 { return 0 }
+  pg := sema_gref_split(src, ps, pn)
+  if pg.qual {
+    ## A path-qualified pointee is refused only when its last segment names no type ANYWHERE — no
+    ## struct/enum, alias or brand. Which module the head names is visibility's question (§3), and
+    ## `qualified_type_name_known` does not yet answer it for a multi-segment library path
+    ## (`base::alloc::AllocError` reads as unknown), so it cannot be the basis of a refusal.
+    if type_name_known(decls, src, pg.ns, pg.nl) or sema_type_alias_known(decls, src, pg.ns, pg.nl) { return 0 }
+    if brand_underlying(decls, src, pg.ns, pg.nl).n != 0 { return 0 }
+    return located_err(ps)
+  }
+  sema_signature_type_head_unknown(ph, decls, src, ps, pn)
 }
 
 ## Validate only the newly supported surface: module-qualified arguments of a generic type appearing
@@ -14742,9 +15207,9 @@ sema_vis_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, c
 ## #403 — a generic declaration's TYPE PARAMETER is a name, not a nominal type reference. `Result`'s
 ## `T`/`E` and `derive::eq`'s `T` are spelled in the SAME type positions a nominal name occupies, and a
 ## user package that happens to declare a private `T := struct {…}` would otherwise make the LIBRARY's
-## own signature a §3 violation (measured: 27 corpus fixtures). `sema_signature_type_head_unknown`
-## already carries this exemption as `sema_fn_type_param_name`; this is the same test against a param
-## list the caller passes explicitly, so the body walk (which has no enclosing declaration) can pass 0.
+## own signature a §3 violation (measured: 27 corpus fixtures). The caller passes the param list
+## explicitly, so the body walk (which has no enclosing declaration) can pass 0; the signature fence
+## `sema_signature_type_head_unknown` asks through this one test too (#697 removed its private copy).
 sema_param_type_name := fn(ph : ptr(mut Param), src : ptr(u8), s : usize, n : usize) -> bool {
   mut pp := ph
   while pp != 0 {
@@ -15153,7 +15618,7 @@ sema_collect_expr := fn(e : ptr(Expr), locals : ptr(LVec), src : ptr(u8), a : pt
     Expr::Lambda(pos, ph, rts, rtl, bh, val) => { sema_collect_stmts(bh, locals, src, a); sema_collect_expr(val, locals, src, a) }
     Expr::Bitcast(inner, ts, tl) => { sema_collect_expr(inner, locals, src, a) }
     Expr::Loop(body) => { sema_collect_stmts(body, locals, src, a) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::FnRef => {}
   }
 }
 
@@ -15194,7 +15659,6 @@ sema_collect_stmts := fn(head : ptr(mut Stmt), locals : ptr(LVec), src : ptr(u8)
         mut arm := ah
         while arm != 0 { am := deref(arm_p(arm)); mut bd := am.binds_head; while bd != 0 { sema_collect_name(locals, src, bnd_ns(bd), bnd_nl(bd)); bd = bnd_next(bd) }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }
       }
-      _ => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -15521,7 +15985,8 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
     }
     Expr::Bitcast(inner, ts, tl) => { sema_enum_global_array_value_bad(inner, decls, upto, src, locals, nloc, a, false) }
     Expr::Loop(body) => { sema_enum_global_array_value_bad_stmts(body, decls, upto, src, locals, nloc, a) }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::Call | Expr::StrLit | Expr::Index
+      | Expr::FloatLit | Expr::FnRef => { 0 }
   }
 }
 
@@ -15633,7 +16098,7 @@ sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(r
           arm = am.next
         }
       }
-      _ => {}
+      Stmt::Continue => {}
     }
     cur = stmt_next_at(cur, a)
   }
@@ -15784,7 +16249,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
     }
     Expr::Bitcast(inner, ts, tl) => { sema_vis_expr(inner, decls, src, cs, cl, locals, nloc, a) }
     Expr::Loop(body) => { sema_vis_stmts(body, decls, src, cs, cl, locals, nloc, a) }
-    _ => { 0 }
+    Expr::Num | Expr::BoolLit | Expr::StrLit | Expr::FloatLit | Expr::FnRef => { 0 }
   }
 }
 
@@ -15829,7 +16294,6 @@ sema_vis_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), 
         mut arm := ah
         while arm != 0 and r == 0 { am := deref(arm_p(arm)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }
       }
-      _ => {}
     }
     cur = stmt_next_at(cur, a)
   }

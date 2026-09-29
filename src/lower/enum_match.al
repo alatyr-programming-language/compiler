@@ -44,7 +44,10 @@ pub deref_var_info := fn(p : ptr(Expr)) -> DInfo {
   ## delivered — only the integer-scrutinee bare form is; see `emit_return_value`.)
   match deref(p) {
     Expr::Var(s, n) => { DInfo(is_v = true, s = s, n = n) }
-    _ => { DInfo(is_v = false, s = 0, n = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { DInfo(is_v = false, s = 0, n = 0) }
   }
 }
 
@@ -70,7 +73,10 @@ pub scrut_enum_info := fn(scrut : ptr(Expr), cx : ptr(LCtx)) -> ScrutInfo {
       }
       return ScrutInfo(is_e = false, base = 0, es = 0, el = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
     }
-    _ => { return ScrutInfo(is_e = false, base = 0, es = 0, el = 0, is_ref = false, tmod_s = 0, tmod_l = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return ScrutInfo(is_e = false, base = 0, es = 0, el = 0, is_ref = false, tmod_s = 0, tmod_l = 0) }
   }
 }
 
@@ -155,7 +161,10 @@ field_var_scrut := fn(scrut : ptr(Expr)) -> FEScrut {
       bv := var_name_span(base)
       if bv.n != 0 { r = FEScrut(ok = true, bs = bv.s, bn = bv.n, fs = fs, fl = fl) }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -410,7 +419,10 @@ pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
@@ -451,7 +463,10 @@ pub try_arrelem_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::St
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
 }
