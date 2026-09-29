@@ -1626,8 +1626,9 @@ take_r := fn(x : u64) -> u64 { x }'
   ## Those rows pass the older needle explicitly rather than being left out: the VERDICT is correct
   ## there, only the class wording is wrong, and asserting it pins today's behaviour so a later
   ## re-classification is a decision somebody makes rather than a silent drift. #716 made it for
-  ## `brand_into_raw_arg`: that compare now reports a located `type mismatch` at the argument. The
-  ## sibling laundered through `A(b)` is still refused as `unbound name`, by a different path.
+  ## `brand_into_raw_arg`: that compare now reports a located `type mismatch` at the argument. #726
+  ## made it for the sibling laundered through `A(b)`: once `check_expr`'s `Call` arm runs, the nested
+  ## constructor is checked as an expression and the brand refusal reports it, at the same line.
   _brand_reject() { # case, body, want-line [, needle]
     local n="$1" body="$2" line="$3" ndl="${4:-implicit brand conversion}"
     local src="$d/$n.al" co="$d/$n.co" ce="$d/$n.ce" bo="$d/$n.bin" be="$d/$n.be"
@@ -1815,7 +1816,8 @@ main := fn() -> u64 { return u64(G) }' 7
   return r
 }' 8
   ## the same B1R crossing at a CALL ARGUMENT, and a sibling laundered through the constructor at
-  ## one: both are refused, by the older per-argument fence that runs first (see `_brand_reject`).
+  ## one: the first is refused by the older per-argument fence that runs first (see `_brand_reject`),
+  ## the second by the brand refusal itself since #726.
   _brand_reject brand_into_raw_arg 'main := fn() -> u64 {
   a : A = A(1)
   return take_r(a)
@@ -1823,7 +1825,7 @@ main := fn() -> u64 { return u64(G) }' 7
   _brand_reject sibling_ctor_arg_in_call 'main := fn() -> u64 {
   b : B = B(2)
   return take_a(A(b))
-}' 8 'unbound name'
+}' 8
   _brand_reject raw_into_brand_tail_result 'mk := fn() -> A {
   r : u64 = 3
   r
