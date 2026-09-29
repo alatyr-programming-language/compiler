@@ -720,9 +720,8 @@ clone_one_stmt := fn(a : ptr(mut rt::Arena), st : ptr(mut Stmt), ok : ptr(mut bo
     Stmt::FieldPathAssign(pl, fpv, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cpl := clone_expr(a, pl, ok); cfpv := clone_expr(a, fpv, ok); r = snode(a, Stmt.FieldPathAssign(cpl, cfpv, 0)) }
     Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cb := clone_expr(a, b, ok); cix := clone_expr(a, ix, ok); cv := clone_expr(a, v, ok); r = snode(a, Stmt.IndexFieldAssign(cb, cix, ffs, ffl, cv, 0)) }
     Stmt::AllocWith(ae, b, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cae := clone_expr(a, ae, ok); cb := clone_stmts(a, b, ok); r = snode(a, Stmt.AllocWith(cae, cb, 0)) }
-    ## #544 stage 1 — this `_` STAYS; `x := deref(stmt_p(Stmt, st))` is blind (#660/#680).
-    ## See the band note above `clone_args`. Deleting it is accepted SILENTLY, rc 0.
-    _ => { deref(nxout) = 0; deref(ok) = false }
+    ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+    Stmt::Match | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { deref(nxout) = 0; deref(ok) = false }
   }
   r
 }
@@ -820,9 +819,8 @@ pub renum_str_stmts := fn(a : ptr(mut rt::Arena), head : ptr(mut Stmt), base : u
       Stmt::FieldPathAssign(pl, fpv, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, pl, base); renum_str_expr(a, fpv, base) }
       Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, b, base); renum_str_expr(a, ix, base); renum_str_expr(a, v, base) }
       Stmt::AllocWith(ae, b, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, ae, base); renum_str_stmts(a, b, base) }
-      ## #544 stage 1 — this `_` STAYS; `x := deref(stmt_p(Stmt, st))` is blind (#660/#680).
-      ## See the band note above `clone_args`. Deleting it is accepted SILENTLY, rc 0.
-      _ => { nx = 0 }
+      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+      Stmt::Match | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { nx = 0 }
     }
     st = unchecked bitcast(ptr(mut Stmt), nx)
   }
