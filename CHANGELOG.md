@@ -140,6 +140,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   `match deref(id(C, p))`, `x := deref(id(C, p))` and `c := pass(C, v)` skipped Control Flow §5.1
   and a missing variant compiled at rc 0. The type argument at that parameter's position is now the
   type, for a sole declaration and a bare type-name argument (#660).
+- **`match deref(q)` over an annotated pointer-to-enum local dispatches on the enum.** The x86_64
+  lowering typed `p : ptr(E)` only as a PARAMETER, so `q : ptr(E) = p` then `match deref(q)` compared
+  every arm against 0 and returned the wrong arm's value for any variant but the first (1 instead of
+  42 in the new fixture, silently). The local is now bound as the parameter is, bare or
+  path-qualified `E` alike (#716).
 - **An enum `match` the x86_64 lowering cannot type is refused instead of miscompiled.** A variant arm
   over a scrutinee whose enum type the lowering could not see — `match deref(ptr(mut x))` over a
   local, a value bound from it, `deref` of a call — was compared against tag 0: the first variant

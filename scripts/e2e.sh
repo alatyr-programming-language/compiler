@@ -6426,6 +6426,9 @@ build_reject_has reject_enum_match_deref_local "cannot see the scrutinee's enum 
 build_reject_has reject_enum_match_value_of_deref "cannot see the scrutinee's enum type"
 build_reject_has reject_enum_match_generic_deref "cannot see the scrutinee's enum type"
 run accept_enum_match_param_deref 42
+# …and the same `match deref(q)` over an ANNOTATED pointer-to-enum LOCAL, which the lowering now
+# binds like the parameter; `G` is variant 1, so the parent's integer path returned 1 here, silently.
+run accept_enum_match_deref_annotated_local 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42
