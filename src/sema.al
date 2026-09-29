@@ -293,6 +293,12 @@ ty_kind_of_tag := fn(tag : u8) -> TyKind {
   TyKind.TyOther
 }
 
+## Issue #583 slice 6 — a `Local`'s tag byte also carries STORAGE FLAGS the kind predicates never see:
+## `+128` marks a `mut` binding and 255 poisons one (a failed binding every later read must reject).
+## These are the only places that spell those numbers.
+tag_is_poison := fn(tag : u8) -> bool { tag == 255 }
+tag_is_plain := fn(tag : u8) -> bool { tag < 128 }
+tag_with_mut := fn(tag : u8) -> u8 { tag + 128 }
 ## Issue #583 slice 3 — a `Local`'s tag byte without its `+128` mutability flag; the 255 poison byte
 ## is left as it is. The one spelling of the strip that 45 sites wrote out by hand.
 tag_unflag := fn(tag : u8) -> u8 {
@@ -2460,7 +2466,7 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
     }
   }
   ## Issue #697 — `ast::Expr` is `Expr`: resolve a path-qualified name to its declaration.
-  if r.tag == 0 {
+  if tag_is_unknown(r.tag) {
     qi := sema_qual_type_decl(decls, src, bn.s, bn.n, ncnt)
     if qi >= 0 {
       qd := deref(decl_get(decls, usize(qi)))
@@ -7579,7 +7585,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   if unchecked bitcast(usize, leb0) != 0 {
     lcode0 := lbv_stmts(leb0, 0, decls, upto, src, a, locals, nloc)
     ltag0 := lbv_code_tag(lcode0)
-    if ltag0 == 250 { return Result(Ty, CheckErr).Err(mismatch_err(lbv_code_span(lcode0), 0)) }
+    if ltag0 == LBV_CONFLICT { return Result(Ty, CheckErr).Err(mismatch_err(lbv_code_span(lcode0), 0)) }
     return Result(Ty, CheckErr).Ok(Ty(tag = ltag0, ns = 0, nl = 0))
   }
   ## Capability queries are call-shaped builtins whose operand is inspected without runtime evaluation and
@@ -7894,7 +7900,10 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
 ## #716 — an operand kind `check_expr`'s `Bin` arm leaves to the lowering: a struct, enum or array (a
 ## user operator overload or a generic numeric aggregate), their hidden local twins, and a brand.
 sema_bin_operand_deferred := fn(t : Ty) -> bool {
-  t.tag == 3 or t.tag == 4 or t.tag == 7 or t.tag == 8 or t.tag == 9 or t.tag == 10
+  match ty_kind_of_tag(t.tag) {
+    TyStruct | TyEnum | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum => { true }
+    TyUnknown | TyInt | TyBool | TyPtr | TyStr | TyWrapper | TyTupleMark | TyOther => { false }
+  }
 }
 ## Issue #716 — the per-variant arms of `check_expr`, over a pointer PARAMETER so the lowering
 ## types the scrutinee. Only the variants `check_expr` routes here are ever checked by their arm; the
@@ -8196,7 +8205,7 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     Expr::Loop(b) => {
       lcode := lbv_stmts(b, 0, decls, upto, src, a, locals, nloc)
       ltag := lbv_code_tag(lcode)
-      if ltag == 250 { Result(Ty, CheckErr).Err(mismatch_err(lbv_code_span(lcode), 0)) }
+      if ltag == LBV_CONFLICT { Result(Ty, CheckErr).Err(mismatch_err(lbv_code_span(lcode), 0)) }
       else { Result(Ty, CheckErr).Ok(Ty(tag = ltag, ns = 0, nl = 0)) }
     }
   }
@@ -8274,7 +8283,7 @@ sema_direct_place_value_bad := fn(dst : Ty, checked : Ty, v : ptr(Expr), src : p
       mut rtag : u8 = tag_unflag(raw.tag)
       if tag_is_hidden_struct(rtag) { rtag = 3 }
       if tag_is_hidden_enum(rtag) { rtag = 4 }
-      if not tag_is_unknown(rtag) and rtag != 255 { actual = Ty(tag = rtag, ns = raw.ns, nl = raw.nl) }
+      if not tag_is_unknown(rtag) and not tag_is_poison(rtag) { actual = Ty(tag = rtag, ns = raw.ns, nl = raw.nl) }
     }
   }
   if tag_is_unknown(actual.tag) {
@@ -9505,7 +9514,7 @@ lbv_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
     Expr::Lambda(_vs, _ph, _ps, _pl, _nl, _body) => { false }
     Expr::FnRef(_fpos, _fms, _fml) => { false }
     Expr::Bitcast(inner, _ps, _pl) => { lbv_expr(inner, decls, upto, src, a, locals, nloc) }
-  Expr::Loop(b) => { lbv_code_tag(lbv_stmts(b, 0, decls, upto, src, a, locals, nloc)) == 250 }
+  Expr::Loop(b) => { lbv_code_is_conflict(lbv_stmts(b, 0, decls, upto, src, a, locals, nloc)) }
   }
 }
 
@@ -9514,17 +9523,21 @@ lbv_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
 ## KNOWN-incompatible pair (spec §7.2 "ill-formed"). For 250, the high bytes carry the offending
 ## break value's source span when one is available, moving the public diagnostic from function name to
 ## break site without changing unknown/poison behavior. `tag_compat` is the sema compatibility relation.
+## Issue #583 slice 6 — the break-value walk's CONFLICT code: two reachable `break v` of known,
+## incompatible types. It rides the low byte beside the real tags 1..7, so it is spelled once here.
+LBV_CONFLICT : u8 = 250
+lbv_code_is_conflict := fn(code : usize) -> bool { lbv_code_tag(code) == LBV_CONFLICT }
 lbv_code := fn(tag : u8, span : usize) -> usize { return usize(tag) + span * 256 }
 lbv_code_tag := fn(code : usize) -> u8 { return u8(code % 256) }
 lbv_code_span := fn(code : usize) -> usize { return code / 256 }
 lbv_merge := fn(acc : usize, t : u8, span : usize) -> usize {
   at := lbv_code_tag(acc)
-  if at == 250 { return acc }
+  if at == LBV_CONFLICT { return acc }
   if t == 0 { return acc }
   if at == 0 { return lbv_code(t, span) }
   if ptrint_seam(at, t) { PTRINT_BREAK = PTRINT_BREAK + 1 }
   if tag_compat(at, t) { return acc }
-  lbv_code(250, span)
+  lbv_code(LBV_CONFLICT, span)
 }
 lbv_merge_code := fn(acc : usize, code : usize) -> usize { return lbv_merge(acc, lbv_code_tag(code), lbv_code_span(code)) }
 
@@ -9605,7 +9618,7 @@ lbv_expr_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
 
 lbv_expr_conflict := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> usize {
   code := lbv_expr_code(e, decls, upto, src, a, locals, nloc)
-  if lbv_code_tag(code) == 250 { return code }
+  if lbv_code_is_conflict(code) { return code }
   return 0
 }
 
@@ -9635,35 +9648,35 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::Assign(_ns, _nl, v, nx) => {
         ec = lbv_expr_conflict(v, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::While(cx, b, nx) => {
         ec = lbv_expr_conflict(cx, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
           acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
         st = nx
       }
       Stmt::FieldAssign(_bns, _bnl, _fns, _fnl, fv, nx) => {
         ec = lbv_expr_conflict(fv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::Return(rv, nx) => {
         ec = lbv_expr_conflict(rv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::If(cx, th, el, nx) => {
         ec = lbv_expr_conflict(cx, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
           acc = lbv_merge_code(acc, lbv_stmts(th, c, decls, upto, src, a, locals, nloc))
           acc = lbv_merge_code(acc, lbv_stmts(el, c, decls, upto, src, a, locals, nloc))
         st = nx
       }
       Stmt::Match(sc, ah, nx) => {
         ec = lbv_expr_conflict(sc, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         mut arm := ah
         while unchecked bitcast(usize, arm) != 0 {
           am := deref(arm_p(arm))
@@ -9674,46 +9687,46 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::For(_fns, _fnl, lo, hi, b, nx) => {
         ec = lbv_expr_conflict(lo, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ## a FOR-IN `for x in <iterable>` has a NULL `hi` (the very shape `check_expr` guards against) —
         ## only the range form `lo .. hi` walks the high bound.
         if unchecked bitcast(usize, hi) != 0 {
           ec = lbv_expr_conflict(hi, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         }
           acc = lbv_merge_code(acc, lbv_stmts(b, c + 1, decls, upto, src, a, locals, nloc))
         st = nx
       }
       Stmt::DerefAssign(p, v, nx) => {
         ec = lbv_expr_conflict(p, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(v, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::IndexAssign(ib, ii, iv, nx) => {
         ec = lbv_expr_conflict(ib, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(ii, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(iv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::IndexFieldAssign(fia, fii, _ifs, _ifl, fiv, nx) => {
         ec = lbv_expr_conflict(fia, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(fii, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ec = lbv_expr_conflict(fiv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::FieldPathAssign(pl, fpv, nx) => {
         ## The left side is a write place, not a value read. DA handles unreadied-place legality;
         ## break-value consistency only needs to inspect the stored value.
         ec = lbv_expr_conflict(fpv, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::Loop(b, nx) => {
@@ -9723,12 +9736,12 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       Stmt::Continue(_cd, nx) => { st = nx }
       Stmt::ExprStmt(e, nx) => {
         ec = lbv_expr_conflict(e, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         st = nx
       }
       Stmt::CompIf(cc, cthen, celse, nx) => {
         ec = lbv_expr_conflict(cc, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
           acc = lbv_merge_code(acc, lbv_stmts(cthen, c, decls, upto, src, a, locals, nloc))
           acc = lbv_merge_code(acc, lbv_stmts(celse, c, decls, upto, src, a, locals, nloc))
         st = nx
@@ -9739,7 +9752,7 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::CompMatch(cmsc, cmah, nx) => {
         ec = lbv_expr_conflict(cmsc, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         mut cam := cmah
         while unchecked bitcast(usize, cam) != 0 {
           cm := deref(arm_p(cam))
@@ -9750,12 +9763,12 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::CompForRange(_rvs, _rvl, rlo, rhi, rb, nx) => {
         ec = lbv_expr_conflict(rlo, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         ## a PACK-iter `comptime for a in args` (a no-`..` form) parses to a CompForRange with a NULL
         ## `rhi` — guard it exactly like the runtime for-in above.
         if unchecked bitcast(usize, rhi) != 0 {
           ec = lbv_expr_conflict(rhi, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
         }
           acc = lbv_merge_code(acc, lbv_stmts(rb, c, decls, upto, src, a, locals, nloc))
         st = nx
@@ -9766,7 +9779,7 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       }
       Stmt::AllocWith(ae, b, nx) => {
         ec = lbv_expr_conflict(ae, decls, upto, src, a, locals, nloc)
-        if lbv_code_tag(ec) == 250 { acc = ec }
+        if lbv_code_is_conflict(ec) { acc = ec }
           acc = lbv_merge_code(acc, lbv_stmts(b, c, decls, upto, src, a, locals, nloc))
         st = nx
       }
@@ -10543,7 +10556,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           dt0 := resolve_ty(src, ann0.s, ann0.n, decls, upto)
           if tag_is_unknown(dt0.tag) { return Result(usize, CheckErr).Err(located_err(ns)) }
           mut bt0 : u8 = dt0.tag
-          if local_is_mut(src, ns) { bt0 = bt0 + 128 }
+          if local_is_mut(src, ns) { bt0 = tag_with_mut(bt0) }
           lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bt0, prov = 0, tns = dt0.ns, tnl = dt0.nl))
           da_push_root(da, ns, nl)
           if tag_is_array(dt0.tag) { da_seed_array(deref(da), src, ns, nl, dt0) }
@@ -10622,7 +10635,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## permission at this source span. The same branch handles plain `=` and every compound
           ## operator after `assign_is_reassign` has recovered its spelling.
           if sema_local_name_is_comptime(src, locals, cnt, ns, nl) { mark_failed(locals, immutable_err(ns)) }
-          if raw.tag < 128 and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or raw.tag == 255 { mark_failed(locals, immutable_err(ns)) }
+          if tag_is_plain(raw.tag) and not da_has_root(da, src, ns, nl) and not local_is_mut(src, ns) or tag_is_poison(raw.tag) { mark_failed(locals, immutable_err(ns)) }
           mut xtag : u8 = tag_unflag(raw.tag)
           ## normalize the HIDDEN aggregate tags (9 struct / 10 enum, set for a StructLit/EnumLit binding)
           ## back to their real struct(3)/enum(4) tag for the reassign type-match — else `tag_compat(9, 3)`
@@ -10880,7 +10893,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## ANNOTATED-local conformance (both directions): `x : <scalar> = <aggregate>` or `x :
           ## <aggregate> = <scalar-literal>` — covers the float/char sink the tag-only `bad_decl` misses.
           if agg_scalar_bad(ann.s, ann.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
-          if local_is_mut(src, ns) { bind_tag = bind_tag + 128 }
+          if local_is_mut(src, ns) { bind_tag = tag_with_mut(bind_tag) }
           lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bind_tag, prov = bind_prov, tns = bind_ns, tnl = bind_nl))
           cnt += 1
         }
@@ -11021,7 +11034,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         if np.sl != 0 {
           mut rt := local_ty(locals, cnt, src, np.rs, np.rn)
-          if rt.tag == 255 {
+          if tag_is_poison(rt.tag) {
             gts := global_type_span(decls, src, np.rs, np.rn)
             if gts.n != 0 { rt = resolve_ty(src, gts.s, gts.n, decls, upto) }
           }
@@ -11241,7 +11254,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             ffv := expr_field_span(ib)
             if frv.n != 0 and ffv.n != 0 {
               mut rte := local_ty(locals, cnt, src, frv.s, frv.n)
-              if rte.tag == 255 {
+              if tag_is_poison(rte.tag) {
                 gts2 := global_type_span(decls, src, frv.s, frv.n)
                 if gts2.n != 0 { rte = resolve_ty(src, gts2.s, gts2.n, decls, upto) }
               }
@@ -12271,7 +12284,7 @@ sema_write_mutability := fn(decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LV
     ## until the separate `[mut T]` work; retain their established writable-view behavior here.
     if tag_is_unknown(tag) or tag_is_ptr(tag) or tag == 255 { return 0 }
     if raw.nl != 0 and str_at((src + raw.ns), raw.nl) == "Slice" { return 0 }
-    if not tag_is_unknown(tag) and raw.tag < 128 { return 1 }
+    if not tag_is_unknown(tag) and tag_is_plain(raw.tag) { return 1 }
     return 0
   }
   if sema_global_name_anywhere(decls, src, root.s, root.n) and not is_mod_mut_global(decls, src, root.s, root.n) { return 2 }
@@ -12468,7 +12481,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
     ## enum's module already produces (see `late_enum_ptr_ty`).
     lpp := late_enum_ptr_ty(src, pm.ts, pm.tl, decls, upto)
     if tag_is_ptr(ptag) and pt.nl == 0 and tag_is_ptr(lpp.tag) { pt = lpp }
-    if pm.pmode == 2 { ptag = ptag + 128 }
+    if pm.pmode == 2 { ptag = tag_with_mut(ptag) }
     ## Array-shaped parameters are already caller-backed places in the existing ABI (pmode 1: a
     ## `[T; N]` and the tuple parameters that share that representation); keep their element writes
     ## compatible with the pre-existing aggregate-parameter contract. Scalar parameters still require
@@ -12568,7 +12581,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   ## 255 (no real loop), so stray fn-level breaks impose nothing. Poisoned checker results remain unknown.
   if failed == false {
     lbvc := lbv_stmts(d.body_stmts, 255, decls, upto, src, a, ptr(locals), nloc)
-    if lbv_code_tag(lbvc) == 250 {
+    if lbv_code_is_conflict(lbvc) {
       failed = true
       lsp := lbv_code_span(lbvc)
       if lsp != 0 { err = mismatch_err(lsp, 0) } else { err = mismatch_err(d.name_start, 0) }
