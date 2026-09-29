@@ -6659,6 +6659,14 @@ build_reject_has reject_brand_array_result_return_sink "implicit brand conversio
 emit_reject_has wat reject_brand_array_result_return_sink "implicit brand conversion"
 emit_reject_has aarch64 reject_brand_array_result_return_sink "implicit brand conversion"
 emit_reject_has riscv64 reject_brand_array_result_return_sink "implicit brand conversion"
+## Issue #583 slice 7a — the direct `if` branch guard over two SIBLING brand locals, when both are
+## `mut`. It compared each local's raw tag byte, `+128` flag included, so a `mut` brand never counted
+## as one there and the crossing compiled clean; the located `check` row names the `if`'s own line.
+check_reject_has reject_brand_mut_sibling_if "type mismatch at line 15 in reject_brand_mut_sibling_if"
+build_reject_has reject_brand_mut_sibling_if "type mismatch"
+emit_reject_has wat reject_brand_mut_sibling_if "type mismatch"
+emit_reject_has aarch64 reject_brand_mut_sibling_if "type mismatch"
+emit_reject_has riscv64 reject_brand_mut_sibling_if "type mismatch"
 check_accept accept_brand_explicit_conversions
 run accept_brand_explicit_conversions 42
 check_accept accept_brand_require_identity

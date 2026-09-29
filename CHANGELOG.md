@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A `mut` brand local counts as a brand at the direct `if`-branch guard.** `if c { a } else { b }`
+  over two sibling-brand locals (Types §5.4) is refused when both are plain, but the guard read each
+  local's raw tag byte, `+128` `mut` flag included, so with a `mut` binding on either side the crossing
+  checked, built and ran at rc 0. A local lookup now answers found, poisoned, `mut` and the unflagged
+  type as separate facts (`LocalTy`), and every one of its readers asks the fact it means (#583).
 - **A sibling brand no longer crosses through a fixed array.** `take([b, c])` for
   `take := fn(xs : [A; 2])` and a sibling `b, c : B`, `take(bs)` for `bs : [B; 2]`, and
   `ys : [A; 2] = bs` all checked at rc 0 and ran to the foreign values (Types §4.2/§5.4). An array
