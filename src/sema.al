@@ -333,6 +333,13 @@ tag_unflag := fn(tag : u8) -> u8 {
   if tag >= 128 and tag != 255 { return tag - 128 }
   tag
 }
+## Issue #583 slice 7b — a `Ty` of kind `k` with no name. `x := check_expr(…)?` binds only the carrier's
+## FIRST word (read in the frozen seed's GAS: `movq %rdx` into the slot, `ns`/`nl` never written), so a
+## name read off such a binding is whatever the frame held. While `Ty`'s first field was a byte that
+## happened to be zero at every site the corpus reaches; once the frame layout moved it was not, and
+## `if c { a } else { a }` over one brand local was refused. The sites that compare names say so
+## explicitly: the carried type is its kind alone (#752 is this class).
+ty_of_kind := fn(k : TyKind) -> Ty { Ty(kind = k, ns = 0, nl = 0) }
 ## Issue #583 slice 7b — the kind of a `Ty`, as a direct call a `match` can use as its scrutinee: the
 ## lowering types a call's enum result, where a bare field read is a spelling #716 had to prove first.
 ty_kind := fn(t : Ty) -> TyKind { t.kind }
@@ -8158,8 +8165,10 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       }
     }
     Expr::Bin(op, l, r) => {
-      tl := check_expr(l, decls, upto, src, a, locals, nloc)?
-      tr := check_expr(r, decls, upto, src, a, locals, nloc)?
+      tl0 := check_expr(l, decls, upto, src, a, locals, nloc)?
+      tl := ty_of_kind(tl0.kind)
+      tr0 := check_expr(r, decls, upto, src, a, locals, nloc)?
+      tr := ty_of_kind(tr0.kind)
       ## #716 — this arm ran for the first time when `check_expr`'s dispatch was typed, and it was
       ## written for kernel scalars only. An AGGREGATE operand (a struct, enum or array: 3/4/7 and the
       ## hidden 9/10) is a user OPERATOR overload (`@inline < := fn(a : Ver, b : Ver) -> u64`) or a
@@ -8205,8 +8214,10 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       cc := check_expr(c, decls, upto, src, a, locals, nloc)?
       ## the condition must be bool (a known non-bool is a `Mismatch`; unknown is poison-tolerant).
       if not kind_is_unknown(cc.kind) and not kind_is_bool(cc.kind) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(c, a), 0)); return er }
-      tt := check_expr(t, decls, upto, src, a, locals, nloc)?
-      tf := check_expr(f, decls, upto, src, a, locals, nloc)?
+      tt0 := check_expr(t, decls, upto, src, a, locals, nloc)?
+      tt := ty_of_kind(tt0.kind)
+      tf0 := check_expr(f, decls, upto, src, a, locals, nloc)?
+      tf := ty_of_kind(tf0.kind)
       ptrint_probe_site("OP-IF", "ifarm", false, tt.kind, tf.kind, s_of(f, a), src)
       if ty_eq(tt, tf, src) { Result(Ty, CheckErr).Ok(unify(tt, tf)) }
       else { Result(Ty, CheckErr).Err(mismatch_err(s_of(f, a), 0)) }
@@ -8233,7 +8244,8 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
           }
           bd = bnd_next(bd)
         }
-        cb := check_expr(am.body, decls, upto, src, a, locals, nl2)?
+        cb0 := check_expr(am.body, decls, upto, src, a, locals, nl2)?
+        cb := ty_of_kind(cb0.kind)
         lvec_truncate(deref(locals), base)
         nl2 = base
         if seen {
@@ -8268,7 +8280,8 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         ga := deref(arg_p(g))
         ## a generic call's type-argument positions (params `T : type`) are type names, not values
         if not (qgen and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a)) {
-          ta := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
+          ta0 := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
+          ta := ty_of_kind(ta0.kind)
           if not qgen {
             pt := callee_param_ty(decls, upto, src, qcs, qcl, pidx, a)
             ptrint_probe_site("ARG", "callarm", true, ta.kind, pt.kind, s_of(ga.e, a), src)
@@ -8292,7 +8305,8 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       if di != 0 { fld = (deref(decl_at(Decl, rt::vec_get(deref(decls), di - 1)))).fields_head }
       while sg != 0 {
         sa := deref(arg_p(sg))
-        tv := check_expr(sa.e, decls, upto, src, a, locals, nloc)?
+        tv0 := check_expr(sa.e, decls, upto, src, a, locals, nloc)?
+        tv := ty_of_kind(tv0.kind)
         if fld != 0 {
           fd := deref(fld_p(fld))
           ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
