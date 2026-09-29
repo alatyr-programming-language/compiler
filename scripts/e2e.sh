@@ -10594,6 +10594,10 @@ check_reject reject_bitcast_bool_to_word
 ## types it now that it runs. The parent accepted it.
 check_located reject_struct_field_array_lit 9
 build_reject reject_struct_field_array_lit
+## #726 — a call's result has its callee's declared type (Types §4.2/§4.3); `check_expr`'s `Call` arm
+## answers it now that it runs. The parent accepted this and ran it to 42.
+check_located reject_call_result_bool_arith 8
+build_reject reject_call_result_bool_arith
 ## Issue #725 — a CALL used as an arithmetic or comparison operand takes the callee's declared result
 ## signedness on every backend. On the parent aarch64/riscv64/wasm divided a negative `i64` result
 ## unsigned (185 / 1), took its `%` unsigned (103), and compared a `u64` result signed (1).

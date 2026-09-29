@@ -3201,6 +3201,40 @@ callee_arg_param_ty := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s :
   psp := callee_param_type_span(decls, upto, src, s, n, pidx, a)
   sema_array_param_brand_ty(pt, src, psp.s, psp.n)
 }
+## The `in out` aggregate place seam at a call argument: a POINTER-valued argument (`da_fvec_value(da)`)
+## into a STRUCT parameter is the place representation the pointer ABI passes, and the checker and
+## lower accept it by design. One predicate for every argument compare that meets it (#726).
+sema_arg_place_ptr_seam := fn(at : Ty, pt : Ty) -> bool { kind_is_ptr(at.kind) and kind_is_struct(pt.kind) }
+## #726 — the index of the ALLOCATOR parameter a call ELIDES (Functions §5.5), or -1. A callee whose
+## `ptr(mut Arena)` parameter is left out takes it from the ambient, so the written arguments map to
+## the parameters around it. The same shape the driver's `alloc::with` splice recognises (one
+## `ptr(… Arena)` parameter, exactly one argument short); a unique callee only.
+callee_elided_alloc_idx := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, nargs : usize) -> i64 {
+  mut r : i64 = 0 - 1
+  cnt := rt::vec_len(deref(decls))
+  th := sema_name_hash(src, s, n)
+  mut jc := sni_lo(cnt, th)
+  jce := sni_hi(cnt, th)
+  mut i := 0
+  while jc < jce {
+    i = sni_at(cnt, jc)
+    jc = jc + 1
+    if i < upto and (SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th) {
+      d := deref(decl_get(decls, i))
+      if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) and d.arity == nargs + 1 {
+        mut pp := d.params_head
+        mut k : i64 = 0
+        while pp != 0 {
+          pm := deref(param_p(pp))
+          if pm.ppl != 0 and str_at((src + pm.ts), pm.tl) == "ptr" and str_at((src + pm.pps), pm.ppl) == "Arena" { r = k }
+          k += 1
+          pp = pm.next
+        }
+      }
+    }
+  }
+  r
+}
 ## #726 — the leftmost source offset of an expression, 0 when it carries none. Only the forms whose
 ## first byte is recorded are answered; everything else is 0, which the caller treats as unprovable.
 sema_expr_left_off := fn(e : ptr(Expr), src : ptr(u8)) -> usize {
@@ -5942,7 +5976,7 @@ da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : 
       }
     }
   }
-  if navec_has(da_navec(da), src, rs, rn, fs, fln, usize(ix)) {
+  if navec_has(da_navec_value(da), src, rs, rn, fs, fln, usize(ix)) {
     navec_remove_index(da_navec_value(da), src, rs, rn, fs, fln, usize(ix))
     di2 := type_decl_index(decls, upto, src, et.ns, et.nl)
     if di2 != 0 {
@@ -7697,7 +7731,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
                 ## at the argument, and leave `bad` to the unbound walk it reports (#716 — a revived
                 ## literal arm gives this compare a known tag it never had). `s_of` has no span for a
                 ## literal argument, so it is located at the call, where the unbound report put it.
-                if not kind_compat(av.kind, pt.kind) {
+                if not kind_compat(av.kind, pt.kind) and not sema_arg_place_ptr_seam(av, pt) {
                   mut asp := s_of(ga.e, a)
                   if asp == 0 and not ast::span_is_synthetic(cs) { asp = cs }
                   mark_failed(locals, mismatch_err(asp, 0))
@@ -8105,7 +8139,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## walk must finish so every offending argument of the call is counted by the census beside it.
       cbe := sema_brand_sink_err(bpty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc, a)
       if cbe != 0 { mark_failed(locals, cbe) }
-      if not kind_is_unknown(crt0.kind) and not (kind_is_ptr(crt0.kind) and kind_is_struct(pty0.kind)) {
+      if not kind_is_unknown(crt0.kind) and not sema_arg_place_ptr_seam(crt0, pty0) {
         if not kind_is_unknown(pty0.kind) { ptrint_probe_site("ARG", "premat", true, crt0.kind, pty0.kind, s_of(ca.e, a), src) }
         if not kind_is_unknown(pty0.kind) and not ty_compat(crt0, pty0, src) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
       }
@@ -8155,8 +8189,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   match deref(e) {
     Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref | Expr::StructLit | Expr::EnumLit | Expr::ArrayLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::Call | Expr::Field => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref | Expr::StructLit | Expr::EnumLit | Expr::ArrayLit | Expr::Call => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::Field => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
   }
 }
 
@@ -8309,6 +8343,12 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       ## (name resolution) but NOT type-checked against the parameter — monomorphization at the
       ## call binds `T`; the per-instance body is checked structurally.
       qgen := callee_is_generic(decls, upto, src, qcs, qcl)
+      ## #726 — this arm ran for the first time here. An OVERLOAD SET is not resolved by sema, so no
+      ## single parameter list or return type belongs to the call: stay tolerant, as the argument
+      ## compare in `expr_has_unbound` does. An elided allocator (Functions §5.5) shifts the written
+      ## arguments past its parameter.
+      qov := callee_fn_name_count(decls, upto, src, qcs, qcl) > 1
+      qel := callee_elided_alloc_idx(decls, upto, src, qcs, qcl, qnargs)
       mut g := qargs_head
       mut pidx := 0
       mut bad := false
@@ -8322,11 +8362,19 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         if not (qgen and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a)) {
           ta0 := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
           ta := ty_of_kind(ta0.kind)
-          if not qgen {
-            pt := callee_arg_param_ty(decls, upto, src, qcs, qcl, pidx, a)
+          if not qgen and not qov {
+            mut ppi := pidx
+            if qel >= 0 and i64(pidx) >= qel { ppi = pidx + 1 }
+            pt := callee_arg_param_ty(decls, upto, src, qcs, qcl, ppi, a)
             ptrint_probe_site("ARG", "callarm", true, ta.kind, pt.kind, s_of(ga.e, a), src)
-            if not ty_compat(ta, pt, src) {
-              if not bad { bad = true; bad_span = s_of(ga.e, a) }
+            if not ty_compat(ta, pt, src) and not sema_arg_place_ptr_seam(ta, pt) {
+              ## located at the call when the argument has no span (a literal), as the compare in
+              ## `expr_has_unbound` locates it
+              if not bad {
+                bad = true
+                bad_span = s_of(ga.e, a)
+                if bad_span == 0 and not ast::span_is_synthetic(qcs) { bad_span = qcs }
+              }
             }
           }
         }
@@ -8334,7 +8382,8 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         g = ga.next
       }
       if bad { er := Result(Ty, CheckErr).Err(mismatch_err(bad_span, 0)); return er }
-      Result(Ty, CheckErr).Ok(callee_ret_ty(decls, upto, src, qcs, qcl))
+      if qov { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
+      else { Result(Ty, CheckErr).Ok(callee_ret_ty(decls, upto, src, qcs, qcl)) }
     }
     ## `S(f0 = e0, …, fN = eN)` — a struct construction. Each field value (in declaration order)
     ## is checked against the struct field's declared type; the literal's type is the struct.
