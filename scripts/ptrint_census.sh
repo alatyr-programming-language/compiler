@@ -27,7 +27,8 @@
 # enclosing declaration the grep never read.
 #
 # `census` prints the per-class × per-direction table (every class, zero rows included), the
-# src/lib/test tier split, and the per-FILE breakdown sorted descending so #529 step 3 can cut slices
+# src/lib/test tier split, the `unchecked`-GRANT split (#529 step (d): Memory §4.5 makes a fabricated
+# pointer ill-formed only OUTSIDE a grant, so a place already inside one is a different remedy), and the per-FILE breakdown sorted descending so #529 step 3 can cut slices
 # with the largest file last. `neutral` is the companion the #507 caveat requires: an instrumented
 # census can report confidently and wrongly, so "this build only counts" is proved separately, by
 # comparing every tracked fixture's exit status, normalized diagnostic bytes AND emitted GAS between
@@ -52,8 +53,10 @@ probe_one() { # $1 compiler  $2 source  $3 rows-file
   echo $?
 }
 
-# A row is `#529 <CLS> <DIR> <SITE> <off> <MODULE> <DECL> |<source line>`; a summary is
-# `#529 SUMMARY calls=… unequal=… seam=… rows=… break=… arith_ptr_operand=… lost=…`.
+# A row is `#529 <CLS> <DIR> <SITE> <off> <MODULE> <DECL> <GRANT> |<source line>`, GRANT being `in`
+# when the check walk was lexically inside an `unchecked { … }` block or an `unchecked <e>` operand
+# where the hook fired and `out` otherwise; a summary is
+# `#529 SUMMARY calls=… unequal=… seam=… rows=… granted=… break=… arith_ptr_operand=… lost=…`.
 census() {
   local CC="${2:-$ROOT/target/debug/alatyr}"
   [ -x "$CC" ] || { echo "ptrint_census: no compiler at $CC" >&2; exit 1; }
@@ -94,13 +97,13 @@ census() {
 report() {
   # Rows carry the tier and path prepended by the walk, so the instrument's own fields start at $4
   # for `src`/`lib` (tier path #529 …) and at $5 for `test` (tier path rc=N #529 …). Normalize once,
-  # into a flat `tier<TAB>path<TAB>class<TAB>dir<TAB>site<TAB>off<TAB>module<TAB>decl` table, and read
+  # into a flat `tier<TAB>path<TAB>class<TAB>dir<TAB>site<TAB>off<TAB>module<TAB>decl<TAB>grant` table, and read
   # every number below off THAT — one parse, not eight.
   awk '{
     tier=$1; path=$2; i=3;
     if ($3 ~ /^rc=/) i=4;
     if ($i != "#529") next;
-    print tier"\t"path"\t"$(i+1)"\t"$(i+2)"\t"$(i+3)"\t"$(i+4)"\t"$(i+5)"\t"$(i+6);
+    print tier"\t"path"\t"$(i+1)"\t"$(i+2)"\t"$(i+3)"\t"$(i+4)"\t"$(i+5)"\t"$(i+6)"\t"$(i+7);
   }' "$OUT/rows.txt" > "$OUT/flat.tsv"
 
   # A PLACE is one (tier, path, class, offset). Two traversals of the same expression reach some
@@ -164,6 +167,28 @@ report() {
   awk -F'\t' '{n[$1]++} END{for (k in n) printf "  %-6s %6d places\n", k, n[k]}' "$OUT/places.tsv" | sort
   echo "  fixtures (tracked test/*.al) carrying at least one place:"
   awk -F'\t' '$1=="test"{p[$2]=1} END{print "    "length(p)}' "$OUT/places.tsv"
+
+  echo
+  echo "=== the count by \`unchecked\` GRANT (#529 step (d); distinct places) ==="
+  # A place's grant is a property of the place, like its direction, so it is joined back on from the
+  # rows the same way. `in` = the hook fired while the check walk was lexically inside an
+  # `unchecked { … }` block or an `unchecked <e>` operand; `out` = it was not. KNOWN LIMIT, printed
+  # rather than hidden: the hook fires at the SINK, so `p : ptr(u8) = unchecked h` reads `out` — the
+  # wrapper encloses the value, not the comparison. Whether such a place counts as granted is the
+  # specification's call, not this script's.
+  awk -F'\t' '$6 != 0' "$OUT/flat.tsv" | cut -f1,2,3,6,9 | sort -u > "$OUT/places_grant.tsv"
+  printf '  %-8s %8s %8s %8s\n' TIER in out total
+  for t in src lib test; do
+    line="$(awk -F'\t' -v t="$t" '$1==t{n[$5]++; k++} END{printf "%d %d %d", n["in"]+0, n["out"]+0, k+0}' "$OUT/places_grant.tsv")"
+    # shellcheck disable=SC2086
+    printf '  %-8s %8s %8s %8s\n' "$t" $line
+  done
+  awk -F'\t' '{n[$5]++; k++} END{printf "  %-8s %8d %8d %8d\n", "ALL", n["in"]+0, n["out"]+0, k+0}' "$OUT/places_grant.tsv"
+  echo "  by class and direction, the places already INSIDE a grant:"
+  awk -F'\t' '$6 != 0 && $9=="in"' "$OUT/flat.tsv" | cut -f1,2,3,4,6 | sort -u |
+    awk -F'\t' '{print "    "$3" "$4}' | sort | uniq -c | sed 's/^/  /'
+  awk -F'\t' '$9 != "in" && $9 != "out"' "$OUT/flat.tsv" | wc -l |
+    awk '{if ($1 > 0) print "  ROWS WITHOUT A GRANT COLUMN (a compiler older than the column?): "$1}'
 
   echo
   echo "=== the count by FILE, descending (this is #529 step 3's slicing order: largest LAST) ==="
@@ -326,6 +351,12 @@ pub main := fn() -> i32 {
   ## PLACE-NESTED: the bounded `root.first.second = v` store.
   mut o0 := Outer(i = Inner(p = give_ptr()))
   o0.i.p = 4096
+  ## GRANT column (#529 step (d)): the SAME reassignment, once inside an `unchecked { … }` block.
+  ## Its row must read `in`; every other row in this program must read `out`.
+  mut g0 : ptr(u8) = give_ptr()
+  unchecked {
+    g0 = 4096
+  }
   ## RESULT-RET / RESULT-TAIL, through the four helpers above.
   c0 := ret_i2p()
   c1 := ret_p2i()
@@ -356,16 +387,22 @@ AL
   echo "     (scar #2) — so at those sites neither this census NOR the checker's own conformance"
   echo "     test runs today. That is a gap in the CHECKER, reported here rather than hidden.)"
 
-  local hits i2p p2i
+  local hits i2p p2i gin
   hits=$(awk '!/ SUMMARY /' "$OUT/planted.rows" | wc -l)
+  gin=$(awk '!/ SUMMARY / && $8=="in"' "$OUT/planted.rows" | wc -l)
   i2p=$(awk -F'\t' '$2=="i2p"' "$OUT/planted_cov.tsv" | wc -l)
   p2i=$(awk -F'\t' '$2=="p2i"' "$OUT/planted_cov.tsv" | wc -l)
   echo
-  echo "  planted rows=$hits   classes proven in i2p=$i2p   classes proven in p2i=$p2i"
+  echo "  planted rows=$hits   classes proven in i2p=$i2p   classes proven in p2i=$p2i   rows inside a grant=$gin"
   if [ "$rc" != 0 ]; then
     echo "*** ptrint census: the planted program was REFUSED (rc=$rc) — the instrument must only count ***"
     return 1
   fi
+  if [ "$gin" != 1 ]; then
+    echo "*** ptrint census: the grant column reported $gin rows \`in\` where the fixture plants exactly 1 ***"
+    return 1
+  fi
+  planted_none "$CC" || return 1
   if [ "$hits" -gt 0 ] && [ "$i2p" -gt 0 ] && [ "$p2i" -gt 0 ]; then
     echo "*** ptrint census: the counter fires, in both directions, across $(wc -l < "$OUT/planted_cov.tsv") class/direction"
     echo "    combinations, on a program that is still ACCEPTED — so a zero anywhere above is a"
@@ -375,6 +412,50 @@ AL
   echo "*** ptrint census: the counter reported nothing on a program built to trip it — a ZERO over the"
   echo "    real tree would be MEANINGLESS until this passes ***"
   return 1
+}
+
+# The other half of non-vacuity: a program that must produce NO row. The same crossings as the
+# positive fixture, each spelled with the explicit `unchecked bitcast` the specification requires, so
+# both tags AGREE at every sink. The entry probe must still show that the walk reached unequal tag
+# pairs (`unequal>0` would be the natural outcome of any non-trivial program; this fixture only needs
+# `calls>0`), and `rows` must be 0 — a counter that fires on explicit form would inflate every total.
+planted_none() {
+  local CC="$1" P="$OUT/planted_none.al"
+  cat > "$P" <<'AL'
+## Issue #529 census NEGATIVE fixture, GENERATED by scripts/ptrint_census.sh — not tracked. Every
+## integer/pointer crossing below is EXPLICIT, so the seam decides nothing and the census must be empty.
+take_ptr := fn(p : ptr(u8)) -> usize { return unchecked bitcast(usize, p) }
+take_int := fn(h : usize) -> usize { return h }
+give_ptr := fn() -> ptr(u8) { return unchecked bitcast(ptr(u8), 4096) }
+give_int := fn() -> usize { return 4096 }
+ret_ptr := fn() -> ptr(u8) { return unchecked bitcast(ptr(u8), give_int()) }
+ret_int := fn() -> usize { pp : ptr(u8) = give_ptr() ; return unchecked bitcast(usize, pp) }
+pub main := fn() -> i32 {
+  p : ptr(u8) = give_ptr()
+  a0 := take_ptr(unchecked bitcast(ptr(u8), 4096))
+  a1 := take_int(unchecked bitcast(usize, p))
+  mut r0 : ptr(u8) = give_ptr()
+  r0 = unchecked bitcast(ptr(u8), give_int())
+  mut r1 : usize = 1
+  r1 = unchecked bitcast(usize, p)
+  q := ret_ptr()
+  c1 := ret_int()
+  if a0 + a1 + r1 + c1 == 0 { return 1 }
+  0
+}
+AL
+  local rc; rc=$(probe_one "$CC" "$P" "$OUT/planted_none.rows")
+  local rows calls
+  rows=$(awk '!/ SUMMARY /' "$OUT/planted_none.rows" | wc -l)
+  calls=$(awk '/ SUMMARY /{for(i=1;i<=NF;i++) if($i ~ /^calls=/) print substr($i,7)}' "$OUT/planted_none.rows")
+  echo
+  echo "  NEGATIVE fixture (explicit bitcasts only): check rc=$rc rows=$rows tag_compat calls=${calls:-none}"
+  sed 's/^/    /' "$OUT/planted_none.rows"
+  if [ "$rc" != 0 ] || [ "$rows" != 0 ] || [ -z "$calls" ] || [ "$calls" = 0 ]; then
+    echo "*** ptrint census: the negative fixture must check rc=0 with a summary, calls>0 and rows=0 ***"
+    return 1
+  fi
+  return 0
 }
 
 case "$MODE" in
