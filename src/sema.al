@@ -2466,7 +2466,7 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
     }
   }
   ## Issue #697 — `ast::Expr` is `Expr`: resolve a path-qualified name to its declaration.
-  if r.tag == 0 {
+  if tag_is_unknown(r.tag) {
     qi := sema_qual_type_decl(decls, src, bn.s, bn.n, ncnt)
     if qi >= 0 {
       qd := deref(decl_get(decls, usize(qi)))
@@ -7900,7 +7900,10 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
 ## #716 — an operand kind `check_expr`'s `Bin` arm leaves to the lowering: a struct, enum or array (a
 ## user operator overload or a generic numeric aggregate), their hidden local twins, and a brand.
 sema_bin_operand_deferred := fn(t : Ty) -> bool {
-  t.tag == 3 or t.tag == 4 or t.tag == 7 or t.tag == 8 or t.tag == 9 or t.tag == 10
+  match ty_kind_of_tag(t.tag) {
+    TyStruct | TyEnum | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum => { true }
+    TyUnknown | TyInt | TyBool | TyPtr | TyStr | TyWrapper | TyTupleMark | TyOther => { false }
+  }
 }
 ## Issue #716 — the per-variant arms of `check_expr`, over a pointer PARAMETER so the lowering
 ## types the scrutinee. Only the variants `check_expr` routes here are ever checked by their arm; the
