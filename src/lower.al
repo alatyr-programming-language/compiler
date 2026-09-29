@@ -23232,7 +23232,10 @@ guard_stmt_ret_expr := fn(bs : ptr(mut Stmt)) -> ptr(Expr) {
       if unchecked bitcast(usize, next) == 0 { return e }
       unchecked bitcast(ptr(Expr), 0)
     }
-    _ => { unchecked bitcast(ptr(Expr), 0) }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
+      | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+      | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+      | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
 guard_pred_body_expr := fn(bs : ptr(mut Stmt), val : ptr(Expr)) -> ptr(Expr) {
