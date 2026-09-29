@@ -134,6 +134,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   bottoms out in, so representability still holds (`n : N = 300` for `N := brand(u8)` stays a
   located error), and two forms that compiled and RAN before are refused: `a : A = 1.5` (it ran to
   1) and `a : A = "x"` (#563).
+- **Every component of an enum-variant payload is a brand sink.** `F.P(b, 7)` for `P(A, u64)` and a
+  sibling `b : B`, and `F.P(7, b)` for `P(u64, A)`, compiled and ran to the crossed values: only an
+  arity-1 variant's payload was judged, because the declaration records one type span for the whole
+  list. Each component is now judged against its own declared type (Types §4.2/§5.4), and the #299
+  census counts it — the last sink `accept_brand_unrefused_sinks` listed as open.
 - **The full gate can run on a GitHub-hosted runner.** `.github/workflows/gate.yml` runs
   `scripts/full.sh --force-sweeps` on every push to a `gate/**` branch and publishes the log and the
   generated corpus manifest; it holds no write token, and landing stays the integrator's (#748).

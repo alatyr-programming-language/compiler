@@ -1,73 +1,24 @@
-## e2e — Issue #299, the COVERAGE reminder. This program is INVALID under Types §4.2/§4.3 + §5.4:
-## the single NUMBERED crossing below is an implicit brand conversion. It is accepted today, and
-## this fixture deliberately locks that in so nobody can read the landed refusal as complete.
-## Everything that is not numbered is a legal control and must stay accepted.
+## e2e — Issue #299, the COVERAGE reminder, now with NOTHING numbered. This program is VALID: every
+## crossing it used to lock in as accepted is closed, and it keeps the legal spelling of each so the
+## sinks it named stay exercised beside their refusals.
 ##
 ## The refusal reaches every sink the checker's LIVE path reaches — the annotated binding, a `=`
-## re-assignment, a direct/UFCS call argument, the declared result, an early `return`, a binary
-## operator (including an `if`-expression's condition), a struct-literal FIELD, a brand constructor
-## fed another brand, the struct-field STORE, a value read out of a branded FIELD, the payload of an
-## ARITY-1 enum variant, every ELEMENT of an array literal at a `[N]T` / `[T; N]` sink and — since
-## the MODULE-DECLARATION slice — a module-level annotated value declaration, including the
-## composition of the last two — and, since #687, a DECLARED RESULT whose type is a fixed array,
-## in both the trailing-expression and the early-`return` spelling. This ONE sink it does NOT
-## reach, for a stated reason:
+## re-assignment, a direct/UFCS call argument, the declared
+## result, an early `return`, a binary operator (including an `if`-expression's condition), a
+## struct-literal FIELD, a brand constructor fed another brand, the struct-field STORE, a value read
+## out of a branded FIELD, EVERY component of an enum-variant payload, every ELEMENT of an array
+## literal at a `[N]T` / `[T; N]` sink, a module-level annotated value declaration, and a DECLARED
+## RESULT whose type is a fixed array.
 ##
-##   1. `F.P(b, 7)` and     — a MULTI-COMPONENT enum-variant payload. `src/ast.al`'s `FieldDecl`
-##      `F.P(A(1), c)`        carries ONE `ts`/`tl` pair for the whole payload LIST, and
-##                            `src/parser.al` fills it under `if marity == 0` — the FIRST component's
-##                            type. So components 2..n have no recorded sink type at all, and the one
-##                            span that IS recorded cannot be attributed to a component without the
-##                            rest of the list beside it. Closing this needs `FieldDecl` to grow a
-##                            per-component type list; that is not AST- or emission-neutral and is
-##                            residual on #299, not part of the arity-1 slice.
-##
-## SIX entries LEFT this list, and they are the reason this fixture is worth keeping. The sixth is
-## the newest and the one that changes how the list should be read: `mk := fn() -> [A; 2] {`, a
-## DECLARED RESULT at a fixed-array type, was numbered here by the #687 unit and closed by the same
-## unit one commit later, so the entry existed for exactly as long as it took to make this fixture
-## go red. It was never on the list before that, and neither was the call ARGUMENT at an array
-## parameter beside it — both were found because the census instrument was REPAIRED (#679) and
-## started looking, not because anyone had written them down. The list is what someone measured,
-## never the boundary of the class. `s.x = b`,
-## the struct-FIELD store, and `fld : u64 = s.x`, the B1R direction through a FIELD READ, were items
-## 4 and 5 here; `E.One(b)`, the ARITY-1 enum payload, was item 3, listed on the belief that the
-## parser "records no per-component payload type" — accurate only for components 2..n, since an
-## arity-1 variant's declared type is exactly what `FieldDecl.ts`/`.tl` holds; `xs : [2]A = [b, b]`,
-## the ARRAY-LITERAL element, was item 2, listed because `resolve_ty` answers tag 7 for the whole
-## `[2]A` annotation and extracted no element type — a missing SINK TYPE, not a missing rule; and
-## `G : A = B(1)`, a MODULE-LEVEL value declaration, was item 1, because a module binding carries no
-## dedicated type field, so it is not one of `check_stmts`' hooked value sinks at all and its `: T`
-## is recovered from the source at the DECL site (the way `global_type_span` recovers it for the
-## global-reassign sink), where the §3.1 assignability checks beside it compare LITERAL tags and
-## never two typed values. All five are now refused, each through the same `sema_brand_class` /
-## `sema_brand_refuse_class` pair. On the compiler that closed the module declaration this file
-## failed at `G : A = B(1)`, which is exactly the job the header below describes. They moved to
-## `test/reject_brand_field_store_sink.al`, `test/reject_brand_field_read_sink.al`,
-## `test/reject_brand_enum_payload_sink.al`, `test/reject_brand_array_element_sink.al` and
-## `test/reject_brand_module_global_sink.al`. The COMPOSITION of the last two — a module-level
-## declaration annotated with an array — is refused too and has its own tracked witness,
-## `test/reject_brand_module_array_element_sink.al`, because neither slice gated it alone.
-##
-## A NESTED place path (`s.t.y = b`, a `Stmt::FieldPathAssign`), a field read whose base is not a
-## directly known struct root, and an element of a NESTED array annotation (`[[2]A; 2]`, whose inner
-## element type the extractor deliberately does not walk) are residual on #299 too, not closed.
-##
-## Two more shapes are accepted ON PURPOSE and are not gaps: `u64(c)` composes brand removal with a
-## numeric conversion in one `T(v)`, which the pin does not say a single constructor may or may not
-## do (so it is not inferred from behaviour here), and an operator mixing a brand with its OWN
-## underlying type is the open operator-inheritance design question #299's probe comment records.
-##
-## When a later unit closes this one, THIS FIXTURE MUST FAIL and move to a `reject_*` row. That is
-## its job. Returns 42 while it is still open.
-##
-## RUNS to its value on x86_64 only. The three non-x86 backends implement a scalar core that does not
-## lower a brand construction at all, so every brand-declaring program in this tree already traps
-## loudly there: `test/accept_ann_brand_and_generic.al` is `run/12` on x86_64 and `run/133 · 133 · 134`
-## on aarch64 · riscv64 · wasm in the committed manifest, measured on the PARENT compiler, and these
-## rows are the same shape. That is a pre-existing backend-subset limit, not this refusal's doing —
-## the four-backend claim each of these units owes is that all four surfaces REFUSE an implicit
-## crossing, and `test/reject_brand_sibling_sink.al` carries it as `compile/1` on every one of them.
+## SEVEN entries left this list, and the lesson of the list is the reason this fixture is kept. The
+## last was item 1, `F.P(b, 7)` and `F.P(A(1), c)` — a MULTI-COMPONENT variant payload — listed because
+## `FieldDecl` records one type span for the whole payload list; the declaration's own `(T0, T1, …)`
+## text still carries the rest, and `sema_enum_payload_ty` reads component `k` from there
+## (`reject_brand_payload_component_sink`). Before it, `mk := fn() -> [A; 2] {` and the ARRAY
+## PARAMETER beside it were never on the list at all: both were found because the census instrument
+## was REPAIRED (#679) and started looking. The list was what someone measured, never the boundary of
+## the class — which is why `scripts/brand_census.sh planted` exists.
+
 A := brand(u64)
 B := brand(u64)
 C := brand(u8)
@@ -90,13 +41,10 @@ main := fn() -> u64 {
   b : B = B(2)
   c : C = C(3)
 
-  ## (1) a MULTI-COMPONENT variant payload, in BOTH positions: a sibling `B` where component 1 is
-  ## declared `A`, and a `C` over another block where component 2 is declared `u64` (the B1R
-  ## direction). Neither is judged, because one recorded span cannot answer for a two-component
-  ## list. The ARITY-1 spelling `E.One(...)` right below IS refused now, and `E` is kept here written
-  ## the LEGAL way so the contrast is in one file: same enum machinery, one payload, refused.
-  f1 := F.P(b, 7)
-  f2 := F.P(A(1), c)
+  ## The multi-component payload, written the legal way: the values item 1 used to carry (2 + 7 and
+  ## 1 + 3) through `A(…)` and a plain `u64`, so `fv` and `gv` below keep their answers.
+  f1 := F.P(A(2), 7)
+  f2 := F.P(A(1), 3)
 
   e := E.One(A(9))
 

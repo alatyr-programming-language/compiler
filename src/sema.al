@@ -6610,29 +6610,47 @@ sema_enum_variant_arity := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
   EnumVariantArity(known = known, fits = fits, want = want, ts = ts, tl = tl, amb = amb)
 }
 
-## Issue #299 — the ENUM-VARIANT PAYLOAD sink, for a variant of arity ONE, as `resolve_ty` gives it
-## (tag 0 = no judgeable sink). `FieldDecl` stores ONE payload type span per variant, filled from the
-## FIRST component (`src/parser.al`'s `if marity == 0`), so an arity-1 variant's declared payload type
-## IS in the AST and an arity->=2 variant's components 2..n are NOT: judging only `want == 1` refuses
-## exactly the shape whose sink type exists and leaves the multi-component residual untouched rather
-## than judging component 2 against component 1's type. `amb` and a `fits` mismatch stay fail-open —
-## the arity reject above already owns a count disagreement, and an ambiguous head has no one sink.
-sema_enum_payload_one_ty := fn(eva : EnumVariantArity, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> Ty {
+## Issue #299 — the declared type of payload COMPONENT `k` of the variant `eva` found, else unknown.
+## `FieldDecl` records one type span for the whole payload list — the FIRST component's (the parser fills
+## it under `if marity == 0`) — so components 1..n had no recorded sink type and a sibling brand crossed
+## `F.P(b, 7)` for `P(A, u64)` unjudged. The span `eva.ts` still sits at the start of the declaration's
+## own `(T0, T1, …)` list in the source, so component `k` is read from there: `k` top-level commas on,
+## up to the next top-level comma or the closing parenthesis.
+sema_enum_payload_ty := fn(eva : EnumVariantArity, k : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> Ty {
   unknown := Ty(tag = 0, ns = 0, nl = 0)
-  if eva.known == false { return unknown }
-  if eva.amb { return unknown }
-  if eva.fits == false { return unknown }
-  if eva.want != 1 { return unknown }
-  if eva.tl == 0 { return unknown }
-  resolve_ty(src, eva.ts, eva.tl, decls, upto)
-}
-## …and that variant's ONE supplied payload value, as the `Arg` node's address (0 = not exactly one).
-## The list is recovered through `expr_enum_lit_head` for the scar #2 reason stated there.
-sema_enum_payload_one_arg := fn(e : ptr(Expr)) -> usize {
-  h := expr_enum_lit_head(e)
-  if h == 0 { return 0 }
-  if (deref(arg_p(h))).next != 0 { return 0 }
-  h
+  if eva.known == false or eva.amb or eva.fits == false or eva.tl == 0 or k >= eva.want { return unknown }
+  if k == 0 { return resolve_ty(src, eva.ts, eva.tl, decls, upto) }
+  mut p := eva.ts
+  mut depth : usize = 0
+  mut seen : usize = 0
+  while seen < k {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" { depth += 1 }
+    else if c == "]" and depth > 0 { depth -= 1 }
+    else if c == ")" {
+      if depth == 0 { return unknown }
+      depth -= 1
+    }
+    else if c == "," and depth == 0 { seen += 1 }
+    else if c == "\n" or c == "{" or c == "}" { return unknown }
+    p += 1
+  }
+  while _sws1(src, p) { p += 1 }
+  q0 := p
+  depth = 0
+  mut going := true
+  while going {
+    c := str_at((src + p), 1)
+    if c == "(" or c == "[" { depth += 1; p += 1 }
+    else if (c == ")" or c == "]") and depth > 0 { depth -= 1; p += 1 }
+    else if (c == "," or c == ")") and depth == 0 { going = false }
+    else if c == "\n" or c == "{" or c == "}" { return unknown }
+    else { p += 1 }
+  }
+  mut q1 := p
+  while q1 > q0 and _sws1(src, q1 - 1) { q1 -= 1 }
+  if q1 == q0 { return unknown }
+  resolve_ty(src, q0, q1 - q0, decls, upto)
 }
 
 ## The bounded scalar `comptime` slice (Comptime §2.2 / §9.1) accepts only a NULLARY user-enum
@@ -7821,16 +7839,23 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## #299 census hook (no refusal): the ENUM-VARIANT PAYLOAD sink of an arity-1 variant, judged
       ## from the very declaration the arity verdict above already found. Inert unless the program
       ## declares a brand of its own.
-      epty0 := sema_enum_payload_one_ty(eva0, decls, upto, src)
-      eph0 := sema_enum_payload_one_arg(e)
-      if not tag_is_unknown(epty0.tag) and eph0 != 0 {
+      ## Every COMPONENT of the payload, not only an arity-1 variant's one (#299's last listed sink):
+      ## component `k` is judged against the declaration's `k`-th type, read by `sema_enum_payload_ty`.
+      mut eph0 := expr_enum_lit_head(e)
+      mut epk0 : usize = 0
+      while eph0 != 0 {
         epa0 := deref(arg_p(eph0))
-        brand_probe_sink(epty0, epa0.e, s_of(epa0.e, a), decls, upto, src, locals, nloc, a)
-        ## …and the REFUSAL at the same sink. Poisons rather than returning, so the arity verdict
-        ## above and the ordinary walk below still run. Located at the offending payload VALUE's own
-        ## span, falling back to the variant name — the span this arm's other diagnostics point at.
-        epe0 := sema_brand_sink_err(epty0, epa0.e, sema_brand_span(s_of(epa0.e, a), eparts0.vs), decls, upto, src, locals, nloc, a)
-        if epe0 != 0 { mark_failed(locals, epe0) }
+        epty0 := sema_enum_payload_ty(eva0, epk0, decls, upto, src)
+        if not tag_is_unknown(epty0.tag) {
+          brand_probe_sink(epty0, epa0.e, s_of(epa0.e, a), decls, upto, src, locals, nloc, a)
+          ## …and the REFUSAL at the same sink. Poisons rather than returning, so the arity verdict
+          ## above and the ordinary walk below still run. Located at the offending payload VALUE's own
+          ## span, falling back to the variant name — the span this arm's other diagnostics point at.
+          epe0 := sema_brand_sink_err(epty0, epa0.e, sema_brand_span(s_of(epa0.e, a), eparts0.vs), decls, upto, src, locals, nloc, a)
+          if epe0 != 0 { mark_failed(locals, epe0) }
+        }
+        epk0 += 1
+        eph0 = epa0.next
       }
     }
   }

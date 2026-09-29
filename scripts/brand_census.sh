@@ -305,6 +305,18 @@ main := fn() -> u64 {
 }
 AL
 
+  echo "  ENUM-VARIANT PAYLOAD, a component past the first (#299's last listed sink):"
+  pl_crossing payload_component2 B2 1 <<'AL'
+A := brand(u64)
+B := brand(u64)
+F := enum { P(u64, A), Q }
+main := fn() -> u64 {
+  b : B = B(2)
+  f := F.P(7, b)
+  return 0
+}
+AL
+
   echo
   echo "=== planted LEGAL programs — the other direction: no row, and proof the elements were seen ==="
   pl_clean array_legal 8 <<'AL'
