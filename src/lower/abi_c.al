@@ -273,7 +273,10 @@ pub abi_c_ret_mem_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
       if callee_decl_is_abi_c(decls, src, ci) == false { return false }
       callee_abi_c_ret_mem(decls, src, a, ci)
     }
-    _ => { false }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
   }
 }
 

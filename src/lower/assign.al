@@ -527,7 +527,10 @@ emit_standard_assign := fn(ss : usize, sl : usize, fhead : usize, base : i64, bi
 pub emit_standard_value := fn(v : ptr(Expr), base : i64, bias : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(v) {
     Expr::StructLit(ss, sl, nf, fhead) => { emit_standard_assign(ss, sl, fhead, base, bias, sb, cx, a, nl) }
-    _ => { panic("selfhost: the byte-precise standard-layout whole-value writer needs a struct LITERAL — a non-literal aggregate value (a call result, a bound var, a deref) has no byte-precise copy in this slice; bind it to its own local instead") }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { panic("selfhost: the byte-precise standard-layout whole-value writer needs a struct LITERAL — a non-literal aggregate value (a call result, a bound var, a deref) has no byte-precise copy in this slice; bind it to its own local instead") }
   }
 }
 
@@ -2284,28 +2287,12 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
   ## rides the existing struct-lit / str-lit / scalar emit — matching collect_slots' binding.
   ## #589 — but a bind, parameter or local of the same name SHADOWS the constant (Declarations §6.1),
   ## and that question is asked BEFORE the resolution: see `const_rhs_unshadowed` above.
-  mut v := const_rhs_unshadowed(v, cx, ns)
   ## A module-level const STRUCT field is a compile-time value, but it is not a bare Var for
   ## const_rhs to resolve. Materialize the selected field before slot/value classification so a
   ## `str` field (for example TOOL-15's `app.version`) takes the existing two-word emit_str_assign
   ## path instead of bare emit_gas, whose deliberate scalar StrLit arm carries only the pointer word.
-  match deref(v) {
-    Expr::Field(base, fs, fl) => {
-      cv := const_struct_field(base, fs, fl, cx.decls, cx.src, a)
-      if unchecked bitcast(usize, cv) != 0 { v = cv }
-    }
-    ## NOT A FIELD SELECTION, so there is no `<const struct>.<field>` to materialize and `v` is
-    ## left exactly as `const_rhs` produced it. This arm is a NORMALIZER, not an emitter: nothing
-    ## is owed here, and the classification that follows (`require_agg_parts`, `struct_lit_info`,
-    ## `enum_lit_info`, `str_lit_info`, `array_lit_info`, then the global/local store paths) is
-    ## what decides every form's lowering. A new `Expr` variant needs an entry here only if it can
-    ## name a module-level const struct field.
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match
-      | Expr::Call | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref
-      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
-      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
-      | Expr::Bitcast | Expr::Loop => {}
-  }
+  ## `collect_slots` sizes the slot through the same `const_field_rhs` (#716).
+  mut v := const_field_rhs(const_rhs_unshadowed(v, cx, ns), cx.decls, cx.src, a)
   rqa := require_agg_parts(v, cx.decls, cx.src, a)
   ## (TYP-6) the ANNOTATED-scalar-local (`x : u64 = s`) and scalar-RE-ASSIGN (`G = s` / `x = s`)
   ## aggregate-into-scalar soundness nets moved UP into `sema::check_program` (build-path gate).

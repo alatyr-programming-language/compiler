@@ -251,9 +251,15 @@ their PR evidence and acceptance record still provide the full description.
 - Verification runs on the locally merged result, not the contributor branch. Re-derive the evidence,
   check that merge with the gate appropriate to its independently reviewed change class, and push exactly
   the object that passed. Never re-merge or modify it between verification and push.
-- Hosted CI or pull-request status is not authoritative. The local full gate is the verdict for every
-  executable, generated, compiler, fixture, build, workflow-control, release, security, permission, or
-  uncertain change. Only independently classified inert prose may use the docs-only gate below.
+- Pull-request status is not authoritative, and neither is any hosted check other than the one below.
+  The full gate is the verdict for every executable, generated, compiler, fixture, build,
+  workflow-control, release, security, permission, or uncertain change, run either on the
+  integrator's own native x86_64 machine or by `.github/workflows/gate.yml` on a GitHub-hosted runner
+  (a push to a `gate/**` branch). The workflow is a remote gate machine, not a landing bot: it holds no
+  write token, and its verdict is the `*** FULL GATE` line of its `gate.log` artifact for the exact
+  pushed commit, read by the integrator — not the check's colour. The corpus manifest it generated is
+  published as an artifact, and an oracle commit may take it byte for byte, exactly as `--write` would.
+  Only independently classified inert prose may use the docs-only gate below.
 - After a successful landing, the integrator removes the accepted same-repository remote feature
   branch and, only when its local tip exactly equals the landed PR head and its dedicated worktree is
   clean, removes the matching local worktree and branch too. A dirty, diverged, or ambiguous local
@@ -312,7 +318,10 @@ No single check is sufficient:
 
 - `nix develop -c bash scripts/dev.sh` is the fast loop. `nix develop -c bash scripts/full.sh` is the
   authoritative compiler gate and must be green before publish for every change outside the narrow
-  docs-only class. A feature-only PR with an intentional oracle
+  docs-only class, whether it runs on a native x86_64 machine or as `.github/workflows/gate.yml`
+  (above). An emulated x86_64 (Rosetta, QEMU user mode) is not a gate machine: measured on the
+  2026-09-29 integration, the same object that matched on native hardware showed 89 `NO-LONGER-RUNS`
+  and 48 `OUTPUT-CHANGED` x86_64 rows under QEMU — timeouts and emulation artifacts, not behavior. A feature-only PR with an intentional oracle
   transition may use the first non-green run only to document the expected oracle mismatch; the final
   merge plus maintainer oracle commit must pass the complete gate before publish.
 - The full gate covers fixpoint, e2e, corpus, formatter, duplicate-decision, wildcard-arm, invariant,
