@@ -1625,7 +1625,9 @@ take_r := fn(x : u64) -> u64 { x }'
   ## wording ("unbound name") names nothing unbound, a diagnostic-quality defect of the #563 family.
   ## Those rows pass the older needle explicitly rather than being left out: the VERDICT is correct
   ## there, only the class wording is wrong, and asserting it pins today's behaviour so a later
-  ## re-classification is a decision somebody makes rather than a silent drift.
+  ## re-classification is a decision somebody makes rather than a silent drift. #716 made it for
+  ## `brand_into_raw_arg`: that compare now reports a located `type mismatch` at the argument. The
+  ## sibling laundered through `A(b)` is still refused as `unbound name`, by a different path.
   _brand_reject() { # case, body, want-line [, needle]
     local n="$1" body="$2" line="$3" ndl="${4:-implicit brand conversion}"
     local src="$d/$n.al" co="$d/$n.co" ce="$d/$n.ce" bo="$d/$n.bin" be="$d/$n.be"
@@ -1817,7 +1819,7 @@ main := fn() -> u64 { return u64(G) }' 7
   _brand_reject brand_into_raw_arg 'main := fn() -> u64 {
   a : A = A(1)
   return take_r(a)
-}' 8 'unbound name'
+}' 8 'type mismatch'
   _brand_reject sibling_ctor_arg_in_call 'main := fn() -> u64 {
   b : B = B(2)
   return take_a(A(b))
@@ -10541,6 +10543,9 @@ run_wat wasm_cmp_value 42
 ## now that it runs. The parent accepted this and ran it to 42.
 check_reject reject_bool_int_arith
 build_reject reject_bool_int_arith
+## #716 — `bitcast(i64, <bool>)` is not an equal-width reinterpretation (Types §4.4); once the operand's
+## `bool` type is computed the `i64` function refuses it. The parent accepted it.
+check_reject reject_bitcast_bool_to_word
 run_wat wasm_locals 42
 run_wat wasm_local_mix 42
 run_wat wasm_reassign 42

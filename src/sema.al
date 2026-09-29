@@ -7461,7 +7461,15 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
               Result::Ok(av) => {
                 pt := callee_param_ty(decls, upto, src, cs, cl, ai, a)
                 ptrint_probe_site("ARG", "unbound", true, av.tag, pt.tag, s_of(ga.e, a), src)
-                if not tag_compat(av.tag, pt.tag) { bad = true }
+                ## A conformance failure, not an unbound name: poison the check with a located MISMATCH
+                ## at the argument, and leave `bad` to the unbound walk it reports (#716 — a revived
+                ## literal arm gives this compare a known tag it never had). `s_of` has no span for a
+                ## literal argument, so it is located at the call, where the unbound report put it.
+                if not tag_compat(av.tag, pt.tag) {
+                  mut asp := s_of(ga.e, a)
+                  if asp == 0 and not ast::span_is_synthetic(cs) { asp = cs }
+                  mark_failed(locals, mismatch_err(asp, 0))
+                }
               }
               Result::Err(e0) => { bad = true }
             }
@@ -7890,10 +7898,10 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## is what the garbage was being read as.
   match deref(e) {
     Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
-      | Expr::FloatLit | Expr::Slice | Expr::Bin => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::BoolLit | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref
-      | Expr::StrLit | Expr::ArrayLit | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+      | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
   }
 }
 
@@ -8181,7 +8189,13 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     Expr::Lambda(fnpos, lph, lrts, lrtl, lbh, lval) => {
       Result(Ty, CheckErr).Ok(Ty(tag = 1, ns = 0, nl = 0))
     }
-    Expr::Bitcast(binner, bps, bpl) => { check_expr(binner, decls, upto, src, a, locals, nloc) }
+    ## #716 — a `bitcast` has its TARGET's type, not its operand's: written as the operand's type this
+    ## arm, run for the first time, refused `unchecked bitcast(i64, u < 0)` in an `i64` function
+    ## (`bitcast_cmp_signedness`). The operand is still checked for its own errors.
+    Expr::Bitcast(binner, bps, bpl) => {
+      bci := check_expr(binner, decls, upto, src, a, locals, nloc)?
+      Result(Ty, CheckErr).Ok(resolve_ty(src, bps, bpl, decls, upto))
+    }
     ## `inner?` — the tryable `?` operator. The inner expression is checked; it must be a
     ## tryable ENUM value (tag 4) — a known non-enum inner is a `Mismatch` (an unknown inner,
     ## e.g. a call whose return type isn't a captured enum, is poison-tolerant). The `?`
