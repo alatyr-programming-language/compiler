@@ -7899,9 +7899,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   match deref(e) {
     Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::StrLit
-      | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
   }
 }
 
@@ -8145,7 +8144,13 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0))
     }
     ## A string literal `"…"` has the `str` type (tag 6). No sub-expression to check.
-    Expr::StrLit(s, n, lbl, _ps, _pn) => { Result(Ty, CheckErr).Ok(Ty(tag = 6, ns = 0, nl = 0)) }
+    ## #716 — `embed(path)` (Comptime §2.4) folds to this same node, with the path span in the last two
+    ## fields, and its surface type is `[u8; N]`, not `str`: typed `str`, this arm refused
+    ## `b : [u8; 4] = embed(…)` the first time it ran. An embed answers UNKNOWN, as it always did.
+    Expr::StrLit(s, n, lbl, _ps, _pn) => {
+      if _pn != 0 { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+      else { Result(Ty, CheckErr).Ok(Ty(tag = 6, ns = 0, nl = 0)) }
+    }
     ## `[e0, …, eN]` — an array literal: each element expression is checked; the value's type
     ## is array (tag 7). Per-element type agreement is DEFERRED (the toy arrays hold word-sized
     ## ints; element-type tracking is not load-bearing for the supported grammar).
