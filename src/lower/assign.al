@@ -527,7 +527,10 @@ emit_standard_assign := fn(ss : usize, sl : usize, fhead : usize, base : i64, bi
 pub emit_standard_value := fn(v : ptr(Expr), base : i64, bias : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(v) {
     Expr::StructLit(ss, sl, nf, fhead) => { emit_standard_assign(ss, sl, fhead, base, bias, sb, cx, a, nl) }
-    _ => { panic("selfhost: the byte-precise standard-layout whole-value writer needs a struct LITERAL — a non-literal aggregate value (a call result, a bound var, a deref) has no byte-precise copy in this slice; bind it to its own local instead") }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { panic("selfhost: the byte-precise standard-layout whole-value writer needs a struct LITERAL — a non-literal aggregate value (a call result, a bound var, a deref) has no byte-precise copy in this slice; bind it to its own local instead") }
   }
 }
 

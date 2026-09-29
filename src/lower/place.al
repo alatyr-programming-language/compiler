@@ -123,7 +123,10 @@ pub field_place_parts := fn(e : ptr(Expr)) -> FPParts {
   mut res := FPParts(base = z, fs = 0, fl = 0)
   match deref(e) {
     Expr::Field(b, fs, fl) => { res = FPParts(base = b, fs = fs, fl = fl) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   res
 }
@@ -144,7 +147,10 @@ pub standard_field_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::
         if bo >= 0 and ft.n != 0 { StdFieldPath(ok = true, root = p.root, bo = p.bo + bo, ts = ft.s, tl = ft.n) } else { StdFieldPath(ok = false, root = 0, bo = 0, ts = 0, tl = 0) }
       } else { StdFieldPath(ok = false, root = 0, bo = 0, ts = 0, tl = 0) }
     }
-    _ => { StdFieldPath(ok = false, root = 0, bo = 0, ts = 0, tl = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { StdFieldPath(ok = false, root = 0, bo = 0, ts = 0, tl = 0) }
   }
 }
 ## #716 — the array-FIELD half of `std_idx_path`'s `Index` arm: `s.items[i]` where `items` is a fixed
@@ -211,7 +217,10 @@ pub std_idx_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), s
         if bo >= 0 and ft.n != 0 { StdIdxPath(ok = true, arr = p.arr, idx = p.idx, bo = p.bo + bo, ts = ft.s, tl = ft.n) } else { StdIdxPath(ok = false, arr = z, idx = z, bo = 0, ts = 0, tl = 0) }
       } else { StdIdxPath(ok = false, arr = z, idx = z, bo = 0, ts = 0, tl = 0) }
     }
-    _ => { StdIdxPath(ok = false, arr = z, idx = z, bo = 0, ts = 0, tl = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { StdIdxPath(ok = false, arr = z, idx = z, bo = 0, ts = 0, tl = 0) }
   }
 }
 ## Is the type `[ts,tl)` reached by an `std_idx_path` walk an AGGREGATE rather than a SCALAR leaf — an
@@ -338,7 +347,10 @@ pub resolve_idx_field_place := fn(e : ptr(Expr), cx : ptr(LCtx)) -> IFPlace {
       if wf < 0 { panic("selfhost: `arr[i].field…leaf` — intermediate field not resolvable in the element struct type") }
       return IFPlace(found = true, tys = fty.s, tyn = fty.n, woff = inner.woff + i64(wf))
     }
-    _ => { return IFPlace(found = false, tys = 0, tyn = 0, woff = 0) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return IFPlace(found = false, tys = 0, tyn = 0, woff = 0) }
   }
 }
 ## Emit `ptr(<place>)` — push the ADDRESS of the place onto the stack. Two place forms:
@@ -485,7 +497,10 @@ pub emit_addr_of := fn(p : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)
         panic("selfhost: `ptr(<field>)` is not supported for this place (the source line above) — only a mutable struct GLOBAL's field and a standard-byte-layout struct LOCAL's own field have an addressable offset here. A nested field path (`ptr(o.inner.x)`) would otherwise take the address ZERO, which makes two distinct fields compare equal. Bind the inner value to a local and take its address.")
       }
     }
-    _ => { push_str(sb, "  pushq $0\n") }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { push_str(sb, "  pushq $0\n") }
   }
 }
 ## The AGGREGATE KIND of a resolved place's terminal type, in the one order every consumer in this
@@ -542,7 +557,10 @@ pub word_field_path := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec)
         } else { z }
       } else { z }
     }
-    _ => { z }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { z }
   }
 }
 pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> FieldAgg {
@@ -607,7 +625,10 @@ pub field_read_agg := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec),
         }
       }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   } }
   ## #447 — a NESTED aggregate place (`o.inner.t`). The depth-1 arm above sees only `Field(Var, f)`, so
   ## a chain whose base is ITSELF a field reported kind 0: `x := o.inner.t` fell to the SCALAR slot and
@@ -816,7 +837,8 @@ index_base_blame_off := fn(base : ptr(Expr)) -> usize {
     Expr::Unchecked(ui) => { res = index_base_blame_off(ui) }
     Expr::Bitcast(bi, bts, btl) => { res = index_base_blame_off(bi) }
     Expr::CompField(cb, ci) => { res = index_base_blame_off(cb) }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit | Expr::ArrayLit
+      | Expr::Try | Expr::FloatLit | Expr::Lambda | Expr::Loop => {}
   }
   res
 }
@@ -860,7 +882,10 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
         push_str(sb, "  addq %rax, %rbx\n  movq %rbx, %rax\n")
         return
       }
-      _ => {}
+      Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+        | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+        | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+        | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
     }
   }
   ## SOUNDNESS (correct-or-trap, §7.2 / Types §9.4): indexing the result of a `Slice(T)`-returning CALL
@@ -1045,7 +1070,10 @@ pub emit_index_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : strbuf:
       ibv := var_name_span(ib)
       if ibv.n != 0 { if var_has_tcomps(cx, ibv.s, ibv.n) { panic("selfhost: nested mixed-kind tuple element access (t.N.M) not yet supported (pass the component through a named local)") } }
     }
-    _ => {}
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   ## SOUNDNESS (correct-or-trap, I11 / Types §9.4): an `Index` whose base is a struct ARRAY FIELD
   ## (`something.cells[i]`) is composed ONLY by the `fib.is_fld` path above, and only when that field's
