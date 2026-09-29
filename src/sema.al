@@ -2787,8 +2787,15 @@ brand_probe_class_name := fn(c : usize) -> str {
 brand_probe_value_sink := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) {
   if SEMA_BRAND_DECLS == 0 { return }
   if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return }
-  BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
   act := sema_brand_value_ty(v, decls, upto, src, locals, nloc, a)
+  brand_probe_ty_sink(dst, act, off, decls, upto, src)
+}
+## The census half of one value sink once the value's brand identity `act` is known — shared by
+## `brand_probe_value_sink` and the whole-array walk (#698), which knows an element TYPE, not an
+## element expression.
+brand_probe_ty_sink := fn(dst : Ty, act : Ty, off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) {
+  if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return }
+  BRAND_PROBE_SINKS = BRAND_PROBE_SINKS + 1
   if not tag_is_brand(act.tag) and not tag_is_brand(dst.tag) { return }
   c := sema_brand_class(dst, act, decls, upto, src)
   if c != 0 { brand_probe_row(brand_probe_class_name(c), off, src) }
@@ -2896,6 +2903,12 @@ sema_brand_value_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : pt
   if SEMA_BRAND_DECLS == 0 { return 0 }
   if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return 0 }
   act := sema_brand_value_ty(v, decls, upto, src, locals, nloc, a)
+  sema_brand_ty_sink_err(dst, act, off, decls, upto, src)
+}
+## The refusing half of one value sink once the value's brand identity `act` is known — the twin of
+## `brand_probe_ty_sink`, and the one place both value-sink shapes decide (#698).
+sema_brand_ty_sink_err := fn(dst : Ty, act : Ty, off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> CheckErr {
+  if not tag_is_brand(dst.tag) and not tag_is_int(dst.tag) { return 0 }
   if not tag_is_brand(act.tag) and not tag_is_brand(dst.tag) { return 0 }
   if sema_brand_refuse_class(dst, act, decls, upto, src) == 0 { return 0 }
   brand_conversion_err(off)
@@ -3029,6 +3042,25 @@ sema_brand_array_elems := fn(census : bool, dst : Ty, v : ptr(Expr), off : usize
   if not tag_is_brand(et.tag) and not tag_is_int(et.tag) { return 0 }
   mut g := expr_array_lit_head(v)
   mut err : CheckErr = 0
+  ## Issue #698 — a WHOLE array value, not a literal: a local recorded as a fixed array
+  ## (`bs : [B; 2]`) has its element type in its annotation, so its elements are judged by TYPE
+  ## against the sink's element type. Before this `ys : [A; 2] = bs` and `take(bs)` for
+  ## `take := fn(xs : [A; 2])` let every element of a sibling brand through.
+  if g == 0 {
+    vv := expr_var_span(v)
+    if vv.n != 0 and nloc != 0 and local_in(locals, nloc, src, vv.s, vv.n) {
+      vl := local_ty(locals, nloc, src, vv.s, vv.n)
+      if tag_is_array(tag_unflag(vl.tag)) and vl.nl != 0 {
+        vsp := sema_brand_array_elem_span(src, vl.ns, vl.nl)
+        if vsp.n != 0 {
+          vet := resolve_ty(src, vsp.s, vsp.n, decls, upto)
+          if census { brand_probe_ty_sink(et, vet, off, decls, upto, src) }
+          else { err = sema_brand_ty_sink_err(et, vet, off, decls, upto, src) }
+        }
+      }
+    }
+    return err
+  }
   while g != 0 {
     ea := deref(arg_p(g))
     eoff := sema_brand_span(s_of(ea.e, a), off)
@@ -3045,6 +3077,25 @@ sema_brand_array_elems := fn(census : bool, dst : Ty, v : ptr(Expr), off : usize
 ## The REFUSING end of that walk — the entry `sema_brand_sink_err` dispatches a tag-7 sink into.
 sema_brand_array_sink_err := fn(dst : Ty, v : ptr(Expr), off : usize, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> CheckErr {
   sema_brand_array_elems(false, dst, v, off, decls, upto, src, locals, nloc, a)
+}
+## Issue #698 — the brand sink type of a call parameter. The parser records an array parameter
+## `xs : [T; N]` by its ELEMENT span `T` (`Param.pmode == 1`), so `callee_param_ty` answers `T`'s type.
+## When the source around that span is a fixed-array annotation — `[` before it and `; N ]` after —
+## this answers the whole annotation as the tag-7 array `Ty` a local `xs : [T; N]` would record, so
+## the brand judge walks the argument's elements; otherwise `pty` unchanged. A slice `[T]` has no `;`
+## and is left alone.
+sema_array_param_brand_ty := fn(pty : Ty, src : ptr(u8), ts : usize, tl : usize) -> Ty {
+  if tl == 0 or ts == 0 { return pty }
+  mut p := ts
+  while p > 0 and _sws1(src, p - 1) { p -= 1 }
+  if p == 0 or str_at((src + p - 1), 1) != "[" { return pty }
+  open := p - 1
+  mut q := ts + tl
+  while _sws1(src, q) { q += 1 }
+  if str_at((src + q), 1) != ";" { return pty }
+  while str_at((src + q), 1) != "]" and str_at((src + q), 1) != "\n" and str_at((src + q), 1) != ")" { q += 1 }
+  if str_at((src + q), 1) != "]" { return pty }
+  Ty(tag = 7, ns = open, nl = q + 1 - open)
 }
 ## The value-sink DISPATCHER every hooked sink calls. A tag-7 declared type is an array annotation
 ## whose ELEMENTS are the value sinks; every other declared type is judged directly. One entry, so a
@@ -7844,12 +7895,18 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## intentionally accepted by the existing checker/lower seam. The conformance gap this lane
       ## closes is a value-result mismatch (`S`/`str`/scalar), not pointer-to-aggregate ABI plumbing.
       pty0 := callee_param_ty(decls, upto, src, ecs.s, ecs.n, apix, a)
+      ## Issue #698 — an ARRAY parameter (`xs : [A; 2]`) records only its ELEMENT type span, so
+      ## `pty0` is the element's type and the brand judge compared `A` against the whole argument —
+      ## an array literal, whose identity it cannot name — and let `[b, c]` of a sibling `B` through.
+      ## The brand sink is handed the whole `[A; N]` annotation instead, which `sema_brand_sink_err`
+      ## already walks element by element for an annotated array binding.
+      bpty0 := sema_array_param_brand_ty(pty0, src, psp.s, psp.n)
       ## #299 census hook (no refusal): this argument's declared parameter type against the value's
       ## recovered brand identity. Inert unless the program declares a brand of its own.
-      brand_probe_sink(pty0, ca.e, s_of(ca.e, a), decls, upto, src, locals, nloc, a)
+      brand_probe_sink(bpty0, ca.e, s_of(ca.e, a), decls, upto, src, locals, nloc, a)
       ## …and the refusal at the same sink (Issue #299). Poisons rather than returning: the argument
       ## walk must finish so every offending argument of the call is counted by the census beside it.
-      cbe := sema_brand_sink_err(pty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc, a)
+      cbe := sema_brand_sink_err(bpty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc, a)
       if cbe != 0 { mark_failed(locals, cbe) }
       if not tag_is_unknown(crt0.tag) and not (tag_is_ptr(crt0.tag) and tag_is_struct(pty0.tag)) {
         if not tag_is_unknown(pty0.tag) { ptrint_probe_site("ARG", "premat", true, crt0.tag, pty0.tag, s_of(ca.e, a), src) }

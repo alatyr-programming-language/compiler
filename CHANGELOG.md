@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A sibling brand no longer crosses through a fixed array.** `take([b, c])` for
+  `take := fn(xs : [A; 2])` and a sibling `b, c : B`, `take(bs)` for `bs : [B; 2]`, and
+  `ys : [A; 2] = bs` all checked at rc 0 and ran to the foreign values (Types §4.2/§5.4). An array
+  parameter is recorded by its element type, so the brand judge never saw an array; and a whole array
+  value was never judged, only array literals. Both are refused at the crossing now, and the #299
+  census counts them (#698).
 - **The full gate can run on a GitHub-hosted runner.** `.github/workflows/gate.yml` runs
   `scripts/full.sh --force-sweeps` on every push to a `gate/**` branch and publishes the log and the
   generated corpus manifest; it holds no write token, and landing stays the integrator's (#748).
