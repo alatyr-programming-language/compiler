@@ -3192,6 +3192,46 @@ sema_array_param_brand_ty := fn(pty : Ty, src : ptr(u8), ts : usize, tl : usize)
   if str_at((src + q), 1) != "]" { return pty }
   Ty(kind = TyKind.TyArray, ns = open, nl = q + 1 - open)
 }
+## #726 — the type a call ARGUMENT is compared against. An array parameter records its ELEMENT span
+## (above), so `callee_param_ty` answers `T` for `xs : [T; N]`; the argument is the whole array, and
+## an array literal compared with `T` refused `sum([40, 2])` the first time `check_expr`'s `ArrayLit`
+## arm typed it. The whole annotation is read back exactly as the brand sink reads it.
+callee_arg_param_ty := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, pidx : usize, a : ptr(mut rt::Arena)) -> Ty {
+  pt := callee_param_ty(decls, upto, src, s, n, pidx, a)
+  psp := callee_param_type_span(decls, upto, src, s, n, pidx, a)
+  sema_array_param_brand_ty(pt, src, psp.s, psp.n)
+}
+## #726 — the leftmost source offset of an expression, 0 when it carries none. Only the forms whose
+## first byte is recorded are answered; everything else is 0, which the caller treats as unprovable.
+sema_expr_left_off := fn(e : ptr(Expr), src : ptr(u8)) -> usize {
+  mut r : usize = 0
+  match deref(e) {
+    Expr::Num(v, s, n) => { if n != 0 { r = s } }
+    Expr::Var(s, n) => { if n != 0 and not ast::span_is_synthetic(s) { r = s } }
+    Expr::FloatLit(s, n) => { if n != 0 { r = s } }
+    Expr::Call(cs, cl, na, ah) => { if cl != 0 and not ast::span_is_synthetic(cs) { r = cs } }
+    Expr::StructLit(ss, sl, nf, fh) => { if sl != 0 and not ast::span_is_synthetic(ss) { r = ss } }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { if el != 0 and not ast::span_is_synthetic(es) { r = es } }
+    Expr::Field(fb, fs, fl) => { r = sema_expr_left_off(fb, src) }
+    Expr::Index(ib, ii) => { r = sema_expr_left_off(ib, src) }
+    Expr::Bin(op, l, rr) => { r = sema_expr_left_off(l, src) }
+    Expr::BoolLit | Expr::If | Expr::Match | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+## #726 — was this `ArrayLit` provably written as an ARRAY `[e0, …]`? The parser builds a TUPLE
+## `(a, b)` as the same node and keeps no delimiter, so it is recovered from the source byte before
+## the first element. A tuple, or a literal whose delimiter cannot be recovered, answers false.
+sema_arraylit_is_array := fn(head : ptr(mut Arg), src : ptr(u8)) -> bool {
+  if unchecked bitcast(usize, head) == 0 { return false }
+  h0 := deref(arg_p(head))
+  mut p := sema_expr_left_off(h0.e, src)
+  if p == 0 { return false }
+  while p > 0 and _sws1(src, p - 1) { p -= 1 }
+  p > 0 and str_at((src + p - 1), 1) == "["
+}
 ## The value-sink DISPATCHER every hooked sink calls. A tag-7 declared type is an array annotation
 ## whose ELEMENTS are the value sinks; every other declared type is judged directly. One entry, so a
 ## sink that is hooked once is hooked for both shapes and no call site learns about arrays.
@@ -7651,7 +7691,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
             at := check_expr(ga.e, decls, upto, src, a, locals, nloc)
             match at {
               Result::Ok(av) => {
-                pt := callee_param_ty(decls, upto, src, cs, cl, ai, a)
+                pt := callee_arg_param_ty(decls, upto, src, cs, cl, ai, a)
                 ptrint_probe_site("ARG", "unbound", true, av.kind, pt.kind, s_of(ga.e, a), src)
                 ## A conformance failure, not an unbound name: poison the check with a located MISMATCH
                 ## at the argument, and leave `bad` to the unbound walk it reports (#716 — a revived
@@ -8115,8 +8155,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   match deref(e) {
     Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref | Expr::StructLit | Expr::EnumLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::Call | Expr::Field | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref | Expr::StructLit | Expr::EnumLit | Expr::ArrayLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::Call | Expr::Field => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
   }
 }
 
@@ -8283,7 +8323,7 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
           ta0 := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
           ta := ty_of_kind(ta0.kind)
           if not qgen {
-            pt := callee_param_ty(decls, upto, src, qcs, qcl, pidx, a)
+            pt := callee_arg_param_ty(decls, upto, src, qcs, qcl, pidx, a)
             ptrint_probe_site("ARG", "callarm", true, ta.kind, pt.kind, s_of(ga.e, a), src)
             if not ty_compat(ta, pt, src) {
               if not bad { bad = true; bad_span = s_of(ga.e, a) }
@@ -8311,7 +8351,11 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
           fd := deref(fld_p(fld))
           ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
           ptrint_probe_site("FIELD-LIT", "structlit", true, tv.kind, ft.kind, s_of(sa.e, a), src)
-          if not ty_compat(tv, ft, src) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(sa.e, a), 0)); return er }
+          ## #726 — `s_of` has no span for a literal field value; locate it at the struct literal's
+          ## head then, as the call-argument compare locates a literal argument at its call.
+          mut fvs := s_of(sa.e, a)
+          if fvs == 0 and not ast::span_is_synthetic(scs) { fvs = scs }
+          if not ty_compat(tv, ft, src) { er := Result(Ty, CheckErr).Err(mismatch_err(fvs, 0)); return er }
           fld = fd.next
         }
         sg = sa.next
@@ -8386,7 +8430,11 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         te := check_expr(aa.e, decls, upto, src, a, locals, nloc)?
         ag = aa.next
       }
-      Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyArray, ns = 0, nl = 0))
+      ## #726 — a TUPLE literal `(5, 2.0)` is the same node; it is not an array, and a tuple's type is
+      ## not modelled here, so it answers UNKNOWN (as every `ArrayLit` did before this arm ran). So does
+      ## a literal whose delimiter cannot be recovered from the source.
+      if sema_arraylit_is_array(aehead, src) { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyArray, ns = 0, nl = 0)) }
+      else { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
     }
     ## `a[i]` — an element read: the index must be int (a known non-int is a `Mismatch`); the
     ## base is checked (any `Var` inside must be bound). The element type is unknown (tag 0,
@@ -11174,6 +11222,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## #726 — `check_expr`'s `EnumLit` arm now answers the public enum tag 4 the same way, and its
           ## name is lost to the same carrier: a nameless enum local skipped #557's exhaustiveness check
           ## and #693's raw-union exclusion. Recover it exactly like the nameless struct.
+          ## …and the public array tag `check_expr`'s `ArrayLit` arm answers is not this file's tag-7 local
+          ## marker, which means a SCALAR-literal-element array: recorded as-is it fenced the whole-struct
+          ## store `ps[0] = P(…)` into `mut ps := [P(…), P(…)]`. The literal is re-judged below.
+          if kind_is_unknown(dt.kind) and kind_is_array(bind_tag) and unchecked bitcast(usize, expr_array_first(v)) != 0 { bind_tag = TyKind.TyUnknown }
           if kind_is_unknown(bind_tag) or ((kind_is_struct(bind_tag) or kind_is_enum(bind_tag)) and bind_nl == 0) {
             ## HIDDEN tags 9 (struct) / 10 (enum): `value_agg_ty` maps them back, but `check_expr`'s Var
             ## resolution does NOT surface them, so the overload-naive existing arg checks stay tolerant.
