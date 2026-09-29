@@ -8115,8 +8115,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   match deref(e) {
     Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref | Expr::StructLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::Call | Expr::Field | Expr::EnumLit | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
   }
 }
 
