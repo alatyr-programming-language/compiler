@@ -97,10 +97,17 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
           rnode := deref(fr)
           match rnode {
             Expr::Num(rv, rs, rn) => { newnode(Expr.Num(apply(op, lv, rv), 0, 0)) }
-            _ => { newnode(Expr.Bin(op, fl, fr)) }
+            Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+              | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+              | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+              | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+              | Expr::Loop => { newnode(Expr.Bin(op, fl, fr)) }
           }
         }
-        _ => { newnode(Expr.Bin(op, fl, fr)) }
+        Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+          | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+          | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+          | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { newnode(Expr.Bin(op, fl, fr)) }
       }
     }
     ## An `if`/`else`: fold each part and rebuild over the folded children (a constant
