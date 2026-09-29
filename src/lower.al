@@ -3392,6 +3392,18 @@ ptr_pointee_struct_span := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr
   CSpan(s = 0, n = 0)
 }
 
+## #716 — the ENUM dual of `ptr_pointee_struct_span`: for a `ptr(<opt mut> E)` type span naming an
+## enum `E` (bare or path-qualified), the pointee's span; 0/0 otherwise.
+ptr_pointee_enum_span := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec)) -> CSpan {
+  if tl < 6 { return CSpan(s = 0, n = 0) }
+  if str_at((src + ts), 4) != "ptr(" { return CSpan(s = 0, n = 0) }
+  mut ps := ts + 4
+  mut pl := tl - 5
+  if pl > 4 and str_at((src + ps), 4) == "mut " { ps = ps + 4; pl = pl - 4 }
+  if enum_decl_of(decls, src, ps, pl) >= 0 { return CSpan(s = ps, n = pl) }
+  CSpan(s = 0, n = 0)
+}
+
 ## The TYPE span (ts, tl) of field `[fs, fs+fl)` of struct `[sns, snl)` — walks the struct's
 ## `FieldDecl` list (each carries `ts`/`tl`); 0/0 if not found. (Mirrors `field_word_offset`.)
 pub field_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), sns : usize, snl : usize, fs : usize, fl : usize, a : rt::Arena) -> CSpan {
@@ -5827,6 +5839,17 @@ bind_ptrstruct_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usi
   if existing >= 0 { return }
   off := svec_len(ptr(slots))
   svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = ss, snl = sl, ek = 7, estride = 1, eek = 0, is_ref = false))
+}
+
+## #716 — bind an annotated POINTER-TO-ENUM local (`q : ptr(E) = …`) as `ek = 6`, the kind a
+## `p : ptr(E)` parameter already gets, so `match deref(q)` dispatches on `E`'s discriminant instead of
+## reaching the integer path (which refuses it). One word holding the pointer; `is_ref` stays false
+## because the slot IS the value — `scrut_enum_info` marks the deref scrutinee by-ref itself.
+bind_ptrenum_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize, es : usize, el : usize) {
+  existing := slot_of(ptr(slots), src, s, n)
+  if existing >= 0 { return }
+  off := svec_len(ptr(slots))
+  svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = es, snl = el, ek = 6, estride = 1, eek = 0, is_ref = false, tmod_s = 0, tmod_l = 0))
 }
 
 ## Emit code pushing a string operand's {ptr, len} pair onto the stack — `ptr` first (deeper),
@@ -11991,7 +12014,7 @@ deref_call_pointee_unresolved := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : p
 int_arm_value := fn(am : Arm, src : ptr(u8)) -> i64 {
   if am.vl != 0 {
     lower_show_src_line(src, am.vs)
-    panic("selfhost: this `match` arm names an enum variant, but the lowering cannot see the scrutinee's enum type (the source line above), so it has no discriminant to compare against. Match over an annotated pointer parameter (`p : ptr(E)` then `match deref(p)`) or pass the value to a function that does (#716).")
+    panic("selfhost: this `match` arm names an enum variant, but the lowering cannot see the scrutinee's enum type (the source line above), so it has no discriminant to compare against. Match over an annotated pointer parameter or local (`p : ptr(E)` then `match deref(p)`) or pass the value to a function that does (#716).")
   }
   am.lit
 }

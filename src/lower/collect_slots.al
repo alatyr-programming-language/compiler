@@ -626,7 +626,9 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
               ## classified above, so this reclassifies nothing that built before → fixpoint-neutral.
               ltn := str_at((src + lts.s), lts.n)
               if ltn == "f64" or ltn == "f32" { bind_float_slot(slots, src, ns, nl) } else {
+                pes := ptr_pointee_enum_span(src, lts.s, lts.n, decls)
                 if pps.n != 0 { bind_ptrstruct_slot(slots, src, ns, nl, pps.s, pps.n) }
+                else if pes.n != 0 { bind_ptrenum_slot(slots, src, ns, nl, pes.s, pes.n) }
                 else { bind_slot_typed(slots, src, ns, nl, lts.s, lts.n) }
               }
             }
