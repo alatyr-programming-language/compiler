@@ -3965,6 +3965,32 @@ EOF
   done
 }
 
+## Issue #697 / Control Flow §5.1 — a PATH-QUALIFIED annotation (`q : ptr(zkinds::Kind)`) names the
+## same enum as the bare spelling, so a `match deref(q)` missing a variant is refused, whichever way the
+## two modules sort. The parent resolved every qualified annotation to nothing: all four checked rc 0.
+## The needle names the `match` line; no fixture header quotes it.
+issue697_qualified_test() {
+  src="$E2E_TEST/issue697_qualified_annotation"
+  d="$T/issue697_qualified_annotation"
+  [ -d "$src" ] || { echo "FAIL issue697_qualified: fixture tree missing"; fail=1; return; }
+  cp -r "$src" "$d" || { echo "FAIL issue697_qualified: could not snapshot fixture"; fail=1; return; }
+  for spec in "late_nonexh:6" "early_nonexh:5"; do
+    name="${spec%%:*}"; line="${spec##*:}"
+    msg="$( cd "$d/$name" && "$CC" check package.al 2>&1 >/dev/null )"; rc=$?
+    case "$rc:$msg" in
+      1:*"type mismatch at line $line in main"*) echo "ok   issue697_qualified/$name: refused at line $line" ;;
+      *) echo "FAIL issue697_qualified/$name: rc=$rc want 1 at line $line, got: $msg"; fail=1 ;;
+    esac
+  done
+  for name in late_exh early_exh; do
+    ( cd "$d/$name" && "$CC" check package.al ) >/dev/null 2>&1; rc=$?
+    if [ "$rc" = 0 ]; then echo "ok   issue697_qualified/$name: check accepted"; else echo "FAIL issue697_qualified/$name: check rc=$rc"; fail=1; fi
+    _e2e_exec_in "$d/$name" "$CC" run package.al >/dev/null 2>&1; got=$?
+    if _e2e_runtime_failure "issue697_qualified/$name(run)" "$got"; then return; fi
+    if [ "$got" = 42 ]; then echo "ok   issue697_qualified/$name: run 42"; else echo "FAIL issue697_qualified/$name: run=$got want=42"; fail=1; fi
+  done
+}
+
 ## Modules §1/§4 + Types §4.1 — same-named nominal enums must never let declaration order choose a
 ## variant layout. The fixture lives outside test/package because it is also part of the corpus; copy it
 ## into this row's private scratch before every build. Both unequal-count orders must preserve the
@@ -7182,6 +7208,7 @@ qualified_generic_package_test
 standard_tuple_global_module_test
 ambig_pub_test
 ambig_enum_collision_test
+issue697_qualified_test
 check_located reject_qualified_generic_unknown 3
 no_input_diag_test
 tool16_no_vendor_test
@@ -7698,6 +7725,14 @@ build_reject when_named_pred_reject
 ## by `check` with a LOCATED diagnostic at the call site (line 15), not only at link. Same faithful-subset
 ## boundary as the size/is-kind forms (a not-yet-monomorphized arg stays admitted).
 check_located when_named_pred_reject 15
+## Issue #697 — a local annotation naming no type is refused at its line, bare, as a `ptr` pointee, and
+## as a path-qualified pointee; the parent accepted all three at rc 0.
+check_located issue697_unknown_ann_bare 5
+check_located issue697_unknown_ann_ptr 4
+check_located issue697_unknown_ann_ptr_qual 4
+build_reject issue697_unknown_ann_bare
+build_reject issue697_unknown_ann_ptr
+build_reject issue697_unknown_ann_ptr_qual
 ## CT-4/CT-5: a structural FIELD-COUNT bound — `when typeinfo(T).fields.len >= 2` (the spec's
 ## `TypeInfo.Struct{fields:[Field]}` surface, appendix §4.1), the count folded per-instance. ACCEPT:
 ## `pick(S,42)` (S a 2-field struct → 2 >= 2 → 42). REJECT: `pick(One,42)` (1-field struct → 1 < 2). The
