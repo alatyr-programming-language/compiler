@@ -8115,8 +8115,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   match deref(e) {
     Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref | Expr::StructLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::Call | Expr::Field | Expr::EnumLit | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref | Expr::StructLit | Expr::EnumLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::Call | Expr::Field | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
   }
 }
 
@@ -11171,7 +11171,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## so recover it exactly like tag 0 instead of recording a nameless struct local. An ARRAY literal
           ## of SCALAR-LITERAL elements is tagged 7 (scalar-element array) so a whole-aggregate store into
           ## `xs[i]` is rejected. An annotation / call-return with a reliable payload still wins.
-          if kind_is_unknown(bind_tag) or (kind_is_struct(bind_tag) and bind_nl == 0) {
+          ## #726 — `check_expr`'s `EnumLit` arm now answers the public enum tag 4 the same way, and its
+          ## name is lost to the same carrier: a nameless enum local skipped #557's exhaustiveness check
+          ## and #693's raw-union exclusion. Recover it exactly like the nameless struct.
+          if kind_is_unknown(bind_tag) or ((kind_is_struct(bind_tag) or kind_is_enum(bind_tag)) and bind_nl == 0) {
             ## HIDDEN tags 9 (struct) / 10 (enum): `value_agg_ty` maps them back, but `check_expr`'s Var
             ## resolution does NOT surface them, so the overload-naive existing arg checks stay tolerant.
             ## Covers a StructLit / EnumLit / nullary-enum-variant RHS (and a Var aliasing such a local).
