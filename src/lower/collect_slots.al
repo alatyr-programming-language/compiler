@@ -57,18 +57,12 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           s = nx
           continue
         }
-        mut v := const_rhs(v, decls, src)
-        ## A module-level const STRUCT field is not a bare Var, so const_rhs cannot resolve it. Repeat
-        ## the same narrow recovery used by emit_st_assign before any slot-shape classifier runs;
-        ## otherwise `v := app.version` reserves one scalar word even though its const field is a
-        ## two-word str view, and the later call ABI passes `v`'s ptr word instead of its pair address.
-        match deref(v) {
-          Expr::Field(base, fs, fl) => {
-            cv := const_struct_field(base, fs, fl, decls, src, a)
-            if unchecked bitcast(usize, cv) != 0 { v = cv }
-          }
-          _ => {}
-        }
+        ## A module-level const STRUCT field is not a bare Var, so const_rhs cannot resolve it. Ask the
+        ## same `const_field_rhs` emit_st_assign asks before any slot-shape classifier runs; otherwise
+        ## `v := app.version` reserves one scalar word even though its const field is a two-word str
+        ## view, and the later call ABI passes `v`'s ptr word instead of its pair address. (#716: the
+        ## inline `match deref(v)` this replaces never took its `Field` arm — see the helper.)
+        mut v := const_field_rhs(const_rhs(v, decls, src), decls, src, a)
         rqa := require_agg_parts(v, decls, src, a)
         si := struct_lit_info(v)
         ei := enum_lit_info(v)
@@ -152,11 +146,9 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
             mut el2 := ei.el
             if enum_lit_full(v).np >= 1 {
               av := var_agg_info(arg0e, ptr(slots), src)
-              mut acall := false
-              match deref(arg0e) {
-                Expr::Call(cs0, cl0, na0, ah0) => { acall = true }
-                _ => {}
-              }
+              ## #716 — `expr_is_call` asks over a pointer PARAMETER; the inline `match deref(arg0e)`
+              ## it replaces was lowered against tag 0, so `acall` was never set.
+              mut acall := expr_is_call(arg0e)
               if acall { acall = enum_ret_call_d(arg0e, decls, src, a) }
               if enum_lit_full(arg0e).is_e or struct_lit_info(arg0e).is_s or av.ek == 2 or av.ek == 3 or acall {
                 ft := synth_lit_type(v, decls, src, a, synth, ptr(slots))
@@ -634,7 +626,9 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
               ## classified above, so this reclassifies nothing that built before → fixpoint-neutral.
               ltn := str_at((src + lts.s), lts.n)
               if ltn == "f64" or ltn == "f32" { bind_float_slot(slots, src, ns, nl) } else {
+                pes := ptr_pointee_enum_span(src, lts.s, lts.n, decls)
                 if pps.n != 0 { bind_ptrstruct_slot(slots, src, ns, nl, pps.s, pps.n) }
+                else if pes.n != 0 { bind_ptrenum_slot(slots, src, ns, nl, pes.s, pes.n) }
                 else { bind_slot_typed(slots, src, ns, nl, lts.s, lts.n) }
               }
             }
