@@ -7390,8 +7390,8 @@ call_atomic_ordering_bad := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Are
 ## Name-resolution prepass for one expression. It is deliberately scalar: the self-host ABI can
 ## lose an error encoded inside the wide `Result(Ty, _)` returned by type synthesis. Calls may name
 ## later declarations, matching the existing call rule; their argument expressions are resolved.
-## The inner VALUE of a preserved `Expr::Bitcast` (`bitcast(ptr(<sub-word>), v)`), or null when `e`
-## is not that node. Standalone pointer-PARAM helper (a `match deref(e)` in its own fn dispatches
+## The inner VALUE of an `Expr::Bitcast` (every `bitcast(T, v)` reaches the checker as one, #529), or
+## null when `e` is not that node. Standalone pointer-PARAM helper (a `match deref(e)` in its own fn dispatches
 ## reliably under the seed, unlike an added arm in a big payload match). Used by the two EXHAUSTIVE
 ## (wildcard-free) Expr walkers — `expr_has_unbound` + `check_expr` — to unwrap the transparent node
 ## pre-match, so a missing arm never falls through and MISREADS the payload as a `Var`.
@@ -7399,6 +7399,20 @@ bitcast_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
   mut r := unchecked bitcast(ptr(Expr), 0)
   match deref(e) {
     Expr::Bitcast(inner, ps, pl) => { r = inner }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
+  }
+  r
+}
+
+## The TARGET span of a `Expr::Bitcast` node (`n == 0` when `e` is not one). Same single-match shape
+## as `bitcast_inner`, for the same seed-dispatch reason.
+bitcast_target := fn(e : ptr(Expr)) -> VSpan {
+  mut r := VSpan(s = 0, n = 0)
+  match deref(e) {
+    Expr::Bitcast(inner, ps, pl) => { r = VSpan(s = ps, n = pl) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
@@ -7731,11 +7745,26 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
 ## `Field` access needs a struct base → the field's type; an `EnumLit` → the enum type. The
 ## span carried in a `Mismatch` is the offending sub-expression's. Fallible (`?`); recurses.
 pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> Result(Ty, CheckErr) {
-  ## `bitcast(ptr(<sub-word>), v)` PRESERVED node — bit-identity, so its type IS the inner value's.
-  ## Handled HERE (pre-match) because the big `match deref(e)` below mis-dispatches payload-heavy arms
-  ## under the bootstrap seed (scar #2); recursing on the inner reliably yields the inner's type.
+  ## `bitcast(T, v)` has the type `T`, never `v`'s (Types §4.3; #716 for the in-match arm). Every
+  ## bitcast now reaches the checker as an `Expr::Bitcast` node — the identity class the lowerers
+  ## erase is erased only at emit time (`ast::bitcast_identity_erase`) — so this is where an explicit
+  ## `unchecked bitcast(usize, p)` stops reading as the pointer `p` (#529). Handled HERE (pre-match)
+  ## because the big `match deref(e)` below mis-dispatches payload-heavy arms under the bootstrap seed
+  ## (scar #2). The operand is still checked for its own errors.
   bci := bitcast_inner(e)
-  if unchecked bitcast(usize, bci) != 0 { return check_expr(bci, decls, upto, src, a, locals, nloc) }
+  if unchecked bitcast(usize, bci) != 0 {
+    bcv := check_expr(bci, decls, upto, src, a, locals, nloc)?
+    bct := bitcast_target(e)
+    btt := resolve_ty(src, bct.s, bct.n, decls, upto)
+    ## Types §4.4 — a bitcast keeps the bit width, and a `bool` is one byte, so `bitcast(i64, u < 0)`
+    ## has no conforming reading (`test/reject_bitcast_bool_to_word.al`, #716). That refusal used to
+    ## come for free from typing the cast as its `bool` operand; with the target's type it is stated.
+    ## Located at the target, with the plain `invalid` class the refusal has always printed.
+    if kind_is_bool(bcv.kind) and not kind_is_bool(btt.kind) and not kind_is_unknown(btt.kind) {
+      return Result(Ty, CheckErr).Err(located_err(bct.s))
+    }
+    return Result(Ty, CheckErr).Ok(btt)
+  }
   ibm := sema_direct_brand_if_mismatch(e, src, locals, nloc)
   if ibm != 0 { return Result(Ty, CheckErr).Err(mismatch_err(ibm, 0)) }
   ## #299 census hook (no refusal): one binary operator over two DIFFERENT brands. On the PRE-MATCH
