@@ -122,6 +122,9 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **The full gate can run on a GitHub-hosted runner.** `.github/workflows/gate.yml` runs
+  `scripts/full.sh --force-sweeps` on every push to a `gate/**` branch and publishes the log and the
+  generated corpus manifest; it holds no write token, and landing stays the integrator's (#748).
 - **A `match` whose enum type arrives through a call or a `deref` is checked for exhaustiveness.**
   `c := g()` then `match c`, `p := f()` then `match deref(p)`, `match deref(f())`, `x := deref(f())`
   and `x := deref(p)` — with `p` annotated or not — used to skip Control Flow §5.1's exhaustiveness
