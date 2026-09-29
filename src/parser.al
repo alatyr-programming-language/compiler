@@ -83,8 +83,8 @@ pub cur := fn(pc : PC) -> Token { tok_at(pc, pc.idx) }
 ## Is the cursor on the **keyword** `w`? The lexer tags every keyword with one kind (2,
 ## `is_kw`), so keyword **identity** is resolved here by comparing the token's lexeme to
 ## `w` (`str_at` over the source span). This is what lets the parser branch on `if` /
-## A bare built-in SCALAR or `str` type NAME — the set of `bitcast` targets that stay IDENTITY-erased
-## (a register no-op / a 2-word value the return-slot coercion already types). Everything else that is
+## A bare built-in SCALAR or `str` type NAME — the set of `bitcast` targets in the IDENTITY class, which
+## the lowerers see erased (`ast::bitcast_identity_erase`; a register no-op / a 2-word value the return-slot coercion already types). Everything else that is
 ## a bare identifier is a USER type name (a struct), whose `bitcast` target must be PRESERVED so a
 ## local bound from it is typed by the TARGET struct (else its fields resolve against the SOURCE type).
 scalar_or_str_name := fn(src : ptr(u8), s : usize, n : usize) -> bool {
@@ -680,7 +680,12 @@ pub clone_expr := fn(a : ptr(mut rt::Arena), e : ptr(Expr), ok : ptr(mut bool)) 
     Expr::FnRef(fp, ms, ml) => { r = newnode(a, Expr.FnRef(fp, ms, ml)) }
     Expr::Bin(op, l, rr) => { cl := clone_expr(a, l, ok); cr := clone_expr(a, rr, ok); r = newnode(a, Expr.Bin(op, cl, cr)) }
     Expr::Unchecked(inner) => { ci := clone_expr(a, inner, ok); r = newnode(a, Expr.Unchecked(ci)) }
-    Expr::Bitcast(inner, bps, bpl) => { ci := clone_expr(a, inner, ok); r = newnode(a, Expr.Bitcast(ci, bps, bpl)) }
+    Expr::Bitcast(inner, bps, bpl) => {
+      ci := clone_expr(a, inner, ok)
+      r = newnode(a, Expr.Bitcast(ci, bps, bpl))
+      ## an identity-class cast stays one in the copy, so the emit-time erasure still finds it
+      if ast::bitcast_identity_has(e, bps, bpl) { ast::bitcast_identity_record(r, bps, bpl) }
+    }
     Expr::AddrOf(inner) => { ci := clone_expr(a, inner, ok); r = newnode(a, Expr.AddrOf(ci)) }
     Expr::Deref(inner) => { ci := clone_expr(a, inner, ok); r = newnode(a, Expr.Deref(ci)) }
     Expr::Try(inner) => { ci := clone_expr(a, inner, ok); r = newnode(a, Expr.Try(ci)) }
@@ -1945,9 +1950,8 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       ## 1/2/4-byte scalar — the pointee width is PRESERVED in an `Expr::Bitcast` node so a `deref`
       ## load/store through it narrows the machine move to the pointee width (else a full 8-byte
       ## `movq` reads/clobbers the 7 neighbouring bytes). The node lowers exactly to the inner value.
-      ## Only a KNOWN sub-word pointee triggers it, so a word-sized / aggregate / unknown pointee (all
-      ## the compiler's own bitcasts) stays identity-erased → the node never appears in the reached
-      ## tree → fixpoint-neutral. While scanning the target type, capture the pointee name span (the
+      ## Only a KNOWN sub-word pointee triggers it; a word-sized / aggregate / unknown pointee (all
+      ## the compiler's own bitcasts) is the identity class, erased before lowering → fixpoint-neutral. While scanning the target type, capture the pointee name span (the
       ## last ident at paren-depth 1 of a `ptr(…)` head), while `tgt_s`/`tgt_e` retain the complete
       ## target text for the formatter and pointer-specific lower paths.
       if str_eq(str_at(pc.src + t.start, t.len), "bitcast") and cur(pc).kind == 10 {
@@ -1988,7 +1992,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         ## `str` or `ptr(…)`): PRESERVE the target in an `Expr::Bitcast` carrying the type's own NAME
         ## span, so a local bound from it (`y := bitcast(B, x)`) is typed by `B` and `y.field` resolves
         ## against `B` (identity erasure kept the SOURCE type → its fields silently read wrong words).
-        ## Scalar/`str` targets stay identity-erased (str_at unaffected); `ptr(…)` has its own arms.
+        ## Scalar/`str` targets are the identity class, erased before lowering (str_at unaffected); `ptr(…)` has its own arms.
         ##
         ## A GENERIC INSTANCE target (`Box(P)`, issue #372) is exactly this shape and was excluded by
         ## the former `not sawparen` gate: the whole target was erased, so `y := bitcast(Box(P), p)`
@@ -2010,20 +2014,19 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         ## `collect_slots` (`bitcast_ptrstruct_span`), rather than collapsing to a bare scalar whose
         ## `deref(vp)`/`vp.f` read zeros. The node lowers to the inner value (bit-identity), so annotated
         ## locals + inline `deref(bitcast(…))` are UNCHANGED. Only USER pointee names are preserved
-        ## (`ptr(usize)` etc. stay identity-erased); the pointee KIND (struct vs enum) is resolved later
+        ## (`ptr(usize)` etc. are the identity class); the pointee KIND (struct vs enum) is resolved later
         ## with `decls` — an enum pointee simply doesn't infer ek 7.
         if sawptr and ppl != 0 and not scalar_or_str_name(pc.src, pps, ppl) {
           return newnode(pc.arena, Expr.Bitcast(bv, tgt_s, tgt_e - tgt_s))
         }
-        ## IDENTITY-ERASED: every remaining target (a word-sized bare scalar, `str`, `type`, or a
-        ## `ptr(…)` over one of those) lowers to the value itself, so no node is built — and the target
-        ## the author wrote would vanish from the tree entirely. `alatyr fmt` reads the same tree and
-        ## rewrote `unchecked bitcast(usize, n)` as `unchecked (n)`; retain the COMPLETE target span in
-        ## the shared side table so fmt can re-emit it verbatim (`ast::bitcast_erasure_mark`, which is
-        ## a single branch unless the fmt driver turned recording on — the build path records nothing
-        ## and the emitted tree is unchanged).
-        ast::bitcast_erasure_mark(bv, tgt_s, tgt_e - tgt_s)
-        return bv
+        ## IDENTITY CLASS: every remaining target (a word-sized bare scalar, `str`, `type`, or a
+        ## `ptr(…)` over one of those) lowers to the value itself. The node is still KEPT, with the
+        ## complete target span, so the checker types the cast by its target (Types §4.3, #529) and
+        ## `fmt` re-emits exactly what was written. The lowerers never see it: it is recorded, and
+        ## `ast::bitcast_identity_erase` rewrites it into its operand at every emit entry.
+        bn := newnode(pc.arena, Expr.Bitcast(bv, tgt_s, tgt_e - tgt_s))
+        ast::bitcast_identity_record(bn, tgt_s, tgt_e - tgt_s)
+        return bn
       }
       ## `<width>(v)` — a primitive scalar CONVERSION (`usize(i)`, `i64(n)`, `u8(b)`, `f64(i)`, …).
       ## These are NO LONGER swallowed to identity here: they parse as an ordinary single-arg `Call`

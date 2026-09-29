@@ -412,8 +412,10 @@ pub Expr := enum {
   ## representation after evaluating the source. A full `ptr([mut] T)` target lets pointer-specific
   ## paths recover `T` for sub-word deref loads or aggregate pointee layout. A bare aggregate target
   ## keeps the existing aggregate reinterpretation inference. Word-sized scalar and unknown targets
-  ## remain identity-erased. The node is transparent only for pointer/aggregate paths; narrow scalar
-  ## nodes are normalized by each backend.
+  ## are the IDENTITY class: kept with the full target span so the checker types the cast by its
+  ## target (#529), and rewritten into the operand before any lowerer runs
+  ## (`bitcast_identity_erase`). The node is transparent only for pointer/aggregate paths; narrow
+  ## scalar nodes are normalized by each backend.
   Bitcast(ptr(Expr), usize, usize),
   ## LOOP-AS-EXPRESSION (Control Flow §3/§6/§7.2): an infinite `loop { … }` used in VALUE position
   ## (`total := loop { … break v … }`). The single field is the body statement-list head (same as
@@ -912,88 +914,112 @@ pub ecallee_is := fn(k : usize) -> bool {
   false
 }
 
-## ── IDENTITY-ERASED `bitcast` TARGET SPANS ───────────────────────────────────────────────────────
-## `p_factor`'s `bitcast` branch DROPS the node whenever the target needs nothing of the lowerers that
-## the value alone does not already give them — a word-sized bare scalar (`usize`, `i64`, …), `str`,
-## `type`, or a `ptr(…)` whose pointee is one of those. It returns the VALUE expression itself, so the
-## target the author WROTE leaves no trace in the tree. That erasure is deliberate and every back end
-## depends on it (the compiler's own ~1 700 bitcasts stay on the identity path, fixpoint-neutral).
+## ── IDENTITY-CLASS `bitcast` NODES (#529) ─────────────────────────────────────────────────────────
+## A `bitcast` whose target asks nothing of the lowerers beyond the value itself — a word-sized bare
+## scalar (`usize`, `i64`, …), `str`, `type`, or a `ptr(…)` over one of those — used to be ERASED by
+## `p_factor`: it returned the operand, so the target the author wrote left no trace in the tree.
+## Every back end depends on that shape (the compiler's own ~1 800 bitcasts ride it), but the
+## CHECKER cannot: Types §4.3 gives `bitcast(T, v)` the type `T`, and with the node gone
+## `unchecked bitcast(usize, p)` was typed as `p`'s pointer — so the implicit `usize <-> ptr(T)`
+## seam (#529) could never be removed from `kind_compat`, and its census counted explicit casts.
 ##
-## `alatyr fmt` is a THIRD consumer of the same tree, and re-emitting the value alone rewrote
-## `unchecked bitcast(usize, n)` as `unchecked (n)` — with exit 0, over the author's own file. That is
-## not a cosmetic loss: the written target is what types a bare binding, so `a := bitcast(usize, n)`
-## and `a := n` differ for a signed `n` wherever the checker is not lenient. Tooling §4.3/§4.3.4 make
-## `fmt` semantics-preserving, so the target span is retained HERE, beside the control-label side
-## table above and for the same reason: no pass that only needs the value sees a new node or a new
-## enum field, while fmt can recover the exact spelling.
+## So the parser now KEEPS an `Expr::Bitcast(v, <full target span>)` node for this class too, and
+## records it here. `sema` sees the target; the lowerers still see exactly the erased tree, because
+## every emit entry first calls `bitcast_identity_erase`, which rewrites each recorded node IN PLACE
+## into a copy of its operand. That is the old erasure, moved from parse time to the parse→lower
+## boundary: the parent keeps pointing at the same address and now finds the operand there.
 ##
-## Recording is OFF until `bitcast_erasure_begin` turns it on, and ONLY `driver::compile_file_fmt`
-## does — once before each of its two parses, which also clears the previous pass's entries (the AST
-## arena is rewound between them, so pass 2 reuses pass 1's node addresses). A BUILD therefore marks
-## nothing, pays one branch per erasure, and cannot overflow the table.
+## Entries are (node address, target start, target length). They are recorded in creation order, so
+## `bitcast(A, bitcast(B, v))` erases the inner node before the outer copies it — the outer ends as
+## `v`, as the parse-time erasure left it. An entry is applied only if the node there is STILL a
+## `Bitcast` with the recorded target span and lies inside the arena being lowered, so an entry left
+## behind by a rewound arena (`bitcast_identity_reset` is called at every AST-arena rewind as well)
+## cannot rewrite anything else. A control label recorded on the operand node follows it to the copy.
 ##
-## Keyed by the returned node's ADDRESS (a source offset would not do: the node carries none, which is
-## the whole defect) through a direct-mapped table with linear probing, so the per-expression lookup
-## fmt owes on every render is a hash and a compare rather than a scan. A NESTED erasure
-## (`bitcast(A, bitcast(B, v))` marks the same node twice, inner first) keeps BOTH through `prev`, so
-## fmt re-emits the complete stack outermost-first instead of silently dropping a level.
-mut BCE_SLOT : [usize; 4096] = [0; 4096]   ## hash slot -> entry index + 1 (0 = empty)
-mut BCE_NODE : [usize; 2048] = [0; 2048]   ## entry -> the marked node's address
-mut BCE_TS : [usize; 2048] = [0; 2048]     ## entry -> target-type span start
-mut BCE_TN : [usize; 2048] = [0; 2048]     ## entry -> target-type span length
-mut BCE_PREV : [usize; 2048] = [0; 2048]   ## entry -> index + 1 of an INNER erasure on the same node
-mut BCE_USED := 0
-mut BCE_ON := 0
+## The table is its own anonymous mapping, grown by nothing: 1 Mi entries of 3 words is 24 MiB of
+## address space the kernel only backs as it is touched. It is never bumped out of a compile arena,
+## because the compiler's own output must not move with an instrument of the parser.
+mut BCI_BASE : usize = 0
+mut BCI_LEN : usize = 0
+mut BCI_CAP : usize = 0
 
-## The slot for key `k`: its home, or the first free/matching slot after it. Terminates because the
-## table has twice as many slots as `bitcast_erasure_mark` will ever fill entries, so a free slot
-## always exists. Node addresses are 8-byte aligned, so the low three bits carry nothing.
-bce_slot_of := fn(k : usize) -> usize {
-  mut h := (k / 8) % 4096
-  mut probing := true
-  while probing {
-    e := BCE_SLOT[h]
-    if e == 0 { probing = false }
-    else if BCE_NODE[e - 1] == k { probing = false }
-    else { h = (h + 1) % 4096 }
+bci_word := fn(i : usize, k : usize) -> ptr(mut usize) {
+  unchecked bitcast(ptr(mut usize), BCI_BASE + (i * 3 + k) * 8)
+}
+
+## Record the identity-class `Bitcast` node at `p`, written with the target `src[s .. s+n]`.
+pub bitcast_identity_record := fn(p : ptr(Expr), s : usize, n : usize) {
+  if BCI_CAP == 0 {
+    cap : usize = 1048576
+    fdm1 := 0 - 1
+    r := rt::sys_mmap(9, 0, cap * 24, 3, 34, fdm1, 0)
+    if r < 0 { panic("selfhost: bitcast table initialization failed (mmap)") }
+    BCI_BASE = unchecked bitcast(usize, r)
+    BCI_CAP = cap
   }
-  h
+  if BCI_LEN >= BCI_CAP { panic("selfhost: too many identity-class bitcasts (limit 1048576)") }
+  deref(bci_word(BCI_LEN, 0)) = unchecked bitcast(usize, p)
+  deref(bci_word(BCI_LEN, 1)) = s
+  deref(bci_word(BCI_LEN, 2)) = n
+  BCI_LEN = BCI_LEN + 1
 }
 
-## Start recording erased `bitcast` targets, discarding anything a previous parse recorded.
-pub bitcast_erasure_begin := fn() {
+## Is the node at `p` a recorded identity-class bitcast with target span `[s, s+n)`? `clone_expr`
+## asks, so a cloned node keeps its class. A backward scan: clones are rare and the table short.
+pub bitcast_identity_has := fn(p : ptr(Expr), s : usize, n : usize) -> bool {
+  k := unchecked bitcast(usize, p)
+  mut i := BCI_LEN
+  while i > 0 {
+    i = i - 1
+    if deref(bci_word(i, 0)) == k and deref(bci_word(i, 1)) == s and deref(bci_word(i, 2)) == n { return true }
+  }
+  false
+}
+
+## Forget every entry. Called wherever the driver rewinds the AST arena for a re-parse.
+pub bitcast_identity_reset := fn() { BCI_LEN = 0 }
+
+## The operand of the `Bitcast` node at `p` whose target span is exactly `[s, s+n)`, else null.
+## A standalone single-match helper: a `match deref(e)` in its own fn dispatches reliably under the
+## seed, unlike an arm added to a big payload match.
+bci_operand := fn(p : ptr(Expr), s : usize, n : usize) -> ptr(Expr) {
+  mut r := unchecked bitcast(ptr(Expr), 0)
+  match deref(p) {
+    Expr::Bitcast(inner, ts, tl) => { if ts == s and tl == n { r = inner } }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
+  }
+  r
+}
+
+## Rewrite every recorded identity-class node inside `[lo, hi)` into a copy of its operand, in
+## creation order, then forget the table. Idempotent: a second call finds nothing to do.
+pub bitcast_identity_erase := fn(lo : usize, hi : usize) {
   mut i := 0
-  while i < 4096 { BCE_SLOT[i] = 0 ; i = i + 1 }
-  BCE_USED = 0
-  BCE_ON = 1
+  while i < BCI_LEN {
+    k := deref(bci_word(i, 0))
+    if k >= lo and k < hi {
+      np := unchecked bitcast(ptr(mut Expr), k)
+      inner := bci_operand(np, deref(bci_word(i, 1)), deref(bci_word(i, 2)))
+      if unchecked bitcast(usize, inner) != 0 {
+        ## Copy the operand's whole 64-byte node slot word by word (`parser::newnode` allocates every
+        ## `Expr` in a 64-byte slot). A whole-enum `deref(np) = deref(inner)` is what this means, but the
+        ## frozen seed does not copy an enum through two derefs correctly: measured, the copy left a
+        ## `Var` whose name span pointed nowhere, and the x86 lowerer faulted hashing it.
+        mut w := 0
+        while w < 8 {
+          dw := unchecked bitcast(ptr(mut usize), k + w * 8)
+          sw := unchecked bitcast(ptr(usize), unchecked bitcast(usize, inner) + w * 8)
+          deref(dw) = deref(sw)
+          w = w + 1
+        }
+        ls := expr_label_span(inner)
+        if ls.n != 0 { expr_label_mark(np, ls.s, ls.n) }
+      }
+    }
+    i = i + 1
+  }
+  BCI_LEN = 0
 }
-
-## Record that the node at `p` was written as `bitcast(<src[s .. s+n]>, …)` and lost that target.
-pub bitcast_erasure_mark := fn(p : ptr(Expr), s : usize, n : usize) {
-  if BCE_ON == 0 { return }
-  k := unchecked bitcast(usize, p)
-  if k == 0 { return }
-  if n == 0 { return }
-  if BCE_USED >= 2048 { panic("selfhost: fmt - too many identity-erased bitcast targets (limit 2048)") }
-  h := bce_slot_of(k)
-  idx := BCE_USED
-  BCE_NODE[idx] = k
-  BCE_TS[idx] = s
-  BCE_TN[idx] = n
-  BCE_PREV[idx] = BCE_SLOT[h]
-  BCE_SLOT[h] = idx + 1
-  BCE_USED = idx + 1
-}
-
-## The OUTERMOST erased-bitcast entry recorded for the node at `p`, as an index + 1 (0 = none).
-pub bitcast_erasure_at := fn(p : ptr(Expr)) -> usize {
-  if BCE_USED == 0 { return 0 }
-  k := unchecked bitcast(usize, p)
-  if k == 0 { return 0 }
-  BCE_SLOT[bce_slot_of(k)]
-}
-
-pub bitcast_erasure_start := fn(e : usize) -> usize { BCE_TS[e - 1] }
-pub bitcast_erasure_len := fn(e : usize) -> usize { BCE_TN[e - 1] }
-## The next erasure INWARD on the same node (0 = none): `bitcast(A, bitcast(B, v))` yields A then B.
-pub bitcast_erasure_prev := fn(e : usize) -> usize { BCE_PREV[e - 1] }

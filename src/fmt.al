@@ -28,14 +28,6 @@ local_is_uninit := ast::local_is_uninit
 ## EXPRESSION callee apart from a genuine call to the borrowed name.
 ecallee_is := ast::ecallee_is
 (bnd_ns, bnd_nl, bnd_next) := ast
-## The target span of an IDENTITY-ERASED `bitcast` (see `ast.al`). The parser DROPS the node for a
-## word-sized scalar / `str` / `type` / `ptr(<one of those>)` target, so the written target reaches
-## fmt only through this side table; without it `unchecked bitcast(usize, n)` re-emits as
-## `unchecked (n)` — the author's conversion deleted, at exit 0 (Tooling §4.3/§4.3.4, issue #397).
-bitcast_erasure_at := ast::bitcast_erasure_at
-bitcast_erasure_start := ast::bitcast_erasure_start
-bitcast_erasure_len := ast::bitcast_erasure_len
-bitcast_erasure_prev := ast::bitcast_erasure_prev
 fld_p := ast::fld_p
 param_p := ast::param_p
 arm_p := ast::arm_p
@@ -1445,41 +1437,11 @@ emit_fmt_postfix_base := fn(base : ptr(Expr), in out sb : rt::StrBuf, src : ptr(
   if w { push_str(sb, ")") }
 }
 
-## Re-open the `bitcast(T, ` heads the parser erased from the node at `e`, outermost first, and return
-## how many closing `)` the caller owes. The stored chain runs outermost -> innermost, which is exactly
-## emission order for `bitcast(A, bitcast(B, v))`. The `unchecked` marker is recovered from source by
-## the same `fmt_bitcast_is_unchecked` scan the PRESERVED `Expr::Bitcast` arm uses — the node records
-## nothing about it in either case, and inventing one would put a trapping operation back in scope.
-fmt_open_erased_bitcasts := fn(ent0 : usize, in out sb : rt::StrBuf, src : ptr(u8)) -> usize {
-  mut n : usize = 0
-  mut ent := ent0
-  while ent != 0 {
-    ts := bitcast_erasure_start(ent)
-    if fmt_bitcast_is_unchecked(src, ts) { push_str(sb, "unchecked ") }
-    push_str(sb, "bitcast(")
-    push_str(sb, str_at((src + ts), bitcast_erasure_len(ent)))
-    push_str(sb, ", ")
-    n = n + 1
-    ent = bitcast_erasure_prev(ent)
-  }
-  n
-}
-
-## Pretty-print an expression, restoring any `bitcast` target the parser erased from THIS node first.
-## Every recursive render goes through here (or `emit_fmt_expr`), so the recovery covers argument,
-## operand, initializer and postfix-base positions with one rule instead of one arm per position.
+## Pretty-print an expression. Kept as the one entry every recursive render goes through: it used to
+## restore the target of a `bitcast` the parser had erased, and since #529 no bitcast reaches fmt
+## erased — the parser keeps every `Expr::Bitcast` node and only the lowerers see them removed.
 emit_fmt_expr_res := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), reserve : usize) {
-  ent := bitcast_erasure_at(e)
-  if ent == 0 {
-    emit_fmt_expr_core(e, sb, src, a, decls, reserve)
-    return
-  }
-  nopen := fmt_open_erased_bitcasts(ent, sb, src)
-  ## The restored heads add a mandatory `)` per level to this expression's tail, so the §4.3.3 width
-  ## verdict for the inner render has to reserve them.
-  emit_fmt_expr_core(e, sb, src, a, decls, reserve + nopen)
-  mut c : usize = 0
-  while c < nopen { push_str(sb, ")") ; c = c + 1 }
+  emit_fmt_expr_core(e, sb, src, a, decls, reserve)
 }
 
 ## Pretty-print an expression in canonical form. Fail-loud on a form outside the v1 core.
@@ -1762,14 +1724,13 @@ emit_fmt_expr_core := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a
     ## then the inner expression.
     Expr::Unchecked(inner) => {
       rhs := fmt_neg_rhs(inner)
-      ## `unchecked bitcast(T, v)` parses as `Unchecked(<the bitcast>)` for BOTH shapes of the cast:
-      ## a PRESERVED `Expr::Bitcast` node, and a node the parser identity-erased (a word-sized scalar
-      ## target — `ast::bitcast_erasure_at`). Either way the render of the operand re-emits the whole
+      ## `unchecked bitcast(T, v)` parses as `Unchecked(Bitcast(…))` — every target class keeps its
+      ## node since #529. The render of the operand re-emits the whole
       ## `unchecked bitcast(…)` surface itself from the source marker, so emitting the keyword here too
       ## would produce `unchecked unchecked bitcast(…)`, one more on every pass. Tested FIRST because
-      ## the erased target can wrap the unary-minus desugar (`unchecked bitcast(usize, 0 - x)`), and
+      ## the cast can wrap the unary-minus desugar (`unchecked bitcast(usize, 0 - x)`), and
       ## the `fmt_neg_rhs` branch below would otherwise render that as `-x` and delete the cast.
-      inner_bc := fmt_is_bitcast(inner) or bitcast_erasure_at(inner) != 0
+      inner_bc := fmt_is_bitcast(inner)
       if inner_bc {
         emit_fmt_expr_res(inner, sb, src, a, decls, reserve)
       } else if unchecked bitcast(usize, rhs) != 0 {
