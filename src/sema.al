@@ -7643,8 +7643,28 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       }
     }
   }
-  node := deref(e)
-  match node {
+  ## Issue #716 — the big `match` below used to be written `node := deref(e) ; match node`, which
+  ## the x86_64 lowering could not type: it compared every arm against tag 0, so only `Expr::Num`
+  ## (variant 0) was ever taken and every other expression fell off the end with a garbage `Result`.
+  ## That is the "big-match arm is not dispatched under the seed" note this file repeats (scar #2).
+  ## The arms now live in `check_expr_arms`, whose `match deref(e)` the lowering types, and they are
+  ## switched on one variant at a time: a variant listed in the first arm here is checked by its
+  ## written arm; every other variant answers UNKNOWN (tag 0, poison-tolerant) — explicitly, which
+  ## is what the garbage was being read as.
+  match deref(e) {
+    Expr::Num => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Result(Ty, CheckErr).Ok(Ty(tag = 0, ns = 0, nl = 0)) }
+  }
+}
+
+## Issue #716 — the per-variant arms of `check_expr`, over a pointer PARAMETER so the lowering
+## types the scrutinee. Only the variants `check_expr` routes here are ever checked by their arm; the
+## others are written, and have never run.
+check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> Result(Ty, CheckErr) {
+  match deref(e) {
     Expr::Num(v, s, n) => { Result(Ty, CheckErr).Ok(Ty(tag = 1, ns = 0, nl = 0)) }
     ## FN-6 — a lifted-lambda code pointer is a word-sized scalar value (tag 1). (`Lambda` is lifted to
     ## `FnRef` by the driver's pass before `check`, so only `FnRef` reaches here.)
