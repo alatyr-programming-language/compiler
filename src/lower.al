@@ -9770,7 +9770,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
           ga := deref(arg_p(phead))
           psi := struct_lit_info(ga.e)
           if psi.is_s {
-            ## a 1-word STRUCT-literal payload (`Ok(Ty(tag=…))`): return the struct's WORD 0 (its
+            ## a 1-word STRUCT-literal payload (`Ok(Ty(kind=…))`): return the struct's WORD 0 (its
             ## FIRST field) in %rdx — `emit_gas` of a whole struct pushes a placeholder `$0`.
             f0 := arg_expr_at(struct_lit_fields(ga.e), 0, a)
             if unchecked bitcast(usize, f0) != 0 { emit_gas(f0, sb, cx, a, nl) } else { push_str(sb, "  pushq $0\n") }
