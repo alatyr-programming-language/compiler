@@ -61,13 +61,13 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: 804960039441267d40299929d0d462cbfec008f65a9635dda5889201f90918c4
-current-seed-version: 0.2.3
+current-seed-sha256: 4d6538b55e5ccb1067fe2b8810312f174ccf9310e8c764d9714db41a04ffdd7c
+current-seed-version: 0.2.4
 #
-# Promoted:      2026-09-11 (see the last entry in this file)
+# Promoted:      2026-09-30 (see the last entry in this file)
 # Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
-# GAS at promotion: 1237719 lines
-# GAS SHA-256:   2e3f90b1c4e83642b74d953d573865b2740940d0414e8995eeafd86655806ca6
+# GAS at promotion: 1354620 lines
+# GAS SHA-256:   597fb55da17caaf1899f26629f70862f463372c60472c95b957065bc4dcb3ea2
 #
 # `current-seed-version` is the `version` field of `package.al` at the moment of the promotion, and by
 # the versioning order in CHANGELOG.md the two must agree at all times: the version moves ON a
@@ -1429,4 +1429,36 @@ current-seed-version: 0.2.3
 #
 # VERSION 0.2.2 -> 0.2.3, PATCH: no new surface and no emitted byte moves; the frozen bootstrap
 # advances so `src/` may use a construct the compiler already supports.
+# The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.3 -> 0.2.4   promoted 2026-09-30   seed/alatyr := Stage2
+#
+# WHY: a stale-emission repair. #752 (PR #754): `x := <call>?` over a multi-word Ok payload bound
+# only payload word 0 on x86_64 and left every other field as whatever the frame held — a silent
+# wrong value in user programs, and in this compiler's own `x := check_expr(…)?` bindings of the
+# three-word `Ty`, which #753 had to pin at seven sites. The fixed source emits different code for
+# those bindings, so the 0.2.3 seed no longer equals Stage1 and the seed that builds `src/` still
+# carried the defect.
+#
+# THE DELTA, read line by line with both label families normalized (the raw diff is the same size —
+# no label moved): 41 hunks, 205 lines, every hunk the same shape — `movq %rdx, %rax` +
+# `movq %rax, -N(%rbp)` becomes `movq %rdx, -N(%rbp)` + `movq %rcx, -(N-8)(%rbp)` +
+# `movq %r8, -(N-16)(%rbp)`. One sentence: each of the compiler's 41 `x := <call>?` bindings over a
+# three-word Ok payload now stores all three payload registers into the local's three slots instead
+# of word 0 alone. Checked by script: 41 of 41 hunks match that shape exactly, 0 others.
+#
+# CONVERGENCE (bump first: package.al, current-seed-version and scripts/package_cli_test.sh moved to
+# 0.2.4 before any stage was built):
+# Stage1 == Stage2 == Stage3 GAS byte-identical RAW at 1354620 lines, no normalization needed.
+# GAS SHA-256: 597fb55da17caaf1899f26629f70862f463372c60472c95b957065bc4dcb3ea2.
+# Stage2 == Stage3 BINARY SHA-256:
+# 4d6538b55e5ccb1067fe2b8810312f174ccf9310e8c764d9714db41a04ffdd7c (5136552 B).
+# Stage1 BINARY SHA-256: 0e9c82d64898d926835960bd87a3bf5db3431fed9464e5528f1fc0e04153d96c — it
+# differs by construction: it was assembled from the stale 0.2.3 seed's emission, the 41 hunks above.
+# All three answer `alatyr 0.2.4`.
+# Superseded seed (0.2.3) SHA-256:
+# 804960039441267d40299929d0d462cbfec008f65a9635dda5889201f90918c4 (4723176 B).
+#
+# VERSION 0.2.3 -> 0.2.4, PATCH: a silent wrong value fixed, no new surface.
 # The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
