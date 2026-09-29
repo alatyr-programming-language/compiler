@@ -2295,7 +2295,7 @@ rv_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) ->
 }
 
 ## The i-th arg expr of an arg list (0-based), null Expr ptr if absent — for `asm(…)` `{i}` substitution.
-rv_arg_at := fn(head : ptr(mut Stmt), i : usize, a : rt::Arena) -> ptr(Expr) {
+rv_arg_at := fn(head : ptr(mut Arg), i : usize, a : rt::Arena) -> ptr(Expr) {
   mut g := head
   mut k := 0
   mut res : usize = 0

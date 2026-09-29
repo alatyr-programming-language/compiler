@@ -8115,8 +8115,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   match deref(e) {
     Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit | Expr::Deref => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
+    Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
   }
 }
 
@@ -10537,7 +10537,7 @@ stmts_mention_var := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : us
 }
 
 ## Walk a `Match`'s arm list — does any arm (value `body` or statement `body_stmts`) mention `[xs, xl)`?
-arms_mention_var := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+arms_mention_var := fn(head : ptr(mut Arm), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut arm := head
   mut res := false
   while arm != 0 {
@@ -12472,7 +12472,7 @@ stmts_use_cons := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize
   res
 }
 
-arms_use_cons := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+arms_use_cons := fn(head : ptr(mut Arm), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut arm := head
   mut res := false
   while arm != 0 {
@@ -12712,7 +12712,7 @@ is_out_param := fn(params_head : ptr(mut Param), src : ptr(u8), s : usize, n : u
 }
 
 ## Walk a `Match`'s arms for a store-escape (below), recursing into each arm's statement body.
-arms_store_escape := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : ptr(mut Param)) -> bool {
+arms_store_escape := fn(head : ptr(mut Arm), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : ptr(mut Param)) -> bool {
   mut arm := head
   mut res := false
   while arm != 0 {

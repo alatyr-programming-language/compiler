@@ -15264,7 +15264,7 @@ expr_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
 ## The type-name discriminator for an overloaded CALL: the first argument whose type is inferable.
 ## `a` is the EMIT arena where the Arg nodes live (NOT `cx.mar` — using the wrong arena to resolve
 ## an Arg handle yields a garbage pointer → segfault).
-arg_type_name := fn(head : ptr(mut Stmt), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
+arg_type_name := fn(head : ptr(mut Arg), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
   mut g := head
   while g != 0 {
     ga := deref(arg_p(g))
@@ -21786,7 +21786,7 @@ if_info := fn(e : ptr(Expr)) -> IfInfo {
 ## (`emit_str_eq_core` against the str scrutinee), not an integer value compare (§5.4). `src/`'s
 ## matches are all integer/enum (keyword classification uses `contains(str, table, w)`), so this is
 ## `false` for the self-host build → the str dispatch is never emitted → fixpoint-neutral.
-match_is_str := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
+match_is_str := fn(head : ptr(mut Arm), a : rt::Arena) -> bool {
   mut arm := head
   mut res := false
   while arm != 0 {
@@ -21803,7 +21803,7 @@ match_is_str := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
 ## labels. Reserving up front (`base = nl; nl += arm_count`) keeps body labels `base..base+n` disjoint
 ## from any dispatch-emitted label, and is byte-identical for the integer/enum path (the body labels
 ## land at the same values the old `lbody := nl; nl += 1` interleave produced).
-arm_count := fn(head : ptr(mut Stmt), a : rt::Arena) -> usize {
+arm_count := fn(head : ptr(mut Arm), a : rt::Arena) -> usize {
   mut arm := head
   mut n := 0
   while arm != 0 {
@@ -22355,7 +22355,7 @@ emit_arm_val_store := fn(body : ptr(Expr), base : i64, in out sb : strbuf::StrBu
 ## value into the local via `emit_arm_val_store` (struct/enum/array assign, or a str {ptr,len} pop) —
 ## the local-binding dual of `emit_return_value`'s aggregate/str routing (aggregates + strs do not
 ## materialize on the stack in bare expr position, so the generic scalar store cannot deliver them).
-emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Stmt), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## An ENUM scrutinee (`p := match e { V(x) => <agg> }`): dispatch on the discriminant with variant
   ## indices + payload binding (the integer path below uses `am.lit`, which is 0 for enum patterns, so
   ## it never matched — the aggregate stayed unwritten). Materialize a global / struct-field / array-
