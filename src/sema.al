@@ -529,6 +529,32 @@ mut PTRINT_DECL_NS : usize = 0
 ## annotation can tell the enclosing function's `T : type` parameters from unknown type names.
 mut SEMA_DECL_PARAMS : usize = 0
 mut PTRINT_DECL_NL : usize = 0
+## Issue #529 step (d) — the `unchecked` GRANT column. Memory §4.5 makes a pointer fabricated from an
+## integer ill-formed OUTSIDE an `unchecked` grant, so a place already inside one differs in kind from
+## a place that is not: the first needs only its implicit crossing spelled out, the second is a new
+## grant to review. `PTRINT_GRANT` is the LEXICAL nesting depth of the check walk inside the two grant
+## forms — a `Stmt::Unchecked` block and an `Expr::Unchecked` operand — raised on entry and RESTORED
+## (not decremented) on exit, at the three walkers that carry hooks (`check_stmts`, `check_expr_arms`,
+## `expr_has_unbound`). It is instrument-only state: no verdict reads it, and `ptrint_probe_decl`
+## zeroes it per declaration, so a refused walk that returned early inside a block cannot leak `in`
+## into the next declaration. PTRINT_GRANTED counts the rows that were emitted at depth > 0.
+##
+## Its known limit, reported rather than guessed: the depth says where the HOOK fired, and a hook
+## fires at the SINK. `p : ptr(u8) = unchecked h` walks `h` at depth 1 but compares the binding at
+## depth 0, so a place whose VALUE is itself an `unchecked <e>` wrapper reads `out`. The spec text
+## decides whether such a place is granted; the census only records the lexical fact.
+mut PTRINT_GRANT : usize = 0
+mut PTRINT_GRANTED : usize = 0
+ptrint_grant_enter := fn() -> usize {
+  g := PTRINT_GRANT
+  PTRINT_GRANT = g + 1
+  g
+}
+ptrint_grant_leave := fn(g : usize) { PTRINT_GRANT = g }
+ptrint_grant_name := fn() -> str {
+  if PTRINT_GRANT == 0 { return "out" }
+  "in"
+}
 ## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF for
 ## one that is closed or opened read-only, and touches no memory in either case.
 ptrint_probe_open := fn() -> bool { rt::sys_write(1, ptrint_probe_fd(), 0, 0) == 0 }
@@ -561,6 +587,7 @@ ptrint_probe_decl := fn(d : Decl) {
   PTRINT_MOD_NL = d.mod_len
   PTRINT_DECL_NS = d.name_start
   PTRINT_DECL_NL = d.name_len
+  PTRINT_GRANT = 0
 }
 ## The unclassified totals, at the funnel.
 ptrint_probe_call := fn(x : u8, y : u8) {
@@ -595,6 +622,7 @@ ptrint_dir_name := fn(directional : bool, vt : u8, st : u8) -> str {
 ptrint_probe_site := fn(cls : str, site : str, directional : bool, vt : u8, st : u8, off : usize, src : ptr(u8)) {
   if not ptrint_seam(vt, st) { return }
   PTRINT_ROWS = PTRINT_ROWS + 1
+  if PTRINT_GRANT != 0 { PTRINT_GRANTED = PTRINT_GRANTED + 1 }
   if ptrint_probe_open() {
     mut pa := rt::Arena(base = 0, off = 0, cap = 0)
     mut sb := ptrint_probe_buf(pa)
@@ -614,6 +642,8 @@ ptrint_probe_site := fn(cls : str, site : str, directional : bool, vt : u8, st :
     dns := PTRINT_DECL_NS
     dnl := PTRINT_DECL_NL
     if dnl == 0 { e0 := rt::push_str(sb, "-") } else { e1 := rt::push_str(sb, str_at((src + dns), dnl)) }
+    g0 := rt::push_str(sb, " ")
+    g1 := rt::push_str(sb, ptrint_grant_name())
     m3 := rt::push_str(sb, " |")
     ls := brand_probe_line(src, off)
     w9 := rt::push_str(sb, str_at((src + ls.s), ls.n))
@@ -635,6 +665,8 @@ ptrint_probe_summary := fn() {
     w5 := rt::push_int(sb, i64(PTRINT_SEAM))
     w6 := rt::push_str(sb, " rows=")
     w7 := rt::push_int(sb, i64(PTRINT_ROWS))
+    g0 := rt::push_str(sb, " granted=")
+    g1 := rt::push_int(sb, i64(PTRINT_GRANTED))
     w8 := rt::push_str(sb, " break=")
     w9 := rt::push_int(sb, i64(PTRINT_BREAK))
     a0 := rt::push_str(sb, " arith_ptr_operand=")
@@ -7504,7 +7536,12 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
     }
     Expr::Index(base, idx) => { expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(idx, decls, upto, src, a, locals, nloc) }
     Expr::Try(inner) => { expr_has_unbound(inner, decls, upto, src, a, locals, nloc) }
-    Expr::Unchecked(inner) => { expr_has_unbound(inner, decls, upto, src, a, locals, nloc) }
+    Expr::Unchecked(inner) => {
+      ug := ptrint_grant_enter()
+      ub := expr_has_unbound(inner, decls, upto, src, a, locals, nloc)
+      ptrint_grant_leave(ug)
+      ub
+    }
     Expr::Slice(base, lo, hi) => { expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(lo, decls, upto, src, a, locals, nloc) or expr_has_unbound(hi, decls, upto, src, a, locals, nloc) }
     Expr::CompField(base, idx) => { expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(idx, decls, upto, src, a, locals, nloc) }
     ## FN-6 — a lifted-lambda code pointer (`FnRef`) binds no names; a `Lambda` is lifted before check.
@@ -8197,7 +8234,12 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     }
     ## `unchecked <inner>` — verification-mode scope (Types §4.2). The TYPE is the inner's type
     ## (fully transparent); the mode affects only the lower's guard emission.
-    Expr::Unchecked(inner) => { check_expr(inner, decls, upto, src, a, locals, nloc) }
+    Expr::Unchecked(inner) => {
+      ug := ptrint_grant_enter()
+      ur := check_expr(inner, decls, upto, src, a, locals, nloc)
+      ptrint_grant_leave(ug)
+      ur
+    }
     ## `loop { … }` in VALUE position (loop-as-expression, §7.2). Reuse the established break-value
     ## walker so a typed sink sees the loop's common reachable-break type instead of UNKNOWN. A loop with
     ## no value break remains UNKNOWN (Never is bottom here), while a known incompatible pair returns the
@@ -11354,7 +11396,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         cur = nx
       }
       Stmt::Unchecked(b, nx) => {
-        cnt = check_stmts(b, decls, upto, src, a, locals, cnt, da)?
+        ## #529 grant column: restore the depth BEFORE the `?`, so an early return cannot leak it.
+        ug := ptrint_grant_enter()
+        ur := check_stmts(b, decls, upto, src, a, locals, cnt, da)
+        ptrint_grant_leave(ug)
+        cnt = ur?
         cur = nx
       }
       Stmt::AllocWith(ae, b, nx) => {
@@ -16319,6 +16365,8 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   PTRINT_MOD_NL = 0
   PTRINT_DECL_NS = 0
   PTRINT_DECL_NL = 0
+  PTRINT_GRANT = 0
+  PTRINT_GRANTED = 0
   BRAND_PROBE_SINKS = 0
   BRAND_PROBE_HITS = 0
   BRAND_PROBE_LOST = 0
