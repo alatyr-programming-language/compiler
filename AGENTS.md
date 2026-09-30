@@ -106,10 +106,18 @@ some. Where a check holds a form, it is an **addition rule** against the merge b
 Only a new occurrence is refused, and a `## <rule>-ok: <reason>` comment on the line or the line above
 acknowledges it.
 
+Write idiomatic code with strict types in the **first draft**. Never satisfy a check by switching to
+an explicit sentinel, or by adding a marker, when the typed form is possible. If the typed form does
+not compile, or compiles wrong, that is a defect: file it and name it in the marker. Do not route
+around it.
+
 1. **Absence is `Option`, not a sentinel.** Do not use 0 as null, −1 as "not found", or 255 as
-   "poisoned" (#659, #681). Use `Option(ptr(T))` (one word, niche-folded) or `Option(u64)`. Held by the
+   "poisoned" (#659, #681). The target form is `Option(ptr(T))` (one word, niche-folded) walked with
+   `match`, or `Option(u64)`. An explicit `unchecked bitcast(usize, p) != 0` only makes the null
+   visible. It is a transitional form, allowed only where the typed form cannot be compiled yet, and
+   its `null-ok` reason names the blocking issue: today #789, plus a seed promotion. Held by the
    `null` rule of `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`) forms
-   together. Marker: `null-ok`.
+   together.
 2. **A kind is an enum, and flags are separate fields.** Do not compare a `kind`/`tag` with a literal,
    and do not pack a flag into a tag byte (`+128`) (#583, #626). Held by `kind-literal`.
 3. **Decide with an exhaustive `match` on the value.** Never use `_` over an enum (#544, #464). Do not
@@ -122,9 +130,10 @@ acknowledges it.
    `unchecked` (marker `unchecked-ok`) and the typed `ptrint` rule (no marker: write it explicitly).
 7. **Bind a `?` before using its value** (`x := f()?`), never `f()?.a` or `g(f()?)` (#752; the seed
    predates the fix for the inline form). Held by `try-inline`.
-8. **Do not write the forms the frozen seed miscompiles.** Each one is recorded as a comment at its
-   workaround site (listed in the skill file). A new workaround names the limitation and the issue.
-   Held by review.
+8. **Do not write the forms the frozen seed miscompiles.** Each one is a row of `scripts/seed_forms.tsv`
+   with a planted program the seed must still miscompile and the tree must run correctly, and a
+   comment at its workaround site. A new workaround adds a row. Held by `scripts/seed_forms_check.sh`,
+   which fails when a promotion fixes a form so its row and workarounds retire.
 9. **An AST handle has its node's own type**, never `usize` or a sibling node's pointer (#760 fixed 12
    walkers). Held by the checker at a `deref`; the typed-handle proposal is in the skill file.
 
@@ -335,6 +344,10 @@ No single check is sufficient:
   together, so #529's conversion of one into the other is never refused. If the head compiler refuses
   the *base* tree (a checker-tightening change can do that), the implicit half is reported as
   SKIPPED, never counted as zero.
+- `seed_forms_check.sh` runs the seed-forms registry after the build. A `seed` row needs the tree
+  compiler to answer the due value and the frozen seed not to. So a promotion that fixes a form turns
+  the gate red and names the workaround sites to remove, and the registry retires itself. A `tree`
+  row is a tree defect that was blamed on the seed; it fails once fixed, until it moves to `seed`.
 - The whole-program invariant checks and cross-target sweeps need non-vacuity tests; a green gate that
   never fails its own planted defect is not evidence.
 - `build_reject` proves only a nonzero exit. Use `build_reject_has` for an intended diagnostic, and do
@@ -365,7 +378,7 @@ No single check is sufficient:
   transition may use the first non-green run only to document the expected oracle mismatch; the final
   merge plus maintainer oracle commit must pass the complete gate before publish.
 - The full gate covers fixpoint, e2e, corpus, formatter, duplicate-decision, wildcard-arm, strict-form,
-  invariant, and cross-target checks; an individual green check is never sufficient.
+  seed-form, invariant, and cross-target checks; an individual green check is never sufficient.
 - The docs-only gate is available only when
   `.agents/skills/alatyr-lane/classify_docs_only.sh <base> <head>` accepts the complete committed range
   and both worker and integrator independently inspect every hunk. Its allowlist is regular,

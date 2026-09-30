@@ -16,19 +16,26 @@ Every form turns a defect class this compiler has **shipped** into something tha
 or cannot be written without a visible, justified marker. The type does most of that work. The check
 is there for the places the type does not yet reach.
 
+**Write the strict form in the first draft.** Use idiomatic code with strict types from the start;
+do not write loose code and tighten it after a check complains. Never satisfy a check by switching
+to an explicit sentinel, or by adding a marker, when the typed form is possible. A marker
+acknowledges a form that cannot be avoided *yet*. It is not a way around a rule. If the typed form
+does not compile, or the compiler gets it wrong, that is a compiler defect. File it, and name the
+issue in the marker's reason. Do not quietly route around it.
+
 | § | form | defect class it retires | held by |
 |---|---|---|---|
-| 1 | absence is `Option`, not a sentinel | 0 as null, −1 as "not found", 255 as "poisoned" | `strict_forms_check.sh` `null` (typed + lexical) |
+| 1 | absence is `Option(ptr(T))` walked with `match`, not a sentinel | 0 as null, −1 as "not found", 255 as "poisoned" | `strict_forms_check.sh` `null` (typed + lexical); the transitional marker names its blocker (#789) |
 | 2 | a kind is an enum, not an integer; flags are not packed into it | #583 (134 literal `.tag` sites), #626, `+128` mut flag | `strict_forms_check.sh` `kind-literal` |
 | 3 | decide with an exhaustive `match` on the value | #544 (249 blind wildcard arms), #716, #464 | `wildcard_arm_check.sh`; the rest by review |
 | 4 | one decision, one place | the #540 family, #539 | `idiom_gate.sh` (for the shapes it knows) |
 | 5 | width and signedness are spelled, never inferred from a form | #546, #608, #707, #764–#766 | review |
 | 6 | `unchecked` is explicit and justified; no implicit `usize` ↔ `ptr` | #529, #610 | `strict_forms_check.sh` `unchecked`, `ptrint` |
 | 7 | bind a `?` before using its value | #752 | `strict_forms_check.sh` `try-inline` |
-| 8 | do not write the forms the frozen seed miscompiles | scar #2, #611, #752 | review, plus a comment at every workaround |
+| 8 | do not write the forms the frozen seed miscompiles | #752, #768, #770, #775, #789 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
 | 9 | an AST handle has its node's own type | #760 (12 walkers), the `usize` pass-plumbing | the checker (since #760), review; §9 has the proposal |
 
-## 1 · Absence is `Option`, not a sentinel
+## 1 · Absence is `Option(ptr(T))` walked with `match`, not a sentinel
 
 **Defect class.** A value that means "there is nothing here" but has the same type as a real value.
 The compiler cannot tell the two apart, so nothing makes you check before you use it. That has
@@ -41,8 +48,14 @@ shipped in every form:
   family);
 - `-1` as "not found" (`conv_kind(...) >= 0`), and `255` as a poisoned binding (`tag_is_poison`).
 
-**Write this.** The absence is part of the type. `Option(ptr(T))` is niche-folded, so it is still one
-word (Types §8, `test/niche_option_ptr.al`), and matching on it forces the absent case to be handled:
+An *explicit* null (`unchecked bitcast(usize, p) != 0`) does not retire this class. It only makes the
+null visible. The value still has a pointer's type, nothing makes the reader test it, and the `null`
+sum stays flat. So the explicit spelling is never the target form. At most it is a transitional
+form (below).
+
+**Write this, in the first draft.** The absence is part of the type. `Option(ptr(T))` is
+niche-folded, so it is still one word (Types §8, `test/niche_option_ptr.al`). A `match` on it forces
+the absent case to be handled, and a linked structure is walked with that `match`:
 
 ```alatyr
 ## not this — the absence is the integer 0, and nothing makes the caller test it
@@ -52,6 +65,9 @@ find_decl := fn(decls : ptr(Decl), n : usize, s : usize) -> ptr(Decl) {
 }
 d := find_decl(ds, n, s)
 v := deref(d).value                         ## reads address 0 when the test is forgotten
+
+## not this either — the same sentinel, only spelled out
+while unchecked bitcast(usize, s) != 0 { ... ; s = deref(s).next }
 
 ## this — the absence is a variant, and the match cannot leave it out
 find_decl := fn(decls : ptr(Decl), n : usize, s : usize) -> Option(ptr(Decl)) {
@@ -63,32 +79,57 @@ match r {
   Some(d) => { dv : Decl = deref(d) ; use(dv.value) }
   None => { return located_reject(s) }
 }
+
+## this — a list walk (N := struct { v : u64, next : Option(ptr(mut N)) })
+mut p : Option(ptr(mut N)) = head
+loop {
+  match p {
+    Option::Some(q) => { nd : N = deref(q) ; s = s + nd.v ; p = nd.next }
+    Option::None => { break }
+  }
+}
 ```
 
 For an integer, use `Option(u64)`, `Option(usize)` and so on, not a reserved value.
 
-**While these are open, write the form above exactly as shown.**
+**Spell the forms exactly as shown.** Each item below is a compiler defect with a planted program in
+the §8 registry (`scripts/seed_forms.tsv`). The registry says when each one retires.
 
-- #775: an `Option(ptr(T))` local is sized by its initializer. Annotate the local
-  (`r : Option(ptr(Decl)) = …`).
-- #768: a field read through a matched payload reads 0. Bind the `deref` to an annotated local first
-  (`dv : Decl = deref(d)`).
-- #770: a generic instance over a `ptr(mut T)` argument does not assemble.
+- Spell every constructor with its type: `Option(ptr(mut N)).Some(x)` and `Option(ptr(mut N)).None`,
+  not a bare `Option.Some(x)` / `Option.None`. On the tree compiler a bare `Option.Some(x)` passed
+  straight as an argument crashes, and a bare `Option.None` re-assigned to an annotated local is
+  refused (#789, registry rows `option_ptr_bare_some_arg` and `option_ptr_bare_none_reassign`).
+- Annotate an `Option(ptr(T))` local (`r : Option(ptr(Decl)) = …`). Bind a `deref` to an annotated
+  local before reading a field (`dv : Decl = deref(d)`). Do not instantiate a generic over
+  `ptr(mut T)`. The tree handles all three since #787 (#775, #768, #770). The seed 0.2.4 does not
+  (rows `option_ptr_local_forms`, `option_ptr_payload_field`, `option_ptr_mut_generic`), and the seed
+  compiles `src/` and `lib/`.
 
-The AST itself still ends every list with a null `next`. Code that walks or builds one of those lists
-has to spell a null, and does it explicitly (§6) with a marker that names the structure:
+**Transitional form, until #789 and a promotion.** The seed 0.2.4 crashes on a `match` over an
+`Option(ptr(T))` parameter or a walked local, even with every constructor spelled out (rows
+`option_ptr_param_match` and `option_ptr_list_walk`: the tree answers 42, the seed SIGSEGVs). So code
+the seed compiles cannot use the walk above yet. The AST's own lists also still end in a raw null
+`next`, and converting them is §9 step 2. Only where the typed form cannot be compiled yet, spell the
+null explicitly (§6). The marker's reason must name the **blocking issue**, not only the structure:
 
 ```alatyr
-## null-ok: Stmt.next — the AST's statement lists end in a null link (ast.al "0 = end")
+## null-ok: #789 — Stmt.next ends in a null link; Option(ptr(Stmt)) is not compilable under seed 0.2.4
 while unchecked bitcast(usize, s) != 0 { ... }
 ```
+
+A `null-ok` whose reason names no issue is a sentinel chosen, not a sentinel forced. Review refuses
+it. This form retires when #789 is fixed and the seed is promoted: the two `seed` rows then answer 42
+under the seed, `scripts/seed_forms_check.sh` fails with "the seed now handles …", and the markers
+that name #789 are the sites to convert.
 
 **Check.** The `null` rule of `scripts/strict_forms_check.sh`. It counts the explicit spellings
 (`bitcast(ptr(T), 0)`, and `bitcast(usize, p) ==/!=/> 0` in either operand order) and the implicit
 comparison `p == 0` with `p : ptr(T)`. The compiler reports the implicit one, because only the checker
-knows `p` is a pointer. The check refuses a change that increases the sum. Marker: `## null-ok: <which
-null-terminated structure>`. The sum is flat while #529 converts implicit tests into explicit ones, so
-that work is never refused.
+knows `p` is a pointer. The check refuses a change that increases the sum. Marker: `## null-ok: #<the
+blocking issue> — <which null-terminated structure>`. The sum is flat while #529 converts implicit
+tests into explicit ones, so that work is never refused. The rule checks that a reason exists. That
+the reason names a real blocker is held by review. The 10 `null-ok` markers already in `src/` predate
+this rule and name only the structure. Each gets its blocker named the next time its file is edited.
 
 ## 2 · A kind is an enum, not an integer, and flags are not packed into it
 
@@ -226,7 +267,8 @@ rule refuses any new implicit crossing and has no marker: write the crossing exp
 **Defect class.** #752: `x := f()?` over a multi-word `Ok` payload delivered only word 0. The fix
 (#754, `4d4911c`) made the binding correct, and the frozen seed 0.2.4 has that fix. The inline uses
 (`f()?.a`, `use(f()?)`, `S(a = f()?)`) stayed wrong until `1b5cd53`, which now takes every word or
-refuses. The seed predates `1b5cd53`, so code the seed compiles must not use them.
+refuses. The seed predates `1b5cd53`, so code the seed compiles must not use them. The §8 registry
+row `try_inline_multiword` measures that: the tree answers 42 and the seed answers 0.
 
 **Write this.**
 
@@ -250,26 +292,93 @@ The statement form `f()?` is fine, because there is no value to read.
 ## 8 · Do not write the forms the frozen seed miscompiles
 
 **Defect class.** `seed/alatyr` builds Stage1, so a form it miscompiles breaks the compiler even when
-the tree's own compiler handles it correctly. These are recorded today **only at the workaround
-sites**, as comments:
+the tree's own compiler handles it correctly. For a long time these forms were recorded **only** as
+comments at the workaround sites. A comment cannot tell anyone whether it is still true, and nothing
+noticed when a promotion made one obsolete. The owner's decision on #785 made them a registry.
 
-| form | where it is recorded |
-|---|---|
-| a payload-heavy arm of a big `match deref(e)` is not dispatched ("scar #2") | `src/sema.al` (the `check_expr` pre-match band, 3102, 3328, 4014, 4449, 7924, 11242, 15471) |
-| a variant `match` nested inside another `match` arm on a bound child | `src/lower.al` 12153, 14853; `src/sema.al` 7358, 14271 |
-| a function returning a new struct type | `src/wat.al` 6307, 6428 |
-| a helper taking `in out StrBuf` plus a by-value `Decl` (segfault) | `src/wat.al` 2454, 5479; #611 |
-| a type span passed to a helper through params (stack garbage) | `src/aarch64.al` 8713–8720 |
-| an enum copied through two `deref`s | `src/ast.al` 1009 |
-| the second word of a tuple returned from a function | `lib/base/num.al` 426 |
-| the value of a multi-word `?` used inline | §7; the seed predates `1b5cd53` |
+**The registry.** `scripts/seed_forms.tsv` has one row per form. Each row points to a planted
+program, `scripts/seed_forms/<name>.al`, and gives its correct exit value, its issue and its
+workaround sites. The programs live outside `test/`, because the corpus pathspec `test/*.al` crosses
+`/`, and a seed limitation that retires on a promotion must not move the corpus manifest. A row has
+one of two states:
 
-**Write this.** Follow the existing idioms at those sites (AGENTS.md "Workspace invariants"). When you
-work around a seed limitation, put the comment where the workaround lives. Name the limitation and the
-issue, so the workaround can be removed after a promotion, the way `29d134c` dropped #751's and #753's.
+- **`seed`**: the frozen seed miscompiles the form and the tree compiler runs it correctly. This is a
+  limitation of the seed alone.
+- **`tree`**: the tree compiler gets it wrong too. A workaround comment blamed the seed, but it is a
+  tree defect with its own issue. The row records it until the fix lands. Then the check makes the
+  fixing change move the row to `seed`.
 
-**Check.** None. A registry of these forms, one line each with a planted program the seed must
-miscompile, would make them checkable. The owner has not decided on one yet.
+Measured at `3e5d7b4` against seed 0.2.4 (`4d6538b55e5c…`). The tree column is the tree-built
+compiler. The values are exit values under local OrbStack emulation, and the gate re-measures them
+on native x86_64.
+
+| row | state | issue | due | tree | seed 0.2.4 | workaround sites |
+|---|---|---|---:|---:|---:|---|
+| `try_inline_multiword`: `f()?.b` over a multi-word `Ok` | seed | #752 | 42 | 42 | 0 | §7, the `try-inline` rule |
+| `option_ptr_payload_field`: `deref(p).v` through a matched `Some(p)` | seed | #768 | 42 | 42 | 0 | §1 |
+| `option_ptr_mut_generic`: a generic instance over `ptr(mut T)` | seed | #770 | 42 | 42 | 13 (assembler refuses) | §1 |
+| `option_ptr_local_forms`: an `Option(ptr)` local from a field, then re-assigned from a call | seed | #775 | 42 | 42 | 1 (refused, NARROWER binding) | §1 |
+| `option_ptr_param_match`: `match` an `Option(ptr)` parameter, deref the payload | seed | #789 | 42 | 42 | 139 | §1 transitional `null-ok` markers |
+| `option_ptr_list_walk`: the §1 list walk | seed | #789 | 42 | 42 | 139 | §1 transitional `null-ok` markers |
+| `option_ptr_bare_some_arg`: a bare `Option.Some(x)` passed as an argument | tree | #789 | 42 | 139 | 139 | §1 (spell the constructor) |
+| `option_ptr_bare_none_reassign`: a bare `Option.None` re-assigned in a `loop` | tree | #789 | 42 | 1 (refused) | 42 | §1 (spell the constructor) |
+| `enum_copy_two_derefs`: `deref(dst) = deref(src)` over a multi-word enum | tree | #790 | 42 | 1 | 1 | `src/ast.al` `bitcast_identity_erase` |
+| `call_result_enum_field_arg`: `is_c(mk().kind)` with an enum field | tree | #791 | 42 | 139 | 139 | `src/sema.al` `resolve_kind` |
+
+**Recorded as seed limitations and not reproduced on 0.2.4.** Each of these comments was probed
+with a minimal program. The seed answered correctly, so no row plants it, and inventing one that
+does not fail would be a fake. Each is a **candidate for retiring its workaround**. Several comments
+tie the fault to one very large function or emit path, which a minimal program does not recreate. So
+the proof is to revert the workaround at its site and run the fixpoint, not to delete the comment on
+the strength of this list:
+
+- a function returning a new struct type (`src/wat.al` `wat_defer_action` and its neighbour,
+  `src/aarch64.al` head, `src/lower_layout.al` `ptr_target_pointee_s`): a 3-word struct return
+  answered 42;
+- a helper taking `in out` of a struct plus a large by-value struct (`src/wat.al`, the overload
+  suffix, #611): 10-word by-value plus `in out` answered 42;
+- a span passed to a helper through params (`src/aarch64.al` and `src/riscv64.al`, the generic
+  instance tag): a 9-parameter call reading params 7–9 answered 42;
+- the second word of a tuple returned off an inferred `unchecked` binding (`lib/base/num.al`
+  `overflowing_*`): 42;
+- an early `return` inside a `match` arm (`src/sema.al` `check_expr_arms` `Var` arm, `src/wat.al`,
+  `src/cli.al`), including one returning a 3-word `Result`: 42;
+- a nested `match … return` (`src/sema.al` `field_variant_name`): 42;
+- a comparison `and`-ed with a call (`src/parser.al`, the lambda-call reject): 42;
+- an inline str-returning call as a `str` argument (`src/fmt.al`, `src/lower_asm.al`, `src/wat.al`),
+  including into an `in out` helper: 42;
+- a recursive `in out` call (`src/parser.al`, `@label`): 42;
+- a 9-word struct written through `in out` (`src/parser.al`, the struct field-order table): 42;
+- an `in out` scalar as a 7th parameter (`src/lower_ctx.al` `call_cidx`): 42;
+- a `[0; 2048]` global initializer (`src/regalloc.al`): 42;
+- an `else if` chain as a function body (`src/fmt.al`): 42;
+- a struct constructor stored through `deref(p) = S(…)` (`src/parser.al`, lambda params): 42;
+- a module constant as a call argument (`src/sema.al`, the brand census descriptor): 42;
+- a 2-word accessor on the second match-bound child (`src/wat.al` `CompField`): 42.
+
+**Not seed limitations: the tree refuses them too.** A payload-heavy arm of a big `match` over a
+bound `deref` ("scar #2", `src/sema.al`, the `check_expr` pre-match band), and a variant `match`
+nested in another arm on a bound child (`src/lower.al`, `src/sema.al`, `src/fmt.al`, `src/wat.al`).
+The tree compiler refuses both with #716's located diagnostic ("the lowering cannot see the
+scrutinee's enum type"), even on an annotated local. That is a lowering limit of the tree, and the
+compiler itself holds it. §3 names the scrutinee shapes that lower.
+
+**Write this.** Follow the existing idioms at the workaround sites (AGENTS.md "Workspace
+invariants"). When you work around a seed limitation, **add a registry row** with a planted program
+that the seed miscompiles and the tree runs correctly. Put a comment at the workaround that names the
+limitation and the issue, and list that site in the row. Then the row can be retired after a
+promotion, the way `29d134c` dropped #751's and #753's workarounds. If the tree gets the form wrong
+too, it is a tree defect: file it and add the row as `tree`.
+
+**Check.** `scripts/seed_forms_check.sh`, a full-gate stage after the build. A `seed` row fails if
+the tree compiler does not answer the due value, because the form regressed in the tree. It also
+fails if the seed does, with "the seed now handles <form>: retire this entry and remove its
+workaround comments at <sites>". So a promotion that fixes a form turns the gate red until the row
+and its workarounds are gone. A `tree` row fails once the tree answers the due value, with "change
+its state to 'seed'". The registry and `scripts/seed_forms/` must match both ways. Its
+`--self-test`, in `full.sh --self-test`, drives the decider through thirteen planted registries with
+a fake compiler: three controls stay green and ten plants are refused by name. Writing a *new* seed
+workaround without a row is held by review.
 
 ## 9 · An AST handle has its node's own type
 
@@ -306,9 +415,10 @@ The steps:
    justify itself. A cheap lexical rule, `handle-usize`, could then refuse a *new*
    `bitcast(ptr(<AST node>), <non-literal>)` outright.
 2. **A handle that can be absent becomes `Option(ptr(mut Stmt))`.** It is niche-folded, so node layout
-   is unchanged. This is blocked on #768, #770 and #775. The seed must also dispatch a
-   `match` over `Option(ptr(T))` payloads, which scar #2 makes doubtful. That probably needs a seed
-   promotion after those land, before the tree can use it.
+   is unchanged. #787 fixed #768, #770 and #775 in the tree. What still blocks it is #789 (the bare
+   constructor spellings) and the seed: 0.2.4 crashes on a `match` over an `Option(ptr(T))`
+   parameter or walked local (§8 rows `option_ptr_param_match`, `option_ptr_list_walk`). So it
+   needs #789 and then a seed promotion, and the registry turns red when the promotion delivers.
 3. **Handles that are not pointers become brands.** Arena offsets and `rt::Vec` slots would be
    `StmtId := brand(usize)`, `ExprId := brand(usize)`. #299 made brands nominal (siblings and the base
    type do not convert implicitly), so `StmtId` vs `ArmId` becomes a checker error instead of a review

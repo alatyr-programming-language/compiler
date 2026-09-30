@@ -1,0 +1,29 @@
+# The SEED-FORMS REGISTRY. strict_forms.md §8 explains it, and scripts/seed_forms_check.sh enforces it.
+# Owner decision on #785: "One file lists each form the seed miscompiles, each with a planted program,
+# so the form is checkable and can be retired after a promotion."
+#
+# One row per form, TAB-separated, five fields:
+#   name     the planted program is scripts/seed_forms/<name>.al (outside the `test/*.al` corpus)
+#   state    `seed`: the frozen seed miscompiles the form and the tree compiler runs it correctly.
+#              The check needs tree == due (else the form regressed in the tree) and seed != due
+#              (else the seed now handles it: retire the row and remove its workarounds at <sites>).
+#            `tree`: the tree compiler miscompiles it too. That is a tree defect with its own issue,
+#              and a seed limitation only in the comments that blamed the seed. The check needs
+#              tree != due. When the fix lands, the check refuses until the row moves to `seed`.
+#              The seed's result is printed and not judged.
+#   due      the program's correct exit value on x86_64 (< 126)
+#   issue    the issue that records the defect (#N)
+#   sites    where the workaround lives, `;`-separated: `path:symbol` or `path §N`. These are the
+#            places to clean up when the row is retired.
+#
+# name	state	due	issue	sites
+try_inline_multiword	seed	42	#752	scripts/strict_forms_check.sh:try-inline rule; .agents/skills/alatyr-lane/strict_forms.md §7
+option_ptr_payload_field	seed	42	#768	.agents/skills/alatyr-lane/strict_forms.md §1 (bind the deref to an annotated local)
+option_ptr_mut_generic	seed	42	#770	.agents/skills/alatyr-lane/strict_forms.md §1 (no generic instance over ptr(mut T))
+option_ptr_local_forms	seed	42	#775	.agents/skills/alatyr-lane/strict_forms.md §1 (annotate the Option(ptr(T)) local)
+option_ptr_param_match	seed	42	#789	every `## null-ok:` marker that names #789; .agents/skills/alatyr-lane/strict_forms.md §1
+option_ptr_list_walk	seed	42	#789	every `## null-ok:` marker that names #789; .agents/skills/alatyr-lane/strict_forms.md §1
+option_ptr_bare_some_arg	tree	42	#789	.agents/skills/alatyr-lane/strict_forms.md §1 (spell the constructor out)
+option_ptr_bare_none_reassign	tree	42	#789	.agents/skills/alatyr-lane/strict_forms.md §1 (spell the constructor out)
+enum_copy_two_derefs	tree	42	#790	src/ast.al:bitcast_identity_erase (word-by-word copy)
+call_result_enum_field_arg	tree	42	#791	src/sema.al:resolve_kind (result bound before the field is read)

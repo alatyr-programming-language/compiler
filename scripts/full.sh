@@ -92,6 +92,16 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/strict_forms_check.sh" --self-test
   _full_strict_self_test_rc=$?
   [ "$_full_strict_self_test_rc" = 0 ] || exit "$_full_strict_self_test_rc"
+  # The SEED-FORMS registry's gate-of-the-gate (strict_forms.md §8, the #600 rule). On a tree whose
+  # seed still miscompiles every registered form, the check never reaches its own failure verdicts:
+  # a form regressed in the tree, the seed now handling a form (the retirement signal), or the tree
+  # now handling a `tree` row. So thirteen planted registries drive it with a fake compiler, and three
+  # of them are CONTROLS that must stay green. Measured: an always-OK decider loses the three verdict
+  # plants, an always-failing decider loses the three controls, and dropping the orphan walk loses
+  # the orphan plant.
+  bash "$ROOT/scripts/seed_forms_check.sh" --self-test
+  _full_seed_forms_self_test_rc=$?
+  [ "$_full_seed_forms_self_test_rc" = 0 ] || exit "$_full_seed_forms_self_test_rc"
   bash "$ROOT/scripts/land.sh" --self-test
   _full_land_self_test_rc=$?
   [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
@@ -320,6 +330,29 @@ if ! grep -qE "^  NEGATIVE fixture \(explicit bitcasts only\): check rc=0 rows=0
   fail=1
 fi
 
+# The SEED-FORMS registry (strict_forms.md §8; owner decision on #785). Each form the frozen seed
+# miscompiles has a planted program under scripts/seed_forms/ (outside the `test/*.al` corpus), and
+# scripts/seed_forms.tsv gives its due exit value. A `seed` row needs the Stage2 compiler the fixpoint
+# step left at target/debug/alatyr to answer the due value, and the seed NOT to. So a promotion that
+# fixes a form turns this stage red, with the workaround sites to clean up, and the entry retires. A
+# `tree` row is a tree defect that a workaround comment blamed on the seed. It must still fail in the
+# tree, so the fix that lands for it has to move the row to `seed`.
+echo "### SEED FORMS (registry: the seed must still miscompile each form, the tree must not) ###"
+SFR_LOG="$LOGDIR/full_seed_forms.log"
+SEED_FORMS_TREE="$ROOT/target/debug/alatyr" bash scripts/seed_forms_check.sh > "$SFR_LOG" 2>&1
+sfr_rc=$?
+grep -E "^(seed forms: rows=|\*\*\* seed forms|seed forms: FAIL)" "$SFR_LOG"
+sfr_cover="$(grep -E "^seed forms: rows=" "$SFR_LOG" | tail -1 | sed 's/^seed forms: //')"
+if [ "$sfr_rc" != 0 ]; then
+  echo "  FAILURES (from $SFR_LOG): scripts/seed_forms_check.sh exited $sfr_rc"
+  fail=1
+fi
+if [ -z "$sfr_cover" ]; then
+  echo "  (scripts/seed_forms_check.sh printed no 'rows=' coverage line — what it ran is unknown,"
+  echo "   treating as a failure)"
+  fail=1; sfr_cover="UNKNOWN — no coverage line"
+fi
+
 # The STRICT-FORMS check, typed half (issue #691). `p == 0` with `p : ptr(T)` is invisible to a
 # tokenizer, and the checker already names it: the #529 instrument writes each implicit usize<->ptr
 # crossing to fd 98. The Stage2 compiler checks the MERGE BASE and this tree (the base from its own
@@ -414,6 +447,7 @@ elif [ "$sw_status" = "RAN" ]; then
   echo "    wildcard arms:   $wa_cover"
   echo "    strict forms:    $sf_cover"
   echo "    strict typed:    $st_cover"
+  echo "    seed forms:      $sfr_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
@@ -425,6 +459,7 @@ else
   echo "    wildcard arms:   $wa_cover"
   echo "    strict forms:    $sf_cover"
   echo "    strict typed:    $st_cover"
+  echo "    seed forms:      $sfr_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
