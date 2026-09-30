@@ -10171,6 +10171,9 @@ run_x86 issue770_option_ptr_mut_label 42
 # `Option(ptr(T))` parameter (it was passed as the two-word enum block, and the callee dereferenced the
 # discriminant) and a folded local's re-assignment (refused as a "NARROWER binding"). The list walk.
 run_x86 issue789_option_ptr_list_walk 42
+# #797 — a `Some(...)` literal stored into an `Option(ptr(T))` struct field is its one folded word, in every
+# field-store form (local, through a pointer, by-ref param, nested, global, array element); it stored None.
+run_x86 issue797_option_ptr_field_store 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.
