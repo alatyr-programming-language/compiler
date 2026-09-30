@@ -78,7 +78,8 @@ their operands or a literal — while the disagreement persists, so the report i
 read. Each finding is written to `--out` as `wrong-<seed>.al` (the reduced program, its per-backend
 exits and the model's answer in its header) plus `wrong-<seed>.orig.al` (the program as generated);
 `refused-`, `hang-` and `model-<seed>.al` likewise, and one line per finding in `findings.tsv`.
-A run exits 1 on any WRONG or REFUSED; HANG and MODEL are reported and do not fail it.
+A compiler killed by a signal on any backend is a CRASH. A run exits 1 on any WRONG, REFUSED or
+CRASH; HANG and MODEL are reported and do not fail it.
 
 NOT IN THE AUTHORITATIVE GATE (#582 item 7): its input is random by design, and the landing verdict
 must be reproducible. It runs nightly instead (`.github/workflows/progen-nightly.yml`), and its findings
@@ -799,17 +800,27 @@ def sh(cmd, timeout=None, cwd=None):
         return None, b'', b'', time.time() - t0, True
 
 
+def compile_why(rc, err):
+    """Why the compiler did not produce an artifact. A compiler killed by a signal (or timed out) is
+    a CRASH — a defect in the compiler whatever the program, unlike a located refusal."""
+    if rc is None:
+        return 'crash: compiler timed out'
+    if rc < 0 or rc >= 128:
+        return f'crash: compiler exit {rc if rc >= 0 else 128 - rc}'
+    return 'compile: ' + err.decode(errors='replace')[:200]
+
+
 def build(cc, backend, src, d):
     """Build `src` for `backend` in directory `d`; return (artifact or None, why)."""
     if backend == 'x86_64':
         out = os.path.join(d, 'x86')
         rc, _, err, _, _ = sh([cc, '-o', out, src], timeout=120)
-        return (out, '') if rc == 0 else (None, 'compile: ' + err.decode(errors='replace')[:200])
+        return (out, '') if rc == 0 else (None, compile_why(rc, err))
     if backend in ('aarch64', 'riscv64'):
         s, o, elf = [os.path.join(d, backend + x) for x in ('.s', '.o', '.elf')]
         rc, out, err, _, _ = sh([cc, backend, src], timeout=120)
         if rc != 0:
-            return None, 'compile: ' + err.decode(errors='replace')[:200]
+            return None, compile_why(rc, err)
         open(s, 'wb').write(out)
         pre = f'{backend}-unknown-linux-gnu-'
         if sh([pre + 'as', s, '-o', o], timeout=60)[0] != 0:
@@ -821,7 +832,7 @@ def build(cc, backend, src, d):
         wat, wasm = os.path.join(d, 'w.wat'), os.path.join(d, 'w.wasm')
         rc, out, err, _, _ = sh([cc, 'wat', src], timeout=120)
         if rc != 0:
-            return None, 'compile: ' + err.decode(errors='replace')[:200]
+            return None, compile_why(rc, err)
         open(wat, 'wb').write(out)
         if sh(['wat2wasm', wat, '-o', wasm], timeout=60)[0] != 0:
             return None, 'reject: wat2wasm'
@@ -874,6 +885,11 @@ def disagreement(res):
     fails-when-valid finding."""
     vals = {b: v for b, v in res.items() if isinstance(v, int)}
     return len(set(vals.values())) > 1
+
+
+def crashed(res):
+    """Some backend's COMPILER crashed on the program (`build:crash:`)."""
+    return any(isinstance(v, str) and v.startswith('build:crash') for v in res.values())
 
 
 def x86_refused(res):
@@ -1192,6 +1208,13 @@ def one_seed(cc, seed, forms, do_reduce):
             small = reduce(cc, prog, seed, keep=lambda r: x86_refused(r) and refusal(r) == want,
                            backends=['x86_64'])
             out['sres'] = observe(cc, render(small, seed), ['x86_64'])
+    elif crashed(res):
+        out['verdict'] = 'CRASH'
+        if do_reduce:
+            who = [b for b in BACKENDS if isinstance(res[b], str) and res[b].startswith('build:crash')]
+            small = reduce(cc, prog, seed, keep=lambda r: all(str(r[b]).startswith('build:crash') for b in who),
+                           backends=['x86_64'] + [b for b in who if b != 'x86_64'])
+            out['sres'] = observe(cc, render(small, seed))
     elif disagreement(res):
         out['verdict'] = 'WRONG'
         small = reduce(cc, prog, seed) if do_reduce else prog
@@ -1213,7 +1236,7 @@ def cmd_run(a):
     forms = parse_forms(a.forms)
     os.makedirs(a.out, exist_ok=True)
     tsv = open(os.path.join(a.out, 'findings.tsv'), 'a')
-    counts = {'ok': 0, 'WRONG': 0, 'REFUSED': 0, 'HANG': 0, 'MODEL': 0}
+    counts = {'ok': 0, 'WRONG': 0, 'REFUSED': 0, 'CRASH': 0, 'HANG': 0, 'MODEL': 0}
     seeds = range(a.seed, a.seed + a.count)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(a.jobs, 1)) as ex:
         futs = [ex.submit(one_seed, cc, s, forms, a.reduce) for s in seeds]
@@ -1241,8 +1264,9 @@ def cmd_run(a):
                       f'{tagof(sres) if sres else "-"}\t{o["smodel"] if sres else "-"}\n')
             tsv.flush()
     print(f'progen: seeds={a.seed}..{a.seed + a.count - 1} agree={counts["ok"]} wrong={counts["WRONG"]} '
-          f'x86_refused={counts["REFUSED"]} hang={counts["HANG"]} model_only={counts["MODEL"]} out={a.out}')
-    return 1 if (counts['WRONG'] or counts['REFUSED']) else 0
+          f'x86_refused={counts["REFUSED"]} crash={counts["CRASH"]} hang={counts["HANG"]} '
+          f'model_only={counts["MODEL"]} out={a.out}')
+    return 1 if (counts['WRONG'] or counts['REFUSED'] or counts['CRASH']) else 0
 
 
 # One planted marker per form: the rendered text of a program with that form forced on must contain
