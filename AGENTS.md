@@ -115,9 +115,9 @@ around it.
    "poisoned" (#659, #681). The target form is `Option(ptr(T))` (one word, niche-folded) walked with
    `match`, or `Option(u64)`. An explicit `unchecked bitcast(usize, p) != 0` only makes the null
    visible. It is a transitional form, allowed only where the typed form cannot be compiled yet, and
-   its `null-ok` reason names the blocking issue: today #789, plus a seed promotion. Held by the
-   `null` rule of `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`) forms
-   together.
+   its `null-ok` reason names the blocker: today a seed promotion (§8 registry rows) and the open
+   array-of-`Option(ptr(T))` element defect. Held by the `null` rule of
+   `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`) forms together.
 2. **A kind is an enum, and flags are separate fields.** Do not compare a `kind`/`tag` with a literal,
    and do not pack a flag into a tag byte (`+128`) (#583, #626). Held by `kind-literal`.
 3. **Decide with an exhaustive `match` on the value.** Never use `_` over an enum (#544, #464). Do not

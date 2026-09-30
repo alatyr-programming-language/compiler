@@ -1,7 +1,7 @@
 ## Seed-forms registry entry `option_ptr_bare_some_arg` (scripts/seed_forms.tsv) — NOT a corpus fixture.
 ## #789: a BARE `Option.Some(x)` passed straight as an `Option(ptr(T))` argument, and the payload
-## dereferenced in the callee. State `tree`: the tree compiler SIGSEGVs on it (so does the seed); the
-## spelled-out `Option(ptr(mut N)).Some(x)` works in the tree (`option_ptr_param_match`). Due: 42.
+## dereferenced in the callee. State `seed`: the tree folds it since #796 (#789 fixed); the 0.2.4 seed
+## SIGSEGVs. Due: 42.
 N := struct { v : u64, next : Option(ptr(mut N)) }
 f := fn(h : Option(ptr(mut N))) -> u64 {
   match h {

@@ -25,7 +25,7 @@ issue in the marker's reason. Do not quietly route around it.
 
 | § | form | defect class it retires | held by |
 |---|---|---|---|
-| 1 | absence is `Option(ptr(T))` walked with `match`, not a sentinel | 0 as null, −1 as "not found", 255 as "poisoned" | `strict_forms_check.sh` `null` (typed + lexical); the transitional marker names its blocker (#789) |
+| 1 | absence is `Option(ptr(T))` walked with `match`, not a sentinel | 0 as null, −1 as "not found", 255 as "poisoned" | `strict_forms_check.sh` `null` (typed + lexical); the transitional marker names its blocker (a seed promotion) |
 | 2 | a kind is an enum, not an integer; flags are not packed into it | #583 (134 literal `.tag` sites), #626, `+128` mut flag | `strict_forms_check.sh` `kind-literal` |
 | 3 | decide with an exhaustive `match` on the value | #544 (249 blind wildcard arms), #716, #464 | `wildcard_arm_check.sh`; the rest by review |
 | 4 | one decision, one place | the #540 family, #539 | `idiom_gate.sh` (for the shapes it knows) |
@@ -96,32 +96,41 @@ For an integer, use `Option(u64)`, `Option(usize)` and so on, not a reserved val
 **Spell the forms exactly as shown.** Each item below is a compiler defect with a planted program in
 the §8 registry (`scripts/seed_forms.tsv`). The registry says when each one retires.
 
-- Spell every constructor with its type: `Option(ptr(mut N)).Some(x)` and `Option(ptr(mut N)).None`,
-  not a bare `Option.Some(x)` / `Option.None`. On the tree compiler a bare `Option.Some(x)` passed
-  straight as an argument crashes, and a bare `Option.None` re-assigned to an annotated local is
-  refused (#789, registry rows `option_ptr_bare_some_arg` and `option_ptr_bare_none_reassign`).
+- In code the seed compiles, store a `Some` into an `Option(ptr(T))` struct field from a local or a
+  call, never as a literal: `s : Option(ptr(mut N)) = Option(ptr(mut N)).Some(ptr(mut b)) ; a.next = s`.
+  `a.next = Option(ptr(mut N)).Some(…)` stores None under seed 0.2.4 (7 where 42 is due, #797). The
+  tree fixes it with #807; its row is added as `seed` once that lands.
+- In code the seed compiles, spell every constructor with its type: `Option(ptr(mut N)).Some(x)` and
+  `Option(ptr(mut N)).None`. The tree folds a bare `Option.Some(x)` / `Option.None` to its position's
+  type since #796 (#789 fixed), but the seed 0.2.4 crashes on a bare `Option.Some(x)` passed straight
+  as an argument (row `option_ptr_bare_some_arg`, state `seed`).
 - Annotate an `Option(ptr(T))` local (`r : Option(ptr(Decl)) = …`). Bind a `deref` to an annotated
   local before reading a field (`dv : Decl = deref(d)`). Do not instantiate a generic over
   `ptr(mut T)`. The tree handles all three since #787 (#775, #768, #770). The seed 0.2.4 does not
   (rows `option_ptr_local_forms`, `option_ptr_payload_field`, `option_ptr_mut_generic`), and the seed
   compiles `src/` and `lib/`.
 
-**Transitional form, until #789 and a promotion.** The seed 0.2.4 crashes on a `match` over an
+**Transitional form, until a seed promotion.** The tree-side blockers are fixed: #789 by #796, and
+#797 (the `Some` field store every list builder writes) by #807. Two things remain before the
+compiler's own source may use `Option(ptr(T))` walks. One is a **seed promotion**. The other is the
+still-open defect in an **array of `Option(ptr(T))` elements**; its issue is being filed. The seed
+0.2.4 crashes on a `match` over an
 `Option(ptr(T))` parameter or a walked local, even with every constructor spelled out (rows
 `option_ptr_param_match` and `option_ptr_list_walk`: the tree answers 42, the seed SIGSEGVs). So code
 the seed compiles cannot use the walk above yet. The AST's own lists also still end in a raw null
 `next`, and converting them is §9 step 2. Only where the typed form cannot be compiled yet, spell the
-null explicitly (§6). The marker's reason must name the **blocking issue**, not only the structure:
+null explicitly (§6). The marker's reason must name the **blocker**, not only the structure: an
+issue, or the registry row when the blocker is the seed:
 
 ```alatyr
-## null-ok: #789 — Stmt.next ends in a null link; Option(ptr(Stmt)) is not compilable under seed 0.2.4
+## null-ok: seed row option_ptr_list_walk — Stmt.next ends in a null link until a promotion past 0.2.4
 while unchecked bitcast(usize, s) != 0 { ... }
 ```
 
 A `null-ok` whose reason names no issue is a sentinel chosen, not a sentinel forced. Review refuses
-it. This form retires when #789 is fixed and the seed is promoted: the two `seed` rows then answer 42
-under the seed, `scripts/seed_forms_check.sh` fails with "the seed now handles …", and the markers
-that name #789 are the sites to convert.
+it. This form retires when the seed is promoted. Then the `option_ptr_*` `seed` rows answer 42 under
+the seed, `scripts/seed_forms_check.sh` fails with "the seed now handles …", and the markers that
+name those rows are the sites to convert.
 
 **Check.** The `null` rule of `scripts/strict_forms_check.sh`. It counts the explicit spellings
 (`bitcast(ptr(T), 0)`, and `bitcast(usize, p) ==/!=/> 0` in either operand order) and the implicit
@@ -309,7 +318,7 @@ one of two states:
   tree defect with its own issue. The row records it until the fix lands. Then the check makes the
   fixing change move the row to `seed`.
 
-Measured at `3e5d7b4` against seed 0.2.4 (`4d6538b55e5c…`). The tree column is the tree-built
+Measured at `bddf081` against seed 0.2.4 (`4d6538b55e5c…`). The tree column is the tree-built
 compiler. The values are exit values under local OrbStack emulation, and the gate re-measures them
 on native x86_64.
 
@@ -321,8 +330,7 @@ on native x86_64.
 | `option_ptr_local_forms`: an `Option(ptr)` local from a field, then re-assigned from a call | seed | #775 | 42 | 42 | 1 (refused, NARROWER binding) | §1 |
 | `option_ptr_param_match`: `match` an `Option(ptr)` parameter, deref the payload | seed | #789 | 42 | 42 | 139 | §1 transitional `null-ok` markers |
 | `option_ptr_list_walk`: the §1 list walk | seed | #789 | 42 | 42 | 139 | §1 transitional `null-ok` markers |
-| `option_ptr_bare_some_arg`: a bare `Option.Some(x)` passed as an argument | tree | #789 | 42 | 139 | 139 | §1 (spell the constructor) |
-| `option_ptr_bare_none_reassign`: a bare `Option.None` re-assigned in a `loop` | tree | #789 | 42 | 1 (refused) | 42 | §1 (spell the constructor) |
+| `option_ptr_bare_some_arg`: a bare `Option.Some(x)` passed as an argument | seed | #789 | 42 | 42 | 139 | §1 (spell the constructor) |
 | `enum_copy_two_derefs`: `deref(dst) = deref(src)` over a multi-word enum | tree | #790 | 42 | 1 | 1 | `src/ast.al` `bitcast_identity_erase` |
 | `call_result_enum_field_arg`: `is_c(mk().kind)` with an enum field | tree | #791 | 42 | 139 | 139 | `src/sema.al` `resolve_kind` |
 
@@ -416,10 +424,11 @@ The steps:
    justify itself. A cheap lexical rule, `handle-usize`, could then refuse a *new*
    `bitcast(ptr(<AST node>), <non-literal>)` outright.
 2. **A handle that can be absent becomes `Option(ptr(mut Stmt))`.** It is niche-folded, so node layout
-   is unchanged. #787 fixed #768, #770 and #775 in the tree. What still blocks it is #789 (the bare
-   constructor spellings) and the seed: 0.2.4 crashes on a `match` over an `Option(ptr(T))`
-   parameter or walked local (§8 rows `option_ptr_param_match`, `option_ptr_list_walk`). So it
-   needs #789 and then a seed promotion, and the registry turns red when the promotion delivers.
+   is unchanged. In the tree, #787 fixed #768, #770 and #775, #796 fixed #789, and #807 fixes
+   #797. What still blocks it is the open array-of-`Option(ptr(T))` element defect and the seed:
+   0.2.4 crashes on a `match` over an `Option(ptr(T))` parameter or walked local (§8 rows
+   `option_ptr_param_match`, `option_ptr_list_walk`). So it needs a seed promotion, and the
+   registry turns red when the promotion delivers.
 3. **Handles that are not pointers become brands.** Arena offsets and `rt::Vec` slots would be
    `StmtId := brand(usize)`, `ExprId := brand(usize)`. #299 made brands nominal (siblings and the base
    type do not convert implicitly), so `StmtId` vs `ArmId` becomes a checker error instead of a review
