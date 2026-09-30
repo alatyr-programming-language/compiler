@@ -122,6 +122,15 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`Option(ptr(T))` is one word in every position, not only in a struct field.** Three defects on
+  x86_64 shared this cause. In a `Some(p)` arm, `deref(p).f` and `n := deref(p); n.f` read **0** on a
+  clean build, because the payload was bound as an untyped word (#768). A local was sized by the form of
+  its initializer. Re-assigning it from another form was refused as a "narrower binding", and a local
+  bound from `deref(p).f`, or a folded value passed straight as an argument (`f(none())`,
+  `f(deref(hp).head)`), crashed at run time with SIGSEGV (#775). A generic instance over a `ptr(mut T)`
+  type argument (`Option::is_some(ptr(mut T), o)`) got a label containing a space, so `as` rejected the
+  build (#770). Once that assembles, the `-> T` result of `Option::unwrap`/`id` at `T = ptr(S)` also
+  carries its pointee. The other backends still refuse `Option(ptr(T))` with a trap, as before.
 - **`check` now types every expression form.** The last six `check_expr` arms (`ArrayLit`, `EnumLit`,
   `Call`, `StructLit`, `Deref`, `Field`) run, so a call result, a field read, an array literal and a
   `bool` local carry their type to the sink they reach. Programs the specification declares invalid

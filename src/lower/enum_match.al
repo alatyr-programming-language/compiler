@@ -27,7 +27,7 @@ fld_p := ast::fld_p
 (Arm, Decl, Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
 (push_str, push_int) := strbuf
 (LCtx, num_lit_value, var_name_span) := lower_ctx
-(base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_byte_place, is_niche_folded, layout_kind, layout_kind_is_byte, layout_kind_is_packed, repr_tag_code, struct_decl_of, struct_words, variant_index, variant_payload_type) := lower_layout
+(base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_byte_place, is_niche_folded, niche_payload_ptr_kind, ptr_target_pointee_s, ptr_target_pointee_n, layout_kind, layout_kind_is_byte, layout_kind_is_packed, repr_tag_code, struct_decl_of, struct_words, variant_index, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
@@ -737,7 +737,16 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
           pview_l = pview.n
           pview_eek = 13
         }
-        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = pview_s, snl = pview_l, ek = 0, estride = 1, eek = pview_eek, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+        ## #768 — a `ptr(S)` / `ptr(E)` payload over a declared aggregate binds as the pointer-to-struct
+        ## (7) / pointer-to-enum (6) kind an annotated `p : ptr(S)` local gets. As a bare scalar its
+        ## pointee was unknown, so `deref(p).f` and `n := deref(p); n.f` read 0 with no diagnostic.
+        mut pkind : u8 = 0
+        if pview.n == 0 { pkind = niche_payload_ptr_kind(cx.decls, cx.src, pty.s, pty.n) }
+        if pkind != 0 {
+          pview_s = ptr_target_pointee_s(cx.src, pty.s, pty.n)
+          pview_l = ptr_target_pointee_n(cx.src, pty.s, pty.n)
+        }
+        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = pview_s, snl = pview_l, ek = pkind, estride = 1, eek = pview_eek, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
       } else {
         svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
       }

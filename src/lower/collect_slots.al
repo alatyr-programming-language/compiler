@@ -23,7 +23,7 @@ assign_is_reassign := ast::assign_is_reassign
 local_is_comptime := ast::binding_is_comptime
 (Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
 (SVec, arg_expr_at, var_name_span) := lower_ctx
-(base_type_name, enum_decl_of, enum_inst_words, is_niche_folded, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
+(base_type_name, enum_decl_of, enum_inst_words, is_niche_folded, niche_payload_ptr_kind, ptr_target_pointee_s, ptr_target_pointee_n, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
@@ -106,6 +106,14 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           rw := require_agg_words(rqa.under, decls, src, a)
           if rk == 3 { bind_enum_slot(slots, decls, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
           else { bind_struct_slot(slots, decls, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
+        } else if folded_value_span(v, ptr(slots), decls, src, a).n != 0 {
+          ## #775 — a NICHE-FOLDED `Option(ptr(T))` local is ONE word whatever initializes it: a call, a
+          ## variant literal with a folded head, another folded local or parameter, a field read or
+          ## `deref(p).f`. Recording the full `Option(ptr(T))` span (ek 3) is what routes the assignment to
+          ## `emit_folded_option_assign` and a `match` to the folded dispatch. (A bare `Option.None` under a
+          ## folded annotation keeps the `ei.is_e` branch below, which already binds it this way.)
+          fvs := folded_value_span(v, ptr(slots), decls, src, a)
+          bind_enum_slot(slots, decls, src, ns, nl, fvs.s, fvs.n, 1)
         } else if si.is_s {
           ## Types §9.4: inside a generic INSTANCE a construction head over the callee's own type
           ## parameter (`b := Box(T)(v = x)`) resolves to the instantiation (`Box(P)`) — the raw
@@ -729,6 +737,14 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
                 mpbn := base_type_name(src, mpty.s, mpty.n)
                 if struct_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_struct_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, struct_words(decls, src, mpty.s, mpty.n, a)) }
                 else if enum_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_enum_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, 1 + enum_inst_words(decls, src, mpty.s, mpty.n, a)) }
+                else if is_niche_folded(src, mes, mel) {
+                  ## #768 — a folded `Some(p)` over `ptr(S)` / `ptr(E)`: type `p` as the pointer-to-struct /
+                  ## pointer-to-enum local an annotation would give it, so `n := deref(p)` in the arm binds a
+                  ## struct copy (the emit-time alias in `emit_match` carries the same kind).
+                  mpk := niche_payload_ptr_kind(decls, src, mpty.s, mpty.n)
+                  if mpk == 7 { bind_ptrstruct_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), ptr_target_pointee_s(src, mpty.s, mpty.n), ptr_target_pointee_n(src, mpty.s, mpty.n)) }
+                  else if mpk == 6 { bind_ptrenum_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), ptr_target_pointee_s(src, mpty.s, mpty.n), ptr_target_pointee_n(src, mpty.s, mpty.n)) }
+                }
               }
             }
           }
