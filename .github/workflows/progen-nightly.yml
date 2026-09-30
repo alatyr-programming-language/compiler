@@ -1,0 +1,111 @@
+# The program generator as a standing guard (#582): every night, `scripts/progen.py` generates
+# thousands of programs valid by construction and runs each on x86_64, aarch64, riscv64 and wasm.
+#
+# It is NOT a gate and holds no landing verdict (#582 item 7: its input is random by design, and the
+# landing verdict must be reproducible). It is an instrument: a red run means the generator found a
+# program on which two backends finish normally with different exit codes (WRONG), a program valid by
+# construction that x86_64 refuses (REFUSED), or a program on which some backend's compiler dies
+# (CRASH). Programs on which every finishing backend agrees with the others but not with progen's
+# model are listed as MODEL and do not fail the run. Each finding is reproducible from its seed alone
+# — `python3 scripts/progen.py show --seed S` prints the program, `model --seed S` its expected exit —
+# and becomes an issue, then a fixture.
+#
+# The seeds move every night, so coverage grows: shard k of a run starting at BASE covers
+# BASE + k*COUNT .. BASE + (k+1)*COUNT - 1, and BASE is the UTC day number times 100000 unless a
+# manual dispatch names one. The job holds no write token and sees no secret: it only reads the tree.
+#
+# Artifacts, one per shard, uploaded for every run including a green one:
+#   progen.log         the run's output: one line per finding, the summary line last
+#   findings.tsv       verdict, seed, per-backend exits as generated, per-backend exits as reduced
+#   wrong-S.al         the REDUCED program for a disagreement, per-backend exits in its header
+#   wrong-S.orig.al    the program as generated
+#   refused-S.al       the reduced program x86_64 refuses, the refusal in its header
+#   crash-S.al         the reduced program some backend's compiler crashes on
+#   hang-S.al, model-S.al   the program as generated, per-backend exits and the model in its header
+name: progen-nightly
+
+on:
+  schedule:
+    - cron: '23 1 * * *'
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'First seed of shard 0 (empty = UTC day number * 100000)'
+        required: false
+        default: ''
+      count:
+        description: 'Seeds per shard (four shards)'
+        required: false
+        default: '1000'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: progen-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  progen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make room for the nix store
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build the dev shell
+        run: nix develop -c true
+
+      - name: Build the compiler
+        run: |
+          ulimit -c 0
+          nix develop -c ./seed/alatyr build package.al
+          ls -l target/debug/alatyr
+
+      - name: Self-test the generator
+        run: |
+          ulimit -c 0
+          nix develop -c python3 scripts/progen.py self-test
+
+      - name: Run the generator
+        env:
+          BASE_INPUT: ${{ github.event.inputs.base }}
+          COUNT_INPUT: ${{ github.event.inputs.count }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          ulimit -c 0
+          COUNT="${COUNT_INPUT:-1000}"
+          BASE="${BASE_INPUT:-$(( $(date -u +%s) / 86400 * 100000 ))}"
+          FIRST=$(( BASE + SHARD * COUNT ))
+          mkdir -p target/progen
+          echo "progen shard ${SHARD}: seeds ${FIRST}..$(( FIRST + COUNT - 1 )) object $(git rev-parse HEAD) runner $(nproc) cpu" | tee target/progen/progen.log
+          set +e
+          nix develop -c python3 scripts/progen.py run --seed "$FIRST" --count "$COUNT" \
+            --jobs "$(nproc)" --out target/progen 2>&1 | tee -a target/progen/progen.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          # the summary line, then one line per finding; the job fails on any WRONG, REFUSED or CRASH
+          { tail -n 1 target/progen/progen.log; echo; grep -E '^(WRONG|REFUSED|CRASH|HANG|MODEL) ' target/progen/progen.log | sed 's/^/    /'; } >> "$GITHUB_STEP_SUMMARY" || true
+          echo "progen exit: $rc"
+          exit "$rc"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: progen-${{ github.run_id }}-shard${{ matrix.shard }}
+          path: target/progen/
+          if-no-files-found: warn
+          retention-days: 30
