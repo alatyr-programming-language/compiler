@@ -6428,6 +6428,53 @@ build_reject_has issue660_nonexh_generic_value "type mismatch at line 7"
 check_reject issue660_nonexh_generic_value
 check_accept issue660_exhaustive_generic
 run issue660_exhaustive_generic 42
+# Issue #788 / Control Flow §5.1/§5.4 — the scrutinee shapes #557/#680/#660 left open: an array
+# ELEMENT (`xs[i]` over a local or a parameter `[C; N]`), a `bool` missing `true` or `false`, an integer
+# with only literal arms and no `_`, a range list short of the type's whole width, and a field read
+# through a pointer (`deref(ptr(h)).t`, `deref(p).t`). Every one built on the parent (the two `deref`
+# field shapes passed `check` and were refused only by the lowering, #716), and the value-position ones
+# delivered 0 from a value no arm covers. Exhaustiveness is decided from the scrutinee's TYPE; the
+# needle names the line, as #557's rows do.
+build_reject_has issue788_nonexh_index_local "type mismatch at line 7"
+check_reject issue788_nonexh_index_local
+build_reject_has issue788_nonexh_index_param "type mismatch at line 6"
+check_reject issue788_nonexh_index_param
+build_reject_has issue788_nonexh_index_value "type mismatch at line 6"
+check_reject issue788_nonexh_index_value
+build_reject_has issue788_nonexh_bool_stmt "type mismatch at line 5"
+check_reject issue788_nonexh_bool_stmt
+build_reject_has issue788_nonexh_bool_value "type mismatch at line 5"
+check_reject issue788_nonexh_bool_value
+build_reject_has issue788_nonexh_int_lits_stmt "type mismatch at line 5"
+check_reject issue788_nonexh_int_lits_stmt
+build_reject_has issue788_nonexh_int_lits_value "type mismatch at line 5"
+check_reject issue788_nonexh_int_lits_value
+build_reject_has issue788_nonexh_int_lits_wide "type mismatch at line 4"
+check_reject issue788_nonexh_int_lits_wide
+build_reject_has issue788_nonexh_int_range_i8 "type mismatch at line 5"
+check_reject issue788_nonexh_int_range_i8
+build_reject_has issue788_nonexh_deref_addr_field "type mismatch at line 8"
+check_reject issue788_nonexh_deref_addr_field
+build_reject_has issue788_nonexh_deref_ptr_field "type mismatch at line 6"
+check_reject issue788_nonexh_deref_ptr_field
+# A reject fixture proves only the x86 surface (AGENTS.md): the three non-x86 emitters are asked
+# directly for the silent-wrong-value shapes (array element, `bool` and integer in value position).
+emit_reject_has wat issue788_nonexh_index_value "type mismatch at line 6"
+emit_reject_has aarch64 issue788_nonexh_index_value "type mismatch at line 6"
+emit_reject_has riscv64 issue788_nonexh_index_value "type mismatch at line 6"
+emit_reject_has wat issue788_nonexh_bool_value "type mismatch at line 5"
+emit_reject_has aarch64 issue788_nonexh_bool_value "type mismatch at line 5"
+emit_reject_has riscv64 issue788_nonexh_bool_value "type mismatch at line 5"
+emit_reject_has wat issue788_nonexh_int_lits_value "type mismatch at line 5"
+emit_reject_has aarch64 issue788_nonexh_int_lits_value "type mismatch at line 5"
+emit_reject_has riscv64 issue788_nonexh_int_lits_value "type mismatch at line 5"
+# The over-rejection controls: every shape above written exhaustively — complete array-element
+# matches, `true` + `false` (and `true | false`), literals with a `_`, and ranges covering the whole
+# width of `u8`, `i8` and `u16` — stays accepted and runs; the complete `deref(ptr(h)).t` match passes
+# `check` (its build is #716's lowering refusal, unchanged).
+check_accept issue788_exhaustive_controls
+run issue788_exhaustive_controls 42
+check_accept issue788_exhaustive_deref_addr_field
 # Issue #716 — a `match` arm naming an enum variant, over a scrutinee whose enum type the x86_64
 # lowering cannot see, compared against tag 0: the first variant matched by coincidence and every
 # other took no arm. The three built and ran to 1 on the parent; each is now a located refusal. The
