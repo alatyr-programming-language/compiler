@@ -203,6 +203,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   and %r13 as scratch without saving them. The caller then silently read the callee's scratch values as its
   own locals. Every text-lowered function, and every allocated function that splices text-emitter code,
   now saves the whole set after its prologue and restores it before its epilogue.
+- **`alatyr ir <file>` — a developer verb for the shared IR (`docs/ir.md`, slice 0a).** It reports,
+  for every function a program hands the new IR builder, what the builder answered; in this slice the
+  builder accepts nothing, so every function is `NotYet(<construct>, <file>:<line>:<col>)` and every
+  backend keeps its own emitter. `alatyr ir --self-test` checks the IR's printer and its verifier's ten
+  rules. No program compiles differently.
 - **The idiomatic `Option(ptr(T))` list walk runs on x86_64.** A bare `Option.Some(p)` / `Option.None`
   names no type argument, so it was folded to one word only as a struct field or an annotated local.
   Passed straight to an `Option(ptr(T))` parameter it went as the two-word `[disc, payload]` block, and

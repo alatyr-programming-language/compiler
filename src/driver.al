@@ -6224,13 +6224,13 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## #683 — user conversions (`T(v)` through a `@convert fn(U) -> T`) are renamed to the @convert's
   ## own callee here, BEFORE the prune below walks callees by name, so the three twins emit them as
   ## ordinary calls. See `d_desugar_convert`.
-  if backend == 0 or backend == 1 or backend == 2 { d_desugar_convert(decls, ptr(na), base) }
+  if backend == 0 or backend == 1 or backend == 2 or backend == 3 { d_desugar_convert(decls, ptr(na), base) }
   ## Resolve `mod::fn` / `alias::fn` callees to the target decl's BARE name and prune the injected
   ## `lib/` closure to what the program reaches — without this the module-unaware backends cannot use
   ## any of the decls this front end just supplied. A single-module compile (nothing injected) skips
   ## it: there is no qualified callee to resolve and nothing to prune.
   mut ed := decls
-  if n > 1 {
+  if n > 1 and D_IR_ALL == 0 {
     ems := rt::vec_get(mod_start, n - 1)
     eml := rt::vec_get(mod_len, n - 1)
     D_EMS = ems
@@ -6252,7 +6252,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## `_start` wrapper, while cross-target test artifacts have their runner. Exclude the package entry in
   ## both modes. This must not depend on D_TEST_MODE: raw backend emission deliberately leaves that flag
   ## false, and the entry exclusion is still required to avoid a duplicate `_start` symbol.
-  if backend == 0 or backend == 1 or backend == 2 {
+  if backend == 0 or backend == 1 or backend == 2 or backend == 3 {
     mut cross_entry := "_start"
     if D_TEST_ENTRY_N != 0 {
       cross_entry = str_at(unchecked bitcast(ptr(u8), D_TEST_ENTRY_P), D_TEST_ENTRY_N)
@@ -6293,6 +6293,9 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     riscv64::set_cross_test_options(rv_keep)
     riscv64::emit_rv_program(ptr(ed), out, base, strbuf::buf_len(bld), na)
   }
+  ## `docs/ir.md` slice 0a: the shared IR's builder over the same front half the twins run. It emits no
+  ## code — it reports, per function, what the builder answered (`ir::report_program`).
+  if backend == 3 { kir := ir::report_program(ptr(ed), out, base, ptr(pv), ptr(src_off), ptr(src_len)) }
   out
 }
 
@@ -6330,6 +6333,26 @@ pub check_file_emit := fn(path : str, in out a : Arena) -> usize {
   rt::arena_init(cs, 134217728)
   paths := d_ambient_paths(cs, path)
   return check_files(paths, cs, "")
+}
+
+## `alatyr ir <file>` (`docs/ir.md` slice 0a): run the twins' front half over ONE program and its
+## ambient `lib/` closure, then hand every function that survives the prune to the shared IR's builder
+## and print its report (`ir::report_program`). Backend 3 is "the IR": it takes the twins' front-end
+## path (the prune and entry rules riscv64 takes) and emits nothing.
+pub compile_file_ir := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
+  return d_compile_file_multi(path, 3)
+}
+## `alatyr ir --modules <file>...`: the same report over a raw module list (the census's `lib/` and `src/`
+## rows), with no ambient closure and no reachability prune — every function of every listed module
+## reaches the builder. `paths` is newline-joined, like the cross-test package path.
+mut D_IR_ALL : usize = 0
+pub compile_files_ir_raw := fn(paths : str, in out a : Arena) -> strbuf::StrBuf {
+  D_RAW_PATHS = 1
+  D_IR_ALL = 1
+  mut out := d_compile_file_multi(paths, 3)
+  D_RAW_PATHS = 0
+  D_IR_ALL = 0
+  out
 }
 
 ## backend breadth (WASM→WAT): compile a `.al` program to a WAT module. Runs the shared

@@ -830,6 +830,47 @@ check_large_source() {
   else echo "FAIL large_source: ran to $rc, want 42"; fail=1; fi
 }
 
+# `docs/ir.md` slice 0a — the shared IR's dev verb (D5: a CLI verb listed in `alatyr help`, never an
+# environment switch). Inert by construction: nothing is lowered through the IR, so these checks read
+# only the verb's own output. The self-test builds and prints IR by hand and plants one violation per
+# verifier rule (V1–V10); a verifier that refused nothing would fail it. The report checks read an
+# EXISTING corpus program, so the corpus manifest gains no row. On the parent compiler `ir` is an
+# unknown argument (rc 40, no stdout), so every check below fails there.
+check_ir_dev_verb() {
+  local out="$T/ir_selftest.out" rc
+  "$CC" ir --self-test > "$out" 2>&1; rc=$?
+  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 17 passed, 0 failed' "$out" \
+    && [ "$(grep -c '^ok   planted #' "$out")" = 14 ]; then
+    echo "ok   ir --self-test: storage, verify, print, 14 planted violations each refused by its rule"
+  else
+    echo "FAIL ir --self-test: rc=$rc"; sed 's/^/     /' "$out" | head -30; fail=1
+  fi
+  local src="$E2E_TEST/wasm_call.al" rep="$T/ir_report.out"
+  [ -f "$src" ] || { echo "MISS wasm_call: no $src"; fail=1; return; }
+  "$CC" ir "$src" > "$rep" 2>"$T/ir_report.err"; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^fn wasm_call::add NotYet(stmt Return, .*wasm_call\.al:1:45)$' "$rep" \
+    && grep -q '^fn wasm_call::main NotYet(stmt Return, .*wasm_call\.al:2:30)$' "$rep" \
+    && grep -qx 'ir: functions=2 built=0 notyet=2' "$rep" && [ ! -s "$T/ir_report.err" ]; then
+    echo "ok   ir wasm_call: NotYet(construct, file:line:col) for each function, built=0"
+  else
+    echo "FAIL ir wasm_call: rc=$rc"; sed 's/^/     /' "$rep" | head -10; fail=1
+  fi
+  # The same check-before-emit contract as `alatyr aarch64|riscv64|wat`: an ill-typed program is
+  # refused with its located diagnostic and the builder never runs.
+  "$CC" ir "$E2E_TEST/reject_bool_int_arith.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 1 ] && [ ! -s "$rep" ]; then echo "ok   ir reject_bool_int_arith: refused by check, nothing reported"
+  else echo "FAIL ir reject_bool_int_arith: rc=$rc (want 1, empty stdout)"; fail=1; fi
+  "$CC" ir > "$rep" 2>&1; rc=$?
+  if [ "$rc" = 40 ] && grep -q '^alatyr: config: ir requires' "$rep"; then echo "ok   ir (no operand): invocation-level Config diagnostic, rc 40"
+  else echo "FAIL ir (no operand): rc=$rc"; fail=1; fi
+  "$CC" ir --modules "$ROOT/lib/std/math.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^ir: functions=[1-9][0-9]* built=0 notyet=' "$rep"; then echo "ok   ir --modules lib/std/math.al: every function reported, none pruned"
+  else echo "FAIL ir --modules lib/std/math.al: rc=$rc"; fail=1; fi
+  "$CC" help > "$rep" 2>&1; rc=$?
+  if [ "$rc" = 0 ] && grep -q '^  ir       ' "$rep"; then echo "ok   help: lists the \`ir\` dev verb (D5, TOOL-21)"
+  else echo "FAIL help: no \`ir\` line"; fail=1; fi
+}
+
 # Modules §4.3 — ordinary one-hop module re-export. The source keeps `facade` and the entry module
 # in one focused front-end input so the non-x86 resolver sees `pub math := std::math`; the check is
 # structural because the WAT backend is the consumer of driver::d_qual_target. A missing rewrite
@@ -10877,6 +10918,7 @@ run_wat loop_expr_labels 42
 run_wat for_break_labels 42
 check_backend_determinism
 check_large_source
+check_ir_dev_verb
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
 ## direct calls, value+statement `if`, `while`, `return`.

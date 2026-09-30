@@ -4116,7 +4116,7 @@ parse_uint_arg := fn(s : str) -> usize {
 ## `fd`/`status` let the no-argument path reuse the exact same material while remaining a failing
 ## invocation-level diagnostic.
 cli_help := fn(in out a : rt::Arena, fd : usize, status : usize) -> usize {
-  mut b := rt::strbuf(a, 512)
+  mut b := rt::strbuf(a, 768)
   k0 := rt::push_str(b, "Usage: alatyr <command> [options]\n\nCommands:\n")
   k1 := rt::push_str(b, "  new      create a package\n")
   k2 := rt::push_str(b, "  build    build a package\n")
@@ -4124,7 +4124,10 @@ cli_help := fn(in out a : rt::Arena, fd : usize, status : usize) -> usize {
   k4 := rt::push_str(b, "  test     build and run package tests\n")
   k5 := rt::push_str(b, "  check    type-check a package\n")
   k6 := rt::push_str(b, "  plan     write a deterministic build plan\n")
-  k7 := rt::push_str(b, "  fmt      format package sources\n\n")
+  k7 := rt::push_str(b, "  fmt      format package sources\n")
+  ## D5 (`docs/ir.md` §8, owner decision on #786): a dev surface is a CLI verb listed here, never an
+  ## environment switch (Codegen §3.1).
+  k9 := rt::push_str(b, "  ir       report the shared IR builder's answer per function (dev)\n\n")
   k8 := rt::push_str(b, "Run program arguments after `--`: alatyr run <program> -- <args>\n")
   kf := diag_flush(b, fd)
   if kf != 0 { return kf }
@@ -5557,7 +5560,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## modes: 0 = emit GAS to stdout; 1 = build to `<out>` (`-o`); 2 = build to a temp exe + run it;
   ## 3 = check (type-check only); 4 = new (scaffold a pkg); 5 = test (build a @test runner + run it);
   ## 6 = build (manifest-driven: artifact → `<target_dir>/<output>`, the spec `alatyr build`);
-  ## 12 = plan (manifest configuration/resolution only, deterministic plan.tsv)
+  ## 12 = plan (manifest configuration/resolution only, deterministic plan.tsv); 13 = ir (the shared
+  ## IR dev verb, `docs/ir.md` slice 0a)
   mut mode := 0
   mut oi := 0
   mut fi := 1
@@ -5579,6 +5583,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     if a1 == "riscv64" { mode = 9; fi = 2 }
     if a1 == "fmt" { mode = 10; fi = 2 }
     if a1 == "selftest-regalloc" { mode = 11; fi = 2 }
+    if a1 == "ir" { mode = 13; fi = 2 }
   }
   if n >= 4 {
     if arg_at(cmd, 1) == "-o" { mode = 1; oi = 2; fi = 3 }
@@ -5683,6 +5688,44 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     fsblen := fsb.len
     d := rt::sb_flush(fsb, 1)
     return flush_status(d, fsblen)
+  }
+  if mode == 13 {
+    ## (`docs/ir.md` slice 0a) the shared IR's dev verb: `ir <file.al>` prints the builder's answer for
+    ## every function the twins' front half hands it; `ir --modules <file.al>...` does the same over a
+    ## raw module list (no ambient closure, no prune, no check — the census's `lib/`/`src/` rows);
+    ## `ir --self-test` builds, verifies and prints IR by hand and plants one violation per verifier
+    ## rule. Exit status: the self-test's failure count, else the emit-dump status.
+    if n < 3 { return cli_config_diag(a, "ir requires a source file, --modules <files>, or --self-test") }
+    iv := arg_at(cmd, 2)
+    if iv == "--self-test" { return ir::self_test(a) }
+    if iv == "--modules" {
+      if n < 4 { return cli_config_diag(a, "ir --modules requires at least one source file") }
+      mut mlen := 0
+      mut mi := 3
+      while mi < n { ml := arg_at(cmd, mi); mlen = mlen + ml.len + 1; mi += 1 }
+      mut mb := rt::strbuf(a, mlen + 16)
+      mi = 3
+      while mi < n {
+        mp := arg_at(cmd, mi)
+        km := rt::push_str(mb, mp)
+        kn := rt::push_byte(mb, 10)
+        mi += 1
+      }
+      mpaths := str_at(mb.data, mb.len)
+      mut msb := driver::compile_files_ir_raw(mpaths, a)
+      msblen := msb.len
+      dm := rt::sb_flush(msb, 1)
+      return emit_dump_status(dm, msblen)
+    }
+    ipath := arg_at(cmd, fi)
+    ## The same check-before-emit contract as the three twin emit verbs: an ill-typed program is
+    ## refused with its located diagnostic before the builder sees it.
+    isbc := driver::check_file_emit(ipath, a)
+    if isbc != 0 { return isbc }
+    mut isb := driver::compile_file_ir(ipath, a)
+    isblen := isb.len
+    di := rt::sb_flush(isb, 1)
+    return emit_dump_status(di, isblen)
   }
   if mode == 11 {
     ## (register allocator, COMMIT 1): run the DORMANT linear-scan allocator's self-test
