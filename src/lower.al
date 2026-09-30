@@ -12835,6 +12835,78 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
   found
 }
 
+## #683 — the emit twins' USER-CONVERSION dispatch (Types §4.6 / TYP-6). The twins resolve a callee
+## by NAME, and a `T(v)` whose `T` is only a @convert TARGET names no fn: aarch64 / riscv64 / wasm
+## trapped at `Celsius(42)` ("undefined/builtin callee"), and a BUILTIN target over an aggregate —
+## `u64(c)` with an in-scope `@convert fn(c : Celsius) -> u64` — read the operand as a scalar: wasm
+## answered the struct's ADDRESS. The twins' front end (`driver::d_desugar_convert`) renames such a
+## call to the @convert's own name before emission; this answers WHICH decl, by x86_64's rules:
+##   * a NON-builtin target `T` resolves through `convert_callee_idx` (a brand or a builtin name never
+##     does), and only when no fn is itself named `T` — the regular callee wins, as on x86_64;
+##   * a BUILTIN target resolves through `convert_callee_idx_incl_builtin`, and only for an operand
+##     that is a provable AGGREGATE (`twin_operand_aggregate`), so `u64(5)` stays the scalar lattice.
+## -1 = not a user conversion; the call is left exactly as it was.
+pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, a0 : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt)) -> i64 {
+  if nargs != 1 or unchecked bitcast(usize, a0) == 0 { return 0 - 1 }
+  if conv_kind(str_at((src + cs), cl)) < 0 {
+    cnt := rt::vec_len(deref(decls))
+    mut i := 0
+    while i < cnt {
+      d := deref(decl_get(decls, i))
+      if d.is_fn and streq(src, d.name_start, d.name_len, cs, cl) { return 0 - 1 }
+      i += 1
+    }
+    return convert_callee_idx(decls, src, cs, cl)
+  }
+  if twin_operand_aggregate(a0, params_head, body_head, decls, src) == false { return 0 - 1 }
+  convert_callee_idx_incl_builtin(decls, src, cs, cl)
+}
+
+## Is the type span `[ts, ts+tl)` a named struct/enum or a tuple? (The twins' aggregate operand test.)
+twin_type_is_aggregate := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> bool {
+  if tl == 0 { return false }
+  if str_at((src + ts), 1) == "(" { return true }
+  bn := base_type_name(src, ts, tl)
+  if bn.n == 0 { return false }
+  struct_decl_of(decls, src, bn.s, bn.n) >= 0 or enum_decl_of(decls, src, bn.s, bn.n) >= 0
+}
+
+## Is the conversion operand `e` PROVABLY an aggregate — the shapes x86_64's `agg_op` test proves
+## without a slot table: a struct / enum / array-or-tuple LITERAL, a PARAMETER whose declared type is a
+## named struct/enum or a tuple, or a flat LOCAL whose annotation is, or whose unannotated initializer
+## is such a literal. Anything else answers false and keeps its previous lowering.
+twin_operand_aggregate := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8)) -> bool {
+  if array_lit_info(e).is_a or struct_lit_info(e).is_s or enum_lit_info(e).is_e { return true }
+  vn := var_name_span(e)
+  if vn.n == 0 { return false }
+  mut p := params_head
+  while p != 0 {
+    pm := deref(param_p(p))
+    if streq(src, pm.ns, pm.nl, vn.s, vn.n) {
+      if lower_layout::param_tuple_open_at(src, pm.ns, pm.nl) >= 0 { return true }
+      return twin_type_is_aggregate(decls, src, pm.ts, pm.tl)
+    }
+    p = pm.next
+  }
+  d := lower_layout::local_decl_assign(body_head, src, vn.s, vn.n)
+  mut r := false
+  if unchecked bitcast(usize, d) != 0 {
+    st := deref(stmt_p(Stmt, d))
+    match st {
+      Stmt::Assign(ans, anl, v, nx) => {
+        an := lower_ctx::ann_span(src, ans, anl)
+        if an.n != 0 { r = twin_type_is_aggregate(decls, src, an.s, an.n) }
+        else { r = array_lit_info(v).is_a or struct_lit_info(v).is_s or enum_lit_info(v).is_e }
+      }
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+    }
+  }
+  r
+}
+
 ## The kind-1 decl index a `Call`'s tail name resolves to, PREFERRING a param arity matching the
 ## call's `nargs` (else the last same-name decl) — so the `*_ret_call` classifiers below pick the
 ## SAME overload the call dispatches to (`option::map`/4 vs `result::map`/5 vs `vec::map`/5), rather

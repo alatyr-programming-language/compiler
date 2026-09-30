@@ -2039,6 +2039,66 @@ d_elide_alloc_stmts := fn(head : ptr(mut Stmt), amb : usize, decls : rt::Vec, na
   }
 }
 
+## ---- USER CONVERSIONS on the emit twins (Types §4.6 / TYP-6, #683) ------------------------------
+## x86_64 dispatches a `T(v)` whose `T` is a @convert TARGET inside its own lowering. The three twins
+## resolve a callee by NAME only, so they trapped at `Celsius(42)` and read `u64(c)` over a struct as
+## a scalar (wasm answered the struct's address). This pass renames every such call, in place, to the
+## @convert fn's own name; `lower::twin_convert_callee` decides which calls and which decl, by x86_64's
+## rules. It walks the same statement/expression shapes as `d_elide_alloc_*` above.
+d_desugar_convert := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut i := 0
+  while i < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d.is_fn { d_convert_stmts(d.body_stmts, d.params_head, d.body_stmts, decls, na, src) }
+    i = i + 1
+  }
+}
+d_convert_expr := fn(e : ptr(Expr), ph : ptr(mut Param), bh : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  match deref(e) {
+    Expr::Bin(op, l, r) => { d_convert_expr(l, ph, bh, decls, na, src); d_convert_expr(r, ph, bh, decls, na, src) }
+    Expr::Unchecked(inner) => { d_convert_expr(inner, ph, bh, decls, na, src) }
+    Expr::Try(inner) => { d_convert_expr(inner, ph, bh, decls, na, src) }
+    Expr::AddrOf(inner) => { d_convert_expr(inner, ph, bh, decls, na, src) }
+    Expr::If(c, th, el) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_expr(th, ph, bh, decls, na, src); d_convert_expr(el, ph, bh, decls, na, src) }
+    Expr::Call(cs, cl, nargs, ah) => {
+      mut g := ah
+      while g != 0 { ga := deref(arg_p(g)); d_convert_expr(ga.e, ph, bh, decls, na, src); g = ga.next }
+      mut a0 := unchecked bitcast(ptr(Expr), 0)
+      if ah != 0 { a0 = deref(arg_p(ah)).e }
+      mut dv := decls
+      ci := lower::twin_convert_callee(ptr(dv), src, cs, cl, nargs, a0, ph, bh)
+      if ci >= 0 {
+        cd := deref(decl_at(Decl, rt::vec_get(decls, usize(ci))))
+        deref(unchecked bitcast(ptr(mut Expr), e)) = Expr.Call(cd.name_start, cd.name_len, nargs, ah)
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+}
+d_convert_stmts := fn(head : ptr(mut Stmt), ph : ptr(mut Param), bh : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut st := head
+  while st != 0 {
+    x := deref(stmt_p(Stmt, st))
+    match x {
+      Stmt::Assign(ns, nl, v, nx) => { d_convert_expr(v, ph, bh, decls, na, src) }
+      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_convert_expr(rv, ph, bh, decls, na, src) } }
+      Stmt::ExprStmt(e, nx) => { d_convert_expr(e, ph, bh, decls, na, src) }
+      Stmt::If(c, th, el, nx) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_stmts(th, ph, bh, decls, na, src); d_convert_stmts(el, ph, bh, decls, na, src) }
+      Stmt::While(c, b, nx) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_stmts(b, ph, bh, decls, na, src) }
+      Stmt::Loop(b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_convert_expr(lo, ph, bh, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_convert_expr(hi, ph, bh, decls, na, src) }; d_convert_stmts(b, ph, bh, decls, na, src) }
+      Stmt::Unchecked(b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
+      Stmt::AllocWith(ae, b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
+      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+    }
+    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
+  }
+}
+
 ## ---- ITERATOR-DRIVEN `for` (Control Flow §6, Stdlib appendix §2.4) ----------------------------
 ## Control Flow §6 binds `for x in iter { … }` to the "structural iterator protocol … defined in the
 ## Stdlib appendix §2.4", and §2.4 fixes the two admitted shapes: a type is an **iterator** when it
@@ -6115,6 +6175,10 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## §5.1 fill omitted trailing parameter-defaults (same filler the x86_64 emit runs) so defaults are
   ## uniform across backends. No-op for a program with no defaults.
   lower::fill_program(ptr(decls), base, ptr(na))
+  ## #683 — user conversions (`T(v)` through a `@convert fn(U) -> T`) are renamed to the @convert's
+  ## own callee here, BEFORE the prune below walks callees by name, so the three twins emit them as
+  ## ordinary calls. See `d_desugar_convert`.
+  if backend == 0 or backend == 1 or backend == 2 { d_desugar_convert(decls, ptr(na), base) }
   ## Resolve `mod::fn` / `alias::fn` callees to the target decl's BARE name and prune the injected
   ## `lib/` closure to what the program reaches — without this the module-unaware backends cannot use
   ## any of the decls this front end just supplied. A single-module compile (nothing injected) skips

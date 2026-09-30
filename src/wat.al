@@ -8196,7 +8196,9 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## memory over the SAME (already-gated) decl set and cannot disagree about an offset.
   apply_when_guards(decls, src, wat_target_arch())
   push_str(sb, "(module\n")
-  push_str(sb, "  (import \"wasi_snapshot_preview1\" \"proc_exit\" (func $proc_exit (param i32)))\n")
+  ## `proc_exit` is imported under `$__wasi_proc_exit`; `$proc_exit` is the masking wrapper appended
+  ## LAST (see the end of this function for why it exists and why it is last).
+  push_str(sb, "  (import \"wasi_snapshot_preview1\" \"proc_exit\" (func $__wasi_proc_exit (param i32)))\n")
   push_str(sb, "  (import \"wasi_snapshot_preview1\" \"fd_write\" (func $fd_write (param i32 i32 i32 i32) (result i32)))\n")
   ## `@extern("sym")` FFI imports (Modules §7.2) — MUST precede every definition (the WASM
   ## abbreviated-import rule). A bodyless `name := @extern("sym") fn(…)` becomes an imported func
@@ -8369,5 +8371,17 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
     push_str(sb, "    (global.set $__istart (local.get $p))\n")
     push_str(sb, "    (i32.sub (i32.const 40) (local.get $p)))\n")
   }
+  ## $proc_exit: the exit status is main's result MODULO 256, as the kernel delivers it on x86_64,
+  ## aarch64 and riscv64 (it keeps the low byte of `exit`'s argument). Passing the whole wrapped word
+  ## to WASI `proc_exit` made wasmtime refuse every status outside [0..126) with `exit 1` and a
+  ## diagnostic: a program x86_64 answers 42 for (`unchecked { 0 - 214 }`) failed LOUD on wasm, and a
+  ## WRONG value above 125 hid behind the same message (#683 — `u64(c)` over a struct answered the
+  ## struct's address). Statuses 126..255 still reach wasmtime, which still refuses them loudly.
+  ##
+  ## Why a WRAPPER, and why LAST: `_start`'s line is echoed verbatim by every wat2wasm diagnostic that
+  ## lands on it (230 corpus rows: a package root has no `$main`), and code emitted before this point
+  ## keeps its function indices and offsets only if nothing is inserted ahead of it — the same
+  ## measurement that put `$__itoa_s` at the end. So `_start` is byte-identical and the mask lives here.
+  push_str(sb, "  (func $proc_exit (param $c i32) (call $__wasi_proc_exit (i32.and (local.get $c) (i32.const 255))))\n")
   push_str(sb, ")\n")
 }
