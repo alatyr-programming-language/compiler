@@ -17,12 +17,5 @@
 #            places to clean up when the row is retired.
 #
 # name	state	due	issue	sites
-try_inline_multiword	seed	42	#752	scripts/strict_forms_check.sh:try-inline rule; .agents/skills/alatyr-lane/strict_forms.md §7
-option_ptr_payload_field	seed	42	#768	.agents/skills/alatyr-lane/strict_forms.md §1 (bind the deref to an annotated local)
-option_ptr_mut_generic	seed	42	#770	.agents/skills/alatyr-lane/strict_forms.md §1 (no generic instance over ptr(mut T))
-option_ptr_local_forms	seed	42	#775	.agents/skills/alatyr-lane/strict_forms.md §1 (annotate the Option(ptr(T)) local)
-option_ptr_param_match	seed	42	#789	every `## null-ok:` marker that names this row; .agents/skills/alatyr-lane/strict_forms.md §1
-option_ptr_list_walk	seed	42	#789	every `## null-ok:` marker that names this row; .agents/skills/alatyr-lane/strict_forms.md §1
-option_ptr_bare_some_arg	seed	42	#789	.agents/skills/alatyr-lane/strict_forms.md §1 (spell the constructor out)
 enum_copy_two_derefs	tree	42	#790	src/ast.al:bitcast_identity_erase (word-by-word copy)
 call_result_enum_field_arg	tree	42	#791	src/sema.al:resolve_kind (result bound before the field is read)

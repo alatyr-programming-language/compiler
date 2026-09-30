@@ -115,8 +115,9 @@ around it.
    "poisoned" (#659, #681). The target form is `Option(ptr(T))` (one word, niche-folded) walked with
    `match`, or `Option(u64)`. An explicit `unchecked bitcast(usize, p) != 0` only makes the null
    visible. It is a transitional form, allowed only where the typed form cannot be compiled yet, and
-   its `null-ok` reason names the blocker: today a seed promotion (§8 registry rows) and the open
-   array-of-`Option(ptr(T))` element defect. Held by the `null` rule of
+   its `null-ok` reason names the blocking issue: today #809 (a direct `match` over such a field
+   through `deref(p)` or an array element) and #792 (an enum or `Option` field read through
+   `deref(p)`). The tree and seed 0.2.5 compile the walk itself. Held by the `null` rule of
    `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`) forms together.
 2. **A kind is an enum, and flags are separate fields.** Do not compare a `kind`/`tag` with a literal,
    and do not pack a flag into a tag byte (`+128`) (#583, #626). Held by `kind-literal`.
@@ -128,8 +129,9 @@ around it.
    them from the form of an operand (#546, #608, #764–#766). Held by review.
 6. **`unchecked` is explicit and justified.** No implicit `usize` ↔ `ptr(T)` (#529, Types §4.3). Held by
    `unchecked` (marker `unchecked-ok`) and the typed `ptrint` rule (no marker: write it explicitly).
-7. **Bind a `?` before using its value** (`x := f()?`), never `f()?.a` or `g(f()?)` (#752; the seed
-   predates the fix for the inline form). Held by `try-inline`.
+7. **Bind a `?` before using its value** (`x := f()?`), never `f()?.a` or `g(f()?)` (#752). Seed
+   0.2.5 compiles the inline form correctly, so the rule now stands for readability alone. Held by
+   `try-inline`.
 8. **Do not write the forms the frozen seed miscompiles.** Each one is a row of `scripts/seed_forms.tsv`
    with a planted program the seed must still miscompile and the tree must run correctly, and a
    comment at its workaround site. A new workaround adds a row. Held by `scripts/seed_forms_check.sh`,
