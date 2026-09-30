@@ -2541,6 +2541,28 @@ pub shift_width_bits := fn(nw : str) -> i64 {
   i64(w) * 8
 }
 
+## Is parameter `idx` of the parameter list `params` (a callee's `params_head`, as the emit twins carry
+## it) declared as a named STRUCT or ENUM — i.e. passed BY REFERENCE? An `xs[i]` argument to such a
+## parameter must hand over the ELEMENT's address, not its first word (#683: aarch64 and riscv64 passed
+## word 0 of `ps[0]` as the pointer and the callee dereferenced 1 — SIGSEGV).
+pub callee_param_is_aggregate := fn(decls : ptr(rt::Vec), src : ptr(u8), params : usize, idx : i64) -> bool {
+  ## unchecked-ok: the emit twins carry a callee's `params_head` as a usize word; it was a ptr(mut Param)
+  mut p := unchecked bitcast(ptr(mut Param), params)
+  mut i := 0
+  ## null-ok: Param.next — a parameter list ends in a null link (ast.al)
+  while unchecked bitcast(usize, p) != 0 {
+    pm := deref(param_p(p))
+    if i == idx {
+      bn := base_type_name(src, pm.ts, pm.tl)
+      if bn.n == 0 { return false }
+      return struct_decl_of(decls, src, bn.s, bn.n) >= 0 or enum_decl_of(decls, src, bn.s, bn.n) >= 0
+    }
+    i += 1
+    p = pm.next
+  }
+  false
+}
+
 ## ─── The NESTED-BLOCK annotation scan (#651) ──────────────────────────────
 ##
 ## `local_decl_assign` above is deliberately FLAT, and every backend-local type recovery built on it

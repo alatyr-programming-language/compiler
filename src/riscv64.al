@@ -4591,7 +4591,12 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
               issretarg := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and rv_call_ret_sret_span(ga.e, decls, src, a).n != 0
               isesretarg := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and rv_call_ret_enum_sret_span(ga.e, decls, src, a).n != 0
               gislice := gavnl != 0 and is_slice_local(body_head, src, gavns, gavnl, a)
-              isaggref := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and (not isesretarg) and (gisarr or gisstruct or gislice)
+              ## an ENUM LOCAL is by-reference too (the instance's enum param slot holds a POINTER to the
+              ## {disc, payload…} block). riscv64 lacked the aarch64 generic branch's `gisenum`, so the
+              ## local's word 0 — the DISCRIMINANT — went down as the pointer and the instance
+              ## dereferenced it: SIGSEGV on `eq(E, a5, a5)` (comptime_enum_eq, #683).
+              gisenum := (not gisarr) and (not gisstruct) and (not gislice) and gavnl != 0 and rv_local_enum_nl(body_head, src, gavns, gavnl, a) != 0
+              isaggref := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and (not isesretarg) and (gisarr or gisstruct or gislice or gisenum)
               isplain := (not isslit) and (not iselit) and (not iscallret) and (not isenumret) and (not issretarg) and (not isesretarg) and (not isaggref)
               if isslit { emit_rv_aggval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
               if iselit { emit_rv_enumval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
@@ -4898,7 +4903,15 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
             if issretarg { emit_rv_sretcall_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
             if isesretarg { emit_rv_enumsret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
             if isagg and aoff >= 0 { push_str(sb, "  addi a0, s0, ") ; push_int(sb, aoff) ; push_str(sb, "\n") }
-            if (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and (not (isagg and aoff >= 0)) { emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+            ## an AGGREGATE ARRAY ELEMENT `ps[i]` to a by-reference struct/enum parameter: pass the
+            ## element's ADDRESS (#683) — it fell to the scalar path, loaded word 0, and the callee
+            ## dereferenced it (SIGSEGV). An unresolvable base stays a located trap.
+            isaggelem := ex_is_index(ga.e) and lower_layout::callee_param_is_aggregate(decls, src, cparams, gidx)
+            if isaggelem {
+              if rv_place_ok(ga.e, body_head, src, params_head, pcount, a, decls) { emit_rv_place_addr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              else { push_str(sb, "  ebreak # aggregate array-element argument: element address not resolvable\n") }
+            }
+            if (not isaggelem) and (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and (not (isagg and aoff >= 0)) { emit_rv_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
           }
           push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
           gidx += 1
