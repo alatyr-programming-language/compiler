@@ -4474,33 +4474,44 @@ scalar_pat := fn(w : u8, vs : usize, vl : usize) -> ScalarPat {
   ScalarPat.PatOther
 }
 
-## Issue #788 — the finite value range `[lo, hi]` of an integer scrutinee whose WIDTH NAME
-## (`tns`/`tnl`) is `u8`, `i8`, `u16`, `i16`, `u32` or `i32` — the widths an `i64` holds. `finite ==
-## false` for `u64`/`usize`/`i64`/`isize`/`u128`/`i128` and for a width the caller could not recover.
-ScalarDom := struct { finite : bool, lo : i64, hi : i64 }
+## Issue #788 / #805 — the value range `[lo, hi]` of an integer scrutinee, by its WIDTH NAME
+## (`tns`/`tnl`). A pattern's `lit`/`hi` are `i64` words, so a 64-bit UNSIGNED width (`u64`, and
+## `usize`, one 64-bit word on every surface this compiler emits) is swept in a KEY space where `x`
+## maps to `x ^ i64::MIN`: that order-preserving flip puts `[0, 2^64 - 1]` on `[i64::MIN, i64::MAX]`
+## (`unsigned64`). `finite == false` for `u128`/`i128`, for `char` (Types §2 leaves its maximum open:
+## a code point, `u32`-shaped) and for a width the caller could not recover.
+ScalarDom := struct { finite : bool, lo : i64, hi : i64, unsigned64 : bool }
 scalar_int_dom := fn(tns : usize, tnl : usize, src : ptr(u8)) -> ScalarDom {
-  if tnl == 0 { return ScalarDom(finite = false, lo = 0, hi = 0) }
+  if tnl == 0 { return ScalarDom(finite = false, lo = 0, hi = 0, unsigned64 = false) }
   w := str_at((src + tns), tnl)
-  if w == "u8" { return ScalarDom(finite = true, lo = 0, hi = 255) }
-  if w == "i8" { return ScalarDom(finite = true, lo = 0 - 128, hi = 127) }
-  if w == "u16" { return ScalarDom(finite = true, lo = 0, hi = 65535) }
-  if w == "i16" { return ScalarDom(finite = true, lo = 0 - 32768, hi = 32767) }
-  if w == "u32" { return ScalarDom(finite = true, lo = 0, hi = 4294967295) }
-  if w == "i32" { return ScalarDom(finite = true, lo = 0 - 2147483648, hi = 2147483647) }
-  ScalarDom(finite = false, lo = 0, hi = 0)
+  if w == "u8" { return ScalarDom(finite = true, lo = 0, hi = 255, unsigned64 = false) }
+  if w == "i8" { return ScalarDom(finite = true, lo = 0 - 128, hi = 127, unsigned64 = false) }
+  if w == "u16" { return ScalarDom(finite = true, lo = 0, hi = 65535, unsigned64 = false) }
+  if w == "i16" { return ScalarDom(finite = true, lo = 0 - 32768, hi = 32767, unsigned64 = false) }
+  if w == "u32" { return ScalarDom(finite = true, lo = 0, hi = 4294967295, unsigned64 = false) }
+  if w == "i32" { return ScalarDom(finite = true, lo = 0 - 2147483648, hi = 2147483647, unsigned64 = false) }
+  if w == "i64" or w == "isize" { return ScalarDom(finite = true, lo = i64_min_key(), hi = i64_max_key(), unsigned64 = false) }
+  if w == "u64" or w == "usize" { return ScalarDom(finite = true, lo = i64_min_key(), hi = i64_max_key(), unsigned64 = true) }
+  ScalarDom(finite = false, lo = 0, hi = 0, unsigned64 = false)
+}
+## The two ends of the `i64` sweep-key range.
+i64_min_key := fn() -> i64 { 0 - 9223372036854775807 - 1 }
+i64_max_key := fn() -> i64 { 9223372036854775807 }
+## Issue #805 — a pattern value's position in `dom`'s sweep order (see `scalar_int_dom`).
+scalar_key := fn(x : i64, dom : ScalarDom) -> i64 {
+  if dom.unsigned64 { return x ^ i64_min_key() }
+  x
 }
 
 ## SCALAR match exhaustiveness (Control Flow §5.1/§5.4): does the arm list leave a value of the
 ## scrutinee's type uncovered? Returns true = a provable gap with no `_` (→ a compile error). Coverage
 ## combines integer and `true`/`false` literals (an OR-pattern is already one arm per alternative) and
 ## ranges (`lit` = lo, `hi` = hi).
-##   * a finite domain (`bool`, `scalar_int_dom`): the arms are swept over `[lo, hi]`, one covered run
-##     at a time, so the cost is the arm count squared and never the domain size.
-##   * any other integer (`u64`, `usize`, or a width the caller could not recover): a LITERAL-ONLY arm
+##   * a finite domain (`bool`, `scalar_int_dom`): the arms are swept over `[lo, hi]` in key order, one
+##     covered run at a time, so the cost is the arm count squared and never the domain size.
+##   * any other integer (`char`, `u128`, or a width the caller could not recover): a LITERAL-ONLY arm
 ##     list is decided without the width — every integer type has at least 256 values, so fewer than
-##     256 literal arms leave one uncovered (issue #788: `match n { 0 => …; 1 => … }` fell through). A
-##     range there is not decided (fail-open, as before #788), since `u64`'s maximum is outside `lit`'s
-##     `i64`.
+##     256 literal arms leave one uncovered (issue #788). A range there is not decided (fail-open).
 ## Fail-OPEN (false) for a `_` arm (exhaustive by §5.1) and for any variant / str / comptime arm — the
 ## same never-false-reject discipline as the enum check.
 scalar_coverage_gap := fn(head : ptr(mut Arm), tag : TyKind, tns : usize, tnl : usize, src : ptr(u8)) -> bool {
@@ -4521,9 +4532,9 @@ scalar_coverage_gap := fn(head : ptr(mut Arm), tag : TyKind, tns : usize, tnl : 
     arm = am.next
   }
   if has_wild or not all_simple { return false }
-  mut dom := ScalarDom(finite = false, lo = 0, hi = 0)
+  mut dom := ScalarDom(finite = false, lo = 0, hi = 0, unsigned64 = false)
   match tag {
-    TyBool => { dom = ScalarDom(finite = true, lo = 0, hi = 1) }
+    TyBool => { dom = ScalarDom(finite = true, lo = 0, hi = 1, unsigned64 = false) }
     TyInt => { dom = scalar_int_dom(tns, tnl, src) }
     TyUnknown | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum
       | TyWrapper | TyTupleMark | TyOther => {}
@@ -4532,37 +4543,49 @@ scalar_coverage_gap := fn(head : ptr(mut Arm), tag : TyKind, tns : usize, tnl : 
     if has_range or not kind_is_int(tag) { return false }
     return nlit < 256
   }
-  ## Sweep: from the lowest value not yet known covered, take the furthest value any arm covering it
-  ## reaches; no such arm is a gap, and reaching `hi` is full coverage.
+  ## Sweep: from the lowest key not yet known covered (`v`), take the furthest key any arm covering it
+  ## reaches; no such arm is a gap, and reaching `hi` is full coverage. Every step stays inside
+  ## `[lo, hi]`, so no key arithmetic can leave the `i64` range.
   mut v : i64 = dom.lo
   mut gap := false
   mut done := false
   while not done {
-    mut reach : i64 = v - 1
+    mut covered := false
+    mut reach : i64 = v
     mut a2 := head
     ## null-ok: Arm.next — a `match`'s arm list ends in a null link (ast.al "0 = end")
     while unchecked bitcast(usize, a2) != 0 {
       m := deref(arm_p(a2))
-      mut top : i64 = v - 1
+      klo := scalar_key(m.lit, dom)
+      khi := scalar_key(m.hi, dom)
       match scalar_pat(m.wild, m.vs, m.vl) {
-        PatLit => { if m.lit == v { top = v } }
-        PatHalfOpen => { if m.lit <= v and v < m.hi { top = m.hi - 1 } }
-        PatInclusive => { if m.lit <= v and v <= m.hi { top = m.hi } }
+        PatLit => { if klo == v { covered = true } }
+        PatHalfOpen => {
+          if klo <= v and v < khi {
+            covered = true
+            if khi - 1 > reach { reach = khi - 1 }
+          }
+        }
+        PatInclusive => {
+          if klo <= v and v <= khi {
+            covered = true
+            if khi > reach { reach = khi }
+          }
+        }
         PatWild | PatVariant | PatOther => {}
       }
-      if top > reach { reach = top }
       a2 = m.next
     }
-    if reach < v { gap = true ; done = true }
+    if not covered { gap = true ; done = true }
     else if reach >= dom.hi { done = true }
     else { v = reach + 1 }
   }
   gap
 }
 
-## Issue #788 — the integer WIDTH NAME at the head of a type annotation span (`u8`, `i16`, …), else
-## empty. The span may run past the type (a parameter's recovered annotation continues to `)`), so
-## only the leading identifier is read.
+## Issue #788 / #805 — the integer WIDTH NAME at the head of a type annotation span (`u8`, `i16`,
+## `char`, …), else empty. The span may run past the type (a parameter's recovered annotation
+## continues to `)`), so only the leading identifier is read.
 sema_int_width_name := fn(src : ptr(u8), s : usize, n : usize) -> VSpan {
   mut e := s
   mut going := n != 0
@@ -4570,27 +4593,90 @@ sema_int_width_name := fn(src : ptr(u8), s : usize, n : usize) -> VSpan {
     c := bytes(str_at((src + e), 1))[0]
     if (c >= 97 and c <= 122) or (c >= 48 and c <= 57) { e += 1 } else { going = false }
   }
-  if e == s or not comptime_integer_type_name(src, s, e - s) { return VSpan(s = 0, n = 0) }
+  if e == s { return VSpan(s = 0, n = 0) }
+  ## `char` is a scalar scrutinee type too (Control Flow §5.4), an integer-shaped code point.
+  if not comptime_integer_type_name(src, s, e - s) and str_at((src + s), e - s) != "char" { return VSpan(s = 0, n = 0) }
   VSpan(s = s, n = e - s)
 }
 
-## Issue #788 — the ELEMENT type span of `xs[i]` read from the DECLARATION of the local or parameter
-## `xs` (`xs : [T; N]`), else empty. A parameter records no array type of its own, so this reads the
-## annotation the way `sema_direct_index_elem_ty` reads a `Slice(T)` one.
-sema_index_elem_ann := fn(sc : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> VSpan {
-  ixv := expr_index_base_var(sc)
-  if ixv.n == 0 or nloc == 0 or not local_in(locals, nloc, src, ixv.s, ixv.n) { return VSpan(s = 0, n = 0) }
-  lc := local_at(locals, nloc, src, ixv.s, ixv.n)
+## Issue #788 / #805 — the ELEMENT type span of an `xs[i]` scrutinee, else empty, read from where the
+## array's type is declared: the local's or parameter's own `[T; N]` annotation (a parameter records
+## no array type of its own), the `[T; N]` an unannotated `ys := xs` recorded from `xs` (#805), or a
+## struct field's declared `[T; N]` for `h.arr[i]` (#805).
+sema_index_elem_ann := fn(sc : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+  match deref(sc) {
+    Expr::Index(base, ix) => { sema_array_value_elem_span(base, decls, src, locals, nloc, a) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
+  }
+}
+## Issue #805 — the element type span of an ARRAY-valued expression `base`: a local or parameter
+## (`sema_local_array_ann`), or a struct field read whose declared type is a fixed array.
+sema_array_value_elem_span := fn(base : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+  bv := expr_var_span(base)
+  if bv.n != 0 {
+    la := sema_local_array_ann(bv, src, locals, nloc)
+    if la.n == 0 { return VSpan(s = 0, n = 0) }
+    return array_elem_span(src, la.s, la.n)
+  }
+  fa := sema_field_array_ann(base, decls, src, locals, nloc, a)
+  if fa.n == 0 { return VSpan(s = 0, n = 0) }
+  array_elem_span(src, fa.s, fa.n)
+}
+## Issue #805 — the declared type span of a struct FIELD read `b.f`, else empty. The owner struct is
+## resolved as the enum scrutinee's field branch resolves it (`sema_struct_owner_span`, then a
+## `deref(<pointer>)` base).
+sema_field_array_ann := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+  match deref(e) {
+    Expr::Field(fb, ffs, ffl) => { sema_field_decl_ann(fb, ffs, ffl, decls, src, locals, nloc, a) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
+  }
+}
+sema_field_decl_ann := fn(fb : ptr(Expr), fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+  ncnt := rt::vec_len(deref(decls))
+  mut owner := sema_struct_owner_span(fb, decls, ncnt, src, locals, nloc, a)
+  if owner.n == 0 { owner = sema_deref_struct_owner(fb, decls, src, locals, nloc) }
+  if owner.n == 0 { return VSpan(s = 0, n = 0) }
+  sema_field_ann_span(decls, ncnt, src, owner.s, owner.n, fs, fl, a)
+}
+## Issue #805 — the fixed-array type span `[T; N]` a local or parameter named by `v` is declared
+## with, else empty: its own annotation (trimmed to the closing `]`, since a parameter's recovered
+## annotation runs on to the `)`), or, for an unannotated local, the array type it recorded.
+sema_local_array_ann := fn(v : VSpan, src : ptr(u8), locals : ptr(LVec), nloc : usize) -> VSpan {
+  if nloc == 0 or not local_in(locals, nloc, src, v.s, v.n) { return VSpan(s = 0, n = 0) }
+  lc := local_at(locals, nloc, src, v.s, v.n)
   ann := local_type_span(src, lc.ns, lc.nl)
-  if ann.n == 0 { return VSpan(s = 0, n = 0) }
-  array_elem_span(src, ann.s, ann.n)
+  if ann.n != 0 { return sema_bracket_span(src, ann.s, ann.n) }
+  if kind_is_array(kind_of_tag(tag_unflag(lc.tag))) and lc.tnl != 0 { return sema_bracket_span(src, lc.tns, lc.tnl) }
+  VSpan(s = 0, n = 0)
+}
+## Issue #805 — the `[ … ]` span at the head of `[s, s+n)`, bracket-balanced, else empty.
+sema_bracket_span := fn(src : ptr(u8), s : usize, n : usize) -> VSpan {
+  if n == 0 or str_at((src + s), 1) != "[" { return VSpan(s = 0, n = 0) }
+  mut depth := 0
+  mut p := s
+  while p < s + n {
+    c := str_at((src + p), 1)
+    if c == "[" { depth += 1 }
+    if c == "]" {
+      depth -= 1
+      if depth == 0 { return VSpan(s = s, n = p + 1 - s) }
+    }
+    p += 1
+  }
+  VSpan(s = 0, n = 0)
 }
 
 ## Issue #788 — the scalar type a `match` scrutinee is decided over, with its WIDTH NAME where the
 ## source spells one: a bare local's or parameter's declared annotation (`n : u8`, `k : i16`), an
 ## array element's declared element type (`xs : [u8; 4]`), else the recorded local type, else the
 ## checked scrutinee's kind with no width — enough for `bool`, and for an integer's literal-only arms.
-match_scrut_scalar_ty := fn(ck : TyKind, sc : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Ty {
+match_scrut_scalar_ty := fn(ck : TyKind, sc : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> Ty {
   sv := expr_var_span(sc)
   if sv.n != 0 and nloc != 0 and local_in(locals, nloc, src, sv.s, sv.n) {
     lc := local_at(locals, nloc, src, sv.s, sv.n)
@@ -4601,7 +4687,7 @@ match_scrut_scalar_ty := fn(ck : TyKind, sc : ptr(Expr), src : ptr(u8), locals :
     ltag : TyKind = lt.ty.kind
     if kind_is_int(ltag) or kind_is_bool(ltag) { return Ty(kind = ltag, ns = lt.ty.ns, nl = lt.ty.nl) }
   }
-  es := sema_index_elem_ann(sc, src, locals, nloc)
+  es := sema_index_elem_ann(sc, decls, src, locals, nloc, a)
   if es.n != 0 {
     ewn := sema_int_width_name(src, es.s, es.n)
     if ewn.n != 0 { return Ty(kind = TyKind.TyInt, ns = ewn.s, nl = ewn.n) }
@@ -6822,16 +6908,19 @@ match_scrut_enum_ty := fn(sc : ptr(Expr), decls : ptr(rt::Vec), upto : usize, sr
   ## (2b) Issue #788 — an ELEMENT `xs[i]` of a local or parameter `[E; N]` (or `Slice(E)`): the
   ## element type `sema_direct_index_elem_ty` already recovers for the index-store conformance check.
   ixv := expr_index_base_var(sc)
-  if ixv.n != 0 {
-    if nloc == 0 or not local_in(locals, nloc, src, ixv.s, ixv.n) { return unknown }
+  if ixv.n != 0 and nloc != 0 and local_in(locals, nloc, src, ixv.s, ixv.n) {
     et := sema_direct_index_elem_ty(src, local_at(locals, nloc, src, ixv.s, ixv.n), decls, ncnt)
     if kind_is_enum(et.kind) and et.nl != 0 { return Ty(kind = TyKind.TyEnum, ns = et.ns, nl = et.nl) }
-    ## A parameter `xs : [E; N]` records no array type; read its declared element type instead.
-    es := sema_index_elem_ann(sc, src, locals, nloc)
+  }
+  ## A parameter `xs : [E; N]`, an alias `ys := xs` and a field `h.arr` record no element type of
+  ## their own; read the declared element type (#805).
+  es := sema_index_elem_ann(sc, decls, src, locals, nloc, a)
+  if es.n != 0 {
     at := resolve_ty(src, es.s, es.n, decls, ncnt)
     if kind_is_enum(at.kind) and at.nl != 0 { return Ty(kind = TyKind.TyEnum, ns = at.ns, nl = at.nl) }
     return unknown
   }
+  if ixv.n != 0 { return unknown }
   ## (3) a struct FIELD read whose declared type is an enum.
   fsp := expr_field_span(sc)
   if fsp.n != 0 {
@@ -6898,10 +6987,18 @@ match_scrut_span := fn(sc : ptr(Expr), a : ptr(mut rt::Arena)) -> usize {
   if s0 != 0 { return s0 }
   inner := expr_deref_inner(sc)
   if unchecked bitcast(usize, inner) != 0 { return s_of(inner, a) }
-  ## Issue #788 — `s_of` has no span for an `Index` either; locate `xs[i]` on its array local.
-  ixv := expr_index_base_var(sc)
-  if ixv.n != 0 and not ast::span_is_synthetic(ixv.s) { return ixv.s }
-  0
+  ## Issue #788 / #805 — `s_of` has no span for an `Index` either; locate `xs[i]` / `h.arr[i]` on
+  ## its array operand.
+  match_index_base_span(sc, a)
+}
+match_index_base_span := fn(sc : ptr(Expr), a : ptr(mut rt::Arena)) -> usize {
+  match deref(sc) {
+    Expr::Index(base, ix) => { s_of(base, a) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+  }
 }
 
 ## Are ALL of a `match`'s arms plain variant patterns (no `_` wildcard / comptime / literal / range)?
@@ -8492,7 +8589,7 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       ## SCALAR exhaustiveness (§5.1/§5.4) for a VALUE match — the dual of `check_stmts`' statement
       ## match. Issue #788: decided from the checked scrutinee's type, so `match b { true => … }` and
       ## `match n { 0 => …; 1 => … }` no longer deliver 0 from a value no arm covers.
-      msty := match_scrut_scalar_ty(cs.kind, scrut, src, locals, nloc)
+      msty := match_scrut_scalar_ty(cs.kind, scrut, decls, src, locals, nloc, a)
       if (kind_is_int(msty.kind) or kind_is_bool(msty.kind)) and scalar_coverage_gap(head, msty.kind, msty.ns, msty.nl, src) {
         er := Result(Ty, CheckErr).Err(mismatch_err(match_scrut_span(scrut, a), 0))
         return er
@@ -11510,6 +11607,16 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## ANNOTATED-local conformance (both directions): `x : <scalar> = <aggregate>` or `x :
           ## <aggregate> = <scalar-literal>` — covers the float/char sink the tag-only `bad_decl` misses.
           if agg_scalar_bad(ann.s, ann.n, v, decls, upto, src, locals, cnt) { mark_failed(locals, mismatch_err(ns, 0)) }
+          ## Issue #805 — `ys := xs` over a fixed-array local or parameter records `xs`'s declared
+          ## `[T; N]`, what `ys : [T; N] = xs` records, so an element `match ys[i]` is decided from the
+          ## element type like `match xs[i]`.
+          if ann.n == 0 and bind_nl == 0 and (kind_is_unknown(bind_tag) or kind_is_array(bind_tag)) {
+            avs := expr_var_span(v)
+            if avs.n != 0 {
+              aal := sema_local_array_ann(avs, src, locals, cnt)
+              if aal.n != 0 { bind_tag = TyKind.TyArray; bind_ns = aal.s; bind_nl = aal.n }
+            }
+          }
           mut bind_byte := tag_of_kind(bind_tag)
           if local_is_mut(src, ns) { bind_byte = tag_with_mut(bind_byte) }
           lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bind_byte, prov = bind_prov, tns = bind_ns, tnl = bind_nl))
@@ -11800,7 +11907,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## SCALAR exhaustiveness (§5.1/§5.4): a `bool` or integer match must cover its type's values or
         ## carry a `_`. Issue #788 — decided from the scrutinee's TYPE (`cs`, or a bare local's recorded
         ## width), not only for a bare local, and for literal-only arm lists as well as ranges.
-        sty := match_scrut_scalar_ty(cs.kind, sc, src, locals, cnt)
+        sty := match_scrut_scalar_ty(cs.kind, sc, decls, src, locals, cnt, a)
         if (kind_is_int(sty.kind) or kind_is_bool(sty.kind)) and scalar_coverage_gap(ah, sty.kind, sty.ns, sty.nl, src) {
           return Result(usize, CheckErr).Err(mismatch_err(match_scrut_span(sc, a), 0))
         }

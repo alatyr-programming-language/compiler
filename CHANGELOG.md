@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **More non-exhaustive `match`es are refused.** A `char` with literal arms only and no `_`, an
+  element of a copied array (`ys := xs; match ys[i]`) or of a struct field array (`match h.arr[i]`), and
+  a range list that stops short of a `u64`, `usize` or `i64` scrutinee's full width all compiled, and a
+  value no arm covers delivered **0**. Each is now `type mismatch` at the `match` line (Control Flow
+  §5.1/§5.4). Programs the specification declares invalid that used to compile are now refused — a
+  PATCH, not a break (#805).
+
 ## 0.2.5 — 2026-09-30
 
 - **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved
