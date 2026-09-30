@@ -8857,6 +8857,30 @@ subst_param_enum_span := fn(pts : usize, ptl : usize, decls : ptr(rt::Vec), src 
   res
 }
 
+## #752 — the operand of a DIRECT `<call>?` value (the `x := <call>?` binding shape), else null. The
+## binding reads the Ok payload's words from the return registers itself, so it needs the `?`'s
+## operand, not the `?` value (which is only payload word 0).
+try_bind_inner := fn(v : ptr(Expr)) -> ptr(Expr) {
+  match deref(v) {
+    Expr::Try(inner) => { inner }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
+  }
+}
+
+## #752 — the word count of a `x := <call>?` binding's struct Ok payload, 0 when the value is not a
+## direct `<call>?` or its payload is not a struct. Locals, not chained reads of call results, so the
+## frozen seed lowers it (the shape #753 had to avoid).
+try_bind_struct_words := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+  inner := try_bind_inner(v)
+  if unchecked bitcast(usize, inner) == 0 { return 0 }
+  tos := try_ok_struct_span(v, decls, src, a)
+  if tos.n == 0 { return 0 }
+  struct_words(decls, src, tos.s, tos.n, a)
+}
+
 ## The Ok-payload STRUCT type span of a `<call>?` whose callee returns `Result(Struct, E)` — else 0/0.
 ## A binding `x := <call>?` (the fallible-pass shape `tv := check_expr(v)?`) yields the Ok payload; when
 ## that payload is a STRUCT, `x` must be bound as that struct so `x.field` resolves to `x`'s base. Without
@@ -9540,6 +9564,41 @@ payload_call_struct_words := fn(es : usize, el : usize, vs : usize, vl : usize, 
   else if cx.gp2_l != 0 and cx.it2_l != 0 and streq(cx.src, rs, rn, cx.gp2_s, cx.gp2_l) { rs = cx.it2_s; rn = cx.it2_l }
   if struct_decl_of(cx.decls, cx.src, rs, rn) >= 0 { return struct_words(cx.decls, cx.src, rs, rn, a) }
   0
+}
+
+## The test half of the `?` operator (#752), shared by the value arm in `emit_gas` and by the
+## `x := <call>?` binding whose Ok payload is a multi-word struct (`emit_st_assign`). It materializes
+## the operand enum into the return registers (disc → %rax, payload word i → `emit_retreg(i+1)`),
+## returns the whole enum from the enclosing fn when the discriminant is not the success variant, and
+## falls through with the payload still in %rdx, %rcx, … on success. The caller then takes the words
+## it needs: the value arm pushes word 0; the binding stores every word into its slots.
+emit_try_check := fn(inner : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  emit_enum_value(inner, sb, cx, a, nl)   ## disc → %rax, payload[0] → %rdx
+  ## SUCCESS = the operand enum's Some/Ok variant, NOT positionally variant 0 (a stdlib Option is
+  ## `{None, Some}` → Some = 1). Resolve it from the operand's type; unresolved folds to 0.
+  tsp := try_operand_ty_span(inner, cx, a)
+  sdisc := try_success_disc(cx.decls, cx.src, tsp.s, tsp.n, a)
+  lok := nl
+  nl += 1
+  push_str(sb, "  cmpq $")
+  push_int(sb, sdisc)
+  push_str(sb, ", %rax\n  je ")
+  emit_label(sb, lok)
+  push_str(sb, "\n")
+  ## failure: %rax/%rdx already hold the whole enum — return it from the enclosing fn.
+  ## DEFER (§9.3): the `?` early-exit runs the NESTED-frame defers (boundary `FRAME[0]`) before
+  ## jumping — SAVE & RESTORE the ledger (an alternate runtime path). Gated on a nested defer frame
+  ## so a defer-free fn (all of `src/`+`lib/`) emits nothing here.
+  if cx.defer_sp > 0 {
+    sv := cx.defer_n
+    emit_defer_chain(sb, cx, a, nl, cx.defer_frame[0])
+    cx.defer_n = sv
+  }
+  push_str(sb, "  jmp ")
+  emit_label(sb, cx.epi)
+  push_str(sb, "\n")
+  emit_label(sb, lok)
+  push_str(sb, ":\n")
 }
 
 ## Materialize an ENUM-VALUED expression into the two-register return convention: the
@@ -20002,33 +20061,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
     ## value is the success payload (word 0, in %rdx), so push %rdx. (CONVENTION: success =
     ## variant 0; the enclosing fn returns the same enum type — see ast.al's `Try` note.)
     Expr::Try(inner) => {
-      emit_enum_value(inner, sb, cx, a, nl)   ## disc → %rax, payload[0] → %rdx
-      ## SUCCESS = the operand enum's Some/Ok variant, NOT positionally variant 0 (a stdlib Option is
-      ## `{None, Some}` → Some = 1). Resolve it from the operand's type; unresolved folds to 0.
-      tsp := try_operand_ty_span(inner, cx, a)
-      sdisc := try_success_disc(cx.decls, cx.src, tsp.s, tsp.n, a)
-      lok := nl
-      nl += 1
-      push_str(sb, "  cmpq $")
-      push_int(sb, sdisc)
-      push_str(sb, ", %rax\n  je ")
-      emit_label(sb, lok)
-      push_str(sb, "\n")
-      ## failure: %rax/%rdx already hold the whole enum — return it from the enclosing fn.
-      ## DEFER (§9.3): the `?` early-exit runs the NESTED-frame defers (boundary `FRAME[0]`) before
-      ## jumping — SAVE & RESTORE the ledger (an alternate runtime path). Gated on a nested defer frame
-      ## so a defer-free fn (all of `src/`+`lib/`) emits nothing here.
-      if cx.defer_sp > 0 {
-        sv := cx.defer_n
-        emit_defer_chain(sb, cx, a, nl, cx.defer_frame[0])
-        cx.defer_n = sv
-      }
-      push_str(sb, "  jmp ")
-      emit_label(sb, cx.epi)
-      push_str(sb, "\n")
+      emit_try_check(inner, sb, cx, a, nl)
       ## success: the `?` value is the payload word (in %rdx).
-      emit_label(sb, lok)
-      push_str(sb, ":\n  pushq %rdx\n")
+      push_str(sb, "  pushq %rdx\n")
     }
     ## `unchecked <inner>` — a scoped verification mode (Types §4.2, CT-11). Emit the inner with
     ## `cx.vchk` FALSE so a routed library operator's `comptime if verify.checked` guard folds

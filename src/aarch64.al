@@ -5985,18 +5985,9 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       emit_a64_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
       A64_CHK = ov
     }
-    ## #544 stage 1 leaves THIS wildcard alone, and it is the only CHECKABLE arm in the file that is
-    ## not spelled out. Deleting it IS refused — rc 1, `type mismatch at line <n> in aarch64` naming
-    ## this site (the census measured it at the parent file's line 5696) — so the arm is visible to
-    ## exhaustiveness. What blocks the group arm is #673: an OR-pattern arm's body is emitted once per
-    ## ALTERNATIVE, and this body holds a string literal, so the eight absorbed variants (StructLit,
-    ## EnumLit, StrLit, ArrayLit, Try, Slice, Lambda, Loop) produce EIGHT `.rodata` definitions under
-    ## one `.Lstr<m>_<k>` label and `as` refuses the self-build. Measured, not inferred: the enumerated
-    ## form stops at `Error: symbol '.Lstr1_617' is already defined`, eight times. #673 is fixed in
-    ## `src/` (PR #685), but the frozen `seed/alatyr` that builds `src/` predates the fix, so this arm
-    ## STAYS until a seed promotion (#464 residual; `.agents/skills/alatyr-lane/
-    ## wildcard_enumeration.md` §3). Enumerate it then, with a non-vacuity check that names this line.
-    _ => { push_str(sb, "  brk #0 // unsupported expr\n") }
+    ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+    Expr::StructLit | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::Slice
+      | Expr::Lambda | Expr::Loop => { push_str(sb, "  brk #0 // unsupported expr\n") }
   }
 }
 

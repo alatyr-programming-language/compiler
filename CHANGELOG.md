@@ -129,6 +129,16 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   result, `f(s.ok)` for a `bool` field into `u64`, `S(a = [40, 2])` for a scalar field, and
   `b := true; f(b)` into a `u64` parameter (Types §4.2/§4.3, §9.4). A `Checked := Pair.require(p)`
   value passed where a `Pair` is expected is refused where the checker can see its type (§8.1) (#726).
+
+## 0.2.4 — 2026-09-30
+
+- **Seed promotion; the compiler's own `?` bindings move.** The frozen bootstrap `seed/alatyr`
+  advances from 0.2.3 to 0.2.4 because the #752 fix below changes what the compiler emits for itself:
+  the 0.2.3 seed no longer equalled Stage1. The normalized seed-to-Stage1 delta is 41 hunks of one
+  shape — each of the compiler's `x := <call>?` bindings over a three-word Ok payload now stores all
+  three payload registers into the local's slots instead of word 0 alone. `Stage1 == Stage2 ==
+  Stage3` byte-identical raw at 1 354 620 GAS lines, `Stage2 == Stage3` in the binary, all three
+  answering `alatyr 0.2.4`; `seed/VERSION` records the hashes.
 - **A `mut` brand local counts as a brand at the direct `if`-branch guard.** `if c { a } else { b }`
   over two sibling-brand locals (Types §5.4) is refused when both are plain, but the guard read each
   local's raw tag byte, `+128` `mut` flag included, so with a `mut` binding on either side the crossing

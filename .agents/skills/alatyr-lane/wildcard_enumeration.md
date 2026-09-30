@@ -211,16 +211,16 @@ one-assignment body and ~415 for a ten-argument call, against ~61 bytes of per-a
 that a group arm costs whether its body is empty or not. The 69 empty group-arm bodies now in
 `src/`+`lib/` cost none of it.
 
-**But not until the seed can compile it, and that is measured.** `src/` is built by
-`seed/alatyr`, and the frozen seed is the compiler that has the defect. Converted on a throwaway
-worktree over the fixed tree, `emit_a64_expr`'s group arm still stops the seed build at
-`Error: symbol '.Lstr1_617' is already defined`; the same tree built by the Stage1 compiler compiled
-FROM the fixed tree builds clean, and its aarch64 emission is byte-identical to the unconverted
-compiler's over all 1 723 `test/*.al`. So the arm is correct, neutral and ready — and it can only be
-written into `src/` after the integrator promotes a seed that carries the fix. Until then this one
-arm stays a `_` with a note pointing here, and the constraint applies to the same emitters in
-`riscv64.al` and `wat.al`. In a user program there is no such wait: an OR-pattern arm body may hold
-a string literal on all four backends as soon as this lands.
+**The seed could compile it from 0.2.3 on.** `src/` is built by `seed/alatyr`, and the seed that
+had the defect was frozen before the fix. Converted on a throwaway worktree over the fixed tree,
+`emit_a64_expr`'s group arm stopped the 0.2.2 seed build at `Error: symbol '.Lstr1_617' is already
+defined`, while the Stage1 compiled FROM the fixed tree built it clean with byte-identical aarch64
+emission over all 1 723 `test/*.al` — so the arm had to wait for a promotion, and the 0.2.2 -> 0.2.3
+promotion (2026-09-11, `seed/VERSION`) was that promotion. This paragraph kept saying "until then"
+after it happened, and the last two arms (`emit_a64_expr` in `src/aarch64.al`, the statement
+emitter in `src/wat.al`) stayed `_` for that stale reason until #464's residual measured it: the
+0.2.3 seed builds both group arms clean. In a user program there was never a wait: an OR-pattern arm
+body may hold a string literal on all four backends.
 
 Enumerate it with a non-vacuity check that names its line, as every other arm in this stage owes.
 
