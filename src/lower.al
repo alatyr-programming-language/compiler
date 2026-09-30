@@ -21541,6 +21541,7 @@ folded_value_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
     return z
   }
   fp := field_place_parts(v)
+  ## null-ok: field_place_parts answers a null base (fl 0) for an expression that is not a field place
   if fp.fl == 0 or unchecked bitcast(usize, fp.base) == 0 { return z }
   mut bs := 0
   mut bl := 0
@@ -21559,6 +21560,7 @@ folded_value_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
       else {
         ## `deref(ptr(s)).f` — the pointer is taken of a struct local right there.
         dai := deref_inner_expr(fp.base)
+        ## null-ok: deref_inner_expr answers a null Expr when its operand is not a `deref(…)`
         if unchecked bitcast(usize, dai) != 0 {
           dav := addr_inner_var_span(dai)
           if dav.n != 0 and slot_of(slots, src, dav.s, dav.n) >= 0 {
