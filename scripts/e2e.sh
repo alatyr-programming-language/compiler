@@ -6561,6 +6561,10 @@ run issue800_onewords_struct_param_scalar 42
 # reassignment as a type source and recursed round the copy cycle. The parent's twins exit 139 at build;
 # x86_64 and wasm ran it to 42 before and after.
 run issue773_copy_back_local 42
+# Issue #817 — a struct local declared without an initializer (`mut p : P`, then `p = P(..)`) was given a
+# one-word slot on aarch64/riscv64, so its later fields overwrote the next local (a copy read 80 for 42;
+# the parent's twins ran this to 2). x86_64 and wasm ran it to 42 before and after.
+run issue817_uninit_struct_copy 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42

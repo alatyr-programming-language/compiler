@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A struct local declared without an initializer gets its full frame slot on aarch64 and riscv64
+  (#817).** `mut p : P` followed by `p = P(x = 40, y = 2)` reserved one word, sized from the parser's
+  one-word placeholder, so the assignment wrote `p.y` over the next local: a copy `q := p` read
+  `q.y` as `p.x` (80 where 42 was due) and a local declared after `p` was overwritten. The slot now has
+  the declared struct's width.
 - **An array literal passed straight to a `[u8; N]` or `[i8; N]` parameter carries its values.** On
   x86_64 `f([1, 7])` staged one word per element while the callee reads packed bytes, so `xs[1]` read
   **0** (the second byte of element 0) on a clean build. The literal is now staged as packed bytes, the
