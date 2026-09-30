@@ -740,7 +740,7 @@ pub emit_elem_copy_in := fn(arr : ptr(Expr), idx : ptr(Expr), dst : i64, in out 
     ge := struct_lit_info(arg_expr_at(array_lit_info(gmv).ehead, 0, a))
     ## an ENUM-element array global's stride is `1 + enum_inst_words` (disc + widest payload), NOT the
     ## scalar `1` — with `1` the copy read one word at `LABEL + i*8`, i.e. the middle of an element.
-    gaen := global_arr_enum(cx.decls, cx.src, gmv, a)
+    gaen := global_arr_enum(cx.decls, cx.src, gvn.s, gvn.n, gmv, a)
     mut gstride := 1
     if ge.is_s { gstride = struct_words(cx.decls, cx.src, ge.ss, ge.sl, a) }
     else if gaen.is_e { gstride = gaen.stride }

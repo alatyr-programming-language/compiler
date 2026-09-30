@@ -10306,6 +10306,9 @@ run_x86 issue809_option_ptr_field_match 42
 # #823 — a `mut` global of type `Option(ptr(T))` is one folded word in `.data`; its store, read, `match`
 # and argument hand-off use the fold (it was a two-word enum whose payload had lost its pointee).
 run_x86 issue823_option_ptr_global 42
+# #824 — a global `[Option(ptr(T)); N]` is N folded words: its `.data` image, element stores and reads, and
+# a direct `match` on an element (a match-binding stack's shape); each element was a two-word enum.
+run_x86 issue824_option_ptr_global_array 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.

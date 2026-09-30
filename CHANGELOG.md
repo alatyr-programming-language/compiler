@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A global array of `Option(ptr(T))` holds one word per element.** A global array took its element
+  type from its first initializer element. For a bare `Option.None` every element therefore became a
+  two-word enum whose payload had lost its pointee type, and a matched `Some` element read **0**. `check`
+  also refused such an element in a value position. The declared element type now decides the `.data`
+  image, the element stores and reads, and a direct `match` on an element (#824).
 - **A `mut` global of type `Option(ptr(T))` is one word.** Such a global took its layout from its
   initializer, and the bare `Option.None` names no type argument. The global therefore became a two-word
   `[disc, payload]` whose payload had lost its pointee type, and a matched `Some` read **0** through

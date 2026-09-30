@@ -291,7 +291,7 @@ pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
       ## the element out of `.data` instead: base `LABEL + i*stride*8` (bounds-checked), word j at
       ## `+j*8`, copied into this match's scratch — the `.data` twin of the frame-array path below.
       mut gaen := GAEnum(is_e = false, es = 0, el = 0, stride = 0, nel = 0)
-      if bvn.n != 0 { gaen = global_arr_enum(cx.decls, cx.src, global_arr_value(cx.slots, cx.decls, cx.src, bvn.s, bvn.n), a) }
+      if bvn.n != 0 { gaen = global_arr_enum(cx.decls, cx.src, bvn.s, bvn.n, global_arr_value(cx.slots, cx.decls, cx.src, bvn.s, bvn.n), a) }
       if gaen.is_e {
         gtb := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
         emit_gas(idx, sb, cx, a, nl)                   ## index → stack

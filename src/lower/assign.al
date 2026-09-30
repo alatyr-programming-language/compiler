@@ -1742,7 +1742,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         gavref = deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, gavvn.s, gavvn.n))).is_ref
       }
       ## an ENUM-element array GLOBAL (`mut GE := [E.A(1), …]`): element stride `1 + enum_inst_words`.
-      gaen := global_arr_enum(cx.decls, cx.src, gaiv, a)
+      gaen := global_arr_enum(cx.decls, cx.src, gaib.s, gaib.n, gaiv, a)
       gaeli := enum_lit_info(iv)
       gavok := gaes.is_s and gaivag.ek == 2 and not gavref
       gacok := gaes.is_s and cx.agg_tmp >= 0 and struct_ret_call(iv, cx.decls, cx.src, a) and not sret_ret_call(iv, cx.decls, cx.src, a)
