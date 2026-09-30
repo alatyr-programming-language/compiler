@@ -2317,6 +2317,16 @@ a64_aggval_words_e := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : pt
   }
   c
 }
+## The block a DISCARDED wide-return call in statement position needs (#714): `mk(1)` whose result
+## is dropped still writes the whole struct / wide enum through x8, so it gets a scratch block of its
+## own, exactly as a call ARGUMENT does. 0 for any other statement expression.
+a64_discard_sret_words := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
+  srr := a64_call_ret_sret_span(e, decls, src, a)
+  if srr.n != 0 { return i64(struct_words(decls, src, srr.s, srr.n, a)) }
+  ers := a64_call_ret_enum_sret_span(e, decls, src, a)
+  if ers.n != 0 { return 1 + i64(enum_max_arity(decls, src, ers.s, ers.n, a)) }
+  0
+}
 a64_aggval_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   mut s := list
   mut c := 0
@@ -2325,7 +2335,7 @@ a64_aggval_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls
     match st {
       Stmt::Assign(ns, nl, v, nx) => { c = c + a64_aggval_words_e(v, src, a, decls) ; s = nx }
       Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { c = c + a64_aggval_words_e(rv, src, a, decls) } ; s = nx }
-      Stmt::ExprStmt(e, nx) => { c = c + a64_aggval_words_e(e, src, a, decls) ; s = nx }
+      Stmt::ExprStmt(e, nx) => { c = c + a64_aggval_words_e(e, src, a, decls) + a64_discard_sret_words(e, src, a, decls) ; s = nx }
       Stmt::While(cc, b, nx) => { c = c + a64_aggval_words_e(cc, src, a, decls) + a64_aggval_words(b, src, a, decls) ; s = nx }
       Stmt::If(cc, th, el, nx) => { c = c + a64_aggval_words_e(cc, src, a, decls) + a64_aggval_words(th, src, a, decls) + a64_aggval_words(el, src, a, decls) ; s = nx }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { c = c + a64_aggval_words_e(fv, src, a, decls) ; s = nx }
@@ -5375,6 +5385,16 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           }
           mut ai := nv - 1
           while ai >= 0 { push_str(sb, "  ldr x") ; push_int(sb, ai) ; push_str(sb, ", [sp], #16\n") ; ai = ai - 1 }
+          ## WIDE-STRUCT SRET through a GENERIC instance (#714): a generic fn whose DECLARED return is a
+          ## > 8-word struct delivers through x8 exactly like the plain call below, but this branch never
+          ## loaded it — bound (`d := mk(u64, 1)`) or discarded, the instance wrote through a stale x8
+          ## (SIGSEGV). A `-> T` return is not a plain struct to `a64_fn_returns_sret`, so it stays as is.
+          if A64_SRET_DST_ON and a64_fn_returns_sret(decls, src, cs, cl, a) {
+            if A64_SRET_DST_IND { push_str(sb, "  ldr x8, [x29, #") ; push_int(sb, A64_SRET_DST) ; push_str(sb, "]\n") }
+            if not A64_SRET_DST_IND { push_str(sb, "  add x8, x29, #") ; push_int(sb, A64_SRET_DST) ; push_str(sb, "\n") }
+            A64_SRET_DST_ON = false
+            A64_SRET_DST_IND = false
+          }
           ## INLINE `bl <fn>__<tag>` (same reason the def label is inline — no span-through-params helper).
           push_str(sb, "  bl ")
           push_str(sb, str_at((src + gd.name_start), gd.name_len))
@@ -7075,6 +7095,29 @@ emit_a64_sretcall_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
   if not ok { push_str(sb, "  brk #0 // unsupported wide (SRET) struct-returning-call argument\n") }
 }
 
+## #714 — an expression whose value is DISCARDED: a statement `mk(1)`, or a void fn's trailing
+## `mk(1)`. A wide (SRET) call still writes its whole result through x8 whether or not anyone reads it,
+## and both sites used to emit the `bl` with x8 holding whatever was there (SIGSEGV). Give it a scratch
+## block — the argument-position hand-off (`emit_a64_sretcall_arg`) minus passing the block on. The
+## block is sized into the frame by `a64_discard_sret_words`. x86_64's dual is #711.
+emit_a64_discarded := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+  dsw := a64_discard_sret_words(e, src, a, decls)
+  if dsw == 0 {
+    emit_a64_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+    return
+  }
+  if (A64_AGG + dsw * 8) > A64_AGG_LIM {
+    push_str(sb, "  brk #0 // discarded wide (SRET) call has no scratch block\n")
+    return
+  }
+  blk := A64_AGG
+  A64_AGG = A64_AGG + dsw * 8
+  oon := A64_SRET_DST_ON ; oof := A64_SRET_DST ; oid := A64_SRET_DST_IND
+  A64_SRET_DST_ON = true ; A64_SRET_DST = blk ; A64_SRET_DST_IND = false
+  emit_a64_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+  A64_SRET_DST_ON = oon ; A64_SRET_DST = oof ; A64_SRET_DST_IND = oid
+}
+
 ## The wide-ENUM analogue of emit_a64_sretcall_arg (§8 piece 3, > 8 words): an enum-returning CALL wider than
 ## the 8-register budget also delivers through x8, so as a call ARGUMENT it needs the same reserved block +
 ## x8 hand-off + by-reference pass. Same latent raw-SIGSEGV shape, closed the same way.
@@ -8051,7 +8094,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         s = nx
       }
       Stmt::ExprStmt(e, nx) => {
-        emit_a64_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+        emit_a64_discarded(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         s = nx
       }
       Stmt::Match(scrut, arms, nx) => {
@@ -8580,7 +8623,9 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   nsargs := a64_slarg_count(d.body_stmts) + a64_slarg_count_e(d.value)
   ## ANONYMOUS AGGREGATE-VALUE args (§8, piece 1): a struct-literal passed by value → its full words,
   ## reserved in the SAME A64_AGG region (above the slice-arg blocks), tree-wide over body + tail.
-  naggw := a64_aggval_words(d.body_stmts, src, a, decls) + a64_aggval_words_e(d.value, src, a, decls)
+  mut naggw := a64_aggval_words(d.body_stmts, src, a, decls) + a64_aggval_words_e(d.value, src, a, decls)
+  ## a VOID fn's trailing wide call is discarded too, and needs its scratch block (#714).
+  if d.ret_tl == 0 and not ex_is_no_tail(d.value) { naggw = naggw + a64_discard_sret_words(d.value, src, a, decls) }
   ## MATCH-over-INDEX temp (§8 enum slice-param): reserve the largest such match's enum words (once per fn).
   mut mtmp := a64_match_tmp_words(d.body_stmts, src, a)
   ## …and the SAME region is written by a `match <enum PARAM>` materialization, which the statement
@@ -8832,7 +8877,7 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   has_tail := not ex_is_no_tail(d.value)
   ## A void function may still end in a value-position CALL whose result is discarded by the language.
   ## Its side effect is real; dropping Decl.value here loses the final `bl` (not merely a return value).
-  if void and has_tail { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+  if void and has_tail { emit_a64_discarded(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
   ## emit the trailing expression as the fn value — UNLESS it is the no-tail sentinel (the body's last
   ## statement, e.g. a tail match, already left the value in x0; emitting -1 would clobber it).
   if (not void) and has_tail {

@@ -7745,7 +7745,12 @@ run when_guard_arch 42
 ## #711: a discarded wide-SRET call needs a destination. x86-only for now — aarch64's bare-statement
 ## arm has the identical gap (it never sets `A64_SRET_DST_ON`), so registering this cross-backend
 ## would assert a fix that only one backend has.
-run_x86 sret_discard_statement 42
+## Cross-backend since #714: aarch64 gives a discarded wide call a scratch block for its x8 too, in
+## statement position and as a void fn's trailing value, and loads x8 on a generic call whose declared
+## return is a concrete wide struct.
+run sret_discard_statement 42
+run sret_discard_void_tail 42
+run sret_generic_decl_ret 42
 ## #711 generic half: the SAME shape through a GENERIC callee (`-> T` instantiated with a 9-word
 ## struct), UNMASKED — the bare generic call is first and binds nothing before it, so no stale
 ## destination in %rdi can stand in for the missing one. `rv64_sret_call_paths.al` only reaches this
