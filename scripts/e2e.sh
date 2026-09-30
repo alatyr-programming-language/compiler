@@ -6498,6 +6498,12 @@ run issue771_result_call_match_wide 42
 # Issue #794 — a text-lowered callee overwrote %rbx/%r12/%r13, which the ABI makes callee-saved and in
 # which a register-allocated caller keeps values live across the call (ran to 8 on the parent).
 run issue794_callee_saved_registers 42
+# Issue #800 — a one-word struct PARAMETER used where its single word is the whole value (an enum or
+# `Result` payload, `==`, a whole-struct store into a field or through a pointer) was read as the pointer
+# its by-reference slot holds. The parent built both and ran each to 2 where 42 was due (the first check:
+# the payload carried an address; `s == t` compared addresses). The other backends trap on both.
+run issue800_onewords_struct_param_payload 42
+run issue800_onewords_struct_param_scalar 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42

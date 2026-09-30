@@ -17022,9 +17022,15 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## reports false for every variant. `emit_enum_value` already has the whole-value path for
         ## returns/matches; this is its scalar/discriminant dual. Ordinary enum locals keep the
         ## existing direct frame-word load.
+        ## A STRUCT param is passed by reference for the same reason (`emit_fn`'s param binding pushes
+        ## `ek = 2, is_ref = true`), so the same holds for it: its scalar value is the pointee's word 0,
+        ## never the pointer. A ONE-word struct reaches this arm as a scalar wherever its only word is
+        ## the whole value — the payload of `Result(S, E).Ok(s)` / `E.A(s)`, returned or stored (#800).
+        ## Before this, those payloads carried the parameter's ADDRESS and the caller read a stack
+        ## address as `s.k1`. Multi-word struct values never come here; they take the word-copy paths.
         push_str(sb, "  movq -")
         push_int(sb, (ent.off + 1) * 8)
-        if ent.ek == 8 or (ent.ek == 3 and ent.is_ref) {
+        if ent.ek == 8 or ((ent.ek == 2 or ent.ek == 3) and ent.is_ref) {
           push_str(sb, "(%rbp), %rax\n  movq (%rax), %rax\n  pushq %rax\n")
         } else {
           push_str(sb, "(%rbp), %rax\n  pushq %rax\n")
