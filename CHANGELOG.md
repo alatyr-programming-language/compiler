@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A `match` directly on a call returning `Result(S, E)` with a 3+-word struct payload no longer
+  overwrites a neighbouring local on x86_64 (#771).** The match scratch was sized from enum declarations
+  alone, where `Ok(T)` counts as one word, so it held two words and the rest of the returned value was
+  stored over the locals below it: a silent wrong value, or a hang when the overwritten local was a loop
+  counter. With few locals the build aborted with "wider than the match scratch" instead. The scratch is
+  now as wide as the widest enum a direct call match in the function stages, and the size check compares
+  against that width rather than the distance to the bottom of the frame.
 - **`Option(ptr(T))` is one word in every position, not only in a struct field.** Three defects on
   x86_64 shared this cause. In a `Some(p)` arm, `deref(p).f` and `n := deref(p); n.f` read **0** on a
   clean build, because the payload was bound as an untyped word (#768). A local was sized by the form of

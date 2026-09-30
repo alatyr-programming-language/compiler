@@ -7602,77 +7602,79 @@ imax := fn(x : usize, y : usize) -> usize { if x > y { x } else { y } }
 ## a level (overcounting a local-var match — which needs no scratch — is safe: just extra frame words).
 ## A COMPTIME `CompMatch` folds to one arm at compile time (no runtime scrutinee) → NOT a level.
 ## Structural twin of `scan_str_arg_expr`/`scan_str_arg_stmts`; the `Match` arm returns `1 + inner`.
-match_depth_expr := fn(e : ptr(Expr), a : rt::Arena) -> usize {
+match_depth_expr := fn(e : ptr(Expr), a : rt::Arena, decls : ptr(rt::Vec), src : ptr(u8), in out cw : usize) -> usize {
   mut m := 0
   match deref(e) {
-    Expr::Bin(op, l, r) => { m = imax(match_depth_expr(l, a), match_depth_expr(r, a)) }
-    Expr::If(c, t, f) => { m = imax(match_depth_expr(c, a), imax(match_depth_expr(t, a), match_depth_expr(f, a))) }
+    Expr::Bin(op, l, r) => { m = imax(match_depth_expr(l, a, decls, src, cw), match_depth_expr(r, a, decls, src, cw)) }
+    Expr::If(c, t, f) => { m = imax(match_depth_expr(c, a, decls, src, cw), imax(match_depth_expr(t, a, decls, src, cw), match_depth_expr(f, a, decls, src, cw))) }
     Expr::Match(scrut, head) => {
-      mut inner := match_depth_expr(scrut, a)
+      cw = imax(cw, match_call_scrut_words(scrut, decls, src, a))
+      mut inner := match_depth_expr(scrut, a, decls, src, cw)
       mut arm := head
       while arm != 0 {
         am := deref(arm_p(arm))
-        inner = imax(inner, match_depth_expr(am.body, a))
-        inner = imax(inner, match_depth_stmts(am.body_stmts, a))
+        inner = imax(inner, match_depth_expr(am.body, a, decls, src, cw))
+        inner = imax(inner, match_depth_stmts(am.body_stmts, a, decls, src, cw))
         arm = am.next
       }
       m = 1 + inner
     }
-    Expr::Call(cs, cl, nargs, args_head) => { mut g : usize = args_head; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a)); g = ga.next } }
-    Expr::StructLit(cs, cl, nf, fhead) => { mut g : usize = fhead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a)); g = ga.next } }
-    Expr::Field(base, fs, fl) => { m = match_depth_expr(base, a) }
-    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g : usize = phead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a)); g = ga.next } }
-    Expr::AddrOf(p) => { m = match_depth_expr(p, a) }
-    Expr::Deref(p) => { m = match_depth_expr(p, a) }
-    Expr::ArrayLit(nel, ehead) => { mut g : usize = ehead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a)); g = ga.next } }
-    Expr::Index(base, idx) => { m = imax(match_depth_expr(base, a), match_depth_expr(idx, a)) }
-    Expr::Try(inner) => { m = match_depth_expr(inner, a) }
-    Expr::Unchecked(inner) => { m = match_depth_expr(inner, a) }
-    Expr::Bitcast(inner, _bcs, _bcl) => { m = match_depth_expr(inner, a) }
+    Expr::Call(cs, cl, nargs, args_head) => { mut g : usize = args_head; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next } }
+    Expr::StructLit(cs, cl, nf, fhead) => { mut g : usize = fhead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next } }
+    Expr::Field(base, fs, fl) => { m = match_depth_expr(base, a, decls, src, cw) }
+    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g : usize = phead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next } }
+    Expr::AddrOf(p) => { m = match_depth_expr(p, a, decls, src, cw) }
+    Expr::Deref(p) => { m = match_depth_expr(p, a, decls, src, cw) }
+    Expr::ArrayLit(nel, ehead) => { mut g : usize = ehead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next } }
+    Expr::Index(base, idx) => { m = imax(match_depth_expr(base, a, decls, src, cw), match_depth_expr(idx, a, decls, src, cw)) }
+    Expr::Try(inner) => { m = match_depth_expr(inner, a, decls, src, cw) }
+    Expr::Unchecked(inner) => { m = match_depth_expr(inner, a, decls, src, cw) }
+    Expr::Bitcast(inner, _bcs, _bcl) => { m = match_depth_expr(inner, a, decls, src, cw) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Slice
       | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
   m
 }
 
-match_depth_stmts := fn(head : ptr(mut Stmt), a : rt::Arena) -> usize {
+match_depth_stmts := fn(head : ptr(mut Stmt), a : rt::Arena, decls : ptr(rt::Vec), src : ptr(u8), in out cw : usize) -> usize {
   mut s := head
   mut m := 0
   while s != 0 {
     st := deref(stmt_p(Stmt, s))
     match st {
-      Stmt::Assign(ns, nl, v, nx) => { m = imax(m, match_depth_expr(v, a)); s = nx }
-      Stmt::While(c, b, nx) => { m = imax(m, imax(match_depth_expr(c, a), match_depth_stmts(b, a))); s = nx }
-      Stmt::Loop(b, nx) => { m = imax(m, match_depth_stmts(b, a)); s = nx }
-      Stmt::Unchecked(b, nx) => { m = imax(m, match_depth_stmts(b, a)); s = nx }
-      Stmt::AllocWith(ae, b, nx) => { m = imax(m, match_depth_stmts(b, a)); s = nx }
+      Stmt::Assign(ns, nl, v, nx) => { m = imax(m, match_depth_expr(v, a, decls, src, cw)); s = nx }
+      Stmt::While(c, b, nx) => { m = imax(m, imax(match_depth_expr(c, a, decls, src, cw), match_depth_stmts(b, a, decls, src, cw))); s = nx }
+      Stmt::Loop(b, nx) => { m = imax(m, match_depth_stmts(b, a, decls, src, cw)); s = nx }
+      Stmt::Unchecked(b, nx) => { m = imax(m, match_depth_stmts(b, a, decls, src, cw)); s = nx }
+      Stmt::AllocWith(ae, b, nx) => { m = imax(m, match_depth_stmts(b, a, decls, src, cw)); s = nx }
       Stmt::Break(_bv, _bd, nx) => { s = nx }
       Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { m = imax(m, match_depth_expr(e, a)); s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, match_depth_expr(fv, a)); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, match_depth_expr(fpv, a)); s = nx }
-      Stmt::Return(rv, nx) => { m = imax(m, match_depth_expr(rv, a)); s = nx }
-      Stmt::DerefAssign(pe, val, nx) => { m = imax(m, imax(match_depth_expr(pe, a), match_depth_expr(val, a))); s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(match_depth_expr(ib, a), imax(match_depth_expr(ii, a), match_depth_expr(iv, a)))); s = nx }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(match_depth_expr(fia, a), imax(match_depth_expr(fii, a), match_depth_expr(fiv, a)))); s = nx }
-      Stmt::If(c, th, el, nx) => { m = imax(m, imax(match_depth_expr(c, a), imax(match_depth_stmts(th, a), match_depth_stmts(el, a)))); s = nx }
+      Stmt::ExprStmt(e, nx) => { m = imax(m, match_depth_expr(e, a, decls, src, cw)); s = nx }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, match_depth_expr(fv, a, decls, src, cw)); s = nx }
+      Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, match_depth_expr(fpv, a, decls, src, cw)); s = nx }
+      Stmt::Return(rv, nx) => { m = imax(m, match_depth_expr(rv, a, decls, src, cw)); s = nx }
+      Stmt::DerefAssign(pe, val, nx) => { m = imax(m, imax(match_depth_expr(pe, a, decls, src, cw), match_depth_expr(val, a, decls, src, cw))); s = nx }
+      Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(match_depth_expr(ib, a, decls, src, cw), imax(match_depth_expr(ii, a, decls, src, cw), match_depth_expr(iv, a, decls, src, cw)))); s = nx }
+      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(match_depth_expr(fia, a, decls, src, cw), imax(match_depth_expr(fii, a, decls, src, cw), match_depth_expr(fiv, a, decls, src, cw)))); s = nx }
+      Stmt::If(c, th, el, nx) => { m = imax(m, imax(match_depth_expr(c, a, decls, src, cw), imax(match_depth_stmts(th, a, decls, src, cw), match_depth_stmts(el, a, decls, src, cw)))); s = nx }
       Stmt::Match(sc, ah, nx) => {
-        mut inner := match_depth_expr(sc, a)
+        cw = imax(cw, match_call_scrut_words(sc, decls, src, a))
+        mut inner := match_depth_expr(sc, a, decls, src, cw)
         mut arm := ah
         while arm != 0 {
           am := deref(arm_p(arm))
-          inner = imax(inner, match_depth_expr(am.body, a))
-          inner = imax(inner, match_depth_stmts(am.body_stmts, a))
+          inner = imax(inner, match_depth_expr(am.body, a, decls, src, cw))
+          inner = imax(inner, match_depth_stmts(am.body_stmts, a, decls, src, cw))
           arm = am.next
         }
         m = imax(m, 1 + inner)
         s = nx
       }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(match_depth_expr(flo, a), match_depth_stmts(fb, a))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, match_depth_expr(fhi, a)) } ; s = nx }
-      Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(match_depth_stmts(cthen, a), match_depth_stmts(celse, a))); s = nx }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, match_depth_stmts(cb, a)); s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, match_depth_stmts(rb, a)); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : usize = cmah; while car != 0 { cam := deref(arm_p(car)); m = imax(m, match_depth_stmts(cam.body_stmts, a)); car = cam.next } ; s = nx }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(match_depth_expr(flo, a, decls, src, cw), match_depth_stmts(fb, a, decls, src, cw))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, match_depth_expr(fhi, a, decls, src, cw)) } ; s = nx }
+      Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(match_depth_stmts(cthen, a, decls, src, cw), match_depth_stmts(celse, a, decls, src, cw))); s = nx }
+      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, match_depth_stmts(cb, a, decls, src, cw)); s = nx }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, match_depth_stmts(rb, a, decls, src, cw)); s = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : usize = cmah; while car != 0 { cam := deref(arm_p(car)); m = imax(m, match_depth_stmts(cam.body_stmts, a, decls, src, cw)); car = cam.next } ; s = nx }
     }
   }
   m
@@ -12732,13 +12734,59 @@ call_ret_enum_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
 ## dispatches the returned enum. Indirect calls have no declaration module to carry here and retain
 ## their existing behavior (located reject remains preferable to guessing).
 call_ret_enum_target := fn(e : ptr(Expr), cx : ptr(LCtx)) -> i64 {
+  call_ret_enum_target_d(e, cx.decls, cx.src, deref(cx.mar))
+}
+## `decls`/`src` form of `call_ret_enum_target`, so the frame-sizing pre-pass (no `cx` yet) resolves
+## the same callee the staging sites do.
+call_ret_enum_target_d := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
   match deref(e) {
-    Expr::Call(cs, cl, nargs, args_head) => { ret_call_target(cx.decls, cx.src, cs, cl, nargs, args_head, deref(cx.mar)) }
+    Expr::Call(cs, cl, nargs, args_head) => { ret_call_target(decls, src, cs, cl, nargs, args_head, a) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 - 1 }
   }
+}
+## Issue #771 — the WORD count a direct `match <call>` stages into its match-scratch level: the
+## discriminant plus the returned enum INSTANCE's payload words, measured the way the three staging
+## sites measure it (`etwc` / `etwt` / `etwm`): the callee is resolved first, then its declaration's
+## module is published while the return span is read and sized. 0 when `e` is not a call this
+## `cx`-free resolver sees as enum-returning. `fn_scratch_shape` sizes every scratch level to at least
+## this, because the level used to be sized from enum DECLARATIONS alone (`Result`'s `Ok(T)` counts as
+## one word there) while `Result(S, E)` with a 3-word `S` stages four — and the fourth landed on a
+## neighbouring local.
+match_call_scrut_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+  if enum_ret_call_d(e, decls, src, a) == false { return 0 }
+  owner_ci := call_ret_enum_target_d(e, decls, src, a)
+  old_on := lower_layout::type_ref_mod_on()
+  old_s := lower_layout::type_ref_mod_s()
+  old_l := lower_layout::type_ref_mod_l()
+  if owner_ci >= 0 {
+    owner_d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(owner_ci))))
+    lower_layout::set_type_ref_module(owner_d.mod_start, owner_d.mod_len, ROOT_MOD_S, ROOT_MOD_L)
+  }
+  sp := call_ret_enum_span_d(e, decls, src, a)
+  mut w : usize = 0
+  if sp.n != 0 { w = 1 + enum_inst_words(decls, src, sp.s, sp.n, a) }
+  if owner_ci >= 0 {
+    if old_on { lower_layout::set_type_ref_module(old_s, old_l, ROOT_MOD_S, ROOT_MOD_L) } else { lower_layout::clear_type_ref_module() }
+  }
+  w
+}
+## The match-scratch SHAPE of function `d`: how many levels (`match_depth_stmts`, at least 1) and the
+## WORDS of each — `1 +` the widest enum declaration's payload (at least 2, the %rax/%rdx staging pair),
+## widened to the widest enum a direct `match <call>` in this body stages (#771, collected by the same
+## depth walk). A body with no such call wider than the declarations keeps the old width and depth, so
+## its frame is unchanged. The text frame and the IR barrier frame both take their scratch from here.
+ScratchShape := struct { width : usize, levels : usize }
+fn_scratch_shape := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> ScratchShape {
+  mut cw : usize = 0
+  levels := imax(1, match_depth_stmts(d.body_stmts, a, decls, src, cw))
+  ## The trailing value is walked for the width it stages; its depth is not a level the frame counted
+  ## before this change, and adding it here would move frames that stage nothing new.
+  tail_levels := match_depth_expr(d.value, a, decls, src, cw)
+  width := imax(imax(2, 1 + max_enum_arity_all(decls, src, a)), cw)
+  ScratchShape(width = width, levels = levels)
 }
 ## FAIL-LOUD GUARD for a DIRECT `match <call>` scrutinee (`match recv.map(f) { … }`) whose generic
 ## return enum's payload resolves to a MULTI-WORD type. The direct call-scrutinee staging sizes the
@@ -17525,7 +17573,10 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## down-growing layout the local/materialize paths use) — so a nested multi-word enum payload
         ## (`R.Fail(Err.Bad(x))`) is staged whole, not truncated to its word 0 (the inner disc).
         etwc := 1 + enum_inst_words(cx.decls, cx.src, ci.s, ci.n, a)
-        if etwc > tbc + 1 { panic("selfhost: match on a call returning an enum wider than the match scratch — bind the result to a local first (`t := f(…)` then `match t { … }`)") }
+        ## #771: the bound is this LEVEL's width, not the distance to slot 0 — below the level sit the
+        ## locals (or an outer level), and a width that merely "fit" there overwrote them. `fn_scratch_shape`
+        ## sizes every direct call it can resolve, so only an unresolved one can still reach this panic.
+        if etwc > cx.swidth { panic("selfhost: match on a call returning an enum wider than the match scratch — bind the result to a local first (`t := f(…)` then `match t { … }`)") }
         if etwc >= 8 {
           ## a WIDE (disc + payload > 7-word, SRET) enum callee has NO return registers to stage from:
           ## it delivers through a hidden result POINTER. Hand it the scratch block's word-0 ADDRESS as
@@ -22306,7 +22357,8 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
         ci := call_ret_enum_span(mi.scrut, cx)
         tbm := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
         etwt := 1 + enum_inst_words(cx.decls, cx.src, ci.s, ci.n, a)
-        if etwt > tbm + 1 { panic("selfhost: tail value-match on a call returning an enum wider than the match scratch — bind the result to a local first (`t := f(…)` then `match t { … }`)") }
+        ## #771: the bound is this level's width (see the value-`Expr::Match` twin).
+        if etwt > cx.swidth { panic("selfhost: tail value-match on a call returning an enum wider than the match scratch — bind the result to a local first (`t := f(…)` then `match t { … }`)") }
         if etwt >= 8 {
           ## a WIDE (SRET) enum callee delivers through a hidden result POINTER, not the return
           ## registers — hand it the scratch block's word-0 address (see the value-`Expr::Match` twin).
@@ -22965,7 +23017,8 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
     ## The scratch check remains fail-loud for a value wider than the current match frame. Supported
     ## nested Option/Result values are staged word-for-word; an over-budget value must not underflow
     ## the down-growing slot arithmetic or silently discard its payload.
-    if etwm > tbm + 1 { panic("selfhost: match on an enum-returning call exceeds the available match scratch") }
+    ## #771: the bound is this level's width (see the value-`Expr::Match` twin).
+    if etwm > cx.swidth { panic("selfhost: match on an enum-returning call exceeds the available match scratch") }
     if etwm >= 8 {
       ## a WIDE (disc + payload > 7-word, SRET) enum callee has NO return registers to stage from: it
       ## delivers through a hidden result POINTER. Hand it the scratch block's word-0 ADDRESS as that
@@ -25853,8 +25906,9 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   mut ir_agg_w := 0
   mut ir_swidth := 2
   if IRP_NGBAR > 0 {
-    ir_swidth = imax(2, 1 + max_enum_arity_all(p.decls, p.src, deref(p.mar)))
-    mdep := imax(1, match_depth_stmts(d.body_stmts, deref(p.mar)))
+    ir_shape := fn_scratch_shape(d, p.decls, p.src, deref(p.mar))
+    ir_swidth = ir_shape.width
+    mdep := ir_shape.levels
     ir_tslot = i64(svec_len(ptr(slots)))
     nscr := ir_swidth * mdep
     for w in 0..nscr { svec_push(slots, SlotEntry(ns = 0, nl = 0, off = svec_len(ptr(slots)), sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false)) }
@@ -26301,11 +26355,12 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   mut lt := svec_len(ptr(slots))
   svec_push(slots, SlotEntry(ns = 0, nl = 0, off = lt, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
   lt = svec_len(ptr(slots))
-  scr_w := imax(2, 1 + max_enum_arity_all(p.decls, p.src, deref(p.mar)))
+  shape := fn_scratch_shape(d, p.decls, p.src, deref(p.mar))
+  scr_w := shape.width
   ## reserve `scr_w` words PER simultaneously-live match level (see LCtx.mdepth): a match nested `d`
   ## deep needs `d` scratch levels so an inner materialization never clobbers an outer scrutinee.
   ## depth ≤ 1 → one level (byte-identical to the pre-depth frame for un-nested-match fns).
-  mdep := imax(1, match_depth_stmts(d.body_stmts, deref(p.mar)))
+  mdep := shape.levels
   nscratch := scr_w * mdep
   for w in 0..nscratch {
     svec_push(slots, SlotEntry(ns = 0, nl = 0, off = lt + w, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
