@@ -8873,10 +8873,10 @@ try_bind_inner := fn(v : ptr(Expr)) -> ptr(Expr) {
 ## #752 — the word count of a `x := <call>?` binding's struct Ok payload, 0 when the value is not a
 ## direct `<call>?` or its payload is not a struct. Locals, not chained reads of call results, so the
 ## frozen seed lowers it (the shape #753 had to avoid).
-try_bind_struct_words := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+try_bind_struct_words := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
   inner := try_bind_inner(v)
   if unchecked bitcast(usize, inner) == 0 { return 0 }
-  tos := try_ok_struct_span(v, decls, src, a)
+  tos := try_ok_struct_span(v, slots, decls, src, a)
   if tos.n == 0 { return 0 }
   struct_words(decls, src, tos.s, tos.n, a)
 }
@@ -8886,17 +8886,27 @@ try_bind_struct_words := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
 ## that payload is a STRUCT, `x` must be bound as that struct so `x.field` resolves to `x`'s base. Without
 ## this `x` was a bare scalar (no type span), and `x.tag` mis-resolved to `base-1` — reading a stale slot
 ## (the check_stmts type-mismatch miscompile: `dt.tag != tv.tag` read garbage → spurious/missed rejects).
-try_ok_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+try_ok_struct_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   match deref(v) {
     Expr::Try(inner) => {
-      es := call_ret_enum_span_d(inner, decls, src, a)
+      mut es := call_ret_enum_span_d(inner, decls, src, a)
+      ## #752 — `?` on an enum LOCAL (`r := f(1); x := r?`): the payload type is the local's recorded
+      ## enum type span, so its struct payload is bound whole exactly like a call's.
+      if es.n == 0 {
+        vs := var_name_span(inner)
+        if vs.n != 0 and slot_of(slots, src, vs.s, vs.n) >= 0 {
+          ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, vs.s, vs.n)))
+          if ent.ek == 3 and ent.snl != 0 { es = CSpan(s = ent.sns, n = ent.snl) }
+        }
+      }
       if es.n == 0 { return CSpan(s = 0, n = 0) }
-      ta := typearg_at(src, es.s, es.n, 0)
+      eh := base_type_name(src, es.s, es.n)
+      ta := typearg_at(src, eh.s, eh.n, 0)
       if ta.n != 0 and struct_decl_of(decls, src, ta.s, ta.n) >= 0 { return CSpan(s = ta.s, n = ta.n) }
       return CSpan(s = 0, n = 0)
     }
-    Expr::Unchecked(inner) => { return try_ok_struct_span(inner, decls, src, a) }
-    Expr::Bitcast(inner, _bcs, _bcl) => { return try_ok_struct_span(inner, decls, src, a) }
+    Expr::Unchecked(inner) => { return try_ok_struct_span(inner, slots, decls, src, a) }
+    Expr::Bitcast(inner, _bcs, _bcl) => { return try_ok_struct_span(inner, slots, decls, src, a) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::ArrayLit | Expr::Index | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
@@ -10306,6 +10316,23 @@ try_operand_ty_span := fn(inner : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> C
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return call_ret_ty_span(inner, cx.decls, cx.src, a) }
   }
+}
+
+## #752 — the word count of a `?` operand's Ok payload: >1 for a struct, a payload-carrying enum, a
+## `str` or an array; 1 for a scalar; 0 when the operand's type is not resolved (then nothing is
+## refused — the lowering's other guards own that case).
+try_value_payload_words := fn(inner : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  tsp := try_operand_ty_span(inner, cx, a)
+  if tsp.n == 0 { return 0 }
+  th := base_type_name(cx.src, tsp.s, tsp.n)
+  pl := typearg_at(cx.src, th.s, th.n, 0)
+  if pl.n == 0 { return 0 }
+  pb := base_type_name(cx.src, pl.s, pl.n)
+  if struct_decl_of(cx.decls, cx.src, pb.s, pb.n) >= 0 { return struct_words(cx.decls, cx.src, pl.s, pl.n, deref(cx.mar)) }
+  if enum_decl_of(cx.decls, cx.src, pb.s, pb.n) >= 0 { return 1 + enum_inst_words(cx.decls, cx.src, pl.s, pl.n, deref(cx.mar)) }
+  if str_at((cx.src + pl.s), pl.n) == "str" { return 2 }
+  if array_elem_span(cx.src, pl.s, pl.n).n != 0 { return 2 }
+  1
 }
 
 ## Emit the `call` for a `Call` whose RESULT is an AGGREGATE (enum / struct) left in the return
@@ -18950,30 +18977,42 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## this fires ONLY for an offset-0 field; anything else falls through.)
       tbf := tryable_field_recv(base, cx.src, a)
       if tbf.kind != 0 {
-        rty := call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar))
+        mut rty := call_ret_ty_span(tbf.recv, cx.decls, cx.src, deref(cx.mar))
+        ## #752 — `?` on an enum LOCAL (`r?.a`) types its payload from the local, as the value arm does.
+        if tbf.kind == 1 { rty = try_operand_ty_span(tbf.recv, cx, deref(cx.mar)) }
         if rty.n != 0 {
           rhead := base_type_name(cx.src, rty.s, rty.n)         ## "Result" / "Option"
           pl := typearg_at(cx.src, rhead.s, rhead.n, 0)          ## the Ok-payload type span
           pbase := base_type_name(cx.src, pl.s, pl.n)            ## payload struct base name (strip generic args)
           foff := field_word_offset(cx.decls, cx.src, pbase.s, pbase.n, fs, fl, a)
-          if foff == 0 {
-            emit_enum_value(tbf.recv, sb, cx, a, nl)             ## disc → %rax, payload[0] → %rdx
-            lok := nl
-            nl += 1
-            push_str(sb, "  cmpq $0, %rax\n  je ")
-            emit_label(sb, lok)
-            push_str(sb, "\n")
+          ## #752 — the payload is in the return registers behind the discriminant (word k in
+          ## `emit_retreg(k+1)`), so a ONE-WORD field at any offset the registers carry is word `foff`.
+          ## Only offset 0 was read before; any other offset fell through to the generic field path and
+          ## read the wrong word (`f(1)?.a + f(1)?.b` was 0 on x86_64).
+          fty := field_type_span(cx.decls, cx.src, pbase.s, pbase.n, fs, fl, a)
+          fone := fty.n != 0 and struct_decl_of(cx.decls, cx.src, fty.s, fty.n) < 0 and enum_decl_of(cx.decls, cx.src, fty.s, fty.n) < 0 and str_at((cx.src + fty.s), fty.n) != "str" and array_elem_span(cx.src, fty.s, fty.n).n == 0
+          if foff >= 0 and not (fone and foff <= 5) {
+            panic("selfhost: a field of a `?`/`expect` result wider than one word, or past the sixth payload word, is not lowered (#752); bind the result first (`x := …?`) and read `x.field`")
+          }
+          if foff >= 0 {
             if tbf.kind == 1 {
-              push_str(sb, "  jmp ")
-              emit_label(sb, cx.epi)
-              push_str(sb, "\n")
+              emit_try_check(tbf.recv, sb, cx, a, nl)
             } else {
+              emit_enum_value(tbf.recv, sb, cx, a, nl)           ## disc → %rax, payload → %rdx, %rcx, …
+              lok := nl
+              nl += 1
+              push_str(sb, "  cmpq $0, %rax\n  je ")
+              emit_label(sb, lok)
+              push_str(sb, "\n")
               emit_str_pair(tbf.msg, sb, cx, a, nl)              ## msg {ptr,len} → stack
               push_str(sb, "  popq %rdx\n  popq %rsi\n  movq $2, %rdi\n  movq $1, %rax\n  syscall\n")
               push_str(sb, "  movq $1, %rdi\n  movq $60, %rax\n  syscall\n")
+              emit_label(sb, lok)
+              push_str(sb, ":\n")
             }
-            emit_label(sb, lok)
-            push_str(sb, ":\n  pushq %rdx\n")
+            push_str(sb, "  pushq ")
+            emit_retreg(sb, usize(foff) + 1)
+            push_str(sb, "\n")
             return
           }
         }
@@ -20061,6 +20100,13 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
     ## value is the success payload (word 0, in %rdx), so push %rdx. (CONVENTION: success =
     ## variant 0; the enclosing fn returns the same enum type — see ast.al's `Try` note.)
     Expr::Try(inner) => {
+      ## #752 — this arm delivers ONE word. A payload wider than that (a struct, an enum with a
+      ## payload, a `str`, an array) is taken whole only by a binding (`x := …?`) or a field read
+      ## (`…?.f`), which read the return registers themselves; anywhere else the missing words were
+      ## silently absent or garbage (`use(f(1)?)` segfaulted). Refuse it, located.
+      if try_value_payload_words(inner, cx, a) > 1 {
+        panic("selfhost: the value of `?` over a multi-word Ok payload is used here, and only one word would arrive (#752); bind it first (`x := …?`) and use `x`")
+      }
       emit_try_check(inner, sb, cx, a, nl)
       ## success: the `?` value is the payload word (in %rdx).
       push_str(sb, "  pushq %rdx\n")

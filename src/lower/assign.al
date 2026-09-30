@@ -2573,14 +2573,14 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_int(sb, (base - i64(k) + 1) * 8)
       push_str(sb, "(%rbp)\n")
     }
-  } else if try_bind_struct_words(v, cx.decls, cx.src, deref(cx.mar)) >= 2 {
+  } else if try_bind_struct_words(v, cx.slots, cx.decls, cx.src, deref(cx.mar)) >= 2 {
     ## #752 — `name := <call>?` whose Ok payload is a MULTI-WORD struct. The `?` value is only payload
     ## word 0, so the generic path bound word 0 and left every other field as whatever the frame held
     ## (`x.a + x.b` read 0 + 0 where the callee returned 20 + 22). Run the `?` test, then store payload
     ## word k (in `emit_retreg(k+1)`, behind the discriminant in %rax) into the local's slot k, exactly
     ## as the struct-returning call arm below stores `emit_retreg(k)`.
     base := slot_of(cx.slots, cx.src, ns, nl2)
-    tw := try_bind_struct_words(v, cx.decls, cx.src, deref(cx.mar))
+    tw := try_bind_struct_words(v, cx.slots, cx.decls, cx.src, deref(cx.mar))
     ## The register convention carries the discriminant plus six payload words (%rdx … %r11); a wider
     ## payload would come back through SRET, which this binding does not stage. Refuse it, located.
     if tw > 6 { panic("selfhost: `x := <call>?` over an Ok payload wider than six words is not lowered yet (#752); bind the Result and `match` it") }

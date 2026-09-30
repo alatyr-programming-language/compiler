@@ -306,11 +306,11 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           if sub_es.n != 0 { es_s = sub_es.s; es_n = sub_es.n }
           mx := enum_inst_words(decls, src, es_s, es_n, a)
           bind_enum_slot(slots, decls, src, ns, nl, es_s, es_n, 1 + mx)
-        } else if try_ok_struct_span(v, decls, src, a).n != 0 {
+        } else if try_ok_struct_span(v, ptr(slots), decls, src, a).n != 0 {
           ## `x := <call>?` where the callee returns `Result(Struct, E)` — bind `x` as the Ok-payload
           ## STRUCT so `x.field` resolves to `x`'s base (the `?` delivers the payload word 0 there). A
           ## bare-scalar binding made `x.tag` read `base-1` (a stale slot → the type-mismatch miscompile).
-          tos := try_ok_struct_span(v, decls, src, a)
+          tos := try_ok_struct_span(v, ptr(slots), decls, src, a)
           bind_struct_slot(slots, decls, src, ns, nl, tos.s, tos.n, struct_words(decls, src, tos.s, tos.n, a))
         } else if addr_struct_span(v, ptr(slots), src).n != 0 {
           ## a `p := ptr(<struct local>)` binding — record p as a pointer-to-struct (ek 7) carrying

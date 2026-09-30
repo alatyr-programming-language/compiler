@@ -6438,6 +6438,7 @@ run accept_enum_match_param_deref 42
 run accept_enum_match_deref_annotated_local 42
 # Issue #752 — `x := <call>?` over a multi-word Ok payload binds every payload word (x86_64 returned 0).
 run issue752_try_multiword_payload 42
+build_reject_has reject_try_multiword_value "multi-word Ok payload"
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42
