@@ -4060,6 +4060,21 @@ emit_require_agg_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr
   cx.vchk = old
 }
 
+## #775 / #789 — pass a NICHE-FOLDED `Option(ptr(T))` value that has no frame home (a call result, a
+## variant literal, a field read) to a by-reference Option parameter: stage its ONE word in an agg-temp
+## and push that word's address. Both callers ask `folded_value_span` first; `emit_call_args` also knows
+## the parameter's declared type, which is what gives a bare `Option.Some(p)` / `Option.None` its fold.
+emit_folded_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  emit_folded_option_value(e, sb, cx, a, nl)
+  foff := agg_alloc(cx)
+  push_str(sb, "  movq %rax, -")
+  push_int(sb, (foff + 1) * 8)
+  push_str(sb, "(%rbp)\n")
+  fent := SlotEntry(ns = 0, nl = 0, off = usize(foff), sns = 0, snl = 0, ek = 3, estride = 1, eek = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
+  emit_agg_base_addr(fent, sb)
+  push_str(sb, "  pushq %rax\n")
+}
+
 emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize, tmp_off : i64) {
   ## A checked aggregate require value has no scalar stack representation. Materialize it into the
   ## preserved aggregate-argument block, run the predicate against a distinct copy, and pass the
@@ -4365,15 +4380,8 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   ## which the callee then dereferenced (a SIGSEGV for `None`, a stray read for `Some`). Stage the one
   ## folded word in an agg-temp and pass its address, exactly as the struct/enum ctor case below does. A
   ## folded LOCAL or PARAMETER keeps its existing by-reference path (its own frame word / the pointer).
-  if var_name_span(e).n == 0 and cx.agg_tmp >= 0 and folded_value_span(e, cx.slots, cx.decls, cx.src, a).n != 0 {
-    emit_folded_option_value(e, sb, cx, a, nl)
-    foff := agg_alloc(cx)
-    push_str(sb, "  movq %rax, -")
-    push_int(sb, (foff + 1) * 8)
-    push_str(sb, "(%rbp)\n")
-    fent := SlotEntry(ns = 0, nl = 0, off = usize(foff), sns = 0, snl = 0, ek = 3, estride = 1, eek = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
-    emit_agg_base_addr(fent, sb)
-    push_str(sb, "  pushq %rax\n")
+  if var_name_span(e).n == 0 and cx.agg_tmp >= 0 and folded_value_span(e, CSpan(s = 0, n = 0), cx.slots, cx.decls, cx.src, a).n != 0 {
+    emit_folded_arg(e, sb, cx, a, nl)
     return
   }
   ## STRUCT/ENUM CTOR argument (a non-place `S(…)` / `E.V(…)`): materialize it into the agg-temp
@@ -4782,6 +4790,34 @@ callee_out_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx
   false
 }
 
+## #789 — the declared type span of parameter `pidx` (full param-list index) of the callee at `cidx`;
+## 0/0 for an unknown callee or an index past the list. Mirrors the walk in `callee_out_scalar`.
+callee_param_ty_span := fn(decls : ptr(rt::Vec), cidx : i64, pidx : usize) -> CSpan {
+  if cidx < 0 { return CSpan(s = 0, n = 0) }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
+  mut pp := d.params_head
+  mut k := 0
+  while pp != 0 {
+    pm := deref(param_p(pp))
+    if k == pidx { return CSpan(s = pm.ts, n = pm.tl) }
+    k += 1
+    pp = pm.next
+  }
+  CSpan(s = 0, n = 0)
+}
+
+## #789 — is the call argument `e` a NICHE-FOLDED `Option(ptr(T))` value for parameter `pidx` of the
+## callee at `cidx`, with no frame home? The parameter's declared type is the expectation
+## `folded_value_span` needs to fold a BARE `Option.Some(p)` / `Option.None`: its head names no type
+## argument, so on its own it was materialized as the two-word `[disc, payload]` block and the callee
+## read the discriminant as the pointer (a SIGSEGV on the first `deref` of the payload).
+callee_folded_arg := fn(e : ptr(Expr), cidx : i64, pidx : usize, cx : ptr(LCtx), a : rt::Arena) -> bool {
+  if var_name_span(e).n != 0 or cx.agg_tmp < 0 { return false }
+  pt := callee_param_ty_span(cx.decls, cidx, pidx)
+  if not is_niche_folded(cx.src, pt.s, pt.n) { return false }
+  folded_value_span(e, pt, cx.slots, cx.decls, cx.src, a).n != 0
+}
+
 ## A scalar callee parameter cannot consume a two-word str element. Most str-element consumers are
 ## routed through `view_temp_arg` (which deliberately materializes the pair), but that route is shape
 ## based and otherwise cannot see the callee's expected type. Keep this call-edge fence here so an
@@ -4924,6 +4960,8 @@ emit_call_args := fn(args_head : ptr(mut Arg), skip : i64, skip2 : i64, skip3 : 
     reject_scalar_str_elem_arg(ea, cx, cidx, arg_src_idx(k, skip, skip2, skip3))
     if callee_out_scalar(cx.decls, cx.src, a, cidx, arg_src_idx(k, skip, skip2, skip3)) {
       emit_out_scalar_arg(ea, sb, cx, a, nl)
+    } else if callee_folded_arg(ea, cidx, arg_src_idx(k, skip, skip2, skip3), cx, a) {
+      emit_folded_arg(ea, sb, cx, a, nl)
     } else {
       emit_arg(ea, sb, cx, a, nl, str_arg_tmp_off(args_head, skip, skip2, skip3, k, cx, a))
     }
@@ -4935,6 +4973,8 @@ emit_call_args := fn(args_head : ptr(mut Arg), skip : i64, skip2 : i64, skip3 : 
     reject_scalar_str_elem_arg(ra, cx, cidx, arg_src_idx(i, skip, skip2, skip3))
     if callee_out_scalar(cx.decls, cx.src, a, cidx, arg_src_idx(i, skip, skip2, skip3)) {
       emit_out_scalar_arg(ra, sb, cx, a, nl)
+    } else if callee_folded_arg(ra, cidx, arg_src_idx(i, skip, skip2, skip3), cx, a) {
+      emit_folded_arg(ra, sb, cx, a, nl)
     } else {
       emit_arg(ra, sb, cx, a, nl, str_arg_tmp_off(args_head, skip, skip2, skip3, i, cx, a))
     }
@@ -21587,6 +21627,16 @@ emit_folded_option_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::S
   }
 }
 
+## #789 — the NICHE-FOLDED `Option(ptr(T))` type of the local or parameter slot named `[ns, ns+nl)` (an
+## `ek 3` slot over a folded span), or 0/0. The one test `folded_value_span`, the local's re-binding in
+## `collect_slots` and the store in `st_dest_folded` all ask.
+folded_slot_span := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  if slot_of(slots, src, ns, nl) < 0 { return CSpan(s = 0, n = 0) }
+  ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, ns, nl)))
+  if ent.ek == 3 and streq(src, ent.ns, ent.nl, ns, nl) and is_niche_folded(src, ent.sns, ent.snl) { return CSpan(s = ent.sns, n = ent.snl) }
+  CSpan(s = 0, n = 0)
+}
+
 ## #775 — the NICHE-FOLDED `Option(ptr(T))` type of the value expression `v`, or 0/0. A folded Option is
 ## ONE word in every position (Types §6.2/§8): a struct field (the layout already said so), a call
 ## result (%rax), and — the part that was missing — a LOCAL. `collect_slots` sized a local by the FORM of
@@ -21598,21 +21648,22 @@ emit_folded_option_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::S
 ## Recognized forms: a variant literal with a folded head (`Option(ptr(T)).None`), a folded local or
 ## parameter (`ek 3` over a folded span), a call whose declared return is folded, and a field read
 ## (`s.f`, `p.f`, `deref(p).f`, `deref(<call>).f`) whose declared field type is folded. Anything else —
-## an `if`/`match` value, an index — answers 0/0 and keeps its existing path.
-folded_value_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+## an `if`/`match` value, an index — answers 0/0 and keeps its existing path. `expect` is the type the
+## position expects (a destination local's, a parameter's), or 0/0 where none is known; only a bare
+## `Option.Some(p)` / `Option.None`, whose head has no type argument, reads it (#789).
+folded_value_span := fn(v : ptr(Expr), expect : CSpan, slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   z := CSpan(s = 0, n = 0)
   ei := enum_lit_info(v)
   if ei.is_e {
     if is_niche_folded(src, ei.es, ei.el) { return CSpan(s = ei.es, n = ei.el) }
+    ## #789 — a BARE `Option.Some(p)` / `Option.None` names no type argument; it takes the fold of the
+    ## type its position expects (the destination local, the parameter). A head WITH arguments keeps
+    ## its own answer above.
+    if is_niche_folded(src, expect.s, expect.n) and base_type_name(src, ei.es, ei.el).n == ei.el and streq(src, ei.es, ei.el, base_type_name(src, expect.s, expect.n).s, base_type_name(src, expect.s, expect.n).n) { return expect }
     return z
   }
   vn := var_name_span(v)
-  if vn.n != 0 {
-    if slot_of(slots, src, vn.s, vn.n) < 0 { return z }
-    vent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, vn.s, vn.n)))
-    if vent.ek == 3 and streq(src, vent.ns, vent.nl, vn.s, vn.n) and is_niche_folded(src, vent.sns, vent.snl) { return CSpan(s = vent.sns, n = vent.snl) }
-    return z
-  }
+  if vn.n != 0 { return folded_slot_span(slots, src, vn.s, vn.n) }
   crt := call_ret_ty_span(v, decls, src, a)
   if crt.n != 0 {
     if is_niche_folded(src, crt.s, crt.n) { return crt }

@@ -10161,6 +10161,10 @@ run_x86 niche_option_str_match 42
 run_x86 issue768_option_ptr_payload_field 42
 run_x86 issue775_option_ptr_local_forms 42
 run_x86 issue770_option_ptr_mut_label 42
+# #789 — a BARE `Option.Some(p)` / `Option.None` takes the fold of the type its position expects: an
+# `Option(ptr(T))` parameter (it was passed as the two-word enum block, and the callee dereferenced the
+# discriminant) and a folded local's re-assignment (refused as a "NARROWER binding"). The list walk.
+run_x86 issue789_option_ptr_list_walk 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.
