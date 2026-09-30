@@ -5819,13 +5819,14 @@ build_reject_has reject_agg_reassign_scalar "check: type mismatch at line 10"
 build_reject reject_scalar_arg_agg_param
 ## Types §4.6 / TYP-6 user CONVERSION-CONSTRUCTOR `@convert`: `Celsius(42)` (a non-brand target type)
 ## dispatches to the in-scope `@convert fn(u64) -> Celsius`; the struct result binds + a field read
-## yields 42. x86_64-only register-return delivery, so run_x86 (sweep-excluded).
-run_x86 convert_user 42
+## yields 42. Cross-backend since #683: the emit twins rename a user-conversion call to its @convert
+## before emission (`driver::d_desugar_convert`), so the sweeps walk all four of these.
+run convert_user 42
 ## @convert whose target struct is >7 words → routes the wide aggregate return through the sret path.
-run_x86 convert_sret 42
+run convert_sret 42
 ## @convert whose TARGET is a builtin-conv name (`u64(structval)`): a struct operand routes to the
 ## @convert instead of the scalar lattice (which silently read word 0 — a miscompile now fail-loud).
-run_x86 convert_to_builtin 42
+run convert_to_builtin 42
 ## TYP-6 aggregate-operand soundness: a builtin conversion `u64(v)` over an AGGREGATE operand with NO
 ## matching `@convert` must FAIL LOUD (never a silent word-0 read). A named struct operand and a TUPLE
 ## operand (which `expr_type_span` cannot name — the tuple gap this closes) are both rejected; a tuple
@@ -5837,7 +5838,7 @@ check_reject reject_p0_f32_zeroarg
 emit_reject_has wat reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
 emit_reject_has aarch64 reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
 emit_reject_has riscv64 reject_p0_f32_zeroarg "scalar conversion requires exactly one operand"
-run_x86 convert_agg_user 42
+run convert_agg_user 42
 run module_mut_global 42
 run module_mut_struct_global 42
 run module_mut_array_global 42
@@ -10761,6 +10762,9 @@ run_a64 unchecked_add_ovf 0
 ## I11/CG-8 scoping for `*`/`-`: `unchecked` drops the guard → 6148914691236517206*3 wraps to 2; 0-214 low-byte 42.
 run_a64 unchecked_mul_ovf 2
 run_a64 unchecked_sub_ovf 42
+## wasm delivers main's result MODULO 256 like the OS does (#683); before, `proc_exit` got the whole
+## word (2^64 - 214) and wasmtime refused it with exit 1.
+run_wat unchecked_sub_ovf 42
 run_a64 inline_call 42
 run_a64 stack_args 42
 run_a64 stack_float_args 42
