@@ -4475,7 +4475,7 @@ PInfo := struct { ok : bool, ss : usize, sl : usize, lbl : usize, nl : bool, ah 
 ## argument is a string LITERAL. (Templates / value args are a follow-up; a print with a non-literal
 ## arg falls through to the generic call path, which traps as an undefined callee.)
 print_call_info := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> PInfo {
-  mut r := PInfo(ok = false, ss = 0, sl = 0, lbl = 0, nl = false, ah = 0)
+  mut r := PInfo(ok = false, ss = 0, sl = 0, lbl = 0, nl = false, ah = unchecked bitcast(ptr(mut Arg), 0))
   match deref(e) {
     Expr::Call(cs, cl, nn, ah) => {
       nm := str_at((src + cs), cl)
@@ -7879,7 +7879,7 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   ## arm. The three native backends need no flag: they evaluate the statement into the result register
   ## and the tail expression overwrites it (aarch64 emit_a64_fn / riscv64 emit_rv_fn: statements, then
   ## `if (not void) and has_tail { emit …(d.value) }`).
-  emit_wat_stmts(head, head, false, (not void) and (not has_ret) and ex_is_no_tail(tail), sb, a, src, params_head, pcount, decls, 0, 0)
+  emit_wat_stmts(unchecked bitcast(usize, head), head, false, (not void) and (not has_ret) and ex_is_no_tail(tail), sb, a, src, params_head, pcount, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
   if (not void) and (not has_ret) {
     if ex_is_no_tail(tail) {
       ## no tail EXPRESSION: either a tail value-match just returned in every arm (this caps the
@@ -7893,22 +7893,22 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
       push_str(sb, "    (local.set ")
       push_int(sb, dscb)
       push_str(sb, " ")
-      emit_wat_expr(tail, sb, a, src, params_head, pcount, head, decls, 0, 0)
+      emit_wat_expr(tail, sb, a, src, params_head, pcount, head, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
       push_str(sb, ")\n")
-      wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, head, decls, 0, 0)
+      wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, head, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
       push_str(sb, "    (local.get ")
       push_int(sb, dscb)
       push_str(sb, ")\n")
       WAT_DEF_N = 0
     } else {
       push_str(sb, "    ")
-      emit_wat_expr(tail, sb, a, src, params_head, pcount, head, decls, 0, 0)
+      emit_wat_expr(tail, sb, a, src, params_head, pcount, head, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
       push_str(sb, "\n")
     }
   } else if WAT_DEF_N > 0 {
     ## a VOID fn (or one whose paths all `return`): the body-scope cleanups still run at the
     ## fall-through end. For the all-return shape this is dead code after a `(return …)` — harmless.
-    wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, head, decls, 0, 0)
+    wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, head, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
     WAT_DEF_N = 0
   }
 }

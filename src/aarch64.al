@@ -8637,8 +8637,8 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   if a64_fn_is_naked(src, d.name_start, d.name_len) {
     emit_a64_export(sb, src, d.name_start, d.name_len)
     if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(A64_TEST_DECL_INDEX)) } else if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { a64_emit_fn_label(sb, src, d) } ; push_str(sb, ":\n")
-    emit_a64_stmts(d.body_stmts, sb, a, src, ephead, pcount, d.body_stmts, decls, frame, 0, 0)
-    if not ex_is_no_tail(d.value) { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+    emit_a64_stmts(unchecked bitcast(usize, d.body_stmts), sb, a, src, ephead, pcount, d.body_stmts, decls, frame, unchecked bitcast(ptr(mut Bind), 0), 0)
+    if not ex_is_no_tail(d.value) { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
     return
   }
   ## FLOAT ABI (SysV / AAPCS64): float params arrive in d0–d7, integer params in x0–x7 (INDEPENDENT
@@ -8828,11 +8828,11 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
     pi += 1
   }
   void := d.ret_tl == 0
-  emit_a64_stmts(d.body_stmts, sb, a, src, ephead, pcount, d.body_stmts, decls, frame, 0, 0)
+  emit_a64_stmts(unchecked bitcast(usize, d.body_stmts), sb, a, src, ephead, pcount, d.body_stmts, decls, frame, unchecked bitcast(ptr(mut Bind), 0), 0)
   has_tail := not ex_is_no_tail(d.value)
   ## A void function may still end in a value-position CALL whose result is discarded by the language.
   ## Its side effect is real; dropping Decl.value here loses the final `bl` (not merely a return value).
-  if void and has_tail { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+  if void and has_tail { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
   ## emit the trailing expression as the fn value — UNLESS it is the no-tail sentinel (the body's last
   ## statement, e.g. a tail match, already left the value in x0; emitting -1 would clobber it).
   if (not void) and has_tail {
@@ -8840,11 +8840,11 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
     ## 2b — same as the explicit-Return path at Stmt::Return); a 1..8-word struct-returning fn's trailing
     ## value delivers word k → x_k (§8 piece 2); an enum-returning fn delivers disc+payload (§8 piece 3);
     ## otherwise the scalar emit. These four are mutually exclusive (see the A64_RET_* set-up in this fn).
-    if byte_ret_n >= 1 { emit_a64_byte_array_value(d.value, sb, byte_ret_n, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
-    if A64_RET_SRET_NL != 0 { emit_a64_sret_store(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
-    if A64_RET_STRUCT_NL != 0 { emit_a64_struct_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
-    if A64_RET_ENUM_NL != 0 { emit_a64_enum_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
-    if byte_ret_n == 0 and A64_RET_STRUCT_NL == 0 and A64_RET_ENUM_NL == 0 and A64_RET_SRET_NL == 0 { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+    if byte_ret_n >= 1 { emit_a64_byte_array_value(d.value, sb, byte_ret_n, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+    if A64_RET_SRET_NL != 0 { emit_a64_sret_store(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+    if A64_RET_STRUCT_NL != 0 { emit_a64_struct_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+    if A64_RET_ENUM_NL != 0 { emit_a64_enum_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+    if byte_ret_n == 0 and A64_RET_STRUCT_NL == 0 and A64_RET_ENUM_NL == 0 and A64_RET_SRET_NL == 0 { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
   }
   emit_a64_epilogue(frame, sb)
   A64_SUB_GPS = 0

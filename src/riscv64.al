@@ -7719,8 +7719,8 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   if rv_fn_is_naked(src, d.name_start, d.name_len) {
     emit_rv_export(sb, src, d.name_start, d.name_len)
     if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(RV_TEST_DECL_INDEX)) } else if d.name_len == 0 { rv_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { push_str(sb, fname) } ; push_str(sb, ":\n")
-    emit_rv_stmts(d.body_stmts, sb, a, src, ephead, pcount, d.body_stmts, decls, frame, 0, 0)
-    if not ex_is_no_tail(d.value) { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+    emit_rv_stmts(unchecked bitcast(usize, d.body_stmts), sb, a, src, ephead, pcount, d.body_stmts, decls, frame, unchecked bitcast(ptr(mut Bind), 0), 0)
+    if not ex_is_no_tail(d.value) { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
     return
   }
   ## GENERICS (§8 mono): a generic instance whose RETURN type IS the type-param `T` returns the concrete
@@ -7871,16 +7871,16 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
     pi += 1
   }
   void := d.ret_tl == 0
-  emit_rv_stmts(d.body_stmts, sb, a, src, ephead, pcount, d.body_stmts, decls, frame, 0, 0)
+  emit_rv_stmts(unchecked bitcast(usize, d.body_stmts), sb, a, src, ephead, pcount, d.body_stmts, decls, frame, unchecked bitcast(ptr(mut Bind), 0), 0)
   ## skip the no-tail sentinel (a tail statement, e.g. a match, already left the value in a0).
   if (not void) and (not ex_is_no_tail(d.value)) {
     ## a struct-returning fn delivers word k → a_k (§8 piece 2); an enum-returning fn delivers disc+payload
     ## (§8 piece 3); otherwise the scalar emit.
-    if RV_RET_STRUCT_NL != 0 { emit_rv_struct_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
-    if RV_RET_ENUM_NL != 0 { emit_rv_enum_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+    if RV_RET_STRUCT_NL != 0 { emit_rv_struct_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+    if RV_RET_ENUM_NL != 0 { emit_rv_enum_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
     ## a WIDE-struct (SRET) fn's TRAILING value delivers through the LP64 indirect-result pointer too.
-    if RV_RET_SRET_NL != 0 { emit_rv_sret_store(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
-    if RV_RET_STRUCT_NL == 0 and RV_RET_ENUM_NL == 0 and RV_RET_SRET_NL == 0 { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+    if RV_RET_SRET_NL != 0 { emit_rv_sret_store(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+    if RV_RET_STRUCT_NL == 0 and RV_RET_ENUM_NL == 0 and RV_RET_SRET_NL == 0 { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
   }
   ## A void function can still end in a side-effecting call: the parser stores the final expression in
   ## Decl.value, while the value-return path above is intentionally skipped for void. Execute that tail;
@@ -7888,8 +7888,8 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
   if void and (not ex_is_no_tail(d.value)) {
     vrs := rv_call_ret_sret_span(d.value, decls, src, a)
     vre := rv_call_ret_enum_sret_span(d.value, decls, src, a)
-    if vrs.n != 0 or vre.n != 0 { emit_rv_sret_discard(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
-    if vrs.n == 0 and vre.n == 0 { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, 0, 0) }
+    if vrs.n != 0 or vre.n != 0 { emit_rv_sret_discard(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+    if vrs.n == 0 and vre.n == 0 { emit_rv_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
   }
   emit_rv_epilogue(frame, sb)
   RV_SUB_GPS = 0
