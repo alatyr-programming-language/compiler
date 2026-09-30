@@ -2658,6 +2658,19 @@ global_array_byte_eek := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl 
   d := deref(decl_get(decls, usize(di)))
   fixed_array_byte_eek(src, d.name_start, d.name_len)
 }
+## #823 — the NICHE-FOLDED `Option(ptr(T))` type a module-level `mut` global `[ns, ns+nl)` is declared
+## with (`mut G : Option(ptr(T)) = Option.None`), else 0/0. Such a global is ONE word in `.data`
+## (None = 0), read and written like a scalar global; its initializer's bare `Option.None` names no type
+## argument, so the ANNOTATION decides, in the data cell, the store, the read and a `match`.
+global_folded_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  if not is_module_mut_global(decls, src, ns, nl) { return CSpan(s = 0, n = 0) }
+  di := global_array_decl_idx(decls, src, ns, nl)
+  if di < 0 { return CSpan(s = 0, n = 0) }
+  d := deref(decl_get(decls, usize(di)))
+  lt := local_type_span(src, d.name_start, d.name_len)
+  if is_niche_folded(src, lt.s, lt.n) { return CSpan(s = lt.s, n = lt.n) }
+  CSpan(s = 0, n = 0)
+}
 ## The STATIC ELEMENT COUNT of a module-level fixed ARRAY global. Array literals carry their count in the
 ## AST; an `embed(...)` initializer is a StrLit, so recover N from the declaration's `[T; N]` annotation.
 ## Returns 0 for non-array globals. This keeps bounds, address-of, loads, stores, and `.len` on one query.
@@ -4402,7 +4415,9 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   ## which the callee then dereferenced (a SIGSEGV for `None`, a stray read for `Some`). Stage the one
   ## folded word in an agg-temp and pass its address, exactly as the struct/enum ctor case below does. A
   ## folded LOCAL or PARAMETER keeps its existing by-reference path (its own frame word / the pointer).
-  if var_name_span(e).n == 0 and cx.agg_tmp >= 0 and folded_value_span(e, CSpan(s = 0, n = 0), cx.slots, cx.decls, cx.src, a).n != 0 {
+  ## #823 — a folded `mut` GLOBAL has no frame word to pass by reference either; stage its word too.
+  ev := var_name_span(e)
+  if (ev.n == 0 or global_folded_span(cx.decls, cx.src, ev.s, ev.n).n != 0) and cx.agg_tmp >= 0 and folded_value_span(e, CSpan(s = 0, n = 0), cx.slots, cx.decls, cx.src, a).n != 0 {
     emit_folded_arg(e, sb, cx, a, nl)
     return
   }
@@ -21851,7 +21866,11 @@ folded_value_span := fn(v : ptr(Expr), expect : CSpan, slots : ptr(SVec), decls 
     return z
   }
   vn := var_name_span(v)
-  if vn.n != 0 { return folded_slot_span(slots, src, vn.s, vn.n) }
+  if vn.n != 0 {
+    if slot_of(slots, src, vn.s, vn.n) >= 0 { return folded_slot_span(slots, src, vn.s, vn.n) }
+    ## #823 — a folded `mut` global (no frame slot).
+    return global_folded_span(decls, src, vn.s, vn.n)
+  }
   crt := call_ret_ty_span(v, decls, src, a)
   if crt.n != 0 {
     if is_niche_folded(src, crt.s, crt.n) { return crt }
@@ -29192,7 +29211,13 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
         efi := enum_lit_full(d.value)
         gbyte := global_array_byte_eek(decls, src, d.name_start, d.name_len)
         gsti := str_lit_info(d.value)
-        if efi.is_e {
+        gfold := global_folded_span(decls, src, d.name_start, d.name_len)
+        if gfold.n != 0 {
+          ## #823 — a folded `Option(ptr(T))` global is ONE word. A pointer is not a link-time constant
+          ## here, so only `None` (the null word) initializes it; `Some(…)` is refused rather than folded.
+          if efi.is_e == false or efi.np != 0 { panic("selfhost: a module-level Option(ptr(T)) global must be initialized with Option.None (assign the Some value at run time)") }
+          push_str(sb, "  .quad 0\n")
+        } else if efi.is_e {
           if is_union_decl(decls, src, efi.es, efi.el) {
             ## RAW UNION global initializer: payload starts at LABEL+0 and there is no discriminant.
             ## Multi-payload members remain fail-loud because §6.3 does not define their layout.
