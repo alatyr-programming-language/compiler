@@ -6442,6 +6442,12 @@ run accept_enum_match_deref_annotated_local 42
 # Issue #752 — `x := <call>?` over a multi-word Ok payload binds every payload word (x86_64 returned 0).
 run issue752_try_multiword_payload 42
 build_reject_has reject_try_multiword_value "multi-word Ok payload"
+# Issue #771 — a `match` directly on a call returning `Result(S, E)` with a 3+-word struct payload. The
+# match scratch held two words and the rest were stored over the neighbouring locals (the first row ran
+# to 1 on the parent, a silent wrong value) or, with too few locals below it, the build aborted (the
+# second row, exit 1). The scratch level is now sized from the widest enum a direct call match stages.
+run issue771_result_call_match_neighbour 42
+run issue771_result_call_match_wide 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42

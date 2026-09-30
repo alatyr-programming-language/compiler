@@ -144,8 +144,6 @@ refusing.
 - Match the enum *value* instead of re-deriving the variant from numbers or names. The scrutinee shapes
   the lowering is proved on are a parameter's `deref`, a bound local, or a direct call whose declared
   result is the enum. `ty_kind(t)` exists so a `match` can use it as its scrutinee.
-- While #771 is open, bind a call that returns a multi-word `Result(S, E)` to a local before matching
-  it. A direct `match f()` over a 3+-word payload overwrites a neighbouring local.
 
 ```alatyr
 ## not this
