@@ -407,6 +407,13 @@ Fire on the exact new shape. A broad lowering fix once regressed ~90 stdlib test
 shipped fired only on the shape that was broken. When one fact is recovered by scanning the source in
 more than one place, `grep` for the other copies — that is part of the fix, not a follow-up.
 
+**Write the strict forms.** Before writing code, read `.agents/skills/alatyr-lane/strict_forms.md`.
+It lists the forms this compiler has shipped defects in, the form to write instead, and the check that
+holds each. `scripts/strict_forms_check.sh` is a stage of the full gate. It refuses a new unacknowledged
+`unchecked`, a new kind compared with a literal, a new inline `?` value, a new implicit `usize` ↔ `ptr`
+crossing and a new null sentinel, and it names the file and line. Fix the form first. If the form is
+really required, write `## <rule>-ok: <reason>` on its line or the line above, with a real reason.
+
 **Do not add a `_ =>` arm over an enumerable scrutinee.** `scripts/wildcard_arm_check.sh` is a stage
 of the full gate and refuses one, naming the file and the line. Spell the absorbed variants as one
 OR-pattern group arm (`wildcard_enumeration.md` §3); if the wildcard is genuinely required, say so
