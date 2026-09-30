@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An array literal passed straight to a `[u8; N]` or `[i8; N]` parameter carries its values.** On
+  x86_64 `f([1, 7])` staged one word per element while the callee reads packed bytes, so `xs[1]` read
+  **0** (the second byte of element 0) on a clean build. The literal is now staged as packed bytes, the
+  layout a typed local already passes (#795).
+
 ## 0.2.5 — 2026-09-30
 
 - **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved

@@ -6486,6 +6486,10 @@ run accept_enum_match_param_deref 42
 # …and the same `match deref(q)` over an ANNOTATED pointer-to-enum LOCAL, which the lowering now
 # binds like the parameter; `G` is variant 1, so the parent's integer path returned 1 here, silently.
 run accept_enum_match_deref_annotated_local 42
+# Issue #795 — an array LITERAL passed straight to a `[u8|i8; N]` parameter is staged as packed bytes,
+# the layout the callee reads; it was staged one word per element and `f([1, 7])` read 0 for `xs[1]`.
+# Register and stack argument positions, a 10-byte literal, `i8` and runtime-valued elements.
+run issue795_byte_array_literal_arg 42
 # Issue #752 — `x := <call>?` over a multi-word Ok payload binds every payload word (x86_64 returned 0).
 run issue752_try_multiword_payload 42
 build_reject_has reject_try_multiword_value "multi-word Ok payload"
