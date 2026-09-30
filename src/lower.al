@@ -4832,6 +4832,74 @@ callee_folded_arg := fn(e : ptr(Expr), cidx : i64, pidx : usize, cx : ptr(LCtx),
   folded_value_span(e, pt, cx.slots, cx.decls, cx.src, a).n != 0
 }
 
+## #795 — the BYTE element kind (`byte_type_eek`: 8 `u8`, 10 `i8`, 11 `bits8`) of parameter `pidx` of
+## the callee at `cidx` when that parameter is a fixed array `[u8|i8|bits8; N]`, else 0 — the same
+## question `emit_fn`'s param binder answers for the callee (`pmode == 1` array param, its `ts`/`tl`
+## the ELEMENT type), which reads such a parameter through its pointer as N packed bytes.
+callee_byte_array_param_eek := fn(cidx : i64, pidx : usize, cx : ptr(LCtx)) -> u8 {
+  if cidx < 0 { return 0 }
+  d := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(cidx))))
+  mut pp := d.params_head
+  mut k := 0
+  ## null-ok: Param.next — a parameter list ends in a null link (ast.al)
+  while unchecked bitcast(usize, pp) != 0 {
+    pm := deref(param_p(pp))
+    if k == pidx {
+      if pm.pmode != 1 { return 0 }
+      return byte_type_eek(cx.src, pm.ts, pm.tl)
+    }
+    k += 1
+    pp = pm.next
+  }
+  0
+}
+
+## #795 — pass an ARRAY LITERAL to a byte-packed `[u8|i8|bits8; N]` parameter: stage its elements as
+## PACKED BYTES in an agg-temp block and push the block's address — the layout a packed local passes.
+## The generic literal argument path stages one WORD per element, so the callee read element 1 from
+## the second byte of element 0 (`f([1, 7])` answered 0). The literal is typed by the parameter here,
+## exactly as `fixed_array_byte_eek` types a literal bound to an annotated local.
+emit_byte_array_lit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  ali := array_lit_info(e)
+  boff := agg_alloc(cx)
+  if ali.nel > cx.agg_w * 8 { panic("selfhost: a byte-array literal argument is wider than the aggregate-value call-arg temp block") }
+  mut g := ali.ehead
+  mut k : i64 = 0
+  ## null-ok: Arg.next — an argument list ends in a null link (ast.al "0 = end")
+  while unchecked bitcast(usize, g) != 0 {
+    ga := deref(arg_p(g))
+    if struct_lit_info(ga.e).is_s or enum_lit_info(ga.e).is_e or str_lit_info(ga.e).is_s or array_lit_info(ga.e).is_a {
+      panic("selfhost: a byte-packed array literal must contain scalar elements")
+    }
+    emit_gas(ga.e, sb, cx, a, nl)
+    push_str(sb, "  popq %rax\n  movb %al, -")
+    push_int(sb, (boff + 1) * 8 - k)
+    push_str(sb, "(%rbp)\n")
+    k += 1
+    g = ga.next
+  }
+  bent := SlotEntry(ns = 0, nl = 0, off = usize(boff), sns = 0, snl = 0, ek = 5, estride = 1, eek = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
+  emit_agg_base_addr(bent, sb)
+  push_str(sb, "  pushq %rax\n")
+}
+
+## The ONE per-parameter argument dispatch of `emit_call_args`, for its stack-arg and register-arg
+## loops alike: an out-scalar parameter takes the argument's address, a folded `Option(ptr(T))`
+## parameter a staged word, a byte-packed array parameter a staged byte block (#795), and every other
+## argument the shape-driven `emit_arg`.
+emit_param_arg := fn(e : ptr(Expr), cidx : i64, pidx : usize, tmp_off : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  reject_scalar_str_elem_arg(e, cx, cidx, pidx)
+  if callee_out_scalar(cx.decls, cx.src, a, cidx, pidx) {
+    emit_out_scalar_arg(e, sb, cx, a, nl)
+  } else if callee_folded_arg(e, cidx, pidx, cx, a) {
+    emit_folded_arg(e, sb, cx, a, nl)
+  } else if array_lit_info(e).is_a and cx.agg_tmp >= 0 and is_byte_array_eek(callee_byte_array_param_eek(cidx, pidx, cx)) {
+    emit_byte_array_lit_arg(e, sb, cx, a, nl)
+  } else {
+    emit_arg(e, sb, cx, a, nl, tmp_off)
+  }
+}
+
 ## A scalar callee parameter cannot consume a two-word str element. Most str-element consumers are
 ## routed through `view_temp_arg` (which deliberately materializes the pair), but that route is shape
 ## based and otherwise cannot see the callee's expected type. Keep this call-edge fence here so an
@@ -4971,27 +5039,13 @@ emit_call_args := fn(args_head : ptr(mut Arg), skip : i64, skip2 : i64, skip3 : 
   while k > reg_cap {
     k = k - 1
     ea := arg_expr_at(args_head, arg_src_idx(k, skip, skip2, skip3), a)
-    reject_scalar_str_elem_arg(ea, cx, cidx, arg_src_idx(k, skip, skip2, skip3))
-    if callee_out_scalar(cx.decls, cx.src, a, cidx, arg_src_idx(k, skip, skip2, skip3)) {
-      emit_out_scalar_arg(ea, sb, cx, a, nl)
-    } else if callee_folded_arg(ea, cidx, arg_src_idx(k, skip, skip2, skip3), cx, a) {
-      emit_folded_arg(ea, sb, cx, a, nl)
-    } else {
-      emit_arg(ea, sb, cx, a, nl, str_arg_tmp_off(args_head, skip, skip2, skip3, k, cx, a))
-    }
+    emit_param_arg(ea, cidx, arg_src_idx(k, skip, skip2, skip3), str_arg_tmp_off(args_head, skip, skip2, skip3, k, cx, a), sb, cx, a, nl)
   }
   ## register args (indices 0..min(nvals,6)-1): lower onto the stack, then pop in reverse
   nreg := if nvals > reg_cap { reg_cap } else { nvals }
   for i in 0..nreg {
     ra := arg_expr_at(args_head, arg_src_idx(i, skip, skip2, skip3), a)
-    reject_scalar_str_elem_arg(ra, cx, cidx, arg_src_idx(i, skip, skip2, skip3))
-    if callee_out_scalar(cx.decls, cx.src, a, cidx, arg_src_idx(i, skip, skip2, skip3)) {
-      emit_out_scalar_arg(ra, sb, cx, a, nl)
-    } else if callee_folded_arg(ra, cidx, arg_src_idx(i, skip, skip2, skip3), cx, a) {
-      emit_folded_arg(ra, sb, cx, a, nl)
-    } else {
-      emit_arg(ra, sb, cx, a, nl, str_arg_tmp_off(args_head, skip, skip2, skip3, i, cx, a))
-    }
+    emit_param_arg(ra, cidx, arg_src_idx(i, skip, skip2, skip3), str_arg_tmp_off(args_head, skip, skip2, skip3, i, cx, a), sb, cx, a, nl)
   }
   ## Pop the register args (in reverse — top of stack = the last arg) into their SysV registers.
   ## INTEGER-ONLY callees (the entire self-host source + any all-int call) take the byte-identical
