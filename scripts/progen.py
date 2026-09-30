@@ -12,63 +12,123 @@ on at least one of them, found without anyone deciding what the right answer is.
 
 WHAT A GENERATED PROGRAM IS
 ---------------------------
-One package-less file: a handful of functions over `i64` or `u64`, each a body of typed locals,
-bounded `while` loops, `if` statements and expressions over literals (negative ones included, #444),
-parameters, calls to earlier functions, the glyph operators `+ - * / % & | ^` and the six
-comparisons. It is kept well-defined on purpose, so that a disagreement can only be a compiler's:
+One package-less file over ONE scalar type, `i64` or `u64` (the program's `ty`): a handful of
+functions, each a body of typed locals, bounded `while` loops, `if` statements and expressions over
+literals (negative ones included, #444), parameters, calls to earlier functions, the glyph operators
+`+ - * / % & | ^` and the six comparisons.
+
+On top of that scalar core a program switches on, independently and per seed, any of four FORMS
+(`--forms` narrows the set; `self-test` forces each one alone):
+  * struct  — `S1 := struct { k1 : ty, ... }` with one to four fields (multi-word ones included);
+              literals `S1(k1 = e, ...)`, immutable and `mut` locals, field reads `s.k1`, field
+              writes `s.k1 = e`, by-value struct parameters, struct copies, and functions returning a
+              struct whose field is read straight off the call (`mk(..).k2`);
+  * enum    — `E1 := enum { V1(ty, ty), V2, ... }` with zero to three payload words per variant;
+              constructions `E1.V1(a, b)`, enum locals and parameters, enum-returning functions
+              matched straight off the call, and EXHAUSTIVE `match` — every variant spelled, no
+              wildcard — both as an expression and as a statement;
+  * result  — functions returning `Result(T, ty)` (T is `ty` or, with structs on, a struct), an early
+              `Err` under a generated condition, `x := f(..)?` bindings (the ONLY position a
+              multi-word `?` value is used in: elsewhere the compiler refuses it by design, #758),
+              and `match f(..) { Result::Ok(q) => {..} Result::Err(q) => {..} }` everywhere else;
+  * brand   — `B1 := brand(ty)`, brand locals and parameters, brand-returning functions, and only the
+              EXPLICIT conversions Types §4.2/§5.4 prescribe: `B1(e)` in, `ty(b)` out, a sibling via
+              `B2(ty(b1))`. Arithmetic on a brand goes through its block: `B1(unchecked (ty(a) + ty(b)))`.
+A program with no form switched on is the original scalar program, so the scalar differential keeps
+its full strength.
+
+It is kept well-defined on purpose, so that a disagreement can only be a compiler's:
   * every arithmetic operator is wrapped in `unchecked (...)`, so overflow is two's-complement wrap,
     specified (CG-7) and identical on every backend — never a trap one backend takes and another not;
   * every divisor is nonzero by construction (`(d % 7) + 8` for i64, `(d % 7) + 1` for u64), and a
     signed division never meets `MIN / -1` because the divisor is at least 2 in magnitude;
   * every loop runs a literal number of iterations (a counter against a small bound);
+  * no function calls itself or a later one, so every program terminates;
   * `main` folds the results into an exit code in 1..113 — below 126, as WASI requires.
 Every program also carries an ambient `checked_add` trigger in an uncalled function: a single file that
 spells no prelude trigger gets NO prelude, so all four backends take the built-in operator path and a
 defect in the library path is invisible (#532).
 
+WHAT THE NON-x86 BACKENDS DO WITH THE FORMS (measured on `main` b8cf45d)
+-----------------------------------------------------------------------
+aarch64, riscv64 and wasm implement a scalar core plus struct locals, by-value struct parameters and
+enum locals with `match`; a function RETURNING a struct, an enum or a `Result`, and any brand
+construction, is lowered to a deliberate trap there (`brk`/`unreachable`, exit 133/134). A trap is
+fail-loud and is not a disagreement, so on those shapes the check compares nothing beyond x86_64 until
+the backend grows the shape — at which point the same seeds start comparing, with no change here.
+
 DETERMINISM, TIMEOUTS, REDUCTION
 --------------------------------
-`--seed S` makes the whole run reproducible; every finding prints its own program seed. A run that
-breaches the wall-clock ceiling is re-run ALONE before it is believed (#537): "the machine was busy"
-and "this program hangs" are different findings. A disagreement is REDUCED — statements dropped,
-expressions replaced by one of their operands or a literal — while the disagreement persists, so the
-report is something a person can read.
+`--seed S` makes the whole run reproducible; every finding prints its own program seed. `--jobs N`
+changes only how many programs run at once, never which programs. A run that breaches the wall-clock
+ceiling is re-run ALONE before it is believed (#537): "the machine was busy" and "this program hangs"
+are different findings. A disagreement is REDUCED — statements dropped, expressions replaced by one of
+their operands or a literal — while the disagreement persists, so the report is something a person can
+read. Each finding is written to `--out` as `wrong-<seed>.al` (the reduced program, its per-backend
+exits in its header) plus `wrong-<seed>.orig.al` (the program as generated), and one line in
+`findings.tsv`.
 
 NOT IN THE AUTHORITATIVE GATE (#582 item 7): its input is random by design, and the landing verdict
-must be reproducible. Findings become ordinary fixtures. `--self-test` is deterministic and proves the
-comparator can see a disagreement at all.
+must be reproducible. It runs nightly instead (`.github/workflows/progen-nightly.yml`), and its findings
+become issues and then ordinary fixtures. `self-test` is deterministic and proves the comparator can
+see a disagreement at all and that every form is generated, accepted and run.
 
 Usage (inside `nix develop`, from the repository root, after `seed/alatyr build package.al`):
-    python3 scripts/progen.py run [--seed S] [--count N] [--cc PATH] [--out DIR]
-    python3 scripts/progen.py show --seed S          # print the program a seed generates
+    python3 scripts/progen.py run [--seed S] [--count N] [--jobs J] [--forms F,..] [--cc PATH] [--out DIR]
+    python3 scripts/progen.py show --seed S [--forms F,..]   # print the program a seed generates
     python3 scripts/progen.py self-test [--cc PATH]
 """
 import argparse
+import concurrent.futures
 import os
 import random
+import re
+import resource
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 CEILING = 10.0          # seconds per guest run, as the sweeps use
 TRAP_MIN = 128          # an exit code at or above this is a signal/trap, not a value
+FORMS = ['struct', 'enum', 'result', 'brand']
+FORM_P = 0.4            # each form is switched on for a program with this probability
 
 # ---------------------------------------------------------------------------------------------
 # The AST. Small tuples, so the reducer can rewrite them structurally.
+#
+# KINDS (the type of a value):  'v' the scalar `ty` · ('s', S) struct · ('e', E) enum ·
+#                               ('b', B) brand · ('r', ok) Result(ok, ty) with ok 'v' or ('s', S)
+#
+# Scalar-valued expressions:
 #   ('lit', v)                         integer literal (v may be negative for i64)
-#   ('var', name)
+#   ('var', name)                      any kind — the kind is the binding's
 #   ('bin', op, l, r)                  op in + - * & | ^
 #   ('div', op, l, r)                  op in / % ; r is wrapped nonzero at render time
 #   ('cmp', op, l, r)                  bool-valued, only as an `if` condition
-#   ('if', c, t, f)                    value-valued
-#   ('call', fname, [args])
+#   ('if', c, t, f)
+#   ('call', fname, [args])            kind = the callee's return kind
+#   ('field', obj, fname)              obj: a struct-kind expression (a var or a call)
+#   ('unbrand', b)                     `ty(b)`, b a brand-kind expression
+#   ('match', scrut, E, [(V, [binds], expr)])       exhaustive; scrut a var of kind ('e', E)
+#   ('rmatch', call, okname, okexpr, errname, errexpr)   `match call { Result::Ok .. Result::Err .. }`
+# Non-scalar constructors:
+#   ('slit', S, [exprs])  ('elit', E, V, [exprs])  ('bmk', B, expr)
 # Statements:
-#   ('let', name, expr, mutable)
+#   ('let', name, expr, mutable)       scalar local
 #   ('set', name, expr)
-#   ('while', counter, bound, [stmts])   `counter` is declared by the loop itself
+#   ('while', counter, bound, [stmts]) `counter` is declared by the loop itself
 #   ('ifs', c, [then], [else])
+#   ('slet', name, S, value, mutable)  struct local
+#   ('fset', name, fname, expr)        field write on a `mut` struct local
+#   ('elet', name, E, value)           enum local
+#   ('blet', name, B, value)           brand local
+#   ('mstmt', scrut, E, [(V, [binds], [stmts])])   exhaustive `match` statement
+#   ('try', name, call)                `name := call?` — only inside a Result-returning function
+# A function: {'name', 'params': [(p, kind)], 'ret': kind, 'body': [stmts], 'tail': ...}; the tail is
+# the returned value, except for a Result function where it is ('rtail', cond, errexpr, okvalue).
 # ---------------------------------------------------------------------------------------------
 
 ARITH = ['+', '-', '*', '&', '|', '^']
@@ -76,12 +136,36 @@ DIVS = ['/', '%']
 CMPS = ['==', '!=', '<', '<=', '>', '>=']
 
 
+class Scope:
+    """What a point in a body can see: every binding's kind, the mutable scalars, the mutable structs."""
+
+    def __init__(self):
+        self.kinds = {}
+        self.muts = []
+        self.smuts = []
+
+    def copy(self):
+        s = Scope()
+        s.kinds = dict(self.kinds)
+        s.muts = list(self.muts)
+        s.smuts = list(self.smuts)
+        return s
+
+    def of(self, kind):
+        return [n for n, k in self.kinds.items() if k == kind]
+
+
 class Gen:
-    def __init__(self, seed, ty):
+    def __init__(self, seed, ty, forms):
         self.r = random.Random(seed)
         self.ty = ty                    # 'i64' or 'u64'
-        self.fns = []                   # (name, nparams) generated so far
+        self.forms = set(forms)
+        self.fns = []                   # (name, [param kinds], ret kind) generated so far
+        self.structs = {}               # S -> [field names]
+        self.enums = {}                 # E -> [(V, npayload)]
+        self.brands = []
         self.n = 0
+        self.in_result = False
 
     def fresh(self, p):
         self.n += 1
@@ -93,65 +177,283 @@ class Gen:
             k = -k
         return ('lit', k)
 
-    def expr(self, scope, depth):
+    # --- declarations ------------------------------------------------------------------------
+
+    def declare(self):
+        if 'struct' in self.forms:
+            for _ in range(self.r.randint(1, 2)):
+                s = self.fresh('S')
+                self.structs[s] = [f'k{i + 1}' for i in range(self.r.randint(1, 4))]
+        if 'enum' in self.forms:
+            for _ in range(self.r.randint(1, 2)):
+                e = self.fresh('E')
+                nv = self.r.randint(2, 4)
+                self.enums[e] = [(f'V{i + 1}', self.r.choice([0, 1, 1, 2, 3])) for i in range(nv)]
+        if 'brand' in self.forms:
+            self.brands = [self.fresh('B') for _ in range(self.r.randint(1, 2))]
+
+    def kinds_available(self):
+        ks = [('s', s) for s in self.structs] + [('e', e) for e in self.enums] + [('b', b) for b in self.brands]
+        return ks
+
+    # --- values of a given kind --------------------------------------------------------------
+
+    def calls_returning(self, kind):
+        return [(f, ps) for f, ps, rk in self.fns if rk == kind]
+
+    def call(self, f, pkinds, sc, depth):
+        return ('call', f, [self.value(sc, k, depth) for k in pkinds])
+
+    def value(self, sc, kind, depth):
+        """An expression of `kind`. With depth <= 0 and an empty scope it is literal-only, which is
+        what `main`'s argument lists use."""
+        if kind == 'v':
+            return self.expr(sc, depth)
+        vars_ = sc.of(kind) if sc else []
         r = self.r.random()
-        if depth <= 0 or r < 0.25:
-            if scope and self.r.random() < 0.6:
-                return ('var', self.r.choice(scope))
-            return self.lit()
-        if r < 0.62:
-            return ('bin', self.r.choice(ARITH), self.expr(scope, depth - 1), self.expr(scope, depth - 1))
-        if r < 0.74:
-            return ('div', self.r.choice(DIVS), self.expr(scope, depth - 1), self.expr(scope, depth - 1))
-        if r < 0.86:
-            return ('if', self.cond(scope, depth - 1), self.expr(scope, depth - 1), self.expr(scope, depth - 1))
-        if self.fns:
-            f, k = self.r.choice(self.fns)
-            return ('call', f, [self.expr(scope, depth - 1) for _ in range(k)])
+        if vars_ and r < 0.45:
+            return ('var', self.r.choice(vars_))
+        makers = self.calls_returning(kind)
+        if makers and depth > 0 and r < 0.65:
+            f, ps = self.r.choice(makers)
+            return self.call(f, ps, sc, depth - 1)
+        return self.construct(sc, kind, depth)
+
+    def construct(self, sc, kind, depth):
+        t, name = kind
+        d = max(depth - 1, 0)
+        if t == 's':
+            return ('slit', name, [self.expr(sc, d) for _ in self.structs[name]])
+        if t == 'e':
+            v, k = self.r.choice(self.enums[name])
+            return ('elit', name, v, [self.expr(sc, d) for _ in range(k)])
+        if t == 'b':
+            if self.r.random() < 0.3 and len(self.brands) > 1:
+                # a sibling brand, crossed explicitly through the block both share (§5.4)
+                other = self.r.choice([b for b in self.brands if b != name])
+                return ('bmk', name, ('unbrand', self.value(sc, ('b', other), d)))
+            if self.r.random() < 0.3 and sc and sc.of(kind):
+                a, b = self.r.choice(sc.of(kind)), self.r.choice(sc.of(kind))
+                op = self.r.choice(ARITH)
+                return ('bmk', name, ('bin', op, ('unbrand', ('var', a)), ('unbrand', ('var', b))))
+            return ('bmk', name, self.expr(sc, d))
+        raise ValueError(kind)
+
+    # --- scalar expressions ------------------------------------------------------------------
+
+    def leaf(self, sc):
+        if sc:
+            r = self.r.random()
+            structs = [(n, k) for n, k in sc.kinds.items() if k[0] == 's']
+            brands = [n for n, k in sc.kinds.items() if k[0] == 'b']
+            scal = sc.of('v')
+            if structs and r < 0.2:
+                n, k = self.r.choice(structs)
+                return ('field', ('var', n), self.r.choice(self.structs[k[1]]))
+            if brands and r < 0.3:
+                return ('unbrand', ('var', self.r.choice(brands)))
+            if scal and r < 0.8:
+                return ('var', self.r.choice(scal))
         return self.lit()
 
-    def cond(self, scope, depth):
-        return ('cmp', self.r.choice(CMPS), self.expr(scope, depth), self.expr(scope, depth))
+    def expr(self, sc, depth):
+        r = self.r.random()
+        if depth <= 0 or r < 0.25:
+            return self.leaf(sc)
+        if r < 0.55:
+            return ('bin', self.r.choice(ARITH), self.expr(sc, depth - 1), self.expr(sc, depth - 1))
+        if r < 0.64:
+            return ('div', self.r.choice(DIVS), self.expr(sc, depth - 1), self.expr(sc, depth - 1))
+        if r < 0.72:
+            return ('if', self.cond(sc, depth - 1), self.expr(sc, depth - 1), self.expr(sc, depth - 1))
+        if r < 0.80 and sc:
+            enums = [(n, k[1]) for n, k in sc.kinds.items() if k[0] == 'e']
+            if enums:
+                n, e = self.r.choice(enums)
+                return self.match_expr(sc, ('var', n), e, depth - 1)
+        if r < 0.86:
+            res = [(f, ps, rk) for f, ps, rk in self.fns if rk[0] == 'r']
+            if res:
+                f, ps, rk = self.r.choice(res)
+                return self.rmatch(sc, f, ps, rk, depth - 1)
+        return self.scalar_call(sc, depth - 1)
 
-    def stmts(self, scope, depth, n):
+    def scalar_call(self, sc, depth):
+        """A call yielding a scalar: a scalar function, a field off a struct-returning one, or the
+        block of a brand-returning one."""
+        if not self.fns:
+            return self.lit()
+        f, ps, rk = self.r.choice(self.fns)
+        c = self.call(f, ps, sc, depth)
+        if rk == 'v':
+            return c
+        if rk[0] == 's':
+            return ('field', c, self.r.choice(self.structs[rk[1]]))
+        if rk[0] == 'b':
+            return ('unbrand', c)
+        if rk[0] == 'e':
+            return self.match_expr(sc, c, rk[1], depth)
+        if rk[0] == 'r':
+            return self.rmatch(sc, f, ps, rk, depth, c)
+        return self.lit()
+
+    def match_expr(self, sc, scrut, e, depth):
+        arms = []
+        for v, k in self.enums[e]:
+            binds = [self.fresh('m') for _ in range(k)]
+            inner = sc.copy() if sc else Scope()
+            for b in binds:
+                inner.kinds[b] = 'v'
+            arms.append((v, binds, self.expr(inner, depth)))
+        return ('match', scrut, e, arms)
+
+    def rmatch(self, sc, f, ps, rk, depth, c=None):
+        c = c or self.call(f, ps, sc, depth)
+        ok, er = self.fresh('q'), self.fresh('q')
+        inner = (sc.copy() if sc else Scope())
+        inner.kinds[ok] = rk[1]
+        inner.kinds[er] = 'v'
+        if rk[1] == 'v':
+            oke = ('bin', self.r.choice(ARITH), ('var', ok), self.expr(sc, 0)) if self.r.random() < 0.5 else ('var', ok)
+        else:
+            oke = ('field', ('var', ok), self.r.choice(self.structs[rk[1][1]]))
+        erre = ('bin', self.r.choice(ARITH), ('var', er), self.lit()) if self.r.random() < 0.5 else ('var', er)
+        return ('rmatch', c, ok, oke, er, erre)
+
+    def cond(self, sc, depth):
+        return ('cmp', self.r.choice(CMPS), self.expr(sc, depth), self.expr(sc, depth))
+
+    # --- statements ----------------------------------------------------------------------------
+
+    def simple_sets(self, sc, depth):
         out = []
-        scope = list(scope)
-        muts = []
+        if sc.muts:
+            out.append(('set', self.r.choice(sc.muts), self.expr(sc, depth)))
+        if sc.smuts and self.r.random() < 0.3:
+            s = self.r.choice(sc.smuts)
+            out.append(('fset', s, self.r.choice(self.structs[sc.kinds[s][1]]), self.expr(sc, depth)))
+        return out
+
+    def stmts(self, sc, depth, n):
+        out = []
+        sc = sc.copy()
         for _ in range(n):
             r = self.r.random()
-            if r < 0.45 or not muts:
+            if r < 0.35 or not sc.muts:
                 name = self.fresh('v')
-                out.append(('let', name, self.expr(scope, depth), True))
-                scope.append(name)
-                muts.append(name)
-            elif r < 0.7:
-                out.append(('set', self.r.choice(muts), self.expr(scope, depth)))
-            elif r < 0.85 and depth > 0:
-                c = self.fresh('i')
-                body = [('set', self.r.choice(muts), self.expr(scope + [c], depth - 1))]
-                out.append(('while', c, self.r.randint(1, 5), body))
+                out.append(('let', name, self.expr(sc, depth), True))
+                sc.kinds[name] = 'v'
+                sc.muts.append(name)
+            elif r < 0.5:
+                out.append(('set', self.r.choice(sc.muts), self.expr(sc, depth)))
+            elif r < 0.6 and depth > 0:
+                c = self.fresh('c')
+                inner = sc.copy()
+                inner.kinds[c] = 'v'
+                out.append(('while', c, self.r.randint(1, 5), self.simple_sets(inner, depth - 1)))
+            elif r < 0.68:
+                out.append(('ifs', self.cond(sc, depth - 1), self.simple_sets(sc, depth - 1),
+                            self.simple_sets(sc, depth - 1)))
+            elif r < 0.8 and self.kinds_available():
+                kind = self.r.choice(self.kinds_available())
+                name = self.fresh({'s': 's', 'e': 'e', 'b': 'b'}[kind[0]])
+                val = self.value(sc, kind, depth)
+                if kind[0] == 's':
+                    mut = self.r.random() < 0.5
+                    out.append(('slet', name, kind[1], val, mut))
+                    if mut:
+                        sc.smuts.append(name)
+                elif kind[0] == 'e':
+                    out.append(('elet', name, kind[1], val))
+                else:
+                    out.append(('blet', name, kind[1], val))
+                sc.kinds[name] = kind
+            elif r < 0.86 and sc.smuts:
+                s = self.r.choice(sc.smuts)
+                out.append(('fset', s, self.r.choice(self.structs[sc.kinds[s][1]]), self.expr(sc, depth)))
+            elif r < 0.93 and any(k[0] == 'e' for k in sc.kinds.values() if k != 'v'):
+                n_, e = self.r.choice([(n_, k[1]) for n_, k in sc.kinds.items() if k != 'v' and k[0] == 'e'])
+                arms = []
+                for v, k in self.enums[e]:
+                    binds = [self.fresh('m') for _ in range(k)]
+                    inner = sc.copy()
+                    for b in binds:
+                        inner.kinds[b] = 'v'
+                    arms.append((v, binds, self.simple_sets(inner, depth - 1)))
+                out.append(('mstmt', ('var', n_), e, arms))
+            elif self.in_result and any(rk[0] == 'r' for _, _, rk in self.fns):
+                f, ps, rk = self.r.choice([x for x in self.fns if x[2][0] == 'r'])
+                name = self.fresh('t')
+                out.append(('try', name, self.call(f, ps, sc, depth - 1)))
+                sc.kinds[name] = rk[1]
             else:
-                t = [('set', self.r.choice(muts), self.expr(scope, depth - 1))]
-                e = [('set', self.r.choice(muts), self.expr(scope, depth - 1))]
-                out.append(('ifs', self.cond(scope, depth - 1), t, e))
-        return out, scope, muts
+                out.append(('set', self.r.choice(sc.muts), self.expr(sc, depth)))
+        return out, sc
+
+    # --- functions -----------------------------------------------------------------------------
 
     def function(self):
-        name = self.fresh('f')
-        k = self.r.randint(1, 3)
-        params = [self.fresh('p') for _ in range(k)]
-        body, scope, muts = self.stmts(params, 3, self.r.randint(1, 5))
-        ret = self.expr(scope, 3)
-        fn = (name, params, body, ret)
-        self.fns.append((name, k))
+        # the return kind: scalar mostly; a struct, a brand or a Result when the form is on
+        rets = ['v', 'v']
+        rets += [('s', s) for s in self.structs]
+        rets += [('b', b) for b in self.brands]
+        rets += [('e', e) for e in self.enums]
+        if 'result' in self.forms:
+            rets += [('r', 'v'), ('r', 'v')] + [('r', ('s', s)) for s in self.structs]
+        ret = self.r.choice(rets)
+        if 'result' in self.forms and not any(rk[0] == 'r' for _, _, rk in self.fns) and self.r.random() < 0.5:
+            ret = ('r', 'v')
+        name = self.fresh({'v': 'g', 's': 'mk', 'b': 'bf', 'e': 'ef', 'r': 'rf'}[ret[0] if ret != 'v' else 'v'])
+        params = []
+        for _ in range(self.r.randint(1, 3)):
+            kinds = ['v', 'v', 'v'] + self.kinds_available()
+            params.append((self.fresh('p'), self.r.choice(kinds)))
+        sc = Scope()
+        for p, k in params:
+            sc.kinds[p] = k
+        self.in_result = ret != 'v' and ret[0] == 'r'
+        lead = []
+        earlier = [x for x in self.fns if x[2][0] == 'r']
+        if self.in_result and earlier and self.r.random() < 0.7:
+            # a `?` binding up front, so a Result chain propagates an `Err` more often than not
+            f, ps, rk = self.r.choice(earlier)
+            t = self.fresh('t')
+            lead.append(('try', t, self.call(f, ps, sc, 1)))
+            sc.kinds[t] = rk[1]
+        body, sc = self.stmts(sc, 3, self.r.randint(1, 5))
+        body = lead + body
+        self.in_result = False
+        if ret == 'v':
+            tail = self.expr(sc, 3)
+        elif ret[0] == 'r':
+            cond = self.cond(sc, 1) if self.r.random() < 0.7 else None
+            tail = ('rtail', cond, self.expr(sc, 2), self.value(sc, ret[1], 2))
+        else:
+            tail = self.value(sc, ret, 2)
+            if tail[0] == 'call':           # keep a maker from simply forwarding an earlier one
+                tail = self.construct(sc, ret, 2)
+        fn = {'name': name, 'params': params, 'ret': ret, 'body': body, 'tail': tail}
+        self.fns.append((name, [k for _, k in params], ret))
         return fn
 
     def program(self, nfns):
+        self.declare()
         fns = [self.function() for _ in range(nfns)]
         calls = []
-        for f, k in self.fns:
-            calls.append(('call', f, [self.lit() for _ in range(k)]))
-        return {'ty': self.ty, 'fns': fns, 'calls': calls}
+        for f, ps, rk in self.fns:
+            c = self.call(f, ps, None, 0)
+            if rk == 'v':
+                calls.append(c)
+            elif rk[0] == 's':
+                calls.append(('field', c, self.r.choice(self.structs[rk[1]])))
+            elif rk[0] == 'b':
+                calls.append(('unbrand', c))
+            elif rk[0] == 'e':
+                calls.append(self.match_expr(None, c, rk[1], 0))
+            else:
+                calls.append(self.rmatch(None, f, ps, rk, 0, c))
+        return {'ty': self.ty, 'forms': sorted(self.forms), 'structs': self.structs, 'enums': self.enums,
+                'brands': self.brands, 'fns': fns, 'calls': calls}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -164,72 +466,139 @@ def rlit(v, ty):
     return str(v)
 
 
-def rexpr(e, ty):
+def rkind(k, P):
+    ty = P['ty']
+    if k == 'v':
+        return ty
+    if k[0] in ('s', 'e', 'b'):
+        return k[1]
+    if k[0] == 'r':
+        return f'Result({rkind(k[1], P)}, {ty})'
+    raise ValueError(k)
+
+
+def rexpr(e, P):
+    ty = P['ty']
     k = e[0]
     if k == 'lit':
         return rlit(e[1], ty)
     if k == 'var':
         return e[1]
     if k == 'bin':
-        return f'unchecked ({rexpr(e[2], ty)} {e[1]} {rexpr(e[3], ty)})'
+        return f'unchecked ({rexpr(e[2], P)} {e[1]} {rexpr(e[3], P)})'
     if k == 'div':
         # nonzero, and at least 2 in magnitude for i64 so MIN / -1 cannot arise
-        d = rexpr(e[3], ty)
+        d = rexpr(e[3], P)
         guard = f'unchecked (({d} % 7) + 8)' if ty == 'i64' else f'unchecked (({d} % 7) + 1)'
-        return f'unchecked ({rexpr(e[2], ty)} {e[1]} {guard})'
+        return f'unchecked ({rexpr(e[2], P)} {e[1]} {guard})'
     if k == 'cmp':
-        return f'{rexpr(e[2], ty)} {e[1]} {rexpr(e[3], ty)}'
+        return f'{rexpr(e[2], P)} {e[1]} {rexpr(e[3], P)}'
     if k == 'if':
-        return f'(if {rexpr(e[1], ty)} {{ {rexpr(e[2], ty)} }} else {{ {rexpr(e[3], ty)} }})'
+        return f'(if {rexpr(e[1], P)} {{ {rexpr(e[2], P)} }} else {{ {rexpr(e[3], P)} }})'
     if k == 'call':
-        return f'{e[1]}(' + ', '.join(rexpr(a, ty) for a in e[2]) + ')'
+        return f'{e[1]}(' + ', '.join(rexpr(a, P) for a in e[2]) + ')'
+    if k == 'field':
+        return f'{rexpr(e[1], P)}.{e[2]}'
+    if k == 'unbrand':
+        return f'{ty}({rexpr(e[1], P)})'
+    if k == 'match':
+        arms = ' '.join(f'{pat(e[2], v, bs)} => {{ {rexpr(x, P)} }}' for v, bs, x in e[3])
+        return f'(match {rexpr(e[1], P)} {{ {arms} }})'
+    if k == 'rmatch':
+        return (f'(match {rexpr(e[1], P)} {{ Result::Ok({e[2]}) => {{ {rexpr(e[3], P)} }} '
+                f'Result::Err({e[4]}) => {{ {rexpr(e[5], P)} }} }})')
+    if k == 'slit':
+        fields = P['structs'][e[1]]
+        return f'{e[1]}(' + ', '.join(f'{f} = {rexpr(x, P)}' for f, x in zip(fields, e[2])) + ')'
+    if k == 'elit':
+        return f'{e[1]}.{e[2]}' + (('(' + ', '.join(rexpr(x, P) for x in e[3]) + ')') if e[3] else '')
+    if k == 'bmk':
+        return f'{e[1]}({rexpr(e[2], P)})'
     raise ValueError(k)
 
 
-def rstmts(ss, ty, ind):
+def pat(E, V, binds):
+    return f'{E}::{V}' + (f'({", ".join(binds)})' if binds else '')
+
+
+def rstmts(ss, P, ind):
+    ty = P['ty']
     out = []
     pad = '  ' * ind
     for s in ss:
         k = s[0]
         if k == 'let':
-            out.append(f'{pad}mut {s[1]} : {ty} = {rexpr(s[2], ty)}')
+            out.append(f'{pad}mut {s[1]} : {ty} = {rexpr(s[2], P)}')
         elif k == 'set':
-            out.append(f'{pad}{s[1]} = {rexpr(s[2], ty)}')
+            out.append(f'{pad}{s[1]} = {rexpr(s[2], P)}')
         elif k == 'while':
             c = s[1]
             out.append(f'{pad}mut {c} : {ty} = 0')
             out.append(f'{pad}while {c} < {s[2]} {{')
-            out += rstmts(s[3], ty, ind + 1)
+            out += rstmts(s[3], P, ind + 1)
             out.append(f'{pad}  {c} = {c} + 1')
             out.append(f'{pad}}}')
         elif k == 'ifs':
-            out.append(f'{pad}if {rexpr(s[1], ty)} {{')
-            out += rstmts(s[2], ty, ind + 1)
+            out.append(f'{pad}if {rexpr(s[1], P)} {{')
+            out += rstmts(s[2], P, ind + 1)
             out.append(f'{pad}}} else {{')
-            out += rstmts(s[3], ty, ind + 1)
+            out += rstmts(s[3], P, ind + 1)
             out.append(f'{pad}}}')
+        elif k == 'slet':
+            if s[4]:
+                out.append(f'{pad}mut {s[1]} : {s[2]} = {rexpr(s[3], P)}')
+            else:
+                out.append(f'{pad}{s[1]} := {rexpr(s[3], P)}')
+        elif k == 'fset':
+            out.append(f'{pad}{s[1]}.{s[2]} = {rexpr(s[3], P)}')
+        elif k in ('elet', 'blet'):
+            out.append(f'{pad}{s[1]} : {s[2]} = {rexpr(s[3], P)}')
+        elif k == 'mstmt':
+            out.append(f'{pad}match {rexpr(s[1], P)} {{')
+            for v, bs, body in s[3]:
+                out.append(f'{pad}  {pat(s[2], v, bs)} => {{')
+                out += rstmts(body, P, ind + 2)
+                out.append(f'{pad}  }}')
+            out.append(f'{pad}}}')
+        elif k == 'try':
+            out.append(f'{pad}{s[1]} := {rexpr(s[2], P)}?')
         else:
             raise ValueError(k)
     return out
 
 
 def render(prog, seed):
+    P = prog
     ty = prog['ty']
-    L = [f'## progen seed={seed} ty={ty} (scripts/progen.py) — a generated program; see #582.',
+    forms = ','.join(prog['forms']) or 'scalar'
+    L = [f'## progen seed={seed} ty={ty} forms={forms} (scripts/progen.py) — a generated program; see #582.',
          '## The uncalled function below is the ambient prelude trigger (#532).',
          'progen_trigger := fn() -> u64 {',
          '  match checked_add(u8(1), u8(1)) { Some(v) => { u64(v) } None => { 0 } }',
          '}']
-    for (name, params, body, ret) in prog['fns']:
-        ps = ', '.join(f'{p} : {ty}' for p in params)
-        L.append(f'{name} := fn({ps}) -> {ty} {{')
-        L += rstmts(body, ty, 1)
-        L.append(f'  return {rexpr(ret, ty)}')
+    for s, fields in prog['structs'].items():
+        L.append(f'{s} := struct {{ ' + ', '.join(f'{f} : {ty}' for f in fields) + ' }')
+    for e, vs in prog['enums'].items():
+        L.append(f'{e} := enum {{ ' + ', '.join(v + (f'({", ".join([ty] * n)})' if n else '') for v, n in vs) + ' }')
+    for b in prog['brands']:
+        L.append(f'{b} := brand({ty})')
+    for fn in prog['fns']:
+        ps = ', '.join(f'{p} : {rkind(k, P)}' for p, k in fn['params'])
+        L.append(f'{fn["name"]} := fn({ps}) -> {rkind(fn["ret"], P)} {{')
+        L += rstmts(fn['body'], P, 1)
+        t = fn['tail']
+        if t[0] == 'rtail':
+            rt = rkind(fn['ret'], P)
+            if t[1] is not None:
+                L.append(f'  if {rexpr(t[1], P)} {{ return {rt}.Err({rexpr(t[2], P)}) }}')
+            L.append(f'  return {rt}.Ok({rexpr(t[3], P)})')
+        else:
+            L.append(f'  return {rexpr(t, P)}')
         L.append('}')
     L.append('main := fn() -> u64 {')
     L.append(f'  mut acc : {ty} = 0')
     for c in prog['calls']:
-        L.append(f'  acc = unchecked ((acc * 31) ^ {rexpr(c, ty)})')
+        L.append(f'  acc = unchecked ((acc * 31) ^ {rexpr(c, P)})')
     if ty == 'i64':
         L.append('  mut r : i64 = acc % 113')
         L.append('  if r < 0 { r = r + 113 }')
@@ -240,11 +609,26 @@ def render(prog, seed):
     return '\n'.join(L) + '\n'
 
 
-def generate(seed):
+def generate(seed, forms=None):
+    """The program a seed denotes. `forms` restricts the forms a seed may switch on (None = all);
+    the rolls are made whatever the restriction, so narrowing never reshuffles the scalar core."""
     r = random.Random(seed)
     ty = r.choice(['i64', 'u64'])
-    g = Gen(seed * 7919 + 1, ty)
-    return g.program(r.randint(1, 4))
+    nfns = r.randint(1, 4)
+    rolls = {f: r.random() < FORM_P for f in FORMS}
+    allowed = FORMS if forms is None else forms
+    on = [f for f in FORMS if rolls[f] and f in allowed]
+    g = Gen(seed * 7919 + 1, ty, on)
+    return g.program(nfns)
+
+
+def generate_forced(seed, forms):
+    """Every form in `forms` switched on, whatever the seed rolls — `self-test` and `show --force`."""
+    r = random.Random(seed)
+    ty = r.choice(['i64', 'u64'])
+    nfns = max(r.randint(1, 4), 3)
+    g = Gen(seed * 7919 + 1, ty, forms)
+    return g.program(nfns)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -294,11 +678,11 @@ RUNNER = {'x86_64': [], 'aarch64': ['qemu-aarch64'], 'riscv64': ['qemu-riscv64']
 BACKENDS = ['x86_64', 'aarch64', 'riscv64', 'wasm']
 
 
-def run_artifact(backend, art):
+def run_artifact(backend, art, d):
     """Run once; on a ceiling breach, re-run ALONE once more before calling it a hang (#537)."""
-    rc, _, _, _, to = sh(RUNNER[backend] + [art], timeout=CEILING)
+    rc, _, _, _, to = sh(RUNNER[backend] + [art], timeout=CEILING, cwd=d)
     if to:
-        rc, _, _, _, to = sh(RUNNER[backend] + [art], timeout=CEILING * 3)
+        rc, _, _, _, to = sh(RUNNER[backend] + [art], timeout=CEILING * 3, cwd=d)
         if to:
             return 'hang'
     if backend == 'wasm' and rc == 134:
@@ -308,16 +692,21 @@ def run_artifact(backend, art):
     return rc
 
 
-def observe(cc, text):
-    """Return {backend: exit-code | 'trap' | 'hang' | 'build:<why>'} for one program text."""
+def observe(cc, text, backends=BACKENDS):
+    """Return {backend: exit-code | 'trap' | 'hang' | 'build:<why>'} for one program text. A program
+    x86_64 refuses is not built for the others: it is not a program, and the refusal is the finding."""
     d = tempfile.mkdtemp(prefix='progen.')
     try:
         src = os.path.join(d, 'p.al')
         open(src, 'w').write(text)
         res = {}
-        for b in BACKENDS:
+        for b in backends:
             art, why = build(cc, b, src, d)
-            res[b] = run_artifact(b, art) if art else 'build:' + why
+            res[b] = run_artifact(b, art, d) if art else 'build:' + why
+            if b == 'x86_64' and not art:
+                for rest in backends[1:]:
+                    res[rest] = 'build:skipped'
+                break
         return res
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -340,16 +729,103 @@ def x86_refused(res):
 # Reduction: simplify while the disagreement persists
 # ---------------------------------------------------------------------------------------------
 
-def expr_candidates(e):
+# The kind of every binding and every function of the program being reduced, per reducing thread.
+# Names are unique program-wide (`Gen.fresh`), so one flat map answers "is this a scalar?". A struct,
+# enum or brand is never replaced by a literal: measured, x86_64 does NOT always refuse the result
+# (`Result(S2, u64).Ok(1)` was kept by a refusal reduction), so an ill-kinded candidate could survive
+# and the reduced program would no longer be valid by construction.
+_KINDS = threading.local()
+
+
+def collect_kinds(p):
+    vk = {}
+    fk = {fn['name']: fn['ret'] for fn in p['fns']}
+
+    def ex(e):
+        if not isinstance(e, tuple):
+            return
+        if e[0] == 'match':
+            for _, bs, x in e[3]:
+                for b in bs:
+                    vk[b] = 'v'
+                ex(x)
+            ex(e[1])
+            return
+        if e[0] == 'rmatch':
+            vk[e[2]] = fk[e[1][1]][1]
+            vk[e[4]] = 'v'
+        for x in e[1:]:
+            if isinstance(x, tuple):
+                ex(x)
+            elif isinstance(x, list):
+                for y in x:
+                    ex(y)
+
+    def st(ss):
+        for s in ss:
+            k = s[0]
+            if k == 'let':
+                vk[s[1]] = 'v'
+                ex(s[2])
+            elif k == 'set':
+                ex(s[2])
+            elif k == 'while':
+                vk[s[1]] = 'v'
+                st(s[3])
+            elif k == 'ifs':
+                ex(s[1])
+                st(s[2])
+                st(s[3])
+            elif k == 'slet':
+                vk[s[1]] = ('s', s[2])
+                ex(s[3])
+            elif k in ('elet', 'blet'):
+                vk[s[1]] = ('e' if k == 'elet' else 'b', s[2])
+                ex(s[3])
+            elif k == 'fset':
+                ex(s[3])
+            elif k == 'mstmt':
+                for _, bs, body in s[3]:
+                    for b in bs:
+                        vk[b] = 'v'
+                    st(body)
+            elif k == 'try':
+                vk[s[1]] = fk[s[2][1]][1]
+                ex(s[2])
+
+    for fn in p['fns']:
+        for n, k in fn['params']:
+            vk[n] = k
+        st(fn['body'])
+        ex(fn['tail'])
+    for c in p['calls']:
+        ex(c)
+    return vk, fk
+
+
+def is_scalar(e):
     k = e[0]
-    if k in ('lit', 'var'):
-        if k == 'var':
-            yield ('lit', 1)
+    if k == 'var':
+        return _KINDS.vk.get(e[1]) == 'v'
+    if k == 'call':
+        return _KINDS.fk.get(e[1]) == 'v'
+    return k in ('lit', 'bin', 'div', 'if', 'field', 'unbrand', 'match', 'rmatch')
+
+
+def expr_candidates(e):
+    """Simpler variants of `e`: a scalar becomes a literal or one of its scalar operands, and the
+    reduction recurses into operands, arguments, fields and arms."""
+    k = e[0]
+    if k == 'lit':
         return
-    yield ('lit', 1)
-    if k in ('bin', 'div'):
-        yield e[2]
-        yield e[3]
+    if is_scalar(e):
+        yield ('lit', 1)
+    if k == 'var':
+        return
+    if k in ('bin', 'div', 'cmp'):
+        if k != 'cmp':              # an operand of a comparison is not a condition
+            yield e[2]
+            yield e[3]
         for c in expr_candidates(e[2]):
             yield (k, e[1], c, e[3])
         for c in expr_candidates(e[3]):
@@ -357,6 +833,8 @@ def expr_candidates(e):
     elif k == 'if':
         yield e[2]
         yield e[3]
+        for c in expr_candidates(e[1]):
+            yield ('if', c, e[2], e[3])
         for c in expr_candidates(e[2]):
             yield ('if', e[1], c, e[3])
         for c in expr_candidates(e[3]):
@@ -365,6 +843,39 @@ def expr_candidates(e):
         for i, a in enumerate(e[2]):
             for c in expr_candidates(a):
                 yield ('call', e[1], e[2][:i] + [c] + e[2][i + 1:])
+    elif k == 'field':
+        for c in expr_candidates(e[1]):
+            if c[0] != 'lit':
+                yield ('field', c, e[2])
+    elif k == 'unbrand':
+        if e[1][0] == 'bmk':
+            yield e[1][2]
+        for c in expr_candidates(e[1]):
+            if c[0] != 'lit':
+                yield ('unbrand', c)
+    elif k == 'match':
+        for i, (v, bs, x) in enumerate(e[3]):
+            yield x
+            for c in expr_candidates(x):
+                yield ('match', e[1], e[2], e[3][:i] + [(v, bs, c)] + e[3][i + 1:])
+    elif k == 'rmatch':
+        yield e[3]
+        yield e[5]
+        for c in expr_candidates(e[1]):
+            if c[0] == 'call':
+                yield ('rmatch', c) + e[2:]
+        for c in expr_candidates(e[3]):
+            yield e[:3] + (c,) + e[4:]
+        for c in expr_candidates(e[5]):
+            yield e[:5] + (c,)
+    elif k in ('slit', 'elit'):
+        xs = e[-1]
+        for i, x in enumerate(xs):
+            for c in expr_candidates(x):
+                yield e[:-1] + (xs[:i] + [c] + xs[i + 1:],)
+    elif k == 'bmk':
+        for c in expr_candidates(e[2]):
+            yield ('bmk', e[1], c)
 
 
 def stmt_list_candidates(ss):
@@ -372,43 +883,89 @@ def stmt_list_candidates(ss):
         yield ss[:i] + ss[i + 1:]
     for i, s in enumerate(ss):
         k = s[0]
-        if k in ('let', 'set'):
+        pre, post = ss[:i], ss[i + 1:]
+        if k in ('let', 'set', 'try'):
             for c in expr_candidates(s[2]):
-                yield ss[:i] + [s[:2] + (c,) + s[3:]] + ss[i + 1:]
+                yield pre + [s[:2] + (c,) + s[3:]] + post
+        elif k in ('slet', 'elet', 'blet', 'fset'):
+            for c in expr_candidates(s[3]):
+                yield pre + [s[:3] + (c,) + s[4:]] + post
         elif k == 'while':
             for c in stmt_list_candidates(s[3]):
-                yield ss[:i] + [('while', s[1], s[2], c)] + ss[i + 1:]
+                yield pre + [('while', s[1], s[2], c)] + post
             if s[2] > 1:
-                yield ss[:i] + [('while', s[1], 1, s[3])] + ss[i + 1:]
+                yield pre + [('while', s[1], 1, s[3])] + post
         elif k == 'ifs':
-            yield ss[:i] + s[2] + ss[i + 1:]
-            yield ss[:i] + s[3] + ss[i + 1:]
+            yield pre + s[2] + post
+            yield pre + s[3] + post
+            for c in expr_candidates(s[1]):
+                yield pre + [('ifs', c, s[2], s[3])] + post
+        elif k == 'mstmt':
+            for j, (v, bs, body) in enumerate(s[3]):
+                for c in stmt_list_candidates(body):
+                    yield pre + [('mstmt', s[1], s[2], s[3][:j] + [(v, bs, c)] + s[3][j + 1:])] + post
+
+
+def tail_candidates(t):
+    if t[0] == 'rtail':
+        if t[1] is not None:
+            yield ('rtail', None, t[2], t[3])
+            for c in expr_candidates(t[1]):
+                yield ('rtail', c, t[2], t[3])
+        for c in expr_candidates(t[2]):
+            yield ('rtail', t[1], c, t[3])
+        for c in expr_candidates(t[3]):
+            yield ('rtail', t[1], t[2], c)
+    else:
+        yield from expr_candidates(t)
+
+
+def unreferenced(p, name, drop):
+    """True when `name` no longer occurs in the program once `drop` (a candidate without its
+    declaration) is rendered — a whole-word search over the text is exact because names are unique."""
+    try:
+        text = render(drop, 0)
+    except KeyError:                # a struct literal still needs the dropped struct's fields
+        return False
+    return re.search(r'\b' + re.escape(name) + r'\b', text) is None
 
 
 def prog_candidates(p):
     fns = p['fns']
+    # drop a function, or a type declaration, nothing refers to any more
+    for fi, fn in enumerate(fns):
+        cand = dict(p, fns=fns[:fi] + fns[fi + 1:])
+        if unreferenced(p, fn['name'], cand):
+            yield cand
+    for key in ('structs', 'enums'):
+        for name in p[key]:
+            cand = dict(p, **{key: {k: v for k, v in p[key].items() if k != name}})
+            if unreferenced(p, name, cand):
+                yield cand
+    for name in p['brands']:
+        cand = dict(p, brands=[b for b in p['brands'] if b != name])
+        if unreferenced(p, name, cand):
+            yield cand
     # drop a top-level call (keep at least one)
     if len(p['calls']) > 1:
         for i in range(len(p['calls'])):
             yield dict(p, calls=p['calls'][:i] + p['calls'][i + 1:])
-    for fi, (name, params, body, ret) in enumerate(fns):
-        for b in stmt_list_candidates(body):
-            yield dict(p, fns=fns[:fi] + [(name, params, b, ret)] + fns[fi + 1:])
-        for c in expr_candidates(ret):
-            yield dict(p, fns=fns[:fi] + [(name, params, body, c)] + fns[fi + 1:])
+    for fi, fn in enumerate(fns):
+        for b in stmt_list_candidates(fn['body']):
+            yield dict(p, fns=fns[:fi] + [dict(fn, body=b)] + fns[fi + 1:])
+        for c in tail_candidates(fn['tail']):
+            yield dict(p, fns=fns[:fi] + [dict(fn, tail=c)] + fns[fi + 1:])
     for ci, c in enumerate(p['calls']):
         for a in expr_candidates(c):
-            if a[0] == 'call':
+            if a[0] != 'lit':
                 yield dict(p, calls=p['calls'][:ci] + [a] + p['calls'][ci + 1:])
 
 
-def valid_refs(p):
-    """A candidate that removed a binding still referenced elsewhere is not a program; the x86_64
-    refusal filters most, but checking names here saves four builds per rejected candidate."""
-    return True
-
-
-def reduce(cc, prog, seed, budget=400):
+def reduce(cc, prog, seed, budget=400, keep=None, backends=BACKENDS):
+    """Shrink `prog` while `keep(result)` holds — by default, while two backends still disagree."""
+    if keep is None:
+        keep = lambda res: not x86_refused(res) and disagreement(res)
+    _KINDS.vk, _KINDS.fk = collect_kinds(prog)
     best = prog
     tries = 0
     changed = True
@@ -418,8 +975,8 @@ def reduce(cc, prog, seed, budget=400):
             tries += 1
             if tries >= budget:
                 break
-            res = observe(cc, render(cand, seed))
-            if not x86_refused(res) and disagreement(res):
+            res = observe(cc, render(cand, seed), backends)
+            if keep(res):
                 best = cand
                 changed = True
                 break
@@ -435,47 +992,108 @@ def default_cc():
     return os.path.join(root, 'target', 'debug', 'alatyr')
 
 
+def parse_forms(s):
+    if s is None:
+        return None
+    fs = [f for f in s.split(',') if f]
+    for f in fs:
+        if f not in FORMS + ['scalar']:
+            raise SystemExit(f'progen: unknown form {f!r} (known: {", ".join(FORMS)}, scalar)')
+    return [f for f in fs if f != 'scalar']
+
+
 def cmd_show(a):
-    sys.stdout.write(render(generate(a.seed), a.seed))
+    forms = parse_forms(a.forms)
+    prog = generate_forced(a.seed, forms) if a.force else generate(a.seed, forms)
+    sys.stdout.write(render(prog, a.seed))
+
+
+def tagof(res):
+    return ' '.join(f'{b}={res[b]}' for b in BACKENDS if b in res).replace('\n', ' ').replace('\t', ' ')
+
+
+def refusal(res):
+    """The first line of x86_64's refusal, less its location, so a shrunk program is kept only while
+    it is refused for the SAME reason."""
+    why = res['x86_64'].split('\n')[0]
+    return why.split(' at line ')[0]
+
+
+def one_seed(cc, seed, forms, do_reduce):
+    """Generate, observe, and on a disagreement reduce, one seed. Returns (verdict, seed, res, text,
+    reduced text or None, reduced res or None)."""
+    prog = generate(seed, forms)
+    text = render(prog, seed)
+    res = observe(cc, text)
+    if x86_refused(res):
+        if not do_reduce:
+            return 'REFUSED', seed, res, text, None, None
+        # a program valid by construction that x86_64 refuses is a generator bug or a
+        # fails-when-valid defect; either way it is read by a person, so it is shrunk too
+        want = refusal(res)
+        small = reduce(cc, prog, seed, keep=lambda r: x86_refused(r) and refusal(r) == want,
+                       backends=['x86_64'])
+        stext = render(small, seed)
+        return 'REFUSED', seed, res, text, stext, observe(cc, stext, ['x86_64'])
+    if disagreement(res):
+        small = reduce(cc, prog, seed) if do_reduce else prog
+        stext = render(small, seed)
+        sres = observe(cc, stext)
+        return 'WRONG', seed, res, text, stext, sres
+    if 'hang' in res.values():
+        return 'HANG', seed, res, text, None, None
+    return 'ok', seed, res, text, None, None
 
 
 def cmd_run(a):
     cc = a.cc or default_cc()
+    forms = parse_forms(a.forms)
     os.makedirs(a.out, exist_ok=True)
-    found = refused = hangs = agree = 0
-    for i in range(a.count):
-        seed = a.seed + i
-        prog = generate(seed)
-        text = render(prog, seed)
-        res = observe(cc, text)
-        tag = ' '.join(f'{b}={res[b]}' for b in BACKENDS)
-        if x86_refused(res):
-            refused += 1
-            open(os.path.join(a.out, f'refused-{seed}.al'), 'w').write(text)
-            print(f'REFUSED  seed={seed} {tag}')
-        elif disagreement(res):
-            found += 1
-            small = reduce(cc, prog, seed) if a.reduce else prog
-            stext = render(small, seed)
-            sres = observe(cc, stext)
-            open(os.path.join(a.out, f'wrong-{seed}.al'), 'w').write(stext)
-            print(f'WRONG    seed={seed} {tag}  reduced: ' + ' '.join(f'{b}={sres[b]}' for b in BACKENDS))
-        elif 'hang' in res.values():
-            hangs += 1
-            print(f'HANG     seed={seed} {tag}')
-        else:
-            agree += 1
-            if a.verbose:
-                print(f'ok       seed={seed} {tag}')
-    print(f'progen: seeds={a.seed}..{a.seed + a.count - 1} agree={agree} wrong={found} '
-          f'x86_refused={refused} hang={hangs} out={a.out}')
-    return 1 if (found or refused) else 0
+    tsv = open(os.path.join(a.out, 'findings.tsv'), 'a')
+    counts = {'ok': 0, 'WRONG': 0, 'REFUSED': 0, 'HANG': 0}
+    seeds = range(a.seed, a.seed + a.count)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(a.jobs, 1)) as ex:
+        futs = [ex.submit(one_seed, cc, s, forms, a.reduce) for s in seeds]
+        for fu in concurrent.futures.as_completed(futs):
+            verdict, seed, res, text, stext, sres = fu.result()
+            counts[verdict] += 1
+            if verdict == 'ok':
+                if a.verbose:
+                    print(f'ok       seed={seed} {tagof(res)}')
+                continue
+            print(f'{verdict:8s} seed={seed} {tagof(res)}' + (f'  reduced: {tagof(sres)}' if sres else ''))
+            base = os.path.join(a.out, f'{verdict.lower()}-{seed}')
+            if stext is not None:
+                head = (f'## generated: {tagof(res)}\n## reduced:   {tagof(sres)}\n'
+                        f'## reproduce: python3 scripts/progen.py show --seed {seed}'
+                        + (f' --forms {a.forms}' if a.forms else '') + '\n')
+                open(base + '.al', 'w').write(head + stext)
+                open(base + '.orig.al', 'w').write(text)
+            else:
+                open(base + '.al', 'w').write(f'## {tagof(res)}\n' + text)
+            tsv.write(f'{verdict}\t{seed}\t{tagof(res)}\t{tagof(sres) if sres else "-"}\n')
+            tsv.flush()
+    print(f'progen: seeds={a.seed}..{a.seed + a.count - 1} agree={counts["ok"]} wrong={counts["WRONG"]} '
+          f'x86_refused={counts["REFUSED"]} hang={counts["HANG"]} out={a.out}')
+    return 1 if (counts['WRONG'] or counts['REFUSED']) else 0
+
+
+# One planted marker per form: the rendered text of a program with that form forced on must contain
+# every one of these, or the generator silently stopped producing the form.
+FORM_MARKERS = {
+    'struct': [':= struct {', '.k'],
+    'enum': [':= enum {', 'match ', '::V'],
+    'result': ['-> Result(', ')?', 'Result::Ok(', '.Err('],
+    'brand': [':= brand(', ' : B'],
+}
 
 
 def cmd_self_test(a):
     """Non-vacuity, both halves. (1) The comparator must see a disagreement it is handed and must
     not see one in agreeing or trap-only results. (2) The generator must produce programs x86_64
-    accepts — a generator whose output is all refused would report nothing and look healthy."""
+    accepts — a generator whose output is all refused would report nothing and look healthy — and
+    must actually produce each form: for every form, a program with that form alone forced on must
+    spell it, pass `check`, and run on x86_64 to an exit inside the 1..113 contract."""
     bad = 0
     cases = [
         ({'x86_64': 42, 'aarch64': 42, 'riscv64': 42, 'wasm': 42}, False, 'all agree'),
@@ -487,44 +1105,68 @@ def cmd_self_test(a):
         got = disagreement(res)
         print(f'  comparator  {name:26s} {"ok" if got == want else "FAIL"} (disagreement={got})')
         bad += got != want
-    # reproducibility: the same seed renders the same text
+    # reproducibility: the same seed renders the same text, and --forms narrowing is a restriction
     same = render(generate(12345), 12345) == render(generate(12345), 12345)
     print(f'  generator   seed determinism          {"ok" if same else "FAIL"}')
     bad += not same
+    scalar = render(generate(12345, []), 12345)
+    plain = all(m not in scalar for m in (':= struct', ':= enum', ':= brand', 'Result('))
+    print(f'  generator   --forms scalar is scalar  {"ok" if plain else "FAIL"}')
+    bad += not plain
     cc = a.cc or default_cc()
-    if os.path.exists(cc):
-        ok = 0
-        for s in range(5):
-            d = tempfile.mkdtemp(prefix='progen.')
-            try:
-                src = os.path.join(d, 'p.al')
-                open(src, 'w').write(render(generate(900 + s), 900 + s))
-                rc = sh([cc, 'check', src], timeout=60)[0]
-                ok += rc == 0
-            finally:
-                shutil.rmtree(d, ignore_errors=True)
-        print(f'  generator   x86 check accepts {ok}/5 generated programs {"ok" if ok == 5 else "FAIL"}')
-        bad += ok != 5
-    else:
+    if not os.path.exists(cc):
         print(f'  generator   (no compiler at {cc}; build it first)')
-        bad += 1
+        print('progen self-test: FAIL')
+        return 1
+    ok = 0
+    for s in range(20):
+        d = tempfile.mkdtemp(prefix='progen.')
+        try:
+            src = os.path.join(d, 'p.al')
+            open(src, 'w').write(render(generate(900 + s), 900 + s))
+            ok += sh([cc, 'check', src], timeout=60)[0] == 0
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+    print(f'  generator   x86 check accepts {ok}/20 generated programs {"ok" if ok == 20 else "FAIL"}')
+    bad += ok != 20
+    for form in FORMS:
+        # the first seed from a fixed base whose program spells every marker: deterministic, and it
+        # does not silently pass when the generator stops producing a form (50 misses fail it)
+        for seed in range(4242, 4292):
+            text = render(generate_forced(seed, [form]), seed)
+            missing = [m for m in FORM_MARKERS[form] if m not in text]
+            if not missing:
+                break
+        res = observe(cc, text, ['x86_64'])
+        x = res['x86_64']
+        good = not missing and isinstance(x, int) and 1 <= x <= 113
+        why = f'missing {missing}' if missing else f'x86_64={x}'
+        print(f'  form        {form:8s} planted seed={seed:<6d} {"ok" if good else "FAIL"} ({why})')
+        bad += not good
     print(f'progen self-test: {"PASS" if not bad else "FAIL"}')
     return 1 if bad else 0
 
 
 def main():
     sys.stdout.reconfigure(line_buffering=True)
+    # A trapping guest must not leave a core file: qemu-user writes one into the working directory
+    # and a nightly run over a thousand seeds would fill the disk (AGENTS.md: `ulimit -c 0`).
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sub = ap.add_subparsers(dest='cmd', required=True)
     r = sub.add_parser('run')
     r.add_argument('--seed', type=int, default=1)
     r.add_argument('--count', type=int, default=50)
+    r.add_argument('--jobs', type=int, default=1)
+    r.add_argument('--forms', help=f'comma list from {",".join(FORMS)},scalar (default: all)')
     r.add_argument('--cc')
     r.add_argument('--out', default='target/progen')
     r.add_argument('--no-reduce', dest='reduce', action='store_false')
     r.add_argument('--verbose', action='store_true')
     s = sub.add_parser('show')
     s.add_argument('--seed', type=int, required=True)
+    s.add_argument('--forms')
+    s.add_argument('--force', action='store_true', help='switch every --forms form on, as self-test does')
     t = sub.add_parser('self-test')
     t.add_argument('--cc')
     a = ap.parse_args()
