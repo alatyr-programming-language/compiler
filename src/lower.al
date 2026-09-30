@@ -21790,7 +21790,7 @@ expr_is_no_tail := fn(e : ptr(Expr)) -> bool {
 ## A `Match`-detection result: whether the expression is a `match`, and (if so) its scrutinee
 ## pointer + arm-list head. Carried out of `match_info` so the deref-`match` stays a function-body
 ## match over a pointer PARAM (the lowerable shape, like `struct_lit_info`).
-MInfo := struct { is_m : bool, scrut : ptr(Expr), head : ptr(mut Stmt) }
+MInfo := struct { is_m : bool, scrut : ptr(Expr), head : ptr(mut Arm) }
 match_info := fn(e : ptr(Expr)) -> MInfo {
   match deref(e) {
     Expr::Match(scrut, head) => { MInfo(is_m = true, scrut = scrut, head = head) }

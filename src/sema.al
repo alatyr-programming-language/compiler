@@ -4350,7 +4350,7 @@ expr_enum_parts := fn(e : ptr(Expr)) -> EnumParts {
 ## payload-heavy `Match` arm under the seed (scar #2, same as `Var`). This lets `check_expr` run the
 ## exhaustiveness check on a VALUE match before that (dead-for-this-arm) match. `is_match` false → not a
 ## match. (`head` = the arena-linked `Arm` list; `scrut` = the scrutinee expr.)
-MatchParts := struct { is_match : bool, scrut : ptr(Expr), head : ptr(mut Stmt) }
+MatchParts := struct { is_match : bool, scrut : ptr(Expr), head : ptr(mut Arm) }
 expr_match_parts := fn(e : ptr(Expr)) -> MatchParts {
   match deref(e) {
     Expr::Match(scrut, head) => { MatchParts(is_match = true, scrut = scrut, head = head) }
@@ -8311,7 +8311,13 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         ga := deref(arg_p(g))
         ## a generic call's type-argument positions (params `T : type`) are type names, not values
         if not (qgen and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a)) {
-          ta := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
+          ## #726 — the argument's KIND only. Its pointee name would make this compare discriminate
+          ## `ptr(X)` from `ptr(Y)`, and the parser erases a word-sized `unchecked bitcast(ptr(X), p)`
+          ## to `p` itself, so a written reinterpretation reached this compare as the un-cast pointer
+          ## (`hdr_len(unchecked bitcast(ptr(FVec), da_pvec(da)))` was refused). Pointer identity at
+          ## an argument stays with the pre-match fence, which judges a named local only.
+          ta0 := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
+          ta := Ty(kind = ta0.kind, ns = 0, nl = 0)
           if not qgen and not qov {
             mut ppi := pidx
             if qel >= 0 and i64(pidx) >= qel { ppi = pidx + 1 }
