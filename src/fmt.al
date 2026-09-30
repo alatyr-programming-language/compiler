@@ -962,7 +962,7 @@ fmt_emit_arraylit := fn(n : usize, head : ptr(mut Arg), in out sb : rt::StrBuf, 
     if not first { push_str(sb, ", ") }
     emit_fmt_expr(ga.e, sb, src, a, decls)
     first = false
-    if fill { g = 0 } else { g = ga.next }
+    if fill { g = unchecked bitcast(ptr(mut Arg), 0) } else { g = ga.next }
   }
   if fill { push_str(sb, "; ") ; dn := push_int(sb, i64(n)) }
   if tup { push_str(sb, ")") } else { push_str(sb, "]") }

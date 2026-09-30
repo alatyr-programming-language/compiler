@@ -126,7 +126,7 @@ body_binding := fn(head : ptr(mut Stmt), ns2 : usize, nl2 : usize, src : ptr(u8)
         | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
-    if isas == false { s = lower_stmt_nx(s, a) }
+    if isas == false { s = unchecked bitcast(ptr(mut Stmt), lower_stmt_nx(unchecked bitcast(usize, s), a)) }
   }
   r
 }

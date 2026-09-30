@@ -8038,7 +8038,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## distinct located code to both public renderers.
   if ecs.n != 0 and not cgen {
     lvmod0 := deref(locals)
-    if literal_overload_ambiguous(decls, src, ecs.s, ecs.n, expr_call_arity(e), expr_call_args_head(e), lvmod0.mod_s, lvmod0.mod_l) {
+    if literal_overload_ambiguous(decls, src, ecs.s, ecs.n, expr_call_arity(e), unchecked bitcast(ptr(mut Arg), expr_call_args_head(e)), lvmod0.mod_s, lvmod0.mod_l) {
       mark_failed(locals, ambiguous_err(ecs.s))
     }
   }
@@ -10836,7 +10836,7 @@ sema_plain_fn_capture_struct := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
 check_forget_uses := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec)) {
   mut cur := head
   while cur != 0 {
-    fv := stmt_forget_var(cur, src, a)
+    fv := stmt_forget_var(unchecked bitcast(usize, cur), src, a)
     if fv.n != 0 {
       mut nx := stmt_next_at(cur, a)
       while nx != 0 {
@@ -11952,7 +11952,7 @@ stmts_bad_loop_control := fn(head : ptr(mut Stmt), in_loop : bool, a : ptr(mut r
         cur = nx
       }
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::ExprStmt | Stmt::CompForRange => { cur = stmt_next_at(cur, a) }
+        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::ExprStmt | Stmt::CompForRange => { cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a)) }
     }
   }
   bad
@@ -12008,7 +12008,7 @@ stmts_decl_before := fn(head : ptr(mut Stmt), upto : usize, src : ptr(u8), ns : 
         | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => { hit = hit }
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
     i += 1
   }
   hit
@@ -12058,7 +12058,7 @@ stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut r
       Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => { bad = bad }
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
     idx += 1
   }
   bad
@@ -12125,7 +12125,7 @@ codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLa
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   err
 }
@@ -12164,7 +12164,7 @@ codepoint_check_stmts := fn(head : ptr(mut Stmt), labels : ptr(CodePointLabels),
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   err
 }
@@ -12174,8 +12174,8 @@ codepoint_check_stmts := fn(head : ptr(mut Stmt), labels : ptr(CodePointLabels),
 stmts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
   if head == 0 { return false }
   mut last := head
-  mut next := stmt_next_at(last, a)
-  while next != 0 { last = next; next = stmt_next_at(last, a) }
+  mut next := stmt_next_at(unchecked bitcast(usize, last), a)
+  while next != 0 { last = unchecked bitcast(ptr(mut Stmt), next); next = stmt_next_at(unchecked bitcast(usize, last), a) }
   end := deref(stmt_p(Stmt, last))
   match end {
     Stmt::Return(rv, nx) => { true }
@@ -12246,8 +12246,8 @@ stmt_starts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
 stmts_tail_value := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
   if head == 0 { return false }
   mut last := head
-  mut next := stmt_next_at(last, a)
-  while next != 0 { last = next; next = stmt_next_at(last, a) }
+  mut next := stmt_next_at(unchecked bitcast(usize, last), a)
+  while next != 0 { last = unchecked bitcast(ptr(mut Stmt), next); next = stmt_next_at(unchecked bitcast(usize, last), a) }
   end := deref(stmt_p(Stmt, last))
   match end {
     Stmt::ExprStmt(e, nx) => { true }
@@ -12389,7 +12389,7 @@ sema_bad_typeinfo_field_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), vs : us
       Stmt::AllocWith(e, b, nx) => { bad = sema_bad_typeinfo_field_expr(e, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
       Stmt::Break | Stmt::Continue | Stmt::CompMatch => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   bad
 }
@@ -12504,7 +12504,7 @@ stmt_uses_var_cons := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : p
 stmts_use_cons := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut cur := head
   mut res := false
-  while cur != 0 { if stmt_uses_var_cons(cur, src, xs, xl, a) { res = true } ; cur = stmt_next_at(cur, a) }
+  while cur != 0 { if stmt_uses_var_cons(cur, src, xs, xl, a) { res = true } ; cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a)) }
   res
 }
 
@@ -12546,14 +12546,14 @@ stmt_binding_var := fn(h : usize, a : ptr(mut rt::Arena)) -> VSpan {
 check_leaks := fn(head : ptr(mut Stmt), dval : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) {
   mut cur := head
   while cur != 0 {
-    bv := stmt_binding_var(cur, a)
+    bv := stmt_binding_var(unchecked bitcast(usize, cur), a)
     if bv.n != 0 and local_is_owning(locals, nloc, src, bv.s, bv.n, decls, upto) {
       mut used := expr_uses_var_cons(dval, src, bv.s, bv.n, a)
-      mut nx := stmt_next_at(cur, a)
+      mut nx := stmt_next_at(unchecked bitcast(usize, cur), a)
       while nx != 0 { if stmt_uses_var_cons(nx, src, bv.s, bv.n, a) { used = true } ; nx = stmt_next_at(nx, a) }
       if used == false { mark_failed(locals, unbound_err(bv.s, 0)) }
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
 }
 
@@ -12588,7 +12588,7 @@ stmts_return_local_addr := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : u
         | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   res
 }
@@ -12815,7 +12815,7 @@ stmts_store_escape := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize,
       Stmt::Return | Stmt::DerefAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
         | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   res
 }
@@ -14029,7 +14029,7 @@ stmts_have_comptime := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool 
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   result
 }
@@ -14130,7 +14130,7 @@ stmts_have_alloc := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize, 
         | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   result
 }
@@ -14216,7 +14216,7 @@ stmts_call_syscall := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize
         | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   result
 }
@@ -14372,7 +14372,7 @@ stmts_have_unchecked := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool
       Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_unchecked(b, a) { result = true } }
       Stmt::Continue => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   result
 }
@@ -14477,7 +14477,7 @@ stmts_have_abstraction := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt
       Stmt::CompMatch(sc, ah, n) => { if arms_have_abstraction(ah, src, a) { result = true } }
       Stmt::CompForRange(vs, vl, lo, hi, b, n) => { if stmts_have_abstraction(b, src, a) { result = true } }
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   result
 }
@@ -16051,7 +16051,7 @@ sema_collect_stmts := fn(head : ptr(mut Stmt), locals : ptr(LVec), src : ptr(u8)
         while arm != 0 { am := deref(arm_p(arm)); mut bd := am.binds_head; while bd != 0 { sema_collect_name(locals, src, bnd_ns(bd), bnd_nl(bd)); bd = bnd_next(bd) }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }
       }
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
 }
 
@@ -16491,7 +16491,7 @@ sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(r
       }
       Stmt::Continue => {}
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   lvec_truncate(deref(locals), saved_len)
   deref(locals).pcnt = saved_pcnt
@@ -16563,7 +16563,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       r
     }
     Expr::StructLit(ss, sl, nf, fh) => {
-      mut r := sema_vis_type_span(decls, src, ss, sl, cs, cl, 0)
+      mut r := sema_vis_type_span(decls, src, ss, sl, cs, cl, unchecked bitcast(ptr(mut Param), 0))
       mut g := fh
       while g != 0 and r == 0 {
         ga := deref(arg_p(g))
@@ -16573,7 +16573,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       r
     }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
-      mut r := sema_vis_type_span(decls, src, es, el, cs, cl, 0)
+      mut r := sema_vis_type_span(decls, src, es, el, cs, cl, unchecked bitcast(ptr(mut Param), 0))
       mut g := ph
       while g != 0 and r == 0 {
         ga := deref(arg_p(g))
@@ -16686,7 +16686,7 @@ sema_vis_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), 
         while arm != 0 and r == 0 { am := deref(arm_p(arm)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }
       }
     }
-    cur = stmt_next_at(cur, a)
+    cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
   }
   r
 }

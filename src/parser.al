@@ -1580,8 +1580,8 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           if cur(pc).kind == 13 or cur(pc).kind == 0 { lbody = le }
           else {
             les := snode(pc.arena, Stmt.ExprStmt(le, 0))
-            if lshead == 0 { lshead = les } else { set_stmt_next(pc.arena, stmt_last(lstail, pc.arena), les) }
-            lstail = les
+            if lshead == 0 { lshead = unchecked bitcast(usize, les) } else { set_stmt_next(pc.arena, stmt_last(lstail, pc.arena), les) }
+            lstail = unchecked bitcast(usize, les)
           }
         }
       }
@@ -3550,10 +3550,10 @@ p_stmt := fn(in out pc : PC) -> usize {
       ty_e := newnode(pc.arena, Expr.Var(ts, 5))
       ty_arg := gnode(pc.arena, Arg(e = ty_e, next = arena_arg))
       calln := newnode(pc.arena, Expr.Call(ai_s, 10, 3, ty_arg))
-      return snode(pc.arena, Stmt.Assign(nm.start, nm.len, calln, 0))
+      return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, calln, 0)))
     }
     callq := newnode(pc.arena, Expr.Call(ai_s, 10, 2, arena_arg))
-    return snode(pc.arena, Stmt.Assign(nm.start, nm.len, callq, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, callq, 0)))
   }
   ## `unchecked { <stmts> }` — the STATEMENT verification-mode block (Grammar §130: `unchecked (expr |
   ## block)`). Parse the braced statement list and wrap it in `Stmt.Unchecked`; the lower lowers the
@@ -3565,7 +3565,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## '{'
     ubody := p_stmts(pc)
     pc.idx = pc.idx + 1                 ## '}'
-    return snode(pc.arena, Stmt.Unchecked(ubody, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.Unchecked(ubody, 0)))
   }
   ## `alloc::with(A) { <stmts> }` — the AMBIENT-ALLOCATOR scope (MEM-5 / Grammar §130 alloc-with-region).
   ## `A` becomes the ambient allocator for the body; a call in the body omitting an allocator param gets
@@ -3577,7 +3577,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## '{'
     wbody := p_stmts(pc)
     pc.idx = pc.idx + 1                 ## '}'
-    return snode(pc.arena, Stmt.AllocWith(aexpr, wbody, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.AllocWith(aexpr, wbody, 0)))
   }
   ## `mut name … = v` — a mutable binding. The self-host compiler binds every local to a frame
   ## slot regardless (mutability is the front end's concern, not lowering's), so the `mut`
@@ -3609,7 +3609,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         celse = p_stmts(pc)
         pc.idx = pc.idx + 1               ## '}'
       }
-      return snode(pc.arena, Stmt.CompIf(ccond, cthen, celse, 0))
+      return unchecked bitcast(usize, snode(pc.arena, Stmt.CompIf(ccond, cthen, celse, 0)))
     }
     ## `comptime for <var> in typeinfo(T).fields/.variants { body }` — a COLLECTION comptime-for,
     ## parsed into a `CompFor` node the lower unrolls over the instance type's members. A RANGE form
@@ -3644,7 +3644,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         pkbody := p_stmts(pc)
         pc.idx = pc.idx + 1               ## '}'
         pnull := unchecked bitcast(ptr(Expr), 0)
-        return snode(pc.arena, Stmt.CompForRange(pvtok.start, pvtok.len, plo, pnull, pkbody, 0))
+        return unchecked bitcast(usize, snode(pc.arena, Stmt.CompForRange(pvtok.start, pvtok.len, plo, pnull, pkbody, 0)))
       }
       if isrange == false {
         pc.idx = pc.idx + 1               ## 'for'
@@ -3657,7 +3657,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         itn := field_tail_name(iter)
         mut isvar : u8 = 0
         if itn.n != 0 and str_eq(str_at(pc.src + itn.s, itn.n), "variants") { isvar = 1 }
-        return snode(pc.arena, Stmt.CompFor(vtok.start, vtok.len, isvar, cfbody, 0))
+        return unchecked bitcast(usize, snode(pc.arena, Stmt.CompFor(vtok.start, vtok.len, isvar, cfbody, 0)))
       } else {
         ## RANGE form `comptime for i in lo .. hi { body }` — parse the bounds + body into a
         ## `CompForRange` node; the lower UNROLLS it at compile time (the loop var binds each constant).
@@ -3671,7 +3671,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         pc.idx = pc.idx + 1               ## '{'
         crbody := p_stmts(pc)
         pc.idx = pc.idx + 1               ## '}'
-        return snode(pc.arena, Stmt.CompForRange(rvtok.start, rvtok.len, rlo, rhi, crbody, 0))
+        return unchecked bitcast(usize, snode(pc.arena, Stmt.CompForRange(rvtok.start, rvtok.len, rlo, rhi, crbody, 0)))
       }
     }
     ## `comptime match typeinfo(T) { Struct(_) => {…} … _ => {…} }` — a COMPTIME kind-dispatch parsed
@@ -3726,7 +3726,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }
       }
       pc.idx = pc.idx + 1                 ## '}'
-      return snode(pc.arena, Stmt.CompMatch(cmscrut, cmhead, 0))
+      return unchecked bitcast(usize, snode(pc.arena, Stmt.CompMatch(cmscrut, cmhead, 0)))
     }
     ## A comptime binding uses the ordinary binding parser below. Validate its head before entering
     ## the legacy fallback, which is retained only for unsupported comptime block syntax.
@@ -3793,7 +3793,7 @@ p_stmt := fn(in out pc : PC) -> usize {
       }
     }
     dummy := newnode(pc.arena, Expr.Num(0, 0, 0))
-    return snode(pc.arena, Stmt.ExprStmt(dummy, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.ExprStmt(dummy, 0)))
     }
   }
   ## `defer (expr | block)` (Control Flow §9.3 / Memory §5.8) — register a cleanup action that runs
@@ -3848,13 +3848,13 @@ p_stmt := fn(in out pc : PC) -> usize {
         set_stmt_next(pc.arena, bstart, dblk)                    ## marker → first block statement
         set_stmt_next(pc.arena, stmt_last(dblk, pc.arena), bend) ## last block stmt → end marker
       }
-      return bstart
+      return unchecked bitcast(usize, bstart)
     }
     dact := p_or(pc)                    ## the cleanup expression (a call, overwhelmingly)
     darg := gnode(pc.arena, Arg(e = dact, next = 0))
     dcs := synth_ident_span(pc, "__defer")
     dcall := newnode(pc.arena, Expr.Call(dcs, 7, 1, darg))
-    return snode(pc.arena, Stmt.ExprStmt(dcall, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.ExprStmt(dcall, 0)))
   }
   ## `@label(name) <loop>` (Control Flow §2.1/§6, CF-4): the structured-label attribute precedes a
   ## loop. Record the pending name span; the loop handler immediately below consumes it via `lbl_push`,
@@ -3881,7 +3881,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## '}'
     wstmt := snode(pc.arena, Stmt.While(cond, body, 0))
     stmt_label_mark(wstmt, loop_label_s, loop_label_l)
-    return wstmt
+    return unchecked bitcast(usize, wstmt)
   }
   ## `loop { <stmts> }` — an infinite loop (exited only by `break`). The body is a statement
   ## list; lower emits a back-edge with no guard.
@@ -3896,7 +3896,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## '}'
     lstmt := snode(pc.arena, Stmt.Loop(body, 0))
     stmt_label_mark(lstmt, loop_label_s, loop_label_l)
-    return lstmt
+    return unchecked bitcast(usize, lstmt)
   }
   ## `break [name] [<expr>]` (Control Flow §7): exit an enclosing loop, optionally targeting a labeled
   ## loop (`break name`) and/or yielding a value (`break v` — §7.2, loop-as-expression). §7.1
@@ -3916,7 +3916,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     if cur(pc).kind != 13 and cur(pc).kind != 30 and cur(pc).kind != 0 { bval = p_or(pc) }
     bstmt := snode(pc.arena, Stmt.Break(bval, bdepth, 0))
     stmt_label_mark(bstmt, break_label_s, break_label_l)
-    return bstmt
+    return unchecked bitcast(usize, bstmt)
   }
   ## `continue [name]` — skip to the next iteration of the target loop (§7.1). `continue name` targets a
   ## labeled LOOP; a bare `continue` targets the nearest loop (depth 0). Carries no value (§7.2).
@@ -3931,7 +3931,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     }
     cstmt := snode(pc.arena, Stmt.Continue(cdepth, 0))
     stmt_label_mark(cstmt, continue_label_s, continue_label_l)
-    return cstmt
+    return unchecked bitcast(usize, cstmt)
   }
   ## `return <cmp>` — an early return statement.
   if tok_kw(pc, "return") {
@@ -3947,10 +3947,10 @@ p_stmt := fn(in out pc : PC) -> usize {
       ## multi-word `Expr.Num(0)` arg yields a stray handle, not the node pointer). Mirrors the
       ## proven `dummy := newnode(…)` pattern in the match-arm handler.
       z := newnode(pc.arena, Expr.Num(0, 0, 0))
-      return snode(pc.arena, Stmt.Return(z, 0))
+      return unchecked bitcast(usize, snode(pc.arena, Stmt.Return(z, 0)))
     }
     rv := p_or(pc)
-    return snode(pc.arena, Stmt.Return(rv, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.Return(rv, 0)))
   }
   ## `if <cmp> { <stmts> } [ else { <stmts> } ]` — a statement-position if. The branch
   ## bodies are STATEMENT LISTS (parsed with `p_stmts`), not single expressions. An `else`
@@ -3975,7 +3975,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         pc.idx = pc.idx + 1             ## '}'
       }
     }
-    return snode(pc.arena, Stmt.If(cond, then_head, else_head, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.If(cond, then_head, else_head, 0)))
   }
   ## `match <cmp> { <pat> => { <stmts> } ; … }` — a statement-position match. Each arm BODY is
   ## a STATEMENT LIST (in braces), parsed with `p_stmts`. The pattern parsing (int literal /
@@ -4090,7 +4090,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
       }
     }
     pc.idx = pc.idx + 1                 ## '}'
-    return snode(pc.arena, Stmt.Match(scrut, ahead, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.Match(scrut, ahead, 0)))
   }
   ## `for <i> in <lo> .. <hi> { <stmts> }` — a counted for loop. `for`/`in` are keywords
   ## (kind 2, `tok_kw`); `..` is the range token (kind 31). The bounds are full expressions
@@ -4113,7 +4113,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
       pc.idx = pc.idx + 1               ## '}'
       fstmt := snode(pc.arena, Stmt.For(iv.start, iv.len, lo, hi, fbody, 0))
       stmt_label_mark(fstmt, loop_label_s, loop_label_l)
-      return fstmt
+      return unchecked bitcast(usize, fstmt)
     }
     ## ITERABLE form `for x in <slice> { … }` (no `..`) — `lo` is the iterable; the loop var binds
     ## each ELEMENT. Marked by a NULL `hi` (fhi == 0), which the lower desugars to a counted loop
@@ -4126,7 +4126,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     nullhi : ptr(mut Expr) = unchecked bitcast(ptr(mut Expr), 0)
     istmt := snode(pc.arena, Stmt.For(iv.start, iv.len, lo, nullhi, ibody, 0))
     stmt_label_mark(istmt, loop_label_s, loop_label_l)
-    return istmt
+    return unchecked bitcast(usize, istmt)
   }
   ## `@label(name) <instruction>` — a DIRECT CODE-POINT label. Keep the existing Stmt::ExprStmt
   ## shape and recover the label through the AST side table, just like structured loop labels; this
@@ -4140,7 +4140,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     stmt_label_mark(cstmt, code_label_s, code_label_l)
     P_PEND_S = 0
     P_PEND_L = 0
-    return cstmt
+    return unchecked bitcast(usize, cstmt)
   }
   ## `deref(p).field[index] = v` — an element WRITE through a pointer-derived struct array field.
   ## Keep this before the scalar field path below: both start with the same `deref(…).field` prefix,
@@ -4148,13 +4148,13 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if deref_field_index_path_assign_starts(pc) {
     dipplace := p_field(pc)
     dipval := p_place_val(pc, dipplace)
-    return snode(pc.arena, Stmt.FieldPathAssign(dipplace, dipval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldPathAssign(dipplace, dipval, 0)))
   }
   if deref_field_index_assign_starts(pc) {
     difplace := p_field(pc)
     difval := p_place_val(pc, difplace)
     difix := index_parts(difplace)
-    return snode(pc.arena, Stmt.IndexAssign(difix.b, difix.i, difval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(difix.b, difix.i, difval, 0)))
   }
   ## `deref(p).field = v` / `deref(node.next).field = v` — a FIELD WRITE THROUGH a pointer (the store
   ## dual of the `deref(p).f` READ). Checked BEFORE the whole-value `deref(p) = v` store below: that
@@ -4166,7 +4166,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if deref_field_assign_starts(pc) {
     dfplace := p_field(pc)              ## parses `deref(p).field` into Field(Deref(p), field)
     dfpval := p_place_val(pc, dfplace)
-    return snode(pc.arena, Stmt.FieldPathAssign(dfplace, dfpval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldPathAssign(dfplace, dfpval, 0)))
   }
   ## `deref(p) = <cmp>` — a STORE through a pointer (a `DerefAssign` statement). The
   ## pointer factor `deref(p)` parses to a `Deref` expr; its inner pointer expression is
@@ -4179,7 +4179,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     pc.idx = pc.idx + 1                 ## ')'
     dplc := newnode(pc.arena, Expr.Deref(ptr))
     dval := p_place_val(pc, dplc)
-    return snode(pc.arena, Stmt.DerefAssign(ptr, dval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.DerefAssign(ptr, dval, 0)))
   }
   ## `arr[i] = <cmp>` — an array element WRITE (a `[` after the base ident, then a
   ## bracket-balanced index, `]`, and `=`). Recorded as an `IndexAssign` (base + index +
@@ -4197,7 +4197,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if deep_idx_field_assign_starts(pc) {
     dplace := p_field(pc)               ## parses `xs[i].f1.f2` into Field(Field(Index(xs,i),f1),f2)
     dpval := p_place_val(pc, dplace)
-    return snode(pc.arena, Stmt.FieldPathAssign(dplace, dpval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldPathAssign(dplace, dpval, 0)))
   }
   ## `xs[i].arr[j] = <cmp>` — a write into an ARRAY FIELD of an array-of-struct ELEMENT. `p_field`
   ## parses the LHS into `Index(Field(Index(xs,i), arr), j)`; `index_parts` unwraps the OUTER Index to
@@ -4208,13 +4208,13 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     atarget := p_field(pc)              ## parses `xs[i].arr[j]` into Index(Field(Index(xs,i),arr), j)
     aval := p_place_val(pc, atarget)
     aix := index_parts(atarget)
-    return snode(pc.arena, Stmt.IndexAssign(aix.b, aix.i, aval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(aix.b, aix.i, aval, 0)))
   }
   if idx_field_assign_starts(pc) {
     ftarget := p_field(pc)              ## parses `a[i].f` into Field(Index(arr,idx), f)
     ifval := p_place_val(pc, ftarget)
     ifp := idx_field_parts(ftarget)
-    return snode(pc.arena, Stmt.IndexFieldAssign(ifp.arr, ifp.idx, ifp.fs, ifp.fl, ifval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexFieldAssign(ifp.arr, ifp.idx, ifp.fs, ifp.fl, ifval, 0)))
   }
   ## `v.field[i] = <cmp>` — a NESTED PLACE write (a struct field that is an array). `p_field`
   ## parses `v.field[i]` into `Index(Field(Var(v), field), idx)`; `index_parts` unwraps it to a
@@ -4228,13 +4228,13 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     fptarget := p_field(pc)
     fpival := p_place_val(pc, fptarget)
     fpix := index_parts(fptarget)
-    return snode(pc.arena, Stmt.IndexAssign(fpix.b, fpix.i, fpival, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(fpix.b, fpix.i, fpival, 0)))
   }
   if field_index_assign_starts(pc) {
     ftarget := p_field(pc)              ## parses `v.field[i]` into Index(Field(Var(v),field), idx)
     fival := p_place_val(pc, ftarget)
     fix := index_parts(ftarget)
-    return snode(pc.arena, Stmt.IndexAssign(fix.b, fix.i, fival, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(fix.b, fix.i, fival, 0)))
   }
   ## `t.N[i] = <cmp>` — an INDEX inside a tuple component's direct array. `p_field` parses the
   ## complete place as `Index(Index(Var(t), Num(N)), i)`; `index_parts` unwraps the outer index and
@@ -4243,7 +4243,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     ttarget := p_field(pc)
     tval := p_place_val(pc, ttarget)
     tix := index_parts(ttarget)
-    return snode(pc.arena, Stmt.IndexAssign(tix.b, tix.i, tval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(tix.b, tix.i, tval, 0)))
   }
   ## `"abc"[0] = v` / `"abc"[i] += v` — the target is an element of a STRING LITERAL. A literal is a
   ## value-expression (Memory §1.6) whose bytes are emitted once into read-only data; it owns no
@@ -4259,7 +4259,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     target := p_field(pc)               ## parses `arr[i]` into an `Index(base, idx)`
     ival := p_place_val(pc, target)
     ix := index_parts(target)
-    return snode(pc.arena, Stmt.IndexAssign(ix.b, ix.i, ival, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(ix.b, ix.i, ival, 0)))
   }
   ## `t.N.M = <cmp>` — a NESTED TUPLE-element write (both indices numeric, `.<int>.<int>`). `p_field`
   ## parses `t.N.M` into `Index(Index(Var(t), Num(N)), Num(M))`; `index_parts` unwraps the OUTER Index to
@@ -4272,7 +4272,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     ttarget := p_field(pc)              ## parses `t.N.M` into Index(Index(Var(t),Num(N)),Num(M))
     tval := p_place_val(pc, ttarget)
     tix := index_parts(ttarget)
-    return snode(pc.arena, Stmt.IndexAssign(tix.b, tix.i, tval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(tix.b, tix.i, tval, 0)))
   }
   ## `t.N = <cmp>` — a ONE-level TUPLE-element write (numeric `.<int>`). `p_field` parses `t.N` into
   ## `Index(Var(t), Num(N))`; `index_parts` unwraps it to an `IndexAssign` — the STORE dual of the tuple
@@ -4284,7 +4284,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     starget := p_field(pc)              ## parses `t.N` into Index(Var(t), Num(N))
     sval := p_place_val(pc, starget)
     six := index_parts(starget)
-    return snode(pc.arena, Stmt.IndexAssign(six.b, six.i, sval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(six.b, six.i, sval, 0)))
   }
   ## `o.i.v = <cmp>` — a NESTED field mutation (≥2 `.field` levels). Parse the LHS place via `p_field`
   ## (→ `Field(Field(Var(o), i), v)`), then `=`, then the value; record a `FieldPathAssign`. Checked
@@ -4292,7 +4292,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if field_path_assign_starts(pc) {
     place := p_field(pc)                ## parses `o.i.v` into a nested `Field`
     fpval := p_place_val(pc, place)
-    return snode(pc.arena, Stmt.FieldPathAssign(place, fpval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldPathAssign(place, fpval, 0)))
   }
   ## `5 = 3` / `f() = 65` / `[1,2,3][0] = 65` / `bytes(s)[0] = 65` — the store target is a
   ## VALUE-expression. Memory §1.6 is normative ("a store's left operand MUST be a place-expression;
@@ -4321,11 +4321,11 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
       base_e := newnode(pc.arena, Expr.Var(nm.start, nm.len))
       cur_fv := newnode(pc.arena, Expr.Field(base_e, fld.start, fld.len))
       compound := newnode(pc.arena, Expr.Bin(u8(fco), cur_fv, rhs))
-      return snode(pc.arena, Stmt.FieldAssign(nm.start, nm.len, fld.start, fld.len, compound, 0))
+      return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldAssign(nm.start, nm.len, fld.start, fld.len, compound, 0)))
     }
     pc.idx = pc.idx + 1                 ## '='
     fval := p_or(pc)
-    return snode(pc.arena, Stmt.FieldAssign(nm.start, nm.len, fld.start, fld.len, fval, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldAssign(nm.start, nm.len, fld.start, fld.len, fval, 0)))
   }
   pc.idx = pc.idx + 1                   ## ident
   ## `name : T` — an explicitly uninitialized local. Preserve the existing Stmt.Assign shape with a
@@ -4335,7 +4335,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if uninit_end != 0 {
     while cur(pc).kind != 0 and cur(pc).start < uninit_end { pc.idx = pc.idx + 1 }
     z := newnode(pc.arena, Expr.Num(0, 0, 0))
-    return snode(pc.arena, Stmt.Assign(nm.start, nm.len, z, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, z, 0)))
   }
   ## `name : T = v` — a TYPED binding. The type annotation is sema's concern, not lowering's
   ## (lower sizes the slot from the value), so skip from the `:` to the binding `=` (kind 21).
@@ -4352,11 +4352,11 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     rhs := p_or(pc)
     lhs := newnode(pc.arena, Expr.Var(nm.start, nm.len))
     compound := newnode(pc.arena, Expr.Bin(u8(nco), lhs, rhs))
-    return snode(pc.arena, Stmt.Assign(nm.start, nm.len, compound, 0))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, compound, 0)))
   }
   pc.idx = pc.idx + 1                   ## ':=' or '='
   val := p_or(pc)
-  snode(pc.arena, Stmt.Assign(nm.start, nm.len, val, 0))
+  unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, val, 0)))
 }
 
 ## Whether the cursor starts a statement: `while`, `ident (:= | =)`, or a struct field
@@ -5581,8 +5581,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
         e := p_or(pc)
         if cur(pc).kind == 13 or cur(pc).kind == 0 { tbody = e } else {
           es := snode(pc.arena, Stmt.ExprStmt(e, 0))
-          if shead == 0 { shead = es } else { set_stmt_next(pc.arena, stmt_last(stail, pc.arena), es) }
-          stail = es
+          if shead == 0 { shead = unchecked bitcast(usize, es) } else { set_stmt_next(pc.arena, stmt_last(stail, pc.arena), es) }
+          stail = unchecked bitcast(usize, es)
         }
       }
     }
@@ -6349,8 +6349,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
           body = e                            ## trailing return expression (`}`/EOF follows)
         } else {
           es := snode(pc.arena, Stmt.ExprStmt(e, 0))
-          if shead == 0 { shead = es } else { set_stmt_next(pc.arena, stmt_last(stail, pc.arena), es) }
-          stail = es
+          if shead == 0 { shead = unchecked bitcast(usize, es) } else { set_stmt_next(pc.arena, stmt_last(stail, pc.arena), es) }
+          stail = unchecked bitcast(usize, es)
         }
       }
     }

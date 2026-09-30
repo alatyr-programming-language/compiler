@@ -138,7 +138,7 @@ pub block_decl_type := fn(head : ptr(mut Stmt), ns2 : usize, nl2 : usize, src : 
         | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
         | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
-    if isas == false { s = lower_stmt_nx(s, a) }
+    if isas == false { s = unchecked bitcast(ptr(mut Stmt), lower_stmt_nx(unchecked bitcast(usize, s), a)) }
   }
   ## not a block-local — a module GLOBAL `{}`-hole (`print("{}", S)`, S a mut STRUCT global): resolve
   ## its type from the global's `StructLit` name. Safe now that `emit_arg` MATERIALIZES a global struct
