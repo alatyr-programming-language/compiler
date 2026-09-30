@@ -12847,6 +12847,7 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
 ##     that is a provable AGGREGATE (`twin_operand_aggregate`), so `u64(5)` stays the scalar lattice.
 ## -1 = not a user conversion; the call is left exactly as it was.
 pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, a0 : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt)) -> i64 {
+  ## null-ok: d_convert_expr passes a null `a0` for a call with no argument (see its `a0` binding)
   if nargs != 1 or unchecked bitcast(usize, a0) == 0 { return 0 - 1 }
   ## conv_kind answers a builtin-lattice INDEX, and -1 for "not a builtin"; its Option(i64) form belongs
   ## with the #583 conversion of its other callers.
