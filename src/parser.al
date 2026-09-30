@@ -660,7 +660,7 @@ pub clone_args := fn(a : ptr(mut rt::Arena), ah : ptr(mut Arg), ok : ptr(mut boo
   while unchecked bitcast(usize, g) != 0 {
     am := deref(arg_p(g))
     ce := clone_expr(a, am.e, ok)
-    ng := gnode(a, Arg(e = ce, next = 0))
+    ng := gnode(a, Arg(e = ce, next = unchecked bitcast(ptr(mut Arg), 0)))
     if unchecked bitcast(usize, head) == 0 { head = ng } else { set_arg_next(a, tail, ng) }
     tail = ng
     g = am.next
@@ -753,7 +753,7 @@ pub clone_params := fn(a : ptr(mut rt::Arena), ph : ptr(mut Param), ok : ptr(mut
   mut p := ph
   while unchecked bitcast(usize, p) != 0 {
     pm := deref(param_p(p))
-    np := pnode(a, Param(ns = pm.ns, nl = pm.nl, next = 0, ts = pm.ts, tl = pm.tl, pmode = pm.pmode, pps = pm.pps, ppl = pm.ppl))
+    np := pnode(a, Param(ns = pm.ns, nl = pm.nl, next = unchecked bitcast(ptr(mut Param), 0), ts = pm.ts, tl = pm.tl, pmode = pm.pmode, pps = pm.pps, ppl = pm.ppl))
     if unchecked bitcast(usize, head) == 0 { head = np } else { set_param_next(a, tail, np) }
     tail = np
     p = pm.next
@@ -1073,7 +1073,7 @@ parse_pat_alt := fn(in out pc : PC) -> ptr(mut Arm) {
     else if cur(pc).kind == 37 { pc.idx = pc.idx + 1; hi = pat_endpoint(pc); w = 6 }
   }
   dummy := newnode(pc.arena, Expr.Num(0, 0, 0))
-  anode(pc.arena, Arm(wild = w, lit = lit, body = dummy, next = 0, vs = vs, vl = vl, binds_head = bhead, body_stmts = 0, hi = hi))
+  anode(pc.arena, Arm(wild = w, lit = lit, body = dummy, next = unchecked bitcast(ptr(mut Arm), 0), vs = vs, vl = vl, binds_head = bhead, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), hi = hi))
 }
 
 ## Is the cursor on a pointer intrinsic `mem :: (addr|val) (` — the `::`-path shape this toy
@@ -1533,7 +1533,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         pc.idx = pc.idx + 1                     ## ':'
         lpt := cur(pc)                          ## type head token
         while cur(pc).kind != 9 and cur(pc).kind != 11 and cur(pc).kind != 0 { pc.idx = pc.idx + 1 }
-        lpnew := pnode(pc.arena, Param(ns = lpn.start, nl = lpn.len, next = 0, ts = lpt.start, tl = lpt.len, pmode = 0, pps = 0, ppl = 0))
+        lpnew := pnode(pc.arena, Param(ns = lpn.start, nl = lpn.len, next = unchecked bitcast(ptr(mut Param), 0), ts = lpt.start, tl = lpt.len, pmode = 0, pps = 0, ppl = 0))
         if unchecked bitcast(usize, lphead) == 0 { lphead = lpnew } else {
           lold := deref(lptail)
           ## build the updated Param in a LOCAL first, THEN store — a `deref(ptr) = Param(...)` inline
@@ -1711,14 +1711,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           pc.idx = pc.idx + 1                 ## '=>'
           tbe := p_or(pc)                     ## EXPRESSION body
           pc.idx = pc.idx + 1                 ## '}' (comptime-for body close)
-          anew2 := anode(pc.arena, Arm(wild = 2, lit = 0, body = tbe, next = 0, vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = 0, hi = 0))
-          if ahead == 0 { ahead = anew2 } else {
+          anew2 := anode(pc.arena, Arm(wild = 2, lit = 0, body = tbe, next = unchecked bitcast(ptr(mut Arm), 0), vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), hi = 0))
+          if ahead == 0 { ahead = unchecked bitcast(usize, anew2) } else {
             ap2 := arm_p(atail)
             old2 := deref(ap2)
             upd2 := Arm(wild = old2.wild, lit = old2.lit, body = old2.body, next = anew2, vs = old2.vs, vl = old2.vl, binds_head = old2.binds_head, body_stmts = old2.body_stmts, hi = old2.hi)
             deref(ap2) = upd2
           }
-          atail = anew2
+          atail = unchecked bitcast(usize, anew2)
           if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }
         }
         else {
@@ -1755,8 +1755,8 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         while g != 0 {
           gm := deref(arm_p(g))
           set_arm_body(pc.arena, g, abody)
-          if ahead == 0 { ahead = g } else { set_arm_next(pc.arena, atail, g) }
-          atail = g
+          if ahead == 0 { ahead = unchecked bitcast(usize, g) } else { set_arm_next(pc.arena, atail, g) }
+          atail = unchecked bitcast(usize, g)
           g = gm.next
         }
         ## optional arm separator: `;` (kind 30) OR `,` (kind 9). Only `,` was unhandled — a
@@ -1802,14 +1802,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       mut etail := 0
       while cur(pc).kind != 15 and cur(pc).kind != 0 {
         ee := p_or(pc)
-        enew := gnode(pc.arena, Arg(e = ee, next = 0))
-        if ehead == 0 { ehead = enew } else {
+        enew := gnode(pc.arena, Arg(e = ee, next = unchecked bitcast(ptr(mut Arg), 0)))
+        if ehead == 0 { ehead = unchecked bitcast(usize, enew) } else {
           ep := arg_p(etail)
           eold := deref(ep)
           eupd := Arg(e = eold.e, next = enew)
           deref(ep) = eupd
         }
-        etail = enew
+        etail = unchecked bitcast(usize, enew)
         nel += 1
         if cur(pc).kind == 9 {
           pc.idx = pc.idx + 1                           ## ',' between elements
@@ -1833,12 +1833,12 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           } else {
             mut fi := 1
             while fi < filln {
-              fnew := gnode(pc.arena, Arg(e = ee, next = 0))
+              fnew := gnode(pc.arena, Arg(e = ee, next = unchecked bitcast(ptr(mut Arg), 0)))
               ep := arg_p(etail)
               eold := deref(ep)
               eupd := Arg(e = eold.e, next = fnew)
               deref(ep) = eupd
-              etail = fnew
+              etail = unchecked bitcast(usize, fnew)
               nel += 1
               fi += 1
             }
@@ -2089,14 +2089,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
             pc.idx = pc.idx + 1           ## field name
             pc.idx = pc.idx + 1           ## '='
             qfe := p_or(pc)
-            qfnew := gnode(pc.arena, Arg(e = qfe, next = 0))
-            if qfhead == 0 { qfhead = qfnew } else {
+            qfnew := gnode(pc.arena, Arg(e = qfe, next = unchecked bitcast(ptr(mut Arg), 0)))
+            if qfhead == 0 { qfhead = unchecked bitcast(usize, qfnew) } else {
               qfp := arg_p(qftail)
               qfold := deref(qfp)
               qfupd := Arg(e = qfold.e, next = qfnew)
               deref(qfp) = qfupd
             }
-            qftail = qfnew
+            qftail = unchecked bitcast(usize, qfnew)
             qfnf += 1
             if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between fields
           }
@@ -2108,14 +2108,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         mut qtail := 0
         while cur(pc).kind != 11 and cur(pc).kind != 0 {
           qe := p_or(pc)
-          qnew := gnode(pc.arena, Arg(e = qe, next = 0))
-          if qhead == 0 { qhead = qnew } else {
+          qnew := gnode(pc.arena, Arg(e = qe, next = unchecked bitcast(ptr(mut Arg), 0)))
+          if qhead == 0 { qhead = unchecked bitcast(usize, qnew) } else {
             qp := arg_p(qtail)
             qold := deref(qp)
             qupd := Arg(e = qold.e, next = qnew)
             deref(qp) = qupd
           }
-          qtail = qnew
+          qtail = unchecked bitcast(usize, qnew)
           qn += 1
           if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between args
         }
@@ -2191,7 +2191,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
             pc.idx = pc.idx + 1           ## field name
             pc.idx = pc.idx + 1           ## '='
             fe := p_or(pc)
-            finew := finode(pc.arena, FInit(fs = fnm.start, fl = fnm.len, e = fe, next = 0))
+            finew := finode(pc.arena, FInit(fs = fnm.start, fl = fnm.len, e = fe, next = unchecked bitcast(ptr(mut FInit), 0)))
             if fihead == 0 { fihead = unchecked bitcast(usize, finew) } else {
               fip := finit_p(unchecked bitcast(ptr(mut FInit), fitail))
               fiold := deref(fip)
@@ -2213,9 +2213,9 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
             ## order literal is byte-identical, so src/lib + the fixpoint are unaffected).
             mut g := fihead
             while g != 0 {
-              fnew := gnode(pc.arena, Arg(e = finit_expr(g), next = 0))
-              if fhead == 0 { fhead = fnew } else { fp := arg_p(ftail); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = fnew) }
-              ftail = fnew
+              fnew := gnode(pc.arena, Arg(e = finit_expr(g), next = unchecked bitcast(ptr(mut Arg), 0)))
+              if fhead == 0 { fhead = unchecked bitcast(usize, fnew) } else { fp := arg_p(ftail); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = fnew) }
+              ftail = unchecked bitcast(usize, fnew)
               fnf += 1
               g = finit_next(g)
             }
@@ -2262,9 +2262,9 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
                 if df.dl > 0 { fval = relex_default(pc, df.ds, df.dl) }
                 else { sfail("selfhost: struct construction leaves a non-trailing field unwritten (a gap before a later written or defaulted field) - provide the field, give it a default, or reorder") }
               }
-              fnew := gnode(pc.arena, Arg(e = fval, next = 0))
-              if fhead == 0 { fhead = fnew } else { fp := arg_p(ftail); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = fnew) }
-              ftail = fnew
+              fnew := gnode(pc.arena, Arg(e = fval, next = unchecked bitcast(ptr(mut Arg), 0)))
+              if fhead == 0 { fhead = unchecked bitcast(usize, fnew) } else { fp := arg_p(ftail); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = fnew) }
+              ftail = unchecked bitcast(usize, fnew)
               fnf += 1
               k += 1
             }
@@ -2276,14 +2276,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         mut atail := 0
         while cur(pc).kind != 11 and cur(pc).kind != 0 {
           ae := p_or(pc)
-          anew := gnode(pc.arena, Arg(e = ae, next = 0))
-          if ahead == 0 { ahead = anew } else {
+          anew := gnode(pc.arena, Arg(e = ae, next = unchecked bitcast(ptr(mut Arg), 0)))
+          if ahead == 0 { ahead = unchecked bitcast(usize, anew) } else {
             gp := arg_p(atail)
             gold := deref(gp)
             gupd := Arg(e = gold.e, next = anew)
             deref(gp) = gupd
           }
-          atail = anew
+          atail = unchecked bitcast(usize, anew)
           nargs += 1
           if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between args
         }
@@ -2309,14 +2309,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       mut cure : ptr(Expr) = e
       mut going := true
       while going {
-        enew := gnode(pc.arena, Arg(e = cure, next = 0))
-        if ehead == 0 { ehead = enew } else {
+        enew := gnode(pc.arena, Arg(e = cure, next = unchecked bitcast(ptr(mut Arg), 0)))
+        if ehead == 0 { ehead = unchecked bitcast(usize, enew) } else {
           ep := arg_p(etail)
           eold := deref(ep)
           eupd := Arg(e = eold.e, next = enew)
           deref(ep) = eupd
         }
-        etail = enew
+        etail = unchecked bitcast(usize, enew)
         nel += 1
         if cur(pc).kind == 9 {
           pc.idx = pc.idx + 1                              ## ','
@@ -2458,14 +2458,14 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
         mut ptail := 0
         while cur(pc).kind != 11 and cur(pc).kind != 0 {
           pe := p_or(pc)
-          pnew := gnode(pc.arena, Arg(e = pe, next = 0))
-          if phead == 0 { phead = pnew } else {
+          pnew := gnode(pc.arena, Arg(e = pe, next = unchecked bitcast(ptr(mut Arg), 0)))
+          if phead == 0 { phead = unchecked bitcast(usize, pnew) } else {
             pp := arg_p(ptail)
             pold := deref(pp)
             pupd := Arg(e = pold.e, next = pnew)
             deref(pp) = pupd
           }
-          ptail = pnew
+          ptail = unchecked bitcast(usize, pnew)
           pnp += 1
           if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between payload args
         }
@@ -2606,14 +2606,14 @@ p_pcall := fn(in out pc : PC, nm : NSpan) -> ptr(mut Expr) {
   mut atail := 0
   while cur(pc).kind != 11 and cur(pc).kind != 0 {
     ae := p_or(pc)
-    anew := gnode(pc.arena, Arg(e = ae, next = 0))
-    if ahead == 0 { ahead = anew } else {
+    anew := gnode(pc.arena, Arg(e = ae, next = unchecked bitcast(ptr(mut Arg), 0)))
+    if ahead == 0 { ahead = unchecked bitcast(usize, anew) } else {
       gp := arg_p(atail)
       gold := deref(gp)
       gupd := Arg(e = gold.e, next = anew)
       deref(gp) = gupd
     }
-    atail = anew
+    atail = unchecked bitcast(usize, anew)
     nargs += 1
     if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }         ## ',' between args
   }
@@ -2635,11 +2635,11 @@ p_pcall := fn(in out pc : PC, nm : NSpan) -> ptr(mut Expr) {
 p_ecallee := fn(in out pc : PC, callee : ptr(mut Expr), rn : NSpan) -> ptr(mut Expr) {
   pc.idx = pc.idx + 1                                    ## '('
   mut nargs := 0
-  chead := gnode(pc.arena, Arg(e = callee, next = 0))
+  chead := gnode(pc.arena, Arg(e = callee, next = unchecked bitcast(ptr(mut Arg), 0)))
   mut atail := chead
   while cur(pc).kind != 11 and cur(pc).kind != 0 {
     ae := p_or(pc)
-    anew := gnode(pc.arena, Arg(e = ae, next = 0))
+    anew := gnode(pc.arena, Arg(e = ae, next = unchecked bitcast(ptr(mut Arg), 0)))
     gp := arg_p(atail)
     gold := deref(gp)
     gupd := Arg(e = gold.e, next = anew)
@@ -3537,7 +3537,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## ':=' / '='
     init_e := p_or(pc)
     ai_s := synth_ident_span(pc, "alloc_into")
-    init_arg := gnode(pc.arena, Arg(e = init_e, next = 0))
+    init_arg := gnode(pc.arena, Arg(e = init_e, next = unchecked bitcast(ptr(mut Arg), 0)))
     arena_arg := gnode(pc.arena, Arg(e = arena_e, next = init_arg))
     ## A bare integer-literal init has no inferable type (spec §3.4: a literal with no context takes the
     ## target's native SIGNED integer, `isize`). `alloc_into`'s `T` is inferred from `init` for a
@@ -3718,14 +3718,14 @@ p_stmt := fn(in out pc : PC) -> usize {
           cmbody = p_stmt(pc)
         }
         dummycm := newnode(pc.arena, Expr.Num(0, 0, 0))
-        anewcm := anode(pc.arena, Arm(wild = cw, lit = 0, body = dummycm, next = 0, vs = cvs, vl = cvl, binds_head = bind_null(), body_stmts = cmbody, hi = 0))
-        if cmhead == 0 { cmhead = anewcm } else {
+        anewcm := anode(pc.arena, Arm(wild = cw, lit = 0, body = dummycm, next = unchecked bitcast(ptr(mut Arm), 0), vs = cvs, vl = cvl, binds_head = bind_null(), body_stmts = cmbody, hi = 0))
+        if cmhead == 0 { cmhead = unchecked bitcast(usize, anewcm) } else {
           apcm := arm_p(cmtail)
           oldcm := deref(apcm)
           updcm := Arm(wild = oldcm.wild, lit = oldcm.lit, body = oldcm.body, next = anewcm, vs = oldcm.vs, vl = oldcm.vl, binds_head = oldcm.binds_head, body_stmts = oldcm.body_stmts, hi = oldcm.hi)
           deref(apcm) = updcm
         }
-        cmtail = anewcm
+        cmtail = unchecked bitcast(usize, anewcm)
         if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }
       }
       pc.idx = pc.idx + 1                 ## '}'
@@ -3854,7 +3854,7 @@ p_stmt := fn(in out pc : PC) -> usize {
       return unchecked bitcast(usize, bstart)
     }
     dact := p_or(pc)                    ## the cleanup expression (a call, overwhelmingly)
-    darg := gnode(pc.arena, Arg(e = dact, next = 0))
+    darg := gnode(pc.arena, Arg(e = dact, next = unchecked bitcast(ptr(mut Arg), 0)))
     dcs := synth_ident_span(pc, "__defer")
     dcall := newnode(pc.arena, Expr.Call(dcs, 7, 1, darg))
     return unchecked bitcast(usize, snode(pc.arena, Stmt.ExprStmt(dcall, 0)))
@@ -3912,7 +3912,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     mut break_label_s : usize = 0
     mut break_label_l : usize = 0
     if cur(pc).kind == 1 {
-      d := lbl_depth(pc.src, cur(pc).start, cur(pc).len)
+      d := lbl_depth(unchecked bitcast(usize, pc.src), cur(pc).start, cur(pc).len)
       if d >= 0 { bdepth = usize(d); break_label_s = cur(pc).start; break_label_l = cur(pc).len; pc.idx = pc.idx + 1 }   ## consume the label name
     }
     mut bval := expr_null()
@@ -3929,7 +3929,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     mut continue_label_s : usize = 0
     mut continue_label_l : usize = 0
     if cur(pc).kind == 1 {
-      d := lbl_depth(pc.src, cur(pc).start, cur(pc).len)
+      d := lbl_depth(unchecked bitcast(usize, pc.src), cur(pc).start, cur(pc).len)
       if d >= 0 { cdepth = usize(d); continue_label_s = cur(pc).start; continue_label_l = cur(pc).len; pc.idx = pc.idx + 1 }
     }
     cstmt := snode(pc.arena, Stmt.Continue(cdepth, 0))
@@ -4039,14 +4039,14 @@ p_stmt := fn(in out pc : PC) -> usize {
         pc.idx = pc.idx + 1                 ## '}' (arm body)
         pc.idx = pc.idx + 1                 ## '}' (comptime-for body)
 dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
-        anewc := anode(pc.arena, Arm(wild = 2, lit = 0, body = dummyc, next = 0, vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = tbody, hi = 0))
-        if ahead == 0 { ahead = anewc } else {
+        anewc := anode(pc.arena, Arm(wild = 2, lit = 0, body = dummyc, next = unchecked bitcast(ptr(mut Arm), 0), vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = tbody, hi = 0))
+        if ahead == 0 { ahead = unchecked bitcast(usize, anewc) } else {
           apc := arm_p(atail)
           oldc := deref(apc)
           updc := Arm(wild = oldc.wild, lit = oldc.lit, body = oldc.body, next = anewc, vs = oldc.vs, vl = oldc.vl, binds_head = oldc.binds_head, body_stmts = oldc.body_stmts, hi = oldc.hi)
           deref(apc) = updc
         }
-        atail = anewc
+        atail = unchecked bitcast(usize, anewc)
         if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }
       }
       else {
@@ -4085,8 +4085,8 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
       while g != 0 {
         gm := deref(arm_p(g))
         set_arm_body_stmts(pc.arena, g, sbody)
-        if ahead == 0 { ahead = g } else { set_arm_next(pc.arena, atail, g) }
-        atail = g
+        if ahead == 0 { ahead = unchecked bitcast(usize, g) } else { set_arm_next(pc.arena, atail, g) }
+        atail = unchecked bitcast(usize, g)
         g = gm.next
       }
       if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }   ## optional ';'
@@ -5140,7 +5140,7 @@ p_stmts := fn(in out pc : PC) -> usize {
         s = p_stmt(pc)
       } else {
         e := p_or(pc)
-        s = snode(pc.arena, Stmt.ExprStmt(e, 0))
+        s = unchecked bitcast(usize, snode(pc.arena, Stmt.ExprStmt(e, 0)))
       }
       if head == 0 { head = s } else { set_stmt_next(pc.arena, stmt_last(tail, pc.arena), s) }
       tail = s
@@ -5385,7 +5385,7 @@ parse_struct_members := fn(in out pc : PC, packed : bool) -> usize {
         panic("selfhost: enum discriminant pin must be a SINGLE integer literal, not an expression (spec Types §6.2 / grammar §130 `\"=\" int`)")
       }
     }
-    fnew := fnode(pc.arena, FieldDecl(ns = mn.start, nl = mn.len, arity = marity, next = 0, ts = mts, tl = mtl, wsize = mwsize))
+    fnew := fnode(pc.arena, FieldDecl(ns = mn.start, nl = mn.len, arity = marity, next = unchecked bitcast(ptr(mut FieldDecl), 0), ts = mts, tl = mtl, wsize = mwsize))
     if unchecked bitcast(usize, fhead) == 0 { fhead = fnew } else {
       old := deref(ftail)
       upd := FieldDecl(ns = old.ns, nl = old.nl, arity = old.arity, next = fnew, ts = old.ts, tl = old.tl, wsize = old.wsize)
@@ -5395,7 +5395,7 @@ parse_struct_members := fn(in out pc : PC, packed : bool) -> usize {
     if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between members
   }
   pc.idx = pc.idx + 1                       ## '}'
-  fhead
+  unchecked bitcast(usize, fhead)
 }
 
 pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, ParseErr) {
@@ -5421,9 +5421,9 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ## decl, so `check`'s per-limit substring scan (`span_has_limit`) can't false-match a normal decl.
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = lts, name_len = ltl, value = ph,
-      is_fn = false, kind = 0, arity = 99, is_generic = false, params_head = 0,
-      body_stmts = 0, fields_head = 0, ret_ts = lts, ret_tl = ltl,
-      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+      is_fn = false, kind = 0, arity = 99, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = lts, ret_tl = ltl,
+      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   ## An optional `pub` visibility prefix (Modules §4.1): every module of the self-host
   ## tree exports its surface with `pub`, so the parser must accept it. The lean compiler does
@@ -5593,9 +5593,9 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     pc.idx = pc.idx + 1                       ## '}'
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = ds, name_len = dl, value = tbody,
-      is_fn = true, kind = 5, arity = 0, is_generic = false, params_head = 0,
-      body_stmts = tstmts, fields_head = 0, ret_ts = trt.start, ret_tl = trt.len,
-      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+      is_fn = true, kind = 5, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      body_stmts = tstmts, fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = trt.start, ret_tl = trt.len,
+      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   ## DESTRUCTURE import — `(A, B, …) := mod` (e.g. `(Arg, Arm, Expr) := ast`): brings each name
   ## into scope as an alias for `mod::Name`. The self-host compiler resolves type/fn references by
@@ -5622,9 +5622,9 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     lastt := tok_at(pc, pc.idx - 1)
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = 0, name_len = 0, value = php,
-      is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = 0,
-      body_stmts = 0, fields_head = 0, ret_ts = gopen.start, ret_tl = lastt.start + lastt.len - gopen.start,
-      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+      is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = gopen.start, ret_tl = lastt.start + lastt.len - gopen.start,
+      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   name := cur(pc)
   ## Operator-fn NAMES: arithmetic 16/17/18/19/29, comparison 20/24..28, AND the bitwise glyphs 34
@@ -5664,8 +5664,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     }
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = aroot,
-      is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = 0,
-      body_stmts = 0, fields_head = 0, ret_ts = 0, ret_tl = 0,
+      is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = awhen, alias_ts = 0, alias_tl = 0)))
   }
   if cur(pc).kind != 5 { return Result(usize, ParseErr).Err(ParseErr.Expected(5)) }
@@ -5690,9 +5690,9 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ph := newnode(pc.arena, Expr.Num(0, 0, 0))
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = ph,
-      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = 0,
-      body_stmts = 0, fields_head = 0, ret_ts = ut.start, ret_tl = ut.len,
-      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = ut.start, ret_tl = ut.len,
+      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   ## MODULE-ALIAS import — `name := mod::sub` (e.g. `vec := alloc::vec`, `io := std::io`): the RHS
   ## is a qualified module path (`::`, kind 7), not a fn/struct/enum/value. Consume `ident (:: ident)+`
@@ -5751,9 +5751,9 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       ph := newnode(pc.arena, Expr.Num(0, 0, 0))
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = ph,
-        is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = 0,
-        body_stmts = 0, fields_head = 0, ret_ts = als_ts, ret_tl = als_tl,
-        mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+        is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = als_ts, ret_tl = als_tl,
+        mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
   }
   ## `@abi(syscall) fn(...) -> R` — a SYSCALL-ABI fn (Stdlib §7 / ABI): a bodyless declaration
@@ -5843,9 +5843,9 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     }
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = rph,
-      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = 0,
-      body_stmts = 0, fields_head = 0, ret_ts = ut.start, ret_tl = utl,
-      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = ut.start, ret_tl = utl,
+      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   else if cur(pc).kind == 33 and tok_at(pc, pc.idx + 1).kind == 1 and not str_eq(str_at(pc.src + tok_at(pc, pc.idx + 1).start, tok_at(pc, pc.idx + 1).len), "abi") {
     ## `@endian(...)` shapes a type's byte order; the lower has NO endian swap yet, so a type-level
@@ -6128,7 +6128,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       ## an ARRAY param carries its static length N in `pps` (no pointee/default there) → the lower reads
       ## it for the `a[i]` bounds check.
       if p_is_arr { fpps = p_arrlen }
-      pnew := pnode(pc.arena, Param(ns = pn.start, nl = pn.len, next = 0, ts = pts, tl = ptl, pmode = p_pmode, pps = fpps, ppl = ppl))
+      pnew := pnode(pc.arena, Param(ns = pn.start, nl = pn.len, next = unchecked bitcast(ptr(mut Param), 0), ts = pts, tl = ptl, pmode = p_pmode, pps = fpps, ppl = ppl))
       if unchecked bitcast(usize, phead) == 0 { phead = pnew } else {
         old := deref(ptail)
         upd := Param(ns = old.ns, nl = old.nl, next = pnew, ts = old.ts, tl = old.tl, pmode = old.pmode, pps = old.pps, ppl = old.ppl)
@@ -6249,8 +6249,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = eph,
         is_fn = true, kind = 1, arity = arity, is_generic = false, params_head = phead,
-        body_stmts = 0, fields_head = 0, ret_ts = rt.start, ret_tl = rt.len,
-        mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = rt.start, ret_tl = rt.len,
+        mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
     ## A SYSCALL-ABI fn has NO body — the `-> R` is the whole declaration. Emit a kind-4 Decl
     ## (the params drive the trampoline's arg-register mapping; `arity` is the param count).
@@ -6259,8 +6259,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = ph,
         is_fn = true, kind = 4, arity = arity, is_generic = false, params_head = phead,
-        body_stmts = 0, fields_head = 0, ret_ts = rt.start, ret_tl = rt.len,
-        mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = rt.start, ret_tl = rt.len,
+        mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
     ## TYPE-FUNCTION generic form — `Name := fn(T : type) -> type { [@owning] struct {…} }` (the
     ## spec's generic-type mechanism, used by the real stdlib: `Vec`/`Slice`/`Handle`/`Buf`). A fn
@@ -6284,8 +6284,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = placeholder,
         is_fn = false, kind = tk, arity = 0, is_generic = true, params_head = phead,
-        body_stmts = 0, fields_head = tfh, ret_ts = 0, ret_tl = 0,
-        mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = tfh, ret_ts = 0, ret_tl = 0,
+        mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
     ## A MULTI-TOKEN return type — `Result(Decl, ParseErr)` / `scoped ptr(mut T)` / `ptr(T)` — has
     ## more tokens after its head before the body `{`. `rt` already captured the head (used for the
@@ -6362,7 +6362,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = body,
       is_fn = true, kind = 1, arity = arity, is_generic = is_generic, params_head = phead,
-      body_stmts = stmts, fields_head = 0, ret_ts = rt.start, ret_tl = rt.len,
+      body_stmts = stmts, fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = rt.start, ret_tl = rt.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = when_e, alias_ts = 0, alias_tl = 0)))
   }
   ## `Name := @owning struct {…}` / `@owning enum {…}` — the `@owning` effector (linearity) may
@@ -6413,8 +6413,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     placeholder := newnode(pc.arena, Expr.Num(0, 0, 0))
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = placeholder,
-      is_fn = false, kind = k, arity = 0, is_generic = is_gen_struct, params_head = 0,
-      body_stmts = 0, fields_head = fhead, ret_ts = 0, ret_tl = 0,
+      is_fn = false, kind = k, arity = 0, is_generic = is_gen_struct, params_head = unchecked bitcast(ptr(mut Param), 0),
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = fhead, ret_ts = 0, ret_tl = 0,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = swhen, alias_ts = 0, alias_tl = 0)))
   }
   ## `Name := brand(U)` — a NOMINAL BRAND over an underlying scalar type `U` (the
@@ -6430,9 +6430,9 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ph := newnode(pc.arena, Expr.Num(0, 0, 0))
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = ph,
-      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = 0,
-      body_stmts = 0, fields_head = 0, ret_ts = ut.start, ret_tl = ut.len,
-      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = 0, alias_ts = 0, alias_tl = 0)))
+      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = ut.start, ret_tl = ut.len,
+      mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   rhs_idx := pc.idx                        ## first token of the RHS (for the alias-shape scan below)
   root := p_or(pc)
@@ -6502,8 +6502,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
   if alias_out_tl == 0 { alias_out_ts = plain_ts; alias_out_tl = plain_tl }
   Result(usize, ParseErr).Ok(dnode(da, Decl(
     name_start = name.start, name_len = name.len, value = root,
-    is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = 0,
-    body_stmts = 0, fields_head = 0, ret_ts = 0, ret_tl = 0,
+    is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+    body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0,
     mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = vwhen,
     alias_ts = alias_out_ts, alias_tl = alias_out_tl)))
 }
