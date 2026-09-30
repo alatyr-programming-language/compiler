@@ -129,6 +129,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   result, `f(s.ok)` for a `bool` field into `u64`, `S(a = [40, 2])` for a scalar field, and
   `b := true; f(b)` into a `u64` parameter (Types §4.2/§4.3, §9.4). A `Checked := Pair.require(p)`
   value passed where a `Pair` is expected is refused where the checker can see its type (§8.1) (#726).
+- **A program's own type shadows a prelude type of the same name in `check`, too.** A file that
+  declares its own `Arena` also gets the injected `alloc::Arena`, and `check` resolved the bare name
+  to whichever came first — the prelude's — so `Arena(live = true)` for a user struct with a `bool`
+  field was refused, while `Arena(live = 5)` passed on the shipped arena's pointer field. A bare type
+  name with more than one declaration now resolves in the module that writes it (Modules §3), as
+  `build` already did (#762).
 
 ## 0.2.4 — 2026-09-30
 

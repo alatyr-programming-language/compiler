@@ -3728,10 +3728,20 @@ callee_param_is_type := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s 
 ## Find the struct/enum `Decl` whose name is [s, s+n) among the first `upto` bindings; returns
 ## its index + 1 (0 = not found, so a `usize` doubles as found?). Used to resolve a struct
 ## literal's type and to look up a field's declared type.
+##
+## #762 — when the name has MORE THAN ONE struct/enum declaration (a program's own `Arena` beside the
+## ambiently injected prelude's `alloc::Arena`), declaration order is not a resolution rule: Modules §3
+## resolves a bare type name in the module that WRITES it, then up its ancestor chain. The writing
+## module is the owner of the declaration enclosing the span (`sema_span_module`), and the ranking is
+## `lower_layout::type_mod_rank_from` — the one rule the lower's `type_decl_ranked` also applies, so
+## `check` and `build` pick the same declaration. A single declaration, a synthetic span, or no
+## candidate on the writer's chain keeps the historical first-match answer unchanged.
 type_decl_index := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize) -> usize {
   cnt := rt::vec_len(deref(decls))
   mut alias_ts := 0
   mut alias_tl := 0
+  mut first := 0
+  mut hits := 0
   th := sema_name_hash(src, s, n)
   mut jc := sni_lo(cnt, th)
   jce := sni_hi(cnt, th)
@@ -3742,7 +3752,10 @@ type_decl_index := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
     if i < upto and (SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th) {
       d := deref(decl_get(decls, i))
       if streq(src, d.name_start, d.name_len, s, n) {
-        if d.kind == 2 or d.kind == 3 { return i + 1 }
+        if d.kind == 2 or d.kind == 3 {
+          if first == 0 { first = i + 1 }
+          hits += 1
+        }
         if d.kind == 0 {
           if d.ret_tl != 0 { alias_ts = d.ret_ts; alias_tl = d.ret_tl }
           else if d.alias_tl != 0 {
@@ -3753,6 +3766,8 @@ type_decl_index := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
       }
     }
   }
+  if hits >= 2 { return type_decl_index_ranked(decls, upto, src, s, n, first) }
+  if first != 0 { return first }
   if alias_tl != 0 {
     at := name_tail(src, alias_ts, alias_tl)
     mut j := 0
@@ -3763,6 +3778,54 @@ type_decl_index := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
     }
   }
   0
+}
+
+## #762 — the module that WRITES source offset `s`: the owner of the declaration whose name starts
+## nearest at or before `s`. The modules reach sema concatenated into one buffer, each file's
+## declarations contiguous in it, so the nearest preceding declaration name lies in the same file as
+## any span inside that file's declarations. `found = false` for a synthetic span or an offset before
+## every declaration — the caller then keeps its historical answer.
+SpanMod := struct { found : bool, s : usize, n : usize }
+sema_span_module := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize) -> SpanMod {
+  if ast::span_is_synthetic(s) { return SpanMod(found = false, s = 0, n = 0) }
+  cnt := rt::vec_len(deref(decls))
+  mut found := false
+  mut best := 0
+  mut ms := 0
+  mut ml := 0
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.name_len != 0 and d.name_start <= s and (not found or d.name_start > best) {
+      found = true
+      best = d.name_start
+      ms = d.mod_start
+      ml = d.mod_len
+    }
+    i += 1
+  }
+  SpanMod(found = found, s = ms, n = ml)
+}
+
+## #762 — `type_decl_index`'s answer when [s, s+n) names two or more struct/enum declarations: the one
+## the writing module reaches first under Modules §3 (own module / lib-path head, then the ancestor
+## chain nearest-first), ranked by the same `type_mod_rank_from` the lower's selector uses. No
+## candidate on the writer's chain, or no writer recoverable, keeps `first` — the historical answer.
+type_decl_index_ranked := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, first : usize) -> usize {
+  wm := sema_span_module(decls, src, s)
+  if not wm.found { return first }
+  mut best : i64 = 0 - 1
+  mut besti := first
+  mut i := 0
+  while i < upto {
+    d := deref(decl_get(decls, i))
+    if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, s, n) {
+      r := lower_layout::type_mod_rank_from(src, d.mod_start, d.mod_len, wm.s, wm.n)
+      if r > best { best = r; besti = i + 1 }
+    }
+    i += 1
+  }
+  besti
 }
 
 ## Reject an alias-of-alias before the lower can treat the second name as an ordinary value. The
