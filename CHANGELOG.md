@@ -122,6 +122,17 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.5 — 2026-09-30
+
+- **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved
+  registers.** The frozen bootstrap `seed/alatyr` advances from 0.2.4 to 0.2.5 because the #794 fix
+  below changes what the compiler emits for itself: the 0.2.4 seed no longer equalled Stage1. The
+  normalized seed-to-Stage1 delta is 7162 hunks of one shape — each of the compiler's 3581
+  text-lowered functions saves `rbx`, `r12`..`r15` after its prologue and restores them before its
+  epilogue. `Stage1 == Stage2 == Stage3` byte-identical raw at 1 391 379 GAS lines, `Stage2 ==
+  Stage3` in the binary, all three answering `alatyr 0.2.5`; `seed/VERSION` records the hashes. The
+  promotion also carries the #789/#797 fixes into the seed, so the compiler's own source may now
+  walk and build `Option(ptr(T))` lists.
 - **Storing `Option.Some(p)` into an `Option(ptr(T))` struct field stores `p`.** A field store pushed its
   value with the plain scalar lowering, which yields `0` for any enum literal with a payload. So
   `a.next = Option.Some(ptr(mut b))` and `deref(tail).next = Option.Some(nd)` stored **None** on a clean
