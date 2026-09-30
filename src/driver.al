@@ -107,19 +107,67 @@ _struct_field_default := fn(src : ptr(u8), ts : usize, tl : usize) -> DSpan {
   DSpan(s = ds, n = e - ds)
 }
 
+## Issue #814 — the PASS-1 tables are sized from what PASS 1 produced, in this one band, for every
+## two-pass front end (`compile_files_mode`, `d_compile_file_multi`, `check_files`, the single-file
+## check). They used to be reserved at 16 + 32 bytes PER SOURCE BYTE before PASS 1 ran, inside the one
+## 512 MiB `tar` arena; with the 8-byte decl vector, the 16 MiB source buffer and the 64 MiB GAS buffer
+## beside them that capped the compiler's own tree at ~7.0 MB of source, a limit the frozen seed hit
+## (#814). Both sizes below are exact upper bounds, and `rt::vec_push` still refuses loudly
+## (`rt: Vec overflow`) if a later edit to a collector ever outgrew its count.
+
+## The number of fields of a struct declaration: the length of its `FieldDecl` list. Shared by the
+## table's sizing and its fill, so the two cannot disagree about a record's length.
+d_struct_nfields := fn(d : Decl) -> usize {
+  mut nf : usize = 0
+  mut f := unchecked bitcast(usize, d.fields_head)
+  while f != 0 {
+    fd := deref(fld_p(unchecked bitcast(ptr(mut FieldDecl), f)))
+    nf += 1
+    f = unchecked bitcast(usize, fd.next)
+  }
+  nf
+}
+## Words `collect_struct_table` pushes: one record per struct declaration, 5 header words
+## (name, module, field count) plus 4 per field (name, default span). Exact, not an estimate.
+d_struct_table_words := fn(decls : rt::Vec) -> usize {
+  mut w : usize = 0
+  mut di := 0
+  while di < rt::vec_len(decls) {
+    d := deref(decl_at(Decl, rt::vec_get(decls, di)))
+    if d.kind == 2 { w = w + 5 + 4 * d_struct_nfields(d) }
+    di += 1
+  }
+  w
+}
+## Words the enum-name table can hold at most: every declaration contributes at most ONE (start, len)
+## pair — an enum declaration (kind 3) its own name, or a one-hop alias of one (kind 0,
+## `collect_enum_aliases`) its alias name; the two kinds are exclusive. `extra` pairs are the caller's
+## own seeds (`compile_file_fmt` adds `Result`/`Option`).
+d_enum_table_words := fn(decls : rt::Vec, extra : usize) -> usize { (rt::vec_len(decls) + extra) * 2 }
+## Fill the PASS-1 enum-name table: every enum declaration's name, then the one-hop aliases.
+d_collect_enum_table := fn(decls : rt::Vec, src : ptr(u8), in out ev : rt::Vec) {
+  dcnt1 := rt::vec_len(decls)
+  mut cdi := 0
+  while cdi < dcnt1 {
+    cd := deref(decl_at(Decl, rt::vec_get(decls, cdi)))
+    ## bind the two spans to LOCALS before pushing: passing `cd.name_start` — a field read off a
+    ## `deref(<call>)`-bound aggregate local — DIRECTLY as the `in out`-Vec `vec_push`'s value argument
+    ## mis-lowers and kills the process (the AGENTS.md "bind a `deref(<call>)` field" hazard).
+    cns := cd.name_start
+    cnl := cd.name_len
+    if cd.kind == 3 { zp1 := rt::vec_push(ev, cns); zp2 := rt::vec_push(ev, cnl) }
+    cdi += 1
+  }
+  collect_enum_aliases(decls, src, ev)
+}
+
 collect_struct_table := fn(decls : rt::Vec, src : ptr(u8), in out sv : rt::Vec) {
   dcnt := rt::vec_len(decls)
   mut di := 0
   while di < dcnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, di)))
     if d.kind == 2 {
-      mut nf := 0
-      mut f := unchecked bitcast(usize, d.fields_head)
-      while f != 0 {
-        fd := deref(fld_p(unchecked bitcast(ptr(mut FieldDecl), f)))
-        nf += 1
-        f = unchecked bitcast(usize, fd.next)
-      }
+      nf := d_struct_nfields(d)
       rt::vec_push(sv, d.name_start)
       rt::vec_push(sv, d.name_len)
       ## The DECLARING MODULE travels with the record (TYPE-ANCESTOR): `parser::struct_rec_of` used
@@ -4839,8 +4887,6 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## (module order is getdents, so all modules must be parsed before the enum-ctor-vs-UFCS decisions
   ## are sound). PASS 1 runs with a NULL table (→ the parser's old always-fire behavior; enum DECLS
   ## parse fine regardless, and only enum-ctor USES are affected, which don't change collection).
-  mut ev := rt::Vec(data = rt::bump(tar, dcap * 16), len = 0, cap = dcap * 2)
-  mut sv := rt::Vec(data = rt::bump(tar, dcap * 32), len = 0, cap = dcap * 4)
   parser::set_structs_tbl(0)
   mut nstr := 0
   ## --- PASS 1: parse to discover enum-type names (results otherwise discarded) ---
@@ -4863,14 +4909,11 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     k += 1
   }
   ## collect kind-3 (enum-type) decl names into `ev`; then reset the AST arena + decls + nstr for pass 2
-  dcnt1 := rt::vec_len(decls)
-  mut di := 0
-  while di < dcnt1 {
-    d := deref(decl_at(Decl, rt::vec_get(decls, di)))
-    if d.kind == 3 { rt::vec_push(ev, d.name_start); rt::vec_push(ev, d.name_len) }
-    di += 1
-  }
-  collect_enum_aliases(decls, base, ev)
+  ## Issue #814 — the PASS-1 tables, sized from what PASS 1 produced (`d_enum_table_words`,
+  ## `d_struct_table_words`) instead of reserved per source byte before it ran.
+  mut ev := rt::Vec(data = rt::bump(tar, d_enum_table_words(decls, 0) * 8), len = 0, cap = d_enum_table_words(decls, 0))
+  mut sv := rt::Vec(data = rt::bump(tar, d_struct_table_words(decls) * 8), len = 0, cap = d_struct_table_words(decls))
+  d_collect_enum_table(decls, base, ev)
   collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
@@ -6119,8 +6162,6 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ast::set_src_extent(strbuf::buf_len(bld))
   dcap := strbuf::buf_len(bld) + 16
   mut decls := rt::Vec(data = rt::bump(tar, dcap * 8), len = 0, cap = dcap)
-  mut ev := rt::Vec(data = rt::bump(tar, dcap * 16), len = 0, cap = dcap * 2)
-  mut sv := rt::Vec(data = rt::bump(tar, dcap * 32), len = 0, cap = dcap * 4)
   parser::set_structs_tbl(0)
   mut nstr := 0
   ## --- PASS 1: parse with a NULL enum table to discover enum-type names (results discarded) ---
@@ -6142,14 +6183,11 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     nstr = pc.nstr
     k += 1
   }
-  dcnt1 := rt::vec_len(decls)
-  mut di := 0
-  while di < dcnt1 {
-    d := deref(decl_at(Decl, rt::vec_get(decls, di)))
-    if d.kind == 3 { rt::vec_push(ev, d.name_start); rt::vec_push(ev, d.name_len) }
-    di += 1
-  }
-  collect_enum_aliases(decls, base, ev)
+  ## Issue #814 — the PASS-1 tables, sized from what PASS 1 produced (`d_enum_table_words`,
+  ## `d_struct_table_words`) instead of reserved per source byte before it ran.
+  mut ev := rt::Vec(data = rt::bump(tar, d_enum_table_words(decls, 0) * 8), len = 0, cap = d_enum_table_words(decls, 0))
+  mut sv := rt::Vec(data = rt::bump(tar, d_struct_table_words(decls) * 8), len = 0, cap = d_struct_table_words(decls))
+  d_collect_enum_table(decls, base, ev)
   collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
@@ -6786,7 +6824,6 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## The parser's by-name struct-construction table is a PASS-1 product, just like the enum-name table.
   ## `check_files` must publish it before PASS 2; otherwise `check` accepts unknown named fields and
   ## disagrees with build, which already rejects them in its equivalent two-pass path.
-  mut sv := rt::Vec(data = rt::bump(tar, dcap * 32), len = 0, cap = dcap * 4)
   parser::set_structs_tbl(0)
   mut nstr := 0
   mut perr := false
@@ -6804,7 +6841,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## nested call inside the argument list) is keyed on `Expr::Call`, so NONE of it reached the node.
   ## `check` therefore returned 0 on programs `build` rejects. `compile_files` / `d_compile_file_multi` /
   ## `compile_file_fmt` already run this two-pass shape; this makes `check` agree with them.
-  mut ev := rt::Vec(data = rt::bump(tar, dcap * 16), len = 0, cap = dcap * 2)
+  ## (Allocated after PASS 1, from its counts — #814.)
   ## --- PASS 1: parse with a NULL enum table to discover the enum-type names ---
   k = 0
   while k < n {
@@ -6857,21 +6894,11 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## The enum table only steers ctor-vs-UFCS node CHOICE on an already-accepted token sequence (both
   ## `is_ctor` branches build a node; neither can fail), so PASS 2 cannot introduce a parse error PASS 1
   ## did not already report — the reject above stays the single parse-diagnostic site.
-  dcnt1 := rt::vec_len(decls)
-  mut cdi := 0
-  while cdi < dcnt1 {
-    cd := deref(decl_at(Decl, rt::vec_get(decls, cdi)))
-    ## bind the two spans to LOCALS before pushing: passing `cd.name_start` — a field read off a
-    ## `deref(<call>)`-bound aggregate local — DIRECTLY as the `in out`-Vec `vec_push`'s value argument
-    ## mis-lowers here and kills the process (the same field-through-call-result hazard the AGENTS.md
-    ## "bind a `deref(<call>)` field to a local where flagged" rule names). Constants push fine, so it is
-    ## the argument, not the loop or the Vec.
-    cns := cd.name_start
-    cnl := cd.name_len
-    if cd.kind == 3 { zp1 := rt::vec_push(ev, cns); zp2 := rt::vec_push(ev, cnl) }
-    cdi += 1
-  }
-  collect_enum_aliases(decls, base, ev)
+  ## Issue #814 — the PASS-1 tables, sized from what PASS 1 produced (`d_enum_table_words`,
+  ## `d_struct_table_words`) instead of reserved per source byte before it ran.
+  mut ev := rt::Vec(data = rt::bump(tar, d_enum_table_words(decls, 0) * 8), len = 0, cap = d_enum_table_words(decls, 0))
+  mut sv := rt::Vec(data = rt::bump(tar, d_struct_table_words(decls) * 8), len = 0, cap = d_struct_table_words(decls))
+  d_collect_enum_table(decls, base, ev)
   collect_struct_table(decls, base, sv)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
@@ -7158,7 +7185,6 @@ pub check := fn(src : str, in out a : Arena) -> usize {
   mut decls := rt::Vec(data = rt::bump(tar, tcap * 8), len = 0, cap = tcap)
   ## Keep the single-file check entry in sync with check_files: struct construction is parsed by name
   ## only when PASS 2 has the declaration-order table from PASS 1.
-  mut sv := rt::Vec(data = rt::bump(tar, tcap * 32), len = 0, cap = tcap * 4)
   parser::set_structs_tbl(0)
   ## PASS 1 (null enum table) — discover the enum-type names. The same two-pass shape `check_files`
   ## and `compile_files` run, and for the same reason: with a NULL table every `recv.method(args)`
@@ -7172,18 +7198,11 @@ pub check := fn(src : str, in out a : Arena) -> usize {
   mut rc := 0
   match pr {
     Result::Ok(n) => {
-      mut ev := rt::Vec(data = rt::bump(tar, tcap * 16), len = 0, cap = tcap * 2)
-      dcnt1 := rt::vec_len(decls)
-      mut cdi := 0
-      while cdi < dcnt1 {
-        cd := deref(decl_at(Decl, rt::vec_get(decls, cdi)))
-        ## bind the spans to LOCALS first — see `check_files`' twin loop.
-        cns := cd.name_start
-        cnl := cd.name_len
-        if cd.kind == 3 { zp1 := rt::vec_push(ev, cns); zp2 := rt::vec_push(ev, cnl) }
-        cdi += 1
-      }
-      collect_enum_aliases(decls, base, ev)
+      ## Issue #814 — the PASS-1 tables, sized from what PASS 1 produced (`d_enum_table_words`,
+      ## `d_struct_table_words`) instead of reserved per source byte before it ran.
+      mut ev := rt::Vec(data = rt::bump(tar, d_enum_table_words(decls, 0) * 8), len = 0, cap = d_enum_table_words(decls, 0))
+      mut sv := rt::Vec(data = rt::bump(tar, d_struct_table_words(decls) * 8), len = 0, cap = d_struct_table_words(decls))
+      d_collect_enum_table(decls, base, ev)
       collect_struct_table(decls, base, sv)
       parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
       na.off = 0

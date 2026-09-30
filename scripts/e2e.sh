@@ -813,6 +813,23 @@ check_backend_determinism() {
   done
 }
 
+# #814 — a program's SIZE is not a limit. `compile_files_mode` used to reserve 56 bytes per source byte
+# (decl vector 8, enum-name table 16, struct-literal table 32) inside one 512 MiB arena, so ~7 MB of
+# source aborted with `rt: arena overflow (bump past cap)` — which is how the frozen seed stopped being
+# able to build the compiler's own next tree. The two PASS-1 tables are now sized from PASS 1's own
+# counts. The source is generated (8 MB of comment lines plus a one-line `main`), so the corpus
+# manifest gains no row. On the parent compiler this build exits 1 with the arena overflow.
+check_large_source() {
+  local d="$T/large_source" rc
+  mkdir -p "$d"
+  awk 'BEGIN { for (i = 0; i < 90000; i++) printf "## filler line %d: the compile arena used to reserve 56 bytes for every source byte.....\n", i; print "main := fn() -> u64 { 42 }" }' > "$d/big.al"
+  "$CC" -o "$d/big" "$d/big.al" > "$d/build.log" 2>&1; rc=$?
+  if [ "$rc" != 0 ]; then echo "FAIL large_source: an 8 MB program did not build (rc=$rc): $(head -c 120 "$d/build.log")"; fail=1; return; fi
+  _e2e_exec "$d/big" >/dev/null 2>&1; rc=$?
+  if [ "$rc" = 42 ]; then echo "ok   large_source: an 8 MB program builds and runs to 42"
+  else echo "FAIL large_source: ran to $rc, want 42"; fail=1; fi
+}
+
 # Modules §4.3 — ordinary one-hop module re-export. The source keeps `facade` and the entry module
 # in one focused front-end input so the non-x86 resolver sees `pub math := std::math`; the check is
 # structural because the WAT backend is the consumer of driver::d_qual_target. A missing rewrite
@@ -10832,6 +10849,7 @@ run_wat wat_labeled_continue 21
 run_wat loop_expr_labels 42
 run_wat for_break_labels 42
 check_backend_determinism
+check_large_source
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
 ## direct calls, value+statement `if`, `while`, `return`.
