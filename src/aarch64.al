@@ -3965,20 +3965,8 @@ a64_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : ptr(mut Param
 }
 
 a64_local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> str {
-  d := lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := ""
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { r = ann_scan_narrow(src, ans + anl) }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-    }
-  }
-  r
+  ## The annotation's sub-word name, or an unannotated `x := xs[i]`'s element — `lower_layout` owns it.
+  lower_layout::local_narrow(head, src, ns, nl)
 }
 ## Narrow type name of operand `e` (param `: uN`, local `: uN`, or an `uN(x)` conversion), or "".
 a64_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> str {
@@ -3990,8 +3978,10 @@ a64_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head 
       if r == "" { r = a64_local_narrow(body_head, src, s, n, a) }
     }
     Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
+    ## `xs[i]` over a local `[uN; K]`: the element's width (#683 — was the native default).
+    Expr::Index(ib, ii) => { r = lower_layout::index_read_narrow(e, body_head, src) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
@@ -5266,10 +5256,17 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_a64_expr(sn, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "  mov x1, x0\n  ldr x0, [sp], #16\n")
         ssigned := a64_operand_signed(sv, params_head, body_head, src, a)
-        if A64_CHK and (nm == "shl" or nm == "shr") { push_str(sb, "  cmp x1, #64\n  b.lo 1f\n  brk #0\n1:\n") }
+        ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
+        ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual.
+        ## Before #683 both were native here: `shl(u8(1), 8)` ran, and `unchecked shl(u8(1), 9)` kept 512.
+        snw := a64_operand_narrow(sv, params_head, body_head, src, a)
+        if A64_CHK and (nm == "shl" or nm == "shr") {
+          push_str(sb, "  cmp x1, #") ; push_int(sb, lower_layout::shift_width_bits(snw)) ; push_str(sb, "\n  b.lo 1f\n  brk #0\n1:\n")
+        }
         if nm == "shl" { push_str(sb, "  lsl x0, x0, x1\n") }
         if nm == "shr" and ssigned { push_str(sb, "  asr x0, x0, x1\n") }
         if nm == "shr" and (not ssigned) { push_str(sb, "  lsr x0, x0, x1\n") }
+        if nm == "shl" or nm == "shr" { a64_emit_narrow(snw, sb) }
         if nm == "rotr" { push_str(sb, "  ror x0, x0, x1\n") }
         if nm == "rotl" { push_str(sb, "  mov x2, #64\n  sub x1, x2, x1\n  ror x0, x0, x1\n") }
       } else if nm == "len" and args_head != 0 and a64_len_recv_slice(sarg, params_head, src, body_head, decls, a) {

@@ -2,7 +2,8 @@
 ## `[u8;N]` array must type `x` as `u8`, so a subsequent `x + <literal>` (BOTH operands non-index) is
 ## width-checked. 200 + 100 = 300 > 255 → the guard TRAPS (x86 → 132) instead of the native-width add
 ## silently returning 300 (exit 44). Companion checked_index_bind_ok confirms the in-range case (42).
-## x86-only (narrow arith is x86-only today).
+## Cross-backend since #683: the emit twins type the unannotated binding through
+## `lower_layout::local_narrow` (they answered 300 → exit 44 before).
 main := fn() -> u64 {
   xs : [u8; 4] = [200, 100, 1, 2]
   i : u64 = 0

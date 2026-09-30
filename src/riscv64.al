@@ -3174,20 +3174,8 @@ rv_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : ptr(mut Param)
 }
 
 rv_local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> str {
-  d := lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := ""
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { r = ann_scan_narrow(src, ans + anl) }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-    }
-  }
-  r
+  ## The annotation's sub-word name, or an unannotated `x := xs[i]`'s element — `lower_layout` owns it.
+  lower_layout::local_narrow(head, src, ns, nl)
 }
 rv_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> str {
   mut r := ""
@@ -3198,8 +3186,10 @@ rv_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head :
       if r == "" { r = rv_local_narrow(body_head, src, s, n, a) }
     }
     Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
+    ## `xs[i]` over a local `[uN; K]`: the element's width (#683 — was the native default).
+    Expr::Index(ib, ii) => { r = lower_layout::index_read_narrow(e, body_head, src) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
@@ -4513,10 +4503,16 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         emit_rv_expr(rsn, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "  mv a1, a0\n  ld a0, 0(sp)\n  addi sp, sp, 16\n")
         rssigned := rv_operand_signed(rsv, params_head, body_head, src, a)
-        if RV_CHK and (nm == "shl" or nm == "shr") { push_str(sb, "  li t0, 64\n  bltu a1, t0, 1f\n  ebreak\n1:\n") }
+        ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
+        ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual (#683).
+        rsnw := rv_operand_narrow(rsv, params_head, body_head, src, a)
+        if RV_CHK and (nm == "shl" or nm == "shr") {
+          push_str(sb, "  li t0, ") ; push_int(sb, lower_layout::shift_width_bits(rsnw)) ; push_str(sb, "\n  bltu a1, t0, 1f\n  ebreak\n1:\n")
+        }
         if nm == "shl" { push_str(sb, "  sll a0, a0, a1\n") }
         if nm == "shr" and rssigned { push_str(sb, "  sra a0, a0, a1\n") }
         if nm == "shr" and (not rssigned) { push_str(sb, "  srl a0, a0, a1\n") }
+        if nm == "shl" or nm == "shr" { rv_emit_narrow(rsnw, sb) }
         if nm == "rotr" { push_str(sb, "  srl t0, a0, a1\n  li t1, 64\n  sub t1, t1, a1\n  sll t2, a0, t1\n  or a0, t0, t2\n") }
         if nm == "rotl" { push_str(sb, "  sll t0, a0, a1\n  li t1, 64\n  sub t1, t1, a1\n  srl t2, a0, t1\n  or a0, t0, t2\n") }
       } else if nm == "len" and args_head != 0 and rv_len_recv_slice(sarg, params_head, src, body_head, decls, a) {
