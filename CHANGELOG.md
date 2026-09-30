@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **The aarch64 and riscv64 compilers no longer crash on a local copied into another and back
+  (#773).** `mut b : u64 = a` followed by `a = b` (or swapping two locals) made both compilers exit with
+  SIGSEGV and no diagnostic: their scan for a local's struct type took the later reassignment as a type
+  source and followed `a -> b -> a` until the stack overflowed. Only a local's declaration gives it a
+  type now (for an uninitialized `name : T`, its annotation), as the language fixes it there.
+
 ## 0.2.5 — 2026-09-30
 
 - **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved
