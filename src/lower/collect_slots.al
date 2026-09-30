@@ -22,13 +22,22 @@ local_is_uninit := ast::local_is_uninit
 assign_is_reassign := ast::assign_is_reassign
 local_is_comptime := ast::binding_is_comptime
 (Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
-(SVec, arg_expr_at, var_name_span) := lower_ctx
+(SVec, CSpan, arg_expr_at, var_name_span) := lower_ctx
 (base_type_name, enum_decl_of, enum_inst_words, is_niche_folded, niche_payload_ptr_kind, ptr_target_pointee_s, ptr_target_pointee_n, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
 (field_read_agg) := lower::place
 (lower_show_src_line) := lower::ctfold
+
+## #789 — the folded type a value bound to the local `[ns, ns+nl)` must take: its own `Option(ptr(T))`
+## annotation, else the folded slot an earlier binding of the same local reserved (`p = Option.None` in a
+## loop over `mut p : Option(ptr(T)) = h`); 0/0 when the local is not a folded Option.
+folded_local_expect := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  lts := local_type_span(src, ns, nl)
+  if lts.n != 0 and is_niche_folded(src, lts.s, lts.n) { return CSpan(s = lts.s, n = lts.n) }
+  folded_slot_span(slots, src, ns, nl)
+}
 
 pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), sub : ptr(Subst), ctslots : ptr(SVec)) {
   mut s := head
@@ -106,13 +115,14 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           rw := require_agg_words(rqa.under, decls, src, a)
           if rk == 3 { bind_enum_slot(slots, decls, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
           else { bind_struct_slot(slots, decls, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
-        } else if folded_value_span(v, ptr(slots), decls, src, a).n != 0 {
+        } else if folded_value_span(v, folded_local_expect(ptr(slots), src, ns, nl), ptr(slots), decls, src, a).n != 0 {
           ## #775 — a NICHE-FOLDED `Option(ptr(T))` local is ONE word whatever initializes it: a call, a
           ## variant literal with a folded head, another folded local or parameter, a field read or
           ## `deref(p).f`. Recording the full `Option(ptr(T))` span (ek 3) is what routes the assignment to
-          ## `emit_folded_option_assign` and a `match` to the folded dispatch. (A bare `Option.None` under a
-          ## folded annotation keeps the `ei.is_e` branch below, which already binds it this way.)
-          fvs := folded_value_span(v, ptr(slots), decls, src, a)
+          ## `emit_folded_option_assign` and a `match` to the folded dispatch. #789 — a bare `Option.None` /
+          ## `Option.Some(q)` takes the local's own folded type (`folded_local_expect`), so re-assigning a
+          ## folded local from one is the same one word, not a wider `[disc, payload]` re-binding.
+          fvs := folded_value_span(v, folded_local_expect(ptr(slots), src, ns, nl), ptr(slots), decls, src, a)
           bind_enum_slot(slots, decls, src, ns, nl, fvs.s, fvs.n, 1)
         } else if si.is_s {
           ## Types §9.4: inside a generic INSTANCE a construction head over the callee's own type

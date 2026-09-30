@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **The idiomatic `Option(ptr(T))` list walk runs on x86_64.** A bare `Option.Some(p)` / `Option.None`
+  names no type argument, so it was folded to one word only as a struct field or an annotated local.
+  Passed straight to an `Option(ptr(T))` parameter it went as the two-word `[disc, payload]` block, and
+  the callee read the discriminant as the pointer: matching the parameter (or a local bound from it) and
+  dereferencing the payload crashed with SIGSEGV. Re-assigning a folded local from one (`p = Option.None`
+  in a loop) was refused as a "narrower binding". The literal now takes the fold of the parameter's or
+  the destination local's type, so `loop { match p { Some(q) => { …; p = deref(q).next } None => { break } } }`
+  walks the list (#789).
 - **`Option(ptr(T))` is one word in every position, not only in a struct field.** Three defects on
   x86_64 shared this cause. In a `Some(p)` arm, `deref(p).f` and `n := deref(p); n.f` read **0** on a
   clean build, because the payload was bound as an untyped word (#768). A local was sized by the form of

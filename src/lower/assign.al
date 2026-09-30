@@ -2275,12 +2275,12 @@ const_scalar_lit := fn(e : ptr(Expr)) -> bool {
 ## the caller keeps the single `s = nx`.
 ## #775 — does `name = v` store into a NICHE-FOLDED `Option(ptr(T))` local (an `ek 3` slot over a folded
 ## span) from a value form `folded_value_span` recognizes? Only then is the one-word folded writer used;
-## an `if`/`match` value keeps the existing enum paths.
+## an `if`/`match` value keeps the existing enum paths. #789 — the local's own type is the expectation,
+## so a bare `p = Option.None` / `p = Option.Some(q)` re-assignment stores the one folded word too.
 st_dest_folded := fn(ns : usize, nl2 : usize, v : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> bool {
-  if slot_of(cx.slots, cx.src, ns, nl2) < 0 { return false }
-  dent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, ns, nl2)))
-  if dent.ek != 3 or not is_niche_folded(cx.src, dent.sns, dent.snl) { return false }
-  folded_value_span(v, cx.slots, cx.decls, cx.src, a).n != 0
+  dfs := folded_slot_span(cx.slots, cx.src, ns, nl2)
+  if dfs.n == 0 { return false }
+  folded_value_span(v, dfs, cx.slots, cx.decls, cx.src, a).n != 0
 }
 
 pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
