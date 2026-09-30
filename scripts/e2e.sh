@@ -8000,7 +8000,7 @@ run narrow_wrap_builtin 42
 ## trap exit here; the wrap/trap ARE emitted on all four backends (the sweeps accept a trap as exit
 ## >= 128 rather than asserting 132, so the precise trap code is pinned on x86_64 only).
 run_x86 checked_narrow_ovf 132
-run_x86 checked_narrow_shift_oob 132
+run checked_narrow_shift_oob 132
 ## §8.1 `@require(pred) T` VALIDITY CONTRACTS: constructing a require-typed value via `T(v)` checks a
 ## comptime predicate and TRAPS (`ud2` → 132) when it is false — the checked mechanism, exactly like a
 ## narrowing overflow (§4.2). A SATISFYING construction runs (require_ok → 42); a VIOLATING one traps
@@ -8104,7 +8104,7 @@ check_reject reject_uninit_array_struct_dynamic
 check_reject reject_uninit_array_elem_sibling
 check_reject reject_uninit_array_whole
 check_reject reject_uninit_array_dynamic
-run_x86 unchecked_narrow_shift_wrap 42
+run unchecked_narrow_shift_wrap 42
 ## Explicit overflow-policy operations (Concurrency §6.3 / CG-8): wrapping_*/saturating_*/checked_* (->
 ## Option)/overflowing_* (-> (T,bool)) on the integer interpretations, exercised at the u8/u64/i32
 ## boundaries. A NEUTRAL library addition (lib/base/num.al) resting on the x86_64-gated scalar
@@ -8161,13 +8161,14 @@ run_x86 issue567_x86_bare_control 42
 ## Checked narrow-width overflow TRAPS for an INDEX read (I11/CG-6): `xs[i]+xs[j]` on a `[u8;N]` array
 ## overflows u8 → 132. The element type is recovered from the array's declared `[u8;N]` so the index
 ## read classifies as narrow-width (was silently native-width → no trap). Companions: the non-overflowing
-## narrow index add returns 42, and a native-width `[u64;N]` index add is unaffected (42). x86-only.
-run_x86 checked_index_overflow 132
+## narrow index add returns 42, and a native-width `[u64;N]` index add is unaffected (42). Registered
+## cross-backend since #683: the three emit twins read the element width too (they answered 300 → 44).
+run checked_index_overflow 132
 run checked_index_narrow_ok 42
 run checked_index_native_ok 42
 ## CG-6 through an index-read BINDING: `x := xs[i]` on `[u8;N]` types `x` as `u8`, so a later
 ## `x + <literal>` (both operands non-index) is width-checked — 200+100 traps (132), 40+2 fits (42).
-run_x86 checked_index_bind_ovf 132
+run checked_index_bind_ovf 132
 run checked_index_bind_ok 42
 ## Signedness: an UNSIGNED ordering comparison (`u64`/`usize`) across 2^63 uses the UNSIGNED setcc
 ## (`setb`/…) instead of the always-signed `setl`/… fallback default — `0 < u64::MAX` is TRUE. A

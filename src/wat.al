@@ -553,20 +553,8 @@ wat_cmp_unsigned := fn(l : ptr(Expr), r : ptr(Expr), params_head : ptr(mut Param
   false
 }
 wat_local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> str {
-  d := lower_layout::local_decl_assign(head, src, ns, nl)
-  mut r := ""
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { r = ann_scan_narrow(src, ans + anl) }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
-    }
-  }
-  r
+  ## The annotation's sub-word name, or an unannotated `x := xs[i]`'s element — `lower_layout` owns it.
+  lower_layout::local_narrow(head, src, ns, nl)
 }
 wat_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> str {
   mut r := ""
@@ -577,8 +565,10 @@ wat_operand_narrow := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head 
       if r == "" { r = wat_local_narrow(body_head, src, s, n, a) }
     }
     Expr::Call(cs, cl, na, ah) => { r = scalar_name_narrow(src, cs, cl) }
+    ## `xs[i]` over a local `[uN; K]`: the element's width (#683 — was the native default).
+    Expr::Index(ib, ii) => { r = lower_layout::index_read_narrow(e, body_head, src) }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
-      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
@@ -5411,6 +5401,13 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         wscn := str_at((src + cs), cl)
         wsv := arg_expr_at(args_head, 0, a)
         wsn := arg_expr_at(args_head, 1, a)
+        ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
+        ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual (#683).
+        mut wsnw := ""
+        if wscn == "shl" or wscn == "shr" { wsnw = wat_operand_narrow(wsv, params_head, body_head, src, a) }
+        wspre := wat_narrow_pre(wsnw)
+        wspost := wat_narrow_post(wsnw)
+        push_str(sb, wspre)
         if wscn == "shl" { push_str(sb, "(i64.shl ") }
         else if wscn == "shr" { if wat_operand_signed(wsv, params_head, body_head, src, a) { push_str(sb, "(i64.shr_s ") } else { push_str(sb, "(i64.shr_u ") } }
         else if wscn == "rotl" { push_str(sb, "(i64.rotl ") }
@@ -5425,13 +5422,16 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           emit_wat_expr(wsn, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           push_str(sb, ") (if (i64.ge_u (local.get ")
           push_int(sb, sc)
-          push_str(sb, ") (i64.const 64)) (then (unreachable))) (local.get ")
+          push_str(sb, ") (i64.const ")
+          push_int(sb, lower_layout::shift_width_bits(wsnw))
+          push_str(sb, ")) (then (unreachable))) (local.get ")
           push_int(sb, sc)
           push_str(sb, "))")
         } else {
           emit_wat_expr(wsn, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         }
         push_str(sb, ")")
+        push_str(sb, wspost)
       } else if str_at((src + cs), cl) == "len" and args_head != 0 and wat_len_recv_slice(arg_expr_at(args_head, 0, a), params_head, src, body_head, decls, a) {
         ## `s.len()` (UFCS-desugared to `Call("len", [s])`) on a slice receiver — the runtime length = word1
         ## of the `{ptr,len}` block. A slice PARAM (a WASM local holding the block base) and a local slice

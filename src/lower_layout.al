@@ -2469,6 +2469,78 @@ pub ann_scan_narrow := fn(src : ptr(u8), pos : usize) -> str {
   scalar_name_narrow(src, sp.s, sp.n)
 }
 
+## ─── The narrow width of an operand on the three emit twins (#683) ────────────────────────────
+##
+## x86_64 types an operand through `expr_type_span`; the three emit twins answer the one question
+## their narrow-width arithmetic needs — "is this operand a sub-word integer, and which?" — from the
+## source, and each used to answer it from a param or a local's OWN annotation only. Two operands
+## carry their width nowhere else than in an ARRAY's declaration, and both were answered "native":
+##
+##   * an index read `xs[i]` over a local `xs : [u8; N]` — `xs[0] + xs[1]` with 200 + 100 overflowed
+##     u8 on x86_64 (checked trap) and answered 300 on aarch64 / riscv64 / wasm;
+##   * an UNANNOTATED local bound to one, `x := xs[i]`, whose type IS the element type — `x + 100`
+##     the same.
+##
+## Both are decided here once, for all three twins, rather than in three private copies.
+##
+## The SUB-WORD integer ELEMENT name of a read `xs[i]` whose base is a flat local annotated with a
+## fixed array `[uN; K]` / `[iN; K]`, or "". Any other base (a param, a global, a field, an
+## unannotated array literal) answers "" — the native default the twins already had.
+pub index_read_narrow := fn(e : ptr(Expr), head : ptr(mut Stmt), src : ptr(u8)) -> str {
+  if not ex_is_index(e) { return "" }
+  b := ex_index_base(e)
+  bn := ex_var_nl(b)
+  if bn == 0 { return "" }
+  d := local_decl_assign(head, src, ex_var_ns(b), bn)
+  mut r := ""
+  if unchecked bitcast(usize, d) != 0 {
+    st := deref(stmt_p(Stmt, d))
+    match st {
+      Stmt::Assign(ans, anl, v, nx) => {
+        sp := ann_scan_span(src, ans + anl)
+        if sp.n != 0 {
+          es := arr_field_elem_span(src, sp.s, sp.n)
+          if es.n != 0 { r = scalar_name_narrow(src, es.s, es.n) }
+        }
+      }
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+    }
+  }
+  r
+}
+
+## The SUB-WORD integer name of the flat local `[ns, nl)`: its annotation's (`x : u8 = …`), else —
+## for an UNANNOTATED binding of an index read, `x := xs[i]` — the element's. "" otherwise.
+pub local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize) -> str {
+  d := local_decl_assign(head, src, ns, nl)
+  mut r := ""
+  if unchecked bitcast(usize, d) != 0 {
+    st := deref(stmt_p(Stmt, d))
+    match st {
+      Stmt::Assign(ans, anl, v, nx) => {
+        r = ann_scan_narrow(src, ans + anl)
+        if r == "" and ann_scan_span(src, ans + anl).n == 0 { r = index_read_narrow(v, head, src) }
+      }
+      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+    }
+  }
+  r
+}
+
+## The bit width a shift's OPERAND bounds its count by (Concurrency §6.1: "a shift amount ≥ the
+## width" traps): 8/16/32 for the sub-word name `nw` a twin's `*_operand_narrow` answered, else 64.
+pub shift_width_bits := fn(nw : str) -> i64 {
+  w := bitcast_narrow_bytes(nw)
+  if nw == "" or w == 0 { return 64 }
+  i64(w) * 8
+}
+
 ## ─── The NESTED-BLOCK annotation scan (#651) ──────────────────────────────
 ##
 ## `local_decl_assign` above is deliberately FLAT, and every backend-local type recovery built on it
