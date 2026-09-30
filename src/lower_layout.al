@@ -9,7 +9,7 @@
 ## reached by `::`), the same machinery `driver` uses for `lexer`/`parser`/`lower`.
 vec := alloc::vec
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt) := ast
-(bnd_ns, bnd_nl, bnd_next) := ast
+(bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 stmt_p := ast::stmt_p
 arm_p := ast::arm_p
 (int_lit_err, dec_val) := lexrt
@@ -3373,13 +3373,18 @@ pub dec_digit_val := fn(c : str) -> i64 {
   return 0 - 1
 }
 ## The position of the destructuring binding named `[ns, ns+nl)` in `bind_head`, or -1.
-pub bind_list_index := fn(bind_head : ptr(mut Bind), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> i64 {
+pub bind_list_index := fn(bind_head : Option(ptr(mut Bind)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> i64 {
   mut b := bind_head
   mut idx := 0
-  while unchecked bitcast(usize, b) != 0 {
-    if streq(src, bnd_ns(b), bnd_nl(b), ns, nl) { return i64(idx) }
-    idx += 1
-    b = bnd_next(b)
+  loop {
+    match b {
+      Some(bq) => {
+        if streq(src, bnd_ns(bq), bnd_nl(bq), ns, nl) { return i64(idx) }
+        idx += 1
+        b = bnd_next(bq)
+      }
+      None => { break }
+    }
   }
   return -1
 }

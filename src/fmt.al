@@ -27,7 +27,7 @@ local_is_uninit := ast::local_is_uninit
 ## FN-6 expression-callee site set (see `ast.al`): the only thing that tells a call through an
 ## EXPRESSION callee apart from a genuine call to the borrowed name.
 ecallee_is := ast::ecallee_is
-(bnd_ns, bnd_nl, bnd_next) := ast
+(bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 fld_p := ast::fld_p
 param_p := ast::param_p
 arm_p := ast::arm_p
@@ -1856,16 +1856,21 @@ emit_fmt_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a : rt
 }
 
 ## The payload BINDING list of a match arm — `(pa, pb, …)`, or nothing when the arm has none.
-emit_fmt_binds := fn(binds_head : ptr(mut Bind), in out sb : rt::StrBuf, src : ptr(u8)) {
-  if unchecked bitcast(usize, binds_head) == 0 { return }
+emit_fmt_binds := fn(binds_head : Option(ptr(mut Bind)), in out sb : rt::StrBuf, src : ptr(u8)) {
+  if bind_count(binds_head) == 0 { return }
   push_str(sb, "(")
   mut b := binds_head
   mut bfirst := true
-  while unchecked bitcast(usize, b) != 0 {
-    if not bfirst { push_str(sb, ", ") }
-    push_str(sb, str_at((src + bnd_ns(b)), bnd_nl(b)))
-    bfirst = false
-    b = bnd_next(b)
+  loop {
+    match b {
+      Some(bq) => {
+        if not bfirst { push_str(sb, ", ") }
+        push_str(sb, str_at((src + bnd_ns(bq)), bnd_nl(bq)))
+        bfirst = false
+        b = bnd_next(bq)
+      }
+      None => { break }
+    }
   }
   push_str(sb, ")")
 }
@@ -2323,18 +2328,7 @@ emit_fmt_comptime_arms := fn(arms_head : usize, scrut : ptr(Expr), in out sb : r
     if am.wild == 1 { push_str(sb, "_") }
     if am.wild == 0 {
       push_str(sb, str_at((src + am.vs), am.vl))
-      if unchecked bitcast(usize, am.binds_head) != 0 {
-        push_str(sb, "(")
-        mut b := am.binds_head
-        mut bfirst := true
-        while unchecked bitcast(usize, b) != 0 {
-          if not bfirst { push_str(sb, ", ") }
-          push_str(sb, str_at((src + bnd_ns(b)), bnd_nl(b)))
-          bfirst = false
-          b = bnd_next(b)
-        }
-        push_str(sb, ")")
-      }
+      emit_fmt_binds(am.binds_head, sb, src)
     }
     ## An empty `{}` arm has the same null statement-list pointer as a malformed/unsupported bare arm,
     ## but the source-shape pass above has already proved every outer `=>` is either braced or the
@@ -2378,18 +2372,7 @@ emit_fmt_stmt_match_arms := fn(arms_head : usize, body_head : ptr(mut Stmt), in 
       push_str(sb, ".(")
       push_str(sb, str_at((src + am.vs), am.vl))
       push_str(sb, ")")
-      if unchecked bitcast(usize, am.binds_head) != 0 {
-        push_str(sb, "(")
-        mut cb := am.binds_head
-        mut cbfirst := true
-        while unchecked bitcast(usize, cb) != 0 {
-          if not cbfirst { push_str(sb, ", ") }
-          push_str(sb, str_at((src + bnd_ns(cb)), bnd_nl(cb)))
-          cbfirst = false
-          cb = bnd_next(cb)
-        }
-        push_str(sb, ")")
-      }
+      emit_fmt_binds(am.binds_head, sb, src)
       push_str(sb, " => {\n")
       emit_fmt_stmts(am.body_stmts, body_head, sb, src, a, indent + 3, decls, tparam)
       emit_indent(sb, indent + 2)
@@ -2416,18 +2399,7 @@ emit_fmt_stmt_match_arms := fn(arms_head : usize, body_head : ptr(mut Stmt), in 
         ## are braced blocks renders here, and it de-qualified `Result::Ok` exactly the same way.
         svps := fmt_variant_pat_start(src, am.vs, am.vl)
         push_str(sb, str_at((src + svps), am.vs + am.vl - svps))
-        if unchecked bitcast(usize, am.binds_head) != 0 {
-          push_str(sb, "(")
-          mut b := am.binds_head
-          mut bfirst := true
-          while unchecked bitcast(usize, b) != 0 {
-            if not bfirst { push_str(sb, ", ") }
-            push_str(sb, str_at((src + bnd_ns(b)), bnd_nl(b)))
-            bfirst = false
-            b = bnd_next(b)
-          }
-          push_str(sb, ")")
-        }
+        emit_fmt_binds(am.binds_head, sb, src)
       } else {
         push_int(sb, am.lit)
       }

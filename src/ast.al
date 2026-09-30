@@ -442,7 +442,7 @@ pub Expr := enum {
 ## arm), the arm body expression, and `next` (arena-linked; 0 = end). For an **enum variant
 ## pattern** `V(x, …, z) => …` the variant name span is `vs`/`vl` (0/0 = not a variant pattern,
 ## i.e. an integer/wildcard arm), `bn` the payload BINDING count, and `binds_head` the
-## arena-linked binding-name list head (a `Bind` list, 0 = none) — general arity, mirroring the
+## arena-linked binding-name list head (a `Bind` list, `None` = none) — general arity, mirroring the
 ## construction `Arg` lists. Lower resolves the variant name to its declaration index for the
 ## discriminant compare, and binds each payload name to the scrutinee's payload slot (word
 ## `i+1`) within the arm body.
@@ -453,7 +453,7 @@ pub Expr := enum {
 ## (a dummy `Expr` pointer). The two forms never mix within one arm — the parser sets exactly one.
 pub Arm := struct {
   wild : u8, lit : i64, body : ptr(Expr), next : ptr(mut Arm),
-  vs : usize, vl : usize, binds_head : ptr(mut Bind),
+  vs : usize, vl : usize, binds_head : Option(ptr(mut Bind)),
   body_stmts : ptr(mut Stmt),
   hi : i64,                     ## range-pattern upper bound (wild 5/6); `lit` is the lower bound
 }
@@ -509,17 +509,36 @@ pub arm_body_first_use := fn(head : ptr(mut Arm), arm : ptr(mut Arm)) -> bool {
 }
 
 ## A match variant-pattern **payload binding** (arena-linked): its source name span `[ns, ns+nl)`
-## and `next` (0 = end). Walked in declaration order — binding `i` aliases the scrutinee's
-## payload word `i+1`.
-pub Bind := struct { ns : usize, nl : usize, next : ptr(mut Bind) }
+## and `next`. Walked in declaration order — binding `i` aliases the scrutinee's payload word `i+1`.
+## Absence is `Option` (strict forms §1): `Arm.binds_head` is `None` for an arm that binds nothing and
+## the last binding's `next` is `None` — never a null pointer. The idiomatic walk:
+##   mut b := am.binds_head
+##   loop { match b { Some(q) => { …bnd_ns(q)…; b = bnd_next(q) }; None => { break } } }
+pub Bind := struct { ns : usize, nl : usize, next : Option(ptr(mut Bind)) }
 
-## Typed accessors for a `Bind` reached through a `ptr(mut Bind)` (§6 ptr-typing). A field read of
-## `deref(p)` on a POINTER-TO-STRUCT PARAM lowers via the `ek = 7` pointee path (the param carries the
-## pointee type), whereas `deref(<field-read/return local>).f` does NOT resolve the pointee struct — so
-## every `Bind`-list walk routes its reads through these one-arg helpers instead of a local aggregate copy.
+## Typed accessors for a `Bind` reached through the `ptr(mut Bind)` a `Some(q)` arm binds (§6
+## ptr-typing): every `Bind`-list walk reads through these one-arg helpers.
 pub bnd_ns := fn(p : ptr(mut Bind)) -> usize { deref(p).ns }
 pub bnd_nl := fn(p : ptr(mut Bind)) -> usize { deref(p).nl }
-pub bnd_next := fn(p : ptr(mut Bind)) -> ptr(mut Bind) { deref(p).next }
+pub bnd_next := fn(p : ptr(mut Bind)) -> Option(ptr(mut Bind)) { deref(p).next }
+## Are `x` and `y` the SAME binding list (both absent, or the same head node)? A backend's binding
+## stack asks it to recognise the arm it pushed.
+pub bind_same := fn(x : Option(ptr(mut Bind)), y : Option(ptr(mut Bind))) -> bool {
+  mut r := false
+  match x {
+    Some(xp) => { match y { Some(yp) => { r = xp == yp }; None => {} } }
+    None => { match y { Some(_yp) => {}; None => { r = true } } }
+  }
+  r
+}
+## The number of payload bindings in the list `h` — the one answer every pass that counts an arm's
+## bindings asks (the folded-`Some` dispatch reads "binds nothing" as the nullary arm).
+pub bind_count := fn(h : Option(ptr(mut Bind))) -> usize {
+  mut n : usize = 0
+  mut b := h
+  loop { match b { Some(q) => { n += 1; b = bnd_next(q) }; None => { break } } }
+  n
+}
 
 ## A top-level binding, discriminated by `kind`: 0 a **value** binding `name := <expr>`
 ## (`value` = the expr); 1 a **function** `name := fn(p0 : T, …, p5 : T) -> R { … }`

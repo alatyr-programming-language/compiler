@@ -24,7 +24,7 @@
 ## and unifying a `Var` that resolves to a top-level value binding (treated as unknown).
 vec := alloc::vec
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_reassign, assign_is_decl, binding_is_comptime) := ast
-(bnd_ns, bnd_nl, bnd_next) := ast
+(bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 ecallee_is := ast::ecallee_is
 fld_p := ast::fld_p
 param_p := ast::param_p
@@ -7955,14 +7955,19 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
         ## + `nl2` restore) so they do not leak into a sibling arm.
         base := nl2
         mut bd := am.binds_head
-        while unchecked bitcast(usize, bd) != 0 {
-          bnns := bnd_ns(bd)
-          bnnl := bnd_nl(bd)
-          if not local_in(locals, nl2, src, bnns, bnnl) {
-            lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-            nl2 += 1
+        loop {
+          match bd {
+            Some(bdq) => {
+              bnns := bnd_ns(bdq)
+              bnnl := bnd_nl(bdq)
+              if not local_in(locals, nl2, src, bnns, bnnl) {
+                lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                nl2 += 1
+              }
+              bd = bnd_next(bdq)
+            }
+            None => { break }
           }
-          bd = bnd_next(bd)
         }
         if expr_has_unbound(am.body, decls, upto, src, a, locals, nl2) { bad = true }
         lvec_truncate(deref(locals), base)
@@ -8605,14 +8610,19 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         ## local count after the arm; `lvec_truncate` keeps the vec length in lockstep.
         base := nl2
         mut bd := am.binds_head
-        while unchecked bitcast(usize, bd) != 0 {
-          bnns := bnd_ns(bd)
-          bnnl := bnd_nl(bd)
-          if not local_in(locals, nl2, src, bnns, bnnl) {
-            lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-            nl2 += 1
+        loop {
+          match bd {
+            Some(bdq) => {
+              bnns := bnd_ns(bdq)
+              bnnl := bnd_nl(bdq)
+              if not local_in(locals, nl2, src, bnns, bnnl) {
+                lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                nl2 += 1
+              }
+              bd = bnd_next(bdq)
+            }
+            None => { break }
           }
-          bd = bnd_next(bd)
         }
         cb := check_expr(am.body, decls, upto, src, a, locals, nl2)?
         lvec_truncate(deref(locals), base)
@@ -10562,14 +10572,19 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
         am0 := deref(arm_p(arm0))
         base0 := nl2m
         mut bd0 := am0.binds_head
-        while unchecked bitcast(usize, bd0) != 0 {
-          bnns0 := bnd_ns(bd0)
-          bnnl0 := bnd_nl(bd0)
-          if not local_in(locals, nl2m, src, bnns0, bnnl0) {
-            lvec_push(deref(locals), Local(ns = bnns0, nl = bnnl0, tag = 0, prov = 0, tns = 0, tnl = 0))
-            nl2m += 1
+        loop {
+          match bd0 {
+            Some(bd0q) => {
+              bnns0 := bnd_ns(bd0q)
+              bnnl0 := bnd_nl(bd0q)
+              if not local_in(locals, nl2m, src, bnns0, bnnl0) {
+                lvec_push(deref(locals), Local(ns = bnns0, nl = bnnl0, tag = 0, prov = 0, tns = 0, tnl = 0))
+                nl2m += 1
+              }
+              bd0 = bnd_next(bd0q)
+            }
+            None => { break }
           }
-          bd0 = bnd_next(bd0)
         }
         if r1m == 0 { r1m = expr_unbound_span(am0.body, decls, upto, src, a, locals, nl2m) }
         lvec_truncate(deref(locals), base0)
@@ -11873,14 +11888,19 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## bindings (and the arm's own locals) do not leak into sibling arms.
           base := cnt
           mut bd := am.binds_head
-          while unchecked bitcast(usize, bd) != 0 {
-            bnns := bnd_ns(bd)
-            bnnl := bnd_nl(bd)
-            if not local_in(locals, cnt, src, bnns, bnnl) {
-              lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-              cnt += 1
+          loop {
+            match bd {
+              Some(bdq) => {
+                bnns := bnd_ns(bdq)
+                bnnl := bnd_nl(bdq)
+                if not local_in(locals, cnt, src, bnns, bnnl) {
+                  lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                  cnt += 1
+                }
+                bd = bnd_next(bdq)
+              }
+              None => { break }
             }
-            bd = bnd_next(bd)
           }
           cnt = check_stmts(am.body_stmts, decls, upto, src, a, locals, cnt, da)?
           lvec_truncate(deref(locals), base)
@@ -12175,14 +12195,19 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           basec := cnt
           mut arm_cntc := cnt
           mut bdc := amc.binds_head
-          while bdc != 0 {
-            bnsc := bnd_ns(bdc)
-            bnlc := bnd_nl(bdc)
-            if not local_in(locals, arm_cntc, src, bnsc, bnlc) {
-              lvec_push(deref(locals), Local(ns = bnsc, nl = bnlc, tag = 0, prov = 0, tns = 0, tnl = 0))
-              arm_cntc += 1
+          loop {
+            match bdc {
+              Some(bdcq) => {
+                bnsc := bnd_ns(bdcq)
+                bnlc := bnd_nl(bdcq)
+                if not local_in(locals, arm_cntc, src, bnsc, bnlc) {
+                  lvec_push(deref(locals), Local(ns = bnsc, nl = bnlc, tag = 0, prov = 0, tns = 0, tnl = 0))
+                  arm_cntc += 1
+                }
+                bdc = bnd_next(bdcq)
+              }
+              None => { break }
             }
-            bdc = bnd_next(bdc)
           }
           egcm = sema_enum_global_array_value_bad(amc.body, decls, upto, src, locals, arm_cntc, a, false)
           if egcm == 0 { egcm = sema_enum_global_array_value_bad_stmts(amc.body_stmts, decls, upto, src, locals, arm_cntc, a) }
@@ -16339,7 +16364,7 @@ sema_collect_expr := fn(e : ptr(Expr), locals : ptr(LVec), src : ptr(u8), a : pt
       while arm != 0 {
         am := deref(arm_p(arm))
         mut bd := am.binds_head
-        while bd != 0 { sema_collect_name(locals, src, bnd_ns(bd), bnd_nl(bd)); bd = bnd_next(bd) }
+        loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }
         sema_collect_expr(am.body, locals, src, a)
         sema_collect_stmts(am.body_stmts, locals, src, a)
         arm = am.next
@@ -16380,7 +16405,7 @@ sema_collect_stmts := fn(head : ptr(mut Stmt), locals : ptr(LVec), src : ptr(u8)
       Stmt::Match(sc, ah, nx) => {
         sema_collect_expr(sc, locals, src, a)
         mut arm := ah
-        while arm != 0 { am := deref(arm_p(arm)); mut bd := am.binds_head; while bd != 0 { sema_collect_name(locals, src, bnd_ns(bd), bnd_nl(bd)); bd = bnd_next(bd) }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }
+        while arm != 0 { am := deref(arm_p(arm)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }
       }
       Stmt::For(fns, fnl, lo, hi, b, nx) => { sema_collect_name(locals, src, fns, fnl); sema_collect_expr(lo, locals, src, a); sema_collect_expr(hi, locals, src, a); sema_collect_stmts(b, locals, src, a) }
       Stmt::DerefAssign(p, v, nx) => { sema_collect_expr(p, locals, src, a); sema_collect_expr(v, locals, src, a) }
@@ -16399,7 +16424,7 @@ sema_collect_stmts := fn(head : ptr(mut Stmt), locals : ptr(LVec), src : ptr(u8)
       Stmt::CompMatch(sc, ah, nx) => {
         sema_collect_expr(sc, locals, src, a)
         mut arm := ah
-        while arm != 0 { am := deref(arm_p(arm)); mut bd := am.binds_head; while bd != 0 { sema_collect_name(locals, src, bnd_ns(bd), bnd_nl(bd)); bd = bnd_next(bd) }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }
+        while arm != 0 { am := deref(arm_p(arm)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }
       }
     }
     cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
@@ -16637,14 +16662,19 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
       arm_base := nloc
       mut arm_cnt := nloc
       mut bd := am.binds_head
-      while bd != 0 {
-        bnns := bnd_ns(bd)
-        bnnl := bnd_nl(bd)
-        if not local_in(locals, arm_cnt, src, bnns, bnnl) {
-          lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-          arm_cnt += 1
+      loop {
+        match bd {
+          Some(bdq) => {
+            bnns := bnd_ns(bdq)
+            bnnl := bnd_nl(bdq)
+            if not local_in(locals, arm_cnt, src, bnns, bnnl) {
+              lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+              arm_cnt += 1
+            }
+            bd = bnd_next(bdq)
+          }
+          None => { break }
         }
-        bd = bnd_next(bd)
       }
       bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
       if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
@@ -16767,14 +16797,19 @@ sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(r
           arm_base := cnt
           mut arm_cnt := cnt
           mut bd := am.binds_head
-          while bd != 0 {
-            bnns := bnd_ns(bd)
-            bnnl := bnd_nl(bd)
-            if not local_in(locals, arm_cnt, src, bnns, bnnl) {
-              lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-              arm_cnt += 1
+          loop {
+            match bd {
+              Some(bdq) => {
+                bnns := bnd_ns(bdq)
+                bnnl := bnd_nl(bdq)
+                if not local_in(locals, arm_cnt, src, bnns, bnnl) {
+                  lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                  arm_cnt += 1
+                }
+                bd = bnd_next(bdq)
+              }
+              None => { break }
             }
-            bd = bnd_next(bd)
           }
           bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
           if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
@@ -16833,11 +16868,16 @@ sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(r
           base := cnt
           mut arm_cnt := cnt
           mut bd := am.binds_head
-          while bd != 0 {
-            bnns := bnd_ns(bd)
-            bnnl := bnd_nl(bd)
-            if not local_in(locals, arm_cnt, src, bnns, bnnl) { lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0)); arm_cnt += 1 }
-            bd = bnd_next(bd)
+          loop {
+            match bd {
+              Some(bdq) => {
+                bnns := bnd_ns(bdq)
+                bnnl := bnd_nl(bdq)
+                if not local_in(locals, arm_cnt, src, bnns, bnnl) { lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0)); arm_cnt += 1 }
+                bd = bnd_next(bdq)
+              }
+              None => { break }
+            }
           }
           bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
           if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
