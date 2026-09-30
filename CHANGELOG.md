@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A text-lowered function now preserves the callee-saved registers on x86_64 (#794).** The ABI the
+  compiler claims (`sysv`, ABI appendix §4.1) makes a callee preserve rbx and r12..r15. The register
+  allocator keeps values in them across a call, but a callee lowered by the text emitter used %rbx, %r12
+  and %r13 as scratch without saving them. The caller then silently read the callee's scratch values as its
+  own locals. Every text-lowered function, and every allocated function that splices text-emitter code,
+  now saves the whole set after its prologue and restores it before its epilogue.
 - **The idiomatic `Option(ptr(T))` list walk runs on x86_64.** A bare `Option.Some(p)` / `Option.None`
   names no type argument, so it was folded to one word only as a struct field or an annotated local.
   Passed straight to an `Option(ptr(T))` parameter it went as the two-word `[disc, payload]` block, and
