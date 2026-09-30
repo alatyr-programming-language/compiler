@@ -122,6 +122,9 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A large program no longer aborts the compiler.** About 7 MB of source (comments included) made
+  `alatyr build` die with `rt: arena overflow (bump past cap)`, because two parser tables were reserved
+  at 48 bytes per source byte before parsing. They are now sized from what the parser found (#814).
 ## 0.2.5 — 2026-09-30
 
 - **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved
