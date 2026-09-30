@@ -21,7 +21,7 @@ stmt_p := ast::stmt_p
 ## `emit_str_pair`, not the pool, but counting their args too just reserves a couple of unused words.
 ##
 ## Count the str-LITERAL arguments of ONE call's arena-linked `Arg` list head `head`.
-scan_call_str_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), a : rt::Arena) -> usize {
+scan_call_str_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Arg), a : rt::Arena) -> usize {
   mut g := head
   mut cnt := 0
   while g != 0 {
@@ -305,7 +305,7 @@ pub scan_agg_width_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src :
 }
 ## Count the aggregate-VALUE arguments of ONE call's arg list — each needs a distinct agg-temp slice
 ## (N in one call → N slices; sharing one slot aliases them, a §8 miscompile — see `emit_call_args`).
-scan_call_agg_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), a : rt::Arena) -> usize {
+scan_call_agg_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Arg), a : rt::Arena) -> usize {
   mut g := head
   mut cnt := 0
   while g != 0 {

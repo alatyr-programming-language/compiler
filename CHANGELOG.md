@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`check` now types every expression form.** The last six `check_expr` arms (`ArrayLit`, `EnumLit`,
+  `Call`, `StructLit`, `Deref`, `Field`) run, so a call result, a field read, an array literal and a
+  `bool` local carry their type to the sink they reach. Programs the specification declares invalid
+  and that used to compile are now refused (a PATCH, not a break): `ready() + 41` for a `bool`
+  result, `f(s.ok)` for a `bool` field into `u64`, `S(a = [40, 2])` for a scalar field, and
+  `b := true; f(b)` into a `u64` parameter (Types §4.2/§4.3, §9.4). A `Checked := Pair.require(p)`
+  value passed where a `Pair` is expected is refused where the checker can see its type (§8.1) (#726).
+
 ## 0.2.4 — 2026-09-30
 
 - **Seed promotion; the compiler's own `?` bindings move.** The frozen bootstrap `seed/alatyr`

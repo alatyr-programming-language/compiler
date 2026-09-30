@@ -2753,7 +2753,7 @@ a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
 
 ## The i-th argument expression of an arg list (0-based), or a null Expr ptr if absent — for `asm(…)`
 ## `{i}` positional-operand substitution.
-a64_arg_at := fn(head : ptr(mut Stmt), i : usize, a : rt::Arena) -> ptr(Expr) {
+a64_arg_at := fn(head : ptr(mut Arg), i : usize, a : rt::Arena) -> ptr(Expr) {
   mut g := head
   mut k := 0
   mut res : usize = 0

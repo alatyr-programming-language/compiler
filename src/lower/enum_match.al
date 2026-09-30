@@ -493,7 +493,7 @@ pub set_arm_next := fn(mar : ptr(mut rt::Arena), h : ptr(mut Arm), nx : ptr(mut 
 ## enum `es`/`el` (each with that variant's name + the template's bindings/body). Non-template arms are
 ## copied through. Returns the new head (built in the AST arena `cx.mar`). No template → returns `head`
 ## unchanged (byte-identical for ordinary matches). Only meaningful in a mono instance (concrete enum).
-pub expand_variant_arms := fn(head : ptr(mut Stmt), es : usize, el : usize, cx : ptr(LCtx), a : rt::Arena) -> usize {
+pub expand_variant_arms := fn(head : ptr(mut Arm), es : usize, el : usize, cx : ptr(LCtx), a : rt::Arena) -> usize {
   mut has2 := false
   mut sc := head
   while sc != 0 {

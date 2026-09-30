@@ -15350,7 +15350,7 @@ expr_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
 ## The type-name discriminator for an overloaded CALL: the first argument whose type is inferable.
 ## `a` is the EMIT arena where the Arg nodes live (NOT `cx.mar` — using the wrong arena to resolve
 ## an Arg handle yields a garbage pointer → segfault).
-arg_type_name := fn(head : ptr(mut Stmt), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
+arg_type_name := fn(head : ptr(mut Arg), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
   mut g := head
   while g != 0 {
     ga := deref(arg_p(g))
@@ -21836,7 +21836,7 @@ expr_is_no_tail := fn(e : ptr(Expr)) -> bool {
 ## A `Match`-detection result: whether the expression is a `match`, and (if so) its scrutinee
 ## pointer + arm-list head. Carried out of `match_info` so the deref-`match` stays a function-body
 ## match over a pointer PARAM (the lowerable shape, like `struct_lit_info`).
-MInfo := struct { is_m : bool, scrut : ptr(Expr), head : ptr(mut Stmt) }
+MInfo := struct { is_m : bool, scrut : ptr(Expr), head : ptr(mut Arm) }
 match_info := fn(e : ptr(Expr)) -> MInfo {
   match deref(e) {
     Expr::Match(scrut, head) => { MInfo(is_m = true, scrut = scrut, head = head) }
@@ -21867,7 +21867,7 @@ if_info := fn(e : ptr(Expr)) -> IfInfo {
 ## (`emit_str_eq_core` against the str scrutinee), not an integer value compare (§5.4). `src/`'s
 ## matches are all integer/enum (keyword classification uses `contains(str, table, w)`), so this is
 ## `false` for the self-host build → the str dispatch is never emitted → fixpoint-neutral.
-match_is_str := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
+match_is_str := fn(head : ptr(mut Arm), a : rt::Arena) -> bool {
   mut arm := head
   mut res := false
   while arm != 0 {
@@ -21884,7 +21884,7 @@ match_is_str := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
 ## labels. Reserving up front (`base = nl; nl += arm_count`) keeps body labels `base..base+n` disjoint
 ## from any dispatch-emitted label, and is byte-identical for the integer/enum path (the body labels
 ## land at the same values the old `lbody := nl; nl += 1` interleave produced).
-arm_count := fn(head : ptr(mut Stmt), a : rt::Arena) -> usize {
+arm_count := fn(head : ptr(mut Arm), a : rt::Arena) -> usize {
   mut arm := head
   mut n := 0
   while arm != 0 {
@@ -22436,7 +22436,7 @@ emit_arm_val_store := fn(body : ptr(Expr), base : i64, in out sb : strbuf::StrBu
 ## value into the local via `emit_arm_val_store` (struct/enum/array assign, or a str {ptr,len} pop) —
 ## the local-binding dual of `emit_return_value`'s aggregate/str routing (aggregates + strs do not
 ## materialize on the stack in bare expr position, so the generic scalar store cannot deliver them).
-emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Stmt), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## An ENUM scrutinee (`p := match e { V(x) => <agg> }`): dispatch on the discriminant with variant
   ## indices + payload binding (the integer path below uses `am.lit`, which is 0 for enum patterns, so
   ## it never matched — the aggregate stayed unwritten). Materialize a global / struct-field / array-
@@ -26297,7 +26297,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## this branch never fires for the self-host build (byte-identical → the TOOL-1 fixpoint holds).
   if fn_is_naked(p.src, d.name_start, d.name_len) {
     push_str(sb, ":\n")
-    ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = -1, agg_end = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = -1, agg_end = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
     ncx.fn_id = di
     ncx.ctslots = ptr(ct_slots)
     emit_stmts(d.body_stmts, sb, ptr(ncx), nl)
@@ -26559,7 +26559,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## push/drain ops are skipped and the emitted tree gas stays byte-identical (the TOOL-1 fixpoint is
   ## neutral). `defer_sp` starts at 0: the fn body has NO frame, only nested blocks push.
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
-  cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = agg_tmp_base, agg_end = agg_tmp_base + aggpoolw, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = agg_tmp_base, agg_end = agg_tmp_base + aggpoolw, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
   cx.fn_id = di
   cx.ctslots = ptr(ct_slots)
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)

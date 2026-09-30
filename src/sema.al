@@ -3181,6 +3181,80 @@ sema_array_param_brand_ty := fn(pty : Ty, src : ptr(u8), ts : usize, tl : usize)
   if str_at((src + q), 1) != "]" { return pty }
   Ty(kind = TyKind.TyArray, ns = open, nl = q + 1 - open)
 }
+## #726 — the type a call ARGUMENT is compared against. An array parameter records its ELEMENT span
+## (above), so `callee_param_ty` answers `T` for `xs : [T; N]`; the argument is the whole array, and
+## an array literal compared with `T` refused `sum([40, 2])` the first time `check_expr`'s `ArrayLit`
+## arm typed it. The whole annotation is read back exactly as the brand sink reads it.
+callee_arg_param_ty := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, pidx : usize, a : ptr(mut rt::Arena)) -> Ty {
+  pt := callee_param_ty(decls, upto, src, s, n, pidx, a)
+  psp := callee_param_type_span(decls, upto, src, s, n, pidx, a)
+  sema_array_param_brand_ty(pt, src, psp.s, psp.n)
+}
+## The `in out` aggregate place seam at a call argument: a POINTER-valued argument (`da_fvec_value(da)`)
+## into a STRUCT parameter is the place representation the pointer ABI passes, and the checker and
+## lower accept it by design. One predicate for every argument compare that meets it (#726).
+sema_arg_place_ptr_seam := fn(at : Ty, pt : Ty) -> bool { kind_is_ptr(at.kind) and kind_is_struct(pt.kind) }
+## #726 — the index of the ALLOCATOR parameter a call ELIDES (Functions §5.5), or -1. A callee whose
+## `ptr(mut Arena)` parameter is left out takes it from the ambient, so the written arguments map to
+## the parameters around it. The same shape the driver's `alloc::with` splice recognises (one
+## `ptr(… Arena)` parameter, exactly one argument short); a unique callee only.
+callee_elided_alloc_idx := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, nargs : usize) -> i64 {
+  mut r : i64 = 0 - 1
+  cnt := rt::vec_len(deref(decls))
+  th := sema_name_hash(src, s, n)
+  mut jc := sni_lo(cnt, th)
+  jce := sni_hi(cnt, th)
+  mut i := 0
+  while jc < jce {
+    i = sni_at(cnt, jc)
+    jc = jc + 1
+    if i < upto and (SDNH == 0 or i >= SDNH_N or rt::rec_get(unchecked bitcast(ptr(mut u8), SDNH), i) == th) {
+      d := deref(decl_get(decls, i))
+      if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) and d.arity == nargs + 1 {
+        mut pp := d.params_head
+        mut k : i64 = 0
+        while pp != 0 {
+          pm := deref(param_p(pp))
+          if pm.ppl != 0 and str_at((src + pm.ts), pm.tl) == "ptr" and str_at((src + pm.pps), pm.ppl) == "Arena" { r = k }
+          k += 1
+          pp = pm.next
+        }
+      }
+    }
+  }
+  r
+}
+## #726 — the leftmost source offset of an expression, 0 when it carries none. Only the forms whose
+## first byte is recorded are answered; everything else is 0, which the caller treats as unprovable.
+sema_expr_left_off := fn(e : ptr(Expr), src : ptr(u8)) -> usize {
+  mut r : usize = 0
+  match deref(e) {
+    Expr::Num(v, s, n) => { if n != 0 { r = s } }
+    Expr::Var(s, n) => { if n != 0 and not ast::span_is_synthetic(s) { r = s } }
+    Expr::FloatLit(s, n) => { if n != 0 { r = s } }
+    Expr::Call(cs, cl, na, ah) => { if cl != 0 and not ast::span_is_synthetic(cs) { r = cs } }
+    Expr::StructLit(ss, sl, nf, fh) => { if sl != 0 and not ast::span_is_synthetic(ss) { r = ss } }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { if el != 0 and not ast::span_is_synthetic(es) { r = es } }
+    Expr::Field(fb, fs, fl) => { r = sema_expr_left_off(fb, src) }
+    Expr::Index(ib, ii) => { r = sema_expr_left_off(ib, src) }
+    Expr::Bin(op, l, rr) => { r = sema_expr_left_off(l, src) }
+    Expr::BoolLit | Expr::If | Expr::Match | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Try | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => {}
+  }
+  r
+}
+## #726 — was this `ArrayLit` provably written as an ARRAY `[e0, …]`? The parser builds a TUPLE
+## `(a, b)` as the same node and keeps no delimiter, so it is recovered from the source byte before
+## the first element. A tuple, or a literal whose delimiter cannot be recovered, answers false.
+sema_arraylit_is_array := fn(head : ptr(mut Arg), src : ptr(u8)) -> bool {
+  if unchecked bitcast(usize, head) == 0 { return false }
+  h0 := deref(arg_p(head))
+  mut p := sema_expr_left_off(h0.e, src)
+  if p == 0 { return false }
+  while p > 0 and _sws1(src, p - 1) { p -= 1 }
+  p > 0 and str_at((src + p - 1), 1) == "["
+}
 ## The value-sink DISPATCHER every hooked sink calls. A tag-7 declared type is an array annotation
 ## whose ELEMENTS are the value sinks; every other declared type is judged directly. One entry, so a
 ## sink that is hooked once is hooked for both shapes and no call site learns about arrays.
@@ -4276,7 +4350,7 @@ expr_enum_parts := fn(e : ptr(Expr)) -> EnumParts {
 ## payload-heavy `Match` arm under the seed (scar #2, same as `Var`). This lets `check_expr` run the
 ## exhaustiveness check on a VALUE match before that (dead-for-this-arm) match. `is_match` false → not a
 ## match. (`head` = the arena-linked `Arm` list; `scrut` = the scrutinee expr.)
-MatchParts := struct { is_match : bool, scrut : ptr(Expr), head : ptr(mut Stmt) }
+MatchParts := struct { is_match : bool, scrut : ptr(Expr), head : ptr(mut Arm) }
 expr_match_parts := fn(e : ptr(Expr)) -> MatchParts {
   match deref(e) {
     Expr::Match(scrut, head) => { MatchParts(is_match = true, scrut = scrut, head = head) }
@@ -5876,7 +5950,7 @@ da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : 
       }
     }
   }
-  if navec_has(da_navec(da), src, rs, rn, fs, fln, usize(ix)) {
+  if navec_has(da_navec_value(da), src, rs, rn, fs, fln, usize(ix)) {
     navec_remove_index(da_navec_value(da), src, rs, rn, fs, fln, usize(ix))
     di2 := type_decl_index(decls, upto, src, et.ns, et.nl)
     if di2 != 0 {
@@ -7619,13 +7693,13 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
             at := check_expr(ga.e, decls, upto, src, a, locals, nloc)
             match at {
               Result::Ok(av) => {
-                pt := callee_param_ty(decls, upto, src, cs, cl, ai, a)
+                pt := callee_arg_param_ty(decls, upto, src, cs, cl, ai, a)
                 ptrint_probe_site("ARG", "unbound", true, av.kind, pt.kind, s_of(ga.e, a), src)
                 ## A conformance failure, not an unbound name: poison the check with a located MISMATCH
                 ## at the argument, and leave `bad` to the unbound walk it reports (#716 — a revived
                 ## literal arm gives this compare a known tag it never had). `s_of` has no span for a
                 ## literal argument, so it is located at the call, where the unbound report put it.
-                if not kind_compat(av.kind, pt.kind) {
+                if not kind_compat(av.kind, pt.kind) and not sema_arg_place_ptr_seam(av, pt) {
                   mut asp := s_of(ga.e, a)
                   if asp == 0 and not ast::span_is_synthetic(cs) { asp = cs }
                   mark_failed(locals, mismatch_err(asp, 0))
@@ -7820,7 +7894,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   ## Resolve a LOCAL `Var`'s type BEFORE the big `match deref(e)` below — that match uses the bound-deref
   ## form, which does not dispatch this payload-heavy arm under the seed (scar #2). Surface a CONCRETE
   ## tag ONLY for a USER enum/struct local (tag 3/4) — enough to reject `x : <scalar> = <enum-local>` and
-  ## `return <enum-local>` against a scalar return — and keep scalars/ptr/str/bool tolerant (tag 0), so
+  ## `return <enum-local>` against a scalar return — and keep scalars/str tolerant (tag 0; see below), so
   ## the still-incomplete positive type model does not reintroduce wrong-rejects. (A fn-body-level
   ## `return`, NOT inside a match arm — safe under the seed.)
   evs := expr_var_span(e)
@@ -7830,10 +7904,13 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
     mut rtag := TyKind.TyUnknown
   ## surface a CONCRETE tag for a struct/enum (3/4), pointer (5), or direct user brand (8) local —
   ## pointers and brands carry their nominal name in ns/nl, so `ty_compat`/`ty_eq` can distinguish
-  ## incompatible identities. Scalars/str/bool stay tolerant (tag 0); an unknown pointee/brand name
+  ## incompatible identities. A `bool` local (tag 2) is surfaced too (#726): with every `check_expr`
+  ## arm running, `b := true; f(b)` into a `u64` parameter was the one spelling of the bool→integer
+  ## crossing the argument compare still could not see (Types §4.2/§4.3; the literal `f(true)` was
+  ## already refused). Integer/str locals stay tolerant (tag 0); an unknown pointee/brand name
   ## remains tolerant inside the corresponding comparison, so this does not widen rejection beyond
   ## a resolved identity.
-  if kind_is_struct(ltag) or kind_is_enum(ltag) or kind_is_ptr(ltag) or kind_is_brand(ltag) { rtag = ltag }
+  if kind_is_struct(ltag) or kind_is_enum(ltag) or kind_is_ptr(ltag) or kind_is_brand(ltag) or kind_is_bool(ltag) { rtag = ltag }
     return Result(Ty, CheckErr).Ok(Ty(kind = rtag, ns = raw.ty.ns, nl = raw.ty.nl))
   }
   ## A direct `local[N]` over a fixed `[T; N]` is the one indexed shape whose bound is already
@@ -8029,7 +8106,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## walk must finish so every offending argument of the call is counted by the census beside it.
       cbe := sema_brand_sink_err(bpty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc, a)
       if cbe != 0 { mark_failed(locals, cbe) }
-      if not kind_is_unknown(crt0.kind) and not (kind_is_ptr(crt0.kind) and kind_is_struct(pty0.kind)) {
+      if not kind_is_unknown(crt0.kind) and not sema_arg_place_ptr_seam(crt0, pty0) {
         if not kind_is_unknown(pty0.kind) { ptrint_probe_site("ARG", "premat", true, crt0.kind, pty0.kind, s_of(ca.e, a), src) }
         if not kind_is_unknown(pty0.kind) and not ty_compat(crt0, pty0, src) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
       }
@@ -8066,20 +8143,14 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       }
     }
   }
-  ## Issue #716 — the big `match` below used to be written `node := deref(e) ; match node`, which
-  ## the x86_64 lowering could not type: it compared every arm against tag 0, so only `Expr::Num`
-  ## (variant 0) was ever taken and every other expression fell off the end with a garbage `Result`.
-  ## That is the "big-match arm is not dispatched under the seed" note this file repeats (scar #2).
-  ## The arms now live in `check_expr_arms`, whose `match deref(e)` the lowering types, and they are
-  ## switched on one variant at a time: a variant listed in the first arm here is checked by its
-  ## written arm; every other variant answers UNKNOWN (tag 0, poison-tolerant) — explicitly, which
-  ## is what the garbage was being read as.
-  match deref(e) {
-    Expr::Num | Expr::Var | Expr::If | Expr::Match | Expr::AddrOf | Expr::Index | Expr::Try
-      | Expr::FloatLit | Expr::Slice | Expr::Bin | Expr::CompField | Expr::Unchecked | Expr::Lambda
-      | Expr::FnRef | Expr::Bitcast | Expr::Loop | Expr::BoolLit | Expr::StrLit => { check_expr_arms(e, decls, upto, src, a, locals, nloc) }
-    Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::Deref | Expr::ArrayLit => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
-  }
+  ## Issue #716 — this function's big `match` used to be written `node := deref(e) ; match node`,
+  ## which the x86_64 lowering could not type: it compared every arm against tag 0, so only
+  ## `Expr::Num` (variant 0) was ever taken and every other expression fell off the end with a garbage
+  ## `Result`. That is the "big-match arm is not dispatched under the seed" note this file repeats
+  ## (scar #2). The arms live in `check_expr_arms`, whose `match deref(e)` the lowering types; they
+  ## were switched on one variant at a time (#716, then #726 for the last six), and every variant now
+  ## reaches its own written arm.
+  check_expr_arms(e, decls, upto, src, a, locals, nloc)
 }
 
 ## #716 — an operand kind `check_expr`'s `Bin` arm leaves to the lowering: a struct, enum or array (a
@@ -8091,8 +8162,7 @@ sema_bin_operand_deferred := fn(t : Ty) -> bool {
   }
 }
 ## Issue #716 — the per-variant arms of `check_expr`, over a pointer PARAMETER so the lowering
-## types the scrutinee. Only the variants `check_expr` routes here are ever checked by their arm; the
-## others are written, and have never run.
+## types the scrutinee. Every variant is routed here (#726).
 check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> Result(Ty, CheckErr) {
   match deref(e) {
     Expr::Num(v, s, n) => { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyInt, ns = 0, nl = 0)) }
@@ -8224,6 +8294,12 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       ## (name resolution) but NOT type-checked against the parameter — monomorphization at the
       ## call binds `T`; the per-instance body is checked structurally.
       qgen := callee_is_generic(decls, upto, src, qcs, qcl)
+      ## #726 — this arm ran for the first time here. An OVERLOAD SET is not resolved by sema, so no
+      ## single parameter list or return type belongs to the call: stay tolerant, as the argument
+      ## compare in `expr_has_unbound` does. An elided allocator (Functions §5.5) shifts the written
+      ## arguments past its parameter.
+      qov := callee_fn_name_count(decls, upto, src, qcs, qcl) > 1
+      qel := callee_elided_alloc_idx(decls, upto, src, qcs, qcl, qnargs)
       mut g := qargs_head
       mut pidx := 0
       mut bad := false
@@ -8235,12 +8311,26 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         ga := deref(arg_p(g))
         ## a generic call's type-argument positions (params `T : type`) are type names, not values
         if not (qgen and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a)) {
-          ta := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
-          if not qgen {
-            pt := callee_param_ty(decls, upto, src, qcs, qcl, pidx, a)
+          ## #726 — the argument's KIND only. Its pointee name would make this compare discriminate
+          ## `ptr(X)` from `ptr(Y)`, and the parser erases a word-sized `unchecked bitcast(ptr(X), p)`
+          ## to `p` itself, so a written reinterpretation reached this compare as the un-cast pointer
+          ## (`hdr_len(unchecked bitcast(ptr(FVec), da_pvec(da)))` was refused). Pointer identity at
+          ## an argument stays with the pre-match fence, which judges a named local only.
+          ta0 := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
+          ta := Ty(kind = ta0.kind, ns = 0, nl = 0)
+          if not qgen and not qov {
+            mut ppi := pidx
+            if qel >= 0 and i64(pidx) >= qel { ppi = pidx + 1 }
+            pt := callee_arg_param_ty(decls, upto, src, qcs, qcl, ppi, a)
             ptrint_probe_site("ARG", "callarm", true, ta.kind, pt.kind, s_of(ga.e, a), src)
-            if not ty_compat(ta, pt, src) {
-              if not bad { bad = true; bad_span = s_of(ga.e, a) }
+            if not ty_compat(ta, pt, src) and not sema_arg_place_ptr_seam(ta, pt) {
+              ## located at the call when the argument has no span (a literal), as the compare in
+              ## `expr_has_unbound` locates it
+              if not bad {
+                bad = true
+                bad_span = s_of(ga.e, a)
+                if bad_span == 0 and not ast::span_is_synthetic(qcs) { bad_span = qcs }
+              }
             }
           }
         }
@@ -8248,7 +8338,8 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         g = ga.next
       }
       if bad { er := Result(Ty, CheckErr).Err(mismatch_err(bad_span, 0)); return er }
-      Result(Ty, CheckErr).Ok(callee_ret_ty(decls, upto, src, qcs, qcl))
+      if qov { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
+      else { Result(Ty, CheckErr).Ok(callee_ret_ty(decls, upto, src, qcs, qcl)) }
     }
     ## `S(f0 = e0, …, fN = eN)` — a struct construction. Each field value (in declaration order)
     ## is checked against the struct field's declared type; the literal's type is the struct.
@@ -8264,7 +8355,11 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
           fd := deref(fld_p(fld))
           ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
           ptrint_probe_site("FIELD-LIT", "structlit", true, tv.kind, ft.kind, s_of(sa.e, a), src)
-          if not ty_compat(tv, ft, src) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(sa.e, a), 0)); return er }
+          ## #726 — `s_of` has no span for a literal field value; locate it at the struct literal's
+          ## head then, as the call-argument compare locates a literal argument at its call.
+          mut fvs := s_of(sa.e, a)
+          if fvs == 0 and not ast::span_is_synthetic(scs) { fvs = scs }
+          if not ty_compat(tv, ft, src) { er := Result(Ty, CheckErr).Err(mismatch_err(fvs, 0)); return er }
           fld = fd.next
         }
         sg = sa.next
@@ -8279,7 +8374,19 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       ## access, not a value — its type is opaque (tag 0, accepted). Without this `check` rejects every
       ## valid `atomic`/`comptime`-arch program while `build` accepts it (check/build parity, §1 item 5).
       if is_prelude_ns_var(base, src) { pu := Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)); return pu }
-      tb := check_expr(base, decls, upto, src, a, locals, nloc)?
+      ## #726 / #752 — the base's NAME is read below (`type_decl_index`). Under the 0.2.3 seed
+      ## `x := check_expr(…)?` delivered only the carrier's first word, so `tb.ns`/`tb.nl` were frame
+      ## garbage and the first run of this arm died with SIGSEGV on 40 corpus programs; the explicit
+      ## `match` delivers the whole payload under either seed (#754 fixed `?` itself).
+      tbr := check_expr(base, decls, upto, src, a, locals, nloc)
+      mut tb := Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)
+      mut tberr : CheckErr = 0
+      mut tbfail := false
+      match tbr {
+        Result::Ok(tb0) => { tb = tb0 }
+        Result::Err(tbe) => { tberr = tbe; tbfail = true }
+      }
+      if tbfail { fe := Result(Ty, CheckErr).Err(tberr); return fe }
       if kind_is_unknown(tb.kind) { unk := Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)); return unk }
       ## Only a clear NON-aggregate scalar (int/bool) genuinely has no fields → mismatch. A `str` carries
       ## the `.ptr`/`.len` pseudo-fields, an array/slice `.len`, and a `ptr(T)` AUTO-DEREFS to the pointee
@@ -8339,7 +8446,11 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         te := check_expr(aa.e, decls, upto, src, a, locals, nloc)?
         ag = aa.next
       }
-      Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyArray, ns = 0, nl = 0))
+      ## #726 — a TUPLE literal `(5, 2.0)` is the same node; it is not an array, and a tuple's type is
+      ## not modelled here, so it answers UNKNOWN (as every `ArrayLit` did before this arm ran). So does
+      ## a literal whose delimiter cannot be recovered from the source.
+      if sema_arraylit_is_array(aehead, src) { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyArray, ns = 0, nl = 0)) }
+      else { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
     }
     ## `a[i]` — an element read: the index must be int (a known non-int is a `Mismatch`); the
     ## base is checked (any `Var` inside must be bound). The element type is unknown (tag 0,
@@ -10477,7 +10588,7 @@ stmts_mention_var := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : us
 }
 
 ## Walk a `Match`'s arm list — does any arm (value `body` or statement `body_stmts`) mention `[xs, xl)`?
-arms_mention_var := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+arms_mention_var := fn(head : ptr(mut Arm), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut arm := head
   mut res := false
   while arm != 0 {
@@ -11107,7 +11218,14 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## so recover it exactly like tag 0 instead of recording a nameless struct local. An ARRAY literal
           ## of SCALAR-LITERAL elements is tagged 7 (scalar-element array) so a whole-aggregate store into
           ## `xs[i]` is rejected. An annotation / call-return with a reliable payload still wins.
-          if kind_is_unknown(bind_tag) or (kind_is_struct(bind_tag) and bind_nl == 0) {
+          ## #726 — `check_expr`'s `EnumLit` arm now answers the public enum tag 4 the same way, and its
+          ## name is lost to the same carrier: a nameless enum local skipped #557's exhaustiveness check
+          ## and #693's raw-union exclusion. Recover it exactly like the nameless struct.
+          ## …and the public array tag `check_expr`'s `ArrayLit` arm answers is not this file's tag-7 local
+          ## marker, which means a SCALAR-literal-element array: recorded as-is it fenced the whole-struct
+          ## store `ps[0] = P(…)` into `mut ps := [P(…), P(…)]`. The literal is re-judged below.
+          if kind_is_unknown(dt.kind) and kind_is_array(bind_tag) and unchecked bitcast(usize, expr_array_first(v)) != 0 { bind_tag = TyKind.TyUnknown }
+          if kind_is_unknown(bind_tag) or ((kind_is_struct(bind_tag) or kind_is_enum(bind_tag)) and bind_nl == 0) {
             ## HIDDEN tags 9 (struct) / 10 (enum): `value_agg_ty` maps them back, but `check_expr`'s Var
             ## resolution does NOT surface them, so the overload-naive existing arg checks stay tolerant.
             ## Covers a StructLit / EnumLit / nullary-enum-variant RHS (and a Var aliasing such a local).
@@ -12390,7 +12508,7 @@ stmts_use_cons := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize
   res
 }
 
-arms_use_cons := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+arms_use_cons := fn(head : ptr(mut Arm), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut arm := head
   mut res := false
   while arm != 0 {
@@ -12628,7 +12746,7 @@ is_out_param := fn(params_head : ptr(mut Param), src : ptr(u8), s : usize, n : u
 }
 
 ## Walk a `Match`'s arms for a store-escape (below), recursing into each arm's statement body.
-arms_store_escape := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : ptr(mut Param)) -> bool {
+arms_store_escape := fn(head : ptr(mut Arm), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : ptr(mut Param)) -> bool {
   mut arm := head
   mut res := false
   while arm != 0 {
