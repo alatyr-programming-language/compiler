@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n, niche_payload_ptr_kind, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n, niche_payload_ptr_kind, enum_elem_words, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -5585,6 +5585,17 @@ fixed_array_byte_eek := fn(src : ptr(u8), ns : usize, nl : usize) -> u8 {
   byte_type_eek(src, es.s, es.n)
 }
 
+## #808 — the element type of a local annotated `[Option(ptr(T)); N]` when it is NICHE-FOLDED, else 0/0.
+## Its first literal element is usually a bare `Option.None`, whose head names no type argument, so the
+## annotation — not the literal — decides the element's one-word layout.
+folded_array_elem_span := fn(src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  lt := local_type_span(src, ns, nl)
+  if lt.n == 0 { return CSpan(s = 0, n = 0) }
+  es := array_elem_span(src, lt.s, lt.n)
+  if is_niche_folded(src, es.s, es.n) { return CSpan(s = es.s, n = es.n) }
+  CSpan(s = 0, n = 0)
+}
+
 ## `slots` (a `ptr(SVec)`) resolves a POINTER element `[ptr(mut b0), …]` to its pointee struct span;
 ## it may be 0 (the IR-scan caller has no frame yet) — the ptr-element branch then folds to the scalar
 ## default, byte-identical (an AddrOf element is never const, so the IR barrier rejects it anyway).
@@ -5621,8 +5632,7 @@ arr_elem_info := fn(ehead : ptr(mut Arg), src : ptr(u8), decls : ptr(rt::Vec), a
       res = AElem(eek = 2, ess = si.ss, esl = si.sl, stride = nf)
     }
   } else if ei.is_e {
-    mx := enum_inst_words(decls, src, ei.es, ei.el, a)
-    res = AElem(eek = 3, ess = ei.es, esl = ei.el, stride = 1 + mx)
+    res = AElem(eek = 3, ess = ei.es, esl = ei.el, stride = enum_elem_words(decls, src, ei.es, ei.el, a))
   } else if ti.is_s {
     ## a `str` element (`["fn", "return", …]`) — each element is a 2-word {ptr, len} value
     ## (eek = 4, stride 2). No nominal type span (str is structural), so ess/esl stay 0.
@@ -9341,8 +9351,8 @@ bind_uninit_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize,
           if is_packed(decls, src, esp.s, esp.n) { panic("selfhost: an array whose element is a @packed struct is not supported (byte-precise element stride + packed field offsets would need byte-granular array addressing, a deferred slice); rejected rather than silently miscompiled to a word-padded layout") }
           bind_array_slot(slots, src, s, n, nel, AElem(eek = 2, ess = esp.s, esl = esp.n, stride = struct_words(decls, src, esp.s, esp.n, a)))
         } else {
-          if enum_decl_of(decls, src, esp.s, esp.n) >= 0 {
-            bind_array_slot(slots, src, s, n, nel, AElem(eek = 3, ess = esp.s, esl = esp.n, stride = 1 + enum_inst_words(decls, src, esp.s, esp.n, a)))
+          if is_niche_folded(src, esp.s, esp.n) or enum_decl_of(decls, src, esp.s, esp.n) >= 0 {
+            bind_array_slot(slots, src, s, n, nel, AElem(eek = 3, ess = esp.s, esl = esp.n, stride = enum_elem_words(decls, src, esp.s, esp.n, a)))
           } else {
             bind_slot_typed(slots, src, s, n, lts.s, lts.n)
           }
@@ -13354,7 +13364,7 @@ slice_elem_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, en : us
   if en < 64 { esdi = struct_decl_of(decls, src, es, en); eedi = enum_decl_of(decls, src, es, en) }
   esl := str_at((src + es), en)
   if esdi >= 0 { eek = 2; stride = struct_words(decls, src, es, en, a) }
-  else if eedi >= 0 { eek = 3; stride = 1 + enum_inst_words(decls, src, es, en, a) }
+  else if eedi >= 0 or is_niche_folded(src, es, en) { eek = 3; stride = enum_elem_words(decls, src, es, en, a) }
   else if esl == "str" { eek = 4; stride = 2 }
   else if type_is_float(decls, src, es, en) { eek = 9; stride = 1 }
   else { eek = 0; stride = 1 }
@@ -20961,6 +20971,11 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
     }
     return
   }
+  ## #808 — an array of NICHE-FOLDED `Option(ptr(T))` holds one word per element.
+  if folded_array_elem_for_off(base, cx).n != 0 {
+    emit_folded_array_elems(v, base, sb, cx, a, nl)
+    return
+  }
   match deref(v) {
     Expr::ArrayLit(nel, ehead) => {
       ## Emit each element by ITS OWN type at a CUMULATIVE word offset (`cumw`), not the first
@@ -21065,6 +21080,42 @@ packed_byte_base_entry := fn(base : ptr(Expr), cx : ptr(LCtx)) -> i64 {
   ent := deref(svec_at(SlotEntry, cx.slots, si))
   if streq(cx.src, ent.ns, ent.nl, vn.s, vn.n) and ent.ek == 5 and is_byte_array_eek(ent.eek) { return i64(si) }
   -1
+}
+
+## #808 — store the elements of the array literal `v` into an array of NICHE-FOLDED `Option(ptr(T))`
+## whose element 0 is the slot `base`: ONE word per element (`emit_folded_option_assign`), element k at
+## slot `base - k`. A bare `Option.None` / `Option.Some(p)` element names no type argument, so the
+## caller — which knows the array's declared element type — is the one that routes here.
+emit_folded_array_elems := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  match deref(v) {
+    Expr::ArrayLit(nel, ehead) => {
+      mut g := ehead
+      mut k : i64 = 0
+      while g != 0 {
+        ga := deref(arg_p(g))
+        emit_folded_option_assign(ga.e, base - k, sb, cx, a, nl)
+        k += 1
+        g = ga.next
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { panic("selfhost: an array of Option(ptr(T)) is initialized here only from an array literal") }
+  }
+}
+
+## #808 — the NICHE-FOLDED element type of the local array whose base slot is `base`, else 0/0. The
+## literal writer asks it so each `Option(ptr(T))` element is stored as its one folded word.
+folded_array_elem_for_off := fn(base : i64, cx : ptr(LCtx)) -> CSpan {
+  mut i := 0
+  cnt := svec_len(cx.slots)
+  while i < cnt {
+    ent := deref(svec_at(SlotEntry, cx.slots, i))
+    if i64(ent.off) == base and ent.ek == 5 and ent.is_ref == false and ent.eek == 3 and is_niche_folded(cx.src, ent.sns, ent.snl) { return CSpan(s = ent.sns, n = ent.snl) }
+    i += 1
+  }
+  CSpan(s = 0, n = 0)
 }
 
 packed_byte_slot_for_off := fn(base : i64, cx : ptr(LCtx)) -> i64 {
@@ -21734,6 +21785,56 @@ folded_value_span := fn(v : ptr(Expr), expect : CSpan, slots : ptr(SVec), decls 
     if is_niche_folded(src, crt.s, crt.n) { return crt }
     return z
   }
+  ## #808 — an element `xs[i]` of an array whose element type is folded (one word per element).
+  ivl := index_value_layout(v, slots, src, decls, a)
+  if ivl.is_agg {
+    if ivl.eek == 3 and is_niche_folded(src, ivl.ess, ivl.esl) { return CSpan(s = ivl.ess, n = ivl.esl) }
+    return z
+  }
+  ## … and an element of an ARRAY FIELD whose element type is folded (`t.b[i]`, `deref(p).b[i]`).
+  mut iae := z
+  match deref(v) {
+    Expr::Index(ib, ii) => { iae = folded_array_elem_of(ib, slots, decls, src, a) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  if iae.n != 0 { return iae }
+  ft := field_place_type_span(v, slots, decls, src, a)
+  if ft.n != 0 and is_niche_folded(src, ft.s, ft.n) { return ft }
+  z
+}
+
+## #808 — the NICHE-FOLDED element type of the array `ab` an `ab[i]` indexes, else 0/0: a local array or
+## an array parameter (by value or `in out`) whose slot records a folded `eek 3` element, or an ARRAY
+## FIELD (`folded_field_array_elem`). An element read (`folded_value_span`) and an element store
+## (`emit_st_index_assign`) both ask it, so the two agree on the one-word element.
+folded_array_elem_of := fn(ab : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  avn := var_name_span(ab)
+  if avn.n != 0 {
+    if slot_of(slots, src, avn.s, avn.n) < 0 { return CSpan(s = 0, n = 0) }
+    aent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, avn.s, avn.n)))
+    if streq(src, aent.ns, aent.nl, avn.s, avn.n) and aent.ek == 5 and aent.eek == 3 and is_niche_folded(src, aent.sns, aent.snl) { return CSpan(s = aent.sns, n = aent.snl) }
+    return CSpan(s = 0, n = 0)
+  }
+  folded_field_array_elem(ab, slots, decls, src, a)
+}
+
+## #808 — the NICHE-FOLDED element type of the ARRAY FIELD place `ab` (`t.b`, `deref(p).b` with
+## `b : [Option(ptr(T)); N]`), else 0/0 — the field half of `folded_array_elem_of`.
+folded_field_array_elem := fn(ab : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  at := field_place_type_span(ab, slots, decls, src, a)
+  es := array_elem_span(src, at.s, at.n)
+  if is_niche_folded(src, es.s, es.n) { return CSpan(s = es.s, n = es.n) }
+  CSpan(s = 0, n = 0)
+}
+
+## #808 — the declared type of the field place `v` (`s.f`, `p.f`, `deref(p).f`, `deref(<call>).f`,
+## `deref(ptr(s)).f`), or 0/0 when `v` is not a field place this resolver reaches. `folded_value_span`
+## reads a folded field off it, and an element of a folded-element ARRAY field (`t.b[i]`) through it.
+field_place_type_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  z := CSpan(s = 0, n = 0)
   fp := field_place_parts(v)
   ## null-ok: field_place_parts answers a null base (fl 0) for an expression that is not a field place
   if fp.fl == 0 or unchecked bitcast(usize, fp.base) == 0 { return z }
@@ -21766,9 +21867,7 @@ folded_value_span := fn(v : ptr(Expr), expect : CSpan, slots : ptr(SVec), decls 
     }
   }
   if bl == 0 { return z }
-  ft := field_type_span(decls, src, bs, bl, fp.fs, fp.fl, a)
-  if ft.n != 0 and is_niche_folded(src, ft.s, ft.n) { return ft }
-  z
+  field_type_span(decls, src, bs, bl, fp.fs, fp.fl, a)
 }
 
 ## §8 `@niche`: emit a folded `Option(ptr(T))` VALUE as ONE word in %rax (the RETURN dual of
@@ -25496,8 +25595,8 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     edi := enum_decl_of(decls, src, bs, bl)
     if sdi >= 0 {
       estride = struct_words(decls, src, bs, bl, a); eek = 2; ess = bs; esl = bl
-    } else if edi >= 0 {
-      estride = 1 + enum_inst_words(decls, src, bs, bl, a); eek = 3; ess = bs; esl = bl
+    } else if edi >= 0 or is_niche_folded(src, bs, bl) {
+      estride = enum_elem_words(decls, src, bs, bl, a); eek = 3; ess = bs; esl = bl
     } else if type_is_float(decls, src, bs, bl) {
       ## FLOAT-element array / uniform float-tuple param (`a : [f64; N]`, `t : (f64, f64)` — a tuple
       ## param reaches this branch as a `pmode == 1` array of its first component). One word per
@@ -25535,8 +25634,8 @@ bind_param := fn(in out slots : SVec, pm : Param, src : ptr(u8), decls : ptr(rt:
     gedi := enum_decl_of(decls, src, aes.s, aes.n)
     if gsdi >= 0 {
       gestride = struct_words(decls, src, aes.s, aes.n, a); geek = 2; gess = aes.s; gesl = aes.n
-    } else if gedi >= 0 {
-      gestride = 1 + enum_inst_words(decls, src, aes.s, aes.n, a); geek = 3; gess = aes.s; gesl = aes.n
+    } else if gedi >= 0 or is_niche_folded(src, aes.s, aes.n) {
+      gestride = enum_elem_words(decls, src, aes.s, aes.n, a); geek = 3; gess = aes.s; gesl = aes.n
     } else if type_is_float(decls, src, aes.s, aes.n) {
       ## FLOAT-element generic array param (`a : T`, `T → [f64; N]`) — the float dual of the struct/enum
       ## cases: one word per element, `eek = 9` for the xmm read/arithmetic path. Neutral (no float

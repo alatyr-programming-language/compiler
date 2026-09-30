@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An array of `Option(ptr(T))` holds one word per element.** The element was sized from the first
+  literal element, and a bare `Option.None` names no type argument. The array therefore got a two-word
+  `[disc, payload]` element that had lost its pointee type, and a matched `Some` element's `deref(q).v`
+  read **0** on a clean build. The element store also wrote the scalar `0` placeholder for a `Some`
+  literal. The declared element type now decides the one-word element in the literal, in the element
+  store and in the element read. This covers a local array, an array parameter (by value and `in out`)
+  and an array field (#808).
+
 ## 0.2.5 — 2026-09-30
 
 - **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved

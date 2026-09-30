@@ -869,7 +869,11 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
           ## each struct-literal / bound-struct-var element at its cumulative `struct_words(T)`-strided base,
           ## so the whole `[Struct; N]` field is constructed in place. `off += wsz` (below) now advances by
           ## the true field width. A scalar / 1-word-struct element is byte-identical to before (neutral).
-          emit_array_assign(ga.e, base - off, sb, cx, nl)
+          ## #808 — an `[Option(ptr(T)); N]` field holds one folded word per element; the bare literal
+          ## heads (`Option.None`) name no type argument, so the FIELD's element type decides.
+          fafe := array_elem_span(cx.src, effc.s, effc.n)
+          if is_niche_folded(cx.src, fafe.s, fafe.n) { emit_folded_array_elems(ga.e, base - off, sb, cx, a, nl) }
+          else { emit_array_assign(ga.e, base - off, sb, cx, nl) }
         } else {
           emit_gas(ga.e, sb, cx, a, nl)
           push_str(sb, "  popq %rax\n  movq %rax, -")
@@ -1665,6 +1669,9 @@ pub emit_st_index_field_assign := fn(fia : ptr(Expr), fii : ptr(Expr), ifs : usi
 ## byte-packed fast path used `s = nx ; continue` to skip the rest; here it is a bare `return`,
 ## and the caller keeps the single `s = nx`.
 pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  ## #808 — the element type of an array whose element is a folded `Option(ptr(T))` (a local, an array
+  ## parameter, an array field), so every element store below takes the one folded word.
+  fidt := folded_array_elem_of(ib, cx.slots, cx.decls, cx.src, a)
   ## BYTE-PACKED LOCAL ARRAY / TYPED BYTE-SLICE WRITE. The address helper leaves the exact byte
   ## address in %rax; evaluate the value first so index lowering cannot consume it, then store
   ## only `%bl` and preserve the seven neighbouring bytes.
@@ -1677,7 +1684,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
   sdbe := std_idx_byte_field_eek(ib, cx.slots, cx.decls, cx.src, a)
   tbfe := tuple_byte_component_base(ib, cx)
   if pbe >= 0 or pbfe != 0 or sbfe != 0 or sdbe != 0 or tbfe.ok {
-    emit_gas(iv, sb, cx, a, nl)
+    emit_store_value(iv, fidt, sb, cx, a, nl)
     emit_index_addr(ib, ii, sb, cx, a, nl)
     push_str(sb, "  popq %rbx\n  movb %bl, (%rax)\n")
     return
@@ -1695,7 +1702,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
     ## to the frame-slot address path and write nowhere near the global.
     if not array_lit_info(gaiv).is_a and global_array_byte_eek(cx.decls, cx.src, gaib.s, gaib.n) != 0 {
       gnel := global_array_len(cx.decls, cx.src, gaib.s, gaib.n, gaiv)
-      emit_gas(iv, sb, cx, a, nl)
+      emit_store_value(iv, fidt, sb, cx, a, nl)
       emit_gas(ii, sb, cx, a, nl)
       push_str(sb, "  leaq ")
       emit_global_label(sb, cx.decls, cx.src, gaib.s, gaib.n)
@@ -1711,7 +1718,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
       ## emit a word store at `LABEL + i*8`, corrupting adjacent elements.
       gbyte := global_array_byte_eek(cx.decls, cx.src, gaib.s, gaib.n)
       if gbyte != 0 {
-        emit_gas(iv, sb, cx, a, nl)                 ## value on the stack
+        emit_store_value(iv, fidt, sb, cx, a, nl)                 ## value on the stack
         emit_gas(ii, sb, cx, a, nl)                 ## index on top
         push_str(sb, "  leaq ")
         emit_global_label(sb, cx.decls, cx.src, gaib.s, gaib.n)
@@ -1900,7 +1907,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         panic("selfhost: `G[i] = <str>` into a module-level `[str; N]` array GLOBAL is not yet supported — each element is a two-word `{ptr, len}` cell and the scalar store would write one word mid-element, corrupting a neighbouring element. Build the array in a LOCAL and index that. [fail-loud guard: never a silent mid-element store]")
       } else if gaes.is_s == false and gbyte == 0 {
         ## a SCALAR-element array global — store one word at `LABEL + i*8`.
-        emit_gas(iv, sb, cx, a, nl)                 ## value on the stack
+        emit_store_value(iv, fidt, sb, cx, a, nl)                 ## value on the stack
         emit_gas(ii, sb, cx, a, nl)                 ## index on top
         push_str(sb, "  leaq ")
         emit_global_label(sb, cx.decls, cx.src, gaib.s, gaib.n)
@@ -1919,7 +1926,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
   if iga_done == false {
     gfo := global_field_off(ib, cx, a)
     if gfo.found {
-      emit_gas(iv, sb, cx, a, nl)                 ## value on the stack
+      emit_store_value(iv, fidt, sb, cx, a, nl)                 ## value on the stack
       emit_gas(ii, sb, cx, a, nl)                 ## index on top
       push_str(sb, "  leaq ")
       emit_global_label(sb, cx.decls, cx.src, gfo.gs, gfo.gn)
@@ -1953,7 +1960,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         niew := deref(svec_at(SlotEntry, cx.slots, index_base_entry(nbxw.arr, cx.slots, cx.src)))
         tcw := tcomp_find(cx, niew.off, usize(num_lit_value(nbxw.idx)))
         if tcw.estride != 0 and tcw.ek == 6 {
-          emit_gas(iv, sb, cx, a, nl)                        ## value → stack
+          emit_store_value(iv, fidt, sb, cx, a, nl)                        ## value → stack
           emit_index_addr(nbxw.arr, nbxw.idx, sb, cx, a, nl) ## component N word-0 address → %rax
           mcw := num_lit_value(ii)
           if mcw != 0 { push_str(sb, "  addq $"); push_int(sb, mcw * 8); push_str(sb, ", %rax\n") }
@@ -2028,7 +2035,14 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
       sivl := struct_lit_info(iv)
       eivl := enum_lit_info(iv)
       ivag := var_agg_info(iv, cx.slots, cx.src)
-      if ibent.eek == 2 and sivl.is_s and cx.agg_tmp >= 0 {
+      if fidt.n != 0 {
+        ## #808 — a NICHE-FOLDED `Option(ptr(T))` element is ONE word: the literal's pointer / 0, or the
+        ## folded word any other value form yields.
+        emit_store_value(iv, fidt, sb, cx, a, nl)
+        emit_index_addr(ib, ii, sb, cx, a, nl)
+        push_str(sb, "  popq %rcx\n  movq %rcx, (%rax)\n")
+        iga_done = true
+      } else if ibent.eek == 2 and sivl.is_s and cx.agg_tmp >= 0 {
         ## struct LITERAL → materialize into the down-growing agg-temp, then copy its words up.
         emit_struct_assign(iv, cx.agg_tmp, sb, cx, a, nl)
         emit_index_addr(ib, ii, sb, cx, a, nl)
@@ -2223,7 +2237,7 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         }
       } else {
         ## Scalar array-field element — preserve the existing one-word path byte-for-byte.
-        emit_gas(iv, sb, cx, a, nl)                                        ## value → stack (bottom)
+        emit_store_value(iv, fidt, sb, cx, a, nl)                                        ## value → stack (bottom)
         emit_gas(ii, sb, cx, a, nl)                                        ## inner index j → stack (top)
         emit_idx_field_addr(wafe.arr, wafe.idx, wafe.woff * 8, sb, cx, nl) ## array-field word-0 addr → %rax
         push_str(sb, "  popq %rcx\n")                                      ## j → %rcx (value still on stack)
@@ -2240,14 +2254,14 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
   if iga_done == false and slice_base_is_byte(ib, cx) {
     ## BYTE Slice LOCAL/PARAM element write — pair the byte-granular address with a byte-width
     ## store. The generic tail is word-sized and would clobber the seven adjacent bytes.
-    emit_gas(iv, sb, cx, a, nl)
+    emit_store_value(iv, fidt, sb, cx, a, nl)
     emit_index_addr(ib, ii, sb, cx, a, nl)
     push_str(sb, "  popq %rbx\n")
     emit_deref_store(sb, 1)
     iga_done = true
   }
   if iga_done == false {
-    emit_gas(iv, sb, cx, a, nl)
+    emit_store_value(iv, fidt, sb, cx, a, nl)
     emit_index_addr(ib, ii, sb, cx, a, nl)
     push_str(sb, "  popq %rbx\n  movq %rbx, (%rax)\n")
   }

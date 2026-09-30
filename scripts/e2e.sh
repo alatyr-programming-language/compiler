@@ -10224,6 +10224,9 @@ run_x86 issue789_option_ptr_list_walk 42
 # #797 — a `Some(...)` literal stored into an `Option(ptr(T))` struct field is its one folded word, in every
 # field-store form (local, through a pointer, by-ref param, nested, global, array element); it stored None.
 run_x86 issue797_option_ptr_field_store 42
+# #808 — `[Option(ptr(T)); N]` is N folded words: the literal, the element store and the element read of a
+# local array, an array parameter (by value and `in out`) and an array field; a `Some` element read 0.
+run_x86 issue808_option_ptr_array 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.
