@@ -8443,6 +8443,11 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## The brand sink is handed the whole `[A; N]` annotation instead, which `sema_brand_sink_err`
       ## already walks element by element for an annotated array binding.
       bpty0 := sema_array_param_brand_ty(pty0, src, psp.s, psp.n)
+      ## Issue #804 — an unannotated `a := [1, 7]` has no context, so its literals take the documented
+      ## default, the native signed integer (Types §9.1, Declarations §3.2/§3.4): `a` is an `[i64; N]`.
+      ## Passed to an array parameter of any other scalar element it is a type mismatch; only
+      ## widening is implicit (Types §4.3), and the literals' context was the binding, not the call.
+      if sema_default_int_array_arg_bad(bpty0, ca.e, src, locals, nloc) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
       ## #299 census hook (no refusal): this argument's declared parameter type against the value's
       ## recovered brand identity. Inert unless the program declares a brand of its own.
       brand_probe_sink(bpty0, ca.e, s_of(ca.e, a), decls, upto, src, locals, nloc, a)
@@ -13952,6 +13957,22 @@ sema_is_scalar_name := fn(nm : str) -> bool {
   if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" { return true }
   if nm == "f32" or nm == "f64" { return true }
   false
+}
+## Issue #804 — is `arg` a local bound by an unannotated INTEGER array literal (`a := [1, 7]`, whose
+## elements took the default `i64`: `prov_lit_array`'s numeric evidence) passed to a parameter declared
+## `[E; N]` with a scalar element `E` other than the native signed integer? `pat` is the parameter's
+## whole declared array type (`sema_array_param_brand_ty`), a non-array type otherwise.
+sema_default_int_array_arg_bad := fn(pat : Ty, arg : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> bool {
+  if not kind_is_array(pat.kind) or pat.nl == 0 { return false }
+  av := expr_var_span(arg)
+  if av.n == 0 or nloc == 0 or not local_in(locals, nloc, src, av.s, av.n) { return false }
+  lc := local_at(locals, nloc, src, av.s, av.n)
+  if local_type_span(src, lc.ns, lc.nl).n != 0 { return false }
+  if not kind_is_int(prov_lit_array_elem(lc.prov)) { return false }
+  es := array_elem_span(src, pat.ns, pat.nl)
+  if es.n == 0 { return false }
+  en := str_at((src + es.s), es.n)
+  sema_is_scalar_name(en) and en != "i64" and en != "isize"
 }
 ## Map a `match typeinfo(T)` arm's variant name to a KIND value — byte-mirror of `lower::comptime_kind_of_name`.
 sema_comptime_kind_of_name := fn(src : ptr(u8), vs : usize, vl : usize) -> i64 {

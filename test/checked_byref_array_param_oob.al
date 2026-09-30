@@ -4,6 +4,6 @@
 ## Was previously unchecked → an OOB index crashed (SIGSEGV/141) instead of a clean trap. `unchecked` drops it.
 sum := fn(a : [u64; 3], i : u64) -> u64 { return a[i] }
 main := fn() -> u64 {
-  arr := [10, 20, 30]
+  arr : [u64; 3] = [10, 20, 30]
   return sum(arr, 8)
 }

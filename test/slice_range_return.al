@@ -11,7 +11,7 @@ mk := fn(in xs : [u64; 4]) -> Slice(u64) { return xs[0..4] }
 mid := fn(in xs : [u64; 4]) -> Slice(u64) { return xs[1..3] }   ## a non-zero `lo` — ptr = elem0 + lo*8
 
 main := fn() -> u64 {
-  a := [10, 20, 30, 40]
+  a : [u64; 4] = [10, 20, 30, 40]
   r := mk(a)
   m := mid(a)
   if r.len != 4 { return 1 }        ## was 0

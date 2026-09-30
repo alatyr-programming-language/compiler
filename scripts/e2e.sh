@@ -6538,6 +6538,19 @@ run accept_enum_match_deref_annotated_local 42
 # the layout the callee reads; it was staged one word per element and `f([1, 7])` read 0 for `xs[1]`.
 # Register and stack argument positions, a 10-byte literal, `i8` and runtime-valued elements.
 run issue795_byte_array_literal_arg 42
+# Issue #804 / Types §9.1, Declarations §3.2/§3.4 — an unannotated `a := [1, 7]` is an `[i64; N]`
+# (its literals had no context); passing it where `[u8; N]` or `[u64; N]` is declared is a located type
+# mismatch. The `[u8; 2]` case read 0 on the parent. The control keeps the annotated and the
+# `[i64; N]` forms accepted.
+build_reject_has issue804_default_int_array_arg "type mismatch at line 8"
+check_reject issue804_default_int_array_arg
+build_reject_has issue804_default_int_array_arg_u64 "type mismatch at line 6"
+check_reject issue804_default_int_array_arg_u64
+emit_reject_has wat issue804_default_int_array_arg "type mismatch at line 8"
+emit_reject_has aarch64 issue804_default_int_array_arg "type mismatch at line 8"
+emit_reject_has riscv64 issue804_default_int_array_arg "type mismatch at line 8"
+check_accept issue804_default_int_array_ok
+run issue804_default_int_array_ok 42
 # Issue #752 — `x := <call>?` over a multi-word Ok payload binds every payload word (x86_64 returned 0).
 run issue752_try_multiword_payload 42
 build_reject_has reject_try_multiword_value "multi-word Ok payload"

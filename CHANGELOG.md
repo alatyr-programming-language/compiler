@@ -181,6 +181,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   really takes, and a function that needs more than the scan placed is emitted again with a pool that
   holds them. Every function that built before keeps its exact frame.
 
+- **An unannotated integer array is no longer accepted for a narrower or unsigned array parameter.**
+  `a := [1, 7]` has no context, so its literals take the default native signed integer and `a` is an
+  `[i64; 2]`; passing it where `[u8; 2]` (or `[u64; 2]`) is declared compiled, and the `[u8; 2]` callee
+  read **0**. It is now a located type mismatch (Types §9.1, §4.3; Declarations §3.2/§3.4) — a PATCH,
+  not a break: annotate the array (`a : [u8; 2] = [1, 7]`) (#804).
 ## 0.2.5 — 2026-09-30
 
 - **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved
