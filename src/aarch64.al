@@ -5631,7 +5631,16 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           isout := a64_callee_out_scalar(decls, src, cs, cl, gidx)
           if isout { a64_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
           if isagg and aoff >= 0 { push_str(sb, "  add x0, x29, #") ; push_int(sb, aoff) ; push_str(sb, "\n") }
-          if (not isbytearg) and (not isout) and (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and (not (isagg and aoff >= 0)) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+          ## an AGGREGATE ARRAY ELEMENT `ps[i]` to a by-reference struct/enum parameter: pass the element's
+          ## ADDRESS (#683). It fell to the scalar path, which loads word 0 of the element (at a one-word
+          ## stride), and the callee dereferenced that value — SIGSEGV. A base the place resolver cannot
+          ## address stays a located trap.
+          isaggelem := (not isout) and ex_is_index(ga.e) and lower_layout::callee_param_is_aggregate(decls, src, a64_callee_params(decls, src, cs, cl), gidx)
+          if isaggelem {
+            if a64_place_ok(ga.e, body_head, src, params_head, pcount, a, decls) { emit_a64_place_addr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+            else { push_str(sb, "  brk #0 // aggregate array-element argument: element address not resolvable\n") }
+          }
+          if (not isaggelem) and (not isbytearg) and (not isout) and (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and (not (isagg and aoff >= 0)) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
           push_str(sb, "  str x0, [sp, #-16]!\n")
           gidx += 1
           g = ga.next

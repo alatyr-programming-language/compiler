@@ -8803,6 +8803,7 @@ run agg_call_arg 42
 ## element is a PLACE, not a scalar. All eight spellings faulted (constant and runtime index, 1-word and
 ## multi-word struct, enum, non-first argument, element of a by-ref param, element of a Slice(P) param).
 run agg_arr_elem_arg 42
+run agg_arr_elem_arg_twins 42
 run_x86 issue260_slice_field 42
 run_x86 issue261_slice_field 42
 run_x86 issue263_slice_narrow_field_write 42
