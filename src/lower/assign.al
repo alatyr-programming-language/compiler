@@ -2273,6 +2273,16 @@ const_scalar_lit := fn(e : ptr(Expr)) -> bool {
 ## touches NO module global. Covers `name := e` / `name = e` in every RHS shape. The
 ## uninitialised-declaration fast path used `s = nx ; continue`; here it is a bare `return`, and
 ## the caller keeps the single `s = nx`.
+## #775 — does `name = v` store into a NICHE-FOLDED `Option(ptr(T))` local (an `ek 3` slot over a folded
+## span) from a value form `folded_value_span` recognizes? Only then is the one-word folded writer used;
+## an `if`/`match` value keeps the existing enum paths.
+st_dest_folded := fn(ns : usize, nl2 : usize, v : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> bool {
+  if slot_of(cx.slots, cx.src, ns, nl2) < 0 { return false }
+  dent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, ns, nl2)))
+  if dent.ek != 3 or not is_niche_folded(cx.src, dent.sns, dent.snl) { return false }
+  folded_value_span(v, cx.slots, cx.decls, cx.src, a).n != 0
+}
+
 pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## A comptime binding has no runtime store. Its value is re-entered only when a later expression
   ## asks for the name through `emit_gas`.
@@ -2312,6 +2322,11 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       emit_global_label(sb, cx.decls, cx.src, ns, nl2)
       push_str(sb, "(%rip)\n")
     }
+  } else if st_dest_folded(ns, nl2, v, cx, a) {
+    ## #775 — a NICHE-FOLDED `Option(ptr(T))` local takes ONE word from every initializer form
+    ## (`collect_slots` binds it that way): the variant literal's pointer / 0, or the folded word any
+    ## other recognized form (`emit_folded_option_value`'s scalar load) yields.
+    emit_folded_option_assign(v, slot_of(cx.slots, cx.src, ns, nl2), sb, cx, a, nl)
   } else if deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, ns, nl2))).ek == 12 {
     ## FN-11: a static-closure STORE `s := fn(…){…}` (lifted to FnRef) whose env holds the captures —
     ## store each captured outer local's CURRENT value into `s`'s env words. The captures are the

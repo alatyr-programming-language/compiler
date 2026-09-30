@@ -609,7 +609,7 @@ type_decl_in_module := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : 
 }
 
 ## Is byte `i` an identifier byte? (the projection-list scan below needs it)
-ll_ident_byte := fn(src : ptr(u8), i : usize) -> bool {
+pub ll_ident_byte := fn(src : ptr(u8), i : usize) -> bool {
   b := bytes(str_at((src + i), 1))[0]
   (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
 }
@@ -2287,6 +2287,20 @@ pub ptr_target_pointee_n := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
 ## `ptr(u8)`, `ptr( mut u8 )` and `ptr (mut u8)` are all pointers. A fixed `"ptr("` prefix test (which
 ## is all `bitcast_target_is_narrow_scalar` needs, because it only has to answer "not a narrow
 ## scalar") would call `ptr (mut u8)` an aggregate and send a pointer to the aggregate fence.
+## #768 — the slot kind a NICHE-FOLDED `Some(p)` payload binding takes when the payload type `[ts, ts+tl)`
+## is `ptr(S)` / `ptr(E)` over a declared struct / enum: 7 (pointer-to-struct) or 6 (pointer-to-enum),
+## the kinds an annotated `p : ptr(S)` / `p : ptr(E)` local gets, so `deref(p).f`, `n := deref(p)` and
+## `match deref(p)` resolve the pointee. 0 for any other payload — the binding stays the scalar pointer
+## it was. The pointee span itself is `ptr_target_pointee_s`/`_n` (two scalars, for the same seed reason).
+pub niche_payload_ptr_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> u8 {
+  ps := ptr_target_pointee_s(src, ts, tl)
+  pn := ptr_target_pointee_n(src, ts, tl)
+  if pn == 0 { return 0 }
+  if struct_decl_of(decls, src, ps, pn) >= 0 { return 7 }
+  if enum_decl_of(decls, src, ps, pn) >= 0 { return 6 }
+  0
+}
+
 pub bitcast_target_is_pointer := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   ptr_target_pointee_n(src, ts, tl) != 0
 }

@@ -10152,6 +10152,13 @@ run_x86 option_ptr_helpers 42
 run_x86 niche_option_return 42
 run_x86 niche_option_field 42
 run_x86 niche_option_str_match 42
+# #768 / #775 / #770 — `Option(ptr(T))` is one word in EVERY position, not only in a struct field: a
+# `Some(p)` payload carries its pointee (#768), a local is one word whatever initializes it and a folded
+# value passed straight as an argument reaches the by-reference parameter as an address (#775), and a
+# generic instance over `ptr(mut T)` has a valid label (#770). x86_64-only for the same reason as above.
+run_x86 issue768_option_ptr_payload_field 42
+run_x86 issue775_option_ptr_local_forms 42
+run_x86 issue770_option_ptr_mut_label 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.

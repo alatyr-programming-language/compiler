@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n, niche_payload_ptr_kind, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -2910,6 +2910,25 @@ paren_is_struct_lit := fn(src : ptr(u8), lp : usize) -> bool {
   }
   res
 }
+## #770 — a type-argument's TEXT inside a GAS symbol. The label is spelled from the source text of each
+## type argument, and a `ptr(mut T)` argument's text is `mut T` — with a SPACE, so the instance label
+## `base__option__is_some__ptr_mut T` split in two and `as` rejected the whole build. Every byte that
+## cannot appear in a symbol becomes `_`; a text made only of symbol bytes (every tag the compiler emits
+## for itself) is pushed unchanged, so existing labels do not move.
+push_label_text := fn(in out sb : strbuf::StrBuf, src : ptr(u8), s : usize, n : usize) {
+  mut clean := true
+  mut i := 0
+  while i < n {
+    if not lower_layout::ll_ident_byte(src, s + i) { clean = false }
+    i += 1
+  }
+  if clean { push_str(sb, str_at((src + s), n)) ; return }
+  mut j := 0
+  while j < n {
+    if lower_layout::ll_ident_byte(src, s + j) { push_str(sb, str_at((src + s + j), 1)) } else { push_str(sb, "_") }
+    j += 1
+  }
+}
 emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, tl : usize) {
   ## Layout consumers keep the FULL type-application span (`Option(u64)`, `ptr(u64)`) so they can
   ## inspect its arguments. The label format, however, expects the HEAD and re-reads arguments with
@@ -2932,7 +2951,7 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
       ct := typearg_at(src, tag_s, 0, jt)
       if ct.n == 0 { got = false } else {
         push_str(sb, "_")
-        push_str(sb, str_at((src + ct.s), ct.n))
+        push_label_text(sb, src, ct.s, ct.n)
         jt += 1
       }
     }
@@ -2943,7 +2962,7 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
   if str_at((src + tag_s), 1) == "[" {
     aes := array_elem_span(src, tag_s, tag_l)
     push_str(sb, "Array_")
-    push_str(sb, str_at((src + aes.s), aes.n))
+    push_label_text(sb, src, aes.s, aes.n)
     push_str(sb, "_")
     push_int(sb, i64(parse_arr_len(src, tag_s, tag_l)))
     return
@@ -2960,7 +2979,7 @@ emit_type_arg_tag := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ts : usize, t
       ta := typearg_at(src, tag_s, tag_l, j)
       if ta.n == 0 { going = false } else {
         push_str(sb, "_")
-        push_str(sb, str_at((src + ta.s), ta.n))
+        push_label_text(sb, src, ta.s, ta.n)
         j += 1
       }
     }
@@ -4337,6 +4356,23 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
     bsv := var_name_span(binner)
     bsent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bsv.s, bsv.n)))
     emit_agg_base_addr(bsent, sb)
+    push_str(sb, "  pushq %rax\n")
+    return
+  }
+  ## #775 — a NICHE-FOLDED `Option(ptr(T))` value that is not a local (a call result, a variant literal,
+  ## a field read, `deref(p).f`). An Option parameter is by reference like every enum parameter, so the
+  ## callee reads its one word THROUGH the pointer it receives; these forms used to push the word itself,
+  ## which the callee then dereferenced (a SIGSEGV for `None`, a stray read for `Some`). Stage the one
+  ## folded word in an agg-temp and pass its address, exactly as the struct/enum ctor case below does. A
+  ## folded LOCAL or PARAMETER keeps its existing by-reference path (its own frame word / the pointer).
+  if var_name_span(e).n == 0 and cx.agg_tmp >= 0 and folded_value_span(e, cx.slots, cx.decls, cx.src, a).n != 0 {
+    emit_folded_option_value(e, sb, cx, a, nl)
+    foff := agg_alloc(cx)
+    push_str(sb, "  movq %rax, -")
+    push_int(sb, (foff + 1) * 8)
+    push_str(sb, "(%rbp)\n")
+    fent := SlotEntry(ns = 0, nl = 0, off = usize(foff), sns = 0, snl = 0, ek = 3, estride = 1, eek = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
+    emit_agg_base_addr(fent, sb)
     push_str(sb, "  pushq %rax\n")
     return
   }
@@ -13857,6 +13893,17 @@ gen_ret_ptrstruct_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
               ta := type_arg_span(ah, a)
               if ta.n != 0 and struct_decl_of(decls, src, ta.s, ta.n) >= 0 { res = ta }
             }
+            ## #770 — a return of the type param ITSELF (`-> T`, the `Option::unwrap`/`expect`/`id` shape)
+            ## instantiated at `T = ptr(S)` is a pointer to `S` as well. Without this the local bound from
+            ## it had no pointee, and `deref(n).f` read 0 on a clean build; it surfaced once #770 let
+            ## `Option::unwrap(ptr(mut S), o)` assemble at all.
+            if res.n == 0 and streq(src, d.ret_ts, d.ret_tl, tps, tpl) {
+              tu := type_arg_full_at(ah, 0, decls, src, a)
+              if tu.n != 0 {
+                tpn := ptr_pointee_name(src, tu.s, tu.n)
+                if tpn.n != 0 and struct_decl_of(decls, src, tpn.s, tpn.n) >= 0 { res = tpn }
+              }
+            }
           }
         }
         i += 1
@@ -21447,11 +21494,85 @@ emit_folded_option_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::S
         push_str(sb, "(%rbp)\n")
       }
     }
+    ## #775 — any other folded value form (`st_dest_folded` admits only those `folded_value_span`
+    ## recognizes: a folded local/param, a folded-returning call, a folded field read) is already ONE
+    ## word; `emit_folded_option_value` loads it into %rax. This arm used to emit nothing.
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {
+      emit_folded_option_value(v, sb, cx, a, nl)
+      push_str(sb, "  movq %rax, -")
+      push_int(sb, (base + 1) * 8)
+      push_str(sb, "(%rbp)\n")
+    }
   }
+}
+
+## #775 — the NICHE-FOLDED `Option(ptr(T))` type of the value expression `v`, or 0/0. A folded Option is
+## ONE word in every position (Types §6.2/§8): a struct field (the layout already said so), a call
+## result (%rax), and — the part that was missing — a LOCAL. `collect_slots` sized a local by the FORM of
+## its initializer, so the same type got one word from a call, `1 + payload` words from a field, a
+## parameter or a variant literal, and an untyped scalar word from `deref(p).f`; a re-assignment across
+## two forms was then refused as a wider re-binding, and the untyped word was handed to a by-reference
+## Option parameter as if it were the block address (a SIGSEGV). Every binding of a folded value now asks
+## THIS one question, and the local, the argument and the assignment all agree on the one-word shape.
+## Recognized forms: a variant literal with a folded head (`Option(ptr(T)).None`), a folded local or
+## parameter (`ek 3` over a folded span), a call whose declared return is folded, and a field read
+## (`s.f`, `p.f`, `deref(p).f`, `deref(<call>).f`) whose declared field type is folded. Anything else —
+## an `if`/`match` value, an index — answers 0/0 and keeps its existing path.
+folded_value_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  z := CSpan(s = 0, n = 0)
+  ei := enum_lit_info(v)
+  if ei.is_e {
+    if is_niche_folded(src, ei.es, ei.el) { return CSpan(s = ei.es, n = ei.el) }
+    return z
+  }
+  vn := var_name_span(v)
+  if vn.n != 0 {
+    if slot_of(slots, src, vn.s, vn.n) < 0 { return z }
+    vent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, vn.s, vn.n)))
+    if vent.ek == 3 and streq(src, vent.ns, vent.nl, vn.s, vn.n) and is_niche_folded(src, vent.sns, vent.snl) { return CSpan(s = vent.sns, n = vent.snl) }
+    return z
+  }
+  crt := call_ret_ty_span(v, decls, src, a)
+  if crt.n != 0 {
+    if is_niche_folded(src, crt.s, crt.n) { return crt }
+    return z
+  }
+  fp := field_place_parts(v)
+  if fp.fl == 0 or unchecked bitcast(usize, fp.base) == 0 { return z }
+  mut bs := 0
+  mut bl := 0
+  bvn := var_name_span(fp.base)
+  if bvn.n != 0 {
+    if slot_of(slots, src, bvn.s, bvn.n) >= 0 {
+      bent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, bvn.s, bvn.n)))
+      if streq(src, bent.ns, bent.nl, bvn.s, bvn.n) and (bent.ek == 2 or bent.ek == 7) { bs = bent.sns; bl = bent.snl }
+    }
+  } else {
+    ds := deref_struct_span(fp.base, slots, src)
+    if ds.n != 0 { bs = ds.s; bl = ds.n }
+    else {
+      dc := deref_call_struct_span(fp.base, decls, src, a)
+      if dc.n != 0 { bs = dc.s; bl = dc.n }
+      else {
+        ## `deref(ptr(s)).f` — the pointer is taken of a struct local right there.
+        dai := deref_inner_expr(fp.base)
+        if unchecked bitcast(usize, dai) != 0 {
+          dav := addr_inner_var_span(dai)
+          if dav.n != 0 and slot_of(slots, src, dav.s, dav.n) >= 0 {
+            daent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, dav.s, dav.n)))
+            if streq(src, daent.ns, daent.nl, dav.s, dav.n) and daent.ek == 2 { bs = daent.sns; bl = daent.snl }
+          }
+        }
+      }
+    }
+  }
+  if bl == 0 { return z }
+  ft := field_type_span(decls, src, bs, bl, fp.fs, fp.fl, a)
+  if ft.n != 0 and is_niche_folded(src, ft.s, ft.n) { return ft }
+  z
 }
 
 ## §8 `@niche`: emit a folded `Option(ptr(T))` VALUE as ONE word in %rax (the RETURN dual of
@@ -22238,8 +22359,13 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
             svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = tail_enum_owner_s, tmod_l = tail_enum_owner_l))
           } else if folded {
             ## The folded `Some` payload is the staged pointer word itself, not the ordinary
-            ## payload slot at `sbase-1`.
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+            ## payload slot at `sbase-1`. #768 — over `ptr(S)` / `ptr(E)` it carries the pointee kind.
+            mut rpk : u8 = 0
+            mut rps := 0
+            mut rpl := 0
+            if pty.n != 0 { rpk = niche_payload_ptr_kind(cx.decls, cx.src, pty.s, pty.n) }
+            if rpk != 0 { rps = ptr_target_pointee_s(cx.src, pty.s, pty.n); rpl = ptr_target_pointee_n(cx.src, pty.s, pty.n) }
+            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = rps, snl = rpl, ek = rpk, estride = 1, eek = 0, is_ref = false))
           } else {
             svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
           }
@@ -22979,7 +23105,14 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
             pview_l2 = pview2.n
             pview_eek2 = 13
           }
-          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = pview_s2, snl = pview_l2, ek = 0, estride = 1, eek = pview_eek2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+          ## #768 — the pointer-to-struct / pointer-to-enum kind, as in `emit_enum_match`'s twin.
+          mut pkind2 : u8 = 0
+          if pview2.n == 0 { pkind2 = niche_payload_ptr_kind(cx.decls, cx.src, ptys2, ptyn2) }
+          if pkind2 != 0 {
+            pview_s2 = ptr_target_pointee_s(cx.src, ptys2, ptyn2)
+            pview_l2 = ptr_target_pointee_n(cx.src, ptys2, ptyn2)
+          }
+          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = pview_s2, snl = pview_l2, ek = pkind2, estride = 1, eek = pview_eek2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
         } else {
           svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
         }
