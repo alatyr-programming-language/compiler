@@ -668,7 +668,7 @@ ptrint_probe_site := fn(cls : str, site : str, directional : bool, vt : TyKind, 
   PTRINT_ROWS = PTRINT_ROWS + 1
   if PTRINT_GRANT != 0 { PTRINT_GRANTED = PTRINT_GRANTED + 1 }
   if ptrint_probe_open() {
-    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    mut pa := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
     mut sb := ptrint_probe_buf(pa)
     w0 := rt::push_str(sb, "#529 ")
     w1 := rt::push_str(sb, cls)
@@ -699,7 +699,7 @@ ptrint_probe_site := fn(cls : str, site : str, directional : bool, vt : TyKind, 
 ## a lower bound rather than a total.
 ptrint_probe_summary := fn() {
   if ptrint_probe_open() {
-    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    mut pa := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
     mut sb := ptrint_probe_buf(pa)
     w0 := rt::push_str(sb, "#529 SUMMARY calls=")
     w1 := rt::push_int(sb, i64(PTRINT_CALLS))
@@ -2673,7 +2673,7 @@ brand_probe_line := fn(src : ptr(u8), off : usize) -> VSpan {
 brand_probe_row := fn(cls : str, off : usize, src : ptr(u8)) {
   BRAND_PROBE_HITS = BRAND_PROBE_HITS + 1
   if brand_probe_open() {
-    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    mut pa := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
     mut sb := brand_probe_buf(pa)
     w0 := rt::push_str(sb, "#299 ")
     w1 := rt::push_str(sb, cls)
@@ -2687,7 +2687,7 @@ brand_probe_row := fn(cls : str, off : usize, src : ptr(u8)) {
 }
 brand_probe_summary := fn() {
   if brand_probe_open() {
-    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    mut pa := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
     mut sb := brand_probe_buf(pa)
     w0 := rt::push_str(sb, "#299 SUMMARY brands=")
     w1 := rt::push_int(sb, i64(SEMA_BRAND_DECLS))
@@ -4357,7 +4357,7 @@ expr_match_parts := fn(e : ptr(Expr)) -> MatchParts {
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MatchParts(is_match = false, scrut = unchecked bitcast(ptr(Expr), 0), head = 0) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MatchParts(is_match = false, scrut = unchecked bitcast(ptr(Expr), 0), head = unchecked bitcast(ptr(mut Arm), 0)) }
   }
 }
 
@@ -10667,7 +10667,7 @@ stmt_mentions_var := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : pt
 sema_comptime_cont_state := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> u8 {
   mut cur := head
   while cur != 0 {
-    if stmt_mentions_var(cur, src, xs, xl, a) { return 1 }
+    if stmt_mentions_var(unchecked bitcast(usize, cur), src, xs, xl, a) { return 1 }
     st := deref(stmt_p(Stmt, cur))
     match st {
       Stmt::Assign(ns, nl, v, nx) => {
@@ -12533,7 +12533,7 @@ stmt_uses_var_cons := fn(h : usize, src : ptr(u8), xs : usize, xl : usize, a : p
 stmts_use_cons := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut cur := head
   mut res := false
-  while cur != 0 { if stmt_uses_var_cons(cur, src, xs, xl, a) { res = true } ; cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a)) }
+  while cur != 0 { if stmt_uses_var_cons(unchecked bitcast(usize, cur), src, xs, xl, a) { res = true } ; cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a)) }
   res
 }
 
@@ -15428,7 +15428,7 @@ qh_probe_send := fn(in out sb : rt::StrBuf) {
 ## only thing keeping its fixture compiling.
 qh_probe_head := fn(src : ptr(u8), hs : usize, hl : usize, kinds : usize) {
   if qh_probe_open() {
-    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    mut pa := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
     rt::arena_init(pa, 4096)
     mut sb := rt::strbuf(pa, 1024)
     w0 := rt::push_str(sb, "#580 HEAD head=")
@@ -15440,7 +15440,7 @@ qh_probe_head := fn(src : ptr(u8), hs : usize, hl : usize, kinds : usize) {
 }
 qh_probe_row := fn(src : ptr(u8), hs : usize, hl : usize, off : usize) {
   if qh_probe_open() {
-    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    mut pa := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
     rt::arena_init(pa, 4096)
     mut sb := rt::strbuf(pa, 1024)
     w0 := rt::push_str(sb, "#580 UNRESOLVED head=")
@@ -15455,7 +15455,7 @@ qh_probe_row := fn(src : ptr(u8), hs : usize, hl : usize, off : usize) {
 }
 qh_probe_summary := fn() {
   if qh_probe_open() {
-    mut pa := rt::Arena(base = 0, off = 0, cap = 0)
+    mut pa := rt::Arena(base = unchecked bitcast(ptr(mut u8), 0), off = 0, cap = 0)
     rt::arena_init(pa, 4096)
     mut sb := rt::strbuf(pa, 1024)
     w0 := rt::push_str(sb, "#580 SUMMARY qualified=")
