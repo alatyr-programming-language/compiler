@@ -83,6 +83,15 @@ if [ "${1:-}" = "--self-test" ]; then
   bash "$ROOT/scripts/wildcard_arm_check.sh" --self-test
   _full_wildcard_self_test_rc=$?
   [ "$_full_wildcard_self_test_rc" = 0 ] || exit "$_full_wildcard_self_test_rc"
+  # The STRICT-FORMS decider's gate-of-the-gate (issue #691, the #600 rule), for the wildcard check's
+  # reason: on a tree that adds no strict form the check never reaches its own failure verdict. Every
+  # rule is refused by name on a planted addition, every escape marker is proved to work, and the
+  # controls (an unchanged tree, a removal and a move between files, acknowledged forms, forms quoted
+  # in prose and strings) must stay green — so an always-pass decider loses the plants, an always-fail
+  # decider loses the controls, and a scanner that stops skipping comments loses the prose control.
+  bash "$ROOT/scripts/strict_forms_check.sh" --self-test
+  _full_strict_self_test_rc=$?
+  [ "$_full_strict_self_test_rc" = 0 ] || exit "$_full_strict_self_test_rc"
   bash "$ROOT/scripts/land.sh" --self-test
   _full_land_self_test_rc=$?
   [ "$_full_land_self_test_rc" = 0 ] || exit "$_full_land_self_test_rc"
@@ -156,6 +165,27 @@ if [ -z "$wa_cover" ]; then
   echo "  (scripts/wildcard_arm_check.sh printed no 'base=' coverage line — what it counted is"
   echo "   unknown, treating as a failure)"
   fail=1; wa_cover="UNKNOWN — no coverage line"
+fi
+
+# The STRICT-FORMS check, lexical half (issue #691). A pure source scan like the wildcard check above,
+# for the same reasons and in the same place: no compiler, ~3 s, no oracle file — it counts the forms
+# AGENTS.md "Strict forms" retires in the MERGE BASE and in this tree and refuses an unacknowledged
+# increase per rule. It does not stop the gate. The typed half (implicit pointer crossings and null
+# sentinels, which need the checker's types) runs after the build, below.
+echo '### STRICT FORMS (lexical: unchecked, kind literals, inline `?` values) ###'
+SF_LOG="$LOGDIR/full_strict_forms.log"
+bash scripts/strict_forms_check.sh > "$SF_LOG" 2>&1
+sf_rc=$?
+grep -E "^(strict forms|\*\*\* strict forms|    )" "$SF_LOG"
+sf_cover="$(grep -E "^strict forms: base=" "$SF_LOG" | tail -1 | sed 's/^strict forms: //')"
+if [ "$sf_rc" != 0 ]; then
+  echo "  FAILURES (from $SF_LOG):"; grep -E "^strict forms: FAIL|^    \+ " "$SF_LOG" | head -20 | sed 's/^/    /'
+  fail=1
+fi
+if [ -z "$sf_cover" ]; then
+  echo "  (scripts/strict_forms_check.sh printed no 'base=' coverage line — what it counted is unknown,"
+  echo "   treating as a failure)"
+  fail=1; sf_cover="UNKNOWN — no coverage line"
 fi
 
 echo "### FIXPOINT ###"
@@ -290,6 +320,29 @@ if ! grep -qE "^  NEGATIVE fixture \(explicit bitcasts only\): check rc=0 rows=0
   fail=1
 fi
 
+# The STRICT-FORMS check, typed half (issue #691). `p == 0` with `p : ptr(T)` is invisible to a
+# tokenizer, and the checker already names it: the #529 instrument writes each implicit usize<->ptr
+# crossing to fd 98. The Stage2 compiler checks the MERGE BASE and this tree (the base from its own
+# extraction, with the compiler copied into its target/ so it reads the base lib/) and refuses a new
+# implicit crossing, or a new null sentinel counting explicit and implicit forms together. Its planted
+# proof runs first: a new `p != 0` must add a row and its explicit twin must not, or the count is blind.
+echo "### STRICT FORMS (typed: implicit pointer crossings and null sentinels) ###"
+ST_LOG="$LOGDIR/full_strict_typed.log"
+bash scripts/strict_forms_check.sh --typed-self-test > "$ST_LOG" 2>&1
+st_st_rc=$?
+bash scripts/strict_forms_check.sh --typed >> "$ST_LOG" 2>&1
+st_rc=$?
+grep -E "^(strict forms typed|\*\*\* strict forms typed|strict forms: FAIL|    \+ )" "$ST_LOG"
+st_cover="$(grep -E "^strict forms typed: base=" "$ST_LOG" | tail -1 | sed 's/^strict forms typed: //')"
+if [ "$st_st_rc" != 0 ] || [ "$st_rc" != 0 ]; then
+  echo "  FAILURES (from $ST_LOG): typed self-test rc=$st_st_rc, typed check rc=$st_rc"
+  fail=1
+fi
+if [ -z "$st_cover" ]; then
+  echo "  (scripts/strict_forms_check.sh --typed printed no 'base=' coverage line — treating as a failure)"
+  fail=1; st_cover="UNKNOWN — no coverage line"
+fi
+
 # The CROSS-BACKEND report (#683). Like the idiom gate it needs no compiler — it is a join over
 # scripts/corpus.manifest, which the CORPUS stage above has already checked against the tree on this
 # same run — so it cannot collide with another lane over target/debug/alatyr.
@@ -359,6 +412,8 @@ elif [ "$sw_status" = "RAN" ]; then
   echo "*** FULL GATE: GREEN (sweeps RAN) ***"
   echo "    corpus enum:     $ce_cover"
   echo "    wildcard arms:   $wa_cover"
+  echo "    strict forms:    $sf_cover"
+  echo "    strict typed:    $st_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
@@ -368,6 +423,8 @@ else
   echo "    landing any change that can reach a backend. ***"
   echo "    corpus enum:     $ce_cover"
   echo "    wildcard arms:   $wa_cover"
+  echo "    strict forms:    $sf_cover"
+  echo "    strict typed:    $st_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
