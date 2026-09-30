@@ -160,6 +160,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   SIGSEGV and no diagnostic: their scan for a local's struct type took the later reassignment as a type
   source and followed `a -> b -> a` until the stack overflowed. Only a local's declaration gives it a
   type now (for an uninitialized `name : T`, its annotation), as the language fixes it there.
+- **A call whose arguments hold an enum-returning call beside another unnamed aggregate now builds on
+  x86_64 (#772).** `g(mk(), mk())` with `mk` returning an enum, or the same call with a constructor or a
+  struct-returning call as the other argument, was refused with "aggregate-value call-arg temp pool
+  overflow": the frame's pool of temporary argument blocks was sized by a scan that did not count an
+  enum-returning call. The pool has no fixed size any more (#801): the emission records the blocks it
+  really takes, and a function that needs more than the scan placed is emitted again with a pool that
+  holds them. Every function that built before keeps its exact frame.
 
 ## 0.2.5 — 2026-09-30
 

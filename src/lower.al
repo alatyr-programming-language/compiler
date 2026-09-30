@@ -3655,13 +3655,21 @@ comp_agg_elem_parts := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> CompA
 
 ## Allocate the next `agg_w`-word slice of the aggregate-value temp pool (bump allocator) and return its
 ## base slot offset. `emit_call_args` save/restores `cx.agg_next` around a call's args so successive
-## aggregate args in one call get DISTINCT slices (no aliasing — §8) and a nested call stacks above. A
-## bump past the reserved pool aborts loudly (never a silent miscompile). Only called when a pool exists
-## (`cx.agg_tmp >= 0`, so `agg_next >= 0`).
+## aggregate args in one call get DISTINCT slices (no aliasing — §8) and a nested call stacks above.
+## Only called when a pool exists (`cx.agg_tmp >= 0`, so `agg_next >= 0`).
+## THIS is the one place that decides how many pool words a function needs (#772, #801): it records the
+## high-water mark in `cx.agg_peak` and never refuses. There used to be a limit here, `agg_end`, set from
+## a separate pre-emission scan (`scan_agg_arg_*`), and every shape where that scan and this allocator
+## disagreed was a valid program refused with "call-arg temp pool overflow" — #711, #772 and the 34
+## progen seeds. Now a block past the reservation is simply taken; `emit_fn` sees `agg_peak` past the
+## reserved words after the body, discards that emission and emits the function again with the pool
+## widened to `agg_peak`. The scan still places the pool's first words (the frame layout it gives is
+## the one every existing function keeps), but it no longer bounds anything.
 agg_alloc := fn(cx : ptr(LCtx)) -> i64 {
   off := cx.agg_next
-  if off + cx.agg_w > cx.agg_end { panic("selfhost: aggregate-value call-arg temp pool overflow (too many or too deeply nested aggregate-value arguments in one call)") }
-  cx.agg_next = off + cx.agg_w
+  top := off + cx.agg_w
+  cx.agg_next = top
+  if top > cx.agg_peak { cx.agg_peak = top }
   ## §4 UP-GROWING: return the TOP of the agg_w-wide slice as the block base (word 0), so
   ## emit_*_assign writes word w at `base - w` and emit_agg_base_addr(base) yields word 0 (lowest addr).
   off + cx.agg_w - 1
@@ -26126,7 +26134,7 @@ mut IRRD_OK : bool = true
 ## body, epilogue) reusing the text path's mangling / SysV convention. Only called for a fn the predicate
 ## has accepted, and only when `RA_ON`. Builds its OWN slots + a minimal `LCtx` (needed by the signedness
 ## queries `is_signed_expr` / `is_unsigned_cmp`); the register-resident values do NOT use the slot frame.
-emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx), in out nl : usize) {
+emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx), in out nl : usize, pool_floor : usize) -> AggPoolFit {
   mut slots := SVec(base = 0, len = 0, cap = 0, arena = p.mar)
   svec_new(slots, p.mar, 32)
   mut ir_cts := SVec(base = 0, len = 0, cap = 0, arena = p.mar)
@@ -26143,7 +26151,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   ## MEGASHAPE SCRATCH POOLS (only when the fn has GENERAL BARRIERS, IRP_NGBAR>0 — set by the just-run
   ## predicate). A barrier text-splices a statement (`fmt::print(…)`, the build calls) whose emit needs the
   ## SAME scratch the text `emit_fn` reserves: enum-match staging (`tslot`), str-literal-arg blocks
-  ## (`str_tmp`), the aggregate-arg pool (`agg_tmp`/`agg_next`/`agg_end`), and `@inline` expansion scratch.
+  ## (`str_tmp`), the aggregate-arg pool (`agg_tmp`/`agg_next`/`agg_peak`), and `@inline` expansion scratch.
   ## Reserved via the SAME scans/sizes as `emit_fn`, so a spliced print's segment {ptr,len} lands in real
   ## frame words — NOT on the saved %rbp / return address (the segfault when these stayed -1). A barrier-free
   ## scalar-leaf fn (IRP_NGBAR==0) keeps every pool at -1/0 → its frame is byte-identical (fixpoint-neutral).
@@ -26152,7 +26160,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   mut ir_agg_tmp := 0 - 1
   mut ir_inl_tmp := 0 - 1
   mut ir_agg_next := 0 - 1
-  mut ir_agg_end := 0 - 1
+  mut ir_agg_words : usize = 0
   mut ir_agg_w := 0
   mut ir_swidth := 2
   if IRP_NGBAR > 0 {
@@ -26174,8 +26182,9 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
     aggpeak := imax(scan_agg_arg_stmts(p.src, p.decls, d.body_stmts, deref(p.mar)), scan_agg_arg_expr(p.src, p.decls, d.value, deref(p.mar)) + agg_unbound_sret_block(p.src, p.decls, d.value, deref(p.mar)))
     aggblocks := imax(1, aggpeak)
     ir_agg_next = i64(svec_len(ptr(slots)))
-    aggpoolw := aggblocks * ir_agg_w
-    ir_agg_end = ir_agg_next + i64(aggpoolw)
+    ## At least the words an earlier emission of this same function measured (`pool_floor`, #772).
+    aggpoolw := imax(aggblocks * ir_agg_w, pool_floor)
+    ir_agg_words = aggpoolw
     for i in 0..aggpoolw { svec_push(slots, SlotEntry(ns = 0, nl = 0, off = svec_len(ptr(slots)), sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false)) }
     ir_agg_tmp = ir_agg_next
     if ir_agg_w > 0 { ir_agg_tmp = ir_agg_next + i64(ir_agg_w) - 1 }
@@ -26187,7 +26196,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
       ir_inl_tmp = i64(ib) + i64(inl_reserve) - 1
     }
   }
-  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = ir_agg_next, agg_end = ir_agg_end, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
   cxv.fn_id = di
   cxv.ctslots = ptr(ir_cts)
   cx := ptr(cxv)
@@ -26348,6 +26357,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
     ri = ri + 1
   }
   push_str(sb, "  movq %rbp, %rsp\n  popq %rbp\n  ret\n")
+  agg_pool_fit(cxv.agg_peak, ir_agg_next, ir_agg_words)
 }
 
 ## ---- The SCALAR-LEAF shape predicate --------------------------------------------------------
@@ -26441,7 +26451,51 @@ emit_csreg_moves := fn(in out sb : strbuf::StrBuf, base : usize, save : bool) {
     }
   }
 }
+
+## #772 / #801 — what one emission of a function found about its aggregate-value temp pool. `Held`:
+## every block `agg_alloc` took lies inside the words the emission reserved. `Outgrew(w)`: the blocks
+## reached `w` pool words, more than were reserved, so that emission's text overlaps the frame slots
+## laid out after the pool and must not be kept.
+AggPoolFit := enum { Held, Outgrew(usize) }
+
+## The one question both emitters ask after the body: did the blocks stay inside the reservation?
+## `peak` is `LCtx.agg_peak` (the high-water slot), `base` the pool's first slot, `reserved` its words.
+## A function with no pool has `peak == base` (nothing was taken), so it always holds.
+agg_pool_fit := fn(peak : i64, base : i64, reserved : usize) -> AggPoolFit {
+  used : i64 = peak - base
+  if used > i64(reserved) { return AggPoolFit.Outgrew(usize(used)) }
+  AggPoolFit.Held
+}
+
+## Emit one function. The aggregate-value temp pool is sized by the emission itself (#772, #801): the
+## first emission reserves what the pre-emission scan places there and `agg_alloc` records every block
+## it really takes. If they went past the reservation, that text is dropped (`sb` and the label counter
+## rewind to where this function began) and the function is emitted again with the pool widened to
+## exactly the measured words. The size therefore comes from the same walk that uses it, so the two
+## cannot disagree: emission does not read the pool's size, only its base, so the second emission
+## takes the same blocks as the first and fits. It is re-emitted only when it outgrew the first
+## reservation, so every function that built before keeps its exact frame and text (fixpoint-neutral).
 pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx), in out nl : usize) {
+  start := sb.len
+  nl_start := nl
+  first : AggPoolFit = emit_fn_pool(d, di, sb, p, nl, 0)
+  match first {
+    AggPoolFit::Held => {}
+    AggPoolFit::Outgrew(w) => {
+      sb.len = start
+      nl = nl_start
+      again : AggPoolFit = emit_fn_pool(d, di, sb, p, nl, w)
+      match again {
+        AggPoolFit::Held => {}
+        AggPoolFit::Outgrew(_w2) => { panic("selfhost: internal — a function emitted again with its measured aggregate-temp pool took more pool words than the first emission measured") }
+      }
+    }
+  }
+}
+
+## `emit_fn`'s body. `pool_floor` is the pool words an earlier emission of this same function measured
+## (0 on the first emission); the pool reserves at least that many.
+emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx), in out nl : usize, pool_floor : usize) -> AggPoolFit {
   ## Module-global references inside this body resolve in the declaration's module, exactly like a
   ## bare function call. This must be established before slot/type collection because those passes
   ## also inspect global initializers to classify array and aggregate places.
@@ -26469,8 +26523,8 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## already rejects it — a defer's cleanup is a call, and a leaf has none — so the extra guard is a
   ## belt-and-braces net; `and` short-circuits so a defer-free fn never runs the scan.)
   if RA_ON == 1 and is_scalar_leaf_shape(d, p) and fn_abi_c == false and (stmts_have_defer(d.body_stmts, p.src, deref(p.mar)) == false) {
-    emit_fn_ir(d, di, sb, p, nl)
-    return
+    ir_fit : AggPoolFit = emit_fn_ir(d, di, sb, p, nl, pool_floor)
+    return ir_fit
   }
   ## the name→slot map: params at slots 0..arity (in declaration order, from the arena-linked
   ## `Param` list), then the body's distinct locals (a struct local reserves its base + field
@@ -26660,6 +26714,9 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## aggregate-VALUE args in any single call (a §4 ABI requirement: N such args in one call need N
   ## distinct blocks or they alias — §8). The pool is `imax(1, aggpeak)` blocks (so ≥ one block for the
   ## single-arg / global-aggregate case — byte-identical for the ≤1-agg-arg fns the self-host build uses).
+  ## That block count is a PLACEMENT, not a capacity (#772, #801): when the body takes more blocks than
+  ## `aggpeak` predicted, `agg_alloc` measures them and `emit_fn` emits this function again with the pool
+  ## widened (`pool_floor`), so an under-count costs one re-emission instead of refusing the program.
   agg_tmp_base := i64(svec_len(ptr(slots)))
   ## AGGREGATE width is per-function: only materializations reachable from this body/value path can
   ## consume this function's pool. `aggpeak` remains the independent nested-call block-count scan.
@@ -26675,7 +26732,9 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## the emitted frame stays byte-identical for the self-host build → fixpoint-neutral. `src/`+`lib/`
   ## declare no wide-ENUM-returning fn at all, so the enum half never fires there.
   if aggpeak > 0 and (fn_returns_sret(d, p.decls, p.src, deref(p.mar)) or fn_returns_enum_sret(d, p.decls, p.src, deref(p.mar))) { aggblocks = aggblocks + 1 }
-  aggpoolw := aggblocks * aggw
+  ## At least the words an earlier emission of this same function measured (`pool_floor`, #772): the
+  ## scan above only places the first words; `agg_alloc` measures what the body really takes.
+  aggpoolw := imax(aggblocks * aggw, pool_floor)
   for i in 0..aggpoolw {
     so := svec_len(ptr(slots))
     svec_push(slots, SlotEntry(ns = 0, nl = 0, off = so, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
@@ -26849,7 +26908,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## this branch never fires for the self-host build (byte-identical → the TOOL-1 fixpoint holds).
   if fn_is_naked(p.src, d.name_start, d.name_len) {
     push_str(sb, ":\n")
-    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = -1, agg_end = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
     ncx.fn_id = di
     ncx.ctslots = ptr(ct_slots)
     emit_stmts(d.body_stmts, sb, ptr(ncx), nl)
@@ -26857,7 +26916,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
     ## naked fn that is the closing `ret()` / `syscall()`. Emit it as a raw instruction too (a non-raw
     ## trailing expr in a naked fn is undefined and emits nothing).
     if is_raw_instr_call(d.value, p.src, deref(p.mar)) { emit_raw_instr(d.value, sb, ptr(ncx), deref(p.mar)) }
-    return
+    return AggPoolFit.Held
   }
   push_str(sb, ":\n  pushq %rbp\n  movq %rsp, %rbp\n  subq $")
   push_int(sb, i64(frame))
@@ -27099,7 +27158,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## §4 UP-GROWING: a temp-pool BLOCK's base is its word-0 = the TOP of the block (lowest address), so
   ## direct uses / str_arg_tmp_off address word k at `base - k` inside the reservation. str_tmp block 0
   ## top = base+1 (2-word blocks; str_arg_tmp_off's `+ j*2` then lands on block j's top). agg_tmp block 0
-  ## top = base+aggw-1. (agg_next/agg_end stay at the pool BOTTOM: agg_alloc returns off+agg_w-1 itself.)
+  ## top = base+aggw-1. (agg_next/agg_peak start at the pool BOTTOM: agg_alloc returns off+agg_w-1 itself.)
   mut str_tmp_top := str_tmp_base
   if str_tmp_base >= 0 { str_tmp_top = str_tmp_base + 1 }
   mut agg_tmp_top := agg_tmp_base
@@ -27112,7 +27171,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## push/drain ops are skipped and the emitted tree gas stays byte-identical (the TOOL-1 fixpoint is
   ## neutral). `defer_sp` starts at 0: the fn body has NO frame, only nested blocks push.
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
-  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = agg_tmp_base, agg_end = agg_tmp_base + aggpoolw, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
   cx.fn_id = di
   cx.ctslots = ptr(ct_slots)
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)
@@ -27196,6 +27255,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   emit_csreg_moves(sb, cs_save_base, false)
   push_str(sb, "  movq %rbp, %rsp\n  popq %rbp\n  ret\n")
   sf := 0
+  agg_pool_fit(cx.agg_peak, agg_tmp_base, aggpoolw)
 }
 
 ## GENERICS tier — the MONOMORPHIZATION instantiation set. One entry = a distinct (generic

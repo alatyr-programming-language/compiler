@@ -8590,6 +8590,12 @@ run slice_field_struct 30
 ## nesting, so it aborted loudly. Now `own + deepest arg subtree`, mirroring a64's tree-wide count — all four
 ## backends MATCH (a64 already handled the nesting, which is what identified the fix).
 run sret_nested_call_arg 18
+## #772/#801: an enum-returning call argument beside a second aggregate temporary (`gee(mk0(), mk0())`,
+## a constructor, a struct-returning call) and the same nested five calls deep. The pool of temporary
+## blocks was sized by a scan that did not count the enum-returning call, and x86_64 refused the build;
+## the pool is now sized by what the emission takes. Parent: build refused (rc 1) on both.
+run agg_pool_enum_call_args 99
+run agg_pool_deep_enum_call_args 103
 check_accept str_field_struct
 ## §4 layout: an array field inside a mutable-global struct — element read/write + a scalar field
 ## after it (word-offset shift), with the array field laid out in .data as its element cells.
