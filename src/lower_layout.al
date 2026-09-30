@@ -2546,9 +2546,11 @@ pub shift_width_bits := fn(nw : str) -> i64 {
 ## parameter must hand over the ELEMENT's address, not its first word (#683: aarch64 and riscv64 passed
 ## word 0 of `ps[0]` as the pointer and the callee dereferenced 1 — SIGSEGV).
 pub callee_param_is_aggregate := fn(decls : ptr(rt::Vec), src : ptr(u8), params : usize, idx : i64) -> bool {
+  ## unchecked-ok: the emit twins carry a callee's `params_head` as a usize word; it was a ptr(mut Param)
   mut p := unchecked bitcast(ptr(mut Param), params)
   mut i := 0
-  while p != 0 {
+  ## null-ok: Param.next — a parameter list ends in a null link (ast.al)
+  while unchecked bitcast(usize, p) != 0 {
     pm := deref(param_p(p))
     if i == idx {
       bn := base_type_name(src, pm.ts, pm.tl)
