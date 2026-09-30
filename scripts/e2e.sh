@@ -6475,6 +6475,37 @@ emit_reject_has riscv64 issue788_nonexh_int_lits_value "type mismatch at line 5"
 check_accept issue788_exhaustive_controls
 run issue788_exhaustive_controls 42
 check_accept issue788_exhaustive_deref_addr_field
+# Issue #805 / Control Flow §5.1/§5.4 — #788's residual shapes: a `char` with literal arms only, an
+# element of a COPIED array (`ys := xs`) and of a struct FIELD array (`h.arr[i]`), and range lists that
+# stop short of a 64-bit width (`u64`, `usize`, `i64`). Every one passed `check` on the parent, and the
+# ones that build delivered 0 from a value no arm covers. The needle names the `match` line.
+build_reject_has issue805_nonexh_char "type mismatch at line 4"
+check_reject issue805_nonexh_char
+build_reject_has issue805_nonexh_index_copy "type mismatch at line 7"
+check_reject issue805_nonexh_index_copy
+build_reject_has issue805_nonexh_index_field "type mismatch at line 8"
+check_reject issue805_nonexh_index_field
+build_reject_has issue805_nonexh_u64_range "type mismatch at line 4"
+check_reject issue805_nonexh_u64_range
+build_reject_has issue805_nonexh_usize_range "type mismatch at line 3"
+check_reject issue805_nonexh_usize_range
+build_reject_has issue805_nonexh_i64_range "type mismatch at line 4"
+check_reject issue805_nonexh_i64_range
+# A reject fixture proves only the x86 surface (AGENTS.md): the three non-x86 emitters are asked
+# directly for the field-array element and the `u64` range.
+emit_reject_has wat issue805_nonexh_index_field "type mismatch at line 8"
+emit_reject_has aarch64 issue805_nonexh_index_field "type mismatch at line 8"
+emit_reject_has riscv64 issue805_nonexh_index_field "type mismatch at line 8"
+emit_reject_has wat issue805_nonexh_u64_range "type mismatch at line 4"
+emit_reject_has aarch64 issue805_nonexh_u64_range "type mismatch at line 4"
+emit_reject_has riscv64 issue805_nonexh_u64_range "type mismatch at line 4"
+# Over-rejection controls: `char` with `_`, a complete field-array element match and full `i64`
+# ranges run; full `u64`/`usize` ranges and a complete `ys := xs` element match pass `check` (their
+# run-time halves are #806 and a lowering refusal, respectively).
+check_accept issue805_exhaustive_controls
+run issue805_exhaustive_controls 42
+check_accept issue805_exhaustive_wide_ranges
+check_accept issue805_exhaustive_index_copy
 # Issue #716 — a `match` arm naming an enum variant, over a scrutinee whose enum type the x86_64
 # lowering cannot see, compared against tag 0: the first variant matched by coincidence and every
 # other took no arm. The three built and ran to 1 on the parent; each is now a located refusal. The
