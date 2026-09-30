@@ -12848,6 +12848,9 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
 ## -1 = not a user conversion; the call is left exactly as it was.
 pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, a0 : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt)) -> i64 {
   if nargs != 1 or unchecked bitcast(usize, a0) == 0 { return 0 - 1 }
+  ## conv_kind answers a builtin-lattice INDEX, and -1 for "not a builtin"; its Option(i64) form belongs
+  ## with the #583 conversion of its other callers.
+  ## kind-literal-ok: an index with a -1 absence, not a kind tag (see above)
   if conv_kind(str_at((src + cs), cl)) < 0 {
     cnt := rt::vec_len(deref(decls))
     mut i := 0
@@ -12880,7 +12883,8 @@ twin_operand_aggregate := fn(e : ptr(Expr), params_head : ptr(mut Param), body_h
   vn := var_name_span(e)
   if vn.n == 0 { return false }
   mut p := params_head
-  while p != 0 {
+  ## null-ok: Param.next — a parameter list ends in a null link (ast.al)
+  while unchecked bitcast(usize, p) != 0 {
     pm := deref(param_p(p))
     if streq(src, pm.ns, pm.nl, vn.s, vn.n) {
       if lower_layout::param_tuple_open_at(src, pm.ns, pm.nl) >= 0 { return true }
@@ -12890,6 +12894,7 @@ twin_operand_aggregate := fn(e : ptr(Expr), params_head : ptr(mut Param), body_h
   }
   d := lower_layout::local_decl_assign(body_head, src, vn.s, vn.n)
   mut r := false
+  ## null-ok: local_decl_assign answers a null Stmt when the name has no flat local declaration
   if unchecked bitcast(usize, d) != 0 {
     st := deref(stmt_p(Stmt, d))
     match st {
