@@ -6,6 +6,7 @@ measurement of the four emitters as they stand at `a46b5bc`, proposes one interm
 the fixpoint intact at every step. Tracking issue: #683.
 
 Contents: [1 Why](#1-why) · [2 Measurement](#2-measurement) · [3 The IR](#3-the-ir) ·
+[3.8 Signedness as a value attribute](#38-signedness-and-width-are-attributes-of-the-value-derived-once) ·
 [4 How each construct lowers](#4-how-each-construct-lowers) · [5 The verifier](#5-the-verifier) ·
 [6 How the four targets consume it](#6-how-the-four-targets-consume-it) ·
 [7 Migration plan](#7-migration-plan) · [8 Decisions for the owner](#8-decisions-for-the-owner) ·
@@ -288,6 +289,28 @@ selector ever infers signedness, and there is no "unknown" default to drift.
   address-taken scalars, spill-proof temporaries, sret buffers. `addr $k` yields their address.
 - **Globals and rodata** are symbols with a layout; `addr @sym` yields their address.
 
+**Aggregate temporaries are frame objects, one per use, never a shared pool.** Every aggregate value
+the program creates without naming it gets **its own** frame object, sized from `lower_layout` when
+the IR is built: a constructor in argument position, a call's aggregate result (the sret buffer), a
+`match` scrutinee that is a call, a returned `Result(S, E)` staged before dispatch. A temporary lives
+for the statement that creates it; a nested constructor inside another constructor's argument is a
+**different** object, built before the outer one reads it. Today's emitters use shared staging areas
+instead — wasm's single `$__tmp` block, the twins' aggregate staging, x86's "aggregate-value call-arg
+temp pool" and fixed-size scratch — and three open defects are exactly that:
+
+- **#769** — `g(S(a = 42, b = g(S(a = 7, b = 9))))` answers the *inner* constructor on
+  aarch64/riscv64/wasm (and the enum form on wasm): the inner constructor reuses the outer one's
+  staging area before the outer call reads it. Distinct frame objects make the overwrite impossible.
+- **#771** — x86_64 stages a 3+-word `Result(S, E)` returned into a `match` into scratch that is too
+  small, and the excess words land on a neighbouring local. In the IR the staging object's size is the
+  layout's size by construction, and verifier rule V6 (every access lies inside its frame object) turns
+  any mismatch into a located build error instead of a clobbered local.
+- **#772** — x86_64 refuses `g(mk(), g(E.A(1), 42))` with "aggregate-value call-arg temp pool
+  overflow": a fixed pool, not a language limit. Frame objects have no pool to overflow.
+
+The frame size is the sum of the objects a function needs (a selector may overlap objects whose
+statements do not overlap — that is placement, spec `90-codegen.md` §3.3, never semantics).
+
 ### 3.4 Operations
 
 Arithmetic ops carry a **mode**, which is where the checked/unchecked decision lives:
@@ -356,6 +379,53 @@ IR signature onto registers or wasm params:
 During the migration an IR-built function and a legacy-emitted function must be able to call each
 other, so each selector adopts **its target's existing convention** for every signature class it
 supports; the convention is unified only when the last legacy caller of that class is gone.
+
+### 3.8 Signedness and width are attributes of the value, derived once
+
+Today signedness is decided **by the shape of the expression**, separately in each emitter: a bare
+typed name is recognised, and anything else — a call result, a struct field, an `if`/`match`
+expression, `unchecked` arithmetic, a literal-only expression — falls to that emitter's default. The
+program generator (#776) found the family this produces, and every member is the same mechanism:
+
+| issue | shape whose signedness is lost | backends wrong |
+|---|---|---|
+| #725 (closed by a local fix) | signed **call result** as a dividend (`f() / 9`) | aarch64, riscv64, wasm |
+| #764 | signed `/`/`%` whose dividend is `unchecked` arithmetic, an `if`, or literal-only (`(0 - 7) % 9`) | all four for three shapes, x86_64 for a fourth |
+| #765 | signed **struct field** as an operand (`s.k / 9`) | aarch64, riscv64, wasm |
+| #766 | `u64` ordering over an `if`/`match` expression or literal-only `unchecked` arithmetic | three shapes on all four, two on the twins |
+| #707 | signedness of an **array element** of a global or a struct field | aarch64, riscv64, wasm (WRONG-VALUE rows) |
+
+The local fix for #725 taught one emitter one more shape; the next shape was already waiting. The IR
+removes the question instead:
+
+1. **The type of every expression is decided once, by sema**, and recorded in a side table keyed by the
+   expression node (slice 0a). That includes the contextual type of a literal-only expression — a
+   comptime number takes the type its context gives it (spec `20-types.md` §2.3), which is exactly
+   what #764's `(0 - 7) % 9` needs — and the types of call results, fields, elements and
+   `if`/`match` values.
+2. **The builder copies it onto the IR value** (`i64 s`, `u64 u`, `i8 s`, …) and never looks at the
+   expression's shape. A value's signedness and width flow with the value through `if`/`match` region
+   results, `unchecked`, calls and loads; nothing can "forget" them, because nothing re-derives them.
+3. **Every signedness-dependent op spells `s`/`u`**, and verifier rule V4 checks it against its
+   operands' recorded signedness.
+4. **There is no default.** An expression sema left untyped is `NotYet(untyped expression)` in the
+   builder (the function falls back and the census counts it); it is never "signed unless proven" or
+   "unsigned unless proven".
+5. **A differential census comes for free.** Once sema records types (slice 0a, before any emission
+   change), a reporting script can compare, for every `/ % >> < <= > >=` in the corpus, `lib/` and
+   `src/`, sema's recorded signedness against what each legacy emitter's shape inference answers. Every
+   disagreement is a #764-class wrong value found mechanically instead of by a generator's luck.
+
+**What slice 1 closes structurally.** Slice 1 (scalar core) consumes the recorded type, so on the three
+twins it closes the scalar shapes of the family: **#764** (all dividend shapes are scalar), **#766**'s
+`if`/`unchecked`/literal-only shapes, and the call-result shape of **#725** for good. **#766**'s
+`match`-expression shape closes with slice 4 (the `match` value is built there), **#765** and **#707**
+with slice 3 (field and element loads carry the layout's declared type). x86_64 does not move to the
+IR until slice 9, so slice 1 also includes one legacy change: **x86's `is_signed_expr` /
+`is_unsigned_expr` / `is_unsigned_cmp` answer from sema's side table** and lose their shape-based
+fallback. That closes #764 and #766 on x86_64 at the same time as on the twins. If the compiler's own
+source contains an affected shape its GAS moves and a seed promotion is owed; slice 0a's differential
+census says in advance whether it does.
 
 ---
 
@@ -451,9 +521,12 @@ selector instead of one more emitter.
    bodies, per *statement* through barriers in the style of `src/lower/ir.al`: the selector stores live
    vregs back to the legacy emitter's name-keyed frame slots, lets the legacy emitter print one
    statement, and resumes.
-3. **x86_64's default emission does not move until the flip (7.4).** Until then x86 goes through the IR
-   only on an opt-in dev path (D5), so the compiler's own GAS — and therefore
-   `seed == Stage1 == Stage2` — is untouched by slices 0–8. The twins are free to change, because the
+3. **x86_64's default emission does not move until the flip (7.4)** — with one exception, slice 1's
+   signedness queries answering from sema's side table (§3.8). Otherwise x86 goes through the IR only
+   on an opt-in dev path (D5), so the compiler's own GAS — and therefore
+   `seed == Stage1 == Stage2` — is untouched by slices 0–8 unless slice 0a's signedness census shows
+   the compiler's own source has a #764-class shape (then slice 1 owes one promotion, and the census
+   says so before it starts). The twins are free to change, because the
    compiler is built for x86 only.
 4. **Measured predictions.** Every slice PR states, before its gate, the exact manifest rows it expects
    to move (joined on `(backend, path)`) and that no other row moves. Twin rows moving from a
@@ -480,12 +553,12 @@ can claim its share exactly.
 
 | # | slice | builder + selectors | expected to eliminate | deletes (when the census allows) |
 |---|---|---|---|---|
-| **0a** | IR core, inert | `src/ir.al` (types, ops, arena-backed storage — no fixed capacities), printer, verifier, a builder that answers `NotYet` for everything; sema records each expression's resolved type in a side table; `ir_census.sh`; trap comments name their construct | nothing: x86 GAS byte-identical (fixpoint holds), twin output differs only in trap comments (manifest identical). Deliverable: the census's first column, and the split of the catch-all | – |
+| **0a** | IR core, inert | `src/ir.al` (types, ops, arena-backed storage — no fixed capacities), printer, verifier, a builder that answers `NotYet` for everything; sema records each expression's resolved type (width, signedness, contextual literal types) in a side table; `ir_census.sh`; the signedness differential census (§3.8); trap comments name their construct | nothing: x86 GAS byte-identical (fixpoint holds), twin output differs only in trap comments (manifest identical). Deliverable: the census's first column, and the split of the catch-all | – |
 | **0b** | one front half | the twin verbs run the x86 front half — sema over the emitted tree (fixing the cache aliasing that forced the separate run), `when` folding for the real target, the mono worklist, package roots through the package pipeline | the package-root rows: **138 LINK + 70 ASSEMBLE = 208 rows** (69–70 paths); part of ACCEPTS where a twin now meets the same front-half refusal | the twins' private front-end glue in `d_compile_file_multi` |
-| **1** | scalar integer core + control flow | all integer widths, `wrap`/`chk`/`hw`, `ext`/`fit`, conversions, shifts, compares, short-circuit `and`/`or`/`not`, `if`, `while`, `loop`, range `for`, labeled `break`/`continue` with values, `return`, scalar locals/params/globals/consts, direct scalar calls, `unchecked`; wasm's `& 255` exit byte | WRONG `unchecked_narrow_shift_wrap` (3 rows); MISSING-TRAP `checked_index_overflow`, `checked_index_bind_ovf`, `checked_narrow_shift_oob` (6 rows) and their wasm LOUD rows (3); LOUD `unchecked_sub_ovf`, `int_literal_float_context_f32` (2); scalar-CF traps (7); the value-`loop` part of the catch-all; the four `unchecked` division paths (8 rows) **if** D1 says they must agree; not in the corpus: #764, #766, #777 | – (the scalar arms stay while legacy statements reach them) |
+| **1** | scalar integer core + control flow | all integer widths, `wrap`/`chk`/`hw`, `ext`/`fit`, conversions, shifts, compares, short-circuit `and`/`or`/`not`, `if`, `while`, `loop`, range `for`, labeled `break`/`continue` with values, `return`, scalar locals/params/globals/consts, direct scalar calls, `unchecked`; wasm's `& 255` exit byte; signedness and width as value attributes from sema's side table, and x86's legacy signedness queries answering from the same table (§3.8) | WRONG `unchecked_narrow_shift_wrap` (3 rows); MISSING-TRAP `checked_index_overflow`, `checked_index_bind_ovf`, `checked_narrow_shift_oob` (6 rows) and their wasm LOUD rows (3); LOUD `unchecked_sub_ovf`, `int_literal_float_context_f32` (2); scalar-CF traps (7); the value-`loop` part of the catch-all; the four `unchecked` division paths (8 rows) **if** D1 says they must agree; structurally, on all four backends: #764, #766 (`if`/`unchecked`/literal shapes), #725's call-result shape; and #777 | – (the scalar arms stay while legacy statements reach them) |
 | **2** | calls, ABI, symbols | the Alatyr convention (scalar, aggregate-by-address, sret), `call_c` with per-target C ABI, `syscall`, one mangling (module, overload, operator, instance tag) | syscall: **242 LINK + 109 TRAP = 351 rows**; the overload/operator ASSEMBLE rows (#475); twins' first-name-match wrong-callee risk; wasm `unknown import` LOUD rows (3) per D4 | twins' `*_callee_defined`/`*_emit_bl_target`, wasm's two copies of the overload suffix |
-| **3** | aggregates, places, layout | frame objects, field/index/deref places, `copy`/`zero`, bounds, aggregate literals, `str`/slices as two-word aggregates, `@endian`/`@offset`/`@packed`/`@repr`, `size(T)`/`align(T)`; statement barriers begin | aggregate-place **512 rows**; `size(T)` **81 rows**; WRONG `endian_struct`, `endian_offset_struct`, `packed_attr_param`, `fmt_agg_body_comment`, `signedness_global_array`, `signedness_struct_field_array`, `slice_field_compare` (19 rows); CRASH `agg_arr_elem_arg`, `sret_discard_statement` (3); catch-all `StructLit`/`ArrayLit`/`StrLit`/`Slice`/`AddrOf`/`Deref` share; #765, #769, #773 | twins' `*_operand_signed_dep` field paths, sret stores, byte-tier helpers |
-| **4** | enums, `match`, `?` | tags and payloads, `switch`, payload binding, range arms, `?` by declaration | `match` **174 rows**; enums **39 rows**; catch-all `EnumLit`/`Try` share; `comptime_enum_eq` CRASH if it is the tag path | `emit_*_match_arms`, `wat_try_success_disc` |
+| **3** | aggregates, places, layout | frame objects, field/index/deref places, `copy`/`zero`, bounds, aggregate literals, `str`/slices as two-word aggregates, `@endian`/`@offset`/`@packed`/`@repr`, `size(T)`/`align(T)`; statement barriers begin | aggregate-place **512 rows**; `size(T)` **81 rows**; WRONG `endian_struct`, `endian_offset_struct`, `packed_attr_param`, `fmt_agg_body_comment`, `signedness_global_array`, `signedness_struct_field_array`, `slice_field_compare` (19 rows); CRASH `agg_arr_elem_arg`, `sret_discard_statement` (3); catch-all `StructLit`/`ArrayLit`/`StrLit`/`Slice`/`AddrOf`/`Deref` share; structurally: #765 and #707 (typed field/element loads), #769, #771 and #772 (one frame object per aggregate temporary, §3.3), #773 | twins' `*_operand_signed_dep` field paths, sret stores, byte-tier helpers |
+| **4** | enums, `match`, `?` | tags and payloads, `switch`, payload binding, range arms, `?` by declaration | `match` **174 rows**; enums **39 rows**; catch-all `EnumLit`/`Try` share; #766's `match`-expression shape; `comptime_enum_eq` CRASH if it is the tag path | `emit_*_match_arms`, `wat_try_success_disc` |
 | **5** | brands and conversions | brand constructors with their `@require` checks, `@convert`, bitcast to aggregates | brand/conv **82 rows**; LOUD `convert_agg_user`, `convert_to_builtin` (2; they need slice 1's exit byte first) | – |
 | **6** | generics and comptime residue | nothing new in the IR — the front half already monomorphised and folded; the twins stop using their private mono/fold | comptime/generic **96 rows**; `for`-in **33 rows**; the generic part of the builtin-callee rows (`unwrap`, `map`, `sort`, `forget`, `len`, `bytes`); `fmt_comptime_match_template`, `fmt_comptime_arm_template`; the `when_guard_binding` traps | `a64_/rv_inst_add`, `*_comp_cond_fold`, `*_comp_range_bound`, wasm's mono |
 | **7** | fn values | `fnaddr`, `call_ind`, lifted-lambda values | fn values **26 rows**; catch-all `Lambda` share | – |
@@ -508,6 +581,9 @@ Slice 1 moves few disagreeing rows (~30 in the corpus) because the scalar core m
 twins today. It is first because it builds the whole pipeline end to end — typed front half, builder,
 verifier, three selectors, the census and the x86 differential — on the constructs where a mistake is
 easiest to see, and because every later slice's constructs contain scalar arithmetic.
+Its largest effect is outside the corpus rows: with signedness and width attached to the value
+(§3.8) it closes the scalar members of the #725/#764/#766 family on all four backends at once, the
+family the program generator keeps finding one shape at a time.
 
 ### 7.4 The x86 flip, and seed promotions
 
@@ -547,7 +623,7 @@ for the same functions.
   expression, and the builder resolve it to a kernel type through `lower_layout`. The alternative — a
   new type synthesis inside the builder — would be a fifth copy. Sema's `Ty` today is a tag plus a name
   span with a poison-tolerant "unknown"; the census will count the expressions sema leaves unknown, and
-  each is a sema gap to close, never a default to pick. Accept sema as the single source?
+  each is a sema gap to close, never a default to pick (§3.8). Accept sema as the single source?
 - **D7 — fallback granularity.** Function-level fallback in slice 1, statement barriers from slice 3.
   Alternatively barriers from the start (more coverage sooner, more coupling to legacy frame layouts).
 - **D8 — gating cadence.** Every slice carries intentional twin transitions, so every slice PR is gated
