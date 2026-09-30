@@ -34,6 +34,7 @@ issue in the marker's reason. Do not quietly route around it.
 | 7 | bind a `?` before using its value | #752 | `strict_forms_check.sh` `try-inline` |
 | 8 | do not write the forms the frozen seed miscompiles | #752, #768, #770, #775, #789 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
 | 9 | an AST handle has its node's own type | #760 (12 walkers), the `usize` pass-plumbing | the checker (since #760), review; §9 has the proposal |
+| 10 | a quantity with an identity is a `brand`, not a bare number | #167 (word offset used as a byte offset), #760, #299 | the checker refuses a sibling or raw mix (since #299); *choosing* a brand is held by review |
 
 ## 1 · Absence is `Option(ptr(T))` walked with `match`, not a sentinel
 
@@ -425,6 +426,68 @@ The steps:
    item. This needs a census of which handle containers carry which node, which the compiler can emit
    the way `brand_census.sh` does, and a decision on whether `rt::Vec` becomes generic in the
    compiler's own code. The seed's generic support decides that.
+
+## 10 · A quantity with an identity is a `brand`, not a bare number
+
+**Defect class.** Two quantities of different units or domains share one integer type, so the
+compiler accepts one where the other is due:
+
+- #167: a sub-word field store through `deref(p)` used the field's **word** offset as a **byte**
+  offset, at word width. For `P2 := struct { a : u8, b : u8 }`, `deref(p).b = 5` emitted
+  `movq %rcx, 8(%rax)` where `movb %cl, 1(%rax)` was due. `b` was never written, which is a silent
+  wrong value (72 where 75 was due), and eight bytes were written past a two-byte object. Both
+  offsets were a `usize`, so nothing could tell them apart.
+- #760: twelve walkers declared an `Arm` or `Arg` list head as `ptr(mut Stmt)`, a handle of the
+  wrong kind. For node *pointers* that is §9. The handles that are not pointers (arena offsets,
+  `rt::Vec` slots, span starts) are bare `usize` today, and a slot index passes for a byte offset
+  with no complaint.
+- #299: until it closed, a `brand` carried no identity. A sibling brand, the raw type and even a
+  brand over another numeric domain all converted implicitly, so `Meters` and `Seconds` were
+  interchangeable. Since #299 a brand is nominal (Types §4.2): siblings do not convert, and brand ↔
+  base is always explicit.
+
+**Write this.** Give each unit or domain its own brand: a byte offset, a word count, a slot index, a
+node handle. Convert between them only in a **named function**, one place per conversion (§4).
+Unwrap with `usize(x)` only at the boundary that really needs the raw number, such as the address
+arithmetic itself.
+
+```alatyr
+## not this — three units, one type
+field_off := fn(s : usize, f : usize) -> usize { ... }      ## a word index? a byte offset?
+store_at(base, field_off(s, f), v)                          ## #167: a word offset used as bytes
+
+## this
+ByteOff := brand(usize)
+WordCount := brand(usize)
+SlotIdx := brand(usize)
+words_to_bytes := fn(w : WordCount) -> ByteOff { ByteOff(usize(w) * 8) }
+field_byte_off := fn(s : usize, f : usize) -> ByteOff { ... }
+store_at := fn(base : ptr(mut u8), off : ByteOff, v : u64) { ... }
+
+store_at(base, field_byte_off(s, f), v)
+store_at(base, words_to_bytes(n), v)       ## the conversion has a name
+store_at(base, n, v)                       ## refused: WordCount where ByteOff is due
+store_at(base, ByteOff(16), v)             ## a constant says its unit too
+```
+
+**Check.** The checker enforces a brand once it is chosen. Measured at `3e5d7b4` on the tree
+compiler and on seed 0.2.4, so `src/` can use brands today. With `ByteOff` and `WordCount` both
+`brand(usize)`:
+
+- a `WordCount` passed where `ByteOff` is due is refused;
+- a raw `usize` local passed where `ByteOff` is due is refused;
+- `b + w` across the two brands is refused.
+
+Each refusal is `check: implicit brand conversion … (Types §4.2/§4.3)`. The explicit constructor and
+the named conversion above run to their value (42). A bare literal argument
+(`store_at(base, 16, v)`) is refused as a type mismatch today, so constants are written
+`ByteOff(16)`. The sinks the refusal reaches are listed in `test/accept_brand_unrefused_sinks.al`,
+with their `reject_brand_*` twins. One known gap: an argument
+to an overloaded, generic or qualified callee is not reached (`src/sema.al`, the brand census note).
+`scripts/brand_census.sh planted`, a full-gate stage, proves that the census instrument still sees
+crossings. **Choosing a brand for a new quantity is held by review.** No check can know that a
+`usize` means a byte offset, and there is no gate rule for it. `src/` declares no brand yet. A new
+quantity is the place to start, and the non-pointer handles of §9 step 3 are the planned campaign.
 
 ## How the checks count, and what they measured
 

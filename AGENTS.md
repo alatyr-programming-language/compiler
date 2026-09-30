@@ -136,6 +136,9 @@ around it.
    which fails when a promotion fixes a form so its row and workarounds retire.
 9. **An AST handle has its node's own type**, never `usize` or a sibling node's pointer (#760 fixed 12
    walkers). Held by the checker at a `deref`; the typed-handle proposal is in the skill file.
+10. **A quantity with an identity is a `brand`**, not a bare number: a byte offset, a word count and a
+    slot index get distinct brands, converted by named functions (#167, #760, #299). The checker
+    refuses a sibling or raw mix since #299. Choosing a brand for a new quantity is held by review.
 
 ## Work reaching `main`
 
