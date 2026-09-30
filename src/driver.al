@@ -4806,6 +4806,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
+  ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   decls.len = 0
   nstr = 0
   ## --- PASS 2: re-parse with the enum-name table (the AST/decls used for emit) ---
@@ -6084,6 +6085,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   collect_struct_table(decls, base, sv)         ## by-name struct-literal reorder table (TYP-8)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
+  ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   decls.len = 0
   nstr = 0
   ## --- PASS 2: re-parse with the enum-name table (the AST/decls the backend emits) ---
@@ -6366,11 +6368,6 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   ## counts its line from the MODULE base, not from the base of a buffer that holds every ambient
   ## stdlib module ahead of it (parser.al `src_line_at` / `P_MOD_BASE`).
   parser::set_module_base(0)
-  ## fmt — and ONLY fmt — asks the parser to retain the target of an identity-erased `bitcast`
-  ## (`ast::bitcast_erasure_mark`): that node is dropped, so `unchecked bitcast(usize, n)` otherwise
-  ## re-emits as `unchecked (n)`. Called before EACH parse: the entries are keyed by AST-node address
-  ## and `na` is rewound between the two passes, so pass 2 reuses pass 1's addresses.
-  ast::bitcast_erasure_begin()
   pr1 := parser::parse_program(pc1, decls, tar)
   match pr1 { Result::Ok(c) => {}; Result::Err(e) => { pek := d_perr_kind(e) ; d_parse_reject(pc1, pek, 0, nread, fmns, fmnl, tar) } }
   mut di := 0
@@ -6399,6 +6396,7 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   tar.off = pass1_decl_mark
   ## reset for PASS 2 (the AST arena, decls, and the token buffer)
   na.off = 0
+  ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   decls.len = 0
   tokar.off = 0
   mut rt_toks2 := rt::Vec(data = rt::bump(tokar, tcap * 8), len = 0, cap = tcap)
@@ -6408,7 +6406,6 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   ## counts its line from the MODULE base, not from the base of a buffer that holds every ambient
   ## stdlib module ahead of it (parser.al `src_line_at` / `P_MOD_BASE`).
   parser::set_module_base(0)
-  ast::bitcast_erasure_begin()
   pr := parser::parse_program(pc, decls, tar)
   match pr { Result::Ok(c) => {}; Result::Err(e) => { pek := d_perr_kind(e) ; d_parse_reject(pc, pek, 0, nread, fmns, fmnl, tar) } }
   ## scan the source for `##` line comments (start,end pairs) so fmt can retain top-level leading
@@ -6806,6 +6803,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   collect_struct_table(decls, base, sv)
   parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
   na.off = 0
+  ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
   decls.len = 0
   nstr = 0
   ## --- PASS 2: re-parse with the enum-name table — the AST `sema` actually checks ---
@@ -7117,6 +7115,7 @@ pub check := fn(src : str, in out a : Arena) -> usize {
       collect_struct_table(decls, base, sv)
       parser::set_structs_tbl(unchecked bitcast(usize, ptr(sv)))
       na.off = 0
+      ast::bitcast_identity_reset()   ## the rewound arena invalidates every recorded node (#529)
       decls.len = 0
       mut toks2 := rt::Vec(data = rt::bump(tar, tcap * 8), len = 0, cap = tcap)
       ze2 := lexrt::lex_rt(src, 0, toks2, tar)

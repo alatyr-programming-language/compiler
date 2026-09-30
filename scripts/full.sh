@@ -267,6 +267,29 @@ if ! grep -qE "^  planted cases=[0-9]+  failures=0$" "$BC_LOG"; then
   fail=1
 fi
 
+# The #529 PTRINT CENSUS's planted non-vacuity (`scripts/ptrint_census.sh planted`), next to the
+# brand census for the same reason. It counts the places where the implicit `usize <-> ptr(T)` seam
+# decides a verdict, on file descriptor 98, and #529's slices are licensed by it. Its NEGATIVE fixture
+# (explicit `unchecked bitcast` only) went from 0 rows to 6 when the checker began typing a bitcast by
+# its operand, and nothing noticed: the census then counted ~350 explicit casts as seam crossings.
+# `planted` must fire in both directions on a program built to trip it, put exactly one row inside a
+# grant, and give ZERO rows on the explicit twin. Same Stage2 compiler, writes only under
+# target/ptrint_census.
+echo "### PTRINT CENSUS (planted: seam crossings must count, explicit bitcasts must not) ###"
+PC_LOG="$LOGDIR/full_ptrint_census.log"
+bash scripts/ptrint_census.sh planted > "$PC_LOG" 2>&1
+pc_rc=$?
+grep -E "^  planted rows=|^  NEGATIVE fixture|^\*\*\* ptrint census" "$PC_LOG"
+if [ "$pc_rc" != 0 ]; then
+  echo "  FAILURES (from $PC_LOG): scripts/ptrint_census.sh planted exited $pc_rc"
+  fail=1
+fi
+if ! grep -qE "^  NEGATIVE fixture \(explicit bitcasts only\): check rc=0 rows=0 tag_compat calls=[1-9]" "$PC_LOG"; then
+  echo "  (scripts/ptrint_census.sh printed no 'NEGATIVE fixture … rc=0 rows=0 tag_compat calls=N' line —"
+  echo "   the explicit twin was not proven clean, treating as a failure)"
+  fail=1
+fi
+
 # The CROSS-BACKEND report (#683). Like the idiom gate it needs no compiler — it is a join over
 # scripts/corpus.manifest, which the CORPUS stage above has already checked against the tree on this
 # same run — so it cannot collide with another lane over target/debug/alatyr.

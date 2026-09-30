@@ -8184,6 +8184,8 @@ emit_wat_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
 }
 
 pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), src_n : usize, a : rt::Arena) {
+  ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
+  ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
   lower_layout::set_call_signedness_decls(decls)       ## #725: call operands take the callee's result signedness
   WAT_SRC_N = src_n
   WAT_PRINT_I64 = false

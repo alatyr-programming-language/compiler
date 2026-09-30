@@ -28063,6 +28063,8 @@ module_decl_ranges := fn(decls : ptr(rt::Vec), src : ptr(u8), base : usize) -> u
 ## consumes the table to split the single `.s` into per-module `.o`; `start` is a byte offset from `sb.data`
 ## (the buffer only ever grows by append, so an offset captured mid-emit is its final file offset).
 pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : ptr(u8), src_n : usize, mar : ptr(mut rt::Arena), a : rt::Arena, in out nl : usize, spanbase : usize, library_mode : bool) {
+  ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
+  ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
   LOWER_SRC_N = src_n
   ## COMMIT 3 (--ra default-on): probe the `ALATYR_RA=0` OFF escape hatch ONCE (intra-module write of
   ## RA_ON). Default → `emit_fn` register-allocates the scalar-leaf shape; `ALATYR_RA=0` forces the old
