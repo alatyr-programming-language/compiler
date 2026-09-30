@@ -26072,10 +26072,13 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   ## live across a call, or a spilling leaf). Spill slots occupy -8..-8*nsp(%rbp) (RA_SPILL_BASE = -8);
   ## the callee-save slots sit BELOW them at -8*(nsp+1), -8*(nsp+2), … in the fixed order rbx,r12..r15.
   nsp := regalloc::ra_spill_slots()
+  ## #794: a function that splices text-emitter code (a barrier) saves the WHOLE callee-saved set — the
+  ## splice writes %rbx/%r12/%r13 the allocator never assigned, and a caller may hold a value there.
+  splice := regalloc::ra_out_has_splice()
   mut nsave := 0
   mut ci := 0
   while ci < 5 {
-    if regalloc::ra_out_uses_reg(ir_csreg_id(ci)) { nsave = nsave + 1 }
+    if splice or regalloc::ra_out_uses_reg(ir_csreg_id(ci)) { nsave = nsave + 1 }
     ci = ci + 1
   }
   mut frame := i64(wbase + nsp + nsave) * 8
@@ -26129,7 +26132,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   mut sk := 0
   while si < 5 {
     r := ir_csreg_id(si)
-    if regalloc::ra_out_uses_reg(r) {
+    if splice or regalloc::ra_out_uses_reg(r) {
       pn := ir_phys_name(r)
       push_str(sb, "  movq ")
       push_str(sb, pn)
@@ -26148,7 +26151,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   mut rk := 0
   while ri < 5 {
     r := ir_csreg_id(ri)
-    if regalloc::ra_out_uses_reg(r) {
+    if splice or regalloc::ra_out_uses_reg(r) {
       pn := ir_phys_name(r)
       push_str(sb, "  movq ")
       push_int(sb, 0 - i64(wbase + nsp + rk + 1) * 8)
@@ -26232,6 +26235,27 @@ mut IRFR_S : [usize; 8] = [0; 8]
 mut IRFR_L : [usize; 8] = [0; 8]
 mut IRFR_N := 0
 
+## #794: save (`save`) or restore the five CALLEE-SAVED registers (rbx, r12..r15, in `ir_csreg_id`
+## order) to or from the text frame's save slots `base .. base+4`. All return paths of a text fn reach
+## the one epilogue, so one restore covers every exit.
+emit_csreg_moves := fn(in out sb : strbuf::StrBuf, base : usize, save : bool) {
+  for k in 0..5 {
+    pn := ir_phys_name(ir_csreg_id(k))
+    push_str(sb, "  movq ")
+    if save {
+      push_str(sb, pn)
+      push_str(sb, ", -")
+      push_int(sb, i64((base + k + 1) * 8))
+      push_str(sb, "(%rbp)\n")
+    } else {
+      push_str(sb, "-")
+      push_int(sb, i64((base + k + 1) * 8))
+      push_str(sb, "(%rbp), ")
+      push_str(sb, pn)
+      push_str(sb, "\n")
+    }
+  }
+}
 pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx), in out nl : usize) {
   ## Module-global references inside this body resolve in the declaration's module, exactly like a
   ## bare function call. This must be established before slot/type collection because those passes
@@ -26545,6 +26569,16 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
       }
     }
   }
+  ## #794 — CALLEE-SAVED registers (ABI appendix §4.1: `sysv`, the x86_64 default, makes the callee
+  ## preserve rbx, rbp, r12..r15). The text emitter uses %rbx, %r12 and %r13 as scratch, and a caller
+  ## lowered by the register allocator keeps values live across a call in exactly those registers, so
+  ## every text-lowered fn saves the whole set after its prologue and restores it before its epilogue.
+  ## Five slots at the bottom of the frame, below every pool; `cs_save_base` is the first.
+  cs_save_base := svec_len(ptr(slots))
+  for w in 0..5 {
+    so := svec_len(ptr(slots))
+    svec_push(slots, SlotEntry(ns = 0, nl = 0, off = so, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+  }
   nslots := svec_len(ptr(slots))
   ## frame size = slots * 8, rounded up to a 16-byte multiple (keep at least 16 bytes).
   mut frame := nslots * 8
@@ -26643,6 +26677,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   push_str(sb, ":\n  pushq %rbp\n  movq %rsp, %rbp\n  subq $")
   push_int(sb, i64(frame))
   push_str(sb, ", %rsp\n")
+  emit_csreg_moves(sb, cs_save_base, true)
   ## SRET: the hidden result-pointer arrived in %rdi; save it to its frame slot before the param
   ## spill (real params come from %rsi.. — see the `sret_shift` below). Non-sret fns emit nothing.
   if d_is_sret {
@@ -26973,6 +27008,7 @@ pub emit_fn := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx
   ## `fn_abi_c` → dormant for the self-host build (fixpoint-neutral; the split `:\n` string concatenates
   ## to the same bytes as the old `:\n  movq %rbp…`).
   if fn_abi_c and rstruct { emit_abi_c_ret_agg_def(p.decls, p.src, deref(p.mar), ers, erl, sb) }
+  emit_csreg_moves(sb, cs_save_base, false)
   push_str(sb, "  movq %rbp, %rsp\n  popq %rbp\n  ret\n")
   sf := 0
 }

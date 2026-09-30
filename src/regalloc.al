@@ -394,7 +394,7 @@ ra_build_busy := fn(n : usize) {
     ## init emitted via the text emitter) may touch ANY register, so every live-across scalar vreg spills.
     ## GENERAL STMT-BARRIER (op 24): the whole statement (a Vec-build call / push) is spliced through the text
     ## emitter — it may `call` (clobbering caller-saved) and touch any register, so the same full clobber.
-    if op == 14 or op == 23 or op == 24 {
+    if ra_op_is_splice(op) {
       mut cb := 0
       while cb < 16 { m = m | usize(1).shl(cb); cb = cb + 1 }
     }
@@ -620,7 +620,7 @@ ra_crosses_barrier := fn(a : i64, b : i64, n : usize) -> bool {
   mut j := 0
   while j < n {
     op := RA_OP[j]
-    if op == 14 or op == 23 or op == 24 {
+    if ra_op_is_splice(op) {
       if ra_bit(LIVEOUT[j], usize(a)) == 1 { return true }
       if ra_bit(LIVEOUT[j], usize(b)) == 1 { return true }
       if ra_bit(LIVEIN[j], usize(a)) == 1 { return true }
@@ -1121,6 +1121,20 @@ pub ra_scalarleaf_begin := fn() {
   ra_alloc_add(15)                 ## r15
 }
 
+## Is `op` a TEXT SPLICE — 14 BARRIER, 23 STMT-BARRIER or 24 GENERAL STMT-BARRIER — whose code the text
+## emitter writes at render, touching any register it likes? One place for the three codes: the busy
+## builder and `ra_crosses_barrier` use it for the full clobber, `ra_out_has_splice` for callee-saves.
+ra_op_is_splice := fn(op : usize) -> bool { op == 14 or op == 23 or op == 24 }
+## After allocation, does the output stream splice any text-emitter code? Such a function clobbers
+## callee-saved registers the allocator never assigned (#794), so its prologue saves the whole set.
+pub ra_out_has_splice := fn() -> bool {
+  mut i := 0
+  while i < RA_OUT_N {
+    if ra_op_is_splice(OUT_OP[i]) { return true }
+    i = i + 1
+  }
+  false
+}
 ## After allocation, did the rewritten output place any value in physical register `r`? (The emitter uses
 ## this over the callee-saved set {rbx=1, r12..r15} to decide which registers to save/restore.) Scans the
 ## VReg-free output stream for a Phys operand naming `r`.

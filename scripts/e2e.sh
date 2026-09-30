@@ -6495,6 +6495,9 @@ build_reject_has reject_try_multiword_value "multi-word Ok payload"
 # second row, exit 1). The scratch level is now sized from the widest enum a direct call match stages.
 run issue771_result_call_match_neighbour 42
 run issue771_result_call_match_wide 42
+# Issue #794 — a text-lowered callee overwrote %rbx/%r12/%r13, which the ABI makes callee-saved and in
+# which a register-allocated caller keeps values live across the call (ran to 8 on the parent).
+run issue794_callee_saved_registers 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42
