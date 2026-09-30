@@ -1835,7 +1835,17 @@ rv_local_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : usiz
           ## keeps resolving its width from the VALUE exactly as before (byte-identical).
           if rv_first_handle(fn_head, ans, anl, src, a) == s {
             annw := rv_ann_arr_words(src, ans, anl, v, a, decls)
-            if annw > 0 { b = b + annw } else { b = b + rv_val_words(v, src, a, decls) }
+            ## #817 — `mut p : P` (no initializer) of a STRUCT type: the sentinel value is one scalar word,
+            ## so `p` got ONE slot and the whole assignment `p = P(..)` wrote its later fields into the
+            ## NEXT local's slots (a later `q := p` then read `q.y` from `p.x`'s word). The declaration's
+            ## struct type is the local struct-type scan's answer (it reads this form's annotation, #773),
+            ## so the slot is that struct's width. Every initialized declaration keeps its value width.
+            mut uw := 0
+            if ast::local_is_uninit(src, ans, anl) {
+              usl := rv_local_struct_nl(fn_head, src, ans, anl, a)
+              if usl != 0 { uw = i64(struct_words(decls, src, rv_local_struct_ns(fn_head, src, ans, anl, a), usl, a)) }
+            }
+            if annw > 0 { b = b + annw } else if uw > 0 { b = b + uw } else { b = b + rv_val_words(v, src, a, decls) }
           }
           s = nx
         }
