@@ -328,6 +328,21 @@ if [ "$xb_cover" != 1 ]; then
   echo "   it walked is unknown, treating as a failure)"
   fail=1
 fi
+## The same manifest, the WIDER question (#683): every (phase, exit) disagreement between x86_64 and a
+## twin, classified — traps, crashes, build-step failures and twins accepting what x86_64 refuses, not
+## only the quiet wrong values above. Reporting only, by the same argument: its count is the backlog
+## #683 is draining, so a finding never sets `fail`; a broken self-test or a missing proof line does.
+bash scripts/xbackend_diff.sh --self-test >> "$XB_LOG" 2>&1
+xd_st_rc=$?
+bash scripts/xbackend_diff.sh --count >> "$XB_LOG" 2>&1
+xd_rc=$?
+grep -E "^(xbackend_diff self-test:|xbackend diff:)" "$XB_LOG"
+if [ "$xd_st_rc" != 0 ] || [ "$xd_rc" != 0 ] || [ "$(grep -cE '^xbackend diff: paths=' "$XB_LOG")" != 1 ]; then
+  echo "  scripts/xbackend_diff.sh failed its self-test, could not read the manifest, or printed no"
+  echo "  'xbackend diff: paths=' proof-of-work line (from $XB_LOG):"
+  grep -E "^  FAIL " "$XB_LOG" | head -5 | sed 's/^/    /'
+  fail=1
+fi
 
 echo "### SWEEPS (conditional) ###"
 bash scripts/sweeps.sh "${SWEEP_ARGS[@]}" 2>&1 | tee "$LOGDIR/full_sweeps.log"
