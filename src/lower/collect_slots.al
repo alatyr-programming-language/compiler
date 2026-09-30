@@ -210,6 +210,10 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## array and stays fixpoint-neutral.
           beek := fixed_array_byte_eek(src, ns, nl)
           if beek != 0 { aelem = AElem(eek = beek, ess = 0, esl = 0, stride = 1) }
+          ## #808 — `xs : [Option(ptr(T)); N] = [Option.None, …]`: the annotation decides the one-word
+          ## folded element (the bare literal head names no type argument).
+          fae := folded_array_elem_span(src, ns, nl)
+          if fae.n != 0 { aelem = AElem(eek = 3, ess = fae.s, esl = fae.n, stride = 1) }
           else if tuple_type_has_byte_component(src, ns, nl) { aelem = AElem(eek = 12, ess = 0, esl = ai.nel, stride = tuple_standard_byte_words(decls, src, ns, nl, a)) }
           bind_array_slot(slots, src, ns, nl, ai.nel, aelem)
         } else if is_cas_call(v, src) {

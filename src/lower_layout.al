@@ -2301,6 +2301,14 @@ pub niche_payload_ptr_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize
   0
 }
 
+## #808 — the word width of one ENUM element `[es, es+en)` of an array, a slice or a tuple: ONE word for a
+## NICHE-FOLDED `Option(ptr(T))` (Types §6.2/§8 — pointer-width in every position, so `[Option(ptr(T)); N]`
+## is N words), else the discriminant plus the widest payload. Every element-stride decision asks this.
+pub enum_elem_words := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, en : usize, a : rt::Arena) -> usize {
+  if is_niche_folded(src, es, en) { return 1 }
+  1 + enum_inst_words(decls, src, es, en, a)
+}
+
 pub bitcast_target_is_pointer := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   ptr_target_pointee_n(src, ts, tl) != 0
 }

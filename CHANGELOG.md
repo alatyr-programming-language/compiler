@@ -136,6 +136,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 - **A large program no longer aborts the compiler.** About 7 MB of source (comments included) made
   `alatyr build` die with `rt: arena overflow (bump past cap)`, because two parser tables were reserved
   at 48 bytes per source byte before parsing. They are now sized from what the parser found (#814).
+- **An array of `Option(ptr(T))` holds one word per element.** The element was sized from the first
+  literal element, and a bare `Option.None` names no type argument. The array therefore got a two-word
+  `[disc, payload]` element that had lost its pointee type, and a matched `Some` element's `deref(q).v`
+  read **0** on a clean build. The element store also wrote the scalar `0` placeholder for a `Some`
+  literal. The declared element type now decides the one-word element in the literal, in the element
+  store and in the element read. This covers a local array, an array parameter (by value and `in out`)
+  and an array field (#808).
+
 ## 0.2.5 — 2026-09-30
 
 - **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved
