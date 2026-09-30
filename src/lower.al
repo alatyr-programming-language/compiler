@@ -4060,6 +4060,20 @@ emit_require_agg_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr
   cx.vchk = old
 }
 
+## #797 — push the value `v` that a store into a destination of declared type `dt` writes. A variant
+## literal (bare or typed head) stored into a NICHE-FOLDED `Option(ptr(T))` destination is its ONE folded
+## word, which `emit_folded_option_value` yields; as a plain scalar, `emit_gas` pushes the `$0`
+## placeholder for every payloaded enum literal, so `a.next = Option.Some(p)` stored None. Every other
+## value or destination takes `emit_gas`, unchanged.
+emit_store_value := fn(v : ptr(Expr), dt : CSpan, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  if is_niche_folded(cx.src, dt.s, dt.n) and enum_lit_info(v).is_e and folded_value_span(v, dt, cx.slots, cx.decls, cx.src, a).n != 0 {
+    emit_folded_option_value(v, sb, cx, a, nl)
+    push_str(sb, "  pushq %rax\n")
+    return
+  }
+  emit_gas(v, sb, cx, a, nl)
+}
+
 ## #775 / #789 — pass a NICHE-FOLDED `Option(ptr(T))` value that has no frame home (a call result, a
 ## variant literal, a field read) to a by-reference Option parameter: stage its ONE word in an agg-temp
 ## and push that word's address. Both callers ask `folded_value_span` first; `emit_call_args` also knows

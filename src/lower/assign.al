@@ -915,6 +915,30 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
 ## two days. Splitting them apart would have kept a lane owning two files; keeping them together
 ## makes `assign` one leaf. Each arm has exactly ONE caller, `emit_stmts`.
 ## ============================================================================================
+## #797 — the declared type of the field `fns` a single-hop `bns.fns = v` writes, read through the base's
+## slot (a struct local, a by-reference struct parameter, a pointer-to-struct local); 0/0 for any other
+## base. `emit_store_value` asks it so a folded `Option(ptr(T))` field stores its one folded word.
+field_assign_dest_ty := fn(bent : SlotEntry, bns : usize, bnl : usize, fns : usize, fnl : usize, cx : ptr(LCtx)) -> CSpan {
+  if not streq(cx.src, bent.ns, bent.nl, bns, bnl) { return CSpan(s = 0, n = 0) }
+  if bent.ek == 2 or bent.ek == 7 or bent.is_ref { return field_type_span(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar)) }
+  CSpan(s = 0, n = 0)
+}
+
+## #797 — the declared type of the leaf field a `FieldPathAssign` place `pl` writes: the folded type
+## `folded_value_span` reads off the place (`s.f`, `p.f`, `deref(p).f`, `deref(<call>).f`), else a
+## mutable global's field, else the leaf of a nested local chain (`o.h.next`); 0/0 when none resolves.
+field_path_dest_ty := fn(pl : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
+  fvs := folded_value_span(pl, CSpan(s = 0, n = 0), cx.slots, cx.decls, cx.src, a)
+  if fvs.n != 0 { return fvs }
+  gp := global_place(pl, cx, a)
+  if gp.found { return CSpan(s = gp.ts, n = gp.tl) }
+  fp := field_place_parts(pl)
+  if fp.fl == 0 { return CSpan(s = 0, n = 0) }
+  bt := base_struct_span(fp.base, cx)
+  if bt.n == 0 { return CSpan(s = 0, n = 0) }
+  field_type_span(cx.decls, cx.src, bt.s, bt.n, fp.fs, fp.fl, deref(cx.mar))
+}
+
 ## The `Stmt::FieldAssign` arm of `emit_stmts`, moved out verbatim (Step 4.1). A `var.field = e`
 ## scalar/aggregate store into the field's reserved frame slot; the caller keeps `s = nx`.
 ## Touches no module global.
@@ -942,7 +966,7 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
         mut gw_multi := false
         if gwft.n != 0 { gw_multi = emit_global_agg_store(fv, bns, bnl, gwi, gwft.s, gwft.n, sb, cx, a, nl) }
         if gw_multi == false {
-          emit_gas(fv, sb, cx, a, nl)
+          emit_store_value(fv, gwft, sb, cx, a, nl)
           push_str(sb, "  popq %rax\n  movq %rax, ")
           emit_global_label(sb, cx.decls, cx.src, bns, bnl)
           push_str(sb, "+")
@@ -955,12 +979,14 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
   }
   if gw_done == false {
   bent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, bns, bnl)))
+  ## #797 — the field's declared type, so a folded `Option(ptr(T))` field takes its one folded word.
+  fdt := field_assign_dest_ty(bent, bns, bnl, fns, fnl, cx)
   if bent.ek == 7 {
     ## POINTER-TO-STRUCT base `p.field = v` (p : ptr(S), ek 7 — the slot HOLDS the pointer):
     ## lower the value (on the stack), load p's pointer value into %rax, then store at
     ## `-(field_index*8)(%rax)` — the store through the pointer, the dual of the ek-7 Field
     ## READ (`deref(p).f`). The down-growing pointee layout (field k at a lower address).
-    emit_gas(fv, sb, cx, a, nl)
+    emit_store_value(fv, fdt, sb, cx, a, nl)
     fi := field_word_offset(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
     push_str(sb, "  movq -")
     push_int(sb, i64((bent.off + 1) * 8))
@@ -971,7 +997,7 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
     ## BY-REFERENCE struct param `p.field = v`: lower the value (on the stack), load the
     ## base pointer (word-0 address), and store at `-(field_index*8)(%rax)` — the store
     ## through the pointer (visible to the caller), the dual of the by-ref Field READ.
-    emit_gas(fv, sb, cx, a, nl)
+    emit_store_value(fv, fdt, sb, cx, a, nl)
     fi := field_word_offset(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl, deref(cx.mar))
     emit_agg_base_addr(bent, sb)           ## word-0 address (the pointer) → %rax
     ## §8 `@packed` BY-REFERENCE PARAM WRITE (spec Types §8) — the store dual of the packed by-ref
@@ -1028,7 +1054,7 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
         pmulti := paes.n != 0 or (fts.n != 0 and (str_at((cx.src + fts.s), fts.n) == "str" or struct_decl_of(cx.decls, cx.src, fts.s, fts.n) >= 0 or enum_decl_of(cx.decls, cx.src, fts.s, fts.n) >= 0))
         if pmulti { panic("selfhost: a @packed local aggregate field write needs its byte-aware aggregate value path; use a supported scalar field") }
         if pbo >= 0 {
-          emit_gas(fv, sb, cx, a, nl)
+          emit_store_value(fv, fdt, sb, cx, a, nl)
           push_str(sb, "  popq %rax\n")
           psz := scalar_byte_size(cx.src, fts.s, fts.n)
           peb := packed_field_endian(cx.decls, cx.src, bent.sns, bent.snl, fns, fnl) == 1
@@ -1074,7 +1100,7 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
         } else if smulti {
           panic("selfhost: a standard-layout aggregate field write needs a byte-aware aggregate value path; use indexed byte writes or a supported scalar field")
         } else if sbo >= 0 {
-          emit_gas(fv, sb, cx, a, nl)
+          emit_store_value(fv, fdt, sb, cx, a, nl)
           push_str(sb, "  popq %rax\n")
           ssz := scalar_byte_size(cx.src, fts.s, fts.n)
           if ssz == 1 { push_str(sb, "  movb %al, -") }
@@ -1090,7 +1116,7 @@ pub emit_st_field_assign := fn(bns : usize, bnl : usize, fns : usize, fnl : usiz
       }
     }
     if fw_handled == false {
-      emit_gas(fv, sb, cx, a, nl)
+      emit_store_value(fv, fdt, sb, cx, a, nl)
       push_str(sb, "  popq %rax\n  movq %rax, -")
       push_int(sb, (fslot + 1) * 8)
       push_str(sb, "(%rbp)\n")
@@ -1242,6 +1268,8 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
 ## Touches no module global.
 pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   fp := field_place_parts(pl)
+  ## #797 — the leaf field's declared type, so a folded `Option(ptr(T))` leaf takes its one folded word.
+  pdt := field_path_dest_ty(pl, cx, a)
   ## `GLOBAL.f1.f2… = val` (any depth) — store into a field of a nested struct field of a
   ## mutable-global struct at `LABEL + off*8` (offset via `global_place`). A SCALAR final field is a
   ## single-word store; a multi-word final field (enum / str / nested struct, `STATE.i.sub = P(…)`)
@@ -1257,7 +1285,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
     mut s3wagg := s3warr.n != 0
     if s3wpath.tl != 0 and (str_at((cx.src + s3wpath.ts), s3wpath.tl) == "str" or struct_decl_of(cx.decls, cx.src, s3wpath.ts, s3wpath.tl) >= 0 or enum_decl_of(cx.decls, cx.src, s3wpath.ts, s3wpath.tl) >= 0) { s3wagg = true }
     if s3wagg { panic("selfhost: a standard-layout nested aggregate field write needs its aggregate store consumer") }
-    emit_gas(v, sb, cx, a, nl)
+    emit_store_value(v, pdt, sb, cx, a, nl)
     push_str(sb, "  popq %rax")
     push_str(sb, "\n")
     s3wsz := scalar_byte_size(cx.src, s3wpath.ts, s3wpath.tl)
@@ -1283,7 +1311,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
       if std_idx_leaf_is_agg(cx.decls, cx.src, s3dw.ts, s3dw.tl) {
         panic("selfhost: writing a whole AGGREGATE field of a byte-layout array element (`xs[i].inner = …` where the field is a struct, str, enum or array) has no byte-precise store in this slice — write a scalar leaf, index a byte array element, or build the whole element (`xs[i] = Elem(…)`)")
       }
-      emit_gas(v, sb, cx, a, nl)
+      emit_store_value(v, pdt, sb, cx, a, nl)
       emit_index_addr(s3dw.arr, s3dw.idx, sb, cx, a, nl)
       emit_packed_store_rax(sb, scalar_byte_size(cx.src, s3dw.ts, s3dw.tl), s3dw.bo, false)
       fpa_done = true
@@ -1301,7 +1329,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
     ffib := field_index_base(fidx.arr, cx)
     if ffib.is_fld {
       foff := idx_field_index(fidx.arr, fidx.idx, fp.fs, fp.fl, cx)
-      emit_gas(v, sb, cx, a, nl)
+      emit_store_value(v, pdt, sb, cx, a, nl)
       emit_idx_field_addr(fidx.arr, fidx.idx, foff * 8, sb, cx, nl)
       push_str(sb, "  popq %rbx\n  movq %rbx, (%rax)\n")
       fpa_done = true
@@ -1316,7 +1344,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
   if fpa_done == false {
     wddif := resolve_deep_idx_field(fp.base, fp.fs, fp.fl, cx)
     if wddif.found {
-      emit_gas(v, sb, cx, a, nl)
+      emit_store_value(v, pdt, sb, cx, a, nl)
       emit_idx_field_addr(wddif.arr, wddif.idx, wddif.woff * 8, sb, cx, nl)
       push_str(sb, "  popq %rbx\n  movq %rbx, (%rax)\n")
       fpa_done = true
@@ -1324,7 +1352,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
   }
   wgp := global_place(pl, cx, a)
   if wgp.found and global_place_scalar(wgp.ts, wgp.tl, cx) {
-    emit_gas(v, sb, cx, a, nl)
+    emit_store_value(v, pdt, sb, cx, a, nl)
     push_str(sb, "  popq %rax\n  movq %rax, ")
     emit_global_label(sb, cx.decls, cx.src, wgp.gs, wgp.gn)
     push_str(sb, "+")
@@ -1347,7 +1375,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
       if std_idx_leaf_is_agg(cx.decls, cx.src, bdp.ts, bdp.tl) {
         panic("selfhost: writing a whole AGGREGATE field through a pointer to a standard-layout struct has no byte-precise store in this slice — write a scalar leaf or build the whole pointee")
       }
-      emit_gas(v, sb, cx, a, nl)
+      emit_store_value(v, pdt, sb, cx, a, nl)
       emit_gas(bdp.p, sb, cx, a, nl)
       push_str(sb, "  popq %rax\n")
       emit_packed_store_rax(sb, scalar_byte_size(cx.src, bdp.ts, bdp.tl), bdp.bo, false)
@@ -1475,7 +1503,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
         fpa_done = true
       } else {
         if wagg { panic("selfhost: an AGGREGATE-field (str/struct/enum) write through a pointer (`deref(p).f = v`) is unsupported here (no agg-temp block reserved) — bind the pointee to a local, or write scalar fields") }
-        emit_gas(v, sb, cx, a, nl)              ## value → stack
+        emit_store_value(v, pdt, sb, cx, a, nl)              ## value → stack
         if wdsb.n != 0 {
           wpv := deref_var_span(fp.base)
           wpent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, wpv.s, wpv.n)))
@@ -1503,7 +1531,7 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
     wnpf := resolve_nested_ptr_field(fp.base, fp.fs, fp.fl, cx)
     if wnpf.found {
       wnent := deref(svec_at(SlotEntry, cx.slots, wnpf.ent_idx))
-      emit_gas(v, sb, cx, a, nl)                 ## value → stack
+      emit_store_value(v, pdt, sb, cx, a, nl)                 ## value → stack
       push_str(sb, "  movq -")
       push_int(sb, i64((wnent.off + 1) * 8))
       push_str(sb, "(%rbp), %rax\n  popq %rbx\n  movq %rbx, ")
@@ -1551,12 +1579,30 @@ pub emit_st_field_path_assign := fn(pl : ptr(Expr), v : ptr(Expr), in out sb : s
       lower_show_src_line(cx.src, fp.fs)
       panic("selfhost: this nested field WRITE (the source line above) has no resolvable frame slot — emitting it would store over the saved frame pointer and DROP the write. A pointer taken into an inner aggregate (`p := ptr(mut o.inner)` then `deref(p).f = v`) does not carry its pointee's layout yet; write through the outer place (`o.inner.f = v`) instead.")
     }
-    emit_gas(v, sb, cx, a, nl)
+    emit_store_value(v, pdt, sb, cx, a, nl)
     push_str(sb, "  popq %rax\n  movq %rax, -")
     push_int(sb, (fslot + 1) * 8)
     push_str(sb, "(%rbp)\n")
   }
 }
+## #797 — the declared type of the field `ifs` an `a[i].f = v` writes, resolved over the same element type
+## `idx_field_index` resolves (an array field's element, a mixed tuple's own component, else the array's
+## uniform element); 0/0 when none resolves. `emit_store_value` asks it for a folded `Option(ptr(T))` field.
+index_field_dest_ty := fn(arr : ptr(Expr), idx : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx)) -> CSpan {
+  ent := deref(svec_at(SlotEntry, cx.slots, index_base_entry(arr, cx.slots, cx.src)))
+  fib := field_index_base(arr, cx)
+  if fib.is_fld {
+    fent := deref(svec_at(SlotEntry, cx.slots, fib.ent_idx))
+    afp := field_place_parts(arr)
+    aft := field_type_span(cx.decls, cx.src, fent.sns, fent.snl, afp.fs, afp.fl, deref(cx.mar))
+    aet := array_elem_span(cx.src, aft.s, aft.n)
+    return field_type_span(cx.decls, cx.src, aet.s, aet.n, fs, fl, deref(cx.mar))
+  }
+  tc := tcomp_find(cx, ent.off, usize(num_lit_value(idx)))
+  if tc.estride != 0 and tc.snl != 0 { return field_type_span(cx.decls, cx.src, tc.sns, tc.snl, fs, fl, deref(cx.mar)) }
+  field_type_span(cx.decls, cx.src, ent.sns, ent.snl, fs, fl, deref(cx.mar))
+}
+
 ## The `Stmt::IndexFieldAssign` arm of `emit_stmts`, moved out verbatim (Step 4.1). An `a[i].f = v`
 ## element-field store. READS the module global `cx.vchk` (the bounds-check gate) and writes no
 ## global, so no state decision is needed; the caller keeps `s = nx`.
@@ -1564,6 +1610,8 @@ pub emit_st_index_field_assign := fn(fia : ptr(Expr), fii : ptr(Expr), ifs : usi
   ## `ARR[i].f = v` on a mutable STRUCT-array global — store into `.data` at
   ## `LABEL + i*stride*8 + fieldidx*8` (ascending). The global has no frame slot, so this precedes
   ## the frame `emit_idx_field_addr` path (which would compute a bogus %rbp-relative address).
+  ## #797 — the element field's declared type, so a folded `Option(ptr(T))` field takes its one folded word.
+  idt := index_field_dest_ty(fia, fii, ifs, ifl, cx)
   wivn := var_name_span(fia)
   wgmv := if wivn.n != 0 { mut_global_value(cx.decls, cx.src, wivn.s, wivn.n) } else { unchecked bitcast(ptr(Expr), 0) }
   mut w_done := false
@@ -1573,7 +1621,7 @@ pub emit_st_index_field_assign := fn(fia : ptr(Expr), fii : ptr(Expr), ifs : usi
       wfi := struct_field_index(cx.decls, cx.src, wesli.ss, wesli.sl, ifs, ifl, a)
       if wfi >= 0 {
         wstride := struct_words(cx.decls, cx.src, wesli.ss, wesli.sl, a)
-        emit_gas(fiv, sb, cx, a, nl)                 ## value → stack
+        emit_store_value(fiv, idt, sb, cx, a, nl)                 ## value → stack
         emit_gas(fii, sb, cx, a, nl)                 ## index → stack (top)
         push_str(sb, "  leaq ")
         emit_global_label(sb, cx.decls, cx.src, wivn.s, wivn.n)
@@ -1599,14 +1647,14 @@ pub emit_st_index_field_assign := fn(fia : ptr(Expr), fii : ptr(Expr), ifs : usi
       if std_idx_leaf_is_agg(cx.decls, cx.src, s3d1.ts, s3d1.tl) {
         panic("selfhost: writing a whole AGGREGATE field of a byte-layout array element (`xs[i].inner = …` where the field is a struct, str, enum or array) has no byte-precise store in this slice — write a scalar leaf, index a byte array element, or build the whole element (`xs[i] = Elem(…)`)")
       }
-      emit_gas(fiv, sb, cx, a, nl)
+      emit_store_value(fiv, idt, sb, cx, a, nl)
       emit_index_addr(fia, fii, sb, cx, a, nl)
       emit_packed_store_rax(sb, scalar_byte_size(cx.src, s3d1.ts, s3d1.tl), s3d1.bo, false)
       w_done = true
     }
   }
   if w_done == false {
-    emit_gas(fiv, sb, cx, a, nl)
+    emit_store_value(fiv, idt, sb, cx, a, nl)
     ifoff := idx_field_index(fia, fii, ifs, ifl, cx) * 8
     emit_idx_field_addr(fia, fii, ifoff, sb, cx, nl)
     push_str(sb, "  popq %rbx\n  movq %rbx, (%rax)\n")

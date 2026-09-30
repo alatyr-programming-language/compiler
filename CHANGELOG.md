@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **Storing `Option.Some(p)` into an `Option(ptr(T))` struct field stores `p`.** A field store pushed its
+  value with the plain scalar lowering, which yields `0` for any enum literal with a payload. So
+  `a.next = Option.Some(ptr(mut b))` and `deref(tail).next = Option.Some(nd)` stored **None** on a clean
+  build, with a bare or a typed head. Every field-store form (a local's field, through a pointer, a
+  by-reference parameter's, nested, a global's, an array element's) now stores the one folded word (#797).
 - **The idiomatic `Option(ptr(T))` list walk runs on x86_64.** A bare `Option.Some(p)` / `Option.None`
   names no type argument, so it was folded to one word only as a struct field or an annotated local.
   Passed straight to an `Option(ptr(T))` parameter it went as the two-word `[disc, payload]` block, and
