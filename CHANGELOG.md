@@ -148,6 +148,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   literal. The declared element type now decides the one-word element in the literal, in the element
   store and in the element read. This covers a local array, an array parameter (by value and `in out`)
   and an array field (#808).
+- **A one-word struct parameter used as a whole value reads the struct, not its address, on x86_64
+  (#800).** A struct parameter is passed by reference, and where a one-word struct's single word is the
+  whole value the parameter was read as the pointer its slot holds. `Result(S, E).Ok(s)`, `Err(s)`,
+  `E.A(s)` and `Option(S).Some(s)` (returned, matched, bound with `?`, or stored into an enum local)
+  therefore carried a stack address, `s == t` compared two addresses, and `w.inner = s` / `deref(p) = s`
+  stored one. All built cleanly and ran to a wrong value. The scalar read of a by-reference struct
+  parameter now loads word 0 through the pointer, as it already did for an enum parameter.
 
 ## 0.2.5 — 2026-09-30
 
