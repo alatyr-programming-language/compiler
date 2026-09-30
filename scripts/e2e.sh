@@ -6556,6 +6556,11 @@ run issue794_callee_saved_registers 42
 # the payload carried an address; `s == t` compared addresses). The other backends trap on both.
 run issue800_onewords_struct_param_payload 42
 run issue800_onewords_struct_param_scalar 42
+# Issue #773 — a local copied into another and back (`b := a` then `a = b`, and the swap of two locals)
+# crashed the aarch64 and riscv64 COMPILERS with SIGSEGV: their local struct-type scan took the
+# reassignment as a type source and recursed round the copy cycle. The parent's twins exit 139 at build;
+# x86_64 and wasm ran it to 42 before and after.
+run issue773_copy_back_local 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42

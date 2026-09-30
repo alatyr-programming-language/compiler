@@ -227,14 +227,27 @@ rv_local_struct_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) and expr_is_struct_lit(v) { rs = expr_struct_lit_ns(v) ; done = true }
+        ## #773 — only a DECLARATION of the name gives it a type. A local's type is fixed where it is declared;
+        ## a later `x = y` cannot change it, and the parser gives a reassignment the same `Stmt.Assign` node,
+        ## so `ast::assign_is_decl` (the source-level test) tells the two apart. Taking the reassignment
+        ## `a = b` as a type source let the var-copy arm below recurse `b := a` -> `a = b` -> `b := a` ... until
+        ## the compiler's stack overflowed (SIGSEGV). The explicitly UNINITIALIZED `name : T` carries only a
+        ## sentinel value, so its type is its annotation; the initializing `name = T(...)` after it is a
+        ## reassignment and is no longer consulted. The first declaration ends the scan either way.
+        named := streq(src, ans, anl, ns, nl) and ast::assign_is_decl(src, ans, anl)
+        if named and ast::local_is_uninit(src, ans, anl) {
+          uts := ast::local_type_span(src, ans, anl)
+          ubn := base_type_name(src, uts.s, uts.n)
+          if uts.n != 0 and struct_decl_of(rv_decls(), src, ubn.s, ubn.n) >= 0 { rs = ubn.s }
+        }
+        if named and expr_is_struct_lit(v) { rs = expr_struct_lit_ns(v) ; done = true }
         ## a local bound to a struct-RETURNING CALL takes the callee's returned struct type (§8 piece 2).
-        if streq(src, ans, anl, ns, nl) and (not done) { crs := rv_call_ret_struct_span(v, rv_decls(), src, a) ; if crs.n != 0 { rs = crs.s ; done = true } }
+        if named and (not done) { crs := rv_call_ret_struct_span(v, rv_decls(), src, a) ; if crs.n != 0 { rs = crs.s ; done = true } }
         ## a local bound to a WIDE-struct-returning CALL (`s := mk()`, LP64 indirect result) takes the same
         ## returned struct type — it IS the destination the callee wrote through, so `.field` resolves here.
-        if streq(src, ans, anl, ns, nl) and (not done) { crt := rv_call_ret_sret_span(v, rv_decls(), src, a) ; if crt.n != 0 { rs = crt.s ; done = true } }
+        if named and (not done) { crt := rv_call_ret_sret_span(v, rv_decls(), src, a) ; if crt.n != 0 { rs = crt.s ; done = true } }
         ## an aggregate-VAR copy `q := p` takes p's struct type (resolve the source local recursively).
-        if streq(src, ans, anl, ns, nl) and (not done) {
+        if named and (not done) {
           cvns := ex_var_ns(v) ; cvnl := ex_var_nl(v)
           if cvnl != 0 and (not streq(src, cvns, cvnl, ns, nl)) {
             if rv_local_struct_nl(head, src, cvns, cvnl, a) != 0 { rs = rv_local_struct_ns(head, src, cvns, cvnl, a) ; done = true }
@@ -242,7 +255,7 @@ rv_local_struct_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
         }
         ## a standard-byte aggregate field copy `q := p.inner` takes the leaf struct type. The source
         ## field's byte offset is handled by the emitter; this scan only gives q the right frame shape.
-        if streq(src, ans, anl, ns, nl) and (not done) and ex_is_field(v) {
+        if named and (not done) and ex_is_field(v) {
           sfp := rv_std_path_ty(v, head, src, a, rv_decls())
           if rv_std_path_ok(v, head, src, a, rv_decls()) and sfp.n != 0 {
             sbn := base_type_name(src, sfp.s, sfp.n)
@@ -251,7 +264,8 @@ rv_local_struct_ns := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
         }
         ## `x := xs[i]` — an ELEMENT copy out of an array of structs takes the ELEMENT struct's type, so
         ## `x.field` reads resolve against x's own (element-wide) frame slots.
-        if streq(src, ans, anl, ns, nl) and (not done) { eis := rv_index_elem_struct_span(v, src, a, rv_decls()) ; if eis.n != 0 { rs = eis.s ; done = true } }
+        if named and (not done) { eis := rv_index_elem_struct_span(v, src, a, rv_decls()) ; if eis.n != 0 { rs = eis.s ; done = true } }
+        if named { done = true }
         s = nx
       }
       Stmt::Return(rv, nx) => { s = nx }
@@ -294,19 +308,32 @@ rv_local_struct_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) and expr_is_struct_lit(v) { rn = expr_struct_lit_nl(v) ; done = true }
-        if streq(src, ans, anl, ns, nl) and (not done) { crs := rv_call_ret_struct_span(v, rv_decls(), src, a) ; if crs.n != 0 { rn = crs.n ; done = true } }
+        ## #773 — only a DECLARATION of the name gives it a type. A local's type is fixed where it is declared;
+        ## a later `x = y` cannot change it, and the parser gives a reassignment the same `Stmt.Assign` node,
+        ## so `ast::assign_is_decl` (the source-level test) tells the two apart. Taking the reassignment
+        ## `a = b` as a type source let the var-copy arm below recurse `b := a` -> `a = b` -> `b := a` ... until
+        ## the compiler's stack overflowed (SIGSEGV). The explicitly UNINITIALIZED `name : T` carries only a
+        ## sentinel value, so its type is its annotation; the initializing `name = T(...)` after it is a
+        ## reassignment and is no longer consulted. The first declaration ends the scan either way.
+        named := streq(src, ans, anl, ns, nl) and ast::assign_is_decl(src, ans, anl)
+        if named and ast::local_is_uninit(src, ans, anl) {
+          uts := ast::local_type_span(src, ans, anl)
+          ubn := base_type_name(src, uts.s, uts.n)
+          if uts.n != 0 and struct_decl_of(rv_decls(), src, ubn.s, ubn.n) >= 0 { rn = ubn.n }
+        }
+        if named and expr_is_struct_lit(v) { rn = expr_struct_lit_nl(v) ; done = true }
+        if named and (not done) { crs := rv_call_ret_struct_span(v, rv_decls(), src, a) ; if crs.n != 0 { rn = crs.n ; done = true } }
         ## a WIDE-struct-returning CALL bind (`s := mk()`, LP64 indirect result) — same span, see the _ns twin.
-        if streq(src, ans, anl, ns, nl) and (not done) { crt := rv_call_ret_sret_span(v, rv_decls(), src, a) ; if crt.n != 0 { rn = crt.n ; done = true } }
+        if named and (not done) { crt := rv_call_ret_sret_span(v, rv_decls(), src, a) ; if crt.n != 0 { rn = crt.n ; done = true } }
         ## an aggregate-VAR copy `q := p` takes p's struct type (resolve the source local recursively).
-        if streq(src, ans, anl, ns, nl) and (not done) {
+        if named and (not done) {
           cvns := ex_var_ns(v) ; cvnl := ex_var_nl(v)
           if cvnl != 0 and (not streq(src, cvns, cvnl, ns, nl)) {
             if rv_local_struct_nl(head, src, cvns, cvnl, a) != 0 { rn = rv_local_struct_nl(head, src, cvns, cvnl, a) ; done = true }
           }
         }
         ## a standard-byte aggregate field copy `q := p.inner` takes the leaf struct type.
-        if streq(src, ans, anl, ns, nl) and (not done) and ex_is_field(v) {
+        if named and (not done) and ex_is_field(v) {
           sfp := rv_std_path_ty(v, head, src, a, rv_decls())
           if rv_std_path_ok(v, head, src, a, rv_decls()) and sfp.n != 0 {
             sbn := base_type_name(src, sfp.s, sfp.n)
@@ -314,7 +341,8 @@ rv_local_struct_nl := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
           }
         }
         ## `x := xs[i]` — an ELEMENT copy takes the ELEMENT struct's type (see the _ns twin).
-        if streq(src, ans, anl, ns, nl) and (not done) { eis := rv_index_elem_struct_span(v, src, a, rv_decls()) ; if eis.n != 0 { rn = eis.n ; done = true } }
+        if named and (not done) { eis := rv_index_elem_struct_span(v, src, a, rv_decls()) ; if eis.n != 0 { rn = eis.n ; done = true } }
+        if named { done = true }
         s = nx
       }
       Stmt::Return(rv, nx) => { s = nx }
