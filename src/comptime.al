@@ -128,14 +128,14 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
       while arm != 0 {
         am := deref(arm_p(arm))
         fb := fold(am.body)
-        anew := newarm(a, Arm(wild = am.wild, lit = am.lit, body = fb, next = 0, vs = am.vs, vl = am.vl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = am.hi))
-        if nhead == 0 { nhead = anew } else {
+        anew := newarm(a, Arm(wild = am.wild, lit = am.lit, body = fb, next = unchecked bitcast(ptr(mut Arm), 0), vs = am.vs, vl = am.vl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = am.hi))
+        if nhead == 0 { nhead = unchecked bitcast(usize, anew) } else {
           ap := arm_p(ntail)
           old := deref(ap)
           upd := Arm(wild = old.wild, lit = old.lit, body = old.body, next = anew, vs = old.vs, vl = old.vl, binds_head = old.binds_head, body_stmts = old.body_stmts, hi = old.hi)
           deref(ap) = upd
         }
-        ntail = anew
+        ntail = unchecked bitcast(usize, anew)
         arm = am.next
       }
       newnode(Expr.Match(fs, nhead))
@@ -152,14 +152,14 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
       while garm != 0 {
         gold := deref(arg_p(garm))
         gfe := fold(gold.e)
-        gnew := newgarg(a, Arg(e = gfe, next = 0))
-        if ghead == 0 { ghead = gnew } else {
+        gnew := newgarg(a, Arg(e = gfe, next = unchecked bitcast(ptr(mut Arg), 0)))
+        if ghead == 0 { ghead = unchecked bitcast(usize, gnew) } else {
           gp := arg_p(gtail)
           gprev := deref(gp)
           gupd := Arg(e = gprev.e, next = gnew)
           deref(gp) = gupd
         }
-        gtail = gnew
+        gtail = unchecked bitcast(usize, gnew)
         garm = gold.next
       }
       newnode(Expr.Call(cs, cl, nargs, ghead))
@@ -176,14 +176,14 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
       while sfa != 0 {
         sfold := deref(arg_p(sfa))
         sffe := fold(sfold.e)
-        sfnew := newgarg(a, Arg(e = sffe, next = 0))
-        if sfh == 0 { sfh = sfnew } else {
+        sfnew := newgarg(a, Arg(e = sffe, next = unchecked bitcast(ptr(mut Arg), 0)))
+        if sfh == 0 { sfh = unchecked bitcast(usize, sfnew) } else {
           sfp := arg_p(sft)
           sfprev := deref(sfp)
           sfupd := Arg(e = sfprev.e, next = sfnew)
           deref(sfp) = sfupd
         }
-        sft = sfnew
+        sft = unchecked bitcast(usize, sfnew)
         sfa = sfold.next
       }
       newnode(Expr.StructLit(scs, scl, snf, sfh))
@@ -203,14 +203,14 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
       while epa != 0 {
         epold := deref(arg_p(epa))
         epfe := fold(epold.e)
-        epnew := newgarg(a, Arg(e = epfe, next = 0))
-        if eph == 0 { eph = epnew } else {
+        epnew := newgarg(a, Arg(e = epfe, next = unchecked bitcast(ptr(mut Arg), 0)))
+        if eph == 0 { eph = unchecked bitcast(usize, epnew) } else {
           epp := arg_p(ept)
           epprev := deref(epp)
           epupd := Arg(e = epprev.e, next = epnew)
           deref(epp) = epupd
         }
-        ept = epnew
+        ept = unchecked bitcast(usize, epnew)
         epa = epold.next
       }
       newnode(Expr.EnumLit(ees, eel, evs, evl, enp, eph))
@@ -238,14 +238,14 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
       while aea != 0 {
         aeold := deref(arg_p(aea))
         aefe := fold(aeold.e)
-        aenew := newgarg(a, Arg(e = aefe, next = 0))
-        if aeh == 0 { aeh = aenew } else {
+        aenew := newgarg(a, Arg(e = aefe, next = unchecked bitcast(ptr(mut Arg), 0)))
+        if aeh == 0 { aeh = unchecked bitcast(usize, aenew) } else {
           aep := arg_p(aet)
           aeprev := deref(aep)
           aeupd := Arg(e = aeprev.e, next = aenew)
           deref(aep) = aeupd
         }
-        aet = aenew
+        aet = unchecked bitcast(usize, aenew)
         aea = aeold.next
       }
       newnode(Expr.ArrayLit(anel, aeh))

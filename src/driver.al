@@ -470,7 +470,7 @@ d_lift_expr := fn(e : ptr(Expr), ms : usize, ml : usize, in out decls : rt::Vec,
     Expr::Lambda(fnpos, ph, rts, rtl, bh, val) => {
       d_lift_stmts(bh, ms, ml, decls, na, tar)
       d_lift_expr(val, ms, ml, decls, na, tar)
-      sd := Decl(name_start = fnpos, name_len = 0, value = val, is_fn = true, kind = 1, arity = d_lam_arity(ph, na), is_generic = false, params_head = ph, body_stmts = bh, fields_head = 0, ret_ts = rts, ret_tl = rtl, mod_start = ms, mod_len = ml, when_cond = 0, alias_ts = 0, alias_tl = 0)
+      sd := Decl(name_start = fnpos, name_len = 0, value = val, is_fn = true, kind = 1, arity = d_lam_arity(ph, na), is_generic = false, params_head = ph, body_stmts = bh, fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = rts, ret_tl = rtl, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       s := rt::bump(deref(tar), size(Decl))
       sdp := unchecked bitcast(ptr(mut Decl), s)
       deref(sdp) = sd
@@ -911,7 +911,7 @@ d_expr_rw_calls := fn(e : ptr(Expr), fs : usize, fl : usize, caps : ptr(rt::Vec)
         while k < ncaps {
           pk := rt::vec_get(deref(caps), k)
           vptr := parser::newnode(na, Expr.Var(pk / 1024, pk % 1024))
-          argh := parser::gnode(na, Arg(e = vptr, next = 0))
+          argh := parser::gnode(na, Arg(e = vptr, next = unchecked bitcast(ptr(mut Arg), 0)))
           if chain_head == 0 { chain_head = argh } else { parser::set_arg_next(na, chain_tail, argh) }
           chain_tail = argh
           k = k + 1
@@ -1253,7 +1253,7 @@ d_expr_rw_hof_site := fn(e : ptr(Expr), hs : usize, hl : usize, fs : usize, fl :
           while k < ncaps {
             pk := rt::vec_get(deref(caps), k)
             vptr := parser::newnode(na, Expr.Var(pk / 1024, pk % 1024))
-            argh := parser::gnode(na, Arg(e = vptr, next = 0))
+            argh := parser::gnode(na, Arg(e = vptr, next = unchecked bitcast(ptr(mut Arg), 0)))
             if chain_head == 0 { chain_head = argh } else { parser::set_arg_next(na, chain_tail, argh) }
             chain_tail = argh
             k = k + 1
@@ -1407,7 +1407,7 @@ d_append_cap_params := fn(ph : ptr(mut Param), caps : ptr(rt::Vec), decls : rt::
     ## body `:=` binding, so the body scan returns 0/0 → an untyped word → silent miscompile; see
     ## d_param_type_span). A resolved aggregate type gives the capture a TYPED by-ref param.
     if ct.n == 0 { ct = d_param_type_span(eph, pk / 1024, pk % 1024, decls, src) }
-    nph := d_mk_param(na, Param(ns = pk / 1024, nl = pk % 1024, next = 0, ts = ct.s, tl = ct.n, pmode = pm8, pps = 0, ppl = 0))
+    nph := d_mk_param(na, Param(ns = pk / 1024, nl = pk % 1024, next = unchecked bitcast(ptr(mut Param), 0), ts = ct.s, tl = ct.n, pmode = pm8, pps = 0, ppl = 0))
     if head == 0 { head = nph } else { d_set_param_next(na, tail, nph) }
     tail = nph
     k = k + 1
@@ -1563,7 +1563,7 @@ expr_call_info := fn(e : ptr(Expr)) -> CallInfo {
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CallInfo(is_call = false, cs = 0, cl = 0, nargs = 0, ah = 0) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CallInfo(is_call = false, cs = 0, cl = 0, nargs = 0, ah = unchecked bitcast(ptr(mut Arg), 0)) }
   }
 }
 d_var_span := fn(e : ptr(Expr)) -> CSpan {
@@ -1582,7 +1582,7 @@ d_fwd_hof_arity := fn(d : Decl, na : ptr(mut rt::Arena), src : ptr(u8)) -> i64 {
   mut r : i64 = 0 - 1
   if d.is_fn {
     if d.params_head != 0 {
-      re := d_single_return(d.body_stmts, na)
+      re := d_single_return(unchecked bitcast(usize, d.body_stmts), na)
       if unchecked bitcast(usize, re) != 0 {
         ci := expr_call_info(re)
         if ci.is_call {
@@ -1748,7 +1748,7 @@ d_rewrite_named_call := fn(e : ptr(Expr), ss : usize, sl : usize, nf : usize, fh
     }
     if found < 0 { panic("selfhost: named call argument does not match any parameter name") }
     ve := d_arg_e_at(fhead, usize(found), na)
-    argh := parser::gnode(na, Arg(e = ve, next = 0))
+    argh := parser::gnode(na, Arg(e = ve, next = unchecked bitcast(ptr(mut Arg), 0)))
     if head == 0 { head = argh } else { parser::set_arg_next(na, tail, argh) }
     tail = argh
     p = p + 1
@@ -1975,7 +1975,7 @@ d_alloc_callee := fn(decls : rt::Vec, cs : usize, cl : usize, na : ptr(mut rt::A
 }
 ## Splice `ae` as arg index `k` into arena-linked Arg list `ah`; returns the (possibly new) head.
 d_insert_arg := fn(ah : ptr(mut Arg), k : usize, ae : ptr(Expr), na : ptr(mut rt::Arena)) -> usize {
-  newarg := parser::gnode(na, Arg(e = ae, next = 0))
+  newarg := parser::gnode(na, Arg(e = ae, next = unchecked bitcast(ptr(mut Arg), 0)))
   if k == 0 { parser::set_arg_next(na, newarg, ah); return newarg }
   mut g := ah
   mut i := 0
@@ -3368,15 +3368,15 @@ d_manifest_module_decls := fn(pv : rt::Vec, name_start : rt::Vec, name_len : rt:
       ## synthetic declaration its own copy of `version`, while keeping the first
       ## copy as the canonical text used by the source-AST rewrite probe.
       fns := MANIFEST_FIELD_S + k * MANIFEST_FIELD_STRIDE
-      fd := d_manifest_field_node(na, FieldDecl(ns = fns, nl = MANIFEST_FIELD_N, arity = 0, next = 0, ts = MANIFEST_FIELD_TS, tl = MANIFEST_FIELD_TL, wsize = 1))
-      td := Decl(name_start = MANIFEST_TYPE_S, name_len = MANIFEST_TYPE_N, value = 0, is_fn = false, kind = 2, arity = 0, is_generic = false, params_head = 0, body_stmts = 0, fields_head = fd, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = 0, alias_ts = 0, alias_tl = 0)
+      fd := d_manifest_field_node(na, FieldDecl(ns = fns, nl = MANIFEST_FIELD_N, arity = 0, next = unchecked bitcast(ptr(mut FieldDecl), 0), ts = MANIFEST_FIELD_TS, tl = MANIFEST_FIELD_TL, wsize = 1))
+      td := Decl(name_start = MANIFEST_TYPE_S, name_len = MANIFEST_TYPE_N, value = unchecked bitcast(ptr(Expr), 0), is_fn = false, kind = 2, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0), body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = fd, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       th := d_manifest_decl_node(tar, td)
       rt::vec_push(decls, th)
       lit := parser::newnode(ptr(na), Expr.StrLit(MANIFEST_VERSION_S, MANIFEST_VERSION_N, nstr, 0, 0))
       nstr += 1
-      ah := parser::gnode(ptr(na), Arg(e = lit, next = 0))
+      ah := parser::gnode(ptr(na), Arg(e = lit, next = unchecked bitcast(ptr(mut Arg), 0)))
       value := parser::newnode(ptr(na), Expr.StructLit(MANIFEST_TYPE_S, MANIFEST_TYPE_N, 1, ah))
-      ad := Decl(name_start = MANIFEST_BIND_S, name_len = MANIFEST_BIND_N, value = value, is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = 0, body_stmts = 0, fields_head = 0, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = 0, alias_ts = 0, alias_tl = 0)
+      ad := Decl(name_start = MANIFEST_BIND_S, name_len = MANIFEST_BIND_N, value = value, is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0), body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       ahd := d_manifest_decl_node(tar, ad)
       rt::vec_push(decls, ahd)
     }
@@ -4384,7 +4384,7 @@ d_check_limits_ceiling := fn(ceiling : str, decls : ptr(rt::Vec), src : ptr(u8))
       while k < cnt {
         d := deref(decl_get(decls, k))
         if d.kind == 0 and d.arity == 99 and d.ret_tl != 0 {
-          if not d_word_in_list(cbase, ci, cj - ci, src, d.ret_ts, d.ret_tl) {
+          if not d_word_in_list(cbase, ci, cj - ci, unchecked bitcast(usize, src), d.ret_ts, d.ret_tl) {
             return DIAG_LIMIT_MARKER + d.ret_ts * 8 + d_limit_kind(cbase, ci, cj - ci)
           }
         }

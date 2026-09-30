@@ -210,9 +210,12 @@ env_truncation_error := fn() {
   tool_error("alatyr: the process environment is larger than alatyr can read (2 MiB); refusing to hand a truncated environment to the toolchain")
 }
 
-## Store a word `val` at byte address `addr` (for building execve's argv/envp pointer arrays). `addr`
-## is a typed `ptr(mut u8)` (usize->ptr Phase 2); callers pass their usize slot addresses unchanged.
-pub wword := fn(addr : ptr(mut u8), val : usize) {
+## Store a word `val` at byte address `addr` (for building execve's argv/envp pointer arrays). Every
+## caller computes the slot address as a `usize` (`av + k * 8`), so `addr` is a `usize` and the one
+## reinterpretation happens here, explicitly (#529). It was a `ptr(mut u8)` that every call reached
+## only through the implicit usize->ptr seam; wrapping each argument instead would have put the
+## `+ k * 8` arithmetic inside the `unchecked` scope and dropped its overflow guard.
+pub wword := fn(addr : usize, val : usize) {
   p : ptr(mut usize) = unchecked bitcast(ptr(mut usize), addr)
   deref(p) = val
 }
