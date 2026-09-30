@@ -49,6 +49,9 @@
 #   REFUSED       x86 V|K,  twin C                         — the twin refuses to compile what x86 runs;
 #                                                            the acceptable end state IF it is located
 #   ACCEPTS       x86 C,    twin V|K|S|T                   — a twin builds a program x86_64 refuses
+#   HW-DEFINED    a MISSING-TRAP row on a path in the `HW_DEFINED` list below: `unchecked` division by
+#                 zero / `MIN / -1`, which the specification makes target-specific (Concurrency §6.2).
+#                 Listed and counted (`hw-defined=`), but not part of `paths=`/`rows=`.
 #
 # Not a disagreement: equal states (V<a>/V<a>, K/K, C/C), and x86 C against twin A, L or a loud
 # exit — every backend refused, only at a different step. `--all` lists those as REFUSED-LATE.
@@ -98,13 +101,38 @@ while [ "$#" -gt 0 ]; do
 done
 MANIFEST="${1:-$ROOT/scripts/corpus.manifest}"
 SHA_EMPTY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-CLASS_ORDER="WRONG-VALUE MISSING-TRAP CRASH LOUD-EXIT TRAP TIMEOUT ASSEMBLE LINK REFUSED ACCEPTS REFUSED-LATE"
+CLASS_ORDER="WRONG-VALUE MISSING-TRAP CRASH LOUD-EXIT TRAP TIMEOUT ASSEMBLE LINK REFUSED ACCEPTS HW-DEFINED REFUSED-LATE"
+
+## ── the documented hardware-defined divergences ───────────────────────────────────────────────
+## Specification (pin b4e7979), Concurrency §6.2 "Inside an `unchecked` scope: wrap":
+##
+##   "The remaining members of the family are dropped to **hardware behaviour**, which is *not* the
+##    same thing and *not* uniform: **division by zero**, an **over-width shift**, and **`MIN ÷ -1`**
+##    do whatever the target does — `x86_64` faults on `MIN ÷ -1` and on a zero divisor (`#DE`),
+##    `aarch64` yields `MIN` and `0` respectively, and an over-width shift is masked on some ISAs and
+##    not others. Writing them under `unchecked` is therefore target-specific by construction (I11:
+##    hardware-defined, never UB — but never portable either)."
+##
+## So a program that divides by zero, or `MIN / -1`, inside `unchecked` is REQUIRED to disagree:
+## x86_64 faults (SIGFPE, exit 136) where aarch64 and riscv64 answer their ISA's defined value. The
+## paths below are exactly such fixtures, each registered per backend in scripts/e2e.sh with its own
+## hardware answer. They are NOT hidden: a listed path's rows are classed HW-DEFINED, printed in the
+## table and counted on the headline line as `hw-defined=`, and excluded only from `paths=`/`rows=`,
+## the count #683 drives to zero. The exemption is narrow on purpose — it applies ONLY to the
+## MISSING-TRAP shape (x86_64 traps, the twin exits quietly with a value); any other disagreement on a
+## listed path (a twin that crashes, answers where x86_64 answers differently, …) keeps its own class.
+## Add a path here only with a fixture whose operation is one the paragraph above names.
+HW_DEFINED='test/unchecked_div_zero.al
+test/unchecked_udiv_zero.al
+test/unchecked_rem_zero.al
+test/unchecked_div_min_neg1.al'
 
 ## The join. Reads a manifest, writes one line per disagreeing (path, twin):
 ##   class TAB backend TAB path TAB x86-state TAB twin-state TAB tag
 ## `all=1` also emits REFUSED-LATE. Kept a function so the self-test feeds it synthetic manifests.
-xb_rows() { # manifest all
-  awk -F'\t' -v all="$2" -v empty="$SHA_EMPTY" '
+xb_rows() { # manifest all [hw-defined-list]
+  awk -F'\t' -v all="$2" -v empty="$SHA_EMPTY" -v hwl="$(printf '%s' "${3-$HW_DEFINED}" | tr '\n' ' ')" '
+    BEGIN { nh = split(hwl, hl, " "); for (i = 1; i <= nh; i++) if (hl[i] != "") hw[hl[i]] = 1 }
     function state(be, ph, ex) {
       if (ph ~ /_timeout$/) return (ph == "run_timeout") ? "T" : "C"
       if (ph == "compile") return "C"
@@ -150,6 +178,7 @@ xb_rows() { # manifest all
           b = tw[j]; k = p "\t" b
           if (!(k in st)) continue
           c = klass(x, st[k], se[k] != empty)
+          if (c == "MISSING-TRAP" && (p in hw)) c = "HW-DEFINED"
           if (c == "" || (c == "REFUSED-LATE" && all != 1)) continue
           tag = (st[k] ~ /^V/) ? ((se[k] == empty) ? "quiet" : "loud") : "-"
           printf "%s\t%s\t%s\t%s\t%s\t%s\n", c, b, p, x, st[k], tag
@@ -227,6 +256,17 @@ if [ "$MODE" = selftest ]; then
   ok "a build timeout is a refusal, a run timeout is TIMEOUT" \
      "$(rows_of "$(q x86_64 run 42)" "$(q aarch64 compile_timeout 124)" "$(q wasm run_timeout 124)")" "REFUSED:aarch64 TIMEOUT:wasm"
   ok "no x86_64 row, no verdict" "$(rows_of "$(q aarch64 run 1)")" ""
+  ## The hardware-defined list: it reclasses ONLY the MISSING-TRAP shape of a LISTED path.
+  hq() { printf '%s\t%s\t%s\t%s\t%s\t%s' "$1" test/hw.al "$2" "$3" "$E" "$E"; }
+  printf '%s\n' "$H" "$(hq x86_64 run 136)" "$(hq aarch64 run 41)" "$(hq riscv64 run 42)" "$(hq wasm run 134)" > "$T/m"
+  ok "a listed hardware-defined path is HW-DEFINED" "$(xb_rows "$T/m" 0 test/hw.al | cut -f1,2 | tr '\t\n' ': ' | sed 's/ $//')" \
+     "HW-DEFINED:aarch64 HW-DEFINED:riscv64"
+  ok "... and the same rows unlisted stay MISSING-TRAP" "$(xb_rows "$T/m" 0 test/other.al | cut -f1 | sort -u)" "MISSING-TRAP"
+  printf '%s\n' "$H" "$(hq x86_64 run 42)" "$(hq aarch64 run 41)" "$(hq riscv64 run 139)" > "$T/m"
+  ok "the list never excuses a wrong value or a crash on a listed path" \
+     "$(xb_rows "$T/m" 0 test/hw.al | cut -f1,2 | tr '\t\n' ': ' | sed 's/ $//')" "WRONG-VALUE:aarch64 CRASH:riscv64"
+  ok "the committed list names only fixtures that exist" \
+     "$(printf '%s\n' "$HW_DEFINED" | while read -r f; do [ -f "$ROOT/$f" ] || echo "$f"; done)" ""
   printf '%s\n' "$H" "$(q x86_64 run 42)" "$(q wasm run 1 "$L")" "$(q aarch64 run 3)" > "$T/m"
   ok "a differing exit is WRONG-VALUE when quiet, LOUD-EXIT when the runner said why" \
      "$(xb_rows "$T/m" 0 | cut -f1,2,6 | tr '\t\n' ': ' | sed 's/ $//')" "WRONG-VALUE:aarch64:quiet LOUD-EXIT:wasm:loud"
@@ -328,14 +368,17 @@ if [ "$MODE" = sites ]; then
   exit 0
 fi
 
-nrows=0; npaths=0
+nrows=0; npaths=0; nhw=0
 if [ -n "$ROWS" ]; then
-  nrows="$(printf '%s\n' "$ROWS" | wc -l | tr -d ' ')"
-  npaths="$(printf '%s\n' "$ROWS" | cut -f3 | sort -u | wc -l | tr -d ' ')"
+  ## The headline counts what #683 must drive to zero; the documented hardware-defined rows are
+  ## counted beside it, never silently dropped.
+  nrows="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED"' | wc -l | tr -d ' ')"
+  npaths="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 != "HW-DEFINED"' | cut -f3 | sort -u | wc -l | tr -d ' ')"
+  nhw="$(printf '%s\n' "$ROWS" | awk -F'\t' '$1 == "HW-DEFINED"' | wc -l | tr -d ' ')"
 fi
 nsrc="$(awk -F'\t' '!/^#/ && NF >= 6 && $1 == "x86_64"' "$MANIFEST" | wc -l | tr -d ' ')"
-echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc"
-[ "$nrows" = 0 ] && exit 0
+echo "xbackend diff: paths=$npaths rows=$nrows sources=$nsrc hw-defined=$nhw"
+[ -n "$ROWS" ] || exit 0
 
 ## A path's class is its highest-priority row's class.
 PATHCLASS="$(printf '%s\n' "$ROWS" | awk -F'\t' -v ord="$CLASS_ORDER" '
