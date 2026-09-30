@@ -318,9 +318,11 @@ scan_call_agg_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Arg
   cnt
 }
 ## The max aggregate-VALUE-argument count of any single call within expr `e` — the structural twin of
-## `scan_str_arg_expr`. Drives the agg-temp POOL reservation (`aggpeak` blocks). A flat max (not a
-## nesting sum): deep agg-nesting that would exceed the reservation is caught by `emit_arg`'s defensive
-## overflow panic (sound — a loud abort, never a silent miscompile), not by over-reserving here.
+## `scan_str_arg_expr`. PLACES the agg-temp pool's first blocks (`aggpeak`); it does not bound the pool.
+## Where it under-counts (an enum-returning call argument is not counted here, #772), `agg_alloc`
+## measures the blocks the emission really takes and `emit_fn` re-emits the function with a pool that
+## holds them. Changing this count moves the frame of every function it touches, so it is left as the
+## layout the tree was built with; deleting it for the measured size alone is a reseed (#801).
 pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), a : rt::Arena) -> usize {
   mut m := 0
   match deref(e) {
@@ -397,8 +399,8 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
 }
 ## One block for a wide-SRET call whose result is NOT BOUND — discarded as a statement, returned, or
 ## a void fn's trailing expression. Those three sites reserve the destination the callee writes
-## through (#711), and a block that is taken must be a block that was counted, or `agg_alloc` aborts
-## with "aggregate-value call-arg temp pool overflow".
+## through (#711). Since #772 an uncounted block no longer aborts (`agg_alloc` measures it and the
+## function is emitted again with a wider pool); counting it here keeps the frame this scan placed.
 ##
 ## Deliberately NOT folded into `scan_agg_arg_expr`: that scanner also runs over a BINDING's
 ## right-hand side, and a bound call takes a frame SLOT rather than a pool block. Counting it there

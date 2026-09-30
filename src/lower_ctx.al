@@ -712,9 +712,12 @@ pub LCtx := struct {
   ## free slot (starts at the pool base = `agg_tmp`); each aggregate-value arg materialized by `emit_arg`
   ## takes a distinct `agg_w`-word slice and advances `agg_next`, so N such args in one call get N
   ## distinct blocks (no aliasing). `emit_call_args` save/restores `agg_next` around a call's args, so a
-  ## nested call's args stack ABOVE the enclosing call's live args. `agg_end` is the pool limit; a bump
-  ## past it aborts (a loud overflow, never a silent miscompile — §8).
-  agg_next : i64, agg_end : i64, agg_w : i64,
+  ## nested call's args stack ABOVE the enclosing call's live args. `agg_peak` is the pool's HIGH-WATER
+  ## mark: one past the highest slot any block has taken so far. It is a measurement, not a limit
+  ## (#772, #801): the pool has no capacity to overflow. After the body, `emit_fn` compares it with the
+  ## words it reserved and, if the blocks went past them, emits the function again with the pool widened
+  ## to exactly what this emission took (`AggPoolFit`).
+  agg_next : i64, agg_peak : i64, agg_w : i64,
   ## MIXED-KIND tuple component layout (§4). A tuple is stored at CUMULATIVE offsets, but the array
   ## read model uses a UNIFORM element type+stride (the FIRST component) — wrong when a later component
   ## has a different kind/width (e.g. `(u64, Pt)`, `t.1.x` misreads). `tcomps` is a side-table of
