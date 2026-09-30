@@ -17654,6 +17654,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       feg := try_field_enum_scrut(scrut, sb, cx)
       ieg := try_index_enum_scrut(scrut, sb, cx, nl)
       aeg := try_arrelem_field_enum_scrut(scrut, sb, cx, nl)
+      ## #809 — a folded `Option(ptr(T))` value none of the helpers above staged.
+      fvg := try_folded_value_scrut(scrut, si.is_e or geg.is_e or feg.is_e or ieg.is_e or aeg.is_e, sb, cx, nl)
       if geg.is_e {
         ## `match <mutable enum GLOBAL>` — materialized into the scratch temp above; dispatch on it.
         emit_enum_match(head, geg, sb, cx, a, nl)
@@ -17663,6 +17665,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         emit_enum_match(head, ieg, sb, cx, a, nl)
       } else if aeg.is_e {
         emit_enum_match(head, aeg, sb, cx, a, nl)
+      } else if fvg.is_e {
+        emit_enum_match(head, fvg, sb, cx, a, nl)
       } else if enum_ret_call(scrut, cx) {
         ## A direct call carries the RETURN DECLARATION's module even when its generic return span
         ## contains a bare type argument (`wide::fail() -> Result(u64, Error)`). Publish that owner
@@ -21885,7 +21889,8 @@ folded_field_array_elem := fn(ab : ptr(Expr), slots : ptr(SVec), decls : ptr(rt:
 }
 
 ## #808 — the declared type of the field place `v` (`s.f`, `p.f`, `deref(p).f`, `deref(<call>).f`,
-## `deref(ptr(s)).f`), or 0/0 when `v` is not a field place this resolver reaches. `folded_value_span`
+## `deref(ptr(s)).f`, and since #809 a mutable global's `G.f` and an array element's `xs[i].f`), or 0/0
+## when `v` is not a field place this resolver reaches. `folded_value_span`
 ## reads a folded field off it, and an element of a folded-element ARRAY field (`t.b[i]`) through it.
 field_place_type_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   z := CSpan(s = 0, n = 0)
@@ -21895,11 +21900,19 @@ field_place_type_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Ve
   mut bs := 0
   mut bl := 0
   bvn := var_name_span(fp.base)
+  fivl := index_value_layout(fp.base, slots, src, decls, a)
   if bvn.n != 0 {
     if slot_of(slots, src, bvn.s, bvn.n) >= 0 {
       bent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, bvn.s, bvn.n)))
       if streq(src, bent.ns, bent.nl, bvn.s, bvn.n) and (bent.ek == 2 or bent.ek == 7) { bs = bent.sns; bl = bent.snl }
+    } else if is_module_mut_global(decls, src, bvn.s, bvn.n) {
+      ## #809 — a field of a mutable struct GLOBAL (`G.head`): the global's initializer names its type.
+      gsi := struct_lit_info(mut_global_value(decls, src, bvn.s, bvn.n))
+      if gsi.is_s { bs = gsi.ss; bl = gsi.sl }
     }
+  } else if fivl.is_agg and fivl.eek == 2 {
+    ## #809 — a field of a struct ARRAY ELEMENT (`ns[i].next`): the array's element type.
+    bs = fivl.ess; bl = fivl.esl
   } else {
     ds := deref_struct_span(fp.base, slots, src)
     if ds.n != 0 { bs = ds.s; bl = ds.n }
@@ -22460,6 +22473,11 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
       aeg := try_arrelem_field_enum_scrut(mi.scrut, sb, cx, nl)
       if aeg.is_e { si = aeg }
     }
+    if si.is_e == false {
+      ## #809 — a folded `Option(ptr(T))` value none of the helpers above staged.
+      fvg := try_folded_value_scrut(mi.scrut, false, sb, cx, nl)
+      if fvg.is_e { si = fvg }
+    }
     if (si.is_e == false) and (enum_ret_call(mi.scrut, cx) == false) {
       is_str := match_is_str(mi.head, a)
       if is_str == false {
@@ -22922,6 +22940,8 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64
   feg := try_field_enum_scrut(scrut, sb, cx)
   ieg := try_index_enum_scrut(scrut, sb, cx, nl)
   aeg := try_arrelem_field_enum_scrut(scrut, sb, cx, nl)
+  ## #809 — a folded `Option(ptr(T))` value none of the helpers above staged.
+  fvg := try_folded_value_scrut(scrut, si0.is_e or geg.is_e or feg.is_e or ieg.is_e or aeg.is_e, sb, cx, nl)
   mut sise := si0.is_e
   mut sbase := si0.base
   mut ses := si0.es
@@ -22930,6 +22950,7 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64
   else if feg.is_e { sise = true; sbase = feg.base; ses = feg.es; sel = feg.el }
   else if ieg.is_e { sise = true; sbase = ieg.base; ses = ieg.es; sel = ieg.el }
   else if aeg.is_e { sise = true; sbase = aeg.base; ses = aeg.es; sel = aeg.el }
+  else if fvg.is_e { sise = true; sbase = fvg.base; ses = fvg.es; sel = fvg.el }
   else if si0.is_e and si0.is_ref {
     mref := materialize_ref_enum(si0.base, si0.es, si0.el, sb, cx)
     sbase = mref.base; ses = mref.es; sel = mref.el
@@ -23185,6 +23206,11 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
   if si0.is_e == false {
     aeg := try_arrelem_field_enum_scrut(scrut, sb, cx, nl)
     if aeg.is_e { si0 = aeg }
+  }
+  ## #809 — a folded `Option(ptr(T))` value none of the helpers above staged.
+  if si0.is_e == false {
+    fvg := try_folded_value_scrut(scrut, false, sb, cx, nl)
+    if fvg.is_e { si0 = fvg }
   }
   ## Capture the comptime-for-VARIANT loop-var name from the `wild==2` template arm (before
   ## `expand_variant_arms` overwrites the generated arms' `vs/vl`) so a `var.name`/`var.payload`

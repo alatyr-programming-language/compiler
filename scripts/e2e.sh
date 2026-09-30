@@ -10279,6 +10279,9 @@ run_x86 issue797_option_ptr_field_store 42
 # #808 — `[Option(ptr(T)); N]` is N folded words: the literal, the element store and the element read of a
 # local array, an array parameter (by value and `in out`) and an array field; a `Some` element read 0.
 run_x86 issue808_option_ptr_array 42
+# #809 — a direct `match` over an `Option(ptr(T))` field reached through a mutable global, an array element
+# or a pointer (`deref(p).next`) is typed from the field's declaration; it was refused as untyped.
+run_x86 issue809_option_ptr_field_match 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.

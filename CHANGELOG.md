@@ -136,6 +136,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 - **A large program no longer aborts the compiler.** About 7 MB of source (comments included) made
   `alatyr build` die with `rt: arena overflow (bump past cap)`, because two parser tables were reserved
   at 48 bytes per source byte before parsing. They are now sized from what the parser found (#814).
+- **A direct `match` over an `Option(ptr(T))` field works wherever the field lives.** The field could
+  be a mutable global's (`match G.head`), an array element's (`match ns[i].next`), or one reached through
+  a pointer (`match deref(p).next`, including the next hop of a list walk, `match deref(q).next`). These
+  were refused with "cannot see the scrutinee's enum type". The field's declared type now names the fold,
+  in the statement, value and tail forms of `match` (#809).
 - **An array of `Option(ptr(T))` holds one word per element.** The element was sized from the first
   literal element, and a bare `Option.None` names no type argument. The array therefore got a two-word
   `[disc, payload]` element that had lost its pointee type, and a matched `Some` element's `deref(q).v`
