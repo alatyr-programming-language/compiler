@@ -3536,7 +3536,7 @@ emit_a64_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt:
   push_str(sb, "  str x0, [sp, #-16]!\n")
   emit_a64_expr(idx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   if A64_CHK {
-    if nel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, nel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+    if nel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, nel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
   }
   push_str(sb, "  mov x1, #") ; push_int(sb, estride) ; push_str(sb, "\n  mul x0, x0, x1\n  ldr x1, [sp], #16\n  add x0, x0, x1\n")
 }
@@ -4043,7 +4043,7 @@ emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out
   ## the fully-evaluated divisor at this point). Mirrors x86_64's routed num.al div guard.
   if A64_CHK {
     if op == 19 or op == 29 {
-      push_str(sb, "  cbnz x1, 1f\n  brk #0\n1:\n")
+      push_str(sb, "  cbnz x1, 1f\n  brk #0 // div_zero\n1:\n")
       ## CHECKED `MIN / -1` (I11 / CG-8 division overflow, CG-13 one mechanism): a SIGNED `sdiv` of
       ## INT64_MIN by -1 has no representable quotient — AArch64 silently yields INT64_MIN (no fault),
       ## so the guard is the only thing that stops a wrong value. `cmn x1, #1` sets Z iff x1 == -1;
@@ -4058,11 +4058,11 @@ emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out
       ## immediates (`imm16 << 0` / `<< 16`). The zero case keeps the previous bytes exactly, so
       ## every native-width divide is unchanged. `%` (29) never sets `dvmin`: `MIN % -1` is 0.
       if dsigned {
-        if dvmin == 0 { push_str(sb, "  cmn x1, #1\n  b.ne 1f\n  negs x2, x0\n  b.vc 1f\n  brk #0\n1:\n") }
+        if dvmin == 0 { push_str(sb, "  cmn x1, #1\n  b.ne 1f\n  negs x2, x0\n  b.vc 1f\n  brk #0 // div_overflow\n1:\n") }
         else {
           push_str(sb, "  cmn x1, #1\n  b.ne 1f\n  mov x2, #")
           push_int(sb, 0 - dvmin)
-          push_str(sb, "\n  cmn x0, x2\n  b.ne 1f\n  brk #0\n1:\n")
+          push_str(sb, "\n  cmn x0, x2\n  b.ne 1f\n  brk #0 // div_overflow\n1:\n")
         }
       }
     }
@@ -4074,7 +4074,7 @@ emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out
   if op == 16 {
     if A64_CHK and (not narrow) {
       push_str(sb, "  adds x0, x0, x1\n")
-      if dsigned { push_str(sb, "  b.vc 1f\n  brk #0\n1:\n") } else { push_str(sb, "  b.cc 1f\n  brk #0\n1:\n") }
+      if dsigned { push_str(sb, "  b.vc 1f\n  brk #0 // overflow\n1:\n") } else { push_str(sb, "  b.cc 1f\n  brk #0 // overflow\n1:\n") }
     } else {
       push_str(sb, "  add x0, x0, x1\n")
     }
@@ -4085,7 +4085,7 @@ emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out
   if op == 17 {
     if A64_CHK and (not narrow) {
       push_str(sb, "  subs x0, x0, x1\n")
-      if dsigned { push_str(sb, "  b.vc 1f\n  brk #0\n1:\n") } else { push_str(sb, "  b.cs 1f\n  brk #0\n1:\n") }
+      if dsigned { push_str(sb, "  b.vc 1f\n  brk #0 // overflow\n1:\n") } else { push_str(sb, "  b.cs 1f\n  brk #0 // overflow\n1:\n") }
     } else {
       push_str(sb, "  sub x0, x0, x1\n")
     }
@@ -4095,8 +4095,8 @@ emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out
   ## to the low product's sign-extension (`asr #63`). Dropped under `unchecked`; narrow wraps.
   if op == 18 {
     if A64_CHK and (not narrow) {
-      if dsigned { push_str(sb, "  smulh x2, x0, x1\n  mul x0, x0, x1\n  asr x3, x0, #63\n  cmp x2, x3\n  b.eq 1f\n  brk #0\n1:\n") }
-      else { push_str(sb, "  umulh x2, x0, x1\n  mul x0, x0, x1\n  cbz x2, 1f\n  brk #0\n1:\n") }
+      if dsigned { push_str(sb, "  smulh x2, x0, x1\n  mul x0, x0, x1\n  asr x3, x0, #63\n  cmp x2, x3\n  b.eq 1f\n  brk #0 // overflow\n1:\n") }
+      else { push_str(sb, "  umulh x2, x0, x1\n  mul x0, x0, x1\n  cbz x2, 1f\n  brk #0 // overflow\n1:\n") }
     } else {
       push_str(sb, "  mul x0, x0, x1\n")
     }
@@ -4117,7 +4117,7 @@ emit_a64_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out
   if op == 41 { push_str(sb, "  orr x0, x0, x1\n") }
   if op == 36 { push_str(sb, "  eor x0, x0, x1\n") }
   known := op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36 or op == 40 or op == 41
-  if not known { push_str(sb, "  brk #0\n") }
+  if not known { push_str(sb, "  brk #0 // unsupported binary operator\n") }
 }
 
 ## Emit the width-narrowing of the value in x0 for `name(x)` — mirrors x86_64 `emit_int_narrow_reg`:
@@ -4149,12 +4149,12 @@ a64_emit_bitcast_narrow := fn(name : str, in out sb : rt::StrBuf) {
 ## the sign-extension of the low N bits differs from the full value. Emitted BEFORE the value-model
 ## wrap, gated by the caller on `A64_CHK` (checked) and a non-`0 - x` negation.
 a64_emit_narrow_trap := fn(name : str, in out sb : rt::StrBuf) {
-  if name == "u8" { push_str(sb, "  lsr x2, x0, #8\n  cbz x2, 1f\n  brk #0\n1:\n") }
-  else if name == "u16" { push_str(sb, "  lsr x2, x0, #16\n  cbz x2, 1f\n  brk #0\n1:\n") }
-  else if name == "u32" { push_str(sb, "  lsr x2, x0, #32\n  cbz x2, 1f\n  brk #0\n1:\n") }
-  else if name == "i8" { push_str(sb, "  sxtb x2, w0\n  cmp x2, x0\n  b.eq 1f\n  brk #0\n1:\n") }
-  else if name == "i16" { push_str(sb, "  sxth x2, w0\n  cmp x2, x0\n  b.eq 1f\n  brk #0\n1:\n") }
-  else if name == "i32" { push_str(sb, "  sxtw x2, w0\n  cmp x2, x0\n  b.eq 1f\n  brk #0\n1:\n") }
+  if name == "u8" { push_str(sb, "  lsr x2, x0, #8\n  cbz x2, 1f\n  brk #0 // narrow\n1:\n") }
+  else if name == "u16" { push_str(sb, "  lsr x2, x0, #16\n  cbz x2, 1f\n  brk #0 // narrow\n1:\n") }
+  else if name == "u32" { push_str(sb, "  lsr x2, x0, #32\n  cbz x2, 1f\n  brk #0 // narrow\n1:\n") }
+  else if name == "i8" { push_str(sb, "  sxtb x2, w0\n  cmp x2, x0\n  b.eq 1f\n  brk #0 // narrow\n1:\n") }
+  else if name == "i16" { push_str(sb, "  sxth x2, w0\n  cmp x2, x0\n  b.eq 1f\n  brk #0 // narrow\n1:\n") }
+  else if name == "i32" { push_str(sb, "  sxtw x2, w0\n  cmp x2, x0\n  b.eq 1f\n  brk #0 // narrow\n1:\n") }
 }
 
 ## Is a module GLOBAL `[ns,nl)` float-typed? A `: f64`/`: f32` annotation OR an inferred FloatLit init
@@ -4910,7 +4910,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           woff := field_word_offset(decls, src, psp.s, psp.n, fs, fl, a)
           pslot := 16 + ipidx * 8
           emit_a64_expr(ex_index_idx(base), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-          if A64_CHK { push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslot) ; push_str(sb, "]\n  ldr x1, [x3, #8]\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+          if A64_CHK { push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslot) ; push_str(sb, "]\n  ldr x1, [x3, #8]\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
           push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslot) ; push_str(sb, "]\n  ldr x2, [x3]\n")
           push_str(sb, "  mov x1, #") ; push_int(sb, stride * 8) ; push_str(sb, "\n  mul x0, x0, x1\n  add x2, x2, x0\n")
           push_str(sb, "  ldr x0, [x2, #") ; push_int(sb, woff * 8) ; push_str(sb, "]\n")
@@ -4943,7 +4943,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
             if eisga { enel = a64_alit_nel(a64_global_value(decls, src, ins, inl)) }
             emit_a64_expr(ex_index_idx(base), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
             if A64_CHK {
-              if enel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, enel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+              if enel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, enel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
             }
             push_str(sb, "  mov x1, #") ; push_int(sb, estrb) ; push_str(sb, "\n  mul x0, x0, x1\n")
             if eisla { push_str(sb, "  add x2, x0, x29\n  add x2, x2, #") ; push_int(sb, eaoff) ; push_str(sb, "\n")
@@ -5309,7 +5309,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## Before #683 both were native here: `shl(u8(1), 8)` ran, and `unchecked shl(u8(1), 9)` kept 512.
         snw := a64_operand_narrow(sv, params_head, body_head, src, a)
         if A64_CHK and (nm == "shl" or nm == "shr") {
-          push_str(sb, "  cmp x1, #") ; push_int(sb, lower_layout::shift_width_bits(snw)) ; push_str(sb, "\n  b.lo 1f\n  brk #0\n1:\n")
+          push_str(sb, "  cmp x1, #") ; push_int(sb, lower_layout::shift_width_bits(snw)) ; push_str(sb, "\n  b.lo 1f\n  brk #0 // shift_range\n1:\n")
         }
         if nm == "shl" { push_str(sb, "  lsl x0, x0, x1\n") }
         if nm == "shr" and ssigned { push_str(sb, "  asr x0, x0, x1\n") }
@@ -5845,7 +5845,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         push_str(sb, "  ldr x1, [sp], #16\n")
         if A64_CHK {
           snelE := arrty_nel(src, stdidxarr.s, stdidxarr.n)
-          if snelE > 0 { push_str(sb, "  mov x2, #") ; push_int(sb, snelE) ; push_str(sb, "\n  cmp x1, x2\n  b.lo 1f\n  brk #0\n1:\n") }
+          if snelE > 0 { push_str(sb, "  mov x2, #") ; push_int(sb, snelE) ; push_str(sb, "\n  cmp x1, x2\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
         }
         push_str(sb, "  add x0, x0, x1\n")
         if stdidxel.n != 0 and str_at((src + stdidxel.s), 1) == "i" { push_str(sb, "  ldrsb x0, [x0]\n") }
@@ -5856,7 +5856,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         if A64_CHK {
           snel := arrty_nel(src, stdarr.s, stdarr.n)
-          if snel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, snel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+          if snel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, snel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
         }
         if stdparamidx {
           spidxI := a64_std_param_path_idx(ibase, params_head, src, a, decls)
@@ -5880,7 +5880,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           push_str(sb, "  str x0, [sp, #-16]!\n")
           emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if A64_CHK {
-            push_str(sb, "  mov x1, #") ; push_int(sb, byte_ret_n) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n")
+            push_str(sb, "  mov x1, #") ; push_int(sb, byte_ret_n) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n")
           }
           push_str(sb, "  lsl x1, x0, #3\n  ldr x2, [sp], #16\n  lsr x0, x2, x1\n  and x0, x0, #255\n")
         }
@@ -5891,7 +5891,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           push_str(sb, "  str x0, [sp, #-16]!\n  str x1, [sp, #8]\n")
           emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if A64_CHK {
-            push_str(sb, "  mov x1, #") ; push_int(sb, byte_ret_n) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n")
+            push_str(sb, "  mov x1, #") ; push_int(sb, byte_ret_n) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n")
           }
           push_str(sb, "  ldr x2, [sp]\n  ldr x3, [sp, #8]\n  add sp, sp, #16\n")
           low := a64_next_label()
@@ -5906,7 +5906,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## `unchecked`). Reload the pointer AFTER the index expr (which may clobber scratch).
         emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         pslotT := 16 + pidxI * 8
-        if A64_CHK { push_str(sb, "  mov x1, #") ; push_int(sb, tupn) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+        if A64_CHK { push_str(sb, "  mov x1, #") ; push_int(sb, tupn) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
         push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, pslotT) ; push_str(sb, "]\n  ldr x0, [x2, x0, lsl #3]\n")
       }
       else if isparamslice {
@@ -5917,7 +5917,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         pslotI := 16 + pidxI * 8
         if A64_CHK {
-          push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslotI) ; push_str(sb, "]\n  ldr x1, [x3, #8]\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n")
+          push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslotI) ; push_str(sb, "]\n  ldr x1, [x3, #8]\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n")
         }
         push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslotI) ; push_str(sb, "]\n  ldr x2, [x3]\n  ldr x0, [x2, x0, lsl #3]\n")
       }
@@ -5927,7 +5927,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## negative i64 index is a huge unsigned → traps). Bounds dropped under `unchecked` (CG-7).
         emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         if A64_CHK {
-          push_str(sb, "  ldr x1, [x29, #") ; push_int(sb, aoff + 8) ; push_str(sb, "]\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n")
+          push_str(sb, "  ldr x1, [x29, #") ; push_int(sb, aoff + 8) ; push_str(sb, "]\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n")
         }
         push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, aoff) ; push_str(sb, "]\n  ldr x0, [x2, x0, lsl #3]\n")
       }
@@ -5939,7 +5939,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         if A64_CHK {
           anel := a64_array_nel(body_head, src, bns, bnl, a)
           if anel > 0 {
-            push_str(sb, "  mov x1, #") ; push_int(sb, anel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n")
+            push_str(sb, "  mov x1, #") ; push_int(sb, anel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n")
           }
         }
         push_str(sb, "  add x2, x29, #") ; push_int(sb, aoff) ; push_str(sb, "\n  ldr x0, [x2, x0, lsl #3]\n")
@@ -5950,7 +5950,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         if A64_CHK {
           gnelR := i64(a64_alit_nel(a64_global_value(decls, src, bns, bnl)))
-          if gnelR > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, gnelR) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+          if gnelR > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, gnelR) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
         }
         gcn := str_at((src + bns), bnl)
         push_str(sb, "  adrp x2, ") ; push_str(sb, gcn) ; push_str(sb, "\n  add x2, x2, :lo12:") ; push_str(sb, gcn) ; push_str(sb, "\n  ldr x0, [x2, x0, lsl #3]\n")
@@ -5964,7 +5964,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         pslotG := 16 + pidxI * 8
         if A64_CHK {
           gnelP := sub_arr_len(src, A64_SUB_ITS, A64_SUB_ITL)
-          if gnelP > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, gnelP) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+          if gnelP > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, gnelP) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
         }
         push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, pslotG) ; push_str(sb, "]\n  ldr x0, [x2, x0, lsl #3]\n")
       }
@@ -6013,7 +6013,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## CHECKED BOUNDS (I11 / CG-7) against the VIEW's own length in x1, the same `b.lo`/`brk` shape
         ## every other index uses; `b.lo` is unsigned, so a negative i64 index also traps. Dropped in
         ## an `unchecked` scope, like the bound spelling's own check.
-        if A64_CHK { push_str(sb, "  cmp x2, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+        if A64_CHK { push_str(sb, "  cmp x2, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
         push_str(sb, "  ldr x0, [x0, x2, lsl #3]\n")
       }
       else { push_str(sb, "  brk #0 // unsupported index\n") }
@@ -6050,8 +6050,15 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       A64_CHK = ov
     }
     ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-    Expr::StructLit | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::Slice
-      | Expr::Lambda | Expr::Loop => { push_str(sb, "  brk #0 // unsupported expr\n") }
+    ## docs/ir.md slice 0a — each construct of the catch-all names itself (§7.2 "catch-all share").
+    Expr::StructLit => { push_str(sb, "  brk #0 // unsupported expr StructLit\n") }
+    Expr::EnumLit => { push_str(sb, "  brk #0 // unsupported expr EnumLit\n") }
+    Expr::StrLit => { push_str(sb, "  brk #0 // unsupported expr StrLit\n") }
+    Expr::ArrayLit => { push_str(sb, "  brk #0 // unsupported expr ArrayLit\n") }
+    Expr::Try => { push_str(sb, "  brk #0 // unsupported expr Try\n") }
+    Expr::Slice => { push_str(sb, "  brk #0 // unsupported expr Slice\n") }
+    Expr::Lambda => { push_str(sb, "  brk #0 // unsupported expr Lambda\n") }
+    Expr::Loop => { push_str(sb, "  brk #0 // unsupported expr Loop\n") }
   }
 }
 
@@ -7431,7 +7438,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           if not eixdeep {
             emit_a64_expr(ex_index_idx(v), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
             if A64_CHK {
-              if eixnel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, eixnel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+              if eixnel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, eixnel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
             }
             if eixbyte {
               emit_a64_place_idx_addr(ex_index_base(v), ex_index_idx(v), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -7752,7 +7759,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           push_str(sb, "  ldr x1, [sp], #16\n")
           if A64_CHK {
             snelA := arrty_nel(src, stdidxAssignTy.s, stdidxAssignTy.n)
-            if snelA > 0 { push_str(sb, "  mov x2, #") ; push_int(sb, snelA) ; push_str(sb, "\n  cmp x1, x2\n  b.lo 1f\n  brk #0\n1:\n") }
+            if snelA > 0 { push_str(sb, "  mov x2, #") ; push_int(sb, snelA) ; push_str(sb, "\n  cmp x1, x2\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
           }
           push_str(sb, "  add x0, x0, x1\n  ldr x2, [sp], #16\n  strb w2, [x0]\n")
         }
@@ -7764,7 +7771,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           ## element ADDRESS once → kept on the stack (each field emit clobbers the scratch registers).
           emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if A64_CHK {
-            if eanel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, eanel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+            if eanel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, eanel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
           }
           mut estrideB := eaw * 8
           if eabyte { estrideB = i64(layout_elem_stride_bytes(decls, src, easp.s, easp.n, a)) }
@@ -7815,7 +7822,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           push_str(sb, "  str x0, [sp, #-16]!\n")
           emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if A64_CHK {
-            push_str(sb, "  ldr x9, [x29, #") ; push_int(sb, aoff + 8) ; push_str(sb, "]\n  cmp x0, x9\n  b.lo 1f\n  brk #0\n1:\n")
+            push_str(sb, "  ldr x9, [x29, #") ; push_int(sb, aoff + 8) ; push_str(sb, "]\n  cmp x0, x9\n  b.lo 1f\n  brk #0 // bounds\n1:\n")
           }
           push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, aoff) ; push_str(sb, "]\n")
           push_str(sb, "  ldr x1, [sp], #16\n  str x1, [x2, x0, lsl #3]\n")
@@ -7827,7 +7834,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           push_str(sb, "  str x0, [sp, #-16]!\n")
           emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if A64_CHK {
-            push_str(sb, "  ldr x9, [x29, #") ; push_int(sb, 16 + sliceparamidx * 8) ; push_str(sb, "]\n  ldr x9, [x9, #8]\n  cmp x0, x9\n  b.lo 1f\n  brk #0\n1:\n")
+            push_str(sb, "  ldr x9, [x29, #") ; push_int(sb, 16 + sliceparamidx * 8) ; push_str(sb, "]\n  ldr x9, [x9, #8]\n  cmp x0, x9\n  b.lo 1f\n  brk #0 // bounds\n1:\n")
           }
           push_str(sb, "  ldr x2, [x29, #") ; push_int(sb, 16 + sliceparamidx * 8) ; push_str(sb, "]\n  ldr x2, [x2]\n")
           push_str(sb, "  ldr x1, [sp], #16\n  str x1, [x2, x0, lsl #3]\n")
@@ -7847,7 +7854,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           emit_a64_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if A64_CHK {
             gnelW := i64(a64_alit_nel(a64_global_value(decls, src, bns, bnl)))
-            if gnelW > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, gnelW) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+            if gnelW > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, gnelW) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
           }
           gcn := str_at((src + bns), bnl)
           push_str(sb, "  adrp x2, ") ; push_str(sb, gcn) ; push_str(sb, "\n  add x2, x2, :lo12:") ; push_str(sb, gcn) ; push_str(sb, "\n  ldr x1, [sp], #16\n  str x1, [x2, x0, lsl #3]\n")
@@ -7928,7 +7935,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           push_str(sb, "  str x0, [sp, #-16]!\n")
           emit_a64_expr(ifi, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if A64_CHK {
-            if fnel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, fnel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+            if fnel > 0 { push_str(sb, "  mov x1, #") ; push_int(sb, fnel) ; push_str(sb, "\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
           }
           push_str(sb, "  mov x1, #") ; push_int(sb, fstrb) ; push_str(sb, "\n  mul x0, x0, x1\n")
           if fla { push_str(sb, "  add x2, x0, x29\n  add x2, x2, #") ; push_int(sb, faoff) ; push_str(sb, "\n") }
@@ -8165,7 +8172,7 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             stride := a64_slice_param_agg_stride(params_head, src, ins, inl, a, decls)
             pslot := 16 + ipidx * 8
             emit_a64_expr(ex_index_idx(scrut), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-            if A64_CHK { push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslot) ; push_str(sb, "]\n  ldr x1, [x3, #8]\n  cmp x0, x1\n  b.lo 1f\n  brk #0\n1:\n") }
+            if A64_CHK { push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslot) ; push_str(sb, "]\n  ldr x1, [x3, #8]\n  cmp x0, x1\n  b.lo 1f\n  brk #0 // bounds\n1:\n") }
             push_str(sb, "  ldr x3, [x29, #") ; push_int(sb, pslot) ; push_str(sb, "]\n  ldr x2, [x3]\n  mov x1, #") ; push_int(sb, stride * 8) ; push_str(sb, "\n  mul x0, x0, x1\n  add x2, x2, x0\n")
             mut ck := 0
             mtmpI := a64_match_tmp_offset()
@@ -8385,12 +8392,12 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
       ## (`_bd`/`_cd != 0`) or a loop-EXPRESSION `break <expr>` (`_bv != 0`, §7.2) fail-loud (`brk #0`)
       ## rather than silently branch to the wrong loop / drop the value.
       Stmt::Break(bv, bd, bnx) => {
-        if bd != 0 or unchecked bitcast(usize, bv) != 0 { push_str(sb, "  brk #0\n") }
+        if bd != 0 or unchecked bitcast(usize, bv) != 0 { push_str(sb, "  brk #0 // labeled break / break with a value\n") }
         else { push_str(sb, "  b .Lbrk") ; push_int(sb, A64_BRK) ; push_str(sb, "\n") }
         s = bnx
       }
       Stmt::Continue(cd, cnx) => {
-        if cd != 0 { push_str(sb, "  brk #0\n") }
+        if cd != 0 { push_str(sb, "  brk #0 // labeled continue\n") }
         else { push_str(sb, "  b .Lcont") ; push_int(sb, A64_CONT) ; push_str(sb, "\n") }
         s = cnx
       }

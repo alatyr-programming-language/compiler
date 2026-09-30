@@ -4439,7 +4439,7 @@ emit_wat_match_arms := fn(arm : usize, es : usize, en : usize, sidx : i64, in ou
         ## FAIL-LOUD: an unresolved variant (a comptime-variant TEMPLATE arm whose placeholder name
         ## didn't resolve, or an enum-span mismatch) — emit `(unreachable)`, NEVER a `-1` comparison
         ## arm that can never match and lets control fall through to a wrong value (silent miscompile).
-        push_str(sb, "(unreachable)")
+        push_str(sb, "(unreachable) (; unknown enum variant ;)")
       } else {
         push_str(sb, "(if (result i64) (i64.eq (i64.load ")
         emit_wat_addr(sb, sidx, 0)
@@ -5881,7 +5881,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           g = ga.next
         }
         push_str(sb, "(global.get $__tmp))")
-      } else { push_str(sb, "(unreachable) (; unsupported expr ;)\n") }
+      } else { push_str(sb, "(unreachable) (; unsupported expr ArrayLit ;)\n") }
     }
     Expr::Index(ibase, iidx) => {
       ## `a[i]` for an ARRAY local: load word `i` (scalar elements, stride 8) at base + i*8.
@@ -6246,8 +6246,11 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       emit_wat_expr(inner, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
       WAT_CHK = ov
     }
-    Expr::AddrOf | Expr::Deref | Expr::StrLit
-      | Expr::Lambda => { push_str(sb, "(unreachable) (; unsupported expr ;)\n") }
+    ## docs/ir.md slice 0a — each construct of the catch-all names itself (§7.2 "catch-all share").
+    Expr::AddrOf => { push_str(sb, "(unreachable) (; unsupported expr AddrOf ;)\n") }
+    Expr::Deref => { push_str(sb, "(unreachable) (; unsupported expr Deref ;)\n") }
+    Expr::StrLit => { push_str(sb, "(unreachable) (; unsupported expr StrLit ;)\n") }
+    Expr::Lambda => { push_str(sb, "(unreachable) (; unsupported expr Lambda ;)\n") }
   }
 }
 
@@ -6524,7 +6527,7 @@ emit_wat_stmt_match := fn(arm : usize, es : usize, en : usize, sidx : i64, fn_he
         ## FAIL-LOUD: an unresolved variant (comptime-variant TEMPLATE arm whose placeholder didn't
         ## resolve, or an enum-span mismatch) — trap, NEVER a `-1` arm that never matches and falls
         ## through to the source tail `return` (a silent miscompile — the reverted-attempt bug).
-        push_str(sb, "    (unreachable)\n")
+        push_str(sb, "    (unreachable) (; unknown enum variant ;)\n")
       } else {
         push_str(sb, "    (if (i64.eq (i64.load ")
         emit_wat_addr(sb, sidx, 0)

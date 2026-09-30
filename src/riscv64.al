@@ -2833,7 +2833,7 @@ emit_rv_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::
   push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
   emit_rv_expr(idx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   if RV_CHK {
-    if nel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, nel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+    if nel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, nel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
   }
   push_str(sb, "  li a1, ") ; push_int(sb, estride) ; push_str(sb, "\n  mul a0, a0, a1\n  ld a1, 0(sp)\n  addi sp, sp, 16\n  add a0, a0, a1\n")
 }
@@ -3241,7 +3241,7 @@ rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out 
   ## holds the fully-evaluated divisor). Mirrors x86_64's routed num.al div guard.
   if RV_CHK {
     if op == 19 or op == 29 {
-      push_str(sb, "  bnez a1, 1f\n  ebreak\n1:\n")
+      push_str(sb, "  bnez a1, 1f\n  ebreak # div_zero\n1:\n")
       ## CHECKED `MIN / -1` (I11 / CG-8 division overflow, CG-13 one mechanism): RV64 `div`/`rem` of
       ## INT64_MIN by -1 does NOT trap — the ISA defines the quotient as INT64_MIN (and the remainder 0),
       ## a wrong value for a checked divide. Trap (`ebreak`) when a1 == -1 AND a0 == INT64_MIN
@@ -3255,11 +3255,11 @@ rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out 
       ## minimum is a 32-bit signed value, so `li` expands to at most `lui`+`addiw`). The zero case
       ## keeps the previous bytes exactly. `%` (29) never sets `dvmin`: `MIN % -1` is 0.
       if dsigned {
-        if dvmin == 0 { push_str(sb, "  li a2, -1\n  bne a1, a2, 1f\n  li a3, 1\n  slli a3, a3, 63\n  bne a0, a3, 1f\n  ebreak\n1:\n") }
+        if dvmin == 0 { push_str(sb, "  li a2, -1\n  bne a1, a2, 1f\n  li a3, 1\n  slli a3, a3, 63\n  bne a0, a3, 1f\n  ebreak # div_overflow\n1:\n") }
         else {
           push_str(sb, "  li a2, -1\n  bne a1, a2, 1f\n  li a3, ")
           push_int(sb, dvmin)
-          push_str(sb, "\n  bne a0, a3, 1f\n  ebreak\n1:\n")
+          push_str(sb, "\n  bne a0, a3, 1f\n  ebreak # div_overflow\n1:\n")
         }
       }
     }
@@ -3271,8 +3271,8 @@ rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out 
   if op == 16 {
     if RV_CHK and (not narrow) {
       push_str(sb, "  add a2, a0, a1\n")
-      if dsigned { push_str(sb, "  xor a3, a2, a0\n  xor a4, a2, a1\n  and a3, a3, a4\n  mv a0, a2\n  bgez a3, 1f\n  ebreak\n1:\n") }
-      else { push_str(sb, "  sltu a3, a2, a0\n  mv a0, a2\n  beqz a3, 1f\n  ebreak\n1:\n") }
+      if dsigned { push_str(sb, "  xor a3, a2, a0\n  xor a4, a2, a1\n  and a3, a3, a4\n  mv a0, a2\n  bgez a3, 1f\n  ebreak # overflow\n1:\n") }
+      else { push_str(sb, "  sltu a3, a2, a0\n  mv a0, a2\n  beqz a3, 1f\n  ebreak # overflow\n1:\n") }
     } else {
       push_str(sb, "  add a0, a0, a1\n")
     }
@@ -3282,8 +3282,8 @@ rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out 
   ## DIFFERENCE routes through `rt::off` (unchecked). Dropped under `unchecked`; narrow wraps.
   if op == 17 {
     if RV_CHK and (not narrow) {
-      if dsigned { push_str(sb, "  sub a2, a0, a1\n  xor a3, a0, a1\n  xor a4, a0, a2\n  and a3, a3, a4\n  mv a0, a2\n  bgez a3, 1f\n  ebreak\n1:\n") }
-      else { push_str(sb, "  sltu a3, a0, a1\n  sub a0, a0, a1\n  beqz a3, 1f\n  ebreak\n1:\n") }
+      if dsigned { push_str(sb, "  sub a2, a0, a1\n  xor a3, a0, a1\n  xor a4, a0, a2\n  and a3, a3, a4\n  mv a0, a2\n  bgez a3, 1f\n  ebreak # overflow\n1:\n") }
+      else { push_str(sb, "  sltu a3, a0, a1\n  sub a0, a0, a1\n  beqz a3, 1f\n  ebreak # overflow\n1:\n") }
     } else {
       push_str(sb, "  sub a0, a0, a1\n")
     }
@@ -3293,8 +3293,8 @@ rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out 
   ## word. Trap (`ebreak`). Dropped under `unchecked`; narrow wraps.
   if op == 18 {
     if RV_CHK and (not narrow) {
-      if dsigned { push_str(sb, "  mulh a2, a0, a1\n  mul a0, a0, a1\n  srai a3, a0, 63\n  beq a2, a3, 1f\n  ebreak\n1:\n") }
-      else { push_str(sb, "  mulhu a2, a0, a1\n  mul a0, a0, a1\n  beqz a2, 1f\n  ebreak\n1:\n") }
+      if dsigned { push_str(sb, "  mulh a2, a0, a1\n  mul a0, a0, a1\n  srai a3, a0, 63\n  beq a2, a3, 1f\n  ebreak # overflow\n1:\n") }
+      else { push_str(sb, "  mulhu a2, a0, a1\n  mul a0, a0, a1\n  beqz a2, 1f\n  ebreak # overflow\n1:\n") }
     } else {
       push_str(sb, "  mul a0, a0, a1\n")
     }
@@ -3314,7 +3314,7 @@ rv_emit_arith := fn(op : u8, dsigned : bool, narrow : bool, dvmin : i64, in out 
   if op == 41 { push_str(sb, "  or a0, a0, a1\n") }
   if op == 36 { push_str(sb, "  xor a0, a0, a1\n") }
   known := op == 16 or op == 17 or op == 18 or op == 19 or op == 29 or op == 34 or op == 35 or op == 36 or op == 40 or op == 41
-  if not known { push_str(sb, "  ebreak\n") }
+  if not known { push_str(sb, "  ebreak # unsupported binary operator\n") }
 }
 
 ## Emit `a0 <- (a0 <cmp> a1) ? 1 : 0` for a comparison op byte (RV64 has no flag/cset — build 0/1 from
@@ -3361,12 +3361,12 @@ rv_emit_bitcast_narrow := fn(name : str, in out sb : rt::StrBuf) {
 ## bit N is set (`srli` nonzero); SIGNED `iN` overflows iff the sign-extension of the low N bits differs
 ## from a0. Emitted BEFORE the value-model wrap; the caller gates on `RV_CHK` and a non-`0 - x` negation.
 rv_emit_narrow_trap := fn(name : str, in out sb : rt::StrBuf) {
-  if name == "u8" { push_str(sb, "  srli a2, a0, 8\n  beqz a2, 1f\n  ebreak\n1:\n") }
-  else if name == "u16" { push_str(sb, "  srli a2, a0, 16\n  beqz a2, 1f\n  ebreak\n1:\n") }
-  else if name == "u32" { push_str(sb, "  srli a2, a0, 32\n  beqz a2, 1f\n  ebreak\n1:\n") }
-  else if name == "i8" { push_str(sb, "  slli a2, a0, 56\n  srai a2, a2, 56\n  beq a2, a0, 1f\n  ebreak\n1:\n") }
-  else if name == "i16" { push_str(sb, "  slli a2, a0, 48\n  srai a2, a2, 48\n  beq a2, a0, 1f\n  ebreak\n1:\n") }
-  else if name == "i32" { push_str(sb, "  addiw a2, a0, 0\n  beq a2, a0, 1f\n  ebreak\n1:\n") }
+  if name == "u8" { push_str(sb, "  srli a2, a0, 8\n  beqz a2, 1f\n  ebreak # narrow\n1:\n") }
+  else if name == "u16" { push_str(sb, "  srli a2, a0, 16\n  beqz a2, 1f\n  ebreak # narrow\n1:\n") }
+  else if name == "u32" { push_str(sb, "  srli a2, a0, 32\n  beqz a2, 1f\n  ebreak # narrow\n1:\n") }
+  else if name == "i8" { push_str(sb, "  slli a2, a0, 56\n  srai a2, a2, 56\n  beq a2, a0, 1f\n  ebreak # narrow\n1:\n") }
+  else if name == "i16" { push_str(sb, "  slli a2, a0, 48\n  srai a2, a2, 48\n  beq a2, a0, 1f\n  ebreak # narrow\n1:\n") }
+  else if name == "i32" { push_str(sb, "  addiw a2, a0, 0\n  beq a2, a0, 1f\n  ebreak # narrow\n1:\n") }
 }
 
 ## ── FLOAT value model (rv64 dual of the aarch64 float path) — IEEE bits ride the integer path (a0 /
@@ -4098,8 +4098,8 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       if (bidx < 0) and (not isagg) and (not outscalar) and (not useframe) and isglob {
         push_str(sb, "  la a0, ") ; push_str(sb, gname) ; push_str(sb, "\n  ld a0, 0(a0)\n")
       }
-      if (bidx < 0) and (not isagg) and (not outscalar) and (not useframe) and (not isglob) { push_str(sb, "  ebreak\n") }
-      if (bidx < 0) and isagg { push_str(sb, "  ebreak\n") }
+      if (bidx < 0) and (not isagg) and (not outscalar) and (not useframe) and (not isglob) { push_str(sb, "  ebreak # unresolved var\n") }
+      if (bidx < 0) and isagg { push_str(sb, "  ebreak # bare struct/array value (copy/arg deferred)\n") }
     }
     Expr::Field(base, fs, fl) => {
       ## `f.offset` — a comptime FIELD descriptor read. Fold it before ordinary field lowering sees
@@ -4186,7 +4186,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           woff := field_word_offset(decls, src, psp.s, psp.n, fs, fl, a)
           pslot := 16 + ipidx * 8
           emit_rv_expr(ex_index_idx(base), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-          if RV_CHK { push_str(sb, "  ld a3, ") ; push_int(sb, pslot) ; push_str(sb, "(s0)\n  ld a1, 8(a3)\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+          if RV_CHK { push_str(sb, "  ld a3, ") ; push_int(sb, pslot) ; push_str(sb, "(s0)\n  ld a1, 8(a3)\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
           push_str(sb, "  ld a3, ") ; push_int(sb, pslot) ; push_str(sb, "(s0)\n  ld a2, 0(a3)\n")
           push_str(sb, "  li a1, ") ; push_int(sb, stride * 8) ; push_str(sb, "\n  mul a0, a0, a1\n  add a2, a2, a0\n")
           push_str(sb, "  ld a0, ") ; push_int(sb, woff * 8) ; push_str(sb, "(a2)\n")
@@ -4219,7 +4219,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
             if eisga { enel = rv_alit_nel(rv_global_value(decls, src, ins, inl)) }
             emit_rv_expr(ex_index_idx(base), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
             if RV_CHK {
-              if enel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, enel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+              if enel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, enel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
             }
             push_str(sb, "  li a1, ") ; push_int(sb, estrb) ; push_str(sb, "\n  mul a0, a0, a1\n")
             if eisla {
@@ -4318,7 +4318,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           }
         }
       }
-      if (not stdhandled) and (not localok) and (not paramok) and (not isslicelen) and (not fldidxdone) and (not gchainok) and (not lchainok) and (not bindaggok) { push_str(sb, "  ebreak\n") }
+      if (not stdhandled) and (not localok) and (not paramok) and (not isslicelen) and (not fldidxdone) and (not gchainok) and (not lchainok) and (not bindaggok) { push_str(sb, "  ebreak # unsupported field access\n") }
     }
     ## `v.(f)` (Expr::CompField) — a member access named by the comptime field-unroll loop var `f`. When
     ## `f` is the active loop var (RV_CF_VAR set), reduce to a scalar field READ of `v` at the CURRENT field
@@ -4348,7 +4348,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         cwoff := field_word_offset(decls, src, cpstys, cpstyn, cfs, cfl, a)
         push_str(sb, "  ld t1, ") ; push_int(sb, 16 + cpidx * 8) ; push_str(sb, "(s0)\n  ld a0, ") ; push_int(sb, cwoff * 8) ; push_str(sb, "(t1)\n")
       }
-      if (not clocalok) and (not cparamok) { push_str(sb, "  ebreak\n") }
+      if (not clocalok) and (not cparamok) { push_str(sb, "  ebreak # unsupported comptime-field access\n") }
     }
     ## `ptr(<place>)` — the ADDRESS of a SCALAR place into a0 (spec MEM-7/MEM-8, scoped reference). A
     ## scalar frame local / by-value scalar param → `addi a0, s0, voff` (the slot's address); a mutable
@@ -4373,7 +4373,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       if outscalar { push_str(sb, "  ld a0, ") ; push_int(sb, voff) ; push_str(sb, "(s0)\n") }
       if useframe { push_str(sb, "  addi a0, s0, ") ; push_int(sb, voff) ; push_str(sb, "\n") }
       if useglob { push_str(sb, "  la a0, ") ; push_str(sb, gname) ; push_str(sb, "\n") }
-      if (not outscalar) and (not useframe) and (not useglob) { push_str(sb, "  ebreak\n") }
+      if (not outscalar) and (not useframe) and (not useglob) { push_str(sb, "  ebreak # unresolved address-of place\n") }
     }
     ## `deref(<scalar ptr>)` — LOAD one word through the pointer. Pointer value → a0, then `ld a0, 0(a0)`.
     ## SCALAR only: a struct-through-pointer read is `deref(p).field` = `Field(Deref(p), …)` (Field arm);
@@ -4392,7 +4392,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       ## operand word is an aggregate base address (struct/array/slice param) or an enum's word-0
       ## discriminant, so the compare below answers on the wrong bits. The `ebreak` traps first;
       ## everything after it is dead. See `rv_is_agg_cmp` for why routing is not an option here.
-      if rv_is_agg_cmp(e, body_head, src, a, params_head, decls) { push_str(sb, "  ebreak\n") }
+      if rv_is_agg_cmp(e, body_head, src, a, params_head, decls) { push_str(sb, "  ebreak # bare aggregate comparison needs structural eq/lt (Stdlib 2.6)\n") }
       emit_rv_expr(l, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
       push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
       emit_rv_expr(r, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -4545,7 +4545,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual (#683).
         rsnw := rv_operand_narrow(rsv, params_head, body_head, src, a)
         if RV_CHK and (nm == "shl" or nm == "shr") {
-          push_str(sb, "  li t0, ") ; push_int(sb, lower_layout::shift_width_bits(rsnw)) ; push_str(sb, "\n  bltu a1, t0, 1f\n  ebreak\n1:\n")
+          push_str(sb, "  li t0, ") ; push_int(sb, lower_layout::shift_width_bits(rsnw)) ; push_str(sb, "\n  bltu a1, t0, 1f\n  ebreak # shift_range\n1:\n")
         }
         if nm == "shl" { push_str(sb, "  sll a0, a0, a1\n") }
         if nm == "shr" and rssigned { push_str(sb, "  sra a0, a0, a1\n") }
@@ -4565,7 +4565,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         aoffL := rv_local_off(body_head, src, rns, rnl, pcount, a, decls)
         if isparam { push_str(sb, "  ld t1, ") ; push_int(sb, 16 + pidxL * 8) ; push_str(sb, "(s0)\n  ld a0, 8(t1)\n") }
         if (not isparam) and aoffL >= 0 { push_str(sb, "  ld a0, ") ; push_int(sb, aoffL + 8) ; push_str(sb, "(s0)\n") }
-        if (not isparam) and aoffL < 0 { push_str(sb, "  ebreak\n") }
+        if (not isparam) and aoffL < 0 { push_str(sb, "  ebreak # unresolved slice length\n") }
       } else if gen_call_ok(decls, src, cs, cl) {
         ## GENERICS (§8 mono): route a generic call to its monomorphized instance `<fn>__<tag>`. Resolve
         ## the type-arg (SAME resolution the collector used, so the emitted label matches a defined
@@ -4576,7 +4576,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         tas := RV_TA_S
         tan := RV_TA_N
         if tan == 0 {
-          push_str(sb, "  ebreak\n")
+          push_str(sb, "  ebreak # generic call: unresolved type-arg\n")
         } else {
           rv_inst_add(src, usize(gi), tas, tan)
           gd := deref(decl_get(decls, usize(gi)))
@@ -4684,7 +4684,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           }
           if gwide and sret_on_g and (not sret_ind_g) { push_str(sb, "  addi a0, s0, ") ; push_int(sb, sret_dst_g) ; push_str(sb, "\n") }
           if gwide and sret_on_g and sret_ind_g { push_str(sb, "  ld a0, ") ; push_int(sb, sret_dst_g) ; push_str(sb, "(s0)\n") }
-          if gwide and (not sret_on_g) { push_str(sb, "  ebreak\n") }
+          if gwide and (not sret_on_g) { push_str(sb, "  ebreak # generic call: wide return with no sret destination\n") }
           ## INLINE `call <fn>__<tag>` (same reason the def label is inline — no span-through-params helper).
           push_str(sb, "  call ")
           push_str(sb, str_at((src + gd.name_start), gd.name_len))
@@ -4770,7 +4770,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           push_str(sb, "  call ") ; rv_emit_lambda_label(sb, src, td.mod_start, td.mod_len, td.name_start) ; push_str(sb, "\n")
         }
       } else if not rv_callee_defined(decls, src, cs, cl, a) {
-        push_str(sb, "  ebreak\n")
+        push_str(sb, "  ebreak # undefined/builtin callee\n")
       } else if arg_list_count(args_head, a) > 8 or (direct_sretcall and arg_list_count(args_head, a) > 7) {
         ## >8 args of a class (LP64D): first 8 int in a0-a7, first 8 float in fa0-fa7 (independent
         ## counters); an arg whose class index reaches 8 overflows to the outgoing stack block. Stack
@@ -4791,7 +4791,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         mut aggarg := false
         mut gsc := args_head
         while gsc != 0 { gsa := deref(arg_p(gsc)) ; if expr_is_struct_lit(gsa.e) or expr_is_enum_lit(gsa.e) or (rv_call_ret_struct_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_sret_span(gsa.e, decls, src, a).n != 0) or (rv_call_ret_enum_sret_span(gsa.e, decls, src, a).n != 0) { aggarg = true } ; gsc = gsa.next }
-        if aggarg { push_str(sb, "  ebreak\n") }
+        if aggarg { push_str(sb, "  ebreak # >8-arg call with aggregate-value/struct-return arg (unsupported)\n") }
         mut nstk := 0
         mut ci := 0
         while ci < n {
@@ -4868,7 +4868,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         }
         if sretcall_over and sret_on_over and (not sret_ind_over) { push_str(sb, "  addi a0, s0, ") ; push_int(sb, sret_dst_over) ; push_str(sb, "\n") }
         if sretcall_over and sret_on_over and sret_ind_over { push_str(sb, "  ld a0, ") ; push_int(sb, sret_dst_over) ; push_str(sb, "(s0)\n") }
-        if sretcall_over and (not sret_on_over) { push_str(sb, "  ebreak\n") }
+        if sretcall_over and (not sret_on_over) { push_str(sb, "  ebreak # >8-arg call: sret callee with no destination\n") }
         push_str(sb, "  call ") ; rv_emit_call_target(sb, decls, src, cs, cl) ; push_str(sb, "\n")
         if stacksz > 0 { push_str(sb, "  addi sp, sp, ") ; push_int(sb, stacksz) ; push_str(sb, "\n") }
         if callee_ret_is_float(decls, src, cs, cl) { push_str(sb, "  fmv.x.d a0, fa0\n") }
@@ -4978,7 +4978,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         if mysret and myind { push_str(sb, "  ld a0, ") ; push_int(sb, mydst) ; push_str(sb, "(s0)\n") }
         ## an SRET callee reached with NO destination in scope (a bare call statement, a nested SRET call)
         ## is unsupported — trap LOUD rather than call with a garbage result pointer.
-        if sretcall and (not mysret) { push_str(sb, "  ebreak\n") }
+        if sretcall and (not mysret) { push_str(sb, "  ebreak # sret call with no destination in scope\n") }
         ## MOD §7.2: a call to an `@extern` callee branches to its EXTERNAL symbol, not the source name.
         push_str(sb, "  call ") ; rv_emit_call_target(sb, decls, src, cs, cl) ; push_str(sb, "\n")
         RV_SRET_DST_ON = sret_on0
@@ -5048,7 +5048,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
         }
       }
-      if (not ok) and (not paramok) and (not bindok) and (not fldok) { push_str(sb, "  ebreak\n") }
+      if (not ok) and (not paramok) and (not bindok) and (not fldok) { push_str(sb, "  ebreak # unsupported match\n") }
     }
     Expr::Index(ibase, iidx) => {
       ## `a[i]` for an ARRAY local: addr = s0 + i*8, element at (base_off)(addr). i is runtime.
@@ -5112,7 +5112,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         push_str(sb, "  ld a1, 0(sp)\n  addi sp, sp, 16\n")
         if RV_CHK {
           snelE := arrty_nel(src, stdidxarr.s, stdidxarr.n)
-          if snelE > 0 { push_str(sb, "  li a2, ") ; push_int(sb, snelE) ; push_str(sb, "\n  bltu a1, a2, 1f\n  ebreak\n1:\n") }
+          if snelE > 0 { push_str(sb, "  li a2, ") ; push_int(sb, snelE) ; push_str(sb, "\n  bltu a1, a2, 1f\n  ebreak # bounds\n1:\n") }
         }
         push_str(sb, "  add a0, a0, a1\n")
         if stdidxel.n != 0 and str_at((src + stdidxel.s), 1) == "i" { push_str(sb, "  lb a0, 0(a0)\n") }
@@ -5124,7 +5124,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         if RV_CHK {
           snel := arrty_nel(src, stdarr.s, stdarr.n)
-          if snel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, snel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+          if snel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, snel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
         }
         mut sboI := i64(0)
         if stdparamidx { sboI = rv_std_param_path_bo(ibase, params_head, src, a, decls) }
@@ -5147,7 +5147,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ## i is at `0(tupleptr + i*8)`. Bounds vs the static component count (dropped under `unchecked`).
         emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         pslotT := 16 + pidxI * 8
-        if RV_CHK { push_str(sb, "  li a1, ") ; push_int(sb, tupn) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+        if RV_CHK { push_str(sb, "  li a1, ") ; push_int(sb, tupn) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
         push_str(sb, "  slli a0, a0, 3\n  ld t3, ") ; push_int(sb, pslotT) ; push_str(sb, "(s0)\n  add t3, t3, a0\n  ld a0, 0(t3)\n")
       }
       else if isparamslice {
@@ -5158,7 +5158,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         pslotI := 16 + pidxI * 8
         if RV_CHK {
-          push_str(sb, "  ld t3, ") ; push_int(sb, pslotI) ; push_str(sb, "(s0)\n  ld a1, 8(t3)\n  bltu a0, a1, 1f\n  ebreak\n1:\n")
+          push_str(sb, "  ld t3, ") ; push_int(sb, pslotI) ; push_str(sb, "(s0)\n  ld a1, 8(t3)\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n")
         }
         push_str(sb, "  slli a0, a0, 3\n  ld t3, ") ; push_int(sb, pslotI) ; push_str(sb, "(s0)\n  ld a2, 0(t3)\n  add a2, a2, a0\n  ld a0, 0(a2)\n")
       }
@@ -5168,7 +5168,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ## i64 index is a huge unsigned → traps). Bounds dropped under `unchecked` (CG-7).
         emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         if RV_CHK {
-          push_str(sb, "  ld a1, ") ; push_int(sb, aoff + 8) ; push_str(sb, "(s0)\n  bltu a0, a1, 1f\n  ebreak\n1:\n")
+          push_str(sb, "  ld a1, ") ; push_int(sb, aoff + 8) ; push_str(sb, "(s0)\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n")
         }
         push_str(sb, "  slli a0, a0, 3\n  ld a2, ") ; push_int(sb, aoff) ; push_str(sb, "(s0)\n  add a2, a2, a0\n  ld a0, 0(a2)\n")
       }
@@ -5180,7 +5180,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         if RV_CHK {
           rnel := rv_array_nel(body_head, src, bns, bnl, a)
           if rnel > 0 {
-            push_str(sb, "  li a1, ") ; push_int(sb, rnel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n")
+            push_str(sb, "  li a1, ") ; push_int(sb, rnel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n")
           }
         }
         push_str(sb, "  slli a0, a0, 3\n  add a0, a0, s0\n  ld a0, ") ; push_int(sb, aoff) ; push_str(sb, "(a0)\n")
@@ -5191,7 +5191,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         if RV_CHK {
           gnelR := rv_alit_nel(rv_global_value(decls, src, bns, bnl))
-          if gnelR > 0 { push_str(sb, "  li a1, ") ; push_int(sb, gnelR) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+          if gnelR > 0 { push_str(sb, "  li a1, ") ; push_int(sb, gnelR) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
         }
         gcn := str_at((src + bns), bnl)
         push_str(sb, "  slli a0, a0, 3\n  la a2, ") ; push_str(sb, gcn) ; push_str(sb, "\n  add a2, a2, a0\n  ld a0, 0(a2)\n")
@@ -5205,7 +5205,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         pslotG := 16 + pidxI * 8
         if RV_CHK {
           gnelP := sub_arr_len(src, RV_SUB_ITS, RV_SUB_ITL)
-          if gnelP > 0 { push_str(sb, "  li a1, ") ; push_int(sb, gnelP) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+          if gnelP > 0 { push_str(sb, "  li a1, ") ; push_int(sb, gnelP) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
         }
         push_str(sb, "  slli a0, a0, 3\n  ld t3, ") ; push_int(sb, pslotG) ; push_str(sb, "(s0)\n  add t3, t3, a0\n  ld a0, 0(t3)\n")
       }
@@ -5253,10 +5253,10 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         ## CHECKED BOUNDS (I11 / CG-7) against the VIEW's own length in a1, the same `bltu`/`ebreak`
         ## shape every other index uses; `bltu` is unsigned, so a negative i64 index also traps.
         ## Dropped in an `unchecked` scope, like the bound spelling's own check.
-        if RV_CHK { push_str(sb, "  bltu a2, a1, 1f\n  ebreak\n1:\n") }
+        if RV_CHK { push_str(sb, "  bltu a2, a1, 1f\n  ebreak # bounds\n1:\n") }
         push_str(sb, "  slli a2, a2, 3\n  add a0, a0, a2\n  ld a0, 0(a0)\n")
       }
-      else { push_str(sb, "  ebreak\n") }
+      else { push_str(sb, "  ebreak # aggregate array-element argument: element address not resolvable\n") }
     }
     ## A preserved bare narrow scalar bitcast restores the target's zero/sign-extended word. A POINTER
     ## target is the machine-word IDENTITY — a pointer value is one word and Types §4.4 makes a bitcast
@@ -5296,8 +5296,16 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
     ## `as` refused the self-build (#673); `src/aarch64.al`'s twin is still a `_` for exactly that
     ## reason. #685 made the data walk visit a shared arm body once and seed 0.2.3 (`a46be2c`) carries
     ## it, so the arm is written out here and the seed builds it.
-    Expr::StructLit | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::Slice
-      | Expr::Lambda | Expr::Loop => { push_str(sb, "  ebreak\n") }
+    ## docs/ir.md slice 0a — each construct of the catch-all names itself, so a trap row is attributed to
+    ## the slice that owns the construct (§7.2 "catch-all share").
+    Expr::StructLit => { push_str(sb, "  ebreak # unsupported expr StructLit\n") }
+    Expr::EnumLit => { push_str(sb, "  ebreak # unsupported expr EnumLit\n") }
+    Expr::StrLit => { push_str(sb, "  ebreak # unsupported expr StrLit\n") }
+    Expr::ArrayLit => { push_str(sb, "  ebreak # unsupported expr ArrayLit\n") }
+    Expr::Try => { push_str(sb, "  ebreak # unsupported expr Try\n") }
+    Expr::Slice => { push_str(sb, "  ebreak # unsupported expr Slice\n") }
+    Expr::Lambda => { push_str(sb, "  ebreak # unsupported expr Lambda\n") }
+    Expr::Loop => { push_str(sb, "  ebreak # unsupported expr Loop\n") }
   }
 }
 
@@ -5366,7 +5374,7 @@ emit_rv_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, endi
           rv_bind_push(am.binds_head, eoff)
           if hasexprV { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
           if dostmtV { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
-          if (not hasexprV) and (not dostmtV) { push_str(sb, "  ebreak\n") }
+          if (not hasexprV) and (not dostmtV) { push_str(sb, "  ebreak # statement-body match arm in value position deferred\n") }
           rv_bind_pop(am.binds_head)
           RV_ARM_ENS = oensV ; RV_ARM_ENL = oenlV ; RV_ARM_VS = ovsV ; RV_ARM_VL = ovlV
           RV_CFVAR_S = ocvs ; RV_CFVAR_L = ocvl ; RV_ARM_BINDS = obV
@@ -5407,7 +5415,7 @@ emit_rv_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, endi
     rv_bind_push(am.binds_head, eoff)
     if am.wild != 2 and hasexpr { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
     if am.wild != 2 and dostmt { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
-    if am.wild != 2 and (not hasexpr) and (not dostmt) { push_str(sb, "  ebreak\n") }
+    if am.wild != 2 and (not hasexpr) and (not dostmt) { push_str(sb, "  ebreak # statement-body match arm in value position deferred\n") }
     rv_bind_pop(am.binds_head)
     RV_ARM_ENS = oens
     RV_ARM_ENL = oenl
@@ -5418,7 +5426,7 @@ emit_rv_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, endi
     if am.wild != 1 and am.wild != 2 { push_str(sb, ".Larmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
     ar = am.next
   }
-  push_str(sb, "  ebreak\n")
+  push_str(sb, "  ebreak # match: no arm taken\n")
 }
 
 ## Function epilogue: restore ra/s0, pop the frame, return.
@@ -5451,7 +5459,7 @@ emit_rv_slice_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, sr
     push_str(sb, "  addi a0, s0, ") ; push_int(sb, blk) ; push_str(sb, "\n")
     RV_AGG = RV_AGG + 16
   }
-  if not sliceok { push_str(sb, "  ebreak\n") }
+  if not sliceok { push_str(sb, "  ebreak # unsupported slice argument\n") }
 }
 
 ## Materialize a STRUCT LITERAL `S(f = v, …)` passed as a call ARGUMENT into a reserved RV_AGG block and
@@ -5509,7 +5517,7 @@ emit_rv_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
     push_str(sb, "  addi a0, s0, ") ; push_int(sb, blk) ; push_str(sb, "\n")
     RV_AGG = RV_AGG + words * 8
   }
-  if not ok { push_str(sb, "  ebreak\n") }
+  if not ok { push_str(sb, "  ebreak # unsupported aggregate-value argument\n") }
 }
 
 ## Materialize an ENUM LITERAL `E.V(p…)` passed as a call ARGUMENT into a reserved RV_AGG block and leave
@@ -5834,7 +5842,7 @@ emit_rv_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf
     return atot
   }
   if expr_is_str_lit(pe) {
-    push_str(sb, "  ebreak\n")
+    push_str(sb, "  ebreak # str payload in value position\n")
     return 2
   }
   ## ISSUE #448: an enum PLACE (param / wide local) reaches the frame in FULL, not as one scalar word.
@@ -5919,7 +5927,7 @@ emit_rv_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::Str
   if expr_is_str_lit(pe) {
     ## a `str` element payload ({ptr,len}) needs its `.Lstr` rodata emitted — fail LOUD rather than
     ## store a dangling pointer. Reserve 2 words.
-    push_str(sb, "  ebreak\n")
+    push_str(sb, "  ebreak # str element payload needs its rodata\n")
     return 2
   }
   ## ISSUE #448: the pointer-relative twin of the same enum-place rule.
@@ -5953,7 +5961,7 @@ emit_rv_enumval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
     }
     push_str(sb, "  addi a0, s0, ") ; push_int(sb, blk) ; push_str(sb, "\n")
   }
-  if not ok { push_str(sb, "  ebreak\n") }
+  if not ok { push_str(sb, "  ebreak # unsupported aggregate-value argument\n") }
 }
 
 ## Deliver a struct VALUE `e` into the return registers word k → a_k (a0..a7) — the §8 register
@@ -6051,7 +6059,7 @@ emit_rv_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
       }
     }
   }
-  if not done { push_str(sb, "  ebreak\n") }
+  if not done { push_str(sb, "  ebreak # unsupported struct return value\n") }
 }
 
 ## Deliver a WIDE-struct return VALUE `e` THROUGH the LP64 indirect-result pointer (the caller-supplied
@@ -6119,7 +6127,7 @@ emit_rv_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
         edone = true
       }
     }
-    if not edone { push_str(sb, "  ebreak\n") }
+    if not edone { push_str(sb, "  ebreak # unsupported enum return value\n") }
     ## LP64 also returns the destination pointer in a0.
     if edone { push_str(sb, "  ld a0, ") ; push_int(sb, eslot) ; push_str(sb, "(s0)\n") }
     return
@@ -6185,7 +6193,7 @@ emit_rv_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
       done = true
     }
   }
-  if not done { push_str(sb, "  ebreak\n") }
+  if not done { push_str(sb, "  ebreak # unsupported struct return value\n") }
   if done { push_str(sb, "  ld a0, ") ; push_int(sb, slot) ; push_str(sb, "(s0)\n") }
 }
 
@@ -6243,7 +6251,7 @@ emit_rv_enum_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
       }
     }
   }
-  if not done { push_str(sb, "  ebreak\n") }
+  if not done { push_str(sb, "  ebreak # unsupported struct return value\n") }
 }
 
 ## Materialize a struct-RETURNING CALL `f(…)` passed as a call ARGUMENT into a reserved RV_AGG block and
@@ -6261,7 +6269,7 @@ emit_rv_callret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
     push_str(sb, "  addi a0, s0, ") ; push_int(sb, blk) ; push_str(sb, "\n")
     RV_AGG = RV_AGG + words * 8
   }
-  if not ok { push_str(sb, "  ebreak\n") }
+  if not ok { push_str(sb, "  ebreak # unsupported aggregate-value argument\n") }
 }
 ## Materialize an enum-RETURNING CALL `f(…)` passed as a call ARGUMENT into a reserved RV_AGG block (§8
 ## piece 3): the callee delivers word 0 = disc, word k+1 = payload in a0.., stored to the block (full enum
@@ -6278,7 +6286,7 @@ emit_rv_enumret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
     push_str(sb, "  addi a0, s0, ") ; push_int(sb, blk) ; push_str(sb, "\n")
     RV_AGG = RV_AGG + words * 8
   }
-  if not ok { push_str(sb, "  ebreak\n") }
+  if not ok { push_str(sb, "  ebreak # unsupported aggregate-value argument\n") }
 }
 
 ## Materialize a WIDE (SRET) struct-returning CALL `f(…)` passed as a call ARGUMENT into a reserved RV_AGG
@@ -6307,7 +6315,7 @@ emit_rv_sretcall_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
     RV_SRET_DST_IND = sid
     push_str(sb, "  addi a0, s0, ") ; push_int(sb, blk) ; push_str(sb, "\n")
   }
-  if not ok { push_str(sb, "  ebreak\n") }
+  if not ok { push_str(sb, "  ebreak # unsupported aggregate-value argument\n") }
 }
 
 ## The wide-ENUM analogue of emit_rv_sretcall_arg (> 8 words): an enum-returning CALL wider than the
@@ -6333,7 +6341,7 @@ emit_rv_enumsret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
     RV_SRET_DST_IND = sid
     push_str(sb, "  addi a0, s0, ") ; push_int(sb, blk) ; push_str(sb, "\n")
   }
-  if not ok { push_str(sb, "  ebreak\n") }
+  if not ok { push_str(sb, "  ebreak # unsupported aggregate-value argument\n") }
 }
 
 ## Emit a WIDE-SRET call used as a bare statement. The value is intentionally discarded, but the ABI still
@@ -6360,7 +6368,7 @@ emit_rv_sret_discard := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
     RV_SRET_DST = sof
     RV_SRET_DST_IND = sid
   }
-  if not ok { push_str(sb, "  ebreak\n") }
+  if not ok { push_str(sb, "  ebreak # unsupported aggregate-value argument\n") }
 }
 
 emit_rv_epilogue := fn(frame : i64, in out sb : rt::StrBuf) {
@@ -6508,13 +6516,13 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         ## CLAYOUT S3(c): the same copy, but byte-precise — the child's §6.1 image at `soff` into the
         ## destination's own tier at `poff`, per the shared plan.
         if iscopy and poff >= 0 and stdbc { rv_std_copy(stdbcts, stdbctl, soff, poff, sb, decls, src, a) }
-        if iscopy and poff < 0 { push_str(sb, "  ebreak\n") }
+        if iscopy and poff < 0 { push_str(sb, "  ebreak # agg-var copy to unresolved local\n") }
         ## element copy: index → a0, scale by the element width, add the frame/label base into a2, then
         ## word-copy the element into x's slots. a2 survives the copy (no emit call in the loop).
         if iseix and poff >= 0 {
           emit_rv_expr(ex_index_idx(v), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if RV_CHK {
-            if eixnel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, eixnel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+            if eixnel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, eixnel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
           }
           if eixbyte {
             push_str(sb, "  li a1, ") ; push_int(sb, i64(layout_elem_stride_bytes(decls, src, eixp.s, eixp.n, a))) ; push_str(sb, "\n  mul a0, a0, a1\n")
@@ -6538,11 +6546,11 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             }
           }
         }
-        if iseix and poff < 0 { push_str(sb, "  ebreak\n") }
+        if iseix and poff < 0 { push_str(sb, "  ebreak # array-element copy to unresolved local\n") }
         if (not isagg) and (not iscr) and (not iscre) and (not issret) and (not isenumsret) and (not iscopy) and (not iseix) and (not outscalar) and (not useframe) and isglob {
           push_str(sb, "  la t0, ") ; push_str(sb, gname) ; push_str(sb, "\n  sd a0, 0(t0)\n")
         }
-        if (not isagg) and (not iscr) and (not iscre) and (not issret) and (not isenumsret) and (not iscopy) and (not iseix) and (not outscalar) and (not useframe) and (not isglob) { push_str(sb, "  ebreak\n") }
+        if (not isagg) and (not iscr) and (not iscre) and (not issret) and (not isenumsret) and (not iscopy) and (not iseix) and (not outscalar) and (not useframe) and (not isglob) { push_str(sb, "  ebreak # assign to unresolved var\n") }
         ## WIDE-struct (SRET) bind: point the call at the local's slots (a0 = s0 + poff) and let the callee
         ## write the struct straight into them — no post-call word copy.
         if issret {
@@ -6555,7 +6563,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             RV_SRET_DST_ON = son
             RV_SRET_DST = sof
           }
-          if poff < 0 { push_str(sb, "  ebreak\n") }
+          if poff < 0 { push_str(sb, "  ebreak # SRET call result to unresolved local\n") }
         }
         ## WIDE-ENUM (SRET) bind `m := mk(…)`: identical a0 hand-off — set the one-shot destination (m's
         ## frame offset), emit the call (the call arm turns it into `addi a0, s0, <poff>` before the `call`),
@@ -6571,7 +6579,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             RV_SRET_DST_ON = eon
             RV_SRET_DST = eof
           }
-          if poff < 0 { push_str(sb, "  ebreak\n") }
+          if poff < 0 { push_str(sb, "  ebreak # SRET call result to unresolved local\n") }
         }
         ## struct-returning-call bind: emit the call (delivers a0..a_(w-1)), store each word to p's slot.
         if iscr {
@@ -6582,7 +6590,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             mut ck := 0
             while ck < crw { push_str(sb, "  sd a") ; push_int(sb, ck) ; push_str(sb, ", ") ; push_int(sb, poff + ck * 8) ; push_str(sb, "(s0)\n") ; ck = ck + 1 }
           }
-          if poff < 0 { push_str(sb, "  ebreak\n") }
+          if poff < 0 { push_str(sb, "  ebreak # SRET call result to unresolved local\n") }
         }
         ## enum-returning-call bind: emit the call (word 0 = disc, word k+1 = payload), store full width.
         if iscre {
@@ -6592,7 +6600,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             mut ck := 0
             while ck < crew { push_str(sb, "  sd a") ; push_int(sb, ck) ; push_str(sb, ", ") ; push_int(sb, poff + ck * 8) ; push_str(sb, "(s0)\n") ; ck = ck + 1 }
           }
-          if poff < 0 { push_str(sb, "  ebreak\n") }
+          if poff < 0 { push_str(sb, "  ebreak # SRET call result to unresolved local\n") }
         }
         stys := expr_struct_lit_ns(v)
         styn := expr_struct_lit_nl(v)
@@ -6654,7 +6662,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         }
         ## Still fail-loud for what is left — a NESTED struct literal into a global has no writer yet.
         ## A trap is the acceptable outcome exactly where a wrong value is not.
-        if isslit and (not slitok) and (not slitstd) and (not slitnest) and (not slitglob) { push_str(sb, "  ebreak\n") }
+        if isslit and (not slitok) and (not slitstd) and (not slitnest) and (not slitglob) { push_str(sb, "  ebreak # nested struct literal into a global\n") }
         vidx := variant_index(decls, src, expr_enum_lit_ns(v), expr_enum_lit_nl(v), expr_enum_variant_ns(v), expr_enum_variant_nl(v), a)
         ## enum local construct `s := E.V(p…)`: disc at word 0, then each payload arg via the shared
         ## multi-word writer (scalar / struct / nested-enum payloads — §8 piece 3b; str stays loud).
@@ -6670,7 +6678,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             eg = ega.next
           }
         }
-        if iselit and (not elitok) { push_str(sb, "  ebreak\n") }
+        if iselit and (not elitok) { push_str(sb, "  ebreak # unsupported enum construct\n") }
         ## array construct `a := [e0,…]`: store each element at base + k*estride*8. A SCALAR element
         ## (estride 1) is one word; a STRUCT element (a StructLit, estride = struct_words) stores each
         ## positional field at base + (k*estride + fk)*8 (the aggregate-array layout — x86's stride).
@@ -6733,7 +6741,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             ag = aga.next
           }
         }
-        if isalit and (not alitok) { push_str(sb, "  ebreak\n") }
+        if isalit and (not alitok) { push_str(sb, "  ebreak # unsupported array construct\n") }
         ## range-slice binding `s := base[lo..hi]` — store a 2-word {ptr, len} view (word0 = &base[lo] =
         ## s0 + base-array byte-off + lo*8; word1 = hi - lo). Bounds re-evaluated per use (pure). Only a
         ## scalar frame-array base (`aoff >= 0`) is supported; anything else is fail-loud.
@@ -6760,7 +6768,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             push_int(sb, aoff) ; push_str(sb, "\n  sd a0, ")
             push_int(sb, poff) ; push_str(sb, "(s0)\n")
           }
-          if not sliceok { push_str(sb, "  ebreak\n") }
+          if not sliceok { push_str(sb, "  ebreak # unsupported slice argument\n") }
         }
         s = nx
       }
@@ -6824,7 +6832,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           push_str(sb, "  ld a1, 0(sp)\n  addi sp, sp, 16\n")
           if RV_CHK {
             snelA := arrty_nel(src, stdidxAssignTy.s, stdidxAssignTy.n)
-            if snelA > 0 { push_str(sb, "  li a2, ") ; push_int(sb, snelA) ; push_str(sb, "\n  bltu a1, a2, 1f\n  ebreak\n1:\n") }
+            if snelA > 0 { push_str(sb, "  li a2, ") ; push_int(sb, snelA) ; push_str(sb, "\n  bltu a1, a2, 1f\n  ebreak # bounds\n1:\n") }
           }
           push_str(sb, "  add a0, a0, a1\n  ld a2, 0(sp)\n  addi sp, sp, 16\n  sb a2, 0(a0)\n")
         }
@@ -6836,7 +6844,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           ## element ADDRESS once → kept on the stack (each field emit clobbers the scratch registers).
           emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if RV_CHK {
-            if eanel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, eanel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+            if eanel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, eanel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
           }
           mut estrideB := eaw * 8
           if eabyte { estrideB = i64(layout_elem_stride_bytes(decls, src, easp.s, easp.n, a)) }
@@ -6875,7 +6883,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           }
           push_str(sb, "  addi sp, sp, 16\n")
         }
-        else if easp.n != 0 { push_str(sb, "  ebreak\n") }
+        else if easp.n != 0 { push_str(sb, "  ebreak # unsupported aggregate array-element assign\n") }
         else if isparamslice {
           ## Bounded word-granular Slice(u64)/Slice(u32) PARAM write: the slot points to the caller's
           ## two-word pair. Preserve the value across index evaluation, check the runtime length, then
@@ -6887,7 +6895,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           pslotS := 16 + pidxS * 8
           if RV_CHK {
-            push_str(sb, "  ld t0, ") ; push_int(sb, pslotS) ; push_str(sb, "(s0)\n  ld t1, 8(t0)\n  bltu a0, t1, 1f\n  ebreak\n1:\n")
+            push_str(sb, "  ld t0, ") ; push_int(sb, pslotS) ; push_str(sb, "(s0)\n  ld t1, 8(t0)\n  bltu a0, t1, 1f\n  ebreak # bounds\n1:\n")
           }
           push_str(sb, "  slli a0, a0, 3\n  ld t0, ") ; push_int(sb, pslotS) ; push_str(sb, "(s0)\n  ld t1, 0(t0)\n  add t1, t1, a0\n  ld a1, 0(sp)\n  addi sp, sp, 16\n  sd a1, 0(t1)\n")
         }
@@ -6898,7 +6906,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
           emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if RV_CHK {
-            push_str(sb, "  ld t0, ") ; push_int(sb, aoff + 8) ; push_str(sb, "(s0)\n  bltu a0, t0, 1f\n  ebreak\n1:\n")
+            push_str(sb, "  ld t0, ") ; push_int(sb, aoff + 8) ; push_str(sb, "(s0)\n  bltu a0, t0, 1f\n  ebreak # bounds\n1:\n")
           }
           push_str(sb, "  slli a0, a0, 3\n  ld a2, ") ; push_int(sb, aoff) ; push_str(sb, "(s0)\n  add a2, a2, a0\n  ld a1, 0(sp)\n  addi sp, sp, 16\n  sd a1, 0(a2)\n")
         }
@@ -6916,7 +6924,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           emit_rv_expr(iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if RV_CHK {
             gnelW := rv_alit_nel(rv_global_value(decls, src, bns, bnl))
-            if gnelW > 0 { push_str(sb, "  li t0, ") ; push_int(sb, gnelW) ; push_str(sb, "\n  bltu a0, t0, 1f\n  ebreak\n1:\n") }
+            if gnelW > 0 { push_str(sb, "  li t0, ") ; push_int(sb, gnelW) ; push_str(sb, "\n  bltu a0, t0, 1f\n  ebreak # bounds\n1:\n") }
           }
           gcn := str_at((src + bns), bnl)
           push_str(sb, "  slli a0, a0, 3\n  la a2, ") ; push_str(sb, gcn) ; push_str(sb, "\n  add a2, a2, a0\n  ld a1, 0(sp)\n  addi sp, sp, 16\n  sd a1, 0(a2)\n")
@@ -6931,7 +6939,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           emit_rv_place_idx_addr(ibase, iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           push_str(sb, "  ld a1, 0(sp)\n  addi sp, sp, 16\n  sd a1, 0(a0)\n")
         }
-        else { push_str(sb, "  ebreak\n") }
+        else { push_str(sb, "  ebreak # aggregate array-element argument: element address not resolvable\n") }
         s = nx
       }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => {
@@ -6991,7 +6999,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             }
           }
         } }
-        if (not stdhandled) and (not ok) and (not gok) and (not paramok) { push_str(sb, "  ebreak\n") }
+        if (not stdhandled) and (not ok) and (not gok) and (not paramok) { push_str(sb, "  ebreak # unsupported field assign\n") }
         s = nx
       }
       ## `G.a.b.c = v` — a nested scalar-field WRITE of a struct GLOBAL at ANY depth. Resolve the
@@ -7043,7 +7051,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           }
           if not rv_std_idx_path_ok(place, body_head, src, a, decls) { push_str(sb, "  sd a1, 0(a0)\n") }
         }
-        if (not stdfpok) and (not gpok) and (not lpok) and (not deepfp) { push_str(sb, "  ebreak\n") }
+        if (not stdfpok) and (not gpok) and (not lpok) and (not deepfp) { push_str(sb, "  ebreak # unsupported field-path assign\n") }
         s = nx
       }
       ## `xs[i].f = e` — a scalar FIELD write into an ELEMENT of a fixed array of scalar-only structs
@@ -7077,7 +7085,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
           emit_rv_expr(ifi, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           if RV_CHK {
-            if fnel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, fnel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+            if fnel > 0 { push_str(sb, "  li a1, ") ; push_int(sb, fnel) ; push_str(sb, "\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
           }
           push_str(sb, "  li a1, ") ; push_int(sb, fstrb) ; push_str(sb, "\n  mul a0, a0, a1\n")
           if fla { push_str(sb, "  add a2, a0, s0\n  addi a2, a2, ") ; push_int(sb, faoff) ; push_str(sb, "\n") }
@@ -7122,7 +7130,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           }
           if not layout_kind_is_byte(layout_kind(decls, src, difty.s, difty.n, a)) { push_str(sb, "  sd a1, ") ; push_int(sb, dwof) ; push_str(sb, "(a0)\n") }
         }
-        if (not ifok) and (not deepif) { push_str(sb, "  ebreak\n") }
+        if (not ifok) and (not deepif) { push_str(sb, "  ebreak # unsupported array-element field assign\n") }
         s = ifnx
       }
       Stmt::Return(rv, nx) => {
@@ -7195,7 +7203,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             stride := rv_slice_param_agg_stride(params_head, src, ins, inl, a, decls)
             pslot := 16 + ipidx * 8
             emit_rv_expr(ex_index_idx(scrut), sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-            if RV_CHK { push_str(sb, "  ld a3, ") ; push_int(sb, pslot) ; push_str(sb, "(s0)\n  ld a1, 8(a3)\n  bltu a0, a1, 1f\n  ebreak\n1:\n") }
+            if RV_CHK { push_str(sb, "  ld a3, ") ; push_int(sb, pslot) ; push_str(sb, "(s0)\n  ld a1, 8(a3)\n  bltu a0, a1, 1f\n  ebreak # bounds\n1:\n") }
             push_str(sb, "  ld a3, ") ; push_int(sb, pslot) ; push_str(sb, "(s0)\n  ld a2, 0(a3)\n  li a1, ") ; push_int(sb, stride * 8) ; push_str(sb, "\n  mul a0, a0, a1\n  add a2, a2, a0\n")
             mut ck := 0
             mtmpI := rv_match_tmp_offset()
@@ -7249,7 +7257,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           emit_rv_scalar_match_arms(arms, endid, sb, a, src, params_head, pcount, body_head, decls, frame)
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
         }
-        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and (not scalar_shape) { push_str(sb, "  ebreak\n") }
+        if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and (not scalar_shape) { push_str(sb, "  ebreak # unsupported match statement\n") }
         s = nx
       }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
@@ -7353,7 +7361,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             push_str(sb, ".Lfiend") ; push_int(sb, id) ; push_str(sb, ":\n")
           }
           if (not okfi) and (not aggdone) {
-            push_str(sb, "  ebreak\n")
+            push_str(sb, "  ebreak # for-in over an unsupported iterable\n")
           }
           ## `break` target (fall-through exit) + restore the enclosing loop's break/continue ids.
           push_str(sb, ".Lbrk") ; push_int(sb, id) ; push_str(sb, ":\n")
@@ -7406,12 +7414,12 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
       ## (`bd`/`cd != 0`) or a loop-EXPRESSION `break <expr>` (`bv != 0`, §7.2) fail-loud (`ebreak`)
       ## rather than silently branch to the wrong loop / drop the value.
       Stmt::Break(bv, bd, bnx) => {
-        if bd != 0 or unchecked bitcast(usize, bv) != 0 { push_str(sb, "  ebreak\n") }
+        if bd != 0 or unchecked bitcast(usize, bv) != 0 { push_str(sb, "  ebreak # labeled break / break with a value\n") }
         else { push_str(sb, "  j .Lbrk") ; push_int(sb, RV_BRK) ; push_str(sb, "\n") }
         s = bnx
       }
       Stmt::Continue(cd, cnx) => {
-        if cd != 0 { push_str(sb, "  ebreak\n") }
+        if cd != 0 { push_str(sb, "  ebreak # labeled continue\n") }
         else { push_str(sb, "  j .Lcont") ; push_int(sb, RV_CONT) ; push_str(sb, "\n") }
         s = cnx
       }
@@ -7432,7 +7440,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         iselitv := expr_is_enum_lit(val)
         isalitv := ex_is_array_lit(val)
         isslicev := ex_is_slice(val)
-        if isslitv or iselitv or isalitv or isslicev { push_str(sb, "  ebreak\n") }
+        if isslitv or iselitv or isalitv or isslicev { push_str(sb, "  ebreak # unsupported deref-assign (aggregate value)\n") }
         else {
           emit_rv_expr(val, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
           push_str(sb, "  addi sp, sp, -16\n  sd a0, 0(sp)\n")
@@ -7454,7 +7462,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         cv := rv_comp_cond_fold(cc, src)
         if cv == 1 { emit_rv_stmts(th, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base) }
         if cv == 0 { emit_rv_stmts(el, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base) }
-        if cv < 0 { push_str(sb, "  ebreak\n") }
+        if cv < 0 { push_str(sb, "  ebreak # comptime-if: unfoldable condition (needs mono context)\n") }
         s = nx
       }
       ## `comptime for i in lo .. hi { body }` — UNROLL at emit time: for each constant k in [lo, hi), store
@@ -7464,14 +7472,14 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         cv := rv_comp_cond_fold(cc, src)
         if cv == 1 { emit_rv_stmts(th, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base) }
         if cv == 0 { emit_rv_stmts(el, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base) }
-        if cv < 0 { push_str(sb, "  ebreak\n") }
+        if cv < 0 { push_str(sb, "  ebreak # comptime-if: unfoldable condition (needs mono context)\n") }
         s = nx
       }
       ## `comptime match typeinfo(T) { <Kind>(_) => …, _ => … }` (§8 mono) — fold on T's KIND inside a
       ## mono INSTANCE (RV_SUB active) and emit ONLY the matching arm (or the `_` arm). An inner
       ## `comptime match <scalar-kind>` keys off the SAME instance type. Outside an instance → fail-loud.
       Stmt::CompMatch(cmsc, cmah, cmnx) => {
-        if RV_SUB_ITL == 0 { push_str(sb, "  ebreak\n") }
+        if RV_SUB_ITL == 0 { push_str(sb, "  ebreak # comptime-match: needs mono context\n") }
         else {
           kind := ct_type_kind(RV_SUB_ITS, RV_SUB_ITL, decls, src)
           nkind := ct_scalar_num_kind(RV_SUB_ITS, RV_SUB_ITL, src)
@@ -7532,21 +7540,21 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
             cfdone = true
           }
         }
-        if not cfdone { push_str(sb, "  ebreak\n") }
+        if not cfdone { push_str(sb, "  ebreak # comptime-for fields: needs a struct mono instance\n") }
         s = nx
       }
       ## k into the loop var's frame slot then emit the body (no runtime loop; the control flow is erased).
       ## Bounds are compile-time integer constants (rv_comp_range_bound: literal / module const). Mirrors
       ## the x86 lower's CompForRange numeric unroll. A null hi (the §7.1 pack form) is unsupported here.
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
-        if unchecked bitcast(usize, rhi) == 0 { push_str(sb, "  ebreak\n") }
+        if unchecked bitcast(usize, rhi) == 0 { push_str(sb, "  ebreak # comptime-for pack unroll unsupported\n") }
         else {
           ioff := rv_local_off(body_head, src, rvs, rvl, pcount, a, decls)
-          if ioff < 0 { push_str(sb, "  ebreak\n") }
+          if ioff < 0 { push_str(sb, "  ebreak # comptime-for loop var unresolved\n") }
           else {
             lo := rv_comp_range_bound(rlo, decls, src)
             hi := rv_comp_range_bound(rhi, decls, src)
-            if hi - lo > 100000 { push_str(sb, "  ebreak\n") }
+            if hi - lo > 100000 { push_str(sb, "  ebreak # comptime-for range exceeds the unroll budget\n") }
             else {
               ## See the note on the same unroll in `wat::emit_wat_stmts` (#602/#638/#646): `lo` is
               ## now reachably negative, and #648's `unchecked` bypass on the increment is gone —
@@ -7564,7 +7572,7 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         s = nx
       }
       ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::AllocWith => { push_str(sb, "  ebreak\n") ; s = 0 }
+      Stmt::AllocWith => { push_str(sb, "  ebreak # unsupported statement\n") ; s = 0 }
     }
   }
 }
@@ -7667,7 +7675,7 @@ emit_rv_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8),
     ## SUPPORTED: a single type-param (any position), OR a leading RUN of 2..3 type-params (cnt == lead).
     gok := RV_SUB_ITL != 0 and cnt >= 1 and cnt <= 3 and (cnt == lead or cnt == 1)
     if not gok {
-      push_str(sb, fname) ; push_str(sb, ":\n  ebreak\n  ret\n")
+      push_str(sb, fname) ; push_str(sb, ":\n  ebreak # generic fn: unsupported type-param shape\n  ret\n")
       return
     }
     inst = true

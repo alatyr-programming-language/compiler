@@ -871,6 +871,28 @@ check_ir_dev_verb() {
   else echo "FAIL help: no \`ir\` line"; fail=1; fi
 }
 
+# `docs/ir.md` slice 0a — every trap a twin emits names what it traps on: the construct a catch-all arm
+# does not lower (`unsupported expr StructLit`, …, §7.2 "catch-all share") or the check it guards
+# (`overflow`, `bounds`, … §3.6), so `xbackend_diff.sh --sites` attributes a trap row on every backend
+# instead of borrowing aarch64's cause for riscv64's bare `ebreak`. Reads existing fixtures only.
+check_trap_names() {
+  local src="$E2E_TEST/agg_from_branch_arg.al" out="$T/trap_names" rc
+  [ -f "$src" ] || { echo "MISS agg_from_branch_arg: no $src"; fail=1; return; }
+  "$CC" aarch64 "$src" > "$out.a64" 2>/dev/null
+  "$CC" riscv64 "$src" > "$out.rv" 2>/dev/null
+  "$CC" wat "$E2E_TEST/accept_ann_str_binding.al" > "$out.wat" 2>/dev/null
+  "$CC" aarch64 "$E2E_TEST/ambient_strbuf.al" > "$out.a64b" 2>/dev/null
+  "$CC" riscv64 "$E2E_TEST/ambient_strbuf.al" > "$out.rvb" 2>/dev/null
+  if grep -q 'brk #0 // unsupported expr StructLit$' "$out.a64" && grep -q 'ebreak # unsupported expr StructLit$' "$out.rv" \
+    && grep -q '(; unsupported expr StrLit ;)' "$out.wat" \
+    && ! grep -q '^  brk #0$' "$out.a64" "$out.a64b" && ! grep -q '^  ebreak$' "$out.rv" "$out.rvb" \
+    && grep -q 'ebreak # overflow$' "$out.rvb"; then
+    echo "ok   trap_names: catch-all traps name their construct, guard traps their kind, no bare trap"
+  else
+    echo "FAIL trap_names: a twin emitted a trap that names nothing (or the named catch-all is missing)"; fail=1
+  fi
+}
+
 # Modules §4.3 — ordinary one-hop module re-export. The source keeps `facade` and the entry module
 # in one focused front-end input so the non-x86 resolver sees `pub math := std::math`; the check is
 # structural because the WAT backend is the consumer of driver::d_qual_target. A missing rewrite
@@ -10919,6 +10941,7 @@ run_wat for_break_labels 42
 check_backend_determinism
 check_large_source
 check_ir_dev_verb
+check_trap_names
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
 ## direct calls, value+statement `if`, `while`, `return`.
