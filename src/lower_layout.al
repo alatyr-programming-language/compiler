@@ -3351,9 +3351,9 @@ pub apply_when_guards := fn(decls : ptr(rt::Vec), src : ptr(u8), arch : str) {
         gh := rt::vec_get(deref(decls), i)
         gdp : ptr(mut Decl) = unchecked bitcast(ptr(mut Decl), gh)
         deref(gdp) = Decl(name_start = dg.name_start, name_len = 0, value = dg.value,
-          is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = 0,
-          body_stmts = 0, fields_head = 0, ret_ts = 0, ret_tl = 0,
-          mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = 0, alias_ts = 0, alias_tl = 0)
+          is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+          body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0,
+          mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       }
     }
     i += 1

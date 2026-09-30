@@ -514,22 +514,22 @@ pub expand_variant_arms := fn(head : ptr(mut Arm), es : usize, el : usize, cx : 
         mut fv := ed.fields_head
         while fv != 0 {
           fvm := deref(fld_p(fv))
-          ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = 0, vs = fvm.ns, vl = fvm.nl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
-          if nh == 0 { nh = ai } else { set_arm_next(cx.mar, nt, ai) }
-          nt = ai
+          ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = unchecked bitcast(ptr(mut Arm), 0), vs = fvm.ns, vl = fvm.nl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
+          if nh == 0 { nh = unchecked bitcast(usize, ai) } else { set_arm_next(cx.mar, nt, ai) }
+          nt = unchecked bitcast(usize, ai)
           fv = fvm.next
         }
       }
     } else if am.wild == 3 {
       ## `T.(v)` comptime-variant PATTERN → resolve `v` to the current loop variant (`cf_curvar`,
       ## set by the enclosing comptime-for arm body). A concrete variant arm matching that variant.
-      ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = 0, vs = cx.cf_curvar_s, vl = cx.cf_curvar_l, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
-      if nh == 0 { nh = ai } else { set_arm_next(cx.mar, nt, ai) }
-      nt = ai
+      ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = unchecked bitcast(ptr(mut Arm), 0), vs = cx.cf_curvar_s, vl = cx.cf_curvar_l, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
+      if nh == 0 { nh = unchecked bitcast(usize, ai) } else { set_arm_next(cx.mar, nt, ai) }
+      nt = unchecked bitcast(usize, ai)
     } else {
-      ai := mk_arm(deref(cx.mar), Arm(wild = am.wild, lit = am.lit, body = am.body, next = 0, vs = am.vs, vl = am.vl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = am.hi))
-      if nh == 0 { nh = ai } else { set_arm_next(cx.mar, nt, ai) }
-      nt = ai
+      ai := mk_arm(deref(cx.mar), Arm(wild = am.wild, lit = am.lit, body = am.body, next = unchecked bitcast(ptr(mut Arm), 0), vs = am.vs, vl = am.vl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = am.hi))
+      if nh == 0 { nh = unchecked bitcast(usize, ai) } else { set_arm_next(cx.mar, nt, ai) }
+      nt = unchecked bitcast(usize, ai)
     }
     arm = am.next
   }

@@ -113,7 +113,7 @@ pub decl_is_variadic := fn(d : Decl, src : ptr(u8), a : rt::Arena) -> bool {
   if d.is_fn == false { return false }
   mut pp := d.params_head
   mut last := 0
-  while pp != 0 { last = pp; pp = deref(param_p(pp)).next }
+  while pp != 0 { last = unchecked bitcast(usize, pp); pp = deref(param_p(pp)).next }
   if last == 0 { return false }
   lp := deref(param_p(last))
   type_is_variadic_rest(src, lp.ts, lp.tl)
@@ -124,7 +124,7 @@ pub decl_is_slice_variadic := fn(d : Decl) -> bool {
   if d.is_fn == false { return false }
   mut pp := d.params_head
   mut last := 0
-  while pp != 0 { last = pp; pp = deref(param_p(pp)).next }
+  while pp != 0 { last = unchecked bitcast(usize, pp); pp = deref(param_p(pp)).next }
   if last == 0 { return false }
   deref(param_p(last)).pmode == 3
 }

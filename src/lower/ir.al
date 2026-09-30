@@ -869,7 +869,7 @@ pub ir_lower_stmts := fn(head : ptr(mut Stmt), cx : ptr(LCtx), unch : bool) {
           ## a Vec-build assign (`r := mmap(…)`, `ar := arena_over(…)`, `v := with_capacity(…)`) — the whole
           ## statement is text-spliced into its FRAME slots via a GENERAL BARRIER (the aggregate stays in
           ## memory); no scalar result vreg is produced. Any modeled scalar its args read is synced first.
-          ir_gbarrier(s, cx)
+          ir_gbarrier(unchecked bitcast(usize, s), cx)
         } else {
           vr := ir_var_vreg(cx, ns, nl2)
           o := ir_lower_expr(v, cx, unch)
@@ -880,7 +880,7 @@ pub ir_lower_stmts := fn(head : ptr(mut Stmt), cx : ptr(LCtx), unch : bool) {
       ## a bare-call ExprStmt — a GENERAL BARRIER (result discarded): a Vec-build side effect
       ## (`v.push(x).expect(…)`, the mutation lands in the frame-resident Vec) OR the trailing `fmt::print`
       ## of the result (its `sum` arg is synced to its frame slot first). Both text-spliced via op-24.
-      Stmt::ExprStmt(e, nx) => { ir_gbarrier(s, cx); s = nx }
+      Stmt::ExprStmt(e, nx) => { ir_gbarrier(unchecked bitcast(usize, s), cx); s = nx }
       Stmt::If(c, th, el, nx) => {
         lelse := ir_fresh_label()
         lend := ir_fresh_label()
@@ -898,7 +898,7 @@ pub ir_lower_stmts := fn(head : ptr(mut Stmt), cx : ptr(LCtx), unch : bool) {
           ## text-spliced verbatim, so its cursor + pushes stay frame-resident (the modeled cursor `i` set
           ## just above is synced to its slot first). The `for x in v` sum loop over the built Vec is the
           ## register-allocated hot loop that follows.
-          ir_gbarrier(s, cx)
+          ir_gbarrier(unchecked bitcast(usize, s), cx)
         } else {
           lg := ir_fresh_label()
           ld := ir_fresh_label()
@@ -1541,7 +1541,7 @@ ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), 
             IRFR_N = IRFR_N + 1
             IRP_NGBAR = IRP_NGBAR + 1
             IRP_NSTMT = IRP_NSTMT - 1
-            ir_count_barrier_syncs(src, decls, s)
+            ir_count_barrier_syncs(src, decls, unchecked bitcast(usize, s))
             if ir_call_returns_vec(src, decls, v) and IRVEC_N < 4 {
               IRVEC_S[IRVEC_N] = ns
               IRVEC_L[IRVEC_N] = nl2
@@ -1574,7 +1574,7 @@ ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), 
         } else if ir_is_call_rhs(e) and IRP_NGBAR < 16 {
           IRP_NGBAR = IRP_NGBAR + 1
           IRP_NSTMT = IRP_NSTMT - 1
-          ir_count_barrier_syncs(src, decls, s)
+          ir_count_barrier_syncs(src, decls, unchecked bitcast(usize, s))
         } else { IRP_OK = false }
         s = nx
       }
@@ -1595,7 +1595,7 @@ ir_check_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), 
           if IRP_NGBAR < 16 {
             IRP_NGBAR = IRP_NGBAR + 1
             IRP_NSTMT = IRP_NSTMT - 1
-            ir_count_barrier_syncs(src, decls, s)
+            ir_count_barrier_syncs(src, decls, unchecked bitcast(usize, s))
           } else { IRP_OK = false }
         } else {
           IRP_SAWMODEL = true

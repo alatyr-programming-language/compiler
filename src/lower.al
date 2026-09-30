@@ -5005,7 +5005,7 @@ enum_lit_full := fn(e : ptr(Expr)) -> EFull {
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { EFull(is_e = false, es = 0, el = 0, vs = 0, vl = 0, np = 0, phead = 0) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { EFull(is_e = false, es = 0, el = 0, vs = 0, vl = 0, np = 0, phead = unchecked bitcast(ptr(mut Arg), 0)) }
   }
 }
 ## Is `e` a `Call` expression. Kept beside the AST-shape probes used by literal slot synthesis so
@@ -5342,7 +5342,7 @@ array_lit_info := fn(e : ptr(Expr)) -> ArrInfo {
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { ArrInfo(is_a = false, nel = 0, ehead = 0) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { ArrInfo(is_a = false, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
   }
 }
 
@@ -14409,7 +14409,7 @@ call_parts := fn(p : ptr(Expr)) -> CallParts {
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CallParts(is_call = false, cs = 0, cl = 0, na = 0, ah = 0) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CallParts(is_call = false, cs = 0, cl = 0, na = 0, ah = unchecked bitcast(ptr(mut Arg), 0)) }
   }
 }
 ## The callee (head) name span of a `Call` expr, else 0/0.
@@ -17094,7 +17094,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             swap := op == 25 or op == 26
             a0 := if swap { r } else { l }
             a1 := if swap { l } else { r }
-            arg1 := mk_arg(deref(cx.mar), Arg(e = a1, next = 0))
+            arg1 := mk_arg(deref(cx.mar), Arg(e = a1, next = unchecked bitcast(ptr(mut Arg), 0)))
             arg0 := mk_arg(deref(cx.mar), Arg(e = a0, next = arg1))
             cidx := mk_expr(deref(cx.mar), Expr.Call(dd.name_start, dd.name_len, 2, arg0))
             cptr := node_ptr(Expr, deref(cx.mar), cidx)
@@ -19438,9 +19438,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           ## arm (`body_stmts`), which has no bare-expression field home → fail loud (never a silent 0).
           if unchecked bitcast(usize, mam.body) == 0 { panic("selfhost: field read off a match-EXPRESSION whose arm has a STATEMENT-list body (not a single value expression) is not lowered — bind the match to a local first, then read the field") }
           mfb := node_ptr(Expr, deref(cx.mar), mk_expr(deref(cx.mar), Expr.Field(mam.body, fs, fl)))
-          mai := mk_arm(deref(cx.mar), Arm(wild = mam.wild, lit = mam.lit, body = mfb, next = 0, vs = mam.vs, vl = mam.vl, binds_head = mam.binds_head, body_stmts = mam.body_stmts, hi = mam.hi))
-          if mnh == 0 { mnh = mai } else { set_arm_next(cx.mar, mnt, mai) }
-          mnt = mai
+          mai := mk_arm(deref(cx.mar), Arm(wild = mam.wild, lit = mam.lit, body = mfb, next = unchecked bitcast(ptr(mut Arm), 0), vs = mam.vs, vl = mam.vl, binds_head = mam.binds_head, body_stmts = mam.body_stmts, hi = mam.hi))
+          if mnh == 0 { mnh = unchecked bitcast(usize, mai) } else { set_arm_next(cx.mar, mnt, mai) }
+          mnt = unchecked bitcast(usize, mai)
           marm = mam.next
         }
         bnm := node_ptr(Expr, deref(cx.mar), mk_expr(deref(cx.mar), Expr.Match(bmi.scrut, unchecked bitcast(ptr(mut Arm), mnh))))
@@ -21843,7 +21843,7 @@ match_info := fn(e : ptr(Expr)) -> MInfo {
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MInfo(is_m = false, scrut = e, head = 0) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MInfo(is_m = false, scrut = e, head = unchecked bitcast(ptr(mut Arm), 0)) }
   }
 }
 
@@ -22346,9 +22346,9 @@ match_if_first_body := fn(v : ptr(Expr), a : rt::Arena) -> ptr(Expr) {
 AggKind := struct { kind : u8, s : usize, n : usize, nel : usize, ehead : ptr(mut Arg) }
 agg_kind_of := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> AggKind {
   si := struct_lit_info(e)
-  if si.is_s { return AggKind(kind = 2, s = si.ss, n = si.sl, nel = 0, ehead = 0) }
+  if si.is_s { return AggKind(kind = 2, s = si.ss, n = si.sl, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
   ei := enum_lit_info(e)
-  if ei.is_e { return AggKind(kind = 3, s = ei.es, n = ei.el, nel = 0, ehead = 0) }
+  if ei.is_e { return AggKind(kind = 3, s = ei.es, n = ei.el, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
   ai := array_lit_info(e)
   if ai.is_a { return AggKind(kind = 5, s = 0, n = 0, nel = ai.nel, ehead = ai.ehead) }
   ## a CALL returning a small (1..7-word) STRUCT as an `if`/`match` branch VALUE (`if c { f() } else
@@ -22359,10 +22359,10 @@ agg_kind_of := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
   ## a §Priority-1 SILENT word-0-drop → 0. (A str-returning call already rides kind 4 via `expr_is_str_val`.)
   if struct_ret_call(e, decls, src, a) {
     csp := call_ret_struct_span(e, decls, src, a)
-    if csp.n != 0 { return AggKind(kind = 2, s = csp.s, n = csp.n, nel = 0, ehead = 0) }
+    if csp.n != 0 { return AggKind(kind = 2, s = csp.s, n = csp.n, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
   }
-  if expr_is_str_val(e, decls, src, a) { return AggKind(kind = 4, s = 0, n = 0, nel = 0, ehead = 0) }
-  AggKind(kind = 0, s = 0, n = 0, nel = 0, ehead = 0)
+  if expr_is_str_val(e, decls, src, a) { return AggKind(kind = 4, s = 0, n = 0, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
+  AggKind(kind = 0, s = 0, n = 0, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0))
 }
 
 ## The aggregate/str kind a `match`/`if` EXPRESSION yields (classified on its first value body), or
@@ -22371,7 +22371,7 @@ agg_kind_of := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
 ## the stack in bare expression position, so the generic scalar store would truncate them).
 match_if_agg_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> AggKind {
   fb := match_if_first_body(v, a)
-  if unchecked bitcast(usize, fb) == 0 { return AggKind(kind = 0, s = 0, n = 0, nel = 0, ehead = 0) }
+  if unchecked bitcast(usize, fb) == 0 { return AggKind(kind = 0, s = 0, n = 0, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
   agg_kind_of(fb, decls, src, a)
 }
 
@@ -23665,7 +23665,7 @@ emit_st_match := fn(sc : ptr(Expr), ah : ptr(mut Arm), nx : ptr(mut Stmt), in ou
   ## epilogue.
   mov_tail := cx.tail
   cx.tail = mov_tail and nx == 0
-  emit_match_stmt(sc, ah, sb, cx, nl)
+  emit_match_stmt(sc, unchecked bitcast(usize, ah), sb, cx, nl)
   cx.tail = mov_tail
 }
 
@@ -27747,7 +27747,7 @@ fill_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
             ## an omitted (index >= nargs) NON-pointer value param with a stored default (`pps != 0`).
             if k >= nargs and str_at((src + pm.ts), pm.tl) != "ptr" and pm.pps != 0 {
               defp := unchecked bitcast(ptr(Expr), pm.pps)
-              h := mk_arg(deref(mar), Arg(e = defp, next = 0))
+              h := mk_arg(deref(mar), Arg(e = defp, next = unchecked bitcast(ptr(mut Arg), 0)))
               if newhead == 0 { newhead = h } else {
                 told := deref(arg_p(tail))
                 set_arg(deref(mar), tail, Arg(e = told.e, next = h))
@@ -28094,9 +28094,9 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
         ## keep `value` (a valid `Expr` ptr the `.rodata` walker handles harmlessly) but drop the NAME,
         ## body, params, and kind → an inert kind-0 no-op that matches no lookup and emits no code.
         deref(gdp) = Decl(name_start = dg.name_start, name_len = 0, value = dg.value,
-          is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = 0,
-          body_stmts = 0, fields_head = 0, ret_ts = 0, ret_tl = 0,
-          mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = 0, alias_ts = 0, alias_tl = 0)
+          is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+          body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0,
+          mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       }
     }
   }
