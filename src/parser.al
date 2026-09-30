@@ -20,6 +20,7 @@ fld_null := ast::fld_null
 (param_p, param_null) := ast
 stmt_null := ast::stmt_null
 arm_p := ast::arm_p
+bind_count := ast::bind_count
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 stmt_label_mark := ast::stmt_label_mark
@@ -861,10 +862,6 @@ pub bnode := fn(a : ptr(mut rt::Arena), val : Bind) -> ptr(mut Bind) {
   p
 }
 
-## The null `Bind` pointer (the empty-list / end-of-list sentinel). `Arm.binds_head` and
-## `Bind.next` are `ptr(mut Bind)` (§6 ptr-typing); an absent list is a null pointer, tested
-## via `unchecked bitcast(usize, p) == 0` (word-based null, no runtime cost).
-bind_null := fn() -> ptr(mut Bind) { unchecked bitcast(ptr(mut Bind), 0) }
 
 ## Parser-local compatibility shim for the shared Grammar §2.4 machinery in `lexrt`; `lit_val_at`
 ## below supplies the parser's source-located diagnostic layer. The historical call-site name stays.
@@ -1016,8 +1013,8 @@ parse_pat_alt := fn(in out pc : PC) -> ptr(mut Arm) {
   mut hi : i64 = 0
   mut vs := 0
   mut vl := 0
-  mut bhead := bind_null()
-  mut btail := bind_null()
+  mut bhead : Option(ptr(mut Bind)) = Option.None
+  mut btail : Option(ptr(mut Bind)) = Option.None
   wt := cur(pc)
   if wt.kind == 1 and str_eq(str_at(pc.src + wt.start, wt.len), "_") { w = 1; pc.idx = pc.idx + 1 }
   else if wt.kind == 1 and str_eq(str_at(pc.src + wt.start, wt.len), "true") { lit = 1; pc.idx = pc.idx + 1 }
@@ -1047,13 +1044,9 @@ parse_pat_alt := fn(in out pc : PC) -> ptr(mut Arm) {
       pc.idx = pc.idx + 1
       while cur(pc).kind != 11 and cur(pc).kind != 0 {
         bt := cur(pc); pc.idx = pc.idx + 1
-        bnew := bnode(pc.arena, Bind(ns = bt.start, nl = bt.len, next = bind_null()))
-        if unchecked bitcast(usize, bhead) == 0 { bhead = bnew } else {
-          bold := deref(btail)
-          bupd := Bind(ns = bold.ns, nl = bold.nl, next = bnew)
-          deref(btail) = bupd
-        }
-        btail = bnew
+        bnew := bnode(pc.arena, Bind(ns = bt.start, nl = bt.len, next = Option.None))
+        match btail { Some(bt0) => { deref(bt0).next = Option.Some(bnew) }; None => { bhead = Option.Some(bnew) } }
+        btail = Option.Some(bnew)
         if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }
       }
       pc.idx = pc.idx + 1
@@ -1682,8 +1675,8 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         mut vs := 0
         mut vl := 0
         mut bn := 0
-        mut bhead := bind_null()
-        mut btail := bind_null()
+        mut bhead : Option(ptr(mut Bind)) = Option.None
+        mut btail : Option(ptr(mut Bind)) = Option.None
         wt := cur(pc)
         ## `comptime for var in typeinfo(T).variants { T.(var)(p…) => <expr> }` — a comptime
         ## VARIANT-ARM TEMPLATE in EXPRESSION-match position (derive's `eq`). Marked `wild = 2`;
@@ -1704,13 +1697,9 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
             pc.idx = pc.idx + 1               ## '(' payload bindings
             while cur(pc).kind != 11 and cur(pc).kind != 0 {
               bt := cur(pc); pc.idx = pc.idx + 1
-              bnew := bnode(pc.arena, Bind(ns = bt.start, nl = bt.len, next = bind_null()))
-              if unchecked bitcast(usize, bhead) == 0 { bhead = bnew } else {
-                bold := deref(btail)
-                bupd := Bind(ns = bold.ns, nl = bold.nl, next = bnew)
-                deref(btail) = bupd
-              }
-              btail = bnew
+              bnew := bnode(pc.arena, Bind(ns = bt.start, nl = bt.len, next = Option.None))
+              match btail { Some(bt0) => { deref(bt0).next = Option.Some(bnew) }; None => { bhead = Option.Some(bnew) } }
+              btail = Option.Some(bnew)
               bn += 1
               if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }
             }
@@ -1743,7 +1732,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           isor = true
           altn := parse_pat_alt(pc)
           am_alt := deref(arm_p(altn))
-          if unchecked bitcast(usize, am_alt.binds_head) != 0 {
+          if bind_count(am_alt.binds_head) != 0 {
             panic("parse: an OR-pattern alternative may not bind a payload (Control Flow §5.4)")
           }
           set_arm_next(pc.arena, gtail, altn)
@@ -1752,7 +1741,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         ## the FIRST alternative of an OR may not bind either (an OR arm binds inconsistently, §5.4).
         if isor {
           am_first := deref(arm_p(first))
-          if unchecked bitcast(usize, am_first.binds_head) != 0 {
+          if bind_count(am_first.binds_head) != 0 {
             panic("parse: an OR-pattern alternative may not bind a payload (Control Flow §5.4)")
           }
         }
@@ -3726,7 +3715,7 @@ p_stmt := fn(in out pc : PC) -> usize {
           cmbody = p_stmt(pc)
         }
         dummycm := newnode(pc.arena, Expr.Num(0, 0, 0))
-        anewcm := anode(pc.arena, Arm(wild = cw, lit = 0, body = dummycm, next = unchecked bitcast(ptr(mut Arm), 0), vs = cvs, vl = cvl, binds_head = bind_null(), body_stmts = cmbody, hi = 0))
+        anewcm := anode(pc.arena, Arm(wild = cw, lit = 0, body = dummycm, next = unchecked bitcast(ptr(mut Arm), 0), vs = cvs, vl = cvl, binds_head = Option.None, body_stmts = cmbody, hi = 0))
         if cmhead == 0 { cmhead = unchecked bitcast(usize, anewcm) } else {
           apcm := arm_p(cmtail)
           oldcm := deref(apcm)
@@ -4004,8 +3993,8 @@ p_stmt := fn(in out pc : PC) -> usize {
       mut vs := 0
       mut vl := 0
       mut bn := 0
-      mut bhead := bind_null()
-      mut btail := bind_null()
+      mut bhead : Option(ptr(mut Bind)) = Option.None
+      mut btail : Option(ptr(mut Bind)) = Option.None
       wt := cur(pc)
       ## `comptime for <var> in typeinfo(T).variants { <T.(var)(p...)> => body }` — a COMPTIME
       ## VARIANT-ARM TEMPLATE (enum derive). Parse the inner arm `T.(var)(bindings) => body` and
@@ -4029,13 +4018,9 @@ p_stmt := fn(in out pc : PC) -> usize {
           pc.idx = pc.idx + 1               ## '(' payload bindings
           while cur(pc).kind != 11 and cur(pc).kind != 0 {
             bt := cur(pc); pc.idx = pc.idx + 1
-            bnew := bnode(pc.arena, Bind(ns = bt.start, nl = bt.len, next = bind_null()))
-            if unchecked bitcast(usize, bhead) == 0 { bhead = bnew } else {
-              bold := deref(btail)
-              bupd := Bind(ns = bold.ns, nl = bold.nl, next = bnew)
-              deref(btail) = bupd
-            }
-            btail = bnew
+            bnew := bnode(pc.arena, Bind(ns = bt.start, nl = bt.len, next = Option.None))
+            match btail { Some(bt0) => { deref(bt0).next = Option.Some(bnew) }; None => { bhead = Option.Some(bnew) } }
+            btail = Option.Some(bnew)
             bn += 1
             if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }
           }
@@ -4071,7 +4056,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
         isor = true
         altn := parse_pat_alt(pc)
         am_alt := deref(arm_p(altn))
-        if unchecked bitcast(usize, am_alt.binds_head) != 0 {
+        if bind_count(am_alt.binds_head) != 0 {
           panic("parse: an OR-pattern alternative may not bind a payload (Control Flow §5.4)")
         }
         set_arm_next(pc.arena, gtail, altn)
@@ -4080,7 +4065,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
       ## the FIRST alternative of an OR may not bind either (an OR arm binds inconsistently, §5.4).
       if isor {
         am_first := deref(arm_p(first))
-        if unchecked bitcast(usize, am_first.binds_head) != 0 {
+        if bind_count(am_first.binds_head) != 0 {
           panic("parse: an OR-pattern alternative may not bind a payload (Control Flow §5.4)")
         }
       }

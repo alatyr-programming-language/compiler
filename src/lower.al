@@ -34,7 +34,7 @@
 strbuf := rt
 vec := alloc::vec
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_decl) := ast
-(bnd_ns, bnd_nl, bnd_next) := ast
+(bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 fld_p := ast::fld_p
 param_p := ast::param_p
 arm_p := ast::arm_p
@@ -22889,9 +22889,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
           push_str(sb, "\n")
           hadwild = true
         } else if folded {
-          mut fnb := 0
-          mut fcb := am.binds_head
-          while unchecked bitcast(usize, fcb) != 0 { fnb = fnb + 1; fcb = bnd_next(fcb) }
+          fnb := bind_count(am.binds_head)
           if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }
           else { push_str(sb, "  cmpq $0, %r12\n  jne ") }
           emit_label(sb, lbody)
@@ -22918,9 +22916,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
         emit_label(sb, lbody2e)
         push_str(sb, ":\n")
         saved := svec_len(cx.slots)
-        mut nbind := 0
-        mut cb := am2.binds_head
-        while unchecked bitcast(usize, cb) != 0 { nbind = nbind + 1; cb = bnd_next(cb) }
+        nbind := bind_count(am2.binds_head)
         pty := variant_payload_type(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, deref(cx.mar))
         mut agg_ek : u8 = 0
         mut array_ess := 0
@@ -22957,42 +22953,47 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
         }
         mut bnd := am2.binds_head
         mut bi := 0
-        while unchecked bitcast(usize, bnd) != 0 {
-          bmns := bnd_ns(bnd)
-          bmnl := bnd_nl(bnd)
-          if agg_ek == 5 {
-            for fi in 0..(array_nel * array_estride) {
-              svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+        loop {
+          match bnd {
+            Some(bndq) => {
+              bmns := bnd_ns(bndq)
+              bmnl := bnd_nl(bndq)
+              if agg_ek == 5 {
+                for fi in 0..(array_nel * array_estride) {
+                  svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+                }
+                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = array_ess, snl = array_esl, ek = 5, estride = array_estride, eek = 2, is_ref = false))
+              } else if agg_ek != 0 {
+                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = tail_enum_owner_s, tmod_l = tail_enum_owner_l))
+              } else if folded {
+                ## The folded `Some` payload is the staged pointer word itself, not the ordinary
+                ## payload slot at `sbase-1`. #768 — over `ptr(S)` / `ptr(E)` it carries the pointee kind.
+                rpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+                rpk := pointee_agg_kind(cx.decls, cx.src, rpt.s, rpt.n)
+                mut rps := 0
+                mut rpl := 0
+                if rpk != 0 { rps = rpt.s; rpl = rpt.n }
+                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = rps, snl = rpl, ek = rpk, estride = 1, eek = 0, is_ref = false))
+              } else {
+                ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
+                ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
+                bpf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
+                tbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+                mut tbk : u8 = 0
+                mut tbs := 0
+                mut tbl := 0
+                if bpf.n != 0 { tbk = 3; tbs = bpf.s; tbl = bpf.n }
+                else {
+                  tbk = pointee_agg_kind(cx.decls, cx.src, tbpt.s, tbpt.n)
+                  if tbk != 0 { tbs = tbpt.s; tbl = tbpt.n }
+                }
+                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = tbs, snl = tbl, ek = tbk, estride = 1, eek = 0, is_ref = false))
+              }
+              bi += 1
+              bnd = bnd_next(bndq)
             }
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = array_ess, snl = array_esl, ek = 5, estride = array_estride, eek = 2, is_ref = false))
-          } else if agg_ek != 0 {
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = tail_enum_owner_s, tmod_l = tail_enum_owner_l))
-          } else if folded {
-            ## The folded `Some` payload is the staged pointer word itself, not the ordinary
-            ## payload slot at `sbase-1`. #768 — over `ptr(S)` / `ptr(E)` it carries the pointee kind.
-            rpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
-            rpk := pointee_agg_kind(cx.decls, cx.src, rpt.s, rpt.n)
-            mut rps := 0
-            mut rpl := 0
-            if rpk != 0 { rps = rpt.s; rpl = rpt.n }
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = rps, snl = rpl, ek = rpk, estride = 1, eek = 0, is_ref = false))
-          } else {
-            ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
-            ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
-            bpf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
-            tbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
-            mut tbk : u8 = 0
-            mut tbs := 0
-            mut tbl := 0
-            if bpf.n != 0 { tbk = 3; tbs = bpf.s; tbl = bpf.n }
-            else {
-              tbk = pointee_agg_kind(cx.decls, cx.src, tbpt.s, tbpt.n)
-              if tbk != 0 { tbs = tbpt.s; tbl = tbpt.n }
-            }
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = tbs, snl = tbl, ek = tbk, estride = 1, eek = 0, is_ref = false))
+            None => { break }
           }
-          bi += 1
-          bnd = bnd_next(bnd)
         }
         cx.mdepth = cx.mdepth + 1                          ## a nested match in the body uses a deeper scratch level
         if tail_enum_owner_ctx {
@@ -23252,13 +23253,18 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64
       esaved := svec_len(cx.slots)
       mut ebnd := eam2.binds_head
       mut ebi := 0
-      while unchecked bitcast(usize, ebnd) != 0 {
-        epf := payload_folded_ty(cx.decls, cx.src, ses, sel, eam2.vs, eam2.vl, usize(ebi), deref(cx.mar))
-        mut epk : u8 = 0
-        if epf.n != 0 { epk = 3 }
-        svec_push(deref(cx.slots), SlotEntry(ns = bnd_ns(ebnd), nl = bnd_nl(ebnd), off = sbase - 1 - ebi, sns = epf.s, snl = epf.n, ek = epk, estride = 1, eek = 0, is_ref = false))
-        ebi += 1
-        ebnd = bnd_next(ebnd)
+      loop {
+        match ebnd {
+          Some(ebndq) => {
+            epf := payload_folded_ty(cx.decls, cx.src, ses, sel, eam2.vs, eam2.vl, usize(ebi), deref(cx.mar))
+            mut epfk : u8 = 0
+            if epf.n != 0 { epfk = 3 }
+            svec_push(deref(cx.slots), SlotEntry(ns = bnd_ns(ebndq), nl = bnd_nl(ebndq), off = sbase - 1 - ebi, sns = epf.s, snl = epf.n, ek = epfk, estride = 1, eek = 0, is_ref = false))
+            ebi += 1
+            ebnd = bnd_next(ebndq)
+          }
+          None => { break }
+        }
       }
       emit_arm_val_store(eam2.body, base, sb, cx, a, nl)
       svec_truncate(deref(cx.slots), esaved)
@@ -23591,9 +23597,7 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
       ## payload `Some` ⟺ `word != 0` (a non-null pointer). No discriminant compare. Nullary-vs-payload
       ## is read from the arm's BINDING COUNT (`Some(p)` binds one, `None` binds none) — robust without
       ## resolving the parenthesized `Option(ptr(T))` span through `enum_decl_of`.
-      mut fnb := 0
-      mut fcb := am.binds_head
-      while unchecked bitcast(usize, fcb) != 0 { fnb = fnb + 1; fcb = bnd_next(fcb) }
+      fnb := bind_count(am.binds_head)
       if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }
       else { push_str(sb, "  cmpq $0, %r12\n  jne ") }
       emit_label(sb, lbody)
@@ -23629,9 +23633,7 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
     ## (substituted) type is a struct/enum binds as an AGGREGATE (ek 2/3, passed by-ref), fixing the
     ## `check`/sema crash where `Ok(bt : Ty)` bound as a 1-word scalar was passed by-value to a
     ## by-ref `Ty` param. A multi-binding / scalar payload keeps one-word-per-binding scalars.
-    mut nbind2 := 0
-    mut cb2 := am2.binds_head
-    while unchecked bitcast(usize, cb2) != 0 { nbind2 = nbind2 + 1; cb2 = bnd_next(cb2) }
+    nbind2 := bind_count(am2.binds_head)
     mut agg_ek2 : u8 = 0
     mut ptys2 := 0
     mut ptyn2 := 0
@@ -23686,59 +23688,64 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
     if sise {
       mut bnd := am2.binds_head
       mut bi := 0
-      while unchecked bitcast(usize, bnd) != 0 {
-        bmns := bnd_ns(bnd)
-        bmnl := bnd_nl(bnd)
-        if agg_ek2 == 5 and array_nel2 != 0 {
-          ## The enum already owns the payload block. Add only the filler metadata needed by the
-          ## existing checked aggregate-array bounds path; these entries do not allocate frame words.
-          for fi2 in 0..(array_nel2 * array_estride2) {
-            svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+      loop {
+        match bnd {
+          Some(bndq) => {
+            bmns := bnd_ns(bndq)
+            bmnl := bnd_nl(bndq)
+            if agg_ek2 == 5 and array_nel2 != 0 {
+              ## The enum already owns the payload block. Add only the filler metadata needed by the
+              ## existing checked aggregate-array bounds path; these entries do not allocate frame words.
+              for fi2 in 0..(array_nel2 * array_estride2) {
+                svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+              }
+              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = array_ess2, snl = array_esl2, ek = 5, estride = array_estride2, eek = 2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+            } else if agg_ek2 == 5 {
+              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = ptup2, ek = 5, estride = 1, eek = 0, is_ref = false))
+            } else if agg_ek2 != 0 {
+              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = ptys2, snl = ptyn2, ek = agg_ek2, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+            } else if folded {
+              ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`sbase`) — bind `p` there as a scalar
+              ## (ek 0) pointer, not the `sbase-1` payload word an ordinary `[disc, payload]` enum uses.
+              ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
+              ## still lowers as the two-word str view; eek 13 records this niche provenance.
+              pview2 := niche_str_ptr_span(cx.src, ptys2, ptyn2)
+              mut pview_s2 := 0
+              mut pview_l2 := 0
+              mut pview_eek2 : u8 = 0
+              if pview2.n != 0 {
+                pview_s2 = pview2.s
+                pview_l2 = pview2.n
+                pview_eek2 = 13
+              }
+              ## #768 — the pointer-to-struct / pointer-to-enum kind, as in `emit_enum_match`'s twin.
+              mut pkind2 : u8 = 0
+              if pview2.n == 0 {
+                ppt2 := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
+                pkind2 = pointee_agg_kind(cx.decls, cx.src, ppt2.s, ppt2.n)
+                if pkind2 != 0 { pview_s2 = ppt2.s; pview_l2 = ppt2.n }
+              }
+              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = pview_s2, snl = pview_l2, ek = pkind2, estride = 1, eek = pview_eek2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+            } else {
+              ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
+              ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
+              spf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
+              sbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
+              mut sbk : u8 = 0
+              mut sbs := 0
+              mut sbl := 0
+              if spf.n != 0 { sbk = 3; sbs = spf.s; sbl = spf.n }
+              else {
+                sbk = pointee_agg_kind(cx.decls, cx.src, sbpt.s, sbpt.n)
+                if sbk != 0 { sbs = sbpt.s; sbl = sbpt.n }
+              }
+              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = sbs, snl = sbl, ek = sbk, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+            }
+            bi += 1
+            bnd = bnd_next(bndq)
           }
-          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = array_ess2, snl = array_esl2, ek = 5, estride = array_estride2, eek = 2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
-        } else if agg_ek2 == 5 {
-          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = ptup2, ek = 5, estride = 1, eek = 0, is_ref = false))
-        } else if agg_ek2 != 0 {
-          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = ptys2, snl = ptyn2, ek = agg_ek2, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
-        } else if folded {
-          ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`sbase`) — bind `p` there as a scalar
-          ## (ek 0) pointer, not the `sbase-1` payload word an ordinary `[disc, payload]` enum uses.
-          ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
-          ## still lowers as the two-word str view; eek 13 records this niche provenance.
-          pview2 := niche_str_ptr_span(cx.src, ptys2, ptyn2)
-          mut pview_s2 := 0
-          mut pview_l2 := 0
-          mut pview_eek2 : u8 = 0
-          if pview2.n != 0 {
-            pview_s2 = pview2.s
-            pview_l2 = pview2.n
-            pview_eek2 = 13
-          }
-          ## #768 — the pointer-to-struct / pointer-to-enum kind, as in `emit_enum_match`'s twin.
-          mut pkind2 : u8 = 0
-          if pview2.n == 0 {
-            ppt2 := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
-            pkind2 = pointee_agg_kind(cx.decls, cx.src, ppt2.s, ppt2.n)
-            if pkind2 != 0 { pview_s2 = ppt2.s; pview_l2 = ppt2.n }
-          }
-          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = pview_s2, snl = pview_l2, ek = pkind2, estride = 1, eek = pview_eek2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
-        } else {
-          ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
-          ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
-          spf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
-          sbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
-          mut sbk : u8 = 0
-          mut sbs := 0
-          mut sbl := 0
-          if spf.n != 0 { sbk = 3; sbs = spf.s; sbl = spf.n }
-          else {
-            sbk = pointee_agg_kind(cx.decls, cx.src, sbpt.s, sbpt.n)
-            if sbk != 0 { sbs = sbpt.s; sbl = sbpt.n }
-          }
-          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = sbs, snl = sbl, ek = sbk, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+          None => { break }
         }
-        bi += 1
-        bnd = bnd_next(bnd)
       }
     }
     ## COMPTIME enum-hash `hash(p)` support: for a single-payload arm, bind the payload name + its
@@ -23746,8 +23753,7 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
     ov_ps := cx.cf_pay_s; ov_pl := cx.cf_pay_l; ov_pts := cx.cf_pay_ty_s; ov_ptl := cx.cf_pay_ty_l
     ov_cvs := cx.cf_curvar_s; ov_cvl := cx.cf_curvar_l
     if nbind2 == 1 and ptyn2 != 0 {
-      cx.cf_pay_s = bnd_ns(am2.binds_head)
-      cx.cf_pay_l = bnd_nl(am2.binds_head)
+      match am2.binds_head { Some(pb2) => { cx.cf_pay_s = bnd_ns(pb2); cx.cf_pay_l = bnd_nl(pb2) }; None => {} }
       cx.cf_pay_ty_s = ptys2
       cx.cf_pay_ty_l = ptyn2
     }

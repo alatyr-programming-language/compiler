@@ -39,7 +39,7 @@
 ## call-postfix binds across the line. `rt::` is referenced qualified here, so no `strbuf := rt` alias
 ## is needed; leading with the `(…) :=` destructures sidesteps the glue entirely.
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt) := ast
-(bnd_ns, bnd_nl, bnd_next) := ast
+(bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 fld_p := ast::fld_p
 param_p := ast::param_p
 arm_p := ast::arm_p
@@ -853,7 +853,7 @@ wat_int_const_expr := fn(e : ptr(Expr)) -> bool {
   }
   r
 }
-wat_direct_float_num := fn(e : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec), body_head : ptr(mut Stmt), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, bind_head : ptr(mut Bind)) -> bool {
+wat_direct_float_num := fn(e : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec), body_head : ptr(mut Stmt), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, bind_head : Option(ptr(mut Bind))) -> bool {
   mut r := false
   if ann_scan_float(src, ns + nl) == false { return r }
   if wat_int_const_expr(e) { return true }
@@ -2627,7 +2627,7 @@ mut WAT_ARM_ENS := 0
 mut WAT_ARM_ENL := 0
 mut WAT_ARM_VS := 0
 mut WAT_ARM_VL := 0
-mut WAT_ARM_BINDS := 0
+mut WAT_ARM_BINDS : Option(ptr(mut Bind)) = Option.None
 mut WAT_CFVAR_S := 0
 mut WAT_CFVAR_L := 0
 
@@ -2636,22 +2636,25 @@ mut WAT_CFVAR_L := 0
 ## binding. Direct inner bindings retain shadowing precedence; saved outer lists provide lexical
 ## visibility after the inner lookup misses. The bounded depth is an explicit fail-loud boundary.
 mut WAT_BIND_DEPTH : i64 = 0
-mut WAT_BIND_HEADS : [usize; 32] = [0; 32]
+mut WAT_BIND_HEADS : [Option(ptr(mut Bind)); 32] = [Option.None; 32]
 mut WAT_BIND_BASES : [i64; 32] = [0; 32]
 mut WAT_BIND_UNSUPPORTED : [bool; 32] = [false; 32]
 
-wat_bind_push := fn(head : ptr(mut Bind), base : i64, unsupported : bool) {
-  if unchecked bitcast(usize, head) != 0 {
-    if WAT_BIND_DEPTH >= 32 { panic("wasm: match binding nesting exceeds 32 levels") }
-    WAT_BIND_HEADS[WAT_BIND_DEPTH] = unchecked bitcast(usize, head)
-    WAT_BIND_BASES[WAT_BIND_DEPTH] = base
-    WAT_BIND_UNSUPPORTED[WAT_BIND_DEPTH] = unsupported
-    WAT_BIND_DEPTH = WAT_BIND_DEPTH + 1
+wat_bind_push := fn(head : Option(ptr(mut Bind)), base : i64, unsupported : bool) {
+  match head {
+    Some(_h) => {
+      if WAT_BIND_DEPTH >= 32 { panic("wasm: match binding nesting exceeds 32 levels") }
+      WAT_BIND_HEADS[WAT_BIND_DEPTH] = head
+      WAT_BIND_BASES[WAT_BIND_DEPTH] = base
+      WAT_BIND_UNSUPPORTED[WAT_BIND_DEPTH] = unsupported
+      WAT_BIND_DEPTH = WAT_BIND_DEPTH + 1
+    }
+    None => {}
   }
 }
 
-wat_bind_pop := fn(head : ptr(mut Bind)) {
-  if unchecked bitcast(usize, head) != 0 { WAT_BIND_DEPTH = WAT_BIND_DEPTH - 1 }
+wat_bind_pop := fn(head : Option(ptr(mut Bind))) {
+  match head { Some(_h) => { WAT_BIND_DEPTH = WAT_BIND_DEPTH - 1 }; None => {} }
 }
 
 ## ─── §6.1 SHADOWED PARAMETERS ──────────────────────────────────────────────
@@ -2837,12 +2840,10 @@ wat_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_he
     ## a Var naming the CURRENT match arm's SINGLE payload BINDING (`hash(p)` inside `T.(var)(p) => …`):
     ## infer T from the variant's payload type (WAT_ARM_* context). Verified against the arm's bind list
     ## so an unrelated local is never mis-resolved. Enables the enum-derive recursion (comptime_enum_hash).
-    if tl == 0 and avn.n != 0 and WAT_ARM_ENL != 0 and WAT_ARM_BINDS != 0 {
-      bh := unchecked bitcast(ptr(mut Bind), WAT_ARM_BINDS)
+    if tl == 0 and avn.n != 0 and WAT_ARM_ENL != 0 {
+      bh := WAT_ARM_BINDS
       bidx := bind_list_index(bh, src, avn.s, avn.n, a)
-      mut bcnt := 0
-      mut bb := bh
-      while unchecked bitcast(usize, bb) != 0 { bcnt = bcnt + 1 ; bb = bnd_next(bb) }
+      bcnt := bind_count(bh)
       if bidx == 0 and bcnt == 1 {
         pty := variant_payload_type(decls, src, WAT_ARM_ENS, WAT_ARM_ENL, WAT_ARM_VS, WAT_ARM_VL, a)
         if pty.n != 0 { ts = pty.s ; tl = pty.n }
@@ -3266,12 +3267,17 @@ wat_ty_word_scalar := fn(src : ptr(u8), ts : usize, tl : usize, a : rt::Arena, d
 ## binding's first word is an address or only a prefix of the value, never the value itself. Multi-bind
 ## scalar variants retain the established word-per-binding path; their aggregate cases already remain
 ## behind the backend's existing fail-loud aggregate fences.
-wat_match_bind_unsupported := fn(bind_head : ptr(mut Bind), es : usize, en : usize, vs : usize, vn : usize, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+wat_match_bind_unsupported := fn(bind_head : Option(ptr(mut Bind)), es : usize, en : usize, vs : usize, vn : usize, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
   mut count := 0
   mut b := bind_head
-  while unchecked bitcast(usize, b) != 0 {
-    count = count + 1
-    b = bnd_next(b)
+  loop {
+    match b {
+      Some(bq) => {
+        count = count + 1
+        b = bnd_next(bq)
+      }
+      None => { break }
+    }
   }
   if count == 0 { return false }
   if count != 1 { return false }
@@ -4333,7 +4339,7 @@ wat_std_copy := fn(ts : usize, tl : usize, sidx : i64, sbo : i64, didx : i64, in
   }
 }
 
-wat_std_store_expr := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+wat_std_store_expr := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   width := scalar_byte_size(src, ts, tl)
   if width == 1 { push_str(sb, "    (i64.store8 ") ; emit_wat_addr(sb, bidx, off) ; push_str(sb, " ") ; emit_wat_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) ; push_str(sb, ")\n") }
   if width == 2 { push_str(sb, "    (i64.store16 ") ; emit_wat_addr(sb, bidx, off) ; push_str(sb, " ") ; emit_wat_expr(pe, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) ; push_str(sb, ")\n") }
@@ -4342,7 +4348,7 @@ wat_std_store_expr := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl :
   if width != 1 and width != 2 and width != 4 and width != 8 { push_str(sb, "    (unreachable) (; unsupported standard scalar width ;)\n") }
 }
 
-wat_std_store_value := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+wat_std_store_value := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   es := wat_arrty_elem(src, ts, tl)
   if es.n != 0 {
     mut bytearr := false
@@ -4384,7 +4390,7 @@ wat_std_store_value := fn(pe : ptr(Expr), bidx : i64, off : i64, ts : usize, tl 
   i64(standard_type_byte_size(decls, src, ts, tl, wsize, a))
 }
 
-wat_std_store_struct := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+wat_std_store_struct := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   sn := expr_struct_name(pe)
   di := struct_decl_of(decls, src, sn.s, sn.n)
   if di < 0 { push_str(sb, "    (unreachable) (; unknown standard struct literal ;)\n") ; return 0 }
@@ -4414,7 +4420,7 @@ emit_wat_tmp_addr := fn(in out sb : rt::StrBuf, byte_off : i64) {
 
 ## Materialize the bounded native `{u8, u8}` expression literal in `$__tmp` using its standard byte
 ## image. The generic expression writer below remains word-granular for every other struct shape.
-wat_std_store_tmp_u8_pair := fn(pe : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+wat_std_store_tmp_u8_pair := fn(pe : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   sn := expr_struct_name(pe)
   di := struct_decl_of(decls, src, sn.s, sn.n)
   if di < 0 { push_str(sb, "(unreachable) (; unknown native u8-pair literal ;)\n") ; return 0 }
@@ -4628,7 +4634,7 @@ emit_print_nl := fn(in out sb : rt::StrBuf) {
 ## rendering, the three shapes that oracle cannot prove and must not be taught (#457: an `[i64; N]`
 ## element, a declared `i64` return, literal arithmetic). Anything neither layer proves signed keeps
 ## $__itoa and its exact previous bytes.
-emit_print_int := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_print_int := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   if wat_hole_signed(e, params_head, body_head, decls, src, a) { WAT_PRINT_I64 = true ; push_str(sb, "    (i32.store (i32.const 4) (call $__itoa_s ") } else { push_str(sb, "    (i32.store (i32.const 4) (call $__itoa ") }
   emit_wat_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
   push_str(sb, "))\n    (i32.store (i32.const 0) (global.get $__istart))\n    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))\n")
@@ -4638,7 +4644,7 @@ emit_print_int := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src :
 ## whole string's data segment — the `{}` bytes are skipped) and itoa+print each hole's argument (the
 ## args after the format string). println appends a newline. Escapes are decoded into the data segment,
 ## and the raw scanner advances four bytes for `\xHH`.
-emit_print_template := fn(pi : PInfo, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_print_template := fn(pi : PInfo, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ## scan the RAW format bytes but track the DECODED offset (dpos) into the data segment — an escape
   ## is 2 raw bytes → 1 decoded byte (or 4 for `\xHH`), so run offsets (which index the decoded data
   ## segment) advance by decoded count. A `{}` hole occupies 2 decoded bytes (both braces are literal decoded chars) that
@@ -4681,7 +4687,7 @@ emit_print_template := fn(pi : PInfo, in out sb : rt::StrBuf, a : rt::Arena, src
 ## PARAM), or the fixed `.data` offset (array GLOBAL). Under `verify.checked` the index is stashed in the
 ## scratch local and range-tested first — against the static element count (array local/global) or the
 ## runtime len in word1 (slice); `i64.ge_u` so a negative index traps too.
-emit_wat_agg_elem_addr := fn(ibase : ptr(Expr), iidx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_wat_agg_elem_addr := fn(ibase : ptr(Expr), iidx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   bn := expr_var_name(ibase)
   stride := wat_arr_elem_stride(body_head, src, bn.s, bn.n, a, decls)
   mut strideb := stride * 8
@@ -4731,7 +4737,7 @@ emit_wat_agg_elem_addr := fn(ibase : ptr(Expr), iidx : ptr(Expr), in out sb : rt
 ## as a huge unsigned), dropped under `unchecked` (CG-7). NESTING IS SAFE: WASM evaluates operands
 ## left-to-right, so an outer hop's guarded index is already consumed onto the operand stack before an
 ## inner hop's guard overwrites the shared scratch local.
-emit_wat_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_wat_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   bt := wat_place_ty(base, body_head, src, a, decls)
   et := wat_arrty_elem(src, bt.s, bt.n)
   mut estride := wat_arr_elem_stride_bytes(src, et.s, et.n, a, decls)
@@ -4760,7 +4766,7 @@ emit_wat_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt:
 ## Emit the linear-memory ADDRESS (an i64 VALUE) of the DEEP place `e` (assumes wat_place_ok). Flat
 ## standalone ifs — an if/else-if chain as a fn body reads as a tail value-if under the lean lower.
 ## The ROOT is a frame local whose WASM local already HOLDS the block's base address.
-emit_wat_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_wat_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   isf := ex_is_field(e)
   isi := ex_is_index(e)
   if isf {
@@ -4790,7 +4796,7 @@ emit_wat_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
 ## wider one, so this replaces it ONLY where the aggregate has a multi-word field (an all-scalar
 ## aggregate keeps the byte-identical positional emit). `bidx` may be the negative CONSTANT-base
 ## encoding `emit_wat_addr` understands.
-emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+emit_wat_store_payload_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   sn := expr_struct_name(pe)
   if sn.n != 0 {
     mut g := ex_struct_lit_args(pe)
@@ -4950,7 +4956,7 @@ wat_store_union_span := fn(pe : ptr(Expr), params_head : ptr(mut Param), body_he
 ## Reading a union member back is a separate, already-LOUD surface on this backend (measured 134 for
 ## `u.m` and for `s.p.m`), so this fix is observable through the NEIGHBOURING field, which is where the
 ## corruption was.
-emit_wat_store_union_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+emit_wat_store_union_at := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   uen := expr_enum_name(pe)
   if uen.n != 0 {
     if not lower_layout::is_union_decl(decls, src, uen.s, uen.n) { return 0 }
@@ -5058,7 +5064,7 @@ wat_bound_lambda := fn(body : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
 ## writable against the frozen seed, which is what builds `src/`. Verified rather than assumed: the
 ## frozen seed checks AND builds this tree, rc 0 both.
 ## See the census note above `wat_local_ann_signed`.
-emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   match deref(e) {
     Expr::FnRef(fnpos, fms, fml) => {
       push_str(sb, "(unreachable) (; FnRef value unsupported on WAT ;)")
@@ -5083,7 +5089,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       ## the binding's first word and must not fall through to a parameter/local with the same name.
       if bidx >= 0 and WAT_BIND_DEPTH > 0 {
         top := WAT_BIND_DEPTH - 1
-        if WAT_BIND_HEADS[top] == unchecked bitcast(usize, bind_head) and WAT_BIND_UNSUPPORTED[top] {
+        if bind_same(WAT_BIND_HEADS[top], bind_head) and WAT_BIND_UNSUPPORTED[top] {
           bidx = 0 - 1
           bind_blocked = true
         }
@@ -5095,13 +5101,11 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         mut bi := WAT_BIND_DEPTH
         while bi > 0 and bidx < 0 and (not bind_blocked) {
           bi = bi - 1
-          bh := unchecked bitcast(ptr(mut Bind), WAT_BIND_HEADS[bi])
-          if unchecked bitcast(usize, bh) != 0 {
-            bx := bind_list_index(bh, src, ns, nl, a)
-            if bx >= 0 {
-              if WAT_BIND_UNSUPPORTED[bi] { bind_blocked = true }
-              else { bidx = bx ; bbase = WAT_BIND_BASES[bi] }
-            }
+          bh := WAT_BIND_HEADS[bi]
+          bx := bind_list_index(bh, src, ns, nl, a)
+          if bx >= 0 {
+            if WAT_BIND_UNSUPPORTED[bi] { bind_blocked = true }
+            else { bidx = bx ; bbase = WAT_BIND_BASES[bi] }
           }
         }
       }
@@ -6425,7 +6429,7 @@ wat_defer_push_block := fn(head : usize) {
 ## Replay the pending defer actions with stack index in [base, top), LIFO (highest index first) — the
 ## cleanup emission shared by every exit path. Emission ONLY: the caller decides whether the entries
 ## are popped (a scope end) or kept (a jump — the fall-through path still owes them).
-wat_defer_drain := fn(top : i64, base : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, fn_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+wat_defer_drain := fn(top : i64, base : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, fn_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   if WAT_DEF_OVF { push_str(sb, "    (unreachable) (; defer stack overflow (wasm: >64 live defers) ;)\n") }
   mut k := top
   while k > base {
@@ -6499,7 +6503,7 @@ body_is_single_match := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
 ## Emit one match-arm body. In a VALUE-yielding match (`vyield`), a single-expression arm `{ e }`
 ## delivers the fn value via `(return e)`; a multi-statement value arm is not modelled (trap). In a
 ## statement (side-effect) match, run the body normally via emit_wat_stmts.
-emit_wat_arm_body := fn(bs : usize, vyield : bool, fn_head : ptr(mut Stmt), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_wat_arm_body := fn(bs : usize, vyield : bool, fn_head : ptr(mut Stmt), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ## `vyield` IS the arm body's tail_value: with it set, emit_wat_stmts turns the arm's trailing
   ## expression statement into `(return …)` — handling single-expr AND multi-statement value arms.
   emit_wat_stmts(bs, fn_head, true, vyield, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
@@ -6543,7 +6547,7 @@ emit_wat_stmt_match := fn(arm : usize, es : usize, en : usize, sidx : i64, fn_he
           oens := WAT_ARM_ENS ; oenl := WAT_ARM_ENL ; ovs := WAT_ARM_VS ; ovl := WAT_ARM_VL
           obinds := WAT_ARM_BINDS ; ocvs := WAT_CFVAR_S ; ocvl := WAT_CFVAR_L
           WAT_ARM_ENS = es ; WAT_ARM_ENL = en ; WAT_ARM_VS = vfm.ns ; WAT_ARM_VL = vfm.nl
-          WAT_ARM_BINDS = unchecked bitcast(usize, am.binds_head) ; WAT_CFVAR_S = vfm.ns ; WAT_CFVAR_L = vfm.nl
+          WAT_ARM_BINDS = am.binds_head ; WAT_CFVAR_S = vfm.ns ; WAT_CFVAR_L = vfm.nl
           wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, vfm.ns, vfm.nl, src, a, decls))
           emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
           wat_bind_pop(am.binds_head)
@@ -6608,7 +6612,7 @@ emit_wat_scalar_stmt_match := fn(arm : usize, sidx : i64, fn_head : ptr(mut Stmt
 ## local/global as at top level. Return→WASM `return`; While→block/loop+br_if; If→value-less WASM if;
 ## ExprStmt→the expr (dropping a non-void result). A nested NEW `:=` (name not top-level, not a global)
 ## traps rather than colliding with a slot.
-emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, tail_value : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, tail_value : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ## DEFER (§9.3): this list IS a scope. Record the pending-cleanup depth on entry; a `defer` inside
   ## pushes above it and the FALL-THROUGH end of the list replays + POPS everything back down to it.
   ## The FUNCTION-body list (`nested` false) is the exception — its drain belongs AFTER the tail
@@ -7915,7 +7919,7 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
   ## arm. The three native backends need no flag: they evaluate the statement into the result register
   ## and the tail expression overwrites it (aarch64 emit_a64_fn / riscv64 emit_rv_fn: statements, then
   ## `if (not void) and has_tail { emit …(d.value) }`).
-  emit_wat_stmts(unchecked bitcast(usize, head), head, false, (not void) and (not has_ret) and ex_is_no_tail(tail), sb, a, src, params_head, pcount, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
+  emit_wat_stmts(unchecked bitcast(usize, head), head, false, (not void) and (not has_ret) and ex_is_no_tail(tail), sb, a, src, params_head, pcount, decls, Option.None, 0)
   if (not void) and (not has_ret) {
     if ex_is_no_tail(tail) {
       ## no tail EXPRESSION: either a tail value-match just returned in every arm (this caps the
@@ -7929,22 +7933,22 @@ emit_wat_body := fn(head : ptr(mut Stmt), tail : ptr(Expr), void : bool, in out 
       push_str(sb, "    (local.set ")
       push_int(sb, dscb)
       push_str(sb, " ")
-      emit_wat_expr(tail, sb, a, src, params_head, pcount, head, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
+      emit_wat_expr(tail, sb, a, src, params_head, pcount, head, decls, Option.None, 0)
       push_str(sb, ")\n")
-      wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, head, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
+      wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, head, decls, Option.None, 0)
       push_str(sb, "    (local.get ")
       push_int(sb, dscb)
       push_str(sb, ")\n")
       WAT_DEF_N = 0
     } else {
       push_str(sb, "    ")
-      emit_wat_expr(tail, sb, a, src, params_head, pcount, head, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
+      emit_wat_expr(tail, sb, a, src, params_head, pcount, head, decls, Option.None, 0)
       push_str(sb, "\n")
     }
   } else if WAT_DEF_N > 0 {
     ## a VOID fn (or one whose paths all `return`): the body-scope cleanups still run at the
     ## fall-through end. For the all-return shape this is dead code after a `(return …)` — harmless.
-    wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, head, decls, unchecked bitcast(ptr(mut Bind), 0), 0)
+    wat_defer_drain(WAT_DEF_N, 0, sb, a, src, params_head, pcount, head, decls, Option.None, 0)
     WAT_DEF_N = 0
   }
 }
