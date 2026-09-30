@@ -57,6 +57,17 @@ construction, is lowered to a deliberate trap there (`brk`/`unreachable`, exit 1
 fail-loud and is not a disagreement, so on those shapes the check compares nothing beyond x86_64 until
 the backend grows the shape — at which point the same seeds start comparing, with no change here.
 
+THE MODEL
+---------
+`model_exit` evaluates the generated AST with the specified semantics of the one scalar type and
+answers the exit code the program MUST produce. It turns a disagreement into a verdict on which side
+is wrong, and it sees what the differential cannot: a program on which every backend that finishes
+agrees on the same wrong answer. Such a program is reported as MODEL — informational, never a failure
+of the run, because the model is a second implementation and can itself be wrong; `model --seed S`
+prints its answer for a seed. Its first 5000 seeds found the class it was built for: a signed `/` or
+`%` whose dividend is not a bare typed name (`unchecked (v - w) / 2`, an `if` expression, a
+literal-only `(0 - 7)`) divides unsigned on all four backends.
+
 DETERMINISM, TIMEOUTS, REDUCTION
 --------------------------------
 `--seed S` makes the whole run reproducible; every finding prints its own program seed. `--jobs N`
@@ -65,8 +76,9 @@ ceiling is re-run ALONE before it is believed (#537): "the machine was busy" and
 are different findings. A disagreement is REDUCED — statements dropped, expressions replaced by one of
 their operands or a literal — while the disagreement persists, so the report is something a person can
 read. Each finding is written to `--out` as `wrong-<seed>.al` (the reduced program, its per-backend
-exits in its header) plus `wrong-<seed>.orig.al` (the program as generated), and one line in
-`findings.tsv`.
+exits and the model's answer in its header) plus `wrong-<seed>.orig.al` (the program as generated);
+`refused-`, `hang-` and `model-<seed>.al` likewise, and one line per finding in `findings.tsv`.
+A run exits 1 on any WRONG or REFUSED; HANG and MODEL are reported and do not fail it.
 
 NOT IN THE AUTHORITATIVE GATE (#582 item 7): its input is random by design, and the landing verdict
 must be reproducible. It runs nightly instead (`.github/workflows/progen-nightly.yml`), and its findings
@@ -76,6 +88,7 @@ see a disagreement at all and that every form is generated, accepted and run.
 Usage (inside `nix develop`, from the repository root, after `seed/alatyr build package.al`):
     python3 scripts/progen.py run [--seed S] [--count N] [--jobs J] [--forms F,..] [--cc PATH] [--out DIR]
     python3 scripts/progen.py show --seed S [--forms F,..]   # print the program a seed generates
+    python3 scripts/progen.py model --seed S [--forms F,..]  # print the exit the model computes
     python3 scripts/progen.py self-test [--cc PATH]
 """
 import argparse
@@ -632,6 +645,148 @@ def generate_forced(seed, forms):
 
 
 # ---------------------------------------------------------------------------------------------
+# The model: what the program means, computed by reading it
+# ---------------------------------------------------------------------------------------------
+# The differential check needs no expected value, and a disagreement is reported on that alone. The
+# model is what TRIAGE needs: which side of a disagreement is right, and — the case the differential
+# cannot see — a program on which all four backends agree on the same wrong answer. It evaluates the
+# AST with the specified semantics of the one scalar type: two's-complement wrap for every `unchecked`
+# operator (CG-7), truncating signed division and a remainder with the dividend's sign, orderings
+# signed for `i64` and unsigned for `u64`, structs and enums as values (a copy is a copy). It is a
+# reading aid and is never a failure criterion: a run fails on a disagreement or a refusal only.
+
+class _Err(Exception):
+    """A `?` that met an `Err`: unwinds to the enclosing Result function."""
+
+    def __init__(self, v):
+        self.v = v
+
+
+def model_exit(P):
+    ty = P['ty']
+    M = 1 << 64
+    fns = {fn['name']: fn for fn in P['fns']}
+
+    def w(v):
+        v %= M
+        return v - M if ty == 'i64' and v >= 1 << 63 else v
+
+    def tdiv(a, b):
+        q = abs(a) // abs(b)
+        return q if (a >= 0) == (b >= 0) else -q
+
+    def trem(a, b):
+        return a - b * tdiv(a, b)
+
+    def ex(e, env):
+        k = e[0]
+        if k == 'lit':
+            return w(e[1])
+        if k == 'var':
+            return env[e[1]]
+        if k == 'bin':
+            a, b = ex(e[2], env), ex(e[3], env)
+            return w({'+': a + b, '-': a - b, '*': a * b, '&': a & b, '|': a | b, '^': a ^ b}[e[1]])
+        if k == 'div':
+            a, d = ex(e[2], env), ex(e[3], env)
+            g = w(trem(d, 7) + (8 if ty == 'i64' else 1))
+            return w(tdiv(a, g) if e[1] == '/' else trem(a, g))
+        if k == 'cmp':
+            a, b = ex(e[2], env), ex(e[3], env)
+            return {'==': a == b, '!=': a != b, '<': a < b, '<=': a <= b, '>': a > b, '>=': a >= b}[e[1]]
+        if k == 'if':
+            return ex(e[2], env) if ex(e[1], env) else ex(e[3], env)
+        if k == 'call':
+            return call(e[1], [ex(a, env) for a in e[2]])
+        if k == 'field':
+            return ex(e[1], env)[e[2]]
+        if k == 'unbrand':
+            return ex(e[1], env)
+        if k == 'bmk':
+            return ex(e[2], env)
+        if k == 'slit':
+            return dict(zip(P['structs'][e[1]], [ex(x, env) for x in e[2]]))
+        if k == 'elit':
+            return (e[2], [ex(x, env) for x in e[3]])
+        if k == 'match':
+            v, pay = ex(e[1], env)
+            for arm, bs, x in e[3]:
+                if arm == v:
+                    return ex(x, dict(env, **dict(zip(bs, pay))))
+            raise AssertionError('non-exhaustive match')
+        if k == 'rmatch':
+            tag, v = ex(e[1], env)
+            return ex(e[3], dict(env, **{e[2]: v})) if tag == 'Ok' else ex(e[5], dict(env, **{e[4]: v}))
+        raise ValueError(k)
+
+    def copy(v):
+        return dict(v) if isinstance(v, dict) else v
+
+    def run(ss, env):
+        for s in ss:
+            k = s[0]
+            if k in ('let', 'set'):
+                env[s[1]] = ex(s[2], env)
+            elif k == 'while':
+                env[s[1]] = 0
+                while env[s[1]] < s[2]:
+                    run(s[3], env)
+                    env[s[1]] = w(env[s[1]] + 1)
+            elif k == 'ifs':
+                run(s[2] if ex(s[1], env) else s[3], env)
+            elif k in ('slet', 'elet', 'blet'):
+                env[s[1]] = copy(ex(s[3], env))
+            elif k == 'fset':
+                env[s[1]][s[2]] = ex(s[3], env)
+            elif k == 'mstmt':
+                v, pay = ex(s[1], env)
+                for arm, bs, body in s[3]:
+                    if arm == v:
+                        inner = dict(env, **dict(zip(bs, pay)))
+                        run(body, inner)
+                        for n in env:               # arms write the enclosing mutables
+                            env[n] = inner[n]
+                        break
+            elif k == 'try':
+                tag, v = ex(s[2], env)
+                if tag == 'Err':
+                    raise _Err(v)
+                env[s[1]] = copy(v)
+
+    def call(name, args):
+        fn = fns[name]
+        env = {p: copy(a) for (p, _), a in zip(fn['params'], args)}
+        t = fn['tail']
+        if t[0] == 'rtail':
+            try:
+                run(fn['body'], env)
+            except _Err as err:
+                return ('Err', err.v)
+            if t[1] is not None and ex(t[1], env):
+                return ('Err', ex(t[2], env))
+            return ('Ok', copy(ex(t[3], env)))
+        run(fn['body'], env)
+        return copy(ex(t, env))
+
+    acc = 0
+    for c in P['calls']:
+        acc = w(w(acc * 31) ^ ex(c, {}))
+    if ty == 'i64':
+        r = trem(acc, 113)
+        return (r + 113 if r < 0 else r) + 1
+    return acc % 113 + 1
+
+
+def model_of(P):
+    """The model's exit, or a string saying why there is none (a candidate the reducer made that no
+    longer means anything is the usual one)."""
+    try:
+        return model_exit(P)
+    except (KeyError, AssertionError, ValueError, TypeError) as e:
+        return f'none({type(e).__name__})'
+
+
+# ---------------------------------------------------------------------------------------------
 # Running one program on the four backends
 # ---------------------------------------------------------------------------------------------
 
@@ -1020,29 +1175,37 @@ def refusal(res):
 
 
 def one_seed(cc, seed, forms, do_reduce):
-    """Generate, observe, and on a disagreement reduce, one seed. Returns (verdict, seed, res, text,
-    reduced text or None, reduced res or None)."""
+    """Generate, observe, and on a finding reduce, one seed. Returns a dict: verdict, seed, res,
+    text, model, and for a reduced finding stext/sres/smodel."""
     prog = generate(seed, forms)
     text = render(prog, seed)
     res = observe(cc, text)
+    out = {'seed': seed, 'res': res, 'text': text, 'model': model_of(prog),
+           'stext': None, 'sres': None, 'smodel': None}
+    small = None
     if x86_refused(res):
-        if not do_reduce:
-            return 'REFUSED', seed, res, text, None, None
-        # a program valid by construction that x86_64 refuses is a generator bug or a
-        # fails-when-valid defect; either way it is read by a person, so it is shrunk too
-        want = refusal(res)
-        small = reduce(cc, prog, seed, keep=lambda r: x86_refused(r) and refusal(r) == want,
-                       backends=['x86_64'])
-        stext = render(small, seed)
-        return 'REFUSED', seed, res, text, stext, observe(cc, stext, ['x86_64'])
-    if disagreement(res):
+        out['verdict'] = 'REFUSED'
+        if do_reduce:
+            # a program valid by construction that x86_64 refuses is a generator bug or a
+            # fails-when-valid defect; either way it is read by a person, so it is shrunk too
+            want = refusal(res)
+            small = reduce(cc, prog, seed, keep=lambda r: x86_refused(r) and refusal(r) == want,
+                           backends=['x86_64'])
+            out['sres'] = observe(cc, render(small, seed), ['x86_64'])
+    elif disagreement(res):
+        out['verdict'] = 'WRONG'
         small = reduce(cc, prog, seed) if do_reduce else prog
-        stext = render(small, seed)
-        sres = observe(cc, stext)
-        return 'WRONG', seed, res, text, stext, sres
-    if 'hang' in res.values():
-        return 'HANG', seed, res, text, None, None
-    return 'ok', seed, res, text, None, None
+        out['sres'] = observe(cc, render(small, seed))
+    elif 'hang' in res.values():
+        out['verdict'] = 'HANG'
+    else:
+        vals = {v for v in res.values() if isinstance(v, int)}
+        # every backend that finished agrees — and disagrees with the model: informational only
+        out['verdict'] = 'MODEL' if isinstance(out['model'], int) and vals and vals != {out['model']} else 'ok'
+    if small is not None:
+        out['stext'] = render(small, seed)
+        out['smodel'] = model_of(small)
+    return out
 
 
 def cmd_run(a):
@@ -1050,31 +1213,35 @@ def cmd_run(a):
     forms = parse_forms(a.forms)
     os.makedirs(a.out, exist_ok=True)
     tsv = open(os.path.join(a.out, 'findings.tsv'), 'a')
-    counts = {'ok': 0, 'WRONG': 0, 'REFUSED': 0, 'HANG': 0}
+    counts = {'ok': 0, 'WRONG': 0, 'REFUSED': 0, 'HANG': 0, 'MODEL': 0}
     seeds = range(a.seed, a.seed + a.count)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(a.jobs, 1)) as ex:
         futs = [ex.submit(one_seed, cc, s, forms, a.reduce) for s in seeds]
         for fu in concurrent.futures.as_completed(futs):
-            verdict, seed, res, text, stext, sres = fu.result()
+            o = fu.result()
+            verdict, seed, res, sres = o['verdict'], o['seed'], o['res'], o['sres']
             counts[verdict] += 1
             if verdict == 'ok':
                 if a.verbose:
-                    print(f'ok       seed={seed} {tagof(res)}')
+                    print(f'ok       seed={seed} {tagof(res)} model={o["model"]}')
                 continue
-            print(f'{verdict:8s} seed={seed} {tagof(res)}' + (f'  reduced: {tagof(sres)}' if sres else ''))
+            print(f'{verdict:8s} seed={seed} {tagof(res)} model={o["model"]}'
+                  + (f'  reduced: {tagof(sres)} model={o["smodel"]}' if sres else ''))
             base = os.path.join(a.out, f'{verdict.lower()}-{seed}')
-            if stext is not None:
-                head = (f'## generated: {tagof(res)}\n## reduced:   {tagof(sres)}\n'
-                        f'## reproduce: python3 scripts/progen.py show --seed {seed}'
-                        + (f' --forms {a.forms}' if a.forms else '') + '\n')
-                open(base + '.al', 'w').write(head + stext)
-                open(base + '.orig.al', 'w').write(text)
+            repro = (f'## reproduce: python3 scripts/progen.py show --seed {seed}'
+                     + (f' --forms {a.forms}' if a.forms else '') + '\n')
+            if o['stext'] is not None:
+                head = (f'## generated: {tagof(res)} model={o["model"]}\n'
+                        f'## reduced:   {tagof(sres)} model={o["smodel"]}\n' + repro)
+                open(base + '.al', 'w').write(head + o['stext'])
+                open(base + '.orig.al', 'w').write(o['text'])
             else:
-                open(base + '.al', 'w').write(f'## {tagof(res)}\n' + text)
-            tsv.write(f'{verdict}\t{seed}\t{tagof(res)}\t{tagof(sres) if sres else "-"}\n')
+                open(base + '.al', 'w').write(f'## {tagof(res)} model={o["model"]}\n' + repro + o['text'])
+            tsv.write(f'{verdict}\t{seed}\t{tagof(res)}\t{o["model"]}\t'
+                      f'{tagof(sres) if sres else "-"}\t{o["smodel"] if sres else "-"}\n')
             tsv.flush()
     print(f'progen: seeds={a.seed}..{a.seed + a.count - 1} agree={counts["ok"]} wrong={counts["WRONG"]} '
-          f'x86_refused={counts["REFUSED"]} hang={counts["HANG"]} out={a.out}')
+          f'x86_refused={counts["REFUSED"]} hang={counts["HANG"]} model_only={counts["MODEL"]} out={a.out}')
     return 1 if (counts['WRONG'] or counts['REFUSED']) else 0
 
 
@@ -1109,6 +1276,22 @@ def cmd_self_test(a):
     same = render(generate(12345), 12345) == render(generate(12345), 12345)
     print(f'  generator   seed determinism          {"ok" if same else "FAIL"}')
     bad += not same
+    # the model, on two planted programs whose meaning is fixed by the specification: a signed
+    # remainder takes the dividend's sign (-9 % 8 = -1, so main answers 113), and a `u64` ordering
+    # is unsigned (1 < 0 - 1 wrapped, so main answers 42)
+    planted = [
+        ({'ty': 'i64', 'forms': [], 'structs': {}, 'enums': {}, 'brands': [], 'calls': [('call', 'g1', [('lit', -9)])],
+          'fns': [{'name': 'g1', 'params': [('p', 'v')], 'ret': 'v', 'body': [],
+                   'tail': ('div', '%', ('var', 'p'), ('lit', 0))}]}, 113, 'signed remainder'),
+        ({'ty': 'u64', 'forms': [], 'structs': {}, 'enums': {}, 'brands': [], 'calls': [('call', 'g1', [('lit', 1)])],
+          'fns': [{'name': 'g1', 'params': [('p', 'v')], 'ret': 'v', 'body': [],
+                   'tail': ('if', ('cmp', '<', ('var', 'p'), ('bin', '-', ('lit', 0), ('lit', 1))),
+                            ('lit', 41), ('lit', 0))}]}, 42, 'unsigned ordering'),
+    ]
+    for prog, want, name in planted:
+        got = model_of(prog)
+        print(f'  model       {name:26s} {"ok" if got == want else "FAIL"} (model={got}, want {want})')
+        bad += got != want
     scalar = render(generate(12345, []), 12345)
     plain = all(m not in scalar for m in (':= struct', ':= enum', ':= brand', 'Result('))
     print(f'  generator   --forms scalar is scalar  {"ok" if plain else "FAIL"}')
@@ -1167,11 +1350,19 @@ def main():
     s.add_argument('--seed', type=int, required=True)
     s.add_argument('--forms')
     s.add_argument('--force', action='store_true', help='switch every --forms form on, as self-test does')
+    m = sub.add_parser('model')
+    m.add_argument('--seed', type=int, required=True)
+    m.add_argument('--forms')
+    m.add_argument('--force', action='store_true')
     t = sub.add_parser('self-test')
     t.add_argument('--cc')
     a = ap.parse_args()
     if a.cmd == 'show':
         return cmd_show(a)
+    if a.cmd == 'model':
+        forms = parse_forms(a.forms)
+        print(model_of(generate_forced(a.seed, forms) if a.force else generate(a.seed, forms)))
+        return 0
     if a.cmd == 'run':
         return cmd_run(a)
     return cmd_self_test(a)
