@@ -10037,6 +10037,13 @@ run issue393_prelude_bare_variant 42
 run issue393_prelude_arena_type 42
 run issue393_prelude_alloc_error 42
 run issue393_prelude_user_shadow 42
+## issue #762 — the same shadowing, held by `check` as well as by `build`. With both the program's own
+## `Arena` and the injected `alloc::Arena` in scope, `check_expr`'s struct-literal arm took the first in
+## declaration order (the prelude's) and compared the literal's field values against the wrong fields.
+## On the parent the accept row is refused (`live = true` against the shipped `base : ptr(…)`) and the
+## reject row builds (an integer passes the pointer seam); Modules §3 resolution flips both.
+run issue762_prelude_shadow_accept 42
+build_reject_has issue762_prelude_shadow_reject "type mismatch"
 ## issue #393 residual item 2 — the other half of the same textual scan. Every bare-name trigger in
 ## `cli::ambient_paths` checked the LEADING word boundary; the result- and option-type triggers had no
 ## TRAILING one, so an identifier that merely BEGINS with the scanned word fired them. These two rows
