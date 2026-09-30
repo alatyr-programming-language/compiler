@@ -8448,6 +8448,12 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       ## Passed to an array parameter of any other scalar element it is a type mismatch; only
       ## widening is implicit (Types §4.3), and the literals' context was the binding, not the call.
       if sema_default_int_array_arg_bad(bpty0, ca.e, src, locals, nloc) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
+      ## Issue #803 — an array LITERAL argument's elements take the array parameter's element type, and
+      ## each one's §9.1 range is judged there, as `f(300)` is for a scalar `u8` parameter.
+      if kind_is_array(bpty0.kind) and bpty0.nl != 0 {
+        alae := array_lit_range_err(src, bpty0.ns, bpty0.nl, ca.e)
+        if alae != 0 { mark_failed(locals, alae) }
+      }
       ## #299 census hook (no refusal): this argument's declared parameter type against the value's
       ## recovered brand identity. Inert unless the program declares a brand of its own.
       brand_probe_sink(bpty0, ca.e, s_of(ca.e, a), decls, upto, src, locals, nloc, a)
@@ -9851,6 +9857,33 @@ ct_array_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), d
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  0
+}
+
+## Issue #803 — Types §9.1 REPRESENTABILITY for each element of an ARRAY LITERAL in the context of a
+## declared `[E; N]` (`[ts, ts+tl)`): the elements take their type from `E` exactly as a scalar literal
+## takes it from `x : E` (`ann_lit_range_bad`), so `[1, 300]` for `[u8; 2]` is the compile error
+## `x : u8 = 300` is, located at the offending element. It was accepted and stored as 44. One judge
+## for both sinks that declare the element type: an annotated binding and an array parameter.
+array_lit_range_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) -> CheckErr {
+  esp := array_elem_span(src, ts, tl)
+  if esp.n == 0 { return 0 }
+  match deref(e) {
+    Expr::ArrayLit(nel, ah) => { array_lit_elems_range_err(src, esp, ah) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+  }
+}
+array_lit_elems_range_err := fn(src : ptr(u8), esp : VSpan, ah : ptr(mut Arg)) -> CheckErr {
+  mut g := ah
+  ## null-ok: Arg.next — an array literal's element list ends in a null link (ast.al "0 = end")
+  while unchecked bitcast(usize, g) != 0 {
+    ga := deref(arg_p(g))
+    if ann_lit_range_bad(src, esp.s, esp.n, ga.e) { return mismatch_err(expr_num_lit_start(ga.e), 0) }
+    g = ga.next
   }
   0
 }
@@ -11407,6 +11440,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           ## annotation and apply the same guard to each element before lowering can emit the array.
           acte := ct_array_guard_err(src, ann.s, ann.n, v, decls, upto)
           if acte != 0 { mark_failed(locals, acte) }
+          ## Issue #803 — each element's §9.1 range in the annotation's element type.
+          if ann.n != 0 {
+            alre := array_lit_range_err(src, ann.s, ann.n, v)
+            if alre != 0 { mark_failed(locals, alre) }
+          }
           ## The same whitelist over a CALL result, whose type comes from the callee's own DECLARED
           ## return type — the second source reliable enough to reject on (`sole_fn_ret_ty` answers only
           ## for an unambiguous, non-overloaded name). `g := fn() -> str { … }  x : u64 = g()` used to

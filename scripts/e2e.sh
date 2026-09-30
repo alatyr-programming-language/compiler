@@ -6632,6 +6632,20 @@ emit_reject_has aarch64 issue804_default_int_array_arg "type mismatch at line 8"
 emit_reject_has riscv64 issue804_default_int_array_arg "type mismatch at line 8"
 check_accept issue804_default_int_array_ok
 run issue804_default_int_array_ok 42
+# Issue #803 / Types §9.1 — an array literal's elements are range-checked in the declared element type
+# (an annotated binding, an array parameter), located at the element; `[1, 300]` for `[u8; 2]` was
+# accepted and read 44. The control keeps elements at the bounds of `u8`, `i8` and `u16` accepted.
+build_reject_has issue803_array_lit_range_local "type mismatch at line 5"
+check_reject issue803_array_lit_range_local
+build_reject_has issue803_array_lit_range_arg "type mismatch at line 5"
+check_reject issue803_array_lit_range_arg
+build_reject_has issue803_array_lit_range_neg "type mismatch at line 4"
+check_reject issue803_array_lit_range_neg
+emit_reject_has wat issue803_array_lit_range_local "type mismatch at line 5"
+emit_reject_has aarch64 issue803_array_lit_range_local "type mismatch at line 5"
+emit_reject_has riscv64 issue803_array_lit_range_local "type mismatch at line 5"
+check_accept issue803_array_lit_range_ok
+run issue803_array_lit_range_ok 42
 # Issue #752 — `x := <call>?` over a multi-word Ok payload binds every payload word (x86_64 returned 0).
 run issue752_try_multiword_payload 42
 build_reject_has reject_try_multiword_value "multi-word Ok payload"
