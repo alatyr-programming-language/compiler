@@ -137,6 +137,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   counter. With few locals the build aborted with "wider than the match scratch" instead. The scratch is
   now as wide as the widest enum a direct call match in the function stages, and the size check compares
   against that width rather than the distance to the bottom of the frame.
+- **A non-exhaustive `match` over an array element, a `bool` or an integer is refused.** `match xs[0]`
+  over a local or parameter `[C; N]` missing a variant, `match b { true => … }` with no `false` arm,
+  and `match n { 0 => …; 1 => … }` over an integer with no `_` all compiled, and a value no arm covers
+  skipped the `match` or, in value position, delivered **0**. A range list that stops short of an
+  `i8`/`u16`/`i16`/`u32`/`i32` scrutinee's full width is refused as `u8`'s already was, and a field
+  read through a pointer (`deref(ptr(h)).t`, `deref(p).t`) is checked like a plain field read. Each is
+  now `type mismatch` at the `match` line (Control Flow §5.1/§5.4). Programs the specification declares
+  invalid and that used to compile are now refused — a PATCH, not a break (#788).
 - **`Option(ptr(T))` is one word in every position, not only in a struct field.** Three defects on
   x86_64 shared this cause. In a `Some(p)` arm, `deref(p).f` and `n := deref(p); n.f` read **0** on a
   clean build, because the payload was bound as an untyped word (#768). A local was sized by the form of

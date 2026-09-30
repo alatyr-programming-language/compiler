@@ -4158,6 +4158,17 @@ expr_deref_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { unchecked bitcast(ptr(Expr), 0) }
   }
 }
+## Issue #788 — the bare local an `xs[i]` scrutinee indexes, else an empty span. A span rather than
+## `expr_index_base`'s nullable pointer, so the one caller asks `n != 0` instead of testing a null.
+expr_index_base_var := fn(e : ptr(Expr)) -> VSpan {
+  match deref(e) {
+    Expr::Index(base, ix) => { expr_var_span(base) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
+  }
+}
 field_path_deref_var := fn(e : ptr(Expr)) -> VSpan {
   match deref(e) {
     Expr::Field(base, fs, fl) => { field_path_deref_var(base) }
@@ -4449,53 +4460,154 @@ expr_loop_body := fn(e : ptr(Expr)) -> ptr(mut Stmt) {
   }
 }
 
-## SCALAR match exhaustiveness (Control Flow §5.4): does the arm list leave a value of the scrutinee's
-## FINITE value domain uncovered? Returns true = a provable gap with no `_` (→ a compile error). This
-## fires ONLY for a RANGE-containing scalar match (`a..b` / `a..=b` are brand-new syntax, so no existing
-## program relies on the pre-existing no-scalar-check behavior → the check adds ZERO regression risk) over
-## a type whose domain is small enough to enumerate: `bool` (tag 2 → [0,1]) or `u8` (tag 1, name `u8` →
-## [0,255]). Coverage combines integer literals, OR-alternatives (each a `wild==0` literal arm after the
-## parser's OR-expansion), and ranges (`wild` 5 half-open / 6 inclusive, `lit`=lo, `hi`=hi). Fail-OPEN
-## (returns false) for a `_` arm (exhaustive), any non-literal/range arm (variant/str/comptime), a non-range
-## match, or a wide/unknown scalar type — the same never-false-reject discipline as the enum check.
+## Issue #788 — what one `match` arm's pattern is, for the scalar exhaustiveness sweep below. `Arm.wild`
+## is the AST's pattern-kind byte (`src/ast.al`: 0 an integer / `true` / `false` literal, or a variant
+## when `vs`/`vl` name one; 1 `_`; 2 and 3 comptime; 4 a str literal; 5 `lo..hi`; 6 `lo..=hi`). This
+## is the one place the sweep reads that byte, so every decision after it is a `match` over this enum.
+ScalarPat := enum { PatLit, PatVariant, PatWild, PatHalfOpen, PatInclusive, PatOther }
+scalar_pat := fn(w : u8, vs : usize, vl : usize) -> ScalarPat {
+  if w == 1 { return ScalarPat.PatWild }
+  if w == 5 { return ScalarPat.PatHalfOpen }
+  if w == 6 { return ScalarPat.PatInclusive }
+  if w == 0 and vs == 0 and vl == 0 { return ScalarPat.PatLit }
+  if w == 0 { return ScalarPat.PatVariant }
+  ScalarPat.PatOther
+}
+
+## Issue #788 — the finite value range `[lo, hi]` of an integer scrutinee whose WIDTH NAME
+## (`tns`/`tnl`) is `u8`, `i8`, `u16`, `i16`, `u32` or `i32` — the widths an `i64` holds. `finite ==
+## false` for `u64`/`usize`/`i64`/`isize`/`u128`/`i128` and for a width the caller could not recover.
+ScalarDom := struct { finite : bool, lo : i64, hi : i64 }
+scalar_int_dom := fn(tns : usize, tnl : usize, src : ptr(u8)) -> ScalarDom {
+  if tnl == 0 { return ScalarDom(finite = false, lo = 0, hi = 0) }
+  w := str_at((src + tns), tnl)
+  if w == "u8" { return ScalarDom(finite = true, lo = 0, hi = 255) }
+  if w == "i8" { return ScalarDom(finite = true, lo = 0 - 128, hi = 127) }
+  if w == "u16" { return ScalarDom(finite = true, lo = 0, hi = 65535) }
+  if w == "i16" { return ScalarDom(finite = true, lo = 0 - 32768, hi = 32767) }
+  if w == "u32" { return ScalarDom(finite = true, lo = 0, hi = 4294967295) }
+  if w == "i32" { return ScalarDom(finite = true, lo = 0 - 2147483648, hi = 2147483647) }
+  ScalarDom(finite = false, lo = 0, hi = 0)
+}
+
+## SCALAR match exhaustiveness (Control Flow §5.1/§5.4): does the arm list leave a value of the
+## scrutinee's type uncovered? Returns true = a provable gap with no `_` (→ a compile error). Coverage
+## combines integer and `true`/`false` literals (an OR-pattern is already one arm per alternative) and
+## ranges (`lit` = lo, `hi` = hi).
+##   * a finite domain (`bool`, `scalar_int_dom`): the arms are swept over `[lo, hi]`, one covered run
+##     at a time, so the cost is the arm count squared and never the domain size.
+##   * any other integer (`u64`, `usize`, or a width the caller could not recover): a LITERAL-ONLY arm
+##     list is decided without the width — every integer type has at least 256 values, so fewer than
+##     256 literal arms leave one uncovered (issue #788: `match n { 0 => …; 1 => … }` fell through). A
+##     range there is not decided (fail-open, as before #788), since `u64`'s maximum is outside `lit`'s
+##     `i64`.
+## Fail-OPEN (false) for a `_` arm (exhaustive by §5.1) and for any variant / str / comptime arm — the
+## same never-false-reject discipline as the enum check.
 scalar_coverage_gap := fn(head : ptr(mut Arm), tag : TyKind, tns : usize, tnl : usize, src : ptr(u8)) -> bool {
   mut has_range := false
   mut has_wild := false
   mut all_simple := true
+  mut nlit : usize = 0
   mut arm := head
-  while arm != 0 {
+  ## null-ok: Arm.next — a `match`'s arm list ends in a null link (ast.al "0 = end")
+  while unchecked bitcast(usize, arm) != 0 {
     am := deref(arm_p(arm))
-    if am.wild == 1 { has_wild = true }
-    else if am.wild == 5 or am.wild == 6 { has_range = true }
-    else if am.wild == 0 and am.vs == 0 and am.vl == 0 { }   ## a scalar integer literal (or OR-expansion)
-    else { all_simple = false }                              ## variant / str / comptime → fail-open
+    match scalar_pat(am.wild, am.vs, am.vl) {
+      PatWild => { has_wild = true }
+      PatHalfOpen | PatInclusive => { has_range = true }
+      PatLit => { nlit += 1 }
+      PatVariant | PatOther => { all_simple = false }
+    }
     arm = am.next
   }
-  if has_wild { return false }
-  if not all_simple { return false }
-  if not has_range { return false }
-  mut lo : i64 = 0
-  mut hi : i64 = 0
-  mut finite := false
-  if kind_is_bool(tag) { finite = true ; lo = 0 ; hi = 1 }
-  else if kind_is_int(tag) and tnl != 0 and str_at((src + tns), tnl) == "u8" { finite = true ; lo = 0 ; hi = 255 }
-  if not finite { return false }
-  mut v := lo
+  if has_wild or not all_simple { return false }
+  mut dom := ScalarDom(finite = false, lo = 0, hi = 0)
+  match tag {
+    TyBool => { dom = ScalarDom(finite = true, lo = 0, hi = 1) }
+    TyInt => { dom = scalar_int_dom(tns, tnl, src) }
+    TyUnknown | TyStruct | TyEnum | TyPtr | TyStr | TyArray | TyBrand | TyHiddenStruct | TyHiddenEnum
+      | TyWrapper | TyTupleMark | TyOther => {}
+  }
+  if not dom.finite {
+    if has_range or not kind_is_int(tag) { return false }
+    return nlit < 256
+  }
+  ## Sweep: from the lowest value not yet known covered, take the furthest value any arm covering it
+  ## reaches; no such arm is a gap, and reaching `hi` is full coverage.
+  mut v : i64 = dom.lo
   mut gap := false
-  while v <= hi {
-    mut covered := false
+  mut done := false
+  while not done {
+    mut reach : i64 = v - 1
     mut a2 := head
-    while a2 != 0 {
+    ## null-ok: Arm.next — a `match`'s arm list ends in a null link (ast.al "0 = end")
+    while unchecked bitcast(usize, a2) != 0 {
       m := deref(arm_p(a2))
-      if m.wild == 0 and m.lit == v { covered = true }
-      else if m.wild == 5 and m.lit <= v and v < m.hi { covered = true }
-      else if m.wild == 6 and m.lit <= v and v <= m.hi { covered = true }
+      mut top : i64 = v - 1
+      match scalar_pat(m.wild, m.vs, m.vl) {
+        PatLit => { if m.lit == v { top = v } }
+        PatHalfOpen => { if m.lit <= v and v < m.hi { top = m.hi - 1 } }
+        PatInclusive => { if m.lit <= v and v <= m.hi { top = m.hi } }
+        PatWild | PatVariant | PatOther => {}
+      }
+      if top > reach { reach = top }
       a2 = m.next
     }
-    if not covered { gap = true }
-    v = v + 1
+    if reach < v { gap = true ; done = true }
+    else if reach >= dom.hi { done = true }
+    else { v = reach + 1 }
   }
   gap
+}
+
+## Issue #788 — the integer WIDTH NAME at the head of a type annotation span (`u8`, `i16`, …), else
+## empty. The span may run past the type (a parameter's recovered annotation continues to `)`), so
+## only the leading identifier is read.
+sema_int_width_name := fn(src : ptr(u8), s : usize, n : usize) -> VSpan {
+  mut e := s
+  mut going := n != 0
+  while going and e < s + n {
+    c := bytes(str_at((src + e), 1))[0]
+    if (c >= 97 and c <= 122) or (c >= 48 and c <= 57) { e += 1 } else { going = false }
+  }
+  if e == s or not comptime_integer_type_name(src, s, e - s) { return VSpan(s = 0, n = 0) }
+  VSpan(s = s, n = e - s)
+}
+
+## Issue #788 — the ELEMENT type span of `xs[i]` read from the DECLARATION of the local or parameter
+## `xs` (`xs : [T; N]`), else empty. A parameter records no array type of its own, so this reads the
+## annotation the way `sema_direct_index_elem_ty` reads a `Slice(T)` one.
+sema_index_elem_ann := fn(sc : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> VSpan {
+  ixv := expr_index_base_var(sc)
+  if ixv.n == 0 or nloc == 0 or not local_in(locals, nloc, src, ixv.s, ixv.n) { return VSpan(s = 0, n = 0) }
+  lc := local_at(locals, nloc, src, ixv.s, ixv.n)
+  ann := local_type_span(src, lc.ns, lc.nl)
+  if ann.n == 0 { return VSpan(s = 0, n = 0) }
+  array_elem_span(src, ann.s, ann.n)
+}
+
+## Issue #788 — the scalar type a `match` scrutinee is decided over, with its WIDTH NAME where the
+## source spells one: a bare local's or parameter's declared annotation (`n : u8`, `k : i16`), an
+## array element's declared element type (`xs : [u8; 4]`), else the recorded local type, else the
+## checked scrutinee's kind with no width — enough for `bool`, and for an integer's literal-only arms.
+match_scrut_scalar_ty := fn(ck : TyKind, sc : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> Ty {
+  sv := expr_var_span(sc)
+  if sv.n != 0 and nloc != 0 and local_in(locals, nloc, src, sv.s, sv.n) {
+    lc := local_at(locals, nloc, src, sv.s, sv.n)
+    ann := local_type_span(src, lc.ns, lc.nl)
+    wn := sema_int_width_name(src, ann.s, ann.n)
+    if wn.n != 0 { return Ty(kind = TyKind.TyInt, ns = wn.s, nl = wn.n) }
+    lt := local_lookup(locals, nloc, src, sv.s, sv.n)
+    ltag : TyKind = lt.ty.kind
+    if kind_is_int(ltag) or kind_is_bool(ltag) { return Ty(kind = ltag, ns = lt.ty.ns, nl = lt.ty.nl) }
+  }
+  es := sema_index_elem_ann(sc, src, locals, nloc)
+  if es.n != 0 {
+    ewn := sema_int_width_name(src, es.s, es.n)
+    if ewn.n != 0 { return Ty(kind = TyKind.TyInt, ns = ewn.s, nl = ewn.n) }
+    if str_at((src + es.s), es.n) == "bool" { return Ty(kind = TyKind.TyBool, ns = 0, nl = 0) }
+  }
+  Ty(kind = ck, ns = 0, nl = 0)
 }
 
 ## ─── AGGREGATE↔SCALAR CONFORMANCE (TYP-6) ────────────────────────────────────────────────────
@@ -6630,6 +6742,30 @@ sema_enum_pointee := fn(pt : Ty, decls : ptr(rt::Vec), src : ptr(u8)) -> Ty {
   unknown
 }
 
+## Issue #788 — the struct a pointer expression points at, as a type-name span, else empty: the
+## address of a struct local (`ptr(h)`, `sema_addr_local_struct_ptr_ty`) or a pointer local or call
+## (`sema_ptr_expr_ty`). Only a pointee that resolves to a struct answers.
+sema_ptr_struct_pointee := fn(pe : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> VSpan {
+  at := sema_addr_local_struct_ptr_ty(pe, src, locals, nloc)
+  if kind_is_ptr(at.kind) and at.nl != 0 { return VSpan(s = at.ns, n = at.nl) }
+  pt := sema_ptr_expr_ty(pe, decls, src, locals, nloc)
+  if kind_is_ptr(pt.kind) and pt.nl != 0 {
+    st := resolve_ty(src, pt.ns, pt.nl, decls, rt::vec_len(deref(decls)))
+    if kind_is_struct(st.kind) and st.nl != 0 { return VSpan(s = st.ns, n = st.nl) }
+  }
+  VSpan(s = 0, n = 0)
+}
+## Issue #788 — the owner struct of a field read whose base is `deref(<pointer>)`, else empty.
+sema_deref_struct_owner := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), locals : ptr(LVec), nloc : usize) -> VSpan {
+  match deref(e) {
+    Expr::Deref(inner) => { sema_ptr_struct_pointee(inner, decls, src, locals, nloc) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { VSpan(s = 0, n = 0) }
+  }
+}
+
 ## Issue #680 — the enum `Ty` of an enum-valued expression that no local records: a `deref` of a
 ## pointer-valued expression (`sema_ptr_expr_ty`) or a direct call to a sole declaration whose result
 ## is an enum. One question for the two places that ask it: the `match` scrutinee below, and an unannotated
@@ -6683,12 +6819,28 @@ match_scrut_enum_ty := fn(sc : ptr(Expr), decls : ptr(rt::Vec), upto : usize, sr
   ## call returning one (`match deref(p_or(pc))`, #680).
   di := expr_deref_inner(sc)
   if unchecked bitcast(usize, di) != 0 { return sema_value_enum_ty(sc, decls, src, locals, nloc) }
+  ## (2b) Issue #788 — an ELEMENT `xs[i]` of a local or parameter `[E; N]` (or `Slice(E)`): the
+  ## element type `sema_direct_index_elem_ty` already recovers for the index-store conformance check.
+  ixv := expr_index_base_var(sc)
+  if ixv.n != 0 {
+    if nloc == 0 or not local_in(locals, nloc, src, ixv.s, ixv.n) { return unknown }
+    et := sema_direct_index_elem_ty(src, local_at(locals, nloc, src, ixv.s, ixv.n), decls, ncnt)
+    if kind_is_enum(et.kind) and et.nl != 0 { return Ty(kind = TyKind.TyEnum, ns = et.ns, nl = et.nl) }
+    ## A parameter `xs : [E; N]` records no array type; read its declared element type instead.
+    es := sema_index_elem_ann(sc, src, locals, nloc)
+    at := resolve_ty(src, es.s, es.n, decls, ncnt)
+    if kind_is_enum(at.kind) and at.nl != 0 { return Ty(kind = TyKind.TyEnum, ns = at.ns, nl = at.nl) }
+    return unknown
+  }
   ## (3) a struct FIELD read whose declared type is an enum.
   fsp := expr_field_span(sc)
   if fsp.n != 0 {
     fbase := expr_field_base(sc)
     if unchecked bitcast(usize, fbase) != 0 {
-      owner := sema_struct_owner_span(fbase, decls, ncnt, src, locals, nloc, a)
+      mut owner := sema_struct_owner_span(fbase, decls, ncnt, src, locals, nloc, a)
+      ## Issue #788 — a field read THROUGH a pointer, `deref(ptr(h)).t` or `deref(p).t`: the owner is
+      ## the pointee struct of the `deref` operand.
+      if owner.n == 0 { owner = sema_deref_struct_owner(fbase, decls, src, locals, nloc) }
       if owner.n != 0 {
         fann := sema_field_ann_span(decls, ncnt, src, owner.s, owner.n, fsp.s, fsp.n, a)
         if fann.n != 0 {
@@ -6746,6 +6898,9 @@ match_scrut_span := fn(sc : ptr(Expr), a : ptr(mut rt::Arena)) -> usize {
   if s0 != 0 { return s0 }
   inner := expr_deref_inner(sc)
   if unchecked bitcast(usize, inner) != 0 { return s_of(inner, a) }
+  ## Issue #788 — `s_of` has no span for an `Index` either; locate `xs[i]` on its array local.
+  ixv := expr_index_base_var(sc)
+  if ixv.n != 0 and not ast::span_is_synthetic(ixv.s) { return ixv.s }
   0
 }
 
@@ -8224,16 +8379,8 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
         mark_failed(locals, mismatch_err(match_scrut_span(emp.scrut, a), 0))
       }
     }
-    msv := expr_var_span(emp.scrut)
-    if msv.n != 0 and nloc != 0 and local_in(locals, nloc, src, msv.s, msv.n) {
-      msty := local_lookup(locals, nloc, src, msv.s, msv.n)
-      mstag : TyKind = msty.ty.kind
-      ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` value-match must cover its finite
-      ## domain (else poison the check). Fail-open for anything else (see scalar_coverage_gap).
-      if (kind_is_int(mstag) or kind_is_bool(mstag)) and scalar_coverage_gap(emp.head, mstag, msty.ty.ns, msty.ty.nl, src) {
-        mark_failed(locals, mismatch_err(s_of(emp.scrut, a), 0))
-      }
-    }
+    ## The SCALAR half is decided in `check_expr_arms`' `Match` arm, where the scrutinee's checked
+    ## type is at hand (issue #788).
   }
   ## Issue #716 — this function's big `match` used to be written `node := deref(e) ; match node`,
   ## which the x86_64 lowering could not type: it compared every arm against tag 0, so only
@@ -8342,6 +8489,14 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     }
     Expr::Match(scrut, head) => {
       cs := check_expr(scrut, decls, upto, src, a, locals, nloc)?
+      ## SCALAR exhaustiveness (§5.1/§5.4) for a VALUE match — the dual of `check_stmts`' statement
+      ## match. Issue #788: decided from the checked scrutinee's type, so `match b { true => … }` and
+      ## `match n { 0 => …; 1 => … }` no longer deliver 0 from a value no arm covers.
+      msty := match_scrut_scalar_ty(cs.kind, scrut, src, locals, nloc)
+      if (kind_is_int(msty.kind) or kind_is_bool(msty.kind)) and scalar_coverage_gap(head, msty.kind, msty.ns, msty.nl, src) {
+        er := Result(Ty, CheckErr).Err(mismatch_err(match_scrut_span(scrut, a), 0))
+        return er
+      }
       mut arm := head
       mut acc := Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)
       mut seen := false
@@ -11642,15 +11797,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
             return Result(usize, CheckErr).Err(mismatch_err(match_scrut_span(sc, a), 0))
           }
         }
-        sv := expr_var_span(sc)
-        if sv.n != 0 and cnt != 0 and local_in(locals, cnt, src, sv.s, sv.n) {
-          sty := local_lookup(locals, cnt, src, sv.s, sv.n)
-          stag : TyKind = sty.ty.kind
-          ## SCALAR exhaustiveness (§5.4): a RANGE-containing `bool`/`u8` scalar match must cover its
-          ## finite domain (else a compile error). Fail-open for anything else (see scalar_coverage_gap).
-          if (kind_is_int(stag) or kind_is_bool(stag)) and scalar_coverage_gap(ah, stag, sty.ty.ns, sty.ty.nl, src) {
-            return Result(usize, CheckErr).Err(mismatch_err(s_of(sc, a), 0))
-          }
+        ## SCALAR exhaustiveness (§5.1/§5.4): a `bool` or integer match must cover its type's values or
+        ## carry a `_`. Issue #788 — decided from the scrutinee's TYPE (`cs`, or a bare local's recorded
+        ## width), not only for a bare local, and for literal-only arm lists as well as ranges.
+        sty := match_scrut_scalar_ty(cs.kind, sc, src, locals, cnt)
+        if (kind_is_int(sty.kind) or kind_is_bool(sty.kind)) and scalar_coverage_gap(ah, sty.kind, sty.ns, sty.nl, src) {
+          return Result(usize, CheckErr).Err(mismatch_err(match_scrut_span(sc, a), 0))
         }
         cur = nx
       }
