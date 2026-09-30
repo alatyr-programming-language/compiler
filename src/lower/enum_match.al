@@ -26,7 +26,7 @@ arm_p := ast::arm_p
 fld_p := ast::fld_p
 (Arm, Decl, Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
 (push_str, push_int) := strbuf
-(LCtx, num_lit_value, var_name_span) := lower_ctx
+(CSpan, LCtx, num_lit_value, var_name_span) := lower_ctx
 (base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_byte_place, is_niche_folded, niche_payload_ptr_kind, ptr_target_pointee_s, ptr_target_pointee_n, layout_kind, layout_kind_is_byte, layout_kind_is_packed, repr_tag_code, struct_decl_of, struct_words, variant_index, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
@@ -469,6 +469,26 @@ pub try_arrelem_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::St
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
   r
+}
+
+## #809 — a `match` over a NICHE-FOLDED `Option(ptr(T))` VALUE that no place helper above staged: a
+## mutable global's field (`G.head`), an array element's field (`ns[i].next`), a field through a pointer
+## (`deref(p).next`), or any other form `folded_value_span` names. Stage its ONE word in this match
+## level's scratch and dispatch on it as a folded local (`None` is the null word, `Some(q)` binds it).
+## `skip` is true when an earlier helper already resolved the scrutinee; nothing is emitted then, and
+## nothing is emitted for a named local (its own slot is the scrutinee).
+pub try_folded_value_scrut := fn(scrut : ptr(Expr), skip : bool, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) -> ScrutInfo {
+  r := ScrutInfo(is_e = false, base = 0, es = 0, el = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
+  if skip or var_name_span(scrut).n != 0 { return r }
+  a := arena_of(cx)
+  fvs := folded_value_span(scrut, CSpan(s = 0, n = 0), cx.slots, cx.decls, cx.src, a)
+  if fvs.n == 0 { return r }
+  tbase := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
+  emit_folded_option_value(scrut, sb, cx, a, nl)
+  push_str(sb, "  movq %rax, -")
+  push_int(sb, i64((tbase + 1) * 8))
+  push_str(sb, "(%rbp)\n")
+  ScrutInfo(is_e = true, base = tbase, es = fvs.s, el = fvs.n, is_ref = false, tmod_s = 0, tmod_l = 0)
 }
 
 ## Lower an enum `match` (`match e { V(x) => body ; W => body ; _ => body }`). The scrutinee
