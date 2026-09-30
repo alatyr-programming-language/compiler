@@ -6570,6 +6570,10 @@ run range_int_match 42
 run or_pattern_match 42
 run match_mixed_arm 42
 check_accept accept_range_exhaustive
+# Issue #806 — a range arm over a `u64`/`usize` scrutinee compares UNSIGNED: a bound at or above 2^63
+# was read as negative, so `10..=18446744073709551615` never matched `u64::MAX`. An `i64` range stays
+# signed in the same program.
+run issue806_u64_range_high_bound 42
 check_reject reject_range_nonexhaustive
 build_reject_has or_pattern_bind_reject "OR-pattern alternative may not bind a payload"
 # Control Flow §5.4 / #673 — an OR-pattern's alternatives SHARE one body node, so every data walk

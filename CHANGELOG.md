@@ -181,6 +181,9 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   really takes, and a function that needs more than the scan placed is emitted again with a pool that
   holds them. Every function that built before keeps its exact frame.
 
+- **A range arm over a `u64` or `usize` compares unsigned.** On x86_64 the bounds of `a..b` / `a..=b`
+  were compared as signed `i64`, so a bound at or above 2^63 read as negative: `10..=18446744073709551615`
+  never matched `u64::MAX` and the `match` fell through, silently (#806).
 ## 0.2.5 — 2026-09-30
 
 - **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved

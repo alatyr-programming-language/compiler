@@ -9448,6 +9448,34 @@ bind_uninit_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usize,
 ## Append a fresh ".L<n>" label name to `sb` (no newline, no colon) and return the next
 ## counter value. Callers use it both to define a label (`.L<n>:`) and to reference it in
 ## a jump (`jmp .L<n>`) — the same number for both, threaded through `nl`.
+## #806 — the ONE emitter of a RANGE arm (Control Flow §5.4) over the scalar scrutinee in %r12, for
+## all four `match` lowerings: jump to `lbody` iff `lo <= x` and (`x < hi` half-open, `x <= hi`
+## inclusive), else fall through to the next arm. The comparison takes its signedness from the
+## scrutinee's TYPE (`is_unsigned_expr`, the question the binary-op ordering already asks): an
+## unsigned scrutinee compares unsigned (`jb`/`jbe`), so a `u64` bound at or above 2^63 is no longer
+## read as a negative number and `10..=18446744073709551615` matches `u64::MAX`. Every other
+## scrutinee (signed, `char`, unrecorded) keeps the signed `jl`/`jle`, byte for byte.
+emit_range_arm := fn(lo : i64, hi : i64, inclusive : bool, unsigned : bool, lbody : usize, in out sb : strbuf::StrBuf, in out nl : usize) {
+  lskip := nl
+  nl += 1
+  push_str(sb, "  movq $")
+  push_int(sb, lo)
+  if unsigned { push_str(sb, ", %rax\n  cmpq %rax, %r12\n  jb ") } else { push_str(sb, ", %rax\n  cmpq %rax, %r12\n  jl ") }
+  emit_label(sb, lskip)
+  push_str(sb, "\n  movq $")
+  push_int(sb, hi)
+  push_str(sb, ", %rax\n  cmpq %rax, %r12\n  ")
+  if unsigned {
+    if inclusive { push_str(sb, "jbe ") } else { push_str(sb, "jb ") }
+  } else {
+    if inclusive { push_str(sb, "jle ") } else { push_str(sb, "jl ") }
+  }
+  emit_label(sb, lbody)
+  push_str(sb, "\n")
+  emit_label(sb, lskip)
+  push_str(sb, ":\n")
+}
+
 emit_label := fn(in out sb : strbuf::StrBuf, n : usize) {
   push_str(sb, ".L")
   push_int(sb, i64(n))
@@ -17790,23 +17818,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           push_str(sb, "\n")
         } else if am.wild == 5 or am.wild == 6 {
           ## a RANGE arm (Control Flow §5.4): `lo..hi` (wild 5, half-open) / `lo..=hi` (wild 6,
-          ## inclusive). Bounds-check the scrutinee (in %r12): jump to the body iff `lo <= x` AND
-          ## (`x < hi` half-open / `x <= hi` inclusive), else fall through to the next arm. Signed
-          ## compares — correct for iN/char and any uN with values < 2^63 (u8/char/small-int ranges).
-          lskip := nl
-          nl += 1
-          push_str(sb, "  movq $")
-          push_int(sb, am.lit)
-          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  jl ")
-          emit_label(sb, lskip)
-          push_str(sb, "\n  movq $")
-          push_int(sb, am.hi)
-          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  ")
-          if am.wild == 6 { push_str(sb, "jle ") } else { push_str(sb, "jl ") }
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
-          emit_label(sb, lskip)
-          push_str(sb, ":\n")
+          ## inclusive), compared with the scrutinee's signedness (`emit_range_arm`, #806).
+          emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
         } else if am.wild != 0 {
           push_str(sb, "  jmp ")
           emit_label(sb, lbody)
@@ -22517,23 +22530,9 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
           emit_label(sb, lbody)
           push_str(sb, "\n")
         } else if am.wild == 5 or am.wild == 6 {
-          ## a RANGE arm (Control Flow §5.4): bounds-check the scrutinee (%r12) against `[lo, hi)`
-          ## (wild 5, half-open) / `[lo, hi]` (wild 6, inclusive); jump to the body iff in range,
-          ## else fall through. Signed compares (correct for iN/char and any uN value < 2^63).
-          lskip := nl
-          nl += 1
-          push_str(sb, "  movq $")
-          push_int(sb, am.lit)
-          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  jl ")
-          emit_label(sb, lskip)
-          push_str(sb, "\n  movq $")
-          push_int(sb, am.hi)
-          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  ")
-          if am.wild == 6 { push_str(sb, "jle ") } else { push_str(sb, "jl ") }
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
-          emit_label(sb, lskip)
-          push_str(sb, ":\n")
+          ## a RANGE arm (Control Flow §5.4): `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6), compared
+          ## with the scrutinee's signedness (`emit_range_arm`, #806).
+          emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(mi.scrut, cx), lbody, sb, nl)
         } else if am.wild != 0 {
           push_str(sb, "  jmp ")
           emit_label(sb, lbody)
@@ -23052,22 +23051,9 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64
       emit_label(sb, lbody)
       push_str(sb, "\n")
     } else if am.wild == 5 or am.wild == 6 {
-      ## a RANGE arm (Control Flow §5.4): bounds-check the scrutinee (%r12) against `[lo, hi)`
-      ## (wild 5) / `[lo, hi]` (wild 6); jump to the body iff in range, else fall through. Signed.
-      lskip := nl
-      nl += 1
-      push_str(sb, "  movq $")
-      push_int(sb, am.lit)
-      push_str(sb, ", %rax\n  cmpq %rax, %r12\n  jl ")
-      emit_label(sb, lskip)
-      push_str(sb, "\n  movq $")
-      push_int(sb, am.hi)
-      push_str(sb, ", %rax\n  cmpq %rax, %r12\n  ")
-      if am.wild == 6 { push_str(sb, "jle ") } else { push_str(sb, "jl ") }
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
-      emit_label(sb, lskip)
-      push_str(sb, ":\n")
+      ## a RANGE arm (Control Flow §5.4): `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6), compared with
+      ## the scrutinee's signedness (`emit_range_arm`, #806).
+      emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
     } else if am.wild != 0 {
       push_str(sb, "  jmp ")
       emit_label(sb, lbody)
@@ -23348,21 +23334,9 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
     } else if (sise == false) and (am.wild == 5 or am.wild == 6) {
       ## a RANGE arm (Control Flow §5.4) over a SCALAR scrutinee (%r12): bounds-check against
       ## `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6); jump to the body iff in range, else fall
-      ## through. Ranges are scalar-only, so this never fires for an enum (`sise`) scrutinee. Signed.
-      lskip := nl
-      nl += 1
-      push_str(sb, "  movq $")
-      push_int(sb, am.lit)
-      push_str(sb, ", %rax\n  cmpq %rax, %r12\n  jl ")
-      emit_label(sb, lskip)
-      push_str(sb, "\n  movq $")
-      push_int(sb, am.hi)
-      push_str(sb, ", %rax\n  cmpq %rax, %r12\n  ")
-      if am.wild == 6 { push_str(sb, "jle ") } else { push_str(sb, "jl ") }
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
-      emit_label(sb, lskip)
-      push_str(sb, ":\n")
+      ## through. Ranges are scalar-only, so this never fires for an enum (`sise`) scrutinee. The
+      ## comparison takes the scrutinee's signedness (`emit_range_arm`, #806).
+      emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
     } else if am.wild != 0 {
       push_str(sb, "  jmp ")
       emit_label(sb, lbody)
