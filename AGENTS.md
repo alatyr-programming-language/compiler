@@ -96,6 +96,38 @@ step-by-step procedures live in `.agents/skills/`.
 - Follow the existing self-hosting idioms. A language feature that is valid in principle may still be
   unavailable to the frozen seed until the integrator promotes it.
 
+## Strict forms
+
+Write compiler and library code in the forms below. Each one turns a defect class this compiler has
+shipped into something that cannot be written, or cannot be written without a visible reason. The
+reasons, the issues and a "this / not this" example for each form are in
+`.agents/skills/alatyr-lane/strict_forms.md`. Read it before writing code, not after the gate refuses
+some. Where a check holds a form, it is an **addition rule** against the merge base (no oracle file).
+Only a new occurrence is refused, and a `## <rule>-ok: <reason>` comment on the line or the line above
+acknowledges it.
+
+1. **Absence is `Option`, not a sentinel.** Do not use 0 as null, −1 as "not found", or 255 as
+   "poisoned" (#659, #681). Use `Option(ptr(T))` (one word, niche-folded) or `Option(u64)`. Held by the
+   `null` rule of `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`) forms
+   together. Marker: `null-ok`.
+2. **A kind is an enum, and flags are separate fields.** Do not compare a `kind`/`tag` with a literal,
+   and do not pack a flag into a tag byte (`+128`) (#583, #626). Held by `kind-literal`.
+3. **Decide with an exhaustive `match` on the value.** Never use `_` over an enum (#544, #464). Do not
+   recover a variant from numbers (#716). Held by `scripts/wildcard_arm_check.sh`.
+4. **One decision, one place.** `grep` for the question before you answer it again (#540, #539). Held,
+   for the shapes it knows, by `scripts/idiom_gate.sh`.
+5. **Width and signedness are spelled.** Annotate a local before `/`, `%` or an ordering. Never infer
+   them from the form of an operand (#546, #608, #764–#766). Held by review.
+6. **`unchecked` is explicit and justified.** No implicit `usize` ↔ `ptr(T)` (#529, Types §4.3). Held by
+   `unchecked` (marker `unchecked-ok`) and the typed `ptrint` rule (no marker: write it explicitly).
+7. **Bind a `?` before using its value** (`x := f()?`), never `f()?.a` or `g(f()?)` (#752; the seed
+   predates the fix for the inline form). Held by `try-inline`.
+8. **Do not write the forms the frozen seed miscompiles.** Each one is recorded as a comment at its
+   workaround site (listed in the skill file). A new workaround names the limitation and the issue.
+   Held by review.
+9. **An AST handle has its node's own type**, never `usize` or a sibling node's pointer (#760 fixed 12
+   walkers). Held by the checker at a `deref`; the typed-handle proposal is in the skill file.
+
 ## Work reaching `main`
 
 The unit of work is: maintainer triage → owner-authored brief → one worker target → branch and PR →
@@ -295,6 +327,14 @@ No single check is sufficient:
   quoting the token in prose — while `grep -cE '^\s+_ =>'` answered 4 for `src/lower_ctx.al`'s 24,
   because twenty sat inline in one-line accessors. The scanner reproduces #544's independent census
   to the unit: 727 over `src/` at `6759a95` and 731 at `6fe1e1d`.
+- `strict_forms_check.sh` holds the "Strict forms" above with the wildcard check's design: a merge-base
+  delta, per rule, with no oracle file, refusing only an unacknowledged addition. Its lexical half
+  (`unchecked`, `kind-literal`, `try-inline`) is a tokenizer run before the build. Its typed half
+  (`ptrint`, `null`) runs after the build and reads the #529 checker instrument on fd 98, because only
+  the checker knows `p` in `p == 0` is a pointer. `null` is decided on explicit plus implicit forms
+  together, so #529's conversion of one into the other is never refused. If the head compiler refuses
+  the *base* tree (a checker-tightening change can do that), the implicit half is reported as
+  SKIPPED, never counted as zero.
 - The whole-program invariant checks and cross-target sweeps need non-vacuity tests; a green gate that
   never fails its own planted defect is not evidence.
 - `build_reject` proves only a nonzero exit. Use `build_reject_has` for an intended diagnostic, and do
@@ -324,8 +364,8 @@ No single check is sufficient:
   and 48 `OUTPUT-CHANGED` x86_64 rows under QEMU — timeouts and emulation artifacts, not behavior. A feature-only PR with an intentional oracle
   transition may use the first non-green run only to document the expected oracle mismatch; the final
   merge plus maintainer oracle commit must pass the complete gate before publish.
-- The full gate covers fixpoint, e2e, corpus, formatter, duplicate-decision, wildcard-arm, invariant,
-  and cross-target checks; an individual green check is never sufficient.
+- The full gate covers fixpoint, e2e, corpus, formatter, duplicate-decision, wildcard-arm, strict-form,
+  invariant, and cross-target checks; an individual green check is never sufficient.
 - The docs-only gate is available only when
   `.agents/skills/alatyr-lane/classify_docs_only.sh <base> <head>` accepts the complete committed range
   and both worker and integrator independently inspect every hunk. Its allowlist is regular,
