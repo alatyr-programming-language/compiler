@@ -703,6 +703,24 @@ archive="$p/target/debug/library-dce-scope.a"
   fi
 }
 
+# #801: a package of 300 module files. The driver sorts the discovered module paths, and the sort
+# collected them into two 256-entry arrays and dropped every path past the 256th: `main.al` sorts after
+# `m000.al`..`m299.al`, so it was lost and the package did not build. The package is generated here
+# (300 one-line modules would be noise in test/): `mNNN::answer()` returns NNN, main calls the first,
+# the middle and the last. Parent: the build failed.
+many_modules_package() {
+  p="$T/many_modules"
+  rm -rf "$p"; mkdir -p "$p/src"
+  sed 's/output = "flat-modules"/output = "many-modules"/' "$E2E_TEST/package/flat_modules/package.al" > "$p/package.al"
+  for i in $(seq 0 299); do
+    printf 'pub answer := fn() -> u64 {\n  return %d\n}\n' "$i" > "$p/src/m$(printf '%03d' "$i").al"
+  done
+  printf 'main := fn() -> u64 {\n  return m000::answer() + m150::answer() + m299::answer() - 407\n}\n' > "$p/src/main.al"
+  _e2e_exec_in "$p" "$CC" run package.al >/dev/null 2>&1; got=$?
+  if _e2e_runtime_failure many_modules_package "$got"; then return; fi
+  if [ "$got" = 42 ]; then echo "ok   many_modules_package: 300 modules, run 42"; else echo "FAIL many_modules_package: run got $got want 42"; fail=1; fi
+}
+
 # (WASM→WAT): emit `test/<name>.al` to WAT, assemble with wat2wasm (structural + type
 # validation), run under wasmtime, check the exit code. Requires wat2wasm + wasmtime (flake
 # devShell); if either is absent this SKIPS (an env gap is not a test failure) but says so.
@@ -7840,6 +7858,7 @@ run_library_target staticlib static_lib 42
 production_test_dce
 abi_reachability_dce
 library_dce_scope
+many_modules_package
 ## CT / Comptime §7: the `when <comptime-predicate>` DECLARATION-GUARD. Two companion `answer` fns +
 ## two `bonus` inferred constants gated by complementary target predicates; the FALSE-guarded decls
 ## (one calling a nonexistent fn) are dropped before name-resolution/emission (Phase B §9), so the
@@ -8596,6 +8615,13 @@ run sret_nested_call_arg 18
 ## the pool is now sized by what the emission takes. Parent: build refused (rc 1) on both.
 run agg_pool_enum_call_args 99
 run agg_pool_deep_enum_call_args 103
+## #801: the front half's side tables grow with the program — 300 labels in one function (sema held
+## 256), 4300 in one program (the parser's label table held 4096), 520 expression-callee sites (512),
+## and a labeled loop 66 loops deep (the parser's loop-label stack held 64). Parent: all four refused.
+run frontend_tables_fn_labels 42
+run frontend_tables_program_labels 42
+run frontend_tables_expr_callees 42
+run frontend_tables_deep_label 42
 check_accept str_field_struct
 ## §4 layout: an array field inside a mutable-global struct — element read/write + a scalar field
 ## after it (word-offset shift), with the array field laid out in .data as its element cells.

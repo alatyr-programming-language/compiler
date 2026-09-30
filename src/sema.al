@@ -12416,38 +12416,59 @@ stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut r
 }
 
 ## Issue #207 / Control Flow §§2.1–2.3: direct code-point labels share one flat function namespace with
-## structured labels. The parser keeps
-## their spelling in the existing statement-label side table, so this pass can collect every forward or
-## backward target before validating jumps. A bounded table is intentional: exhausting it is a located
-## reject, never a silent loss of a target. `kind` distinguishes a direct code-point (1) from a
-## structured loop label (2): both occupy the function namespace, but only kind 1 has an address.
-CodePointLabels := struct { starts : [usize; 256], lens : [usize; 256], count : usize, kind : [usize; 256] }
-codepoint_label_add := fn(labels : ptr(mut CodePointLabels), src : ptr(u8), s : usize, n : usize, k : usize) -> CheckErr {
-  if s == 0 or n == 0 { return 0 }
-  mut i := 0
-  while i < labels.count {
-    ## Issue #523 — the one CheckErr span encode that does not go through a constructor above; route it
-    ## through the same `diag_span` funnel so the invariant "no CheckErr carries a non-source span" has
-    ## no exception to remember. `s` is a statement-label span, always a real lexer token, so this is
-    ## the identity here and the emitted code for every accepted program is unchanged.
-    if streq(src, labels.starts[i], labels.lens[i], s, n) { return 3 + diag_span(s) * 4 }
-    i += 1
-  }
-  if labels.count >= 256 { return located_err(s) }
-  labels.starts[labels.count] = s
-  labels.lens[labels.count] = n
-  labels.kind[labels.count] = k
-  labels.count += 1
-  0
-}
-codepoint_label_has := fn(labels : ptr(CodePointLabels), src : ptr(u8), s : usize, n : usize) -> bool {
-  mut i := 0
+## structured labels. The parser keeps their spelling in the existing statement-label side table, so this
+## pass can collect every forward or backward target before validating jumps. A direct code-point label
+## has an address and a structured loop label does not, but both occupy the namespace, so each kind has
+## its own table and a name may appear in neither twice. The tables are `rt` word tables of (start,
+## length) pairs that grow with the function (#801): they used to hold 256 labels, and a function with
+## more was refused with a located error although it was valid.
+LabelTarget := enum { CodePoint, Loop }
+CodePointLabels := struct { pts : usize, pts_cap : usize, npts : usize, loops : usize, loops_cap : usize, nloops : usize }
+## Is `[s, s+n)` one of the `cnt` (start, length) pairs of the table at `base`?
+label_table_has := fn(base : usize, cnt : usize, src : ptr(u8), s : usize, n : usize) -> bool {
+  mut i : usize = 0
   mut found := false
-  while i < labels.count and not found {
-    if labels.kind[i] == 1 and streq(src, labels.starts[i], labels.lens[i], s, n) { found = true }
+  while i < cnt and not found {
+    if streq(src, rt::wtab_get(base, i * 2), rt::wtab_get(base, i * 2 + 1), s, n) { found = true }
     i += 1
   }
   found
+}
+## Append the pair (`s`, `n`) after the `cnt` pairs of the table (`base`, `cap`), growing it first.
+label_table_push := fn(in out base : usize, in out cap : usize, cnt : usize, s : usize, n : usize) {
+  rt::wtab_reserve(base, cap, cnt * 2, cnt * 2 + 2)
+  rt::wtab_set(base, cnt * 2, s)
+  rt::wtab_set(base, cnt * 2 + 1, n)
+}
+codepoint_label_add := fn(labels : ptr(mut CodePointLabels), src : ptr(u8), s : usize, n : usize, t : LabelTarget) -> CheckErr {
+  if s == 0 or n == 0 { return 0 }
+  ## Issue #523 — the one CheckErr span encode that does not go through a constructor above; route it
+  ## through the same `diag_span` funnel so the invariant "no CheckErr carries a non-source span" has
+  ## no exception to remember. `s` is a statement-label span, always a real lexer token, so this is
+  ## the identity here and the emitted code for every accepted program is unchanged.
+  if label_table_has(labels.pts, labels.npts, src, s, n) or label_table_has(labels.loops, labels.nloops, src, s, n) { return 3 + diag_span(s) * 4 }
+  match t {
+    LabelTarget::CodePoint => {
+      mut pb := labels.pts
+      mut pc := labels.pts_cap
+      label_table_push(pb, pc, labels.npts, s, n)
+      labels.pts = pb
+      labels.pts_cap = pc
+      labels.npts += 1
+    }
+    LabelTarget::Loop => {
+      mut lb := labels.loops
+      mut lc := labels.loops_cap
+      label_table_push(lb, lc, labels.nloops, s, n)
+      labels.loops = lb
+      labels.loops_cap = lc
+      labels.nloops += 1
+    }
+  }
+  0
+}
+codepoint_label_has := fn(labels : ptr(CodePointLabels), src : ptr(u8), s : usize, n : usize) -> bool {
+  label_table_has(labels.pts, labels.npts, src, s, n)
 }
 codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLabels), src : ptr(u8), a : ptr(mut rt::Arena)) -> CheckErr {
   mut cur := head
@@ -12455,10 +12476,10 @@ codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLa
   while cur != 0 and err == 0 {
     st := deref(stmt_p(Stmt, cur))
     match st {
-      Stmt::ExprStmt(e, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, 1) }
-      Stmt::While(c, b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, 2); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
-      Stmt::For(ns, nl, lo, hi, b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, 2); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
-      Stmt::Loop(b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, 2); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
+      Stmt::ExprStmt(e, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.CodePoint) }
+      Stmt::While(c, b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
+      Stmt::For(ns, nl, lo, hi, b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
+      Stmt::Loop(b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
       Stmt::If(c, th, el, nx) => { err = codepoint_collect_stmts(th, labels, src, a); if err == 0 { err = codepoint_collect_stmts(el, labels, src, a) } }
       Stmt::Match(sc, ah, nx) => {
         mut arm := ah
@@ -13254,13 +13275,15 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   ## Locate structural rejections at the FN's declaration name (a `break`/`continue` AST node carries
   ## no span, and a missing result is a whole-fn property) — an honest "invalid at line N in <module>"
   ## rather than "location not tracked" (§1 item 6).
-  mut code_labels := CodePointLabels(starts = [0; 256], lens = [0; 256], count = 0)
+  mut code_labels := CodePointLabels(pts = 0, pts_cap = 0, npts = 0, loops = 0, loops_cap = 0, nloops = 0)
   cpl := codepoint_collect_stmts(d.body_stmts, ptr(code_labels), src, a)
   if cpl != 0 { failed = true; err = cpl }
   if failed == false {
     cjp := codepoint_check_stmts(d.body_stmts, ptr(code_labels), src, a, false)
     if cjp != 0 { failed = true; err = cjp }
   }
+  rt::wtab_free(code_labels.pts, code_labels.pts_cap)
+  rt::wtab_free(code_labels.loops, code_labels.loops_cap)
   if stmts_bad_loop_control(d.body_stmts, false, a) { failed = true; err = located_err(d.name_start) }
   ## Types §9.1 through the CONVERSION-CONSTRUCTOR spelling (#564) — the whole body plus the tail
   ## value in ONE walk that threads the `unchecked` mode, so `u8(300)` is refused wherever it is

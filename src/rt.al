@@ -95,12 +95,71 @@ pub rec_get := fn(addr : ptr(mut u8), i : usize) -> usize {
   return deref(p)
 }
 
+## #801 — WORD TABLES WITH NO CAPACITY. A side table that the parser, sema or the CLI fills while it
+## walks a program (control-label spans, expression-callee sites, identity bitcasts, loop-label frames,
+## a function's jump labels, a package's module paths) used to be a fixed array. A valid program that
+## needed one more entry was refused, or, where the overflow was skipped instead, silently
+## mis-resolved. Such a table now lives in its own anonymous mapping, and `wtab_reserve` grows it
+## before an append would pass its end, so its size is whatever the walk that fills it reaches. It is
+## never bumped out of a compile arena, so a table growing cannot move the compiler's output.
+## A table is two words its owner keeps: `base` (the mapping's address, a word handle) and `cap` (its
+## size in words; 0 = the table owns no mapping yet, and `base` is then never read).
+pub sys_munmap := @abi(syscall) fn(num : usize, addr : usize, len : usize) -> isize
+
+## Make the table (`base`, `cap`) hold at least `need` words, keeping its first `used` words. Grows by
+## doubling (at least 512 words), so appending one entry at a time costs amortized O(1).
+pub wtab_reserve := fn(in out base : usize, in out cap : usize, used : usize, need : usize) {
+  if need <= cap { return }
+  mut nc : usize = 512
+  if cap > nc { nc = cap }
+  while nc < need { nc = nc * 2 }
+  fdm1 := 0 - 1
+  r := sys_mmap(9, 0, nc * 8, 3, 34, fdm1, 0)
+  if r < 0 { panic("rt: word table growth failed (mmap)") }
+  ## unchecked-ok: a successful anonymous mmap returns the mapping's address (r >= 0 checked above).
+  nb := unchecked bitcast(usize, r)
+  for i in 0..used { wtab_set(nb, i, wtab_get(base, i)) }
+  if cap > 0 { freed := sys_munmap(11, base, cap * 8) }
+  base = nb
+  cap = nc
+}
+
+## Release the table (`base`, `cap`); a table that never grew owns nothing.
+pub wtab_free := fn(base : usize, cap : usize) {
+  if cap > 0 { freed := sys_munmap(11, base, cap * 8) }
+}
+
+## Word `i` of the table at `base` (the owner keeps `i` below the words it reserved).
+pub wtab_get := fn(base : usize, i : usize) -> usize {
+  ## unchecked-ok: `base` is a mapping `wtab_reserve` returned; word `i` lies inside it.
+  rec_get(unchecked bitcast(ptr(mut u8), base), i)
+}
+
+## Store `x` as word `i` of the table at `base`.
+pub wtab_set := fn(base : usize, i : usize, x : usize) {
+  ## unchecked-ok: `base` is a mapping `wtab_reserve` returned; word `i` lies inside it.
+  rec_set(unchecked bitcast(ptr(mut u8), base), i, x)
+}
+
 ## A `str`-element vector (path B): a `str` is two words {ptr, len}, so each element is a 2-word
 ## record `bump`ed into the arena, its base handle pushed into a `Vec`. This is the lean stand-in
 ## for `alloc::vec(str)` at the driver's I/O boundary (the file-path / module-source lists) — no
 ## generic `Vec(T)`/`get(T,…)`, all word ops the self-host lower emits. `push` stores {ptr, len};
 ## `get` reconstructs the `str` via `str_at` (a Stage-0 builtin AND a self-host-inlined view).
+## #801: the vector GROWS here instead of stopping at the capacity its caller reserved. The driver's
+## module-path vector was 256 entries, and a package with more module files died on "rt: Vec overflow".
+## A full vector moves to a block twice its size in the same arena (the old block is simply left
+## behind, as every arena block is); a vector that fits never moves, so no existing build changes.
 pub svec_str_push := fn(in out v : Vec, in out a : Arena, s : str) -> usize {
+  if v.len >= v.cap {
+    mut nc : usize = 16
+    if v.cap * 2 > nc { nc = v.cap * 2 }
+    ## unchecked-ok: `bump` returns the address of a fresh block of `nc` words in `a`.
+    nd := unchecked bitcast(ptr(mut u8), bump(a, nc * 8))
+    for i in 0..v.len { rec_set(nd, i, vec_get(v, i)) }
+    v.data = nd
+    v.cap = nc
+  }
   h := bump(a, 16)
   rec_set(h, 0, unchecked bitcast(usize, s.ptr))
   rec_set(h, 1, s.len)
