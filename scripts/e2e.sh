@@ -854,10 +854,32 @@ check_large_source() {
 # verifier rule (V1–V10); a verifier that refused nothing would fail it. The report checks read an
 # EXISTING corpus program, so the corpus manifest gains no row. On the parent compiler `ir` is an
 # unknown argument (rc 40, no stdout), so every check below fails there.
+# docs/ir-slice-1.md §2 (slice 1b): the builder builds and verifies real programs. The six golden builds
+# of `ir --self-test` (src/ir/golden.al: arithmetic and its traps, logic, control flow, shifts, calls,
+# refusals) compare the verb's whole report with a reviewed text; their programs live in the compiler,
+# not under test/, so the corpus manifest gains no row. NotYet names the first construct outside the
+# subset with its location, and a refused function falls back (nothing is emitted from the IR yet).
+check_ir_build() {
+  local out="$T/ir_golden.out" rep="$T/ir_build.out" rc g ok=1
+  "$CC" ir --self-test > "$out" 2>&1; rc=$?
+  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_notyet; do
+    grep -q "^ok   golden $g: " "$out" || ok=0
+  done
+  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 6 ]; then
+    echo "ok   ir golden builds: 6 programs built, verified and printed exactly as reviewed"
+  else
+    echo "FAIL ir golden builds: rc=$rc"; grep -E '^(FAIL|ok   golden)' "$out" | head -12 | sed 's/^/     /'; fail=1
+  fi
+  "$CC" ir "$E2E_TEST/wasm_struct.al" > "$rep" 2>/dev/null; rc=$?
+  if [ "$rc" = 0 ] && grep -q 'NotYet(.*wasm_struct\.al:[0-9]*:[0-9]*)$' "$rep" && grep -q 'verify_failed=0$' "$rep"; then
+    echo "ok   ir wasm_struct: a struct is outside slice 1, refused NotYet with its location"
+  else echo "FAIL ir wasm_struct: rc=$rc"; fail=1; fi
+}
+
 check_ir_dev_verb() {
   local out="$T/ir_selftest.out" rc
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 17 passed, 0 failed' "$out" \
+  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 23 passed, 0 failed' "$out" \
     && [ "$(grep -c '^ok   planted #' "$out")" = 14 ]; then
     echo "ok   ir --self-test: storage, verify, print, 14 planted violations each refused by its rule"
   else
@@ -866,10 +888,10 @@ check_ir_dev_verb() {
   local src="$E2E_TEST/wasm_call.al" rep="$T/ir_report.out"
   [ -f "$src" ] || { echo "MISS wasm_call: no $src"; fail=1; return; }
   "$CC" ir "$src" > "$rep" 2>"$T/ir_report.err"; rc=$?
-  if [ "$rc" = 0 ] && grep -q '^fn wasm_call::add NotYet(stmt Return, .*wasm_call\.al:1:45)$' "$rep" \
-    && grep -q '^fn wasm_call::main NotYet(stmt Return, .*wasm_call\.al:2:30)$' "$rep" \
-    && grep -qx 'ir: functions=2 built=0 notyet=2' "$rep" && [ ! -s "$T/ir_report.err" ]; then
-    echo "ok   ir wasm_call: NotYet(construct, file:line:col) for each function, built=0"
+  if [ "$rc" = 0 ] && grep -qx 'fn wasm_call::add Built' "$rep" \
+    && grep -qx '  %2 = add.chk.u i64 %0, %1 overflow  @[0-9]*' "$rep" \
+    && grep -qx 'ir: functions=2 built=2 notyet=0 sema_gaps=0 verify_failed=0' "$rep" && [ ! -s "$T/ir_report.err" ]; then
+    echo "ok   ir wasm_call: both functions built and verified (slice 1b)"
   else
     echo "FAIL ir wasm_call: rc=$rc"; sed 's/^/     /' "$rep" | head -10; fail=1
   fi
@@ -882,7 +904,7 @@ check_ir_dev_verb() {
   if [ "$rc" = 40 ] && grep -q '^alatyr: config: ir requires' "$rep"; then echo "ok   ir (no operand): invocation-level Config diagnostic, rc 40"
   else echo "FAIL ir (no operand): rc=$rc"; fail=1; fi
   "$CC" ir --modules "$ROOT/lib/std/math.al" > "$rep" 2>/dev/null; rc=$?
-  if [ "$rc" = 0 ] && grep -q '^ir: functions=[1-9][0-9]* built=0 notyet=' "$rep"; then echo "ok   ir --modules lib/std/math.al: every function reported, none pruned"
+  if [ "$rc" = 0 ] && grep -q '^ir: functions=[1-9][0-9]* built=[0-9]* notyet=[0-9]* sema_gaps=[0-9]* verify_failed=0$' "$rep"; then echo "ok   ir --modules lib/std/math.al: every function reported, none pruned"
   else echo "FAIL ir --modules lib/std/math.al: rc=$rc"; fail=1; fi
   "$CC" help > "$rep" 2>&1; rc=$?
   if [ "$rc" = 0 ] && grep -q '^  ir       ' "$rep"; then echo "ok   help: lists the \`ir\` dev verb (D5, TOOL-21)"
@@ -11126,6 +11148,7 @@ run_wat for_break_labels 42
 check_backend_determinism
 check_large_source
 check_ir_dev_verb
+check_ir_build
 check_trap_names
 check_sign_census
 check_twin_package

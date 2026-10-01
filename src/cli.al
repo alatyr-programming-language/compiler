@@ -5735,6 +5735,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
       mut msb := driver::compile_files_ir_raw(mpaths, a)
       msblen := msb.len
       dm := rt::sb_flush(msb, 1)
+      ## A built function the IR verifier refused is an internal error (docs/ir.md §5): exit 70.
+      if ir::verify_failures() != 0 { return 70 }
       return emit_dump_status(dm, msblen)
     }
     ipath := arg_at(cmd, fi)
@@ -5745,6 +5747,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     mut isb := driver::compile_file_ir(ipath, a)
     isblen := isb.len
     di := rt::sb_flush(isb, 1)
+    if ir::verify_failures() != 0 { return 70 }
     return emit_dump_status(di, isblen)
   }
   if mode == 11 {

@@ -1,0 +1,1455 @@
+## selfhost::ir::build — the IR builder for slice 1's scalar subset (`docs/ir-slice-1.md` §2).
+##
+## The one place a function's scalar constructs become IR (`docs/ir.md` §3.1). Every value's kernel type
+## and signedness come from sema's side table (`ir::sty_get`, owner decision D6): the builder never
+## infers a type from an expression's shape. An expression sema left untyped is a `NotYet` that names
+## sema's gap (`NyWhy`), never a default (§3.8.4), so the census counts each gap instead of hiding it.
+## Anything outside the subset answers `NotYet(construct, span)` naming the first construct it could not
+## build, and the function falls back to its target's legacy emitter (§7.1 rules 1–2). In slice 1b
+## nothing consumes a built function except `alatyr ir`, which verifies and prints it; the selectors
+## arrive in 1c.
+##
+## This is a child module of `ir` (Modules §3): it reaches `ir.al`'s private helpers — the instruction
+## emitters `e_*`, the record readers, `put*` — by bare name through the ancestor chain.
+##
+## Absence is a variant here, never a reserved value: an expression builder answers `Option(VRegId)`
+## (`None` once the function is refused), a call answers `CallOut`, and every handle is a brand
+## (`VRegId`, `LabelId`, `SymId`, `FnId`).
+(Arg, Decl, Expr, Param, Stmt) := ast
+arg_p := ast::arg_p
+stmt_p := ast::stmt_p
+param_p := ast::param_p
+streq := lower_ctx::streq
+
+## A kernel type with its signedness: what a value of the subset is.
+IbKS := struct { ty : Kty, sg : Sgn }
+
+## What `build_one` answered for one function: the built function's id in the program, or a refusal
+## whose construct, class and span are in the caller's `BuildWhy`.
+pub BuildOut := enum { Built(FnId), Refused }
+
+## Why a function was refused. `NwOutside`: the construct is outside slice 1's subset (a later slice
+## claims it). The other four are SEMA GAPS (D6): the builder needed a type sema did not record —
+## `NwAbsent` sema never typed the node (a desugared node, a path sema does not visit), `NwUnknown` sema
+## visited it and could not type it, `NwLit` a literal no context gave a type, `NwDisagree` sema typed
+## two values that must agree (an operator's operands, a call's result and its callee) differently.
+pub NyWhy := enum { NwOutside, NwAbsent, NwUnknown, NwLit, NwDisagree }
+pub nywhy_is_gap := fn(w : NyWhy) -> bool {
+  match w { NwOutside => { false }; NwAbsent | NwUnknown | NwLit | NwDisagree => { true } }
+}
+pub nywhy_name := fn(w : NyWhy) -> str {
+  match w {
+    NwOutside => { "outside the subset" }; NwAbsent => { "sema-gap absent" }; NwUnknown => { "sema-gap unknown" }
+    NwLit => { "sema-gap literal" }; NwDisagree => { "sema-gap disagree" }
+  }
+}
+## The refusal `build_one` reports: the construct, why it was refused, and where.
+pub BuildWhy := struct { c : Construct, w : NyWhy, span : u64 }
+
+## The binary operators of the AST, decoded ONCE from its operator byte (`ib_bin_of`) so every decision
+## below is an exhaustive `match` on a named kind, never a literal comparison.
+AstBin := enum { BAdd, BSub, BMul, BDiv, BRem, BBand, BBor, BBxor, BEq, BNe, BLt, BGt, BLe, BGe, BAnd, BOr, BNot }
+## The AST's operator bytes are the lexer's token kinds (`src/lexrt.al` header, `src/parser.al`'s
+## `and`/`or`/`not` at 40/41/42). This is the only place they are compared.
+ib_bin_of := fn(op : u8) -> Option(AstBin) {
+  if op == 16 { return Option(AstBin).Some(AstBin.BAdd) }
+  if op == 17 { return Option(AstBin).Some(AstBin.BSub) }
+  if op == 18 { return Option(AstBin).Some(AstBin.BMul) }
+  if op == 19 { return Option(AstBin).Some(AstBin.BDiv) }
+  if op == 29 { return Option(AstBin).Some(AstBin.BRem) }
+  if op == 34 { return Option(AstBin).Some(AstBin.BBand) }
+  if op == 35 { return Option(AstBin).Some(AstBin.BBor) }
+  if op == 36 { return Option(AstBin).Some(AstBin.BBxor) }
+  if op == 20 { return Option(AstBin).Some(AstBin.BEq) }
+  if op == 28 { return Option(AstBin).Some(AstBin.BNe) }
+  if op == 24 { return Option(AstBin).Some(AstBin.BLt) }
+  if op == 25 { return Option(AstBin).Some(AstBin.BGt) }
+  if op == 26 { return Option(AstBin).Some(AstBin.BLe) }
+  if op == 27 { return Option(AstBin).Some(AstBin.BGe) }
+  if op == 40 { return Option(AstBin).Some(AstBin.BAnd) }
+  if op == 41 { return Option(AstBin).Some(AstBin.BOr) }
+  if op == 42 { return Option(AstBin).Some(AstBin.BNot) }
+  Option(AstBin).None
+}
+## The comparison predicate of an operator, if it is a comparison.
+ib_bin_cc := fn(b : AstBin) -> Cc {
+  match b {
+    BEq => { Cc.CcEq }; BNe => { Cc.CcNe }; BLt => { Cc.CcLt }; BGt => { Cc.CcGt }; BLe => { Cc.CcLe }; BGe => { Cc.CcGe }
+    BAdd | BSub | BMul | BDiv | BRem | BBand | BBor | BBxor | BAnd | BOr | BNot => { Cc.CcNone }
+  }
+}
+## The integer IR op of an arithmetic or bitwise operator (`OpMov` for the others, which never reach it).
+ib_bin_op := fn(b : AstBin) -> Op {
+  match b {
+    BAdd => { Op.OpAdd }; BSub => { Op.OpSub }; BMul => { Op.OpMul }; BDiv => { Op.OpDiv }; BRem => { Op.OpRem }
+    BBand => { Op.OpAnd }; BBor => { Op.OpOr }; BBxor => { Op.OpXor }
+    BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { Op.OpMov }
+  }
+}
+## The shape of operator: short-circuit logic, comparison, arithmetic (with a mode), or bitwise.
+AstBinK := enum { BkLogic, BkCmp, BkArith, BkBits }
+ib_bin_kind := fn(b : AstBin) -> AstBinK {
+  match b {
+    BAnd | BOr | BNot => { AstBinK.BkLogic }
+    BEq | BNe | BLt | BGt | BLe | BGe => { AstBinK.BkCmp }
+    BAdd | BSub | BMul | BDiv | BRem => { AstBinK.BkArith }
+    BBand | BBor | BBxor => { AstBinK.BkBits }
+  }
+}
+## Does the operator divide (and so owe the zero and `MIN / -1` checks, §4)?
+ib_bin_divides := fn(b : AstBin) -> bool {
+  match b {
+    BDiv | BRem => { true }
+    BAdd | BSub | BMul | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { false }
+  }
+}
+
+## The shift and rotate operation-functions (Types §2.2, OP-6), by the callee's name.
+ShiftK := enum { SkShl, SkShr, SkRotl, SkRotr }
+ib_shift_of := fn(nm : str) -> Option(ShiftK) {
+  if nm == "shl" { return Option(ShiftK).Some(ShiftK.SkShl) }
+  if nm == "shr" { return Option(ShiftK).Some(ShiftK.SkShr) }
+  if nm == "rotl" { return Option(ShiftK).Some(ShiftK.SkRotl) }
+  if nm == "rotr" { return Option(ShiftK).Some(ShiftK.SkRotr) }
+  Option(ShiftK).None
+}
+ib_shift_op := fn(s : ShiftK) -> Op {
+  match s { SkShl => { Op.OpShl }; SkShr => { Op.OpShr }; SkRotl => { Op.OpRotl }; SkRotr => { Op.OpRotr } }
+}
+ib_shift_is_rot := fn(s : ShiftK) -> bool {
+  match s { SkRotl | SkRotr => { true }; SkShl | SkShr => { false } }
+}
+
+## What a call answered: its result value, no value (a function with no result), or a refusal.
+CallOut := enum { CoValue(VRegId), CoVoid, CoRefused }
+
+## The builder's state for ONE function. Bindings and the loop stack are growing word buffers (no fixed
+## capacity, docs/ir.md §7.2 slice 0a). `term` is whether the statement sequence being built has
+## already transferred control (a `ret`/`br`/`trap`): a statement after one is unreachable and is
+## dropped, because V7 refuses anything after a terminator. A refusal records the first construct that
+## could not be built, why, and its span; every builder returns early once `failed` is set.
+## The loop stack is four parallel buffers: each loop's exit label, its continue label, whether it
+## carries a value (`lhasres`, 0/1) with that value's vreg (`lres`, read only when `lhasres` is 1), and
+## whether a `break` reached it (`lbroken`, 0/1: a loop no `break` leaves never falls through).
+IbB := struct {
+  f : ptr(mut IrFn), p : IrProg,
+  src : ptr(u8), decls : ptr(rt::Vec), mod_s : usize, mod_n : usize,
+  bnames : ptr(mut WBuf), blens : ptr(mut WBuf), bvregs : ptr(mut WBuf),
+  lexit : ptr(mut WBuf), lcont : ptr(mut WBuf), lres : ptr(mut WBuf), lhasres : ptr(mut WBuf), lbroken : ptr(mut WBuf),
+  unch : bool, term : bool,
+  failed : bool, fail_c : Construct, fail_w : NyWhy, fail_s : u64,
+  span0 : u64,
+}
+
+## Record reads, copy-then-read (#792: an enum or bool field read straight through `deref(p)` is wrong
+## on x86_64 today). Writes copy the whole record back for the same reason.
+ib_b_f := fn(bp : ptr(mut IbB)) -> ptr(mut IrFn) { bv : IbB = deref(bp); bv.f }
+ib_b_p := fn(bp : ptr(mut IbB)) -> IrProg { bv : IbB = deref(bp); bv.p }
+ib_b_src := fn(bp : ptr(mut IbB)) -> ptr(u8) { bv : IbB = deref(bp); bv.src }
+ib_b_decls := fn(bp : ptr(mut IbB)) -> ptr(rt::Vec) { bv : IbB = deref(bp); bv.decls }
+ib_b_failed := fn(bp : ptr(mut IbB)) -> bool { bv : IbB = deref(bp); bv.failed }
+ib_b_unch := fn(bp : ptr(mut IbB)) -> bool { bv : IbB = deref(bp); bv.unch }
+ib_b_term := fn(bp : ptr(mut IbB)) -> bool { bv : IbB = deref(bp); bv.term }
+ib_b_set_unch := fn(bp : ptr(mut IbB), u : bool) { mut bv : IbB = deref(bp); bv.unch = u; deref(bp) = bv }
+ib_b_set_term := fn(bp : ptr(mut IbB), t : bool) { mut bv : IbB = deref(bp); bv.term = t; deref(bp) = bv }
+
+## Refuse the function at construct `c` for reason `w` (spanned `s`, else the function's name). The
+## first refusal wins.
+ib_refuse := fn(bp : ptr(mut IbB), c : Construct, w : NyWhy, s : Option(u64)) {
+  mut bv : IbB = deref(bp)
+  if bv.failed { return }
+  bv.failed = true
+  bv.fail_c = c
+  bv.fail_w = w
+  bv.fail_s = bv.span0
+  match s { Some(x) => { bv.fail_s = x }; None => {} }
+  deref(bp) = bv
+}
+ib_refuse_expr := fn(bp : ptr(mut IbB), e : ptr(Expr), w : NyWhy) {
+  c : Construct = expr_construct(e)
+  sp : Option(u64) = expr_span(e)
+  ib_refuse(bp, c, w, sp)
+}
+ib_refuse_stmt := fn(bp : ptr(mut IbB), h : ptr(mut Stmt), w : NyWhy) {
+  c : Construct = stmt_construct(h)
+  sp : Option(u64) = stmt_span(h)
+  ib_refuse(bp, c, w, sp)
+}
+## A refused expression, as an expression builder's answer.
+ib_no := fn(bp : ptr(mut IbB), e : ptr(Expr), w : NyWhy) -> Option(VRegId) {
+  ib_refuse_expr(bp, e, w)
+  Option(VRegId).None
+}
+## The source offset a checked op carries (V9): its expression's, else the function's name.
+ib_span_of := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> usize {
+  sp : Option(u64) = expr_span(e)
+  bv : IbB = deref(bp)
+  match sp { Some(x) => { return usize(x) }; None => {} }
+  usize(bv.span0)
+}
+
+## ── kernel types (sema's record → IR type) ──
+
+## The kernel type of an integer of `bytes` width and sign `s`, if it is one.
+ib_int_ks := fn(bytes : u64, s : Sgn) -> Option(IbKS) {
+  if bytes == 1 { return Option(IbKS).Some(IbKS(ty = Kty.KI8, sg = s)) }
+  if bytes == 2 { return Option(IbKS).Some(IbKS(ty = Kty.KI16, sg = s)) }
+  if bytes == 4 { return Option(IbKS).Some(IbKS(ty = Kty.KI32, sg = s)) }
+  if bytes == 8 { return Option(IbKS).Some(IbKS(ty = Kty.KI64, sg = s)) }
+  Option(IbKS).None
+}
+## The kernel type of a recorded value type, when slice 1 builds values of it (integers and `bool`).
+ib_vty_ks := fn(t : VTy) -> Option(IbKS) {
+  c : VCls = t.cls
+  match c {
+    VcInt => { ib_int_ks(t.bytes, t.sg) }
+    VcBool => { Option(IbKS).Some(IbKS(ty = Kty.KBool, sg = Sgn.SgNone)) }
+    VcAbsent | VcUnknown | VcLit | VcPtr | VcFloat | VcAgg => { Option(IbKS).None }
+  }
+}
+## Why a recorded value type gives no kernel type: a sema gap for the untyped classes, otherwise a type
+## slice 1 does not build (a pointer, a float, an aggregate, an integer wider than 64 bits).
+ib_vty_why := fn(t : VTy) -> NyWhy {
+  c : VCls = t.cls
+  match c {
+    VcAbsent => { NyWhy.NwAbsent }; VcUnknown => { NyWhy.NwUnknown }; VcLit => { NyWhy.NwLit }
+    VcInt | VcBool | VcPtr | VcFloat | VcAgg => { NyWhy.NwOutside }
+  }
+}
+## The kernel type sema recorded for `e`. Without one the function is refused at `e`, naming sema's gap
+## (D6: never a default).
+ib_ty := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> Option(IbKS) {
+  t : VTy = sty_get(e)
+  ko : Option(IbKS) = ib_vty_ks(t)
+  match ko { Some(k) => { return ko }; None => {} }
+  w : NyWhy = ib_vty_why(t)
+  ib_refuse_expr(bp, e, w)
+  Option(IbKS).None
+}
+## The kernel type sema recorded for the binding declared at name offset `ns` (statement `h`).
+ib_bind_ty := fn(bp : ptr(mut IbB), h : ptr(mut Stmt), ns : usize) -> Option(IbKS) {
+  t : VTy = sty_bind_get(ns)
+  ko : Option(IbKS) = ib_vty_ks(t)
+  match ko { Some(k) => { return ko }; None => {} }
+  w : NyWhy = ib_vty_why(t)
+  ib_refuse_stmt(bp, h, w)
+  Option(IbKS).None
+}
+## The kernel type a declared type NAME `[s, s+n)` denotes, by sema's one table of scalar names.
+ib_name_ks := fn(src : ptr(u8), s : usize, n : usize) -> Option(IbKS) {
+  t : VTy = sema::sema_vty_scalar(src, s, n)
+  ib_vty_ks(t)
+}
+ib_vreg_ks := fn(f : ptr(mut IrFn), v : VRegId) -> IbKS {
+  t : Kty = vreg_ty(f, usize(v))
+  s : Sgn = vreg_sg(f, usize(v))
+  IbKS(ty = t, sg = s)
+}
+ib_ks_eq := fn(x : IbKS, y : IbKS) -> bool { kty_eq(x.ty, y.ty) and sgn_eq(x.sg, y.sg) }
+ib_ks_i64 := fn(s : Sgn) -> IbKS { IbKS(ty = Kty.KI64, sg = s) }
+ib_bool_ks := fn() -> IbKS { IbKS(ty = Kty.KBool, sg = Sgn.SgNone) }
+ib_ks_bits := fn(k : IbKS) -> u64 { kty_bytes(k.ty) * 8 }
+
+## ── small emitters over the builder ──
+
+ib_fresh := fn(bp : ptr(mut IbB), in out a : rt::Arena, k : IbKS) -> VRegId { new_vreg(ib_b_f(bp), a, k.ty, k.sg) }
+ib_mov := fn(bp : ptr(mut IbB), in out a : rt::Arena, d : VRegId, x : VRegId) {
+  k : IbKS = ib_vreg_ks(ib_b_f(bp), d)
+  ox := o_vreg(x)
+  on := o_none()
+  i := e_bin(ib_b_f(bp), a, Op.OpMov, Mode.MdNone, Sgn.SgNone, k.ty, d, ox, on)
+}
+ib_konst := fn(bp : ptr(mut IbB), in out a : rt::Arena, k : IbKS, x : i64) -> VRegId {
+  d := ib_fresh(bp, a, k)
+  i := e_const(ib_b_f(bp), a, k.ty, k.sg, d, x)
+  d
+}
+ib_open_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : VRegId) { i := e_if(ib_b_f(bp), a, c) }
+ib_plain := fn(bp : ptr(mut IbB), in out a : rt::Arena, o : Op) { i := e_plain(ib_b_f(bp), a, o) }
+ib_br := fn(bp : ptr(mut IbB), in out a : rt::Arena, l : LabelId) { on := o_none(); i := e_br(ib_b_f(bp), a, Op.OpBr, on, l) }
+## `%d = <o>.<md>.<sg> i64 x, y`, marked proven (V10: a `wrap` the builder proved cannot overflow).
+ib_proven := fn(bp : ptr(mut IbB), in out a : rt::Arena, o : Op, k : IbKS, x : VRegId, y : Opnd) -> VRegId {
+  d := ib_fresh(bp, a, k)
+  mut it := st_mk(o, k.ty, k.sg, Mode.MdNone)
+  if op_has_mode(o) { it.md = Mode.MdWrap; it.proven = true }
+  set_dst(it, d)
+  ox := o_vreg(x)
+  set_a(it, ox)
+  set_b(it, y)
+  i := emit(ib_b_f(bp), a, it)
+  d
+}
+## Widen (or re-sign) `x` to `to` with `ext` — the only way a value changes width or signedness (V4).
+ib_ext_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, x : VRegId, to : IbKS) -> VRegId {
+  from : IbKS = ib_vreg_ks(ib_b_f(bp), x)
+  if ib_ks_eq(from, to) { return x }
+  d := ib_fresh(bp, a, to)
+  i := e_width(ib_b_f(bp), a, Op.OpExt, from.sg, to.ty, from.ty, d, x)
+  d
+}
+## The value `x` at the type `to` sema gave its position (a binding, an argument, a result, a `break`
+## or an arm value). An integer narrower than `to` that sema accepted there loses no value: it is
+## widened by `ext` (same signedness, or unsigned into signed). Any other mismatch is sema's two records
+## disagreeing, and the function is refused at `at`.
+ib_coerce := fn(bp : ptr(mut IbB), in out a : rt::Arena, x : VRegId, to : IbKS, at : ptr(Expr)) -> Option(VRegId) {
+  from : IbKS = ib_vreg_ks(ib_b_f(bp), x)
+  if ib_ks_eq(from, to) { return Option(VRegId).Some(x) }
+  widens := kty_is_int(from.ty) and kty_is_int(to.ty) and kty_bytes(from.ty) < kty_bytes(to.ty)
+    and (sgn_eq(from.sg, to.sg) or sgn_eq(from.sg, Sgn.SgU))
+  if widens { w := ib_ext_to(bp, a, x, to); return Option(VRegId).Some(w) }
+  ib_no(bp, at, NyWhy.NwDisagree)
+}
+## Narrow the 64-bit `x` to `to`: `fit` (traps `tk` when it does not fit) in a checked scope, `ext`
+## (wraps) inside `unchecked` (§3.2 canonical form; V3).
+ib_narrow_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, x : VRegId, to : IbKS, tk : TrapKind, span : usize) -> VRegId {
+  from : IbKS = ib_vreg_ks(ib_b_f(bp), x)
+  if ib_ks_eq(from, to) { return x }
+  if ib_b_unch(bp) { return ib_wrap_to(bp, a, x, to) }
+  d := ib_fresh(bp, a, to)
+  mut it := st_mk(Op.OpFit, to.ty, from.sg, Mode.MdNone)
+  it.from = from.ty
+  set_dst(it, d)
+  ox := o_vreg(x)
+  set_a(it, ox)
+  it.tk = tk
+  set_span(it, span)
+  i2 := emit(ib_b_f(bp), a, it)
+  d
+}
+## Wrap the 64-bit `x` to `to` with `ext`, in any scope: for an operation whose result keeps only the
+## type's low bits by definition (a shift, a rotation, a bitwise op), never an overflow.
+ib_wrap_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, x : VRegId, to : IbKS) -> VRegId {
+  from : IbKS = ib_vreg_ks(ib_b_f(bp), x)
+  if ib_ks_eq(from, to) { return x }
+  d := ib_fresh(bp, a, to)
+  i := e_width(ib_b_f(bp), a, Op.OpExt, from.sg, to.ty, from.ty, d, x)
+  d
+}
+
+## ── bindings (one vreg per binding; shadowing never shares one, §3.3) ──
+
+ib_bind := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, v : VRegId) {
+  bv : IbB = deref(bp)
+  k1 := wb_push(bv.bnames, a, s)
+  k2 := wb_push(bv.blens, a, n)
+  k3 := wb_push(bv.bvregs, a, usize(v))
+}
+## The innermost binding of the name `[s, s+n)`, if any.
+ib_lookup := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(VRegId) {
+  bv : IbB = deref(bp)
+  mut i := wb_len(bv.bnames)
+  while i > 0 {
+    i = i - 1
+    if wb_get(bv.blens, i) == n and streq(bv.src, wb_get(bv.bnames, i), n, s, n) { return Option(VRegId).Some(VRegId(wb_get(bv.bvregs, i))) }
+  }
+  Option(VRegId).None
+}
+## Drop the bindings made since the scope that recorded `mark` opened.
+ib_wb_cut := fn(w : ptr(mut WBuf), n : usize) { if n < wb_len(w) { deref(w).len = n } }
+ib_scope_mark := fn(bp : ptr(mut IbB)) -> usize { bv : IbB = deref(bp); wb_len(bv.bnames) }
+ib_scope_drop := fn(bp : ptr(mut IbB), mark : usize) {
+  bv : IbB = deref(bp)
+  ib_wb_cut(bv.bnames, mark)
+  ib_wb_cut(bv.blens, mark)
+  ib_wb_cut(bv.bvregs, mark)
+}
+
+## ── the loop stack ──
+
+ib_loop_push := fn(bp : ptr(mut IbB), in out a : rt::Arena, exit : LabelId, cont : LabelId, res : Option(VRegId)) {
+  bv : IbB = deref(bp)
+  k1 := wb_push(bv.lexit, a, usize(exit))
+  k2 := wb_push(bv.lcont, a, usize(cont))
+  k3 := wb_push(bv.lbroken, a, 0)
+  match res {
+    Some(r) => { k4 := wb_push(bv.lres, a, usize(r)); k5 := wb_push(bv.lhasres, a, 1) }
+    None => { k6 := wb_push(bv.lres, a, 0); k7 := wb_push(bv.lhasres, a, 0) }
+  }
+}
+## Pop the innermost loop; answers whether a `break` left it.
+ib_loop_pop := fn(bp : ptr(mut IbB)) -> bool {
+  bv : IbB = deref(bp)
+  n := wb_len(bv.lexit) - 1
+  broken := wb_get(bv.lbroken, n) == 1
+  ib_wb_cut(bv.lexit, n)
+  ib_wb_cut(bv.lcont, n)
+  ib_wb_cut(bv.lres, n)
+  ib_wb_cut(bv.lhasres, n)
+  ib_wb_cut(bv.lbroken, n)
+  broken
+}
+## The loop `depth` levels out (0 = innermost) — its index in the stack, when it exists.
+ib_loop_at := fn(bp : ptr(mut IbB), depth : usize) -> Option(u64) {
+  bv : IbB = deref(bp)
+  n := wb_len(bv.lexit)
+  if depth >= n { return Option(u64).None }
+  Option(u64).Some(u64(n - 1 - depth))
+}
+## The value vreg of loop `ix`, when it is a value loop.
+ib_loop_res := fn(bp : ptr(mut IbB), ix : usize) -> Option(VRegId) {
+  bv : IbB = deref(bp)
+  if wb_get(bv.lhasres, ix) != 1 { return Option(VRegId).None }
+  Option(VRegId).Some(VRegId(wb_get(bv.lres, ix)))
+}
+ib_loop_exit := fn(bp : ptr(mut IbB), ix : usize) -> LabelId { bv : IbB = deref(bp); LabelId(wb_get(bv.lexit, ix)) }
+ib_loop_cont := fn(bp : ptr(mut IbB), ix : usize) -> LabelId { bv : IbB = deref(bp); LabelId(wb_get(bv.lcont, ix)) }
+ib_loop_mark_broken := fn(bp : ptr(mut IbB), in out a : rt::Arena, ix : usize) {
+  bv : IbB = deref(bp)
+  w : WBuf = deref(bv.lbroken)
+  deref(word_at(w.data, ix)) = 1
+}
+
+## ── expressions ──
+
+## Build `e` and answer the vreg holding its value; `None` once the function is refused.
+ib_bx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Option(VRegId) {
+  if ib_b_failed(bp) { return Option(VRegId).None }
+  match deref(e) {
+    Expr::Num(v, s, n) => { return ib_bx_num(bp, a, e, v) }
+    Expr::BoolLit(v) => { bk := ib_konst(bp, a, ib_bool_ks(), v); return Option(VRegId).Some(bk) }
+    Expr::Var(s, n) => { return ib_bx_var(bp, a, e, s, n) }
+    Expr::Bin(op, l, r) => { return ib_bx_bin(bp, a, e, op, l, r) }
+    Expr::If(c, t, x) => { return ib_bx_if(bp, a, e, c, t, x) }
+    Expr::Unchecked(inner) => {
+      ou := ib_b_unch(bp)
+      it := inst0(Op.OpUnch)
+      k := emit(ib_b_f(bp), a, it)
+      ib_b_set_unch(bp, true)
+      v : Option(VRegId) = ib_bx(bp, a, inner)
+      ib_b_set_unch(bp, ou)
+      ib_plain(bp, a, Op.OpEnd)
+      return v
+    }
+    Expr::Call(cs, cl, na, ah) => { return ib_bx_callv(bp, a, e, cs, cl, na, ah) }
+    Expr::Loop(body) => { return ib_bx_value_loop(bp, a, e, body) }
+    Expr::Bitcast(inner, ts, tl) => { return ib_bx_bitcast(bp, a, e, inner, ts, tl) }
+    Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+      | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
+      | Expr::FnRef => { ib_refuse_expr(bp, e, NyWhy.NwOutside) }
+  }
+  Option(VRegId).None
+}
+
+## A call in value position: it must have a result.
+ib_bx_callv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : ptr(mut Arg)) -> Option(VRegId) {
+  co : CallOut = ib_call(bp, a, e, cs, cl, na, ah)
+  match co {
+    CoValue(v) => { Option(VRegId).Some(v) }
+    CoVoid => { ib_no(bp, e, NyWhy.NwDisagree) }
+    CoRefused => { Option(VRegId).None }
+  }
+}
+
+## A literal takes the type its context gave it (sema's record). One no context typed is refused
+## (§3.8.4: never a default).
+ib_bx_num := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), v : i64) -> Option(VRegId) {
+  k := ib_ty(bp, e)?
+  d := ib_konst(bp, a, k, ib_canon(v, k))
+  Option(VRegId).Some(d)
+}
+## A literal's value in the canonical form of its type (§3.2): sign-extended from the width if signed,
+## zero-extended if not. Sema refuses a source literal its type cannot hold, so this changes only the
+## parser's own desugars — `~x` is `x ^ -1`, and at `u8` the `-1` is the all-ones byte 255.
+ib_canon := fn(v : i64, k : IbKS) -> i64 {
+  bytes : u64 = kty_bytes(k.ty)
+  if bytes >= 8 or not kty_is_int(k.ty) { return v }
+  bits : u64 = bytes * 8
+  mask : u64 = shl(u64(1), bits) - 1
+  ## unchecked-ok: the literal's 64 bits reinterpreted unsigned to mask them to the type's width.
+  low : u64 = unchecked bitcast(u64, v) & mask
+  if sgn_eq(k.sg, Sgn.SgS) {
+    half : u64 = shl(u64(1), bits - 1)
+    ## unchecked-ok: `low < 2^bits <= 2^32`, so the subtraction is exact; it sign-extends the narrow value.
+    if low >= half { r : i64 = unchecked (i64(low) - i64(shl(u64(1), bits))); return r }
+  }
+  i64(low)
+}
+
+## A name: the innermost local binding, else a module constant or immutable global. Its type is sema's
+## record of this use, and it must be the binding's own (both are sema's).
+ib_bx_var := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s : usize, n : usize) -> Option(VRegId) {
+  found : Option(VRegId) = ib_lookup(bp, s, n)
+  match found {
+    Some(r) => { return ib_bx_local(bp, e, r) }
+    None => {}
+  }
+  ib_bx_global(bp, a, e, s, n)
+}
+ib_bx_local := fn(bp : ptr(mut IbB), e : ptr(Expr), r : VRegId) -> Option(VRegId) {
+  k := ib_ty(bp, e)?
+  if not ib_ks_eq(ib_vreg_ks(ib_b_f(bp), r), k) { return ib_no(bp, e, NyWhy.NwDisagree) }
+  Option(VRegId).Some(r)
+}
+## The one value declaration named `[s, s+n)`: in the function's own module when it has one there, else
+## the only one in the program. None when there is none or the name is ambiguous.
+ib_global_decl := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(u64) {
+  bv : IbB = deref(bp)
+  cnt := rt::vec_len(deref(bv.decls))
+  mut own : Option(u64) = Option(u64).None
+  mut any : Option(u64) = Option(u64).None
+  mut nown : usize = 0
+  mut nany : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d : Decl = deref(ib_decl_ptr(bv.decls, i))
+    if not d.is_fn and d.name_len == n and streq(bv.src, d.name_start, d.name_len, s, n) {
+      nany = nany + 1
+      any = Option(u64).Some(u64(i))
+      if d.mod_len == bv.mod_n and streq(bv.src, d.mod_start, d.mod_len, bv.mod_s, bv.mod_n) {
+        nown = nown + 1
+        own = Option(u64).Some(u64(i))
+      }
+    }
+    i = i + 1
+  }
+  if nown == 1 { return own }
+  if nown == 0 and nany == 1 { return any }
+  Option(u64).None
+}
+## A module constant or immutable global read (§2): `const` when its initializer is a literal, else the
+## address of its symbol and a `load` at sema's type (the selector names the symbol by its target's
+## existing global naming). A mutable global is a place (slice 3).
+ib_bx_global := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s : usize, n : usize) -> Option(VRegId) {
+  gd : Option(u64) = ib_global_decl(bp, s, n)
+  match gd {
+    Some(x) => { return ib_bx_global_at(bp, a, e, usize(x)) }
+    None => {}
+  }
+  ib_no(bp, e, NyWhy.NwOutside)
+}
+ib_bx_global_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : usize) -> Option(VRegId) {
+  src := ib_b_src(bp)
+  d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), di))
+  if ast::local_is_mut(src, d.name_start) or ast::binding_is_comptime(src, d.name_start) or not expr_present(d.value) {
+    return ib_no(bp, e, NyWhy.NwOutside)
+  }
+  k := ib_ty(bp, e)?
+  lit : Option(i64) = ib_num_value(d.value)
+  match lit {
+    Some(v) => { d := ib_konst(bp, a, k, ib_canon(v, k)); return Option(VRegId).Some(d) }
+    None => {}
+  }
+  f := ib_b_f(bp)
+  dnm := str_at((src + d.name_start), d.name_len)
+  sym := prog_sym(ib_b_p(bp), a, di, dnm.ptr, dnm.len)
+  pa := ib_fresh(bp, a, IbKS(ty = Kty.KPtr, sg = Sgn.SgNone))
+  mut ai := inst0(Op.OpAddrSym)
+  ai.ty = Kty.KPtr
+  set_dst(ai, pa)
+  osym := o_sym(sym)
+  set_a(ai, osym)
+  i1 := emit(f, a, ai)
+  dv := ib_fresh(bp, a, k)
+  od := o_vreg(dv)
+  opa := o_vreg(pa)
+  on := o_none()
+  i2 := e_mem(f, a, Op.OpLoad, k.ty, k.sg, od, opa, 0, on)
+  Option(VRegId).Some(dv)
+}
+
+ib_bx_bin := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), op : u8, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  bo : Option(AstBin) = ib_bin_of(op)
+  match bo {
+    Some(b) => { return ib_bx_binop(bp, a, e, b, l, r) }
+    None => {}
+  }
+  ib_no(bp, e, NyWhy.NwOutside)
+}
+ib_bx_binop := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  bk : AstBinK = ib_bin_kind(b)
+  match bk {
+    BkLogic => { ib_bx_logic(bp, a, b, l, r) }
+    BkCmp => { ib_bx_cmp(bp, a, e, b, l, r) }
+    BkArith => { ib_bx_arith(bp, a, e, b, l, r) }
+    BkBits => { ib_bx_bits(bp, a, e, b, l, r) }
+  }
+}
+
+## `and`, `or`, `not`: regions over a `bool` vreg — short-circuit by construction (#777). `not x` is
+## `Bin(not, x, _)`: the right operand is the parser's placeholder and is never built.
+ib_bx_logic := fn(bp : ptr(mut IbB), in out a : rt::Arena, b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  res := ib_fresh(bp, a, ib_bool_ks())
+  lv := ib_bool_operand(bp, a, l)?
+  ib_open_if(bp, a, lv)
+  lk : AstLogic = ib_logic_of(b)
+  ## `a and b`: b when a, else false. `a or b`: true when a, else b. `not a`: false when a, else true.
+  if ib_logic_is_and(lk) {
+    rv := ib_bool_operand(bp, a, r)?
+    ib_mov(bp, a, res, rv)
+  } else {
+    t1 := ib_konst(bp, a, ib_bool_ks(), ib_logic_then(lk))
+    ib_mov(bp, a, res, t1)
+  }
+  ib_plain(bp, a, Op.OpElse)
+  if ib_logic_is_or(lk) {
+    rv2 := ib_bool_operand(bp, a, r)?
+    ib_mov(bp, a, res, rv2)
+  } else {
+    f1 := ib_konst(bp, a, ib_bool_ks(), ib_logic_else(lk))
+    ib_mov(bp, a, res, f1)
+  }
+  ib_plain(bp, a, Op.OpEnd)
+  Option(VRegId).Some(res)
+}
+## The three short-circuit operators.
+AstLogic := enum { LAnd, LOr, LNot }
+ib_logic_of := fn(b : AstBin) -> AstLogic {
+  match b {
+    BAnd => { AstLogic.LAnd }; BOr => { AstLogic.LOr }
+    BNot | BAdd | BSub | BMul | BDiv | BRem | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe => { AstLogic.LNot }
+  }
+}
+ib_logic_is_and := fn(k : AstLogic) -> bool { match k { LAnd => { true }; LOr | LNot => { false } } }
+ib_logic_is_or := fn(k : AstLogic) -> bool { match k { LOr => { true }; LAnd | LNot => { false } } }
+## The constant an arm assigns when it does not evaluate the right operand.
+ib_logic_then := fn(k : AstLogic) -> i64 { match k { LOr => { 1 }; LAnd | LNot => { 0 } } }
+ib_logic_else := fn(k : AstLogic) -> i64 { match k { LNot => { 1 }; LAnd | LOr => { 0 } } }
+## An operand that must be a `bool`.
+ib_bool_operand := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Option(VRegId) {
+  v := ib_bx(bp, a, e)?
+  if not kty_is_bool(vreg_ty(ib_b_f(bp), usize(v))) { return ib_no(bp, e, NyWhy.NwDisagree) }
+  Option(VRegId).Some(v)
+}
+
+## A comparison. Both operands carry sema's types and must agree; the predicate's `s`/`u` is theirs.
+ib_bx_cmp := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  cc : Cc = ib_bin_cc(b)
+  lv := ib_bx(bp, a, l)?
+  rv := ib_bx(bp, a, r)?
+  lk : IbKS = ib_vreg_ks(ib_b_f(bp), lv)
+  rk : IbKS = ib_vreg_ks(ib_b_f(bp), rv)
+  if not ib_ks_eq(lk, rk) { return ib_no(bp, e, NyWhy.NwDisagree) }
+  if kty_is_bool(lk.ty) and cc_is_ordering(cc) { return ib_no(bp, e, NyWhy.NwOutside) }
+  d := ib_fresh(bp, a, ib_bool_ks())
+  ol := o_vreg(lv)
+  orr := o_vreg(rv)
+  mut csg : Sgn = lk.sg
+  if not cc_is_ordering(cc) or kty_is_bool(lk.ty) { csg = Sgn.SgNone }
+  i := e_cmp(ib_b_f(bp), a, cc, csg, lk.ty, d, ol, orr)
+  Option(VRegId).Some(d)
+}
+
+## Two values, built in source order.
+IbPair := struct { l : VRegId, r : VRegId }
+## An integer operator `e`: its operands, built first (so a construct outside the subset is named before
+## any type is asked for), and the integer result type sema recorded for `e`, which both must have.
+## (Flat, not `k : IbKS`: an `Option` of a struct holding a struct crashes the GAS dump path, #NNN.)
+IbIntOp := struct { ty : Kty, sg : Sgn, l : VRegId, r : VRegId }
+ib_int_operands := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), l : ptr(Expr), r : ptr(Expr)) -> Option(IbIntOp) {
+  lv := ib_bx(bp, a, l)?
+  rv := ib_bx(bp, a, r)?
+  k := ib_int_ty(bp, e)?
+  f := ib_b_f(bp)
+  if not ib_ks_eq(ib_vreg_ks(f, lv), k) or not ib_ks_eq(ib_vreg_ks(f, rv), k) {
+    ib_refuse_expr(bp, e, NyWhy.NwDisagree)
+    return Option(IbIntOp).None
+  }
+  Option(IbIntOp).Some(IbIntOp(ty = k.ty, sg = k.sg, l = lv, r = rv))
+}
+## The integer result type sema recorded for an operator expression `e`.
+ib_int_ty := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> Option(IbKS) {
+  k := ib_ty(bp, e)?
+  if not kty_is_int(k.ty) {
+    ib_refuse_expr(bp, e, NyWhy.NwDisagree)
+    return Option(IbKS).None
+  }
+  Option(IbKS).Some(k)
+}
+
+## Integer arithmetic. The result type is sema's record of `e`. A 64-bit op is emitted at its type; a
+## narrow one widens its operands, operates at 64 bits, and narrows back (`fit` checked / `ext`
+## wrapping, V3). Checked `+ - *` trap `overflow`; `/` and `%` trap `div_zero`, and `div_overflow` for a
+## signed `MIN / -1` (§4). Inside `unchecked`, `+ - *` wrap and `/ %` are the hardware op (D1, CG-7).
+ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  pr := ib_int_operands(bp, a, e, l, r)?
+  k := IbKS(ty = pr.ty, sg = pr.sg)
+  io : Op = ib_bin_op(b)
+  divides := ib_bin_divides(b)
+  wk := ib_ks_i64(k.sg)
+  lv := ib_ext_to(bp, a, pr.l, wk)
+  rv := ib_ext_to(bp, a, pr.r, wk)
+  sp := ib_span_of(bp, e)
+  f := ib_b_f(bp)
+  unch := ib_b_unch(bp)
+  if divides and not unch {
+    z := ib_fresh(bp, a, ib_bool_ks())
+    orv := o_vreg(rv)
+    oz := o_imm(0)
+    i1 := e_cmp(f, a, Cc.CcEq, Sgn.SgNone, Kty.KI64, z, orv, oz)
+    i2 := e_trap_if(f, a, z, TrapKind.TkDivZero, sp, true)
+    if sgn_eq(k.sg, Sgn.SgS) and kty_eq(k.ty, Kty.KI64) {
+      ## `MIN / -1` overflows only at the full width: a narrow quotient is narrowed (and checked) below.
+      m1 := ib_fresh(bp, a, ib_bool_ks())
+      m2 := ib_fresh(bp, a, ib_bool_ks())
+      olv := o_vreg(lv)
+      omin := o_imm(0 - 9223372036854775807 - 1)
+      i3 := e_cmp(f, a, Cc.CcEq, Sgn.SgNone, Kty.KI64, m1, olv, omin)
+      orv2 := o_vreg(rv)
+      oneg := o_imm(0 - 1)
+      i4 := e_cmp(f, a, Cc.CcEq, Sgn.SgNone, Kty.KI64, m2, orv2, oneg)
+      both := ib_fresh(bp, a, ib_bool_ks())
+      ib_open_if(bp, a, m1)
+      ib_mov(bp, a, both, m2)
+      ib_plain(bp, a, Op.OpElse)
+      fz := ib_konst(bp, a, ib_bool_ks(), 0)
+      ib_mov(bp, a, both, fz)
+      ib_plain(bp, a, Op.OpEnd)
+      i5 := e_trap_if(f, a, both, TrapKind.TkDivOverflow, sp, true)
+    }
+  }
+  d := ib_fresh(bp, a, wk)
+  ol := o_vreg(lv)
+  orr := o_vreg(rv)
+  mut tk := TrapKind.TkOverflow
+  if divides { tk = TrapKind.TkDivZero }
+  if unch {
+    mut md := Mode.MdWrap
+    if divides { md = Mode.MdHw }
+    i6 := e_bin(f, a, io, md, wk.sg, Kty.KI64, d, ol, orr)
+  } else {
+    i7 := e_binc(f, a, io, wk.sg, Kty.KI64, d, ol, orr, tk, sp)
+  }
+  ## A narrow quotient that does not fit is `MIN / -1` at the narrow width: a division overflow.
+  mut ntk := TrapKind.TkOverflow
+  if divides { ntk = TrapKind.TkDivOverflow }
+  nd := ib_narrow_to(bp, a, d, k, ntk, sp)
+  Option(VRegId).Some(nd)
+}
+
+## Bitwise `& | ^` on canonical operands is canonical at any width (V3), so it is emitted at its type.
+ib_bx_bits := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  pr := ib_int_operands(bp, a, e, l, r)?
+  k := IbKS(ty = pr.ty, sg = pr.sg)
+  d := ib_fresh(bp, a, k)
+  ol := o_vreg(pr.l)
+  orr := o_vreg(pr.r)
+  io : Op = ib_bin_op(b)
+  i := e_bin(ib_b_f(bp), a, io, Mode.MdNone, Sgn.SgNone, k.ty, d, ol, orr)
+  Option(VRegId).Some(d)
+}
+
+## A value `if`: one result vreg, assigned in each arm.
+ib_bx_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), c : ptr(Expr), t : ptr(Expr), x : ptr(Expr)) -> Option(VRegId) {
+  k := ib_ty(bp, e)?
+  res := ib_fresh(bp, a, k)
+  cv := ib_bool_operand(bp, a, c)?
+  ib_open_if(bp, a, cv)
+  tv0 := ib_bx(bp, a, t)?
+  tv := ib_coerce(bp, a, tv0, k, t)?
+  ib_mov(bp, a, res, tv)
+  ib_plain(bp, a, Op.OpElse)
+  xv0 := ib_bx(bp, a, x)?
+  xv := ib_coerce(bp, a, xv0, k, x)?
+  ib_mov(bp, a, res, xv)
+  ib_plain(bp, a, Op.OpEnd)
+  Option(VRegId).Some(res)
+}
+
+## A value `loop { … break v … }`: the result vreg is assigned at each `break v`.
+ib_bx_value_loop := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), body : ptr(mut Stmt)) -> Option(VRegId) {
+  k := ib_ty(bp, e)?
+  res := ib_fresh(bp, a, k)
+  ib_bs_loop(bp, a, body, Option(VRegId).Some(res))
+  if ib_b_failed(bp) { return Option(VRegId).None }
+  Option(VRegId).Some(res)
+}
+
+## `unchecked bitcast(T, x)` between integers of one width re-signs the value: `ext` at the same width
+## (§4 `bitcast` scalar↔scalar). Every other bitcast is outside slice 1.
+ib_bx_bitcast := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inner : ptr(Expr), ts : usize, tl : usize) -> Option(VRegId) {
+  to : Option(IbKS) = ib_name_ks(ib_b_src(bp), ts, tl)
+  match to { Some(tk) => {}; None => { return ib_no(bp, e, NyWhy.NwOutside) } }
+  xv := ib_bx(bp, a, inner)?
+  k := ib_ty(bp, e)?
+  match to { Some(tk2) => { if not ib_ks_eq(tk2, k) { return ib_no(bp, e, NyWhy.NwDisagree) } }; None => {} }
+  from : IbKS = ib_vreg_ks(ib_b_f(bp), xv)
+  if not kty_is_int(from.ty) or not kty_is_int(k.ty) or kty_bytes(from.ty) != kty_bytes(k.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
+  rs := ib_ext_to(bp, a, xv, k)
+  Option(VRegId).Some(rs)
+}
+
+## ── calls ──
+
+## A call: a width conversion when the callee names a scalar type (`u8(x)`, `i64(x)`), a shift or
+## rotation operation-function, else a direct call to the one non-generic function of that name whose
+## parameters and result are all kernel scalars.
+ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : ptr(mut Arg)) -> CallOut {
+  src := ib_b_src(bp)
+  tk : Option(IbKS) = ib_name_ks(src, cs, cl)
+  match tk {
+    Some(to) => { cv : Option(VRegId) = ib_bx_conv(bp, a, e, to, na, ah); return ib_call_out(cv) }
+    None => {}
+  }
+  nm := str_at((src + cs), cl)
+  so : Option(ShiftK) = ib_shift_of(nm)
+  match so {
+    Some(sk) => { if na == 2 { sv : Option(VRegId) = ib_bx_shift(bp, a, e, sk, ah); return ib_call_out(sv) } }
+    None => {}
+  }
+  ib_call_user(bp, a, e, cs, cl, na, ah)
+}
+ib_call_out := fn(v : Option(VRegId)) -> CallOut {
+  match v { Some(x) => { CallOut.CoValue(x) }; None => { CallOut.CoRefused } }
+}
+
+## `T(x)` for a kernel integer or `bool` `T`. A literal argument is the constant at `T`, wrapped to its
+## width inside `unchecked` (Types §9.2, CG-7; sema refuses one that does not fit in a checked scope).
+## An integer is widened, or narrowed by `fit` (`narrow` trap) — `ext` inside `unchecked` (§4). A `bool`
+## becomes 0 or 1.
+ib_bx_conv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), to : IbKS, na : usize, ah : ptr(mut Arg)) -> Option(VRegId) {
+  if na != 1 or not kty_is_int(to.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
+  a0 := deref(arg_p(ah))
+  lk : VTy = sty_get(a0.e)
+  if vty_is_lit(lk) {
+    nv : Option(i64) = ib_num_value(a0.e)
+    match nv { Some(lv) => { c := ib_konst(bp, a, to, ib_canon(lv, to)); return Option(VRegId).Some(c) }; None => {} }
+  }
+  xv := ib_bx(bp, a, a0.e)?
+  from : IbKS = ib_vreg_ks(ib_b_f(bp), xv)
+  if kty_is_bool(from.ty) {
+    res := ib_fresh(bp, a, to)
+    ib_open_if(bp, a, xv)
+    one := ib_konst(bp, a, to, 1)
+    ib_mov(bp, a, res, one)
+    ib_plain(bp, a, Op.OpElse)
+    zero := ib_konst(bp, a, to, 0)
+    ib_mov(bp, a, res, zero)
+    ib_plain(bp, a, Op.OpEnd)
+    return Option(VRegId).Some(res)
+  }
+  if not kty_is_int(from.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
+  w := ib_ext_to(bp, a, xv, ib_ks_i64(from.sg))
+  sp := ib_span_of(bp, e)
+  nw := ib_narrow_to(bp, a, w, to, TrapKind.TkNarrow, sp)
+  Option(VRegId).Some(nw)
+}
+
+## `shl/shr/rotl/rotr(v, n)` (Types §2.2, §3.2; OP-6). The value's type is sema's record of the call
+## (its first operand's); the count is an integer, taken at 64 bits. A shift traps `shift_range` when
+## `n >= N`, N the TYPE's width (a checked guard, Concurrency §6.1); inside `unchecked` it is the
+## hardware shift (§6.2). `shr` is arithmetic on a signed type, logical on an unsigned one. A rotation
+## is total (count mod N). A narrow type shifts at 64 bits and wraps back to its width (V3).
+ib_bx_shift := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), sk : ShiftK, ah : ptr(mut Arg)) -> Option(VRegId) {
+  a0 := deref(arg_p(ah))
+  a1 := deref(arg_p(a0.next))
+  xv0 := ib_bx(bp, a, a0.e)?
+  nv0 := ib_bx(bp, a, a1.e)?
+  k := ib_int_ty(bp, e)?
+  xv := ib_coerce(bp, a, xv0, k, a0.e)?
+  nk : IbKS = ib_vreg_ks(ib_b_f(bp), nv0)
+  if not kty_is_int(nk.ty) { return ib_no(bp, a1.e, NyWhy.NwDisagree) }
+  nv := ib_ext_to(bp, a, nv0, ib_ks_i64(nk.sg))
+  sp := ib_span_of(bp, e)
+  if ib_shift_is_rot(sk) { rr := ib_rotate(bp, a, sk, k, xv, nv); return Option(VRegId).Some(rr) }
+  f := ib_b_f(bp)
+  io : Op = ib_shift_op(sk)
+  if kty_eq(k.ty, Kty.KI64) {
+    d := ib_fresh(bp, a, k)
+    ox := o_vreg(xv)
+    on := o_vreg(nv)
+    if ib_b_unch(bp) { i1 := e_bin(f, a, io, Mode.MdHw, k.sg, k.ty, d, ox, on) }
+    else { i2 := e_binc(f, a, io, k.sg, k.ty, d, ox, on, TrapKind.TkShiftRange, sp) }
+    return Option(VRegId).Some(d)
+  }
+  wx := ib_ext_to(bp, a, xv, ib_ks_i64(k.sg))
+  r := ib_shift_wide(bp, a, io, k, wx, nv, sp)
+  wr := ib_wrap_to(bp, a, r, k)
+  Option(VRegId).Some(wr)
+}
+## The 64-bit shift of a narrow `k` value `wx` (already widened) by `n`. Inside `unchecked` it is the
+## hardware shift. Otherwise the guard is the TYPE's width, so the 64-bit shift after it is proven in
+## range.
+ib_shift_wide := fn(bp : ptr(mut IbB), in out a : rt::Arena, io : Op, k : IbKS, wx : VRegId, n : VRegId, sp : usize) -> VRegId {
+  f := ib_b_f(bp)
+  wk := ib_ks_i64(k.sg)
+  if ib_b_unch(bp) {
+    r := ib_fresh(bp, a, wk)
+    ox := o_vreg(wx)
+    on := o_vreg(n)
+    i1 := e_bin(f, a, io, Mode.MdHw, wk.sg, wk.ty, r, ox, on)
+    return r
+  }
+  over := ib_fresh(bp, a, ib_bool_ks())
+  onv := o_vreg(n)
+  onw := o_imm(i64(ib_ks_bits(k)))
+  i2 := e_cmp(f, a, Cc.CcGe, Sgn.SgU, Kty.KI64, over, onv, onw)
+  i3 := e_trap_if(f, a, over, TrapKind.TkShiftRange, sp, true)
+  on2 := o_vreg(n)
+  ib_proven(bp, a, io, wk, wx, on2)
+}
+## A rotation of `x : k` by the 64-bit count `n`. At 64 bits it is the `rotl`/`rotr` op. A narrow type
+## rotates its N low bits: with `z` the value's bits zero-extended and `c = n mod N`,
+## `rotl = (z << c) | (z >> (N - c))` (and the mirror for `rotr`), every shift proven in range because
+## `c < N <= 32`; the result wraps back to the type (V3).
+ib_rotate := fn(bp : ptr(mut IbB), in out a : rt::Arena, sk : ShiftK, k : IbKS, x : VRegId, n : VRegId) -> VRegId {
+  f := ib_b_f(bp)
+  if kty_eq(k.ty, Kty.KI64) {
+    d := ib_fresh(bp, a, k)
+    ox := o_vreg(x)
+    on := o_vreg(n)
+    io : Op = ib_shift_op(sk)
+    i0 := e_bin(f, a, io, Mode.MdNone, Sgn.SgNone, k.ty, d, ox, on)
+    return d
+  }
+  uk := ib_ks_i64(Sgn.SgU)
+  bits := ib_ks_bits(k)
+  wx := ib_ext_to(bp, a, x, ib_ks_i64(k.sg))
+  ux := ib_ext_to(bp, a, wx, uk)
+  z := ib_fresh(bp, a, uk)
+  oux := o_vreg(ux)
+  omask := o_imm(i64(shl(u64(1), bits) - 1))
+  i1 := e_bin(f, a, Op.OpAnd, Mode.MdNone, Sgn.SgNone, Kty.KI64, z, oux, omask)
+  un := ib_ext_to(bp, a, n, uk)
+  c := ib_fresh(bp, a, uk)
+  oun := o_vreg(un)
+  ocm := o_imm(i64(bits - 1))
+  i2 := e_bin(f, a, Op.OpAnd, Mode.MdNone, Sgn.SgNone, Kty.KI64, c, oun, ocm)
+  nn := ib_konst(bp, a, uk, i64(bits))
+  oc := o_vreg(c)
+  rest := ib_proven(bp, a, Op.OpSub, uk, nn, oc)
+  mut first : Op = Op.OpShl
+  mut second : Op = Op.OpShr
+  match sk {
+    SkRotr => { first = Op.OpShr; second = Op.OpShl }
+    SkRotl | SkShl | SkShr => {}
+  }
+  oc2 := o_vreg(c)
+  lo := ib_proven(bp, a, first, uk, z, oc2)
+  orest := o_vreg(rest)
+  hi := ib_proven(bp, a, second, uk, z, orest)
+  both := ib_fresh(bp, a, uk)
+  olo := o_vreg(lo)
+  ohi := o_vreg(hi)
+  i3 := e_bin(f, a, Op.OpOr, Mode.MdNone, Sgn.SgNone, Kty.KI64, both, olo, ohi)
+  sx := ib_ext_to(bp, a, both, ib_ks_i64(k.sg))
+  ib_wrap_to(bp, a, sx, k)
+}
+
+## A direct call to a user function. Each argument takes its parameter's declared type (widened by
+## `ib_coerce` when sema accepted a narrower integer); the result is sema's record of the call, and it
+## must be the callee's declared result.
+ib_call_user := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : ptr(mut Arg)) -> CallOut {
+  ci : Option(u64) = ib_callee_decl(bp, cs, cl)
+  match ci {
+    Some(x) => { return ib_call_decl(bp, a, e, usize(x), na, ah) }
+    None => {}
+  }
+  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  CallOut.CoRefused
+}
+ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : usize, na : usize, ah : ptr(mut Arg)) -> CallOut {
+  src := ib_b_src(bp)
+  d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), di))
+  ## Only an Alatyr function with a body is called through the Alatyr convention; a syscall or an extern
+  ## is slice 2's `syscall` / `call_c`, and more than 8 arguments are not modelled (docs/ir-slice-1.md §3).
+  if d.arity != na or na > 8 or lower::extern_symbol(src, d.name_start, d.name_len).n != 0 {
+    ib_refuse_expr(bp, e, NyWhy.NwOutside)
+    return CallOut.CoRefused
+  }
+  ## The result first: a callee whose result is not a kernel scalar is outside the subset, and sema's
+  ## record of the call must be that result.
+  mut res : Option(IbKS) = Option(IbKS).None
+  if d.ret_tl != 0 {
+    res = ib_call_result(bp, e, d)
+    if ib_b_failed(bp) { return CallOut.CoRefused }
+  }
+  ## The argument vregs are built first, then pushed onto the pool as one run.
+  args := wb_new(a, 8)
+  mut pp := d.params_head
+  mut g := ah
+  while ib_arg_present(g) {
+    ga := deref(arg_p(g))
+    pm := deref(param_p(pp))
+    avo : Option(VRegId) = ib_arg(bp, a, e, pm, ga.e)
+    match avo { Some(av) => { k1 := wb_push(args, a, usize(av)) }; None => { return CallOut.CoRefused } }
+    g = ga.next
+    pp = pm.next
+  }
+  f := ib_b_f(bp)
+  mut it := inst0(Op.OpCall)
+  dnm := str_at((src + d.name_start), d.name_len)
+  sym := prog_sym(ib_b_p(bp), a, di, dnm.ptr, dnm.len)
+  ocallee := o_sym(sym)
+  set_a(it, ocallee)
+  mut j : usize = 0
+  while j < wb_len(args) {
+    slot := pool_push(f, a, wb_get(args, j))
+    if j == 0 { it.pool = slot }
+    j = j + 1
+  }
+  it.n = na
+  match res {
+    Some(kr) => {
+      rv := ib_fresh(bp, a, kr)
+      set_dst(it, rv)
+      i := emit(f, a, it)
+      return CallOut.CoValue(rv)
+    }
+    None => {}
+  }
+  i0 := emit(f, a, it)
+  CallOut.CoVoid
+}
+## The kernel result of callee `d`, which must be sema's record of the call `e`.
+ib_call_result := fn(bp : ptr(mut IbB), e : ptr(Expr), d : Decl) -> Option(IbKS) {
+  rk : Option(IbKS) = ib_name_ks(ib_b_src(bp), d.ret_ts, d.ret_tl)
+  match rk {
+    Some(kr) => { return ib_call_result_is(bp, e, kr) }
+    None => {}
+  }
+  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  Option(IbKS).None
+}
+ib_call_result_is := fn(bp : ptr(mut IbB), e : ptr(Expr), kr : IbKS) -> Option(IbKS) {
+  ke := ib_ty(bp, e)?
+  if ib_ks_eq(ke, kr) { return Option(IbKS).Some(kr) }
+  ib_refuse_expr(bp, e, NyWhy.NwDisagree)
+  Option(IbKS).None
+}
+## One argument `ae` of the call `e`, at its parameter `pm`'s declared kernel type.
+ib_arg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), pm : Param, ae : ptr(Expr)) -> Option(VRegId) {
+  pk : Option(IbKS) = ib_name_ks(ib_b_src(bp), pm.ts, pm.tl)
+  match pk {
+    Some(want) => { if pm.pmode == 0 { return ib_value_at(bp, a, ae, want) } }
+    None => {}
+  }
+  ib_no(bp, e, NyWhy.NwOutside)
+}
+## The value of an integer literal node.
+ib_num_value := fn(e : ptr(Expr)) -> Option(i64) {
+  match deref(e) {
+    Expr::Num(v, s, n) => { Option(i64).Some(v) }
+    Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { Option(i64).None }
+  }
+}
+## null-ok: Arg.next — an argument list ends in a null link (ast.al "0 = end"; the field is not an Option).
+ib_arg_present := fn(g : ptr(mut Arg)) -> bool { unchecked bitcast(usize, g) != 0 }
+## unchecked-ok: `decls` holds Decl record addresses (the parser's `rt::Vec` of handles).
+ib_decl_ptr := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { unchecked bitcast(ptr(Decl), rt::vec_get(deref(decls), i)) }
+## The index of the ONE non-generic function declaration named `[cs, cs+cl)`; none when there is no such
+## function or several (an overload set is slice 2's mangling, so it is refused here).
+ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
+  decls := ib_b_decls(bp)
+  src := ib_b_src(bp)
+  cnt := rt::vec_len(deref(decls))
+  mut found : Option(u64) = Option(u64).None
+  mut hits : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d : Decl = deref(ib_decl_ptr(decls, i))
+    if d.is_fn and d.name_len == cl and streq(src, d.name_start, d.name_len, cs, cl) {
+      hits = hits + 1
+      if not d.is_generic { found = Option(u64).Some(u64(i)) }
+    }
+    i = i + 1
+  }
+  if hits != 1 { return Option(u64).None }
+  found
+}
+
+## ── statements ──
+
+## Build the statement list at `h` in a scope of its own.
+ib_bs_block := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
+  mark := ib_scope_mark(bp)
+  ib_bs(bp, a, h)
+  ib_scope_drop(bp, mark)
+}
+
+ib_bs := fn(bp : ptr(mut IbB), in out a : rt::Arena, head : ptr(mut Stmt)) {
+  mut h := head
+  while stmt_present(h) and not ib_b_failed(bp) {
+    ## A statement after a terminator is unreachable: dropped, never built (V7).
+    if not ib_b_term(bp) { ib_bs_one(bp, a, h) }
+    h = ib_stmt_next(h)
+  }
+}
+## A function with a result whose body produces it as the value of its LAST statement (a trailing
+## expression, or an `if`/`unchecked` block whose own last statement does): that statement is built in
+## tail position, and each value it yields is returned.
+ib_bs_tail := fn(bp : ptr(mut IbB), in out a : rt::Arena, head : ptr(mut Stmt)) {
+  mut h := head
+  while stmt_present(h) and not ib_b_failed(bp) {
+    nx := ib_stmt_next(h)
+    if not ib_b_term(bp) {
+      if stmt_present(nx) { ib_bs_one(bp, a, h) } else { ib_bs_last(bp, a, h) }
+    }
+    h = nx
+  }
+}
+ib_bs_tail_block := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
+  mark := ib_scope_mark(bp)
+  ib_bs_tail(bp, a, h)
+  ib_scope_drop(bp, mark)
+}
+## Return `v` as the function's result, at its declared type.
+ib_ret_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, v : VRegId, at : ptr(Expr)) {
+  f := ib_b_f(bp)
+  want := IbKS(ty = fn_ret_ty(f), sg = fn_ret_sg(f))
+  wo : Option(VRegId) = ib_coerce(bp, a, v, want, at)
+  match wo {
+    Some(w) => { ow := o_vreg(w); i := e_ret(f, a, ow); ib_b_set_term(bp, true) }
+    None => {}
+  }
+}
+ib_bs_last := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
+  st := deref(stmt_p(Stmt, h))
+  match st {
+    Stmt::ExprStmt(e, nx) => { ib_bs_tail_expr(bp, a, e) }
+    Stmt::If(c, th, el, nx) => {
+      if stmt_present(el) { ib_bs_tail_if(bp, a, c, th, el) } else { ib_bs_one(bp, a, h) }
+    }
+    Stmt::Unchecked(b, nx) => {
+      ou := ib_b_unch(bp)
+      it := inst0(Op.OpUnch)
+      k := emit(ib_b_f(bp), a, it)
+      ib_b_set_unch(bp, true)
+      ib_bs_tail_block(bp, a, b)
+      ib_b_set_unch(bp, ou)
+      ib_plain(bp, a, Op.OpEnd)
+    }
+    Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::For | Stmt::DerefAssign
+      | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue
+      | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange | Stmt::AllocWith => { ib_bs_one(bp, a, h) }
+  }
+}
+## The tail expression's value is the result.
+ib_bs_tail_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
+  vo : Option(VRegId) = ib_bx(bp, a, e)
+  match vo { Some(v) => { ib_ret_value(bp, a, v, e) }; None => {} }
+}
+## A tail `if … else …`: each arm's own tail is returned.
+ib_bs_tail_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), th : ptr(mut Stmt), el : ptr(mut Stmt)) {
+  co : Option(VRegId) = ib_bool_operand(bp, a, c)
+  match co {
+    Some(cv) => {
+      ib_open_if(bp, a, cv)
+      ib_b_set_term(bp, false)
+      ib_bs_tail_block(bp, a, th)
+      tt := ib_b_term(bp)
+      ib_plain(bp, a, Op.OpElse)
+      ib_b_set_term(bp, false)
+      ib_bs_tail_block(bp, a, el)
+      et := ib_b_term(bp)
+      ib_plain(bp, a, Op.OpEnd)
+      ib_b_set_term(bp, tt and et)
+    }
+    None => {}
+  }
+}
+ib_stmt_next := fn(h : ptr(mut Stmt)) -> ptr(mut Stmt) {
+  st := deref(stmt_p(Stmt, h))
+  match st {
+    Stmt::Assign(ns, nl, v, nx) => { nx }; Stmt::While(c, b, nx) => { nx }
+    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { nx }; Stmt::Return(rv, nx) => { nx }
+    Stmt::If(c, th, el, nx) => { nx }; Stmt::Match(sc, ah, nx) => { nx }
+    Stmt::For(fns, fnl, lo, hi, b, nx) => { nx }; Stmt::DerefAssign(p, v, nx) => { nx }
+    Stmt::IndexAssign(b, i, v, nx) => { nx }; Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { nx }
+    Stmt::FieldPathAssign(pl, pv, nx) => { nx }; Stmt::Loop(b, nx) => { nx }
+    Stmt::Break(bv, bd, nx) => { nx }; Stmt::Continue(cd, nx) => { nx }; Stmt::ExprStmt(e, nx) => { nx }
+    Stmt::CompIf(c, th, el, nx) => { nx }; Stmt::CompFor(vs, vl, iv, b, nx) => { nx }
+    Stmt::CompMatch(sc, ah, nx) => { nx }; Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { nx }
+    Stmt::Unchecked(b, nx) => { nx }; Stmt::AllocWith(ae, b, nx) => { nx }
+  }
+}
+
+ib_bs_one := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
+  st := deref(stmt_p(Stmt, h))
+  match st {
+    Stmt::Assign(ns, nl, v, nx) => { ib_bs_assign(bp, a, h, ns, nl, v) }
+    Stmt::ExprStmt(e, nx) => { ib_bs_expr(bp, a, e) }
+    Stmt::Return(rv, nx) => { ib_bs_return(bp, a, rv) }
+    Stmt::If(c, th, el, nx) => { ib_bs_if(bp, a, c, th, el) }
+    Stmt::While(c, b, nx) => { ib_bs_while(bp, a, c, b) }
+    Stmt::Loop(b, nx) => { ib_bs_loop(bp, a, b, Option(VRegId).None) }
+    Stmt::For(fns, fnl, lo, hi, b, nx) => { ib_bs_for(bp, a, h, fns, fnl, lo, hi, b) }
+    Stmt::Break(bv, bd, nx) => { ib_bs_break(bp, a, h, bv, bd) }
+    Stmt::Continue(cd, nx) => { ib_bs_continue(bp, a, h, cd) }
+    Stmt::Unchecked(b, nx) => {
+      ou := ib_b_unch(bp)
+      it := inst0(Op.OpUnch)
+      k := emit(ib_b_f(bp), a, it)
+      ib_b_set_unch(bp, true)
+      ib_bs_block(bp, a, b)
+      ib_b_set_unch(bp, ou)
+      ## A terminator inside the region ends it; nothing more is emitted before its `end`.
+      ib_plain(bp, a, Op.OpEnd)
+    }
+    Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+      | Stmt::FieldPathAssign | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange
+      | Stmt::AllocWith => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## `continue [name]`: restart the target loop (a range `for` leaves its body block, so its step runs).
+ib_bs_continue := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), depth : usize) {
+  lo : Option(u64) = ib_loop_at(bp, depth)
+  match lo {
+    Some(ix) => { ib_br(bp, a, ib_loop_cont(bp, usize(ix))); ib_b_set_term(bp, true) }
+    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## An expression statement: its value, if any, is discarded; a call may have none.
+ib_bs_expr := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) {
+  match deref(e) {
+    Expr::Call(cs, cl, na, ah) => { co : CallOut = ib_call(bp, a, e, cs, cl, na, ah) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { v : Option(VRegId) = ib_bx(bp, a, e) }
+  }
+}
+
+## `x := e` / `x : T = e` binds a new vreg at the binding's type (sema's record of the declaration);
+## `x = e` assigns the innermost binding of `x`.
+ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, v : ptr(Expr)) {
+  src := ib_b_src(bp)
+  if ast::local_is_uninit(src, ns, nl) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
+  if ast::assign_is_decl(src, ns, nl) {
+    nvo : Option(VRegId) = ib_decl_value(bp, a, h, ns, v)
+    match nvo { Some(nv) => { ib_bind(bp, a, ns, nl, nv) }; None => {} }
+    return
+  }
+  found : Option(VRegId) = ib_lookup(bp, ns, nl)
+  match found {
+    Some(dv) => { ib_assign_to(bp, a, dv, v) }
+    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## A declaration's fresh vreg, holding its initializer at the binding's type.
+ib_decl_value := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, v : ptr(Expr)) -> Option(VRegId) {
+  vv := ib_bx(bp, a, v)?
+  bk := ib_bind_ty(bp, h, ns)?
+  cv := ib_coerce(bp, a, vv, bk, v)?
+  nv := ib_fresh(bp, a, bk)
+  ib_mov(bp, a, nv, cv)
+  Option(VRegId).Some(nv)
+}
+## `x = e` into the binding `dv`, at its type.
+ib_assign_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, dv : VRegId, v : ptr(Expr)) {
+  dk : IbKS = ib_vreg_ks(ib_b_f(bp), dv)
+  co : Option(VRegId) = ib_value_at(bp, a, v, dk)
+  match co { Some(cv) => { ib_mov(bp, a, dv, cv) }; None => {} }
+}
+## Build `e` and take it at the type `k` its position gives it (`ib_coerce`).
+ib_value_at := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), k : IbKS) -> Option(VRegId) {
+  v := ib_bx(bp, a, e)?
+  ib_coerce(bp, a, v, k, e)
+}
+
+ib_bs_return := fn(bp : ptr(mut IbB), in out a : rt::Arena, rv : ptr(Expr)) {
+  f := ib_b_f(bp)
+  if expr_present(rv) and not lower_layout::ex_is_no_tail(rv) {
+    vo : Option(VRegId) = ib_bx(bp, a, rv)
+    match vo { Some(v) => { ib_ret_value(bp, a, v, rv) }; None => {} }
+    return
+  }
+  on := o_none()
+  i2 := e_ret(f, a, on)
+  ib_b_set_term(bp, true)
+}
+
+ib_bs_if := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), th : ptr(mut Stmt), el : ptr(mut Stmt)) {
+  co : Option(VRegId) = ib_bool_operand(bp, a, c)
+  match co { Some(cv) => { ib_bs_if_on(bp, a, cv, th, el) }; None => {} }
+}
+ib_bs_if_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, cv : VRegId, th : ptr(mut Stmt), el : ptr(mut Stmt)) {
+  ib_open_if(bp, a, cv)
+  ib_b_set_term(bp, false)
+  ib_bs_block(bp, a, th)
+  tt := ib_b_term(bp)
+  ib_plain(bp, a, Op.OpElse)
+  ib_b_set_term(bp, false)
+  ib_bs_block(bp, a, el)
+  et := ib_b_term(bp)
+  ib_plain(bp, a, Op.OpEnd)
+  ib_b_set_term(bp, tt and et and stmt_present(el))
+}
+
+## `while c { body }` = `block X { loop T { if c {} else { br X }; body; br T } }`. `continue` restarts T.
+ib_bs_while := fn(bp : ptr(mut IbB), in out a : rt::Arena, c : ptr(Expr), body : ptr(mut Stmt)) {
+  f := ib_b_f(bp)
+  lx := new_label(f)
+  lt := new_label(f)
+  i1 := e_open(f, a, Op.OpBlock, lx)
+  i2 := e_open(f, a, Op.OpLoop, lt)
+  co : Option(VRegId) = ib_bool_operand(bp, a, c)
+  match co { Some(cv) => { ib_bs_while_on(bp, a, cv, lx, lt, body) }; None => {} }
+}
+ib_bs_while_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, cv : VRegId, lx : LabelId, lt : LabelId, body : ptr(mut Stmt)) {
+  ib_open_if(bp, a, cv)
+  ib_plain(bp, a, Op.OpElse)
+  ib_br(bp, a, lx)
+  ib_plain(bp, a, Op.OpEnd)
+  ib_loop_push(bp, a, lx, lt, Option(VRegId).None)
+  ib_b_set_term(bp, false)
+  ib_bs_block(bp, a, body)
+  broken := ib_loop_pop(bp)
+  if not ib_b_term(bp) { ib_br(bp, a, lt) }
+  ib_plain(bp, a, Op.OpEnd)
+  ib_plain(bp, a, Op.OpEnd)
+  ib_b_set_term(bp, false)
+}
+
+## `loop { body }` = `block X { loop T { body; br T } }`; a value loop carries its result vreg. A loop no
+## `break` leaves never falls through, so what follows it is unreachable.
+ib_bs_loop := fn(bp : ptr(mut IbB), in out a : rt::Arena, body : ptr(mut Stmt), res : Option(VRegId)) {
+  f := ib_b_f(bp)
+  lx := new_label(f)
+  lt := new_label(f)
+  i1 := e_open(f, a, Op.OpBlock, lx)
+  i2 := e_open(f, a, Op.OpLoop, lt)
+  ib_loop_push(bp, a, lx, lt, res)
+  ib_b_set_term(bp, false)
+  ib_bs_block(bp, a, body)
+  broken := ib_loop_pop(bp)
+  if not ib_b_term(bp) { ib_br(bp, a, lt) }
+  ib_plain(bp, a, Op.OpEnd)
+  ib_plain(bp, a, Op.OpEnd)
+  ib_b_set_term(bp, not broken)
+}
+
+## A range `for i in lo..hi { body }`:
+##   i = lo; end = hi; block X { loop T { if i >= end { br X }; block C { body }; i = add wrap proven 1; br T } }
+## `continue` leaves C, so the step still runs. An iterable `for` (no `hi`) is not scalar, and a narrow
+## induction variable is not built yet.
+ib_bs_for := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, lo : ptr(Expr), hi : ptr(Expr), body : ptr(mut Stmt)) {
+  if not expr_present(hi) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
+  bo : Option(IbPair) = ib_for_bounds(bp, a, h, ns, lo, hi)
+  match bo { Some(pr) => { ib_bs_for_on(bp, a, ns, nl, pr, body) }; None => {} }
+}
+## The induction variable, holding `lo`, and the end, holding `hi`, both at the binding's type.
+ib_for_bounds := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, lo : ptr(Expr), hi : ptr(Expr)) -> Option(IbPair) {
+  k := ib_bind_ty(bp, h, ns)?
+  if not kty_eq(k.ty, Kty.KI64) {
+    ib_refuse_stmt(bp, h, NyWhy.NwOutside)
+    return Option(IbPair).None
+  }
+  lv := ib_value_at(bp, a, lo, k)?
+  ev := ib_value_at(bp, a, hi, k)?
+  iv := ib_fresh(bp, a, k)
+  ib_mov(bp, a, iv, lv)
+  endv := ib_fresh(bp, a, k)
+  ib_mov(bp, a, endv, ev)
+  Option(IbPair).Some(IbPair(l = iv, r = endv))
+}
+ib_bs_for_on := fn(bp : ptr(mut IbB), in out a : rt::Arena, ns : usize, nl : usize, pr : IbPair, body : ptr(mut Stmt)) {
+  f := ib_b_f(bp)
+  iv := pr.l
+  endv := pr.r
+  k : IbKS = ib_vreg_ks(f, iv)
+  lx := new_label(f)
+  lt := new_label(f)
+  lc := new_label(f)
+  i1 := e_open(f, a, Op.OpBlock, lx)
+  i2 := e_open(f, a, Op.OpLoop, lt)
+  ge := ib_fresh(bp, a, ib_bool_ks())
+  oi := o_vreg(iv)
+  oe := o_vreg(endv)
+  i3 := e_cmp(f, a, Cc.CcGe, k.sg, k.ty, ge, oi, oe)
+  oge := o_vreg(ge)
+  i4 := e_br(f, a, Op.OpBrIf, oge, lx)
+  i5 := e_open(f, a, Op.OpBlock, lc)
+  mark := ib_scope_mark(bp)
+  ib_bind(bp, a, ns, nl, iv)
+  ib_loop_push(bp, a, lx, lc, Option(VRegId).None)
+  ib_b_set_term(bp, false)
+  ib_bs_block(bp, a, body)
+  broken := ib_loop_pop(bp)
+  ib_scope_drop(bp, mark)
+  ib_plain(bp, a, Op.OpEnd)
+  ## After the bound test `i < end`, so `i + 1` cannot overflow: a proven `wrap` (V10).
+  one := o_imm(1)
+  step := ib_proven(bp, a, Op.OpAdd, k, iv, one)
+  ib_mov(bp, a, iv, step)
+  ib_br(bp, a, lt)
+  ib_plain(bp, a, Op.OpEnd)
+  ib_plain(bp, a, Op.OpEnd)
+  ib_b_set_term(bp, false)
+}
+
+## `break [name] [v]`: assign the target loop's result vreg (a value loop), then leave it.
+ib_bs_break := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), bv : ptr(Expr), depth : usize) {
+  lo : Option(u64) = ib_loop_at(bp, depth)
+  match lo {
+    Some(x) => { ib_bs_break_to(bp, a, h, bv, usize(x)) }
+    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## `break` to loop `ix`: a value loop owes a value, any other loop none.
+ib_bs_break_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), bv : ptr(Expr), ix : usize) {
+  res : Option(VRegId) = ib_loop_res(bp, ix)
+  match res {
+    Some(rd) => { if expr_present(bv) { ib_assign_to(bp, a, rd, bv) } else { ib_refuse_stmt(bp, h, NyWhy.NwOutside) } }
+    None => { if expr_present(bv) { ib_refuse_stmt(bp, h, NyWhy.NwOutside) } }
+  }
+  if ib_b_failed(bp) { return }
+  ib_loop_mark_broken(bp, a, ix)
+  ib_br(bp, a, ib_loop_exit(bp, ix))
+  ib_b_set_term(bp, true)
+}
+
+## ── functions ──
+
+## Build the function declaration `di` of `decls` into `p`. `Built(id)` when every construct is in the
+## subset; `Refused`, with the construct, the reason and the span in `why`, otherwise.
+pub build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, in out a : rt::Arena, in out why : BuildWhy) -> BuildOut {
+  dp := ib_decl_ptr(decls, di)
+  d : Decl = deref(dp)
+  why.span = u64(d.name_start)
+  why.w = NyWhy.NwOutside
+  if d.is_generic { why.c = Construct.CGeneric; return BuildOut.Refused }
+  if not d.is_fn or lower::extern_symbol(src, d.name_start, d.name_len).n != 0 { why.c = Construct.CBodyless; return BuildOut.Refused }
+  mut has_ret := false
+  mut rk := IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  if d.ret_tl != 0 {
+    rko : Option(IbKS) = ib_name_ks(src, d.ret_ts, d.ret_tl)
+    match rko { Some(kk) => { rk = kk; has_ret = true }; None => { why.c = Construct.CSignature; return BuildOut.Refused } }
+  }
+  fnm := str_at((src + d.name_start), d.name_len)
+  f := fn_new(a, fnm.ptr, fnm.len, has_ret, rk.ty, rk.sg)
+  nb := IbB(f = f, p = p, src = src, decls = decls, mod_s = d.mod_start, mod_n = d.mod_len,
+          bnames = wb_new(a, 16), blens = wb_new(a, 16), bvregs = wb_new(a, 16),
+          lexit = wb_new(a, 8), lcont = wb_new(a, 8), lres = wb_new(a, 8), lhasres = wb_new(a, 8), lbroken = wb_new(a, 8),
+          unch = false, term = false, failed = false, fail_c = Construct.CEmpty, fail_w = NyWhy.NwOutside,
+          fail_s = u64(d.name_start), span0 = u64(d.name_start))
+  mut bb := nb
+  bp := ptr(mut bb)
+  mut pp := d.params_head
+  while ib_param_present(pp) {
+    pm := deref(param_p(pp))
+    pk : Option(IbKS) = ib_name_ks(src, pm.ts, pm.tl)
+    match pk {
+      Some(kk) => {
+        if pm.pmode != 0 { why.c = Construct.CSignature; return BuildOut.Refused }
+        pv := new_param(f, a, kk.ty, kk.sg)
+        ib_bind(bp, a, pm.ns, pm.nl, pv)
+      }
+      None => { why.c = Construct.CSignature; return BuildOut.Refused }
+    }
+    pp = pm.next
+  }
+  has_tail := expr_present(d.value) and not lower_layout::ex_is_no_tail(d.value)
+  if has_ret and not has_tail { ib_bs_tail(bp, a, d.body_stmts) } else { ib_bs(bp, a, d.body_stmts) }
+  if not ib_b_failed(bp) and not ib_b_term(bp) {
+    if has_tail {
+      tvo : Option(VRegId) = ib_bx(bp, a, d.value)
+      match tvo {
+        Some(tv) => { if has_ret { ib_ret_value(bp, a, tv, d.value) } else { on := o_none(); i2 := e_ret(f, a, on) } }
+        None => {}
+      }
+    } else {
+      ## A body that neither returns nor yields its declared result on every path is not one the builder
+      ## understands (sema accepted it, so a form is missing here): refused, never given a made-up exit.
+      if has_ret { ib_refuse(bp, Construct.SReturn, NyWhy.NwOutside, Option(u64).None) } else { on2 := o_none(); i3 := e_ret(f, a, on2) }
+    }
+  }
+  fb : IbB = deref(bp)
+  if fb.failed { why.c = fb.fail_c; why.w = fb.fail_w; why.span = fb.fail_s; return BuildOut.Refused }
+  fid := prog_add(p, a, f)
+  BuildOut.Built(fid)
+}
+## null-ok: Param.next — a parameter list ends in a null link (ast.al; the field is not an Option).
+ib_param_present := fn(p : ptr(mut Param)) -> bool { unchecked bitcast(usize, p) != 0 }
