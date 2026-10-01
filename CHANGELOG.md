@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A multi-word enum copied through pointers keeps its tag and payload on x86_64 (#790).**
+  `deref(dst) = deref(src)` over a `ptr(mut E)` moved one scalar word, the same as for a word-sized
+  pointee, and a local bound from `deref(src)` (`v : E = deref(src)`, or inferred) took one scalar
+  word, so a later copy carried the tag alone and a `match` on it could not see an enum. An enum
+  pointee is now copied whole, `1 + payload` words, exactly as a struct pointee already was.
 ## 0.2.6 — 2026-10-01
 
 - **Seed promotion; no emitted byte moves.** The frozen bootstrap `seed/alatyr` advances from 0.2.5 to

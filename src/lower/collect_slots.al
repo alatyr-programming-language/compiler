@@ -461,11 +461,11 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           }
           if vb_is_slice { bind_slice_slot(slots, src, ns, nl, vb_stride, vb_eek, vb_ess, vb_esl) }
           else { bind_str_slot(slots, src, ns, nl) }
-        } else if deref_call_enum_span(v, decls, src, a).n != 0 {
-          ## a `st := deref(node_ptr(E, …))` binding — reserve `st` as enum E (disc + max-payload
-          ## words) so a following `match st` is recognized as an enum match (ek 3); the words are
-          ## copied in from the arena pointee on the emit side.
-          dce := deref_call_enum_span(v, decls, src, a)
+        } else if deref_enum_pointee_span(v, ptr(slots), decls, src, a).n != 0 {
+          ## a `st := deref(node_ptr(E, …))` / `v := deref(p)` binding (p a pointer-to-enum, #790) —
+          ## reserve it as enum E (disc + max-payload words) so a following `match` is recognized as an
+          ## enum match (ek 3); the words are copied in from the pointee on the emit side.
+          dce := deref_enum_pointee_span(v, ptr(slots), decls, src, a)
           mx := enum_inst_words(decls, src, dce.s, dce.n, a)
           bind_enum_slot(slots, decls, src, ns, nl, dce.s, dce.n, 1 + mx)
         } else if call_ret_ptrstruct_span(v, decls, src, a).n != 0 {

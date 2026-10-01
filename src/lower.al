@@ -11776,16 +11776,21 @@ bitcast_ptrstruct_span_sub := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(
   }
 }
 
-## Words of the pointee struct when `p` is a `Var` bound as a pointer-to-struct (ek 7); 0 otherwise.
-## Lets a `deref(vd) = deref(vs)` store copy the WHOLE pointee struct (both pointers ek 7) — the
-## pointee→pointee dual of the by-ref struct store. A scalar pointer (`ptr(mut usize)`, ek 0) → 0, so
-## the unchanged scalar-store path handles `src/`'s `deref(dp) = deref(sp)` → fixpoint-neutral.
-ptr_var_struct_words := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
+## Words of the AGGREGATE pointee when `p` is a `Var` bound as a pointer-to-struct (ek 7) or a
+## pointer-to-enum (ek 6); 0 otherwise. Lets a `deref(vd) = deref(vs)` store copy the WHOLE pointee —
+## the pointee→pointee dual of the by-ref aggregate store. A scalar pointer (`ptr(mut usize)`, ek 0)
+## → 0, so the unchanged scalar-store path handles `src/`'s `deref(dp) = deref(sp)`.
+## #790 — the enum pointee was missing: `deref(dst) = deref(src)` over a `ptr(mut E)` fell to the
+## scalar store, which moved neither the tag nor the payload of a multi-word enum. An enum pointee is
+## `1 + enum_inst_words` wide, as every other enum place; a niche-folded `Option(ptr(T))` pointee is
+## one word, so it stays on the scalar path.
+ptr_var_agg_words := fn(p : ptr(Expr), cx : ptr(LCtx)) -> usize {
   vn := var_name_span(p)
   if vn.n == 0 { return 0 }
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-  if ent.ek != 7 { return 0 }
-  struct_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar))
+  if ent.ek == 7 { return struct_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
+  if ent.ek == 6 and ent.snl != 0 and not is_niche_folded(cx.src, ent.sns, ent.snl) { return 1 + enum_inst_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
+  0
 }
 
 ## Is `e` an `if`/`match` BRANCH expression? Used by the `DerefAssign` store to fail LOUD on
@@ -12814,6 +12819,27 @@ call_first_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
 ## stmt_p(Stmt, s))` binding sized `st` as a SCALAR, so `match st` was not recognized as an
 ## enum match (scrut_enum_info needs `ek == 3`) and its arm payload variables collided with the
 ## function's own locals (the TOOL-1 Stage2 emit_rodata_stmts `s = nx` self-assign hang).
+## The enum TYPE behind `deref(p)` when `p` is a pointer-to-enum local or param (ek 6) — the enum twin
+## of `deref_struct_span`. 0/0 otherwise, and for a niche-folded `Option(ptr(T))` pointee, which is one
+## scalar word and stays on the scalar path.
+deref_enum_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan {
+  dv := deref_var_span(e)
+  if dv.n == 0 { return CSpan(s = 0, n = 0) }
+  ent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, dv.s, dv.n)))
+  if ent.ek != 6 or ent.snl == 0 { return CSpan(s = 0, n = 0) }
+  if streq(src, ent.ns, ent.nl, dv.s, dv.n) == false { return CSpan(s = 0, n = 0) }
+  if is_niche_folded(src, ent.sns, ent.snl) { return CSpan(s = 0, n = 0) }
+  CSpan(s = ent.sns, n = ent.snl)
+}
+## #790 — the enum pointee of a `deref(<pointer>)` SOURCE, whichever form produces the pointer: a
+## pointer-to-enum local or param, or a pointer-returning call. The one question the binding of
+## `v := deref(p)` and its word copy both ask; the call form alone was answered before, so a `deref`
+## of a pointer VARIABLE bound one scalar word and copied only the tag.
+deref_enum_pointee_span := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+  dvs := deref_enum_span(e, slots, src)
+  if dvs.n != 0 { return dvs }
+  deref_call_enum_span(e, decls, src, a)
+}
 deref_call_enum_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   inner := deref_inner_expr(e)
   if unchecked bitcast(usize, inner) == 0 { return CSpan(s = 0, n = 0) }

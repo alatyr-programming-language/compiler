@@ -1006,8 +1006,10 @@ pub bitcast_identity_erase := fn(lo : usize, hi : usize) {
       if unchecked bitcast(usize, inner) != 0 {
         ## Copy the operand's whole 64-byte node slot word by word (`parser::newnode` allocates every
         ## `Expr` in a 64-byte slot). A whole-enum `deref(np) = deref(inner)` is what this means, but the
-        ## frozen seed does not copy an enum through two derefs correctly: measured, the copy left a
-        ## `Var` whose name span pointed nowhere, and the x86 lowerer faulted hashing it.
+        ## compiler did not copy an enum through two derefs at all — neither the tag nor the payload
+        ## (#790; measured, the copy left a `Var` whose name span pointed nowhere, and the x86 lowerer
+        ## faulted hashing it). The tree is fixed; the frozen seed is not, so this stays until a
+        ## promotion retires `enum_copy_two_derefs` in `scripts/seed_forms.tsv`.
         mut w := 0
         while w < 8 {
           dw := unchecked bitcast(ptr(mut usize), k + w * 8)

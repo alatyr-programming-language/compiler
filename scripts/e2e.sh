@@ -6565,6 +6565,10 @@ run issue773_copy_back_local 42
 # one-word slot on aarch64/riscv64, so its later fields overwrote the next local (a copy read 80 for 42;
 # the parent's twins ran this to 2). x86_64 and wasm ran it to 42 before and after.
 run issue817_uninit_struct_copy 42
+# Issue #790 — a multi-word enum copied through pointers (`deref(dst) = deref(src)`, and a local bound
+# from `deref(src)`): the parent copied neither tag nor payload and refused the inferred binding's
+# `match` (build exit 1; without that check it ran to 2); the twins trap.
+run issue790_enum_copy_through_deref 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42

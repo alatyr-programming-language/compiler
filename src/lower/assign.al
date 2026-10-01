@@ -1229,7 +1229,7 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
         push_str(sb, "(%rax)\n")
       }
     }
-  } else if ptr_var_struct_words(dptr, cx) > 1 and unchecked bitcast(usize, deref_inner_expr(val)) != 0 {
+  } else if ptr_var_agg_words(dptr, cx) > 1 and unchecked bitcast(usize, deref_inner_expr(val)) != 0 {
     ## POINTEE→POINTEE whole-struct store `deref(vd) = deref(vs)` where BOTH `vd` and `vs` are
     ## pointer-to-struct (ek 7) — the generic-container element MOVE (`omap_grow` / `omap_insert`
     ## shift with a struct value type, `V` monomorphized to a multi-word struct). The scalar path
@@ -1238,7 +1238,7 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
     ## (`+k*8` — the ascending pointee layout the by-ref field read / `deref(p)` load use). Gated on
     ## the DEST being an ek-7 multi-word struct pointer, so `src/`'s `deref(dp) = deref(sp)` through
     ## a `ptr(mut usize)` (ek 0 → 0 words) stays on the scalar path → fixpoint-neutral.
-    dw2 := ptr_var_struct_words(dptr, cx)
+    dw2 := ptr_var_agg_words(dptr, cx)
     srcp := deref_inner_expr(val)
     emit_gas(srcp, sb, cx, a, nl)
     emit_gas(dptr, sb, cx, a, nl)
@@ -1250,7 +1250,7 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
       push_int(sb, i64(k * 8))
       push_str(sb, "(%rax)\n")
     }
-  } else if ptr_var_struct_words(dptr, cx) > 1 and expr_is_branch(val) {
+  } else if ptr_var_agg_words(dptr, cx) > 1 and expr_is_branch(val) {
     ## `deref(p) = if/match …` into a MULTI-WORD pointee — the scalar store path below moves only
     ## word 0 (a silent word-drop; a struct-lit / var / pointee source is handled by the arms above,
     ## but a BRANCH value is neither). Fail LOUD rather than truncate. Tightly gated on an ek-7
@@ -2858,12 +2858,12 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
       push_int(sb, i64((dst - k + 1) * 8))
       push_str(sb, "(%rbp)\n")
     }
-  } else if deref_call_enum_span(v, cx.decls, cx.src, a).n != 0 {
-    ## a `st := deref(node_ptr(E, …))`: lower the pointer-producing call (its result is the
-    ## pointee word-0 address in %rax), then copy each of the enum's `1 + max_arity` words
-    ## from `-(k*8)(%rax)` into st's slots (disc at slot dst, payload i at dst+1+i) — the
-    ## enum dual of the deref-struct copy, so a following `match st` reads valid words.
-    dce := deref_call_enum_span(v, cx.decls, cx.src, a)
+  } else if deref_enum_pointee_span(v, cx.slots, cx.decls, cx.src, a).n != 0 {
+    ## a `st := deref(node_ptr(E, …))` / `v := deref(p)` (#790): lower the pointer (a call, or the
+    ## pointer variable — either leaves the pointee word-0 address on the stack), then copy each of
+    ## the enum's `1 + max_arity` words from `(k*8)(%rax)` into st's slots — the enum dual of the
+    ## deref-struct copy, so a following `match st` reads valid words.
+    dce := deref_enum_pointee_span(v, cx.slots, cx.decls, cx.src, a)
     nf := 1 + enum_inst_words(cx.decls, cx.src, dce.s, dce.n, a)
     dst := slot_of(cx.slots, cx.src, ns, nl2)
     inner := deref_inner_expr(v)
