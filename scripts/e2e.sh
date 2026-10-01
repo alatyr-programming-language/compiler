@@ -6692,6 +6692,9 @@ run issue792_enum_field_through_ptr 42
 # from `deref(src)`): the parent copied neither tag nor payload and refused the inferred binding's
 # `match` (build exit 1; without that check it ran to 2); the twins trap.
 run issue790_enum_copy_through_deref 42
+# Issue #791 — an aggregate field read straight off a struct-returning call (`is_c(mk().kind)`), as an
+# argument and returned by value. The parent crashed with SIGSEGV at the first check; the twins trap.
+run issue791_call_result_agg_field 42
 # Control Flow §5.4 — range patterns (a..b / a..=b) and OR-patterns (p | q | r).
 run range_int_match 42
 run or_pattern_match 42

@@ -4467,6 +4467,38 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
     push_str(sb, "  pushq %rax\n")
     return
   }
+  ## #791 — an AGGREGATE FIELD of a struct-returning call passed straight as an argument
+  ## (`is_c(mk().kind)`): stage the field in a fresh agg-temp block and pass the block's address, like
+  ## every other aggregate argument with no frame home. A register-returned root delivers the field's
+  ## words in `emit_retreg(woff..)`; a WIDE root writes its whole result into the block through the hidden
+  ## pointer, and the field is at `woff` words into it.
+  caf791 := call_agg_field(e, cx.decls, cx.src, a)
+  if caf791.ok and cx.agg_tmp >= 0 {
+    if caf791.sret {
+      cfb := agg_alloc(cx)
+      ovc := cx.sret_call
+      cx.sret_call = cfb
+      emit_struct_value(caf791.root, sb, cx, a, nl)
+      cx.sret_call = ovc
+      cfent := SlotEntry(ns = 0, nl = 0, off = usize(cfb), sns = 0, snl = 0, ek = 2, estride = 1, eek = 0, is_ref = false)
+      emit_agg_base_addr(cfent, sb)
+      if caf791.woff != 0 { push_str(sb, "  addq $") ; push_int(sb, caf791.woff * 8) ; push_str(sb, ", %rax\n") }
+    } else {
+      emit_call_agg_field_value(caf791, sb, cx, a, nl)
+      cfb := agg_alloc(cx)
+      for k in 0..caf791.words {
+        push_str(sb, "  movq ")
+        emit_retreg(sb, k)
+        push_str(sb, ", -")
+        push_int(sb, (i64(cfb) - i64(k) + 1) * 8)
+        push_str(sb, "(%rbp)\n")
+      }
+      cfent := SlotEntry(ns = 0, nl = 0, off = usize(cfb), sns = 0, snl = 0, ek = 2, estride = 1, eek = 0, is_ref = false)
+      emit_agg_base_addr(cfent, sb)
+    }
+    push_str(sb, "  pushq %rax\n")
+    return
+  }
   ## A CALL returning a STRUCT passed as a by-ref aggregate arg (`mk().sum()` — a UFCS receiver that
   ## is itself a call, or any `f(…)` struct value forwarded by value): the call has no frame home, so
   ## materialize its register-returned words (`emit_retreg(k)`) into the agg-temp block, then push the
@@ -10147,6 +10179,13 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       ## words. Without this arm an enum `Field` fell to the `_` fallback (disc 0, payload 0), so a
       ## two-arm `match` on the result matched NEITHER arm. Gated on the field's type resolving to an
       ## ENUM — every other `Field` keeps the byte-identical fallback below.
+      ## #791 — an enum field straight off a struct-returning CALL has no place; deliver it from the
+      ## call's result registers instead (`call_agg_field`).
+      ecaf := call_agg_field(e, cx.decls, cx.src, deref(cx.mar))
+      if ecaf.ok {
+        emit_call_agg_field_value(ecaf, sb, cx, a, nl)
+        return
+      }
       fbt := agg_base_struct_span(fbase, cx)
       fft := field_type_span(cx.decls, cx.src, fbt.s, fbt.n, ffs, ffl, deref(cx.mar))
       ffbn := base_type_name(cx.src, fft.s, fft.n)
@@ -11190,6 +11229,12 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## fallback, which writes `$0` into %rax/%rdx: a SILENT ZERO struct return. Gated on the field's
       ## type resolving to a STRUCT — every other `Field` (scalar / `str` / unresolvable) keeps the
       ## byte-identical fallback, so `src/`+`lib/` are untouched.
+      ## #791 — a struct field straight off a struct-returning CALL: from the result registers.
+      scaf := call_agg_field(e, cx.decls, cx.src, deref(cx.mar))
+      if scaf.ok {
+        emit_call_agg_field_value(scaf, sb, cx, a, nl)
+        return
+      }
       fbt := agg_base_struct_span(fbase, cx)
       fft := field_type_span(cx.decls, cx.src, fbt.s, fbt.n, ffs, ffl, deref(cx.mar))
       ffbn := base_type_name(cx.src, fft.s, fft.n)
@@ -14051,6 +14096,82 @@ call_chain_place := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : r
       | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return CallChainPlace(found = false, root = z, tys = 0, tyn = 0, woff = 0) }
+  }
+}
+
+## #791 — an AGGREGATE (struct or non-folded enum) field projected straight off a struct-returning
+## CALL (`is_c(mk().kind)`, `return mk().kind`). The call result has no frame home, so such a field is
+## neither a place `agg_field_of` can address nor a scalar word: passed as an argument its first WORD was
+## handed over as the callee's block pointer (SIGSEGV), and returned by value it was the null enum. This
+## is the ONE answer the argument scans (`arg_is_agg_value` / `agg_value_words`) and the emitters share:
+## the call (`root`), the field's ascending word offset in the result (`woff`, `call_chain_place` for a
+## register-returned struct, any depth), the field's own width (`words`), and for a WIDE (SRET) root —
+## depth 1 only — the whole result's width (`rwords`), which is the block the callee writes through.
+CallAggField := struct { ok : bool, root : ptr(Expr), woff : i64, words : usize, rwords : usize, sret : bool }
+call_agg_field := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CallAggField {
+  ## `ok` is the whole answer; the other fields are read only when it holds (`root` is `e` itself then,
+  ## a valid node, never a fabricated null).
+  mut res := CallAggField(ok = false, root = e, woff = 0, words = 0, rwords = 0, sret = false)
+  match deref(e) {
+    Expr::Field(fbase, ffs, ffl) => { res = call_agg_field_of(e, fbase, ffs, ffl, decls, src, a) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  res
+}
+call_agg_field_of := fn(e : ptr(Expr), fbase : ptr(Expr), fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CallAggField {
+  none := CallAggField(ok = false, root = e, woff = 0, words = 0, rwords = 0, sret = false)
+  mut root := e
+  mut woff : i64 = 0
+  mut ts : usize = 0
+  mut tn : usize = 0
+  mut rwords : usize = 0
+  mut sret := false
+  if sret_ret_call(fbase, decls, src, a) {
+    rt := call_ret_struct_span(fbase, decls, src, a)
+    if rt.n == 0 { return none }
+    ft := field_type_span(decls, src, rt.s, rt.n, fs, fl, a)
+    wf := field_word_offset(decls, src, rt.s, rt.n, fs, fl, a)
+    if ft.n == 0 or wf < 0 { return none }
+    root = fbase
+    woff = i64(wf)
+    ts = ft.s
+    tn = ft.n
+    rwords = struct_words(decls, src, rt.s, rt.n, a)
+    sret = true
+  } else {
+    ccp := call_chain_place(e, decls, src, a)
+    if ccp.found == false { return none }
+    root = ccp.root
+    woff = ccp.woff
+    ts = ccp.tys
+    tn = ccp.tyn
+  }
+  bn := base_type_name(src, ts, tn)
+  mut w : usize = 0
+  if bn.n != 0 and struct_decl_of(decls, src, bn.s, bn.n) >= 0 { w = struct_words(decls, src, ts, tn, a) }
+  if bn.n != 0 and enum_decl_of(decls, src, bn.s, bn.n) >= 0 and not is_niche_folded(src, ts, tn) and not is_union_decl(decls, src, bn.s, bn.n) { w = 1 + enum_inst_words(decls, src, ts, tn, a) }
+  if w == 0 { return none }
+  CallAggField(ok = true, root = root, woff = woff, words = w, rwords = rwords, sret = sret)
+}
+
+## Deliver a register-returned call's aggregate FIELD (`call_agg_field`, not SRET) into the return
+## registers as a value of its own: emit the call, then move result word `woff + k` to `emit_retreg(k)`,
+## ascending (a source index is never below its destination, so no word is overwritten before it moves).
+emit_call_agg_field_value := fn(caf : CallAggField, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+  if caf.sret { panic("selfhost: an aggregate field of a WIDE (hidden-pointer) struct-returning call used by value is not lowered — bind the call result to a local first (`t := mk()`), then use `t.field`") }
+  if caf.woff + i64(caf.words) > 7 { panic("selfhost: an aggregate field past the 7-word return-register budget of a struct-returning call is not lowered — bind the call result to a local first") }
+  emit_struct_value(caf.root, sb, cx, a, nl)
+  if caf.woff != 0 {
+    for k in 0..caf.words {
+      push_str(sb, "  movq ")
+      emit_retreg(sb, usize(caf.woff) + k)
+      push_str(sb, ", ")
+      emit_retreg(sb, k)
+      push_str(sb, "\n")
+    }
   }
 }
 
