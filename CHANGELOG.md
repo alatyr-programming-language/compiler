@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A `mut` global of type `Option(ptr(T))` is one word.** Such a global took its layout from its
+  initializer, and the bare `Option.None` names no type argument. The global therefore became a two-word
+  `[disc, payload]` whose payload had lost its pointee type, and a matched `Some` read **0** through
+  `deref(q).v` on a clean build. The declared type now decides the one-word `.data` cell, the store,
+  the read, a `match` on the global and passing it as an argument (#823).
+
 ## 0.2.6 — 2026-10-01
 
 - **Seed promotion; no emitted byte moves.** The frozen bootstrap `seed/alatyr` advances from 0.2.5 to

@@ -2378,7 +2378,14 @@ pub emit_st_assign := fn(ns : usize, nl2 : usize, v : ptr(Expr), in out sb : str
     ## would silently drop every word past word 0 — a §Priority-1 miscompile); a NON-literal
     ## aggregate RHS fails loud there. A SCALAR global (`COUNTER = <scalar>`) takes the fast path
     ## below: `<eval v>; popq %rax; movq %rax, LABEL(%rip)`.
-    if not emit_mut_global_whole_assign(ns, nl2, v, sb, cx, a, nl) {
+    ## #823 — a folded `Option(ptr(T))` global takes its one folded word (`emit_store_value`).
+    gfs := global_folded_span(cx.decls, cx.src, ns, nl2)
+    if gfs.n != 0 {
+      emit_store_value(v, gfs, sb, cx, a, nl)
+      push_str(sb, "  popq %rax\n  movq %rax, ")
+      emit_global_label(sb, cx.decls, cx.src, ns, nl2)
+      push_str(sb, "(%rip)\n")
+    } else if not emit_mut_global_whole_assign(ns, nl2, v, sb, cx, a, nl) {
       emit_gas(v, sb, cx, a, nl)
       push_str(sb, "  popq %rax\n  movq %rax, ")
       emit_global_label(sb, cx.decls, cx.src, ns, nl2)

@@ -130,6 +130,8 @@ pub try_global_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, c
   if unchecked bitcast(usize, mgv) == 0 { return z }
   gei := enum_lit_info(mgv)
   if gei.is_e == false { return z }
+  ## #823 — a folded `Option(ptr(T))` global is one word, staged by `try_folded_value_scrut`.
+  if global_folded_span(cx.decls, cx.src, gvn.s, gvn.n).n != 0 { return z }
   nw := 1 + enum_inst_words(cx.decls, cx.src, gei.es, gei.el, deref(cx.mar))
   tbase := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
   push_str(sb, "  leaq ")
@@ -476,10 +478,14 @@ pub try_arrelem_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::St
 ## (`deref(p).next`), or any other form `folded_value_span` names. Stage its ONE word in this match
 ## level's scratch and dispatch on it as a folded local (`None` is the null word, `Some(q)` binds it).
 ## `skip` is true when an earlier helper already resolved the scrutinee; nothing is emitted then, and
-## nothing is emitted for a named local (its own slot is the scrutinee).
+## nothing is emitted for a named local (its own slot is the scrutinee). A folded `mut` GLOBAL (#823)
+## has no slot and is staged like any other value.
 pub try_folded_value_scrut := fn(scrut : ptr(Expr), skip : bool, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) -> ScrutInfo {
   r := ScrutInfo(is_e = false, base = 0, es = 0, el = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
-  if skip or var_name_span(scrut).n != 0 { return r }
+  if skip { return r }
+  ## A named LOCAL is its own scrutinee slot; a folded `mut` global (#823) has none and is staged.
+  svn := var_name_span(scrut)
+  if svn.n != 0 and slot_of(cx.slots, cx.src, svn.s, svn.n) >= 0 { return r }
   a := arena_of(cx)
   fvs := folded_value_span(scrut, CSpan(s = 0, n = 0), cx.slots, cx.decls, cx.src, a)
   if fvs.n == 0 { return r }
