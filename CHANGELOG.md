@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.7 — 2026-10-01
+
+- **Seed promotion; no emitted byte moves.** The frozen bootstrap `seed/alatyr` advances from 0.2.6 to
+  0.2.7 so the compiler's source may keep `Option(ptr(T))` values in module globals and global arrays
+  (#823, #824), which the AST link migration (#529) needs. The 0.2.6 seed already emits this tree's GAS
+  byte for byte: seed, Stage1, Stage2 and Stage3 are identical in GAS (1 425 931 lines) and Stage1..3 in
+  the binary, all answering `alatyr 0.2.7`; `seed/VERSION` records the hashes.
 - **An array-literal element out of range for its element type is refused.** `a : [u8; 2] = [1, 300]`
   and `f([1, 300])` into `xs : [u8; 2]` compiled and stored 44; each element is now range-checked in
   the declared element type, as `x : u8 = 300` already was, and refused at the element's line (Types

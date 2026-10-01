@@ -61,13 +61,13 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: 1b4c8c86d13b4dd4c346b152dacf0a711390f4cdbf7595fcf60bde4be2b655af
-current-seed-version: 0.2.6
+current-seed-sha256: 1ec875d96dc4987c13313b5bb51e19b1df9059b9cb00c36aa04a672fe9b5ccb8
+current-seed-version: 0.2.7
 #
 # Promoted:      2026-10-01 (see the last entry in this file)
 # Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
-# GAS at promotion: 1396590 lines
-# GAS SHA-256:   9f1c243dfd0bc311ec9a17c17c39dadce5d23281524285e69b0bf6cbd7a01256
+# GAS at promotion: 1425931 lines
+# GAS SHA-256:   61321e7fa2d2e93cb93fe79c5521d6d3ed30fba83873ebad6a444c0786d134e5
 #
 # `current-seed-version` is the `version` field of `package.al` at the moment of the promotion, and by
 # the versioning order in CHANGELOG.md the two must agree at all times: the version moves ON a
@@ -1528,4 +1528,29 @@ current-seed-version: 0.2.6
 # 00d05ce6debb389cf17cc927d0e5e4145fb5dc30742972370e7d2d0b37ea6c55 (5310968 B).
 #
 # VERSION 0.2.5 -> 0.2.6, PATCH: no emitted byte moves; the frozen bootstrap advances.
+# The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.6 -> 0.2.7   promoted 2026-10-01   seed/alatyr := Stage2
+#
+# WHY: the frozen bootstrap advances so `src/` may use `Option(ptr(T))` in module globals — the
+# AST link migration (#529) keeps list handles in backend globals and bind-head stacks. #823 (PR
+# #831): a `mut` global of type `Option(ptr(T))` read back wrong; #824 (PR #832): a global
+# `[Option(ptr(T)); N]` read back wrong after an element store. The 0.2.6 seed refuses the migrated
+# tree at `check`. The tree also carries the shared-IR slice 0a (#813/#840/#845) and slice 0b part 1
+# (#850), none of which changes what the compiler emits for itself.
+#
+# THE DELTA: none. The 0.2.6 seed and Stage1 emit byte-identical GAS (1425931 lines, raw).
+# One sentence: no emitted byte moves; only the bootstrap binary advances.
+#
+# CONVERGENCE (bump first; native x86_64 omen):
+# seed == Stage1 == Stage2 == Stage3 GAS byte-identical RAW at 1425931 lines.
+# GAS SHA-256: 61321e7fa2d2e93cb93fe79c5521d6d3ed30fba83873ebad6a444c0786d134e5.
+# Stage1 == Stage2 == Stage3 BINARY SHA-256:
+# 1ec875d96dc4987c13313b5bb51e19b1df9059b9cb00c36aa04a672fe9b5ccb8 (5398080 B).
+# All three answer `alatyr 0.2.7`.
+# Superseded seed (0.2.6) SHA-256:
+# 1b4c8c86d13b4dd4c346b152dacf0a711390f4cdbf7595fcf60bde4be2b655af (5329064 B).
+#
+# VERSION 0.2.6 -> 0.2.7, PATCH: no emitted byte moves; the frozen bootstrap advances.
 # The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
