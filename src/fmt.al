@@ -3953,8 +3953,8 @@ emit_fmt_struct := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::A
 }
 
 ## `Name := enum { V0, V1(T) }` — one variant per line. A unit variant (arity 0) is a bare name; a
-## single-payload variant (arity 1) prints `(T)`; a multi-payload variant is fail-loud (the FieldDecl
-## records only one payload type span, so the others can't be faithfully reconstructed).
+## payloaded variant (any arity) copies its `( … )` group verbatim from source — the FieldDecl type
+## span is only the payload's HEAD token, so `B(Option(ptr(mut N)))` rendered from it was `B(Option)`.
 ## The length of the balanced `( … )` payload group that starts at the FIRST `(` at/after `from` in
 ## `src` (including both parens), else 0. A multi-payload enum variant (`Bin(u8, ptr(Expr), ptr(Expr))`)
 ## stores only its arity + the FIRST payload type span in the FieldDecl, so fmt recovers the whole
@@ -4036,18 +4036,14 @@ emit_fmt_enum := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Are
     fd := deref(fld_p(f))
     push_str(sb, "  ")
     push_str(sb, str_at((src + fd.ns), fd.nl))
-    if fd.arity == 1 {
-      push_str(sb, "(")
-      push_str(sb, str_at((src + fd.ts), fd.tl))
-      push_str(sb, ")")
-    } else if fd.arity > 1 {
-      ## MULTI-payload variant — the FieldDecl kept only the arity + first type, so render the whole
-      ## `( … )` payload group verbatim from source. Scan from the variant NAME start: the first `(`
-      ## after it is the payload open (the name is an identifier, no parens), and the first payload
-      ## type span `fd.ts` sits INSIDE those parens (so starting at `fd.ts` would miss the open).
+    if fd.arity > 0 {
+      ## A payloaded variant — the FieldDecl kept only the arity and the first payload's HEAD token
+      ## (`Option` of `Option(ptr(mut N))`, #856), so render the whole `( … )` payload group verbatim
+      ## from source. Scan from the variant NAME start: the first `(` after it is the payload open (the
+      ## name is an identifier, no parens), and `fd.ts` sits INSIDE those parens.
       mut popen : usize = 0
       plen := enum_payload_len(src, fd.ns, ptr(popen))
-      if plen == 0 { panic("selfhost: fmt — multi-payload enum variant payload not found in source") }
+      if plen == 0 { panic("selfhost: fmt — enum variant payload not found in source") }
       push_str(sb, str_at((src + popen), plen))
     }
     push_str(sb, ",\n")

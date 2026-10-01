@@ -7684,6 +7684,9 @@ fmt_test_has fmt_ufcs_dot 42 "r.unwrap()"
 ## FieldDecl keeps only name+type+arity: `@packed`/`@align`/`@repr` vanished and a discriminant PIN
 ## (`A = 5`) took the following variant with it. Rendered verbatim now.
 fmt_test_has fmt_agg_decl 42 "@packed struct"
+## #856: an arity-1 variant rendered from the FieldDecl head-token span lost its type arguments
+## (`B(ptr(N))` became `B(ptr)`), still compiled and was idempotent. The payload group is verbatim now.
+fmt_test_has_all fmt_enum_generic_payload 42 "B(ptr(u64))," "C(Option(u64)),"
 ## by-NAME struct construction re-attached the names POSITIONALLY -- values stayed put while names moved,
 ## the worst shape of all because the render still compiles.
 fmt_test_has fmt_struct_lit_names 42 "D(b = 3)"
