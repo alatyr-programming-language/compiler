@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A range arm over a `u64` or `usize` compares unsigned.** On x86_64 the bounds of `a..b` / `a..=b`
+  were compared as signed `i64`, so a bound at or above 2^63 read as negative: `10..=18446744073709551615`
+  never matched `u64::MAX` and the `match` fell through, silently (#806).
+- **An unannotated integer array is no longer accepted for a narrower or unsigned array parameter.**
+  `a := [1, 7]` has no context, so its literals take the default native signed integer and `a` is an
+  `[i64; 2]`; passing it where `[u8; 2]` (or `[u64; 2]`) is declared compiled, and the `[u8; 2]` callee
+  read **0**. It is now a located type mismatch (Types §9.1, §4.3; Declarations §3.2/§3.4) — a PATCH,
+  not a break: annotate the array (`a : [u8; 2] = [1, 7]`) (#804).
 - **A global array of `Option(ptr(T))` holds one word per element.** A global array took its element
   type from its first initializer element. For a bare `Option.None` every element therefore became a
   two-word enum whose payload had lost its pointee type, and a matched `Some` element read **0**. `check`
@@ -204,14 +212,6 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   really takes, and a function that needs more than the scan placed is emitted again with a pool that
   holds them. Every function that built before keeps its exact frame.
 
-- **A range arm over a `u64` or `usize` compares unsigned.** On x86_64 the bounds of `a..b` / `a..=b`
-  were compared as signed `i64`, so a bound at or above 2^63 read as negative: `10..=18446744073709551615`
-  never matched `u64::MAX` and the `match` fell through, silently (#806).
-- **An unannotated integer array is no longer accepted for a narrower or unsigned array parameter.**
-  `a := [1, 7]` has no context, so its literals take the default native signed integer and `a` is an
-  `[i64; 2]`; passing it where `[u8; 2]` (or `[u64; 2]`) is declared compiled, and the `[u8; 2]` callee
-  read **0**. It is now a located type mismatch (Types §9.1, §4.3; Declarations §3.2/§3.4) — a PATCH,
-  not a break: annotate the array (`a : [u8; 2] = [1, 7]`) (#804).
 ## 0.2.5 — 2026-09-30
 
 - **Seed promotion; every text-lowered function of the compiler now preserves the callee-saved
