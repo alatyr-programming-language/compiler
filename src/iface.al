@@ -217,65 +217,75 @@ iface_emit_struct := fn(in out b : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u
   iface_push_bool(b, niche)
   push_str(b, " layout_hash=")
   mut field := deref(dp).fields_head
-  while field != 0 {
-    fd := deref(fld_p(field))
-    fw := fd.wsize
-    mut fwords := usize(0)
-    if fw != 0 { fwords = field_words(decls, src, fd.ts, fd.tl, fw, a) }
-    mut off : i64 = -1
-    if packed { off = packed_field_byte_offset(decls, src, ns, nn, fd.ns, fd.nl, a) }
-    else if byte_layout { off = standard_field_byte_offset(decls, src, ns, nn, fd.ns, fd.nl, a) }
-    else { off = i64(field_word_offset(decls, src, ns, nn, fd.ns, fd.nl, a)) * 8 }
-    mut sz := usize(0)
-    if fw != 0 { sz = field_byte_size(decls, src, fd.ts, fd.tl, fw, a) }
-    fa := field_align_attr(src, fd.ns)
-    fe := field_endian_attr(src, fd.ns)
-    fo := field_offset_attr(src, fd.ns)
-    h = iface_hash_span(h, src, fd.ns, fd.nl)
-    h = iface_hash_span(h, src, fd.ts, fd.tl)
-    h = iface_hash_uint(h, fw)
-    h = iface_hash_uint(h, fwords)
-    h = iface_hash_int(h, off)
-    h = iface_hash_uint(h, sz)
-    h = iface_hash_int(h, fa)
-    h = iface_hash_int(h, fe)
-    h = iface_hash_int(h, fo)
-    field = fd.next
+  loop {
+    match field {
+      Some(fieldq) => {
+        fd := deref(fld_p(fieldq))
+        fw := fd.wsize
+        mut fwords := usize(0)
+        if fw != 0 { fwords = field_words(decls, src, fd.ts, fd.tl, fw, a) }
+        mut off : i64 = -1
+        if packed { off = packed_field_byte_offset(decls, src, ns, nn, fd.ns, fd.nl, a) }
+        else if byte_layout { off = standard_field_byte_offset(decls, src, ns, nn, fd.ns, fd.nl, a) }
+        else { off = i64(field_word_offset(decls, src, ns, nn, fd.ns, fd.nl, a)) * 8 }
+        mut sz := usize(0)
+        if fw != 0 { sz = field_byte_size(decls, src, fd.ts, fd.tl, fw, a) }
+        fa := field_align_attr(src, fd.ns)
+        fe := field_endian_attr(src, fd.ns)
+        fo := field_offset_attr(src, fd.ns)
+        h = iface_hash_span(h, src, fd.ns, fd.nl)
+        h = iface_hash_span(h, src, fd.ts, fd.tl)
+        h = iface_hash_uint(h, fw)
+        h = iface_hash_uint(h, fwords)
+        h = iface_hash_int(h, off)
+        h = iface_hash_uint(h, sz)
+        h = iface_hash_int(h, fa)
+        h = iface_hash_int(h, fe)
+        h = iface_hash_int(h, fo)
+        field = fd.next
+      }
+      None => { break }
+    }
   }
   iface_push_uint(b, h)
   push_byte(b, 10)
   field = deref(dp).fields_head
-  while field != 0 {
-    fd := deref(fld_p(field))
-    fw := fd.wsize
-    mut fwords := usize(0)
-    if fw != 0 { fwords = field_words(decls, src, fd.ts, fd.tl, fw, a) }
-    mut off : i64 = -1
-    if packed { off = packed_field_byte_offset(decls, src, ns, nn, fd.ns, fd.nl, a) }
-    else if byte_layout { off = standard_field_byte_offset(decls, src, ns, nn, fd.ns, fd.nl, a) }
-    else { off = i64(field_word_offset(decls, src, ns, nn, fd.ns, fd.nl, a)) * 8 }
-    mut sz := usize(0)
-    if fw != 0 { sz = field_byte_size(decls, src, fd.ts, fd.tl, fw, a) }
-    push_str(b, "field name=")
-    iface_push_span(b, src, fd.ns, fd.nl)
-    push_str(b, " type=")
-    iface_push_span(b, src, fd.ts, fd.tl)
-    push_str(b, " wsize=")
-    iface_push_uint(b, fw)
-    push_str(b, " words=")
-    iface_push_uint(b, fwords)
-    push_str(b, " offset=")
-    iface_push_int(b, off)
-    push_str(b, " size=")
-    iface_push_uint(b, sz)
-    push_str(b, " align_attr=")
-    iface_push_int(b, field_align_attr(src, fd.ns))
-    push_str(b, " offset_attr=")
-    iface_push_int(b, field_offset_attr(src, fd.ns))
-    push_str(b, " endian=")
-    iface_push_int(b, field_endian_attr(src, fd.ns))
-    push_byte(b, 10)
-    field = fd.next
+  loop {
+    match field {
+      Some(fieldq) => {
+        fd := deref(fld_p(fieldq))
+        fw := fd.wsize
+        mut fwords := usize(0)
+        if fw != 0 { fwords = field_words(decls, src, fd.ts, fd.tl, fw, a) }
+        mut off : i64 = -1
+        if packed { off = packed_field_byte_offset(decls, src, ns, nn, fd.ns, fd.nl, a) }
+        else if byte_layout { off = standard_field_byte_offset(decls, src, ns, nn, fd.ns, fd.nl, a) }
+        else { off = i64(field_word_offset(decls, src, ns, nn, fd.ns, fd.nl, a)) * 8 }
+        mut sz := usize(0)
+        if fw != 0 { sz = field_byte_size(decls, src, fd.ts, fd.tl, fw, a) }
+        push_str(b, "field name=")
+        iface_push_span(b, src, fd.ns, fd.nl)
+        push_str(b, " type=")
+        iface_push_span(b, src, fd.ts, fd.tl)
+        push_str(b, " wsize=")
+        iface_push_uint(b, fw)
+        push_str(b, " words=")
+        iface_push_uint(b, fwords)
+        push_str(b, " offset=")
+        iface_push_int(b, off)
+        push_str(b, " size=")
+        iface_push_uint(b, sz)
+        push_str(b, " align_attr=")
+        iface_push_int(b, field_align_attr(src, fd.ns))
+        push_str(b, " offset_attr=")
+        iface_push_int(b, field_offset_attr(src, fd.ns))
+        push_str(b, " endian=")
+        iface_push_int(b, field_endian_attr(src, fd.ns))
+        push_byte(b, 10)
+        field = fd.next
+      }
+      None => { break }
+    }
   }
   h
 }
@@ -323,34 +333,44 @@ iface_emit_enum := fn(in out b : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8)
   iface_push_bool(b, niche)
   push_str(b, " layout_hash=")
   mut field := deref(dp).fields_head
-  while field != 0 {
-    fd := deref(fld_p(field))
-    vi := variant_index(decls, src, ns, nn, fd.ns, fd.nl, a)
-    ps := variant_payload_span(decls, src, ns, nn, fd.ns, fd.nl, a)
-    h = iface_hash_span(h, src, fd.ns, fd.nl)
-    h = iface_hash_uint(h, fd.arity)
-    h = iface_hash_span(h, src, fd.ts, fd.tl)
-    h = iface_hash_int(h, vi)
-    h = iface_hash_span(h, src, ps.s, ps.n)
-    field = fd.next
+  loop {
+    match field {
+      Some(fieldq) => {
+        fd := deref(fld_p(fieldq))
+        vi := variant_index(decls, src, ns, nn, fd.ns, fd.nl, a)
+        ps := variant_payload_span(decls, src, ns, nn, fd.ns, fd.nl, a)
+        h = iface_hash_span(h, src, fd.ns, fd.nl)
+        h = iface_hash_uint(h, fd.arity)
+        h = iface_hash_span(h, src, fd.ts, fd.tl)
+        h = iface_hash_int(h, vi)
+        h = iface_hash_span(h, src, ps.s, ps.n)
+        field = fd.next
+      }
+      None => { break }
+    }
   }
   iface_push_uint(b, h)
   push_byte(b, 10)
   field = deref(dp).fields_head
-  while field != 0 {
-    fd := deref(fld_p(field))
-    vi := variant_index(decls, src, ns, nn, fd.ns, fd.nl, a)
-    ps := variant_payload_span(decls, src, ns, nn, fd.ns, fd.nl, a)
-    push_str(b, "variant name=")
-    iface_push_span(b, src, fd.ns, fd.nl)
-    push_str(b, " index=")
-    iface_push_int(b, vi)
-    push_str(b, " arity=")
-    iface_push_uint(b, fd.arity)
-    push_str(b, " type=")
-    iface_push_span(b, src, ps.s, ps.n)
-    push_byte(b, 10)
-    field = fd.next
+  loop {
+    match field {
+      Some(fieldq) => {
+        fd := deref(fld_p(fieldq))
+        vi := variant_index(decls, src, ns, nn, fd.ns, fd.nl, a)
+        ps := variant_payload_span(decls, src, ns, nn, fd.ns, fd.nl, a)
+        push_str(b, "variant name=")
+        iface_push_span(b, src, fd.ns, fd.nl)
+        push_str(b, " index=")
+        iface_push_int(b, vi)
+        push_str(b, " arity=")
+        iface_push_uint(b, fd.arity)
+        push_str(b, " type=")
+        iface_push_span(b, src, ps.s, ps.n)
+        push_byte(b, 10)
+        field = fd.next
+      }
+      None => { break }
+    }
   }
   h
 }

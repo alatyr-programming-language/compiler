@@ -877,10 +877,15 @@ pub struct_nfields := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut cnt := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    cnt += 1
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        cnt += 1
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   cnt
 }
@@ -895,11 +900,16 @@ pub field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
   mut f := d.fields_head
   mut idx := 0
   mut res := -1
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, fs, fl) { res = idx }
-    idx += 1
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) { res = idx }
+        idx += 1
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -1011,35 +1021,40 @@ pub std_struct_has_direct_byte_layout := fn(decls : ptr(rt::Vec), src : ptr(u8),
   mut found_array := false
   mut found_subword := false
   mut scalar_only := true
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    es := arr_field_elem_span(src, eff.s, eff.n)
-    if es.n != 0 {
-      ## Preserve the established direct-byte-array admission exactly.  A later non-byte field
-      ## remains the existing fail-loud boundary in its consumer; this predicate must not turn an
-      ## already-supported byte-array shape into a different classification while widening the
-      ## scalar-only branch below.
-      if layout_byte_type_eek(src, es.s, es.n) != 0 { found_array = true }
-      else { scalar_only = false }
-    } else {
-      ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-      sbn := base_type_name(src, eff.s, eff.n)
-      mut nested_byte := false
-      if ew == 1 and struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 and not is_packed(decls, src, eff.s, eff.n) and not is_union_decl(decls, src, eff.s, eff.n) {
-        ## Close the scalar tier under a nested direct-scalar child.  Without this, S4 makes
-        ## `Small` byte-laid out while `Deep { inner : Small }` remains word-laid out, so the
-        ## parent writer and the standalone child copy speak different representations.
-        nested_byte = std_struct_has_direct_byte_layout(decls, src, eff.s, eff.n, a)
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        es := arr_field_elem_span(src, eff.s, eff.n)
+        if es.n != 0 {
+          ## Preserve the established direct-byte-array admission exactly.  A later non-byte field
+          ## remains the existing fail-loud boundary in its consumer; this predicate must not turn an
+          ## already-supported byte-array shape into a different classification while widening the
+          ## scalar-only branch below.
+          if layout_byte_type_eek(src, es.s, es.n) != 0 { found_array = true }
+          else { scalar_only = false }
+        } else {
+          ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+          sbn := base_type_name(src, eff.s, eff.n)
+          mut nested_byte := false
+          if ew == 1 and struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 and not is_packed(decls, src, eff.s, eff.n) and not is_union_decl(decls, src, eff.s, eff.n) {
+            ## Close the scalar tier under a nested direct-scalar child.  Without this, S4 makes
+            ## `Small` byte-laid out while `Deep { inner : Small }` remains word-laid out, so the
+            ## parent writer and the standalone child copy speak different representations.
+            nested_byte = std_struct_has_direct_byte_layout(decls, src, eff.s, eff.n, a)
+          }
+          if nested_byte { found_subword = true }
+          else {
+            sw := std_direct_scalar_byte_width(src, eff.s, eff.n)
+            if ew != 1 or sw == 0 { scalar_only = false }
+            else if sw < 8 { found_subword = true }
+          }
+        }
+        f = fd.next
       }
-      if nested_byte { found_subword = true }
-      else {
-        sw := std_direct_scalar_byte_width(src, eff.s, eff.n)
-        if ew != 1 or sw == 0 { scalar_only = false }
-        else if sw < 8 { found_subword = true }
-      }
+      None => { break }
     }
-    f = fd.next
   }
   if found_array { return true }
   scalar_only and found_subword
@@ -1056,11 +1071,16 @@ pub std_struct_is_u8_pair := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, 
   mut f := d.fields_head
   mut nf := 0
   mut ok := true
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if str_at((src + fd.ts), fd.tl) != "u8" { ok = false }
-    nf += 1
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if str_at((src + fd.ts), fd.tl) != "u8" { ok = false }
+        nf += 1
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   ok and nf == 2
 }
@@ -1081,12 +1101,17 @@ pub std_struct_has_byte_layout := fn(decls : ptr(rt::Vec), src : ptr(u8), s : us
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut found := false
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-    if std_type_has_byte_layout(decls, src, eff.s, eff.n, ew, a) { found = true }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+        if std_type_has_byte_layout(decls, src, eff.s, eff.n, ew, a) { found = true }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   found
 }
@@ -1216,31 +1241,36 @@ pub std_struct_is_byte_writable := fn(decls : ptr(rt::Vec), src : ptr(u8), s : u
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut ok := true
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-    aes := arr_field_elem_span(src, eff.s, eff.n)
-    if aes.n != 0 {
-      ## An ARRAY field is in the domain only as an explicitly byte-typed one of statically known
-      ## length: that is the single array shape all four writers store element-by-element.
-      if layout_byte_type_eek(src, aes.s, aes.n) == 0 { ok = false }
-      if ew == 0 { ok = false }
-    } else {
-      sbn := base_type_name(src, eff.s, eff.n)
-      if ew != 1 { ok = false }                                        ## a multi-word non-array field
-      else if is_union_decl(decls, src, sbn.s, sbn.n) { ok = false }
-      else if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 {
-        if not std_struct_is_byte_writable(decls, src, eff.s, eff.n, a) { ok = false }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+        aes := arr_field_elem_span(src, eff.s, eff.n)
+        if aes.n != 0 {
+          ## An ARRAY field is in the domain only as an explicitly byte-typed one of statically known
+          ## length: that is the single array shape all four writers store element-by-element.
+          if layout_byte_type_eek(src, aes.s, aes.n) == 0 { ok = false }
+          if ew == 0 { ok = false }
+        } else {
+          sbn := base_type_name(src, eff.s, eff.n)
+          if ew != 1 { ok = false }                                        ## a multi-word non-array field
+          else if is_union_decl(decls, src, sbn.s, sbn.n) { ok = false }
+          else if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 {
+            if not std_struct_is_byte_writable(decls, src, eff.s, eff.n, a) { ok = false }
+          }
+          else if enum_decl_of(decls, src, sbn.s, sbn.n) >= 0 { ok = false }
+          else if is_view_type(src, eff.s, eff.n) { ok = false }
+          else if str_at((src + eff.s), 1) == "(" { ok = false }            ## a TUPLE field
+          else if standard_type_byte_size(decls, src, eff.s, eff.n, ew, a) != scalar_byte_size(src, eff.s, eff.n) { ok = false }
+        }
+        ## Every field must also HAVE a §6.1 offset — the writer stores at that number and nowhere else.
+        if standard_field_byte_offset(decls, src, s, n, fd.ns, fd.nl, a) < 0 { ok = false }
+        f = fd.next
       }
-      else if enum_decl_of(decls, src, sbn.s, sbn.n) >= 0 { ok = false }
-      else if is_view_type(src, eff.s, eff.n) { ok = false }
-      else if str_at((src + eff.s), 1) == "(" { ok = false }            ## a TUPLE field
-      else if standard_type_byte_size(decls, src, eff.s, eff.n, ew, a) != scalar_byte_size(src, eff.s, eff.n) { ok = false }
+      None => { break }
     }
-    ## Every field must also HAVE a §6.1 offset — the writer stores at that number and nowhere else.
-    if standard_field_byte_offset(decls, src, s, n, fd.ns, fd.nl, a) < 0 { ok = false }
-    f = fd.next
   }
   ok
 }
@@ -1296,29 +1326,34 @@ pub std_copy_dest_word_ok := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut ok := true
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    bo := standard_field_byte_offset(decls, src, s, n, fd.ns, fd.nl, a)
-    wo := field_word_offset(decls, src, s, n, fd.ns, fd.nl, a)
-    if bo < 0 { ok = false }
-    if wo < 0 { ok = false }
-    aes := arr_field_elem_span(src, eff.s, eff.n)
-    mut nested := false
-    if aes.n == 0 {
-      sbn := base_type_name(src, eff.s, eff.n)
-      if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { nested = true }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        bo := standard_field_byte_offset(decls, src, s, n, fd.ns, fd.nl, a)
+        wo := field_word_offset(decls, src, s, n, fd.ns, fd.nl, a)
+        if bo < 0 { ok = false }
+        if wo < 0 { ok = false }
+        aes := arr_field_elem_span(src, eff.s, eff.n)
+        mut nested := false
+        if aes.n == 0 {
+          sbn := base_type_name(src, eff.s, eff.n)
+          if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { nested = true }
+        }
+        ## An ARRAY field cannot reach here: a byte-typed one makes the struct BYTE-tier (rejected above)
+        ## and any other kind is outside the writer's domain. Refuse it explicitly all the same, so this
+        ## predicate stays sound on its own rather than by a caller's ordering.
+        if aes.n != 0 { ok = false }
+        if nested and not std_copy_dest_word_ok(decls, src, eff.s, eff.n, a) { ok = false }
+        if not nested and aes.n == 0 {
+          sz := scalar_byte_size(src, eff.s, eff.n)
+          if sz != 1 and sz != 2 and sz != 4 and sz != 8 { ok = false }
+        }
+        f = fd.next
+      }
+      None => { break }
     }
-    ## An ARRAY field cannot reach here: a byte-typed one makes the struct BYTE-tier (rejected above)
-    ## and any other kind is outside the writer's domain. Refuse it explicitly all the same, so this
-    ## predicate stays sound on its own rather than by a caller's ordering.
-    if aes.n != 0 { ok = false }
-    if nested and not std_copy_dest_word_ok(decls, src, eff.s, eff.n, a) { ok = false }
-    if not nested and aes.n == 0 {
-      sz := scalar_byte_size(src, eff.s, eff.n)
-      if sz != 1 and sz != 2 and sz != 4 and sz != 8 { ok = false }
-    }
-    f = fd.next
   }
   ok
 }
@@ -1348,31 +1383,36 @@ _copy_walk := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, sbia
   if di < 0 { return r }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    bo := standard_field_byte_offset(decls, src, s, n, fd.ns, fd.nl, a)
-    wo := field_word_offset(decls, src, s, n, fd.ns, fd.nl, a)
-    aes := arr_field_elem_span(src, eff.s, eff.n)
-    mut nested := false
-    if aes.n == 0 {
-      sbn := base_type_name(src, eff.s, eff.n)
-      if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { nested = true }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        bo := standard_field_byte_offset(decls, src, s, n, fd.ns, fd.nl, a)
+        wo := field_word_offset(decls, src, s, n, fd.ns, fd.nl, a)
+        aes := arr_field_elem_span(src, eff.s, eff.n)
+        mut nested := false
+        if aes.n == 0 {
+          sbn := base_type_name(src, eff.s, eff.n)
+          if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { nested = true }
+        }
+        if nested {
+          sub := _copy_walk(decls, src, eff.s, eff.n, sbias + bo, dbias + wo, want, r.seen, a)
+          mut take := false
+          if sub.found and (not r.found) { take = true }
+          if take { r = LCopyStep(found = true, seen = sub.seen, sbo = sub.sbo, dwo = sub.dwo, sz = sub.sz, signed = sub.signed) }
+          if not take { r = LCopyStep(found = r.found, seen = sub.seen, sbo = r.sbo, dwo = r.dwo, sz = r.sz, signed = r.signed) }
+        }
+        if not nested {
+          mut hit := false
+          if (not r.found) and i64(r.seen) == want { hit = true }
+          if hit { r = LCopyStep(found = true, seen = r.seen + 1, sbo = sbias + bo, dwo = dbias + wo, sz = scalar_byte_size(src, eff.s, eff.n), signed = eff.n != 0 and str_at((src + eff.s), 1) == "i") }
+          if not hit { r = LCopyStep(found = r.found, seen = r.seen + 1, sbo = r.sbo, dwo = r.dwo, sz = r.sz, signed = r.signed) }
+        }
+        f = fd.next
+      }
+      None => { break }
     }
-    if nested {
-      sub := _copy_walk(decls, src, eff.s, eff.n, sbias + bo, dbias + wo, want, r.seen, a)
-      mut take := false
-      if sub.found and (not r.found) { take = true }
-      if take { r = LCopyStep(found = true, seen = sub.seen, sbo = sub.sbo, dwo = sub.dwo, sz = sub.sz, signed = sub.signed) }
-      if not take { r = LCopyStep(found = r.found, seen = sub.seen, sbo = r.sbo, dwo = r.dwo, sz = r.sz, signed = r.signed) }
-    }
-    if not nested {
-      mut hit := false
-      if (not r.found) and i64(r.seen) == want { hit = true }
-      if hit { r = LCopyStep(found = true, seen = r.seen + 1, sbo = sbias + bo, dwo = dbias + wo, sz = scalar_byte_size(src, eff.s, eff.n), signed = eff.n != 0 and str_at((src + eff.s), 1) == "i") }
-      if not hit { r = LCopyStep(found = r.found, seen = r.seen + 1, sbo = r.sbo, dwo = r.dwo, sz = r.sz, signed = r.signed) }
-    }
-    f = fd.next
   }
   r
 }
@@ -1509,17 +1549,22 @@ pub std_struct_has_aggregate_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut found := false
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    es := arr_field_elem_span(src, eff.s, eff.n)
-    if es.n == 0 {
-      sbn := base_type_name(src, eff.s, eff.n)
-      if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { found = true }
-      if enum_decl_of(decls, src, sbn.s, sbn.n) >= 0 { found = true }
-      if str_at((src + eff.s), eff.n) == "str" { found = true }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        es := arr_field_elem_span(src, eff.s, eff.n)
+        if es.n == 0 {
+          sbn := base_type_name(src, eff.s, eff.n)
+          if struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 { found = true }
+          if enum_decl_of(decls, src, sbn.s, sbn.n) >= 0 { found = true }
+          if str_at((src + eff.s), eff.n) == "str" { found = true }
+        }
+        f = fd.next
+      }
+      None => { break }
     }
-    f = fd.next
   }
   found
 }
@@ -1542,31 +1587,41 @@ pub std_struct_is_word_granular := fn(decls : ptr(rt::Vec), src : ptr(u8), s : u
   ## (`standard_type_byte_size` panics on `wsize == 0`), so answer false BEFORE any query runs.
   mut f0 := d.fields_head
   mut sized := true
-  while f0 != 0 {
-    fd0 := deref(fld_p(f0))
-    eff0 := subst_field_ty(decls, src, s, n, fd0.ts, fd0.tl, a)
-    ew0 := eff_field_wsize(decls, src, s, n, fd0.ts, fd0.tl, fd0.wsize, a)
-    aes0 := arr_field_elem_span(src, eff0.s, eff0.n)
-    if ew0 == 0 and aes0.n != 0 { sized = false }
-    f0 = fd0.next
+  loop {
+    match f0 {
+      Some(f0q) => {
+        fd0 := deref(fld_p(f0q))
+        eff0 := subst_field_ty(decls, src, s, n, fd0.ts, fd0.tl, a)
+        ew0 := eff_field_wsize(decls, src, s, n, fd0.ts, fd0.tl, fd0.wsize, a)
+        aes0 := arr_field_elem_span(src, eff0.s, eff0.n)
+        if ew0 == 0 and aes0.n != 0 { sized = false }
+        f0 = fd0.next
+      }
+      None => { break }
+    }
   }
   if not sized { return false }
   ## PASS 2 — every field's two offsets must coincide, and a struct-typed field must itself qualify.
   mut f := d.fields_head
   mut ok := true
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-    bo := standard_field_byte_offset(decls, src, s, n, fd.ns, fd.nl, a)
-    wo := field_word_offset(decls, src, s, n, fd.ns, fd.nl, a)
-    if bo < 0 or wo < 0 { ok = false }
-    if bo != wo * 8 { ok = false }
-    sbn := base_type_name(src, eff.s, eff.n)
-    if ew == 1 and struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 {
-      if not std_struct_is_word_granular(decls, src, eff.s, eff.n, a) { ok = false }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+        bo := standard_field_byte_offset(decls, src, s, n, fd.ns, fd.nl, a)
+        wo := field_word_offset(decls, src, s, n, fd.ns, fd.nl, a)
+        if bo < 0 or wo < 0 { ok = false }
+        if bo != wo * 8 { ok = false }
+        sbn := base_type_name(src, eff.s, eff.n)
+        if ew == 1 and struct_decl_of(decls, src, sbn.s, sbn.n) >= 0 {
+          if not std_struct_is_word_granular(decls, src, eff.s, eff.n, a) { ok = false }
+        }
+        f = fd.next
+      }
+      None => { break }
     }
-    f = fd.next
   }
   if standard_struct_bytes(decls, src, s, n, a) != struct_words(decls, src, s, n, a) * 8 { ok = false }
   ok
@@ -1756,15 +1811,20 @@ pub standard_struct_align := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, 
   mut mx := 1
   sa := struct_align_attr(decls, src, s, n)
   if sa >= 1 { mx = usize(sa) }
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-    mut fa := standard_type_byte_align(decls, src, eff.s, eff.n, ew, a)
-    ea := field_align_attr(src, fd.ns)
-    if ea >= 1 and usize(ea) > fa { fa = usize(ea) }
-    if fa > mx { mx = fa }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+        mut fa := standard_type_byte_align(decls, src, eff.s, eff.n, ew, a)
+        ea := field_align_attr(src, fd.ns)
+        if ea >= 1 and usize(ea) > fa { fa = usize(ea) }
+        if fa > mx { mx = fa }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   mx
 }
@@ -1776,17 +1836,22 @@ pub standard_field_byte_offset := fn(decls : ptr(rt::Vec), src : ptr(u8), s : us
   mut f := d.fields_head
   mut off := 0
   mut res : i64 = -1
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-    mut fa := standard_type_byte_align(decls, src, eff.s, eff.n, ew, a)
-    ea := field_align_attr(src, fd.ns)
-    if ea >= 1 and usize(ea) > fa { fa = usize(ea) }
-    off = round_up_to(off, fa)
-    if streq(src, fd.ns, fd.nl, fs, fl) { res = i64(off) }
-    off += standard_type_byte_size(decls, src, eff.s, eff.n, ew, a)
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+        mut fa := standard_type_byte_align(decls, src, eff.s, eff.n, ew, a)
+        ea := field_align_attr(src, fd.ns)
+        if ea >= 1 and usize(ea) > fa { fa = usize(ea) }
+        off = round_up_to(off, fa)
+        if streq(src, fd.ns, fd.nl, fs, fl) { res = i64(off) }
+        off += standard_type_byte_size(decls, src, eff.s, eff.n, ew, a)
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -1797,16 +1862,21 @@ pub standard_struct_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut off := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-    mut fa := standard_type_byte_align(decls, src, eff.s, eff.n, ew, a)
-    ea := field_align_attr(src, fd.ns)
-    if ea >= 1 and usize(ea) > fa { fa = usize(ea) }
-    off = round_up_to(off, fa)
-    off += standard_type_byte_size(decls, src, eff.s, eff.n, ew, a)
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+        mut fa := standard_type_byte_align(decls, src, eff.s, eff.n, ew, a)
+        ea := field_align_attr(src, fd.ns)
+        if ea >= 1 and usize(ea) > fa { fa = usize(ea) }
+        off = round_up_to(off, fa)
+        off += standard_type_byte_size(decls, src, eff.s, eff.n, ew, a)
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   round_up_to(off, standard_struct_align(decls, src, s, n, a))
 }
@@ -1877,41 +1947,46 @@ pub struct_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut tot := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    ## NESTED-GENERIC: a type-PARAM field of a generic INSTANCE (`v : T` in `Box(Pair(u64))`) is sized
-    ## as the instance's type-arg (`Pair` → 2 words); gated to aggregate type-args, so a scalar-arg
-    ## instance (`Box(u64)`) sizes byte-identically to the un-substituted param `T` (1 word).
-    ## COMPTIME-VALUE-GENERIC: a `[T; <expr>]` field (parser `wsize` 0) folds its length against the
-    ## instance's comptime-value bindings (`uint(192)` → `[u64; 3]` = 3 words).
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    ## SOUNDNESS (I11 / Types §9.4): the current field/index consumers have one word-model stride for
-    ## an inline array field, but an element that is itself an array needs a second independent index
-    ## and its own nested stride. Before this fence `s.data[i][j]` compiled and the second index fell
-    ## through to slot 0, yielding a clean wrong value; the assignment spelling could also disappear in
-    ## the parser before lowering. Reject the whole containing struct here, before any backend reserves
-    ## or materializes its image, so x86_64 and all cross backends share the same safe boundary.
-    if array_type_has_array_element(src, eff.s, eff.n) {
-      ll_show_src_line(src, fd.ts)
-      panic("selfhost: a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled")
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        ## NESTED-GENERIC: a type-PARAM field of a generic INSTANCE (`v : T` in `Box(Pair(u64))`) is sized
+        ## as the instance's type-arg (`Pair` → 2 words); gated to aggregate type-args, so a scalar-arg
+        ## instance (`Box(u64)`) sizes byte-identically to the un-substituted param `T` (1 word).
+        ## COMPTIME-VALUE-GENERIC: a `[T; <expr>]` field (parser `wsize` 0) folds its length against the
+        ## instance's comptime-value bindings (`uint(192)` → `[u64; 3]` = 3 words).
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        ## SOUNDNESS (I11 / Types §9.4): the current field/index consumers have one word-model stride for
+        ## an inline array field, but an element that is itself an array needs a second independent index
+        ## and its own nested stride. Before this fence `s.data[i][j]` compiled and the second index fell
+        ## through to slot 0, yielding a clean wrong value; the assignment spelling could also disappear in
+        ## the parser before lowering. Reject the whole containing struct here, before any backend reserves
+        ## or materializes its image, so x86_64 and all cross backends share the same safe boundary.
+        if array_type_has_array_element(src, eff.s, eff.n) {
+          ll_show_src_line(src, fd.ts)
+          panic("selfhost: a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled")
+        }
+        ## The default struct layout is still word-granular. An explicitly byte-typed array field would
+        ## therefore be accepted but laid out at an element stride of 8, while Types §6.4 requires stride
+        ## 1 for `[u8|i8|bits8; N]`. Keep the correct-or-trap invariant until the shared byte-layout path
+        ## exists: `@packed` fields already have a separate byte emitter and remain supported here.
+        ## `ew` (the effective field WORD size) is bound BEFORE the fences below: the second fence reads it,
+        ## and `:=` locals are function-scoped, so binding it after the read made that fence consult an unset
+        ## slot on the first iteration and the PREVIOUS field's `wsize` afterwards. The fence is redundant
+        ## today (the `layout_kind` gate above catches the same shape first) but it must be correct before
+        ## that gate widens (CLAYOUT S4).
+        ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+        if not layout_kind_is_packed(lk) {
+          aes := arr_field_elem_span(src, eff.s, eff.n)
+          if aes.n != 0 and layout_byte_type_eek(src, aes.s, aes.n) != 0 { panic("selfhost: a plain struct with a byte fixed-array field is not yet supported by the word-granular aggregate layout; use @packed or wait for the shared byte-layout implementation") }
+          if std_type_has_byte_layout(decls, src, eff.s, eff.n, ew, a) { panic("selfhost: a plain struct containing a byte-layout aggregate field is not yet supported by all aggregate consumers — bind the inner value separately or use @packed") }
+        }
+        tot += field_words(decls, src, eff.s, eff.n, ew, a)
+        f = fd.next
+      }
+      None => { break }
     }
-    ## The default struct layout is still word-granular. An explicitly byte-typed array field would
-    ## therefore be accepted but laid out at an element stride of 8, while Types §6.4 requires stride
-    ## 1 for `[u8|i8|bits8; N]`. Keep the correct-or-trap invariant until the shared byte-layout path
-    ## exists: `@packed` fields already have a separate byte emitter and remain supported here.
-    ## `ew` (the effective field WORD size) is bound BEFORE the fences below: the second fence reads it,
-    ## and `:=` locals are function-scoped, so binding it after the read made that fence consult an unset
-    ## slot on the first iteration and the PREVIOUS field's `wsize` afterwards. The fence is redundant
-    ## today (the `layout_kind` gate above catches the same shape first) but it must be correct before
-    ## that gate widens (CLAYOUT S4).
-    ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-    if not layout_kind_is_packed(lk) {
-      aes := arr_field_elem_span(src, eff.s, eff.n)
-      if aes.n != 0 and layout_byte_type_eek(src, aes.s, aes.n) != 0 { panic("selfhost: a plain struct with a byte fixed-array field is not yet supported by the word-granular aggregate layout; use @packed or wait for the shared byte-layout implementation") }
-      if std_type_has_byte_layout(decls, src, eff.s, eff.n, ew, a) { panic("selfhost: a plain struct containing a byte-layout aggregate field is not yet supported by all aggregate consumers — bind the inner value separately or use @packed") }
-    }
-    tot += field_words(decls, src, eff.s, eff.n, ew, a)
-    f = fd.next
   }
   ## §8 `@packed`: the SLOT reservation (this WORD count) must cover the byte-precise layout — an
   ## `@offset(N)` field can push the highest byte END past the field-count words, so reserve at least
@@ -1949,17 +2024,22 @@ pub field_word_offset := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   mut f := d.fields_head
   mut off := 0
   mut res := -1
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, fs, fl) { res = i64(off) }
-    ## NESTED-GENERIC: advance by the substituted field width (a `Pair`-typed param field is 2 words),
-    ## so a later field's offset — and the READ side that funnels through here — stays consistent with
-    ## `struct_words`. Gated to aggregate type-args (scalar-arg instances are byte-identical).
-    ## COMPTIME-VALUE-GENERIC: a `[T; <expr>]` field advances by its folded length (see `struct_words`).
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-    off += field_words(decls, src, eff.s, eff.n, ew, a)
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) { res = i64(off) }
+        ## NESTED-GENERIC: advance by the substituted field width (a `Pair`-typed param field is 2 words),
+        ## so a later field's offset — and the READ side that funnels through here — stays consistent with
+        ## `struct_words`. Gated to aggregate type-args (scalar-arg instances are byte-identical).
+        ## COMPTIME-VALUE-GENERIC: a `[T; <expr>]` field advances by its folded length (see `struct_words`).
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        ew := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+        off += field_words(decls, src, eff.s, eff.n, ew, a)
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -1972,10 +2052,15 @@ pub field_type_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut r := false
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, fs, fl) { if fd.tl != 0 { tn := str_at((src + fd.ts), fd.tl) ; if tn == "f64" { r = true } ; if tn == "f32" { r = true } } }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) { if fd.tl != 0 { tn := str_at((src + fd.ts), fd.tl) ; if tn == "f64" { r = true } ; if tn == "f32" { r = true } } }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   r
 }
@@ -3483,7 +3568,7 @@ pub apply_when_guards := fn(decls : ptr(rt::Vec), src : ptr(u8), arch : str) {
         gdp : ptr(mut Decl) = unchecked bitcast(ptr(mut Decl), gh)
         deref(gdp) = Decl(name_start = dg.name_start, name_len = 0, value = dg.value,
           is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-          body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0,
+          body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
           mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       }
     }
@@ -4019,10 +4104,15 @@ pub packed_field_endian := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut res := -1
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, fs, fl) { res = field_endian_attr(src, fd.ns) }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) { res = field_endian_attr(src, fd.ns) }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -4087,11 +4177,16 @@ pub packed_struct_align := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut mx := 1
-  while f != 0 {
-    fd := deref(fld_p(f))
-    ea := field_align_attr(src, fd.ns)
-    if ea >= 1 and usize(ea) > mx { mx = usize(ea) }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        ea := field_align_attr(src, fd.ns)
+        if ea >= 1 and usize(ea) > mx { mx = usize(ea) }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   mx
 }
@@ -4159,17 +4254,22 @@ pub packed_field_byte_offset := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usiz
   mut f := d.fields_head
   mut off := 0
   mut res := -1
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eo := field_offset_attr(src, fd.ns)
-    ea := field_align_attr(src, fd.ns)            ## §8 @align(N) on this field, or -1
-    mut cur := off
-    ## `@align(N)` raises the cursor to a multiple of N; an explicit `@offset(N)` (absolute) overrides.
-    if ea >= 1 { cur = round_up_to(cur, usize(ea)) }
-    if eo >= 0 { cur = usize(eo) }
-    if streq(src, fd.ns, fd.nl, fs, fl) { res = i64(cur) }
-    off = cur + field_byte_size(decls, src, fd.ts, fd.tl, fd.wsize, a)
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eo := field_offset_attr(src, fd.ns)
+        ea := field_align_attr(src, fd.ns)            ## §8 @align(N) on this field, or -1
+        mut cur := off
+        ## `@align(N)` raises the cursor to a multiple of N; an explicit `@offset(N)` (absolute) overrides.
+        if ea >= 1 { cur = round_up_to(cur, usize(ea)) }
+        if eo >= 0 { cur = usize(eo) }
+        if streq(src, fd.ns, fd.nl, fs, fl) { res = i64(cur) }
+        off = cur + field_byte_size(decls, src, fd.ts, fd.tl, fd.wsize, a)
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -4186,17 +4286,22 @@ pub packed_struct_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   mut f := d.fields_head
   mut off := 0
   mut maxend := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eo := field_offset_attr(src, fd.ns)
-    ea := field_align_attr(src, fd.ns)            ## §8 @align(N) on this field, or -1
-    mut cur := off
-    if ea >= 1 { cur = round_up_to(cur, usize(ea)) }
-    if eo >= 0 { cur = usize(eo) }
-    endb := cur + field_byte_size(decls, src, fd.ts, fd.tl, fd.wsize, a)
-    if endb > maxend { maxend = endb }
-    off = endb
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eo := field_offset_attr(src, fd.ns)
+        ea := field_align_attr(src, fd.ns)            ## §8 @align(N) on this field, or -1
+        mut cur := off
+        if ea >= 1 { cur = round_up_to(cur, usize(ea)) }
+        if eo >= 0 { cur = usize(eo) }
+        endb := cur + field_byte_size(decls, src, fd.ts, fd.tl, fd.wsize, a)
+        if endb > maxend { maxend = endb }
+        off = endb
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   ## §8: the struct size rounds up to the struct's alignment (max field alignment). A plain packed
   ## struct is alignment 1 → no rounding → byte-identical to the pre-`@align` behavior.
@@ -4353,10 +4458,15 @@ pub union_member_ty := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
   mut f := d.fields_head
   mut rs := 0
   mut rn := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, fs, fl) { rs = fd.ts; rn = fd.tl }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) { rs = fd.ts; rn = fd.tl }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   LSpan(s = rs, n = rn)
 }
@@ -4467,20 +4577,25 @@ pub enum_max_arity := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usi
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut mx := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    mut pw := fd.arity
-    if fd.arity == 1 {
-      if struct_decl_of(decls, src, fd.ts, fd.tl) >= 0 {
-        pw = struct_words(decls, src, fd.ts, fd.tl, a)
-      } else if enum_decl_of(decls, src, fd.ts, fd.tl) >= 0 {
-        pw = 1 + enum_max_arity(decls, src, fd.ts, fd.tl, a)
-      } else if str_at((src + fd.ts), fd.tl) == "str" {
-        pw = 2                                   ## a `str` payload is a 2-word {ptr, len}
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        mut pw := fd.arity
+        if fd.arity == 1 {
+          if struct_decl_of(decls, src, fd.ts, fd.tl) >= 0 {
+            pw = struct_words(decls, src, fd.ts, fd.tl, a)
+          } else if enum_decl_of(decls, src, fd.ts, fd.tl) >= 0 {
+            pw = 1 + enum_max_arity(decls, src, fd.ts, fd.tl, a)
+          } else if str_at((src + fd.ts), fd.tl) == "str" {
+            pw = 2                                   ## a `str` payload is a 2-word {ptr, len}
+          }
+        }
+        if pw > mx { mx = pw }
+        f = fd.next
       }
+      None => { break }
     }
-    if pw > mx { mx = pw }
-    f = fd.next
   }
   mx
 }
@@ -4494,20 +4609,25 @@ enum_max_arity_of_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), di : usize, a 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), di)))
   mut f := d.fields_head
   mut mx := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    mut pw := fd.arity
-    if fd.arity == 1 {
-      if struct_decl_of(decls, src, fd.ts, fd.tl) >= 0 {
-        pw = struct_words(decls, src, fd.ts, fd.tl, a)
-      } else if enum_decl_of(decls, src, fd.ts, fd.tl) >= 0 {
-        pw = 1 + enum_max_arity(decls, src, fd.ts, fd.tl, a)
-      } else if str_at((src + fd.ts), fd.tl) == "str" {
-        pw = 2
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        mut pw := fd.arity
+        if fd.arity == 1 {
+          if struct_decl_of(decls, src, fd.ts, fd.tl) >= 0 {
+            pw = struct_words(decls, src, fd.ts, fd.tl, a)
+          } else if enum_decl_of(decls, src, fd.ts, fd.tl) >= 0 {
+            pw = 1 + enum_max_arity(decls, src, fd.ts, fd.tl, a)
+          } else if str_at((src + fd.ts), fd.tl) == "str" {
+            pw = 2
+          }
+        }
+        if pw > mx { mx = pw }
+        f = fd.next
       }
+      None => { break }
     }
-    if pw > mx { mx = pw }
-    f = fd.next
   }
   mx
 }
@@ -4937,20 +5057,25 @@ pub enum_inst_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
   if d.is_generic == false { return enum_max_arity_of_decl(decls, src, usize(di), a) }
   mut f := d.fields_head
   mut mx := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    mut pw := fd.arity
-    if fd.arity == 1 {
-      pos := param_pos(decls, usize(di), src, fd.ts, fd.tl, a)
-      if pos >= 0 {
-        ta := typearg_at(src, ebn.s, ebn.n, usize(pos))
-        if ta.n > 0 { pw = agg_words(decls, src, ta.s, ta.n, a) }
-      } else {
-        pw = agg_words(decls, src, fd.ts, fd.tl, a)
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        mut pw := fd.arity
+        if fd.arity == 1 {
+          pos := param_pos(decls, usize(di), src, fd.ts, fd.tl, a)
+          if pos >= 0 {
+            ta := typearg_at(src, ebn.s, ebn.n, usize(pos))
+            if ta.n > 0 { pw = agg_words(decls, src, ta.s, ta.n, a) }
+          } else {
+            pw = agg_words(decls, src, fd.ts, fd.tl, a)
+          }
+        }
+        if pw > mx { mx = pw }
+        f = fd.next
       }
+      None => { break }
     }
-    if pw > mx { mx = pw }
-    f = fd.next
   }
   mx
 }
@@ -4978,20 +5103,25 @@ pub variant_payload_type := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, 
   ## struct-local-in-loop miscompile; see `typearg_at`). Build the `LSpan` once at return.
   mut rs := 0
   mut rn := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, vs, vn) and fd.arity >= 1 {
-      rs = fd.ts
-      rn = fd.tl
-      if d.is_generic {
-        pos := param_pos(decls, usize(di), src, fd.ts, fd.tl, a)
-        if pos >= 0 {
-          ta := typearg_at(src, ebn.s, ebn.n, usize(pos))
-          if ta.n > 0 { rs = ta.s; rn = ta.n }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, vs, vn) and fd.arity >= 1 {
+          rs = fd.ts
+          rn = fd.tl
+          if d.is_generic {
+            pos := param_pos(decls, usize(di), src, fd.ts, fd.tl, a)
+            if pos >= 0 {
+              ta := typearg_at(src, ebn.s, ebn.n, usize(pos))
+              if ta.n > 0 { rs = ta.s; rn = ta.n }
+            }
+          }
         }
+        f = fd.next
       }
+      None => { break }
     }
-    f = fd.next
   }
   LSpan(s = rs, n = rn)
 }
@@ -5011,31 +5141,36 @@ pub variant_payload_span := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, 
   mut f := d.fields_head
   mut rs := 0
   mut rn := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, vs, vn) and fd.arity >= 2 {
-      ## MULTI-component `V(T0, …, TN)` — the `(…)` list sits right after the variant name; capture
-      ## the balanced-paren span as a TUPLE type. Scan to `(`, then forward at paren depth to the `)`.
-      mut p := (fd.ns + fd.nl)
-      while str_at((src + p), 1) != "(" { p = p + 1 }
-      op := p
-      mut depth := 0
-      mut i := p
-      mut cl := p
-      mut go := true
-      while go {
-        c := str_at((src + i), 1)
-        if c == "(" { depth = depth + 1 }
-        else if c == ")" {
-          depth = depth - 1
-          if depth == 0 { cl = i; go = false }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, vs, vn) and fd.arity >= 2 {
+          ## MULTI-component `V(T0, …, TN)` — the `(…)` list sits right after the variant name; capture
+          ## the balanced-paren span as a TUPLE type. Scan to `(`, then forward at paren depth to the `)`.
+          mut p := (fd.ns + fd.nl)
+          while str_at((src + p), 1) != "(" { p = p + 1 }
+          op := p
+          mut depth := 0
+          mut i := p
+          mut cl := p
+          mut go := true
+          while go {
+            c := str_at((src + i), 1)
+            if c == "(" { depth = depth + 1 }
+            else if c == ")" {
+              depth = depth - 1
+              if depth == 0 { cl = i; go = false }
+            }
+            i += 1
+          }
+          rs = op
+          rn = cl - op + 1
         }
-        i += 1
+        f = fd.next
       }
-      rs = op
-      rn = cl - op + 1
+      None => { break }
     }
-    f = fd.next
   }
   if rn != 0 { return LSpan(s = rs, n = rn) }
   ## 1-component (or unit): fall back to the single-type view (handles the generic substitution).
@@ -5063,36 +5198,41 @@ pub variant_bind_pointee := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, 
   if di < 0 { return z }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, vs, vn) and fd.arity >= 1 {
-      if nbind != fd.arity or bi >= nbind { return z }
-      ## The `( … )` group opens right after the variant name; `typearg_at` reads component `bi` of it.
-      mut op := fd.ns + fd.nl
-      while str_at((src + op), 1) != "(" { op = op + 1 }
-      comp := typearg_at(src, op, 0, bi)
-      if comp.n == 0 { return z }
-      mut ts := comp.s
-      mut tl := comp.n
-      if d.is_generic {
-        pos := param_pos(decls, usize(di), src, ts, tl, a)
-        if pos >= 0 {
-          ta := typearg_at(src, ebn.s, ebn.n, usize(pos))
-          if ta.n == 0 { return z }
-          ts = ta.s
-          tl = ta.n
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, vs, vn) and fd.arity >= 1 {
+          if nbind != fd.arity or bi >= nbind { return z }
+          ## The `( … )` group opens right after the variant name; `typearg_at` reads component `bi` of it.
+          mut op := fd.ns + fd.nl
+          while str_at((src + op), 1) != "(" { op = op + 1 }
+          comp := typearg_at(src, op, 0, bi)
+          if comp.n == 0 { return z }
+          mut ts := comp.s
+          mut tl := comp.n
+          if d.is_generic {
+            pos := param_pos(decls, usize(di), src, ts, tl, a)
+            if pos >= 0 {
+              ta := typearg_at(src, ebn.s, ebn.n, usize(pos))
+              if ta.n == 0 { return z }
+              ts = ta.s
+              tl = ta.n
+            }
+          }
+          ps := ptr_target_pointee_s(src, ts, tl)
+          pn := ptr_target_pointee_n(src, ts, tl)
+          if pn == 0 { return z }
+          if d.is_generic {
+            ppos := param_pos(decls, usize(di), src, ps, pn, a)
+            if ppos >= 0 { return typearg_at(src, ebn.s, ebn.n, usize(ppos)) }
+          }
+          return LSpan(s = ps, n = pn)
         }
+        f = fd.next
       }
-      ps := ptr_target_pointee_s(src, ts, tl)
-      pn := ptr_target_pointee_n(src, ts, tl)
-      if pn == 0 { return z }
-      if d.is_generic {
-        ppos := param_pos(decls, usize(di), src, ps, pn, a)
-        if ppos >= 0 { return typearg_at(src, ebn.s, ebn.n, usize(ppos)) }
-      }
-      return LSpan(s = ps, n = pn)
+      None => { break }
     }
-    f = fd.next
   }
   z
 }
@@ -5193,20 +5333,25 @@ variant_pin := fn(src : ptr(u8), ns : usize, nl : usize) -> i64 {
 ## (spec Types §6.2: first `0`, each subsequent previous `+1`, a `= N` pin overrides and the run
 ## continues from `N + 1`). Shared by `variant_index` and `enum_dup_disc`. An un-pinned list resolves to
 ## `0,1,2,…` == the positional index → byte-identical to the former positional behaviour.
-eff_disc_at := fn(src : ptr(u8), fields_head : ptr(mut FieldDecl), target : usize) -> i64 {
+eff_disc_at := fn(src : ptr(u8), fields_head : Option(ptr(mut FieldDecl)), target : usize) -> i64 {
   mut f := fields_head
   mut running := 0
   mut idx := 0
   mut res := -1
-  while f != 0 {
-    fd := deref(fld_p(f))
-    pin := variant_pin(src, fd.ns, fd.nl)
-    mut disc := running
-    if pin >= 0 { disc = pin }
-    if idx == target { res = disc }
-    running = disc + 1
-    idx = idx + 1
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        pin := variant_pin(src, fd.ns, fd.nl)
+        mut disc := running
+        if pin >= 0 { disc = pin }
+        if idx == target { res = disc }
+        running = disc + 1
+        idx = idx + 1
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -5215,19 +5360,24 @@ eff_disc_at := fn(src : ptr(u8), fields_head : ptr(mut FieldDecl), target : usiz
 ## to a distinct value (spec Types §6.2: "Two variants resolving to the same value are ill-formed").
 ## All-pairs over the variants (enums are small); an un-pinned enum resolves to `0,1,2,…` (always
 ## distinct) → `-1` → no rejection → fixpoint-neutral.
-pub enum_dup_disc := fn(src : ptr(u8), fields_head : ptr(mut FieldDecl)) -> i64 {
+pub enum_dup_disc := fn(src : ptr(u8), fields_head : Option(ptr(mut FieldDecl))) -> i64 {
   mut fi := fields_head
   mut i := 0
-  while fi != 0 {
-    di := eff_disc_at(src, fields_head, i)
-    mut j := 0
-    while j < i {
-      if eff_disc_at(src, fields_head, j) == di { return di }
-      j = j + 1
+  loop {
+    match fi {
+      Some(fiq) => {
+        di := eff_disc_at(src, fields_head, i)
+        mut j := 0
+        while j < i {
+          if eff_disc_at(src, fields_head, j) == di { return di }
+          j = j + 1
+        }
+        fdi := deref(fld_p(fiq))
+        fi = fdi.next
+        i = i + 1
+      }
+      None => { break }
     }
-    fdi := deref(fld_p(fi))
-    fi = fdi.next
-    i = i + 1
   }
   -1
 }
@@ -5249,14 +5399,19 @@ pub variant_index := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
   mut f := d.fields_head
   mut running := 0
   mut res := -1
-  while f != 0 {
-    fd := deref(fld_p(f))
-    pin := variant_pin(src, fd.ns, fd.nl)
-    mut disc := running
-    if pin >= 0 { disc = pin }
-    if streq(src, fd.ns, fd.nl, vs, vl) { res = disc }
-    running = disc + 1
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        pin := variant_pin(src, fd.ns, fd.nl)
+        mut disc := running
+        if pin >= 0 { disc = pin }
+        if streq(src, fd.ns, fd.nl, vs, vl) { res = disc }
+        running = disc + 1
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -5325,12 +5480,18 @@ const_struct_field_value := fn(base : ptr(Expr), fs : usize, fl : usize, decls :
   mut f := d.fields_head
   mut g := ex_struct_lit_args(cv)
   mut res : ptr(Expr) = z
-  while f != 0 and g != 0 {
-    fd := deref(fld_p(f))
-    ga := deref(arg_p(g))
-    if streq(src, fd.ns, fd.nl, fs, fl) { res = ga.e }
-    f = fd.next
-    g = ga.next
+  loop {
+    match f {
+      Some(fq) => {
+        if not (g != 0) { break }
+        fd := deref(fld_p(fq))
+        ga := deref(arg_p(g))
+        if streq(src, fd.ns, fd.nl, fs, fl) { res = ga.e }
+        f = fd.next
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   res
 }

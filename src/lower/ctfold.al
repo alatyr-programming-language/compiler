@@ -1258,7 +1258,7 @@ comptime_typeinfo_count := fn(ts : usize, tl : usize, cx : ptr(LCtx)) -> i64 {
     sdd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(sd))))
     mut fc := 0
     mut f := sdd.fields_head
-    while f != 0 { fc = fc + 1 ; f = deref(fld_p(f)).next }
+    loop { match f { Some(fq) => { fc = fc + 1 ; f = deref(fld_p(fq)).next }; None => { break } } }
     return i64(fc)
   }
   ed := enum_decl_of(cx.decls, cx.src, bnt.s, bnt.n)
@@ -1266,7 +1266,7 @@ comptime_typeinfo_count := fn(ts : usize, tl : usize, cx : ptr(LCtx)) -> i64 {
     edd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(ed))))
     mut vc := 0
     mut vf := edd.fields_head
-    while vf != 0 { vc = vc + 1 ; vf = deref(fld_p(vf)).next }
+    loop { match vf { Some(vfq) => { vc = vc + 1 ; vf = deref(fld_p(vfq)).next }; None => { break } } }
     return i64(vc)
   }
   if str_at((cx.src + ts), 1) == "(" {

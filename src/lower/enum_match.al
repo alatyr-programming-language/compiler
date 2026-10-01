@@ -538,12 +538,17 @@ pub expand_variant_arms := fn(head : ptr(mut Arm), es : usize, el : usize, cx : 
       if edi >= 0 {
         ed := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(edi))))
         mut fv := ed.fields_head
-        while fv != 0 {
-          fvm := deref(fld_p(fv))
-          ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = unchecked bitcast(ptr(mut Arm), 0), vs = fvm.ns, vl = fvm.nl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
-          if nh == 0 { nh = unchecked bitcast(usize, ai) } else { set_arm_next(cx.mar, nt, ai) }
-          nt = unchecked bitcast(usize, ai)
-          fv = fvm.next
+        loop {
+          match fv {
+            Some(fvq) => {
+              fvm := deref(fld_p(fvq))
+              ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = unchecked bitcast(ptr(mut Arm), 0), vs = fvm.ns, vl = fvm.nl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
+              if nh == 0 { nh = unchecked bitcast(usize, ai) } else { set_arm_next(cx.mar, nt, ai) }
+              nt = unchecked bitcast(usize, ai)
+              fv = fvm.next
+            }
+            None => { break }
+          }
         }
       }
     } else if am.wild == 3 {

@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`deref(p) = S(…)` stores an `Option(ptr(T))` field literal correctly.** Storing a struct literal
+  through a pointer pushed each field as a scalar, so `Some(q)` stored None (the `0` placeholder). Each
+  field is now pushed by its declared type (#846).
+- **A global struct may hold an `Option(ptr(T))` field anywhere.** A global's `.data` cells were laid
+  out from its initializer. A folded field's bare `Option.None` became a two-word cell, so every later
+  field read the word before its own. Each cell is now sized by the field's declared type (#826).
+
 ## 0.2.8 — 2026-10-02
 
 - **Seed promotion; the bootstrap stops miscompiling its own global arguments.** The frozen

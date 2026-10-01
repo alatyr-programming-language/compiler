@@ -16,7 +16,6 @@
 ## 28 != 30 ; 38 => .
 vec := alloc::vec
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, FInit, LabelSpan, Param, Stmt, Token) := ast
-fld_null := ast::fld_null
 (param_p, param_null) := ast
 stmt_null := ast::stmt_null
 arm_p := ast::arm_p
@@ -5167,15 +5166,15 @@ skip_type_param := fn(in out pc : PC) -> bool {
   false
 }
 
-## Parse a `{ member, … }` body into an arena-linked `FieldDecl` list (the head, 0 = empty),
+## Parse a `{ member, … }` body into an arena-linked `FieldDecl` list (the head, `None` = empty),
 ## consuming the opening `{` (cur must be on it) through the closing `}`. A struct field is
 ## `name : T` (arity 0; a `[T; N]` field sets `wsize = N`); an enum variant is `name` or
 ## `name(T, …)` (arity = payload count). Shared by the `Name := struct/enum {…}` decl form AND
 ## the type-FUNCTION form `Name := fn(T : type) -> type { struct {…} }`.
-parse_struct_members := fn(in out pc : PC, packed : bool) -> usize {
+parse_struct_members := fn(in out pc : PC, packed : bool) -> Option(ptr(mut FieldDecl)) {
   pc.idx = pc.idx + 1                       ## '{'
-  mut fhead := fld_null()
-  mut ftail := fld_null()
+  mut fhead : Option(ptr(mut FieldDecl)) = Option.None
+  mut ftail : Option(ptr(mut FieldDecl)) = Option.None
   while cur(pc).kind != 13 and cur(pc).kind != 0 {
     ## FIELD-LEVEL layout attributes (spec Types §8; `@` is kind 33). `@offset(N)` gives the field an
     ## explicit BYTE offset (MMIO / register maps) — a PREFIX surface marker (`@offset(N) x : T`)
@@ -5382,17 +5381,13 @@ parse_struct_members := fn(in out pc : PC, packed : bool) -> usize {
         panic("selfhost: enum discriminant pin must be a SINGLE integer literal, not an expression (spec Types §6.2 / grammar §130 `\"=\" int`)")
       }
     }
-    fnew := fnode(pc.arena, FieldDecl(ns = mn.start, nl = mn.len, arity = marity, next = unchecked bitcast(ptr(mut FieldDecl), 0), ts = mts, tl = mtl, wsize = mwsize))
-    if unchecked bitcast(usize, fhead) == 0 { fhead = fnew } else {
-      old := deref(ftail)
-      upd := FieldDecl(ns = old.ns, nl = old.nl, arity = old.arity, next = fnew, ts = old.ts, tl = old.tl, wsize = old.wsize)
-      deref(ftail) = upd
-    }
-    ftail = fnew
+    fnew := fnode(pc.arena, FieldDecl(ns = mn.start, nl = mn.len, arity = marity, next = Option.None, ts = mts, tl = mtl, wsize = mwsize))
+    match ftail { Some(ft0) => { deref(ft0).next = Option.Some(fnew) }; None => { fhead = Option.Some(fnew) } }
+    ftail = Option.Some(fnew)
     if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between members
   }
   pc.idx = pc.idx + 1                       ## '}'
-  unchecked bitcast(usize, fhead)
+  fhead
 }
 
 pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, ParseErr) {
@@ -5419,7 +5414,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = lts, name_len = ltl, value = ph,
       is_fn = false, kind = 0, arity = 99, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = lts, ret_tl = ltl,
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = lts, ret_tl = ltl,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   ## An optional `pub` visibility prefix (Modules §4.1): every module of the self-host
@@ -5591,7 +5586,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = ds, name_len = dl, value = tbody,
       is_fn = true, kind = 5, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-      body_stmts = tstmts, fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = trt.start, ret_tl = trt.len,
+      body_stmts = tstmts, fields_head = Option.None, ret_ts = trt.start, ret_tl = trt.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   ## DESTRUCTURE import — `(A, B, …) := mod` (e.g. `(Arg, Arm, Expr) := ast`): brings each name
@@ -5620,7 +5615,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = 0, name_len = 0, value = php,
       is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = gopen.start, ret_tl = lastt.start + lastt.len - gopen.start,
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = gopen.start, ret_tl = lastt.start + lastt.len - gopen.start,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   name := cur(pc)
@@ -5662,7 +5657,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = aroot,
       is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0,
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = awhen, alias_ts = 0, alias_tl = 0)))
   }
   if cur(pc).kind != 5 { return Result(usize, ParseErr).Err(ParseErr.Expected(5)) }
@@ -5688,7 +5683,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = ph,
       is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = ut.start, ret_tl = ut.len,
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = ut.start, ret_tl = ut.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   ## MODULE-ALIAS import — `name := mod::sub` (e.g. `vec := alloc::vec`, `io := std::io`): the RHS
@@ -5749,7 +5744,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = ph,
         is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = als_ts, ret_tl = als_tl,
+        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = als_ts, ret_tl = als_tl,
         mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
   }
@@ -5841,7 +5836,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = rph,
       is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = ut.start, ret_tl = utl,
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = ut.start, ret_tl = utl,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   else if cur(pc).kind == 33 and tok_at(pc, pc.idx + 1).kind == 1 and not str_eq(str_at(pc.src + tok_at(pc, pc.idx + 1).start, tok_at(pc, pc.idx + 1).len), "abi") {
@@ -6246,7 +6241,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = eph,
         is_fn = true, kind = 1, arity = arity, is_generic = false, params_head = phead,
-        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = rt.start, ret_tl = rt.len,
+        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = rt.start, ret_tl = rt.len,
         mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
     ## A SYSCALL-ABI fn has NO body — the `-> R` is the whole declaration. Emit a kind-4 Decl
@@ -6256,7 +6251,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = ph,
         is_fn = true, kind = 4, arity = arity, is_generic = false, params_head = phead,
-        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = rt.start, ret_tl = rt.len,
+        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = rt.start, ret_tl = rt.len,
         mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
     ## TYPE-FUNCTION generic form — `Name := fn(T : type) -> type { [@owning] struct {…} }` (the
@@ -6359,7 +6354,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = body,
       is_fn = true, kind = 1, arity = arity, is_generic = is_generic, params_head = phead,
-      body_stmts = stmts, fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = rt.start, ret_tl = rt.len,
+      body_stmts = stmts, fields_head = Option.None, ret_ts = rt.start, ret_tl = rt.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = when_e, alias_ts = 0, alias_tl = 0)))
   }
   ## `Name := @owning struct {…}` / `@owning enum {…}` — the `@owning` effector (linearity) may
@@ -6428,7 +6423,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = ph,
       is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = ut.start, ret_tl = ut.len,
+      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = ut.start, ret_tl = ut.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   rhs_idx := pc.idx                        ## first token of the RHS (for the alias-shape scan below)
@@ -6500,7 +6495,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
   Result(usize, ParseErr).Ok(dnode(da, Decl(
     name_start = name.start, name_len = name.len, value = root,
     is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-    body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0,
+    body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
     mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = vwhen,
     alias_ts = alias_out_ts, alias_tl = alias_out_tl)))
 }
