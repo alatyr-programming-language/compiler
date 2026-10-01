@@ -1228,11 +1228,16 @@ ir_all_scalar_struct := fn(src : ptr(u8), decls : ptr(rt::Vec), ts : usize, tl :
   mut f := cd.fields_head
   mut any := false
   mut ok := true
-  while f != 0 {
-    fdn := deref(fld_p(f))
-    any = true
-    if not ir_native_scalar(src, fdn.ts, fdn.tl) { ok = false }
-    f = fdn.next
+  loop {
+    match f {
+      Some(fq) => {
+        fdn := deref(fld_p(fq))
+        any = true
+        if not ir_native_scalar(src, fdn.ts, fdn.tl) { ok = false }
+        f = fdn.next
+      }
+      None => { break }
+    }
   }
   any and ok
 }
@@ -1251,13 +1256,18 @@ pub index_plain_scalar_struct := fn(src : ptr(u8), decls : ptr(rt::Vec), ts : us
   if std_struct_has_byte_layout(decls, src, ts, tl, a) { return false }
   mut f := d.fields_head
   mut any := false
-  while f != 0 {
-    fd := deref(fld_p(f))
-    any = true
-    if not ir_native_scalar(src, fd.ts, fd.tl) {
-      if not index_plain_scalar_struct(src, decls, fd.ts, fd.tl, a) { return false }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        any = true
+        if not ir_native_scalar(src, fd.ts, fd.tl) {
+          if not index_plain_scalar_struct(src, decls, fd.ts, fd.tl, a) { return false }
+        }
+        f = fd.next
+      }
+      None => { break }
     }
-    f = fd.next
   }
   any
 }

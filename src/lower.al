@@ -36,6 +36,7 @@ vec := alloc::vec
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_type_span, local_is_uninit, local_is_mut, assign_is_decl) := ast
 (bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 fld_p := ast::fld_p
+fld_any := ast::fld_any
 param_p := ast::param_p
 arm_p := ast::arm_p
 arg_p := ast::arg_p
@@ -2293,10 +2294,15 @@ vis_check_program := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
     }
     ## struct FIELD / enum VARIANT-PAYLOAD types
     mut f := d.fields_head
-    while f != 0 {
-      fd := deref(fld_p(f))
-      vis_check_type_span(decls, src, fd.ts, fd.tl, d.mod_start, d.mod_len)
-      f = fd.next
+    loop {
+      match f {
+        Some(fq) => {
+          fd := deref(fld_p(fq))
+          vis_check_type_span(decls, src, fd.ts, fd.tl, d.mod_start, d.mod_len)
+          f = fd.next
+        }
+        None => { break }
+      }
     }
     ## an IMPORT / ALIAS binding (`m := geo::child`, `String := strbuf::StrBuf`): a kind-0 no-op decl
     ## whose `ret` span holds the RHS PATH. Modules §4.1 — what a binding may name follows §3.
@@ -2777,11 +2783,16 @@ const_struct_field := fn(base : ptr(Expr), fs : usize, fl : usize, decls : ptr(r
   mut f := d.fields_head
   mut idx := 0
   mut found := 0 - 1
-  while f != 0 {
-    fdn := deref(fld_p(f))
-    if streq(src, fdn.ns, fdn.nl, fs, fl) { found = i64(idx) }
-    idx += 1
-    f = fdn.next
+  loop {
+    match f {
+      Some(fq) => {
+        fdn := deref(fld_p(fq))
+        if streq(src, fdn.ns, fdn.nl, fs, fl) { found = i64(idx) }
+        idx += 1
+        f = fdn.next
+      }
+      None => { break }
+    }
   }
   if found < 0 { return z }
   arg_expr_at(struct_lit_fields(mcv), usize(found), a)
@@ -2817,11 +2828,16 @@ struct_field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), ss : usize, sl : u
   mut f := d.fields_head
   mut idx := 0
   mut found := 0 - 1
-  while f != 0 {
-    fdn := deref(fld_p(f))
-    if streq(src, fdn.ns, fdn.nl, fs, fl) { found = i64(idx) }
-    idx += 1
-    f = fdn.next
+  loop {
+    match f {
+      Some(fq) => {
+        fdn := deref(fld_p(fq))
+        if streq(src, fdn.ns, fdn.nl, fs, fl) { found = i64(idx) }
+        idx += 1
+        f = fdn.next
+      }
+      None => { break }
+    }
   }
   found
 }
@@ -3275,15 +3291,28 @@ agg_members_agree := fn(decls : ptr(rt::Vec), src : ptr(u8), da : i64, db : i64)
   mut fa := wa.fields_head
   mut fb := wb.fields_head
   mut agree := true
-  while fa != 0 and fb != 0 {
-    ta := deref(fld_p(fa))
-    tb := deref(fld_p(fb))
-    if streq(src, ta.ns, ta.nl, tb.ns, tb.nl) == false { agree = false }
-    fa = ta.next
-    fb = tb.next
+  ## Walk both lists in lockstep; they agree when every name pairs up and both end together.
+  mut going := true
+  while going {
+    match fa {
+      Some(faq) => {
+        match fb {
+          Some(fbq) => {
+            ta := deref(fld_p(faq))
+            tb := deref(fld_p(fbq))
+            if streq(src, ta.ns, ta.nl, tb.ns, tb.nl) == false { agree = false }
+            fa = ta.next
+            fb = tb.next
+          }
+          None => { agree = false; going = false }
+        }
+      }
+      None => {
+        if fld_any(fb) { agree = false }
+        going = false
+      }
+    }
   }
-  if fa != 0 { agree = false }
-  if fb != 0 { agree = false }
   agree
 }
 
@@ -3473,17 +3502,22 @@ pub field_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), sns : usize, snl 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut res := CSpan(s = 0, n = 0)
-  while f != 0 {
-    fd := deref(fld_p(f))
-    ## NESTED-GENERIC: a type-PARAM field of a generic INSTANCE resolves to the instance's type-arg
-    ## (`Box(Pair(u64))`'s `v : T` → `Pair`), so a nested read `c.v.a` types `c.v` as the concrete
-    ## aggregate. Gated (aggregate type-args only) inside `subst_field_ty` — a scalar-arg instance
-    ## returns the param `T` unchanged (typed/sized as a scalar, byte-identical to before).
-    if streq(src, fd.ns, fd.nl, fs, fl) {
-      eff := subst_field_ty(decls, src, sns, snl, fd.ts, fd.tl, a)
-      res = CSpan(s = eff.s, n = eff.n)
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        ## NESTED-GENERIC: a type-PARAM field of a generic INSTANCE resolves to the instance's type-arg
+        ## (`Box(Pair(u64))`'s `v : T` → `Pair`), so a nested read `c.v.a` types `c.v` as the concrete
+        ## aggregate. Gated (aggregate type-args only) inside `subst_field_ty` — a scalar-arg instance
+        ## returns the param `T` unchanged (typed/sized as a scalar, byte-identical to before).
+        if streq(src, fd.ns, fd.nl, fs, fl) {
+          eff := subst_field_ty(decls, src, sns, snl, fd.ts, fd.tl, a)
+          res = CSpan(s = eff.s, n = eff.n)
+        }
+        f = fd.next
+      }
+      None => { break }
     }
-    f = fd.next
   }
   res
 }
@@ -5381,9 +5415,31 @@ emit_global_data_cells := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, decls : 
   ali := array_lit_info(e)
   if sli.is_s {
     nfa := struct_lit_nf(e)
+    ## #826 — each field cell is sized by the field's DECLARED type, walked in step with the values (the
+    ## literal's values are in declaration order): a folded `Option(ptr(T))` field is ONE word (None = 0),
+    ## not the two-word enum cell its bare `Option.None` initializer would otherwise lay down.
+    mut gfd : Option(ptr(mut FieldDecl)) = Option.None
+    gsdi := struct_decl_of(decls, src, sli.ss, sli.sl)
+    if gsdi >= 0 { gfd = (deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gsdi))))).fields_head }
     mut k := 0
     while k < nfa {
-      emit_global_data_cells(arg_expr_at(struct_lit_fields(e), k, a), sb, decls, src, a)
+      gv := arg_expr_at(struct_lit_fields(e), k, a)
+      mut gfolded := false
+      match gfd {
+        Some(gfq) => {
+          gfdn := deref(fld_p(gfq))
+          gft := subst_field_ty(decls, src, sli.ss, sli.sl, gfdn.ts, gfdn.tl, a)
+          gfolded = is_niche_folded(src, gft.s, gft.n)
+          gfd = gfdn.next
+        }
+        None => {}
+      }
+      if gfolded {
+        if enum_lit_full(gv).is_e == false or enum_lit_full(gv).np != 0 { panic("selfhost: an Option(ptr(T)) field of a module-level global must be initialized with Option.None (assign the Some value at run time)") }
+        push_str(sb, "  .quad 0\n")
+      } else {
+        emit_global_data_cells(gv, sb, decls, src, a)
+      }
       k += 1
     }
   } else if ali.is_a {
@@ -5896,18 +5952,23 @@ enum_type_payload_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   if d.is_generic { return enum_inst_words(decls, src, s, n, a) }
   mut f := d.fields_head
   mut mx := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    mut pw := fd.arity
-    if fd.arity == 1 {
-      apw := array_payload_words(decls, src, fd.ts, fd.tl, a)
-      if apw != 0 { pw = apw }
-      else if struct_decl_of(decls, src, fd.ts, fd.tl) >= 0 { pw = struct_words(decls, src, fd.ts, fd.tl, a) }
-      else if enum_decl_of(decls, src, fd.ts, fd.tl) >= 0 { pw = 1 + enum_inst_words(decls, src, fd.ts, fd.tl, a) }
-      else if str_at((src + fd.ts), fd.tl) == "str" { pw = 2 }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        mut pw := fd.arity
+        if fd.arity == 1 {
+          apw := array_payload_words(decls, src, fd.ts, fd.tl, a)
+          if apw != 0 { pw = apw }
+          else if struct_decl_of(decls, src, fd.ts, fd.tl) >= 0 { pw = struct_words(decls, src, fd.ts, fd.tl, a) }
+          else if enum_decl_of(decls, src, fd.ts, fd.tl) >= 0 { pw = 1 + enum_inst_words(decls, src, fd.ts, fd.tl, a) }
+          else if str_at((src + fd.ts), fd.tl) == "str" { pw = 2 }
+        }
+        if pw > mx { mx = pw }
+        f = fd.next
+      }
+      None => { break }
     }
-    if pw > mx { mx = pw }
-    f = fd.next
   }
   mx
 }
@@ -9361,10 +9422,15 @@ append_lit_type := fn(in out msb : strbuf::StrBuf, v : ptr(Expr), decls : ptr(rt
   mut vf := d.fields_head
   mut vfts := 0
   mut vftl := 0
-  while vf != 0 {
-    fd := deref(fld_p(vf))
-    if streq(src, fd.ns, fd.nl, ef.vs, ef.vl) and fd.arity >= 1 { vfts = fd.ts; vftl = fd.tl }
-    vf = fd.next
+  loop {
+    match vf {
+      Some(vfq) => {
+        fd := deref(fld_p(vfq))
+        if streq(src, fd.ns, fd.nl, ef.vs, ef.vl) and fd.arity >= 1 { vfts = fd.ts; vftl = fd.tl }
+        vf = fd.next
+      }
+      None => { break }
+    }
   }
   bound_pi := param_pos(decls, usize(di), src, vfts, vftl, a)   ## the param index this variant's payload binds (-1 if none)
   ## Emit one type-arg per type-PARAM, in declaration order: the param the payload binds resolves to the
@@ -10483,13 +10549,18 @@ try_success_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   mut f := d.fields_head
   mut idx := 0
   mut res := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    nm := str_at((src + fd.ns), fd.nl)
-    if nm == "Some" { res = idx }
-    if nm == "Ok" { res = idx }
-    idx += 1
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        nm := str_at((src + fd.ns), fd.nl)
+        if nm == "Some" { res = idx }
+        if nm == "Ok" { res = idx }
+        idx += 1
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -10800,13 +10871,18 @@ struct_has_nonstr_multiword_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s :
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut res := false
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
-    efw := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
-    fw := field_words(decls, src, eff.s, eff.n, efw, a)
-    if fw > 1 and str_at((src + eff.s), eff.n) != "str" { res = true }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, s, n, fd.ts, fd.tl, a)
+        efw := eff_field_wsize(decls, src, s, n, fd.ts, fd.tl, fd.wsize, a)
+        fw := field_words(decls, src, eff.s, eff.n, efw, a)
+        if fw > 1 and str_at((src + eff.s), eff.n) != "str" { res = true }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -11025,7 +11101,7 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## a silent truncation of the returned struct). A plain `S(…)` head strips to itself → unchanged.
       irsb := base_type_name(cx.src, irs.s, irs.n)
       di := struct_decl_of(cx.decls, cx.src, irsb.s, irsb.n)
-      mut fd := 0
+      mut fd : Option(ptr(mut FieldDecl)) = Option.None
       if di >= 0 {
         ddd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(di))))
         fd = ddd.fields_head
@@ -11034,13 +11110,16 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       for k in 0..nf {
         fk := arg_expr_at(fhead, k, a)
         mut is_str := false
-        if fd != 0 {
-          fdn := deref(fld_p(fd))
-          ## the SUBSTITUTED field type (a `v : T` param field of `Box(str)` IS a str) — the raw span
-          ## `T` missed the probe and pushed one word.
-          effr := subst_field_ty(cx.decls, cx.src, irs.s, irs.n, fdn.ts, fdn.tl, a)
-          if str_at((cx.src + effr.s), effr.n) == "str" { is_str = true }
-          fd = fdn.next
+        match fd {
+          Some(fdq) => {
+            fdn := deref(fld_p(fdq))
+            ## the SUBSTITUTED field type (a `v : T` param field of `Box(str)` IS a str) — the raw span
+            ## `T` missed the probe and pushed one word.
+            effr := subst_field_ty(cx.decls, cx.src, irs.s, irs.n, fdn.ts, fdn.tl, a)
+            if str_at((cx.src + effr.s), effr.n) == "str" { is_str = true }
+            fd = fdn.next
+          }
+          None => {}
         }
         sti := str_lit_info(fk)
         if is_str and sti.is_s {
@@ -23920,7 +23999,7 @@ guard_type_member_count := fn(rs : usize, rn : usize, decls : ptr(rt::Vec), src 
     sdd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(sd))))
     mut fc := 0
     mut f := sdd.fields_head
-    while f != 0 { fc = fc + 1 ; f = deref(fld_p(f)).next }
+    loop { match f { Some(fq) => { fc = fc + 1 ; f = deref(fld_p(fq)).next }; None => { break } } }
     return i64(fc)
   }
   ed := enum_decl_of(decls, src, bnt.s, bnt.n)
@@ -23928,7 +24007,7 @@ guard_type_member_count := fn(rs : usize, rn : usize, decls : ptr(rt::Vec), src 
     edd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ed))))
     mut vc := 0
     mut vf := edd.fields_head
-    while vf != 0 { vc = vc + 1 ; vf = deref(fld_p(vf)).next }
+    loop { match vf { Some(vfq) => { vc = vc + 1 ; vf = deref(fld_p(vfq)).next }; None => { break } } }
     return i64(vc)
   }
   return -1
@@ -24487,16 +24566,21 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : ptr(mut St
       ov_fs := cx.cf_fld_s; ov_fl := cx.cf_fld_l
       ov_ts := cx.cf_ty_s; ov_tl := cx.cf_ty_l
       mut fd := sd.fields_head
-      while fd != 0 {
-        fdd := deref(fld_p(fd))
-        cx.cf_var_s = cvs
-        cx.cf_var_l = cvl
-        cx.cf_fld_s = fdd.ns
-        cx.cf_fld_l = fdd.nl
-        cx.cf_ty_s = fdd.ts
-        cx.cf_ty_l = fdd.tl
-        emit_stmts(cbody, sb, cx, nl)
-        fd = fdd.next
+      loop {
+        match fd {
+          Some(fdq) => {
+            fdd := deref(fld_p(fdq))
+            cx.cf_var_s = cvs
+            cx.cf_var_l = cvl
+            cx.cf_fld_s = fdd.ns
+            cx.cf_fld_l = fdd.nl
+            cx.cf_ty_s = fdd.ts
+            cx.cf_ty_l = fdd.tl
+            emit_stmts(cbody, sb, cx, nl)
+            fd = fdd.next
+          }
+          None => { break }
+        }
       }
       cx.cf_var_s = ov_vs; cx.cf_var_l = ov_vl
       cx.cf_fld_s = ov_fs; cx.cf_fld_l = ov_fl
@@ -24525,20 +24609,25 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : ptr(mut St
       ov_cs := cx.cf_curvar_s; ov_cl := cx.cf_curvar_l
       ov_ls := cx.cf_vloop_s; ov_ll := cx.cf_vloop_l
       mut vf := ed.fields_head
-      while vf != 0 {
-        vfd := deref(fld_p(vf))
-        cx.cf_var_s = cvs
-        cx.cf_var_l = cvl
-        cx.cf_fld_s = vfd.ns
-        cx.cf_fld_l = vfd.nl
-        cx.cf_ty_s = vfd.ts
-        cx.cf_ty_l = vfd.tl
-        cx.cf_curvar_s = vfd.ns
-        cx.cf_curvar_l = vfd.nl
-        cx.cf_vloop_s = cvs
-        cx.cf_vloop_l = cvl
-        emit_stmts(cbody, sb, cx, nl)
-        vf = vfd.next
+      loop {
+        match vf {
+          Some(vfq) => {
+            vfd := deref(fld_p(vfq))
+            cx.cf_var_s = cvs
+            cx.cf_var_l = cvl
+            cx.cf_fld_s = vfd.ns
+            cx.cf_fld_l = vfd.nl
+            cx.cf_ty_s = vfd.ts
+            cx.cf_ty_l = vfd.tl
+            cx.cf_curvar_s = vfd.ns
+            cx.cf_curvar_l = vfd.nl
+            cx.cf_vloop_s = cvs
+            cx.cf_vloop_l = cvl
+            emit_stmts(cbody, sb, cx, nl)
+            vf = vfd.next
+          }
+          None => { break }
+        }
       }
       cx.cf_var_s = ov_vs; cx.cf_var_l = ov_vl
       cx.cf_fld_s = ov_fs; cx.cf_fld_l = ov_fl
@@ -28624,7 +28713,7 @@ pub validate_repr := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
         }
         mut f := d.fields_head
         mut vc := 0
-        while f != 0 { fd := deref(fld_p(f)); vc = vc + 1; f = fd.next }
+        loop { match f { Some(fq) => { fd := deref(fld_p(fq)); vc = vc + 1; f = fd.next }; None => { break } } }
         cap := repr_ty_capacity(src, rsp.s, rsp.n)
         if cap != 0 and vc > cap {
           panic("selfhost: @repr(T) tag type is too narrow to represent the enum's discriminant count")
@@ -28644,14 +28733,19 @@ emit_field_name_rodata := fn(decls : ptr(rt::Vec), src : ptr(u8), in out sb : st
     d := deref(decl_get(decls, fi))
     if d.kind == 2 or d.kind == 3 {
       mut fh := d.fields_head
-      while fh != 0 {
-        fdd := deref(fld_p(fh))
-        globl_lfld(sb, fdd.ns)
-        push_lfld(sb, fdd.ns)
-        push_str(sb, ": .ascii \"")
-        push_str(sb, str_at((src + fdd.ns), fdd.nl))
-        push_str(sb, "\"\n")
-        fh = fdd.next
+      loop {
+        match fh {
+          Some(fhq) => {
+            fdd := deref(fld_p(fhq))
+            globl_lfld(sb, fdd.ns)
+            push_lfld(sb, fdd.ns)
+            push_str(sb, ": .ascii \"")
+            push_str(sb, str_at((src + fdd.ns), fdd.nl))
+            push_str(sb, "\"\n")
+            fh = fdd.next
+          }
+          None => { break }
+        }
       }
     }
   }
@@ -28749,7 +28843,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
         ## body, params, and kind → an inert kind-0 no-op that matches no lookup and emits no code.
         deref(gdp) = Decl(name_start = dg.name_start, name_len = 0, value = dg.value,
           is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
-          body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0,
+          body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
           mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       }
     }
@@ -28911,10 +29005,15 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
         if sdf >= 0 {
           sdd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(sdf))))
           mut fdc := sdd.fields_head
-          while fdc != 0 {
-            fdcm := deref(fld_p(fdc))
-            add_inst(insts, src, ie.gi, fdcm.ts, fdcm.tl, 0, 0, 0, 0)
-            fdc = fdcm.next
+          loop {
+            match fdc {
+              Some(fdcq) => {
+                fdcm := deref(fld_p(fdcq))
+                add_inst(insts, src, ie.gi, fdcm.ts, fdcm.tl, 0, 0, 0, 0)
+                fdc = fdcm.next
+              }
+              None => { break }
+            }
           }
         }
         ## TUPLE `ie.ts` — the `comptime for c in typeinfo(T).components` unroll recurses `<gi>(c.type,
@@ -28946,14 +29045,19 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
         if edc >= 0 {
           edd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(edc))))
           mut fvc := edd.fields_head
-          while fvc != 0 {
-            fvcm := deref(fld_p(fvc))
-            ## the SINGLE-binding payload view (`variant_payload_span`): a multi-component variant
-            ## yields its `(…)` TUPLE span, so `display(p)`'s tuple instance (`display__Tuple_…`) is
-            ## collected — matching the arm's `cf_pay_ty` routing.
-            pty := variant_payload_span(decls, src, bne.s, bne.n, fvcm.ns, fvcm.nl, a)
-            if pty.n != 0 { add_inst(insts, src, ie.gi, pty.s, pty.n, 0, 0, 0, 0) }
-            fvc = fvcm.next
+          loop {
+            match fvc {
+              Some(fvcq) => {
+                fvcm := deref(fld_p(fvcq))
+                ## the SINGLE-binding payload view (`variant_payload_span`): a multi-component variant
+                ## yields its `(…)` TUPLE span, so `display(p)`'s tuple instance (`display__Tuple_…`) is
+                ## collected — matching the arm's `cf_pay_ty` routing.
+                pty := variant_payload_span(decls, src, bne.s, bne.n, fvcm.ns, fvcm.nl, a)
+                if pty.n != 0 { add_inst(insts, src, ie.gi, pty.s, pty.n, 0, 0, 0, 0) }
+                fvc = fvcm.next
+              }
+              None => { break }
+            }
           }
         }
       }

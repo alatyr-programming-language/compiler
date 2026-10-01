@@ -27,6 +27,7 @@ vec := alloc::vec
 (bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 ecallee_is := ast::ecallee_is
 fld_p := ast::fld_p
+fld_any := ast::fld_any
 param_p := ast::param_p
 arm_p := ast::arm_p
 arg_p := ast::arg_p
@@ -3357,18 +3358,21 @@ sema_brand_struct_fields := fn(census : bool, e : ptr(Expr), decls : ptr(rt::Vec
   mut err : CheckErr = 0
   while g != 0 {
     sa := deref(arg_p(g))
-    if fld != 0 {
-      fd := deref(fld_p(fld))
-      ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
-      if census {
-        brand_probe_sink(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
-      } else {
-        fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
-        if fe != 0 and err == 0 { err = fe }
+    match fld {
+      Some(fldq) => {
+        fd := deref(fld_p(fldq))
+        ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
+        if census {
+          brand_probe_sink(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+        } else {
+          fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+          if fe != 0 and err == 0 { err = fe }
+        }
+        ne := sema_brand_struct_fields(census, sa.e, decls, upto, src, a, locals, nloc)
+        if ne != 0 and err == 0 { err = ne }
+        fld = fd.next
       }
-      ne := sema_brand_struct_fields(census, sa.e, decls, upto, src, a, locals, nloc)
-      if ne != 0 and err == 0 { err = ne }
-      fld = fd.next
+      None => {}
     }
     g = sa.next
   }
@@ -3862,10 +3866,15 @@ sema_type_alias_chain_reject := fn(d : Decl, decls : ptr(rt::Vec), upto : usize,
 field_ty := fn(d : Decl, src : ptr(u8), fs : usize, fl : usize, decls : ptr(rt::Vec), upto : usize, a : ptr(mut rt::Arena)) -> Ty {
   mut r := Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)
   mut f := d.fields_head
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, fs, fl) { r = resolve_ty(src, fd.ts, fd.tl, decls, upto) }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) { r = resolve_ty(src, fd.ts, fd.tl, decls, upto) }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   r
 }
@@ -4992,11 +5001,16 @@ sema_local_multidim_array := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
 sema_multidim_array_field_bad := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
   if d.kind != 2 { return 0 }
   mut f := d.fields_head
-  while f != 0 {
-    fd := deref(fld_p(f))
-    eff := subst_field_ty(decls, src, d.name_start, d.name_len, fd.ts, fd.tl, a)
-    if array_type_has_array_element(src, eff.s, eff.n) { return fd.ts }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        eff := subst_field_ty(decls, src, d.name_start, d.name_len, fd.ts, fd.tl, a)
+        if array_type_has_array_element(src, eff.s, eff.n) { return fd.ts }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   0
 }
@@ -5601,10 +5615,15 @@ sema_field_ann_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), sns
   if di != 0 {
     d := deref(decl_get(decls, di - 1))
     mut f := d.fields_head
-    while f != 0 {
-      fd := deref(fld_p(f))
-      if streq(src, fd.ns, fd.nl, fns, fnl) { r = VSpan(s = fd.ts, n = fd.tl) }
-      f = fd.next
+    loop {
+      match f {
+        Some(fq) => {
+          fd := deref(fld_p(fq))
+          if streq(src, fd.ns, fd.nl, fns, fnl) { r = VSpan(s = fd.ts, n = fd.tl) }
+          f = fd.next
+        }
+        None => { break }
+      }
     }
   }
   r
@@ -6112,10 +6131,15 @@ da_seed_fields := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : p
     if di != 0 {
       d := deref(decl_get(decls, di - 1))
       mut f := d.fields_head
-      while f != 0 {
-        fd := deref(fld_p(f))
-        fvec_push(da_fvec_value(da), rs, rn, fd.ns, fd.nl)
-        f = fd.next
+      loop {
+        match f {
+          Some(fq) => {
+            fd := deref(fld_p(fq))
+            fvec_push(da_fvec_value(da), rs, rn, fd.ns, fd.nl)
+            f = fd.next
+          }
+          None => { break }
+        }
       }
     }
   }
@@ -6164,10 +6188,15 @@ da_assign_array_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, 
     if di != 0 {
       d := deref(decl_get(decls, di - 1))
       mut f := d.fields_head
-      while f != 0 {
-        fd := deref(fld_p(f))
-        navec_push(da_navec_value(da), rs, rn, fd.ns, fd.nl, usize(ix))
-        f = fd.next
+      loop {
+        match f {
+          Some(fq) => {
+            fd := deref(fld_p(fq))
+            navec_push(da_navec_value(da), rs, rn, fd.ns, fd.nl, usize(ix))
+            f = fd.next
+          }
+          None => { break }
+        }
       }
     }
   }
@@ -6202,10 +6231,15 @@ da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : 
       mut j : i64 = 0
       while j < n {
         mut ff := d.fields_head
-        while ff != 0 {
-          fd := deref(fld_p(ff))
-          napvec_push(da_napvec_value(da), rs, rn, fs, fln, fd.ns, fd.nl, usize(j))
-          ff = fd.next
+        loop {
+          match ff {
+            Some(ffq) => {
+              fd := deref(fld_p(ffq))
+              napvec_push(da_napvec_value(da), rs, rn, fs, fln, fd.ns, fd.nl, usize(j))
+              ff = fd.next
+            }
+            None => { break }
+          }
         }
         j += 1
       }
@@ -6217,10 +6251,15 @@ da_assign_array_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), upto : 
     if di2 != 0 {
       d2 := deref(decl_get(decls, di2 - 1))
       mut ff2 := d2.fields_head
-      while ff2 != 0 {
-        fd2 := deref(fld_p(ff2))
-        napvec_push(da_napvec_value(da), rs, rn, fs, fln, fd2.ns, fd2.nl, usize(ix))
-        ff2 = fd2.next
+      loop {
+        match ff2 {
+          Some(ff2q) => {
+            fd2 := deref(fld_p(ff2q))
+            napvec_push(da_napvec_value(da), rs, rn, fs, fln, fd2.ns, fd2.nl, usize(ix))
+            ff2 = fd2.next
+          }
+          None => { break }
+        }
       }
     }
   }
@@ -6244,10 +6283,15 @@ da_assign_array_elem_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), up
     if di != 0 {
       d := deref(decl_get(decls, di - 1))
       mut f := d.fields_head
-      while f != 0 {
-        fd := deref(fld_p(f))
-        navec_push(da_navec_value(da), rs, rn, fd.ns, fd.nl, usize(ix))
-        f = fd.next
+      loop {
+        match f {
+          Some(fq) => {
+            fd := deref(fld_p(fq))
+            navec_push(da_navec_value(da), rs, rn, fd.ns, fd.nl, usize(ix))
+            f = fd.next
+          }
+          None => { break }
+        }
       }
     }
   }
@@ -6261,10 +6305,15 @@ da_assign_array_elem_nested_field := fn(in out da : DA, decls : ptr(rt::Vec), up
     if di2 != 0 {
       d2 := deref(decl_get(decls, di2 - 1))
       mut ff := d2.fields_head
-      while ff != 0 {
-        fd2 := deref(fld_p(ff))
-        napvec_push(da_napvec_value(da), rs, rn, fs, fln, fd2.ns, fd2.nl, usize(ix))
-        ff = fd2.next
+      loop {
+        match ff {
+          Some(ffq) => {
+            fd2 := deref(fld_p(ffq))
+            napvec_push(da_napvec_value(da), rs, rn, fs, fln, fd2.ns, fd2.nl, usize(ix))
+            ff = fd2.next
+          }
+          None => { break }
+        }
       }
     }
   }
@@ -6335,10 +6384,15 @@ da_assign_path := fn(in out da : DA, decls : ptr(rt::Vec), upto : usize, src : p
       if di != 0 {
         d := deref(decl_get(decls, di - 1))
         mut f := d.fields_head
-        while f != 0 {
-          fd := deref(fld_p(f))
-          pvec_push(da_pvec_value(da), np.rs, np.rn, np.fs, np.fl, fd.ns, fd.nl)
-          f = fd.next
+        loop {
+          match f {
+            Some(fq) => {
+              fd := deref(fld_p(fq))
+              pvec_push(da_pvec_value(da), np.rs, np.rn, np.fs, np.fl, fd.ns, fd.nl)
+              f = fd.next
+            }
+            None => { break }
+          }
         }
       }
     }
@@ -6962,17 +7016,22 @@ enum_coverage_gap := fn(head : ptr(mut Arm), decls : ptr(rt::Vec), src : ptr(u8)
   ed := deref(decl_get(decls, usize(edi)))
   mut fv := ed.fields_head
   mut uncovered := false
-  while fv != 0 {
-    fdc := deref(fld_p(fv))
-    mut covered := false
-    mut a3 := head
-    while a3 != 0 {
-      am3 := deref(arm_p(a3))
-      if streq(src, am3.vs, am3.vl, fdc.ns, fdc.nl) { covered = true }
-      a3 = am3.next
+  loop {
+    match fv {
+      Some(fvq) => {
+        fdc := deref(fld_p(fvq))
+        mut covered := false
+        mut a3 := head
+        while a3 != 0 {
+          am3 := deref(arm_p(a3))
+          if streq(src, am3.vs, am3.vl, fdc.ns, fdc.nl) { covered = true }
+          a3 = am3.next
+        }
+        if not covered { uncovered = true }
+        fv = fdc.next
+      }
+      None => { break }
     }
-    if not covered { uncovered = true }
-    fv = fdc.next
   }
   uncovered
 }
@@ -7026,10 +7085,15 @@ sema_enum_variant_known := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
     if d.kind == 3 and name_matches(src, d.name_start, d.name_len, es, el) {
       matched = true
       mut f := d.fields_head
-      while f != 0 {
-        fd := deref(fld_p(f))
-        if streq(src, fd.ns, fd.nl, vs, vl) { found = true }
-        f = fd.next
+      loop {
+        match f {
+          Some(fq) => {
+            fd := deref(fld_p(fq))
+            if streq(src, fd.ns, fd.nl, vs, vl) { found = true }
+            f = fd.next
+          }
+          None => { break }
+        }
       }
     }
     i += 1
@@ -7071,18 +7135,23 @@ sema_enum_variant_arity := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
     d := deref(decl_get(decls, i))
     if d.kind == 3 and name_matches(src, d.name_start, d.name_len, es, el) {
       mut f := d.fields_head
-      while f != 0 {
-        fd := deref(fld_p(f))
-        if streq(src, fd.ns, fd.nl, vs, vl) {
-          if not known {
-            want = fd.arity
-            ts = fd.ts
-            tl = fd.tl
-          } else if fd.arity != want or streq(src, fd.ts, fd.tl, ts, tl) == false { amb = true }
-          known = true
-          if fd.arity == np { fits = true }
+      loop {
+        match f {
+          Some(fq) => {
+            fd := deref(fld_p(fq))
+            if streq(src, fd.ns, fd.nl, vs, vl) {
+              if not known {
+                want = fd.arity
+                ts = fd.ts
+                tl = fd.tl
+              } else if fd.arity != want or streq(src, fd.ts, fd.tl, ts, tl) == false { amb = true }
+              known = true
+              if fd.arity == np { fits = true }
+            }
+            f = fd.next
+          }
+          None => { break }
         }
-        f = fd.next
       }
     }
     i += 1
@@ -7145,13 +7214,18 @@ comptime_enum_variant_zero := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u
   mut f := d.fields_head
   mut found := false
   mut zero := false
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, vs, vl) {
-      found = true
-      if fd.arity == 0 { zero = true }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, vs, vl) {
+          found = true
+          if fd.arity == 0 { zero = true }
+        }
+        f = fd.next
+      }
+      None => { break }
     }
-    f = fd.next
   }
   found and zero
 }
@@ -7483,13 +7557,18 @@ callee_is_fn_valued_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, 
     d := deref(decl_get(decls, i))
     if d.kind == 2 or d.kind == 3 {
       mut f := d.fields_head
-      while f != 0 {
-        fd := deref(fld_p(f))
-        if streq(src, fd.ns, fd.nl, s, n) and fd.tl >= 3 and str_at((src + fd.ts), 3) == "fn(" {
-          rt2 := sema_fnty_ret_span(src, fd.ts)
-          if sema_ty_is_scalar(src, rt2.s, rt2.n) { r = true }
+      loop {
+        match f {
+          Some(fq) => {
+            fd := deref(fld_p(fq))
+            if streq(src, fd.ns, fd.nl, s, n) and fd.tl >= 3 and str_at((src + fd.ts), 3) == "fn(" {
+              rt2 := sema_fnty_ret_span(src, fd.ts)
+              if sema_ty_is_scalar(src, rt2.s, rt2.n) { r = true }
+            }
+            f = fd.next
+          }
+          None => { break }
         }
-        f = fd.next
       }
     }
     i += 1
@@ -8700,21 +8779,24 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     Expr::StructLit(scs, scl, snf, sfhead) => {
       di := type_decl_index(decls, upto, src, scs, scl)
       mut sg := sfhead
-      mut fld := 0
+      mut fld : Option(ptr(mut FieldDecl)) = Option.None
       if di != 0 { fld = (deref(decl_at(Decl, rt::vec_get(deref(decls), di - 1)))).fields_head }
       while sg != 0 {
         sa := deref(arg_p(sg))
         tv := check_expr(sa.e, decls, upto, src, a, locals, nloc)?
-        if fld != 0 {
-          fd := deref(fld_p(fld))
-          ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
-          ptrint_probe_site("FIELD-LIT", "structlit", true, tv.kind, ft.kind, s_of(sa.e, a), src)
-          ## #726 — `s_of` has no span for a literal field value; locate it at the struct literal's
-          ## head then, as the call-argument compare locates a literal argument at its call.
-          mut fvs := s_of(sa.e, a)
-          if fvs == 0 and not ast::span_is_synthetic(scs) { fvs = scs }
-          if not ty_compat(tv, ft, src) { er := Result(Ty, CheckErr).Err(mismatch_err(fvs, 0)); return er }
-          fld = fd.next
+        match fld {
+          Some(fldq) => {
+            fd := deref(fld_p(fldq))
+            ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
+            ptrint_probe_site("FIELD-LIT", "structlit", true, tv.kind, ft.kind, s_of(sa.e, a), src)
+            ## #726 — `s_of` has no span for a literal field value; locate it at the struct literal's
+            ## head then, as the call-argument compare locates a literal argument at its call.
+            mut fvs := s_of(sa.e, a)
+            if fvs == 0 and not ast::span_is_synthetic(scs) { fvs = scs }
+            if not ty_compat(tv, ft, src) { er := Result(Ty, CheckErr).Err(mismatch_err(fvs, 0)); return er }
+            fld = fd.next
+          }
+          None => {}
         }
         sg = sa.next
       }
@@ -11166,15 +11248,18 @@ sema_plain_fn_capture_struct := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
   match deref(e) {
     Expr::StructLit(ss, sl, nf, fh) => {
       di := type_decl_index(decls, upto, src, ss, sl)
-      mut fld := 0
+      mut fld : Option(ptr(mut FieldDecl)) = Option.None
       if di != 0 { fld = (deref(decl_at(Decl, rt::vec_get(deref(decls), di - 1)))).fields_head }
       mut g := fh
       while g != 0 and bad == 0 {
         ga := deref(arg_p(g))
-        if fld != 0 {
-          fd := deref(fld_p(fld))
-          bad = sema_plain_fn_capture_span(fd.ts, fd.tl, ga.e, src, locals, nloc, a)
-          fld = fd.next
+        match fld {
+          Some(fldq) => {
+            fd := deref(fld_p(fldq))
+            bad = sema_plain_fn_capture_span(fd.ts, fd.tl, ga.e, src, locals, nloc, a)
+            fld = fd.next
+          }
+          None => {}
         }
         g = ga.next
       }
@@ -14078,7 +14163,7 @@ sema_guard_type_member_count := fn(rs : usize, rn : usize, decls : ptr(rt::Vec),
     sdd := deref(decl_get(decls, usize(sd)))
     mut fc := 0
     mut f := sdd.fields_head
-    while f != 0 { fc = fc + 1 ; f = deref(fld_p(f)).next }
+    loop { match f { Some(fq) => { fc = fc + 1 ; f = deref(fld_p(fq)).next }; None => { break } } }
     return i64(fc)
   }
   ed := enum_decl_of(decls, src, bnt.s, bnt.n)
@@ -14086,7 +14171,7 @@ sema_guard_type_member_count := fn(rs : usize, rn : usize, decls : ptr(rt::Vec),
     edd := deref(decl_get(decls, usize(ed)))
     mut vc := 0
     mut vf := edd.fields_head
-    while vf != 0 { vc = vc + 1 ; vf = deref(fld_p(vf)).next }
+    loop { match vf { Some(vfq) => { vc = vc + 1 ; vf = deref(fld_p(vfq)).next }; None => { break } } }
     return i64(vc)
   }
   return 0 - 1
@@ -15271,7 +15356,7 @@ sema_repr_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
   if repr_ty_is_integer(src, rsp.s, rsp.n) == false { return located_err(d.name_start) }
   mut f := d.fields_head
   mut vc := 0
-  while f != 0 { fd := deref(fld_p(f)); vc = vc + 1; f = fd.next }
+  loop { match f { Some(fq) => { fd := deref(fld_p(fq)); vc = vc + 1; f = fd.next }; None => { break } } }
   cap := repr_ty_capacity(src, rsp.s, rsp.n)
   if cap != 0 and vc > cap { return located_err(d.name_start) }
   0
@@ -15636,7 +15721,7 @@ sema_head_names_scope := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl 
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.mod_len != 0 and sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl) { r = true }
-    if d.name_len != 0 and d.is_fn == false and unchecked bitcast(usize, d.fields_head) != 0 {
+    if d.name_len != 0 and d.is_fn == false and fld_any(d.fields_head) {
       if streq(src, d.name_start, d.name_len, hs, hl) { r = true }
     }
     i = i + 1
@@ -15695,7 +15780,7 @@ sema_qual_head_kinds := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl :
       ## arity-0 decl whose `ret` span holds the RHS PATH (`vec := alloc::vec`, `mm := std::math`).
       al := d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0
       ## BIT 1 — a TYPE as an associated-function / variant namespace (`Option::unwrap`, `Option::Some`)
-      if nm and d.is_fn == false and unchecked bitcast(usize, d.fields_head) != 0 { r = r | 2 }
+      if nm and d.is_fn == false and fld_any(d.fields_head) { r = r | 2 }
       ## BIT 2 — a local ALIAS to any of the above, in EITHER of its two parser shapes. The `::`-path
       ##     form is the one above; a bare ROOT alias (`strbuf := rt`, `ifc := iface`) never reaches
       ##     `parser.al`'s module-alias branch at all — that branch requires a `::` in the RHS — so
@@ -16318,11 +16403,16 @@ sema_vis_declared := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
       if r1 != 0 { return r1 }
     }
     mut f := d.fields_head
-    while f != 0 {
-      fd := deref(fld_p(f))
-      r2 := sema_vis_type_span(decls, src, fd.ts, fd.tl, d.mod_start, d.mod_len, d.params_head)
-      if r2 != 0 { return r2 }
-      f = fd.next
+    loop {
+      match f {
+        Some(fq) => {
+          fd := deref(fld_p(fq))
+          r2 := sema_vis_type_span(decls, src, fd.ts, fd.tl, d.mod_start, d.mod_len, d.params_head)
+          if r2 != 0 { return r2 }
+          f = fd.next
+        }
+        None => { break }
+      }
     }
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len != 0 {
       mut r3 := sema_vis_qual(decls, src, d.ret_ts, d.ret_tl, d.mod_start, d.mod_len, 1, 4)

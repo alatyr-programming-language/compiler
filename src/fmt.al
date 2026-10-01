@@ -29,6 +29,8 @@ local_is_uninit := ast::local_is_uninit
 ecallee_is := ast::ecallee_is
 (bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 fld_p := ast::fld_p
+fld_at := ast::fld_at
+fld_any := ast::fld_any
 param_p := ast::param_p
 arm_p := ast::arm_p
 arg_p := ast::arg_p
@@ -550,16 +552,15 @@ fmt_emit_arg_list := fn(head : ptr(mut Arg), open : str, close : str, in out sb 
 ## with a trailing comma, `)` back at `ind`), else the single-line form. ONE renderer with two
 ## spellings on purpose — a second copy of the field-name recovery could drift from this one, and the
 ## by-name pairing it performs is the part whose divergence is a SILENT relabelling of the fields.
-fmt_emit_declfields := fn(head : ptr(mut Arg), fh : usize, ind : usize, multi : bool, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
+fmt_emit_declfields := fn(head : ptr(mut Arg), fh : Option(ptr(mut FieldDecl)), ind : usize, multi : bool, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
   push_str(sb, "(")
   if multi { push_str(sb, "\n") }
   mut g := head
   mut f := fh
   mut first := true
   while g != 0 {
-    if f == 0 { panic("selfhost: fmt — struct literal has more args than fields") }
     ga := deref(arg_p(g))
-    fd := deref(fld_p(f))
+    fd := deref(fld_p(fld_at(f, "selfhost: fmt — struct literal has more args than fields")))
     if multi { fmt_emit_spaces(sb, ind + 2) }
     if not multi { if not first { push_str(sb, ", ") } }
     push_str(sb, str_at((src + fd.ns), fd.nl))
@@ -618,10 +619,10 @@ name_base_len := fn(src : ptr(u8), ss : usize, sl : usize) -> usize {
   i
 }
 
-fmt_struct_fields := fn(decls : ptr(rt::Vec), src : ptr(u8), ss : usize, sl : usize) -> usize {
+fmt_struct_fields := fn(decls : ptr(rt::Vec), src : ptr(u8), ss : usize, sl : usize) -> Option(ptr(mut FieldDecl)) {
   cnt := rt::vec_len(deref(decls))
   mut i := 0
-  mut r := 0
+  mut r : Option(ptr(mut FieldDecl)) = Option.None
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
     if d.kind == 2 and streq(src, d.name_start, d.name_len, ss, sl) { r = d.fields_head }
@@ -1675,9 +1676,9 @@ emit_fmt_expr_core := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a
       ## Alatyr construction is by-name (Types §9.3), so the names are always THERE in the source.
       mut sfopen := find_fields_open(src, ss + sl)
       if sfopen != 0 { if fmt_structlit_names_ok(src, sfopen, ah) == false { sfopen = 0 } }
-      mut fh : usize = 0
+      mut fh : Option(ptr(mut FieldDecl)) = Option.None
       if sfopen == 0 { fh = fmt_struct_fields(decls, src, ss, name_base_len(src, ss, sl)) }
-      if fh != 0 {
+      if fld_any(fh) {
         ## FIELD-NAME recovery keys on the BASE name (a generic instance `Slice(u64)` is declared as
         ## `Slice`); the full instance span is still what was rendered above, so the name round-trips.
         push_str(sb, str_at((src + ss), sl))
@@ -3906,17 +3907,22 @@ emit_fmt_struct := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::A
     }
   } else {
     mut f := d.fields_head
-    while f != 0 {
-      fd := deref(fld_p(f))
-      push_str(sb, "  ")
-      ## the field's own `mut` marker — source-recovered, see `fmt_field_is_mut` (dropping it changes
-      ## what a `typeinfo(T).fields` derive computes, i.e. what the program returns).
-      if fmt_field_is_mut(src, fd.ns) { push_str(sb, "mut ") }
-      push_str(sb, str_at((src + fd.ns), fd.nl))
-      push_str(sb, " : ")
-      push_str(sb, str_at((src + fd.ts), fd.tl))
-      push_str(sb, ",\n")
-      f = fd.next
+    loop {
+      match f {
+        Some(fq) => {
+          fd := deref(fld_p(fq))
+          push_str(sb, "  ")
+          ## the field's own `mut` marker — source-recovered, see `fmt_field_is_mut` (dropping it changes
+          ## what a `typeinfo(T).fields` derive computes, i.e. what the program returns).
+          if fmt_field_is_mut(src, fd.ns) { push_str(sb, "mut ") }
+          push_str(sb, str_at((src + fd.ns), fd.nl))
+          push_str(sb, " : ")
+          push_str(sb, str_at((src + fd.ts), fd.tl))
+          push_str(sb, ",\n")
+          f = fd.next
+        }
+        None => { break }
+      }
     }
   }
   push_str(sb, "}")
@@ -4004,26 +4010,31 @@ emit_fmt_enum := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Are
   }
   push_str(sb, " {\n")
   mut f := d.fields_head
-  while f != 0 {
-    fd := deref(fld_p(f))
-    push_str(sb, "  ")
-    push_str(sb, str_at((src + fd.ns), fd.nl))
-    if fd.arity == 1 {
-      push_str(sb, "(")
-      push_str(sb, str_at((src + fd.ts), fd.tl))
-      push_str(sb, ")")
-    } else if fd.arity > 1 {
-      ## MULTI-payload variant — the FieldDecl kept only the arity + first type, so render the whole
-      ## `( … )` payload group verbatim from source. Scan from the variant NAME start: the first `(`
-      ## after it is the payload open (the name is an identifier, no parens), and the first payload
-      ## type span `fd.ts` sits INSIDE those parens (so starting at `fd.ts` would miss the open).
-      mut popen : usize = 0
-      plen := enum_payload_len(src, fd.ns, ptr(popen))
-      if plen == 0 { panic("selfhost: fmt — multi-payload enum variant payload not found in source") }
-      push_str(sb, str_at((src + popen), plen))
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        push_str(sb, "  ")
+        push_str(sb, str_at((src + fd.ns), fd.nl))
+        if fd.arity == 1 {
+          push_str(sb, "(")
+          push_str(sb, str_at((src + fd.ts), fd.tl))
+          push_str(sb, ")")
+        } else if fd.arity > 1 {
+          ## MULTI-payload variant — the FieldDecl kept only the arity + first type, so render the whole
+          ## `( … )` payload group verbatim from source. Scan from the variant NAME start: the first `(`
+          ## after it is the payload open (the name is an identifier, no parens), and the first payload
+          ## type span `fd.ts` sits INSIDE those parens (so starting at `fd.ts` would miss the open).
+          mut popen : usize = 0
+          plen := enum_payload_len(src, fd.ns, ptr(popen))
+          if plen == 0 { panic("selfhost: fmt — multi-payload enum variant payload not found in source") }
+          push_str(sb, str_at((src + popen), plen))
+        }
+        push_str(sb, ",\n")
+        f = fd.next
+      }
+      None => { break }
     }
-    push_str(sb, ",\n")
-    f = fd.next
   }
   push_str(sb, "}")
   if wtl != 0 { push_str(sb, " ") ; push_str(sb, str_at((src + wts), wtl)) }

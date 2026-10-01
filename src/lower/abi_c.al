@@ -151,19 +151,24 @@ pub abi_c_eightbyte_is_sse := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
   if abi_c_is_u8_pair(decls, src, s, n) { return false }
   mut f := d.fields_head
   mut nf := 0
-  while f != 0 { fd := deref(fld_p(f)); nf = nf + 1; f = fd.next }
+  loop { match f { Some(fq) => { fd := deref(fld_p(fq)); nf = nf + 1; f = fd.next }; None => { break } } }
   if struct_words(decls, src, s, n, a) != nf { panic("selfhost: @abi(c) aggregate with a non-eightbyte-aligned field (sub-8-byte float packing / a multi-word field) not yet supported — each field must occupy one eightbyte") }
   mut g := d.fields_head
   mut k := 0
   mut res := false
-  while g != 0 {
-    fd := deref(fld_p(g))
-    if k == ei {
-      tn := str_at((src + fd.ts), fd.tl)
-      if tn == "f64" or tn == "f32" { res = true }
+  loop {
+    match g {
+      Some(gq) => {
+        fd := deref(fld_p(gq))
+        if k == ei {
+          tn := str_at((src + fd.ts), fd.tl)
+          if tn == "f64" or tn == "f32" { res = true }
+        }
+        k += 1
+        g = fd.next
+      }
+      None => { break }
     }
-    k += 1
-    g = fd.next
   }
   res
 }

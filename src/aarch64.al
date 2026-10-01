@@ -604,14 +604,19 @@ a64_struct_has_word_array_field := fn(decls : ptr(rt::Vec), src : ptr(u8), s : u
     di := struct_decl_of(decls, src, s, n)
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
     mut f := d.fields_head
-    while f != 0 {
-      fd := deref(fld_p(f))
-      ft := field_type_span(decls, src, s, n, fd.ns, fd.nl, a)
-      et := a64_arrty_elem(src, ft.s, ft.n)
-      if et.n != 0 and struct_decl_of(decls, src, et.s, et.n) >= 0 and struct_plain(decls, src, et.s, et.n) {
-        if std_struct_is_word_granular(decls, src, et.s, et.n, a) { r = true }
+    loop {
+      match f {
+        Some(fq) => {
+          fd := deref(fld_p(fq))
+          ft := field_type_span(decls, src, s, n, fd.ns, fd.nl, a)
+          et := a64_arrty_elem(src, ft.s, ft.n)
+          if et.n != 0 and struct_decl_of(decls, src, et.s, et.n) >= 0 and struct_plain(decls, src, et.s, et.n) {
+            if std_struct_is_word_granular(decls, src, et.s, et.n, a) { r = true }
+          }
+          f = fd.next
+        }
+        None => { break }
       }
-      f = fd.next
     }
   }
   r
@@ -931,19 +936,24 @@ a64_struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut ok := true
-  while f != 0 {
-    fd := deref(fld_p(f))
-    ## NESTED-GENERIC (§8 mono): substitute a type-PARAM field with the instance's concrete type-arg
-    ## (`Box(P)`'s `v : T` → the aggregate `P`) via field_type_span (which routes subst_field_ty). An
-    ## AGGREGATE type-arg CHANGES the field span → the struct is NOT all-scalar: its slit field value is
-    ## itself a `{…}` and must take the nested-materialization store, not the one-word positional store
-    ## (which would emit a scalar `brk`). subst changes the span ONLY for an aggregate type-arg; a scalar
-    ## type-arg / a plain (non-generic) / a comptime-value type-fn stay put → byte-identical everywhere else.
-    ft := field_type_span(decls, src, s, n, fd.ns, fd.nl, a)
-    changed := ft.n != 0 and (ft.s != fd.ts or ft.n != fd.tl)
-    if changed { ok = false }
-    if (not changed) and field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) != 1 { ok = false }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        ## NESTED-GENERIC (§8 mono): substitute a type-PARAM field with the instance's concrete type-arg
+        ## (`Box(P)`'s `v : T` → the aggregate `P`) via field_type_span (which routes subst_field_ty). An
+        ## AGGREGATE type-arg CHANGES the field span → the struct is NOT all-scalar: its slit field value is
+        ## itself a `{…}` and must take the nested-materialization store, not the one-word positional store
+        ## (which would emit a scalar `brk`). subst changes the span ONLY for an aggregate type-arg; a scalar
+        ## type-arg / a plain (non-generic) / a comptime-value type-fn stay put → byte-identical everywhere else.
+        ft := field_type_span(decls, src, s, n, fd.ns, fd.nl, a)
+        changed := ft.n != 0 and (ft.s != fd.ts or ft.n != fd.tl)
+        if changed { ok = false }
+        if (not changed) and field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) != 1 { ok = false }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   ok
 }
@@ -1011,10 +1021,15 @@ a64_field_is_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut r := false
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if streq(src, fd.ns, fd.nl, fs, fl) and field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) == 1 { r = true }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) and field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) == 1 { r = true }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   r
 }
@@ -1329,15 +1344,21 @@ a64_std_store_struct := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut g := ex_struct_lit_args(pe)
-  while f != 0 and g != 0 {
-    fd := deref(fld_p(f))
-    ga := deref(arg_p(g))
-    bo := standard_field_byte_offset(decls, src, sns, snl, fd.ns, fd.nl, a)
-    ft := field_type_span(decls, src, sns, snl, fd.ns, fd.nl, a)
-    if bo >= 0 and ft.n != 0 { _sw := a64_std_store_value(ga.e, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-    if bo < 0 or ft.n == 0 { push_str(sb, "  brk #0 // unresolved standard struct field\n") }
-    f = fd.next
-    g = ga.next
+  loop {
+    match f {
+      Some(fq) => {
+        if not (g != 0) { break }
+        fd := deref(fld_p(fq))
+        ga := deref(arg_p(g))
+        bo := standard_field_byte_offset(decls, src, sns, snl, fd.ns, fd.nl, a)
+        ft := field_type_span(decls, src, sns, snl, fd.ns, fd.nl, a)
+        if bo >= 0 and ft.n != 0 { _sw := a64_std_store_value(ga.e, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        if bo < 0 or ft.n == 0 { push_str(sb, "  brk #0 // unresolved standard struct field\n") }
+        f = fd.next
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   i64(standard_type_byte_size(decls, src, sns, snl, 1, a))
 }
@@ -1389,15 +1410,21 @@ a64_std_store_struct_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrB
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut g := ex_struct_lit_args(pe)
-  while f != 0 and g != 0 {
-    fd := deref(fld_p(f))
-    ga := deref(arg_p(g))
-    bo := standard_field_byte_offset(decls, src, sns, snl, fd.ns, fd.nl, a)
-    ft := field_type_span(decls, src, sns, snl, fd.ns, fd.nl, a)
-    if bo >= 0 and ft.n != 0 { _sw := a64_std_store_value_atptr(ga.e, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-    if bo < 0 or ft.n == 0 { push_str(sb, "  brk #0 // unresolved byte-tier field at pointer\n") }
-    f = fd.next
-    g = ga.next
+  loop {
+    match f {
+      Some(fq) => {
+        if not (g != 0) { break }
+        fd := deref(fld_p(fq))
+        ga := deref(arg_p(g))
+        bo := standard_field_byte_offset(decls, src, sns, snl, fd.ns, fd.nl, a)
+        ft := field_type_span(decls, src, sns, snl, fd.ns, fd.nl, a)
+        if bo >= 0 and ft.n != 0 { _sw := a64_std_store_value_atptr(ga.e, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        if bo < 0 or ft.n == 0 { push_str(sb, "  brk #0 // unresolved byte-tier field at pointer\n") }
+        f = fd.next
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   i64(standard_type_byte_size(decls, src, sns, snl, 1, a))
 }
@@ -2721,13 +2748,13 @@ a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
           sdd := deref(decl_get(decls, usize(sd)))
           mut fc := 0
           mut f := sdd.fields_head
-          while f != 0 { fc = fc + 1 ; f = deref(fld_p(f)).next }
+          loop { match f { Some(fq) => { fc = fc + 1 ; f = deref(fld_p(fq)).next }; None => { break } } }
           r = i64(fc)
         } else if ed >= 0 {
           edd := deref(decl_get(decls, usize(ed)))
           mut vc := 0
           mut vf := edd.fields_head
-          while vf != 0 { vc = vc + 1 ; vf = deref(fld_p(vf)).next }
+          loop { match vf { Some(vfq) => { vc = vc + 1 ; vf = deref(fld_p(vfq)).next }; None => { break } } }
           r = i64(vc)
         } else if str_at((src + rt.s), 1) == "(" {
           ## TUPLE component count = top-level commas + 1. Scanned inline over the `(…)` source span (NOT
@@ -6103,31 +6130,36 @@ emit_a64_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, end
         edd := deref(decl_get(decls, usize(edi)))
         mut vf := edd.fields_head
         mut vc := 0
-        while vf != 0 {
-          vfm := deref(fld_p(vf))
-          vvidx := variant_index(decls, src, ens, enl, vfm.ns, vfm.nl, a)
-          ## label id unique PER MATCH SITE (`endid`) + per variant (`vc`): a nested/sibling match over the
-          ## SAME enum would collide on a variant-keyed id (both iterate the same variant list). Compound
-          ## `.LarmskipV<endid>_<vc>` keeps the two dispatch chains disjoint.
-          push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, eoff) ; push_str(sb, "]\n")
-          push_str(sb, "  ldr x1, =") ; push_int(sb, vvidx) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, "\n")
-          hasexprV := am.body_stmts == 0
-          dostmtV := (am.body_stmts != 0) and (frame >= 0)
-          oensV := A64_ARM_ENS ; oenlV := A64_ARM_ENL ; ovsV := A64_ARM_VS ; ovlV := A64_ARM_VL
-          ocvs := A64_CFVAR_S ; ocvl := A64_CFVAR_L ; obV := A64_ARM_BINDS
-          A64_ARM_ENS = ens ; A64_ARM_ENL = enl ; A64_ARM_VS = vfm.ns ; A64_ARM_VL = vfm.nl
-          A64_CFVAR_S = vfm.ns ; A64_CFVAR_L = vfm.nl ; A64_ARM_BINDS = am.binds_head
-          a64_bind_push(am.binds_head, eoff)
-          if hasexprV { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
-          if dostmtV { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
-          if (not hasexprV) and (not dostmtV) { push_str(sb, "  brk #0 // statement-body match arm in value position deferred\n") }
-          a64_bind_pop(am.binds_head)
-          A64_ARM_ENS = oensV ; A64_ARM_ENL = oenlV ; A64_ARM_VS = ovsV ; A64_ARM_VL = ovlV
-          A64_CFVAR_S = ocvs ; A64_CFVAR_L = ocvl ; A64_ARM_BINDS = obV
-          push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
-          push_str(sb, ".LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, ":\n")
-          vc = vc + 1
-          vf = vfm.next
+        loop {
+          match vf {
+            Some(vfq) => {
+              vfm := deref(fld_p(vfq))
+              vvidx := variant_index(decls, src, ens, enl, vfm.ns, vfm.nl, a)
+              ## label id unique PER MATCH SITE (`endid`) + per variant (`vc`): a nested/sibling match over the
+              ## SAME enum would collide on a variant-keyed id (both iterate the same variant list). Compound
+              ## `.LarmskipV<endid>_<vc>` keeps the two dispatch chains disjoint.
+              push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, eoff) ; push_str(sb, "]\n")
+              push_str(sb, "  ldr x1, =") ; push_int(sb, vvidx) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, "\n")
+              hasexprV := am.body_stmts == 0
+              dostmtV := (am.body_stmts != 0) and (frame >= 0)
+              oensV := A64_ARM_ENS ; oenlV := A64_ARM_ENL ; ovsV := A64_ARM_VS ; ovlV := A64_ARM_VL
+              ocvs := A64_CFVAR_S ; ocvl := A64_CFVAR_L ; obV := A64_ARM_BINDS
+              A64_ARM_ENS = ens ; A64_ARM_ENL = enl ; A64_ARM_VS = vfm.ns ; A64_ARM_VL = vfm.nl
+              A64_CFVAR_S = vfm.ns ; A64_CFVAR_L = vfm.nl ; A64_ARM_BINDS = am.binds_head
+              a64_bind_push(am.binds_head, eoff)
+              if hasexprV { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
+              if dostmtV { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
+              if (not hasexprV) and (not dostmtV) { push_str(sb, "  brk #0 // statement-body match arm in value position deferred\n") }
+              a64_bind_pop(am.binds_head)
+              A64_ARM_ENS = oensV ; A64_ARM_ENL = oenlV ; A64_ARM_VS = ovsV ; A64_ARM_VL = ovlV
+              A64_CFVAR_S = ocvs ; A64_CFVAR_L = ocvl ; A64_ARM_BINDS = obV
+              push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
+              push_str(sb, ".LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, ":\n")
+              vc = vc + 1
+              vf = vfm.next
+            }
+            None => { break }
+          }
         }
       }
     }
@@ -8518,13 +8550,18 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             ov_fs := A64_CF_FLD_S ; ov_fl := A64_CF_FLD_L
             ov_ts := A64_CF_TY_S ; ov_tl := A64_CF_TY_L
             mut fd := sd.fields_head
-            while fd != 0 {
-              fdd := deref(fld_p(fd))
-              A64_CF_VAR_S = cvs ; A64_CF_VAR_L = cvl
-              A64_CF_FLD_S = fdd.ns ; A64_CF_FLD_L = fdd.nl
-              A64_CF_TY_S = fdd.ts ; A64_CF_TY_L = fdd.tl
-              emit_a64_stmts(cbody, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
-              fd = fdd.next
+            loop {
+              match fd {
+                Some(fdq) => {
+                  fdd := deref(fld_p(fdq))
+                  A64_CF_VAR_S = cvs ; A64_CF_VAR_L = cvl
+                  A64_CF_FLD_S = fdd.ns ; A64_CF_FLD_L = fdd.nl
+                  A64_CF_TY_S = fdd.ts ; A64_CF_TY_L = fdd.tl
+                  emit_a64_stmts(cbody, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
+                  fd = fdd.next
+                }
+                None => { break }
+              }
             }
             A64_CF_VAR_S = ov_vs ; A64_CF_VAR_L = ov_vl
             A64_CF_FLD_S = ov_fs ; A64_CF_FLD_L = ov_fl

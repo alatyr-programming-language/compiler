@@ -119,11 +119,16 @@ _struct_field_default := fn(src : ptr(u8), ts : usize, tl : usize) -> DSpan {
 ## table's sizing and its fill, so the two cannot disagree about a record's length.
 d_struct_nfields := fn(d : Decl) -> usize {
   mut nf : usize = 0
-  mut f := unchecked bitcast(usize, d.fields_head)
-  while f != 0 {
-    fd := deref(fld_p(unchecked bitcast(ptr(mut FieldDecl), f)))
-    nf += 1
-    f = unchecked bitcast(usize, fd.next)
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        nf += 1
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   nf
 }
@@ -180,15 +185,20 @@ collect_struct_table := fn(decls : rt::Vec, src : ptr(u8), in out sv : rt::Vec) 
       rt::vec_push(sv, nf)
       ## Each field entry is 4 words: `ns, nl, def_start, def_len` (def_len == 0 = no default). The
       ## default span is SOURCE-SCANNED past the field's captured type span `[ts, ts+tl)` (TYP-8/§9.4).
-      mut f2 := unchecked bitcast(usize, d.fields_head)
-      while f2 != 0 {
-        fd := deref(fld_p(unchecked bitcast(ptr(mut FieldDecl), f2)))
-        rt::vec_push(sv, fd.ns)
-        rt::vec_push(sv, fd.nl)
-        df := _struct_field_default(src, fd.ts, fd.tl)
-        rt::vec_push(sv, df.s)
-        rt::vec_push(sv, df.n)
-        f2 = unchecked bitcast(usize, fd.next)
+      mut f2 := d.fields_head
+      loop {
+        match f2 {
+          Some(f2q) => {
+            fd := deref(fld_p(f2q))
+            rt::vec_push(sv, fd.ns)
+            rt::vec_push(sv, fd.nl)
+            df := _struct_field_default(src, fd.ts, fd.tl)
+            rt::vec_push(sv, df.s)
+            rt::vec_push(sv, df.n)
+            f2 = fd.next
+          }
+          None => { break }
+        }
       }
     }
     di += 1
@@ -518,7 +528,7 @@ d_lift_expr := fn(e : ptr(Expr), ms : usize, ml : usize, in out decls : rt::Vec,
     Expr::Lambda(fnpos, ph, rts, rtl, bh, val) => {
       d_lift_stmts(bh, ms, ml, decls, na, tar)
       d_lift_expr(val, ms, ml, decls, na, tar)
-      sd := Decl(name_start = fnpos, name_len = 0, value = val, is_fn = true, kind = 1, arity = d_lam_arity(ph, na), is_generic = false, params_head = ph, body_stmts = bh, fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = rts, ret_tl = rtl, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
+      sd := Decl(name_start = fnpos, name_len = 0, value = val, is_fn = true, kind = 1, arity = d_lam_arity(ph, na), is_generic = false, params_head = ph, body_stmts = bh, fields_head = Option.None, ret_ts = rts, ret_tl = rtl, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       s := rt::bump(deref(tar), size(Decl))
       sdp := unchecked bitcast(ptr(mut Decl), s)
       deref(sdp) = sd
@@ -3484,15 +3494,15 @@ d_manifest_module_decls := fn(pv : rt::Vec, name_start : rt::Vec, name_len : rt:
       ## synthetic declaration its own copy of `version`, while keeping the first
       ## copy as the canonical text used by the source-AST rewrite probe.
       fns := MANIFEST_FIELD_S + k * MANIFEST_FIELD_STRIDE
-      fd := d_manifest_field_node(na, FieldDecl(ns = fns, nl = MANIFEST_FIELD_N, arity = 0, next = unchecked bitcast(ptr(mut FieldDecl), 0), ts = MANIFEST_FIELD_TS, tl = MANIFEST_FIELD_TL, wsize = 1))
-      td := Decl(name_start = MANIFEST_TYPE_S, name_len = MANIFEST_TYPE_N, value = unchecked bitcast(ptr(Expr), 0), is_fn = false, kind = 2, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0), body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = fd, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
+      fd := d_manifest_field_node(na, FieldDecl(ns = fns, nl = MANIFEST_FIELD_N, arity = 0, next = Option.None, ts = MANIFEST_FIELD_TS, tl = MANIFEST_FIELD_TL, wsize = 1))
+      td := Decl(name_start = MANIFEST_TYPE_S, name_len = MANIFEST_TYPE_N, value = unchecked bitcast(ptr(Expr), 0), is_fn = false, kind = 2, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0), body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.Some(fd), ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       th := d_manifest_decl_node(tar, td)
       rt::vec_push(decls, th)
       lit := parser::newnode(ptr(na), Expr.StrLit(MANIFEST_VERSION_S, MANIFEST_VERSION_N, nstr, 0, 0))
       nstr += 1
       ah := parser::gnode(ptr(na), Arg(e = lit, next = unchecked bitcast(ptr(mut Arg), 0)))
       value := parser::newnode(ptr(na), Expr.StructLit(MANIFEST_TYPE_S, MANIFEST_TYPE_N, 1, ah))
-      ad := Decl(name_start = MANIFEST_BIND_S, name_len = MANIFEST_BIND_N, value = value, is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0), body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = unchecked bitcast(ptr(mut FieldDecl), 0), ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
+      ad := Decl(name_start = MANIFEST_BIND_S, name_len = MANIFEST_BIND_N, value = value, is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0), body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       ahd := d_manifest_decl_node(tar, ad)
       rt::vec_push(decls, ahd)
     }
