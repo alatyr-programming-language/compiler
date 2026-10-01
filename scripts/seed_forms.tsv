@@ -17,5 +17,5 @@
 #            places to clean up when the row is retired.
 #
 # name	state	due	issue	sites
-enum_copy_two_derefs	seed	42	#790	src/ast.al:bitcast_identity_erase (word-by-word copy)
-call_result_enum_field_arg	seed	42	#791	src/sema.al:resolve_kind (result bound before the field is read)
+#
+# live-rows: 0

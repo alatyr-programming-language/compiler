@@ -20,7 +20,11 @@
 #                               what the row tracks.
 #
 # The registry must also match the directory, both ways: a program with no row, or a row with no
-# program, is refused, as is a malformed row or an empty registry.
+# program, is refused, as is a malformed row. An EMPTY registry is legitimate only when it says so:
+# a `# live-rows: N` line declares how many rows the file holds, and the parsed count must equal it.
+# Without the declaration an empty registry is refused, and a declaration the parse disagrees with is
+# refused too, so a parser that silently skips rows cannot read as "nothing to check". The registry
+# empties when a promotion retires its last row (0.2.7 retired #790's and #791's).
 #
 # WHY THE PROGRAMS ARE NOT IN test/
 # ---------------------------------
@@ -71,8 +75,9 @@ sf_check() {
   local dir="${SEED_FORMS_DIR:-$ROOT/scripts/seed_forms}"
   local tree="${SEED_FORMS_TREE:-$ROOT/target/debug/alatyr}"
   local seed="${SEED_FORMS_SEED:-$ROOT/seed/alatyr}"
-  local w bad=0 rows=0 nseed=0 ntree=0
+  local w bad=0 rows=0 nseed=0 ntree=0 declared
   [ -f "$reg" ] || { echo "seed forms: cannot read the registry $reg" >&2; return 2; }
+  declared="$(sed -n 's/^# live-rows: *\([0-9][0-9]*\) *$/\1/p' "$reg" | head -1)"
   [ -d "$dir" ] || { echo "seed forms: no program directory $dir" >&2; return 2; }
   [ -x "$tree" ] || { echo "seed forms: no tree compiler at $tree (build first)" >&2; return 2; }
   [ -x "$seed" ] || { echo "seed forms: no seed at $seed" >&2; return 2; }
@@ -121,7 +126,11 @@ sf_check() {
     grep -qxF "$b" "$w/names" || { echo "seed forms: FAIL $b: program $f has no row in the registry"; bad=1; }
   done
   rm -rf "$w"
-  if [ "$rows" = 0 ]; then echo "seed forms: FAIL: the registry lists no form — what was checked is unknown"; bad=1; fi
+  if [ -n "$declared" ]; then
+    if [ "$rows" != "$declared" ]; then echo "seed forms: FAIL: the registry declares live-rows: $declared but $rows rows were parsed"; bad=1; fi
+  elif [ "$rows" = 0 ]; then
+    echo "seed forms: FAIL: the registry lists no form — what was checked is unknown (an emptied registry says '# live-rows: 0')"; bad=1
+  fi
   local sh
   sh="$( (sha256sum "$seed" 2>/dev/null || shasum -a 256 "$seed" 2>/dev/null) | cut -c1-12)"
   echo "seed forms: rows=$rows seed=$nseed tree=$ntree seed_sha256=${sh:-unknown}"
@@ -186,6 +195,11 @@ EOF
   sf_case orphan 1 "FAIL h: program" "has no row" < <(printf 'g%sseed%s42%s#7%ss.al:k\n' "$T" "$T" "$T" "$T")
   sf_case no-program 1 "FAIL i: the row has no program" < <(printf 'i%sseed%s42%s#8%ss.al:k\n' "$T" "$T" "$T" "$T")
   sf_case empty 1 "the registry lists no form" < <(printf '# only comments\n\n')
+  ## CONTROL: an emptied registry that declares it passes, and says how many rows it checked.
+  sf_case declared-empty 0 "rows=0" "*** seed forms: PASS" < <(printf '# live-rows: 0\n# only comments\n')
+  ## A declaration the parse disagrees with is refused: a row the parser skipped cannot hide.
+  mk declared-mismatch n 42 0
+  sf_case declared-mismatch 1 "declares live-rows: 0 but 1 rows" < <(printf '# live-rows: 0\nn%sseed%s42%s#9%ss.al:k\n' "$T" "$T" "$T" "$T")
   mk bad-due j 42 0
   sf_case bad-due 1 "FAIL j: due '300'" < <(printf 'j%sseed%s300%s#9%ss.al:k\n' "$T" "$T" "$T" "$T")
   mk bad-state k 42 0
@@ -195,7 +209,7 @@ EOF
   mk dup m 42 0
   sf_case dup 1 "FAIL m: listed twice" < <(printf 'm%sseed%s42%s#9%ss.al:k\nm%sseed%s42%s#9%ss.al:k\n' "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T")
   rm -rf "$st"
-  local want=13
+  local want=15
   echo "seed forms self-test: cases=$cases failures=$bad"
   if [ "$cases" != "$want" ]; then echo "FAIL seed forms self-test: ran $cases cases, want $want"; return 1; fi
   [ "$bad" = 0 ] || return 1

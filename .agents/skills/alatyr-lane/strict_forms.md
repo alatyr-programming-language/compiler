@@ -32,7 +32,7 @@ issue in the marker's reason. Do not quietly route around it.
 | 5 | width and signedness are spelled, never inferred from a form | #546, #608, #707, #764–#766 | review |
 | 6 | `unchecked` is explicit and justified; no implicit `usize` ↔ `ptr` | #529, #610 | `strict_forms_check.sh` `unchecked`, `ptrint` |
 | 7 | bind a `?` before using its value | #752 | `strict_forms_check.sh` `try-inline` |
-| 8 | do not write the forms the frozen seed miscompiles | #790, #791; seven rows retired by 0.2.5 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
+| 8 | do not write the forms the frozen seed miscompiles | no live rows; seven retired by 0.2.5, two (#790, #791) by 0.2.7 | `seed_forms_check.sh` (the registry, `scripts/seed_forms.tsv`); a comment at every workaround |
 | 9 | an AST handle has its node's own type | #760 (12 walkers), the `usize` pass-plumbing | the checker (since #760), review; §9 has the proposal |
 | 10 | a quantity with an identity is a `brand`, not a bare number | #167 (word offset used as a byte offset), #760, #299 | the checker refuses a sibling or raw mix (since #299); *choosing* a brand is held by review |
 
@@ -310,13 +310,20 @@ one of two states:
   tree defect with its own issue. The row records it until the fix lands. Then the check makes the
   fixing change move the row to `seed`.
 
-Measured at `db74009` against seed 0.2.5 (`00d05ce6debb…`) on native x86_64 (omen). The tree column
-is the tree-built compiler.
+The registry has no live row at 0.2.7. A new row is added with the next form the frozen seed is
+found to miscompile.
 
-| row | state | issue | due | tree | seed 0.2.5 | workaround sites |
-|---|---|---|---:|---:|---:|---|
-| `enum_copy_two_derefs`: `deref(dst) = deref(src)` over a multi-word enum | tree | #790 | 42 | 1 | 1 | `src/ast.al` `bitcast_identity_erase` |
-| `call_result_enum_field_arg`: `is_c(mk().kind)` with an enum field | tree | #791 | 42 | 139 | 139 | `src/sema.al` `resolve_kind` |
+**Retired by the 0.2.7 promotion.** Both rows that were `tree` at `db74009` moved to `seed` when the tree
+fixes landed (#842 for #790, #843 for #791), and under seed 0.2.7 (`1ec875d9…`) both answer 42, so the
+check refused them with "the seed now handles …" and they were removed:
+
+| retired row | issue | seed 0.2.6 | seed 0.2.7 | workaround it retires |
+|---|---|---:|---:|---|
+| `enum_copy_two_derefs`: `deref(dst) = deref(src)` over a multi-word enum | #790 | 1 | 42 | `src/ast.al` `bitcast_identity_erase` (word-by-word copy) |
+| `call_result_enum_field_arg`: `is_c(mk().kind)` with an enum field | #791 | 139 | 42 | `src/sema.al` `resolve_kind` (result bound first) |
+
+The two workarounds are still in the source. Removing one changes the compiler's own emission, so it
+is a separate change with its own fixpoint, not part of a promotion; their comments say so.
 
 **Retired by the 0.2.5 promotion.** This is the registry's first retirement, and it worked the way it
 is designed to. Seven `seed` rows were planted against 0.2.4, where the tree answered 42 and the seed

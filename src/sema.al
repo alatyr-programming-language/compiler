@@ -2556,8 +2556,8 @@ resolve_ty := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), nc
 ## result handed straight to a `TyKind` parameter was passed as the word itself where the callee reads an
 ## address (measured: Stage1 built by the frozen seed segfaulted in `kind_is_enum`; the tree compiler did
 ## the same until #791), so the result is bound first and the kind read off the binding. The tree is
-## fixed; the frozen seed is not, so this stays until a promotion retires `call_result_enum_field_arg`
-## in `scripts/seed_forms.tsv`.
+## fixed and seed 0.2.7 handles it (its registry row retired), so the binding may be dropped in a change
+## of its own.
 resolve_kind := fn(src : ptr(u8), ts : usize, tl : usize, decls : ptr(rt::Vec), ncnt : usize) -> TyKind {
   rt0 := resolve_ty(src, ts, tl, decls, ncnt)
   rt0.kind
