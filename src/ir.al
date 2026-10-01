@@ -24,6 +24,10 @@
 ## `usize` <-> pointer crossings are confined to the four accessors of the storage band, each with its
 ## reason.
 (Arg, Arm, Decl, Expr, Param, Stmt) := ast
+## The slice-1 builder, a child module (`src/ir/build.al`), imported by bare name.
+(build_one, BuildOut, BuildWhy, NyWhy, nywhy_is_gap, nywhy_name) := build
+## The golden builds `ir --self-test` runs (`src/ir/golden.al`).
+(golden_run) := golden
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 
@@ -346,6 +350,7 @@ pub VRegId := brand(usize)
 pub LabelId := brand(usize)
 pub FrameId := brand(usize)
 pub FnId := brand(usize)
+pub SymId := brand(usize)
 
 ## ───────────────────────────── storage: a growing word buffer ─────────────────────────────
 
@@ -457,8 +462,10 @@ pub IrFn := struct {
   nlabels : usize,
 }
 
-## A program: its functions, in order (an `OkFn` operand is an index into `fns`).
-pub IrProg := struct { fns : ptr(mut WBuf) }
+## A program: its functions, in order (an `OkFn` operand is an index into `fns`), and the symbols its
+## `OkSym` operands name — a function or a global outside the program, identified by its declaration.
+## `syms` holds three words per symbol: the declaration's index, its name's address and its length.
+pub IrProg := struct { fns : ptr(mut WBuf), syms : ptr(mut WBuf) }
 
 ## ── the way back out of a WBuf word: one accessor per record type ──
 ## unchecked-ok: `fn_ptr` reads back a word `prog_add` pushed from a `ptr(mut IrFn)`.
@@ -470,7 +477,33 @@ vinfo_ptr := fn(w : usize) -> ptr(mut VInfo) { unchecked bitcast(ptr(mut VInfo),
 ## unchecked-ok: `frame_ptr` reads back a word `new_frame` pushed from a `ptr(mut Frame)`.
 frame_ptr := fn(w : usize) -> ptr(mut Frame) { unchecked bitcast(ptr(mut Frame), w) }
 
-pub prog_new := fn(in out a : rt::Arena) -> IrProg { IrProg(fns = wb_new(a, 8)) }
+pub prog_new := fn(in out a : rt::Arena) -> IrProg {
+  fw := wb_new(a, 8)
+  sw := wb_new(a, 24)
+  IrProg(fns = fw, syms = sw)
+}
+## The symbol of declaration `decl` named `[name_p, name_p+name_n)`, added on first use.
+pub prog_sym := fn(p : IrProg, in out a : rt::Arena, decl : usize, name_p : ptr(u8), name_n : usize) -> SymId {
+  n := wb_len(p.syms) / 3
+  mut i : usize = 0
+  while i < n {
+    if wb_get(p.syms, i * 3) == decl { return SymId(i) }
+    i = i + 1
+  }
+  k1 := wb_push(p.syms, a, decl)
+  ## unchecked-ok: a symbol's name address is kept as its WBuf word; `sym_name` is the only way back.
+  k2 := wb_push(p.syms, a, unchecked bitcast(usize, name_p))
+  k3 := wb_push(p.syms, a, name_n)
+  SymId(n)
+}
+pub prog_nsyms := fn(p : IrProg) -> usize { wb_len(p.syms) / 3 }
+## The declaration index a symbol names.
+pub sym_decl := fn(p : IrProg, s : SymId) -> usize { wb_get(p.syms, usize(s) * 3) }
+sym_name := fn(p : IrProg, s : SymId) -> str {
+  ## unchecked-ok: the word `prog_sym` stored from the symbol's name address.
+  np : ptr(u8) = unchecked bitcast(ptr(u8), wb_get(p.syms, usize(s) * 3 + 1))
+  str_at(np, wb_get(p.syms, usize(s) * 3 + 2))
+}
 pub prog_len := fn(p : IrProg) -> usize { wb_len(p.fns) }
 pub prog_fn := fn(p : IrProg, i : FnId) -> ptr(mut IrFn) { fn_ptr(wb_get(p.fns, usize(i))) }
 
@@ -573,7 +606,7 @@ pub o_none := fn() -> Opnd { Opnd(k = OpndK.OkNone, v = 0) }
 pub o_vreg := fn(v : VRegId) -> Opnd { Opnd(k = OpndK.OkVReg, v = i64(usize(v))) }
 pub o_imm := fn(x : i64) -> Opnd { Opnd(k = OpndK.OkImm, v = x) }
 pub o_frame := fn(k : FrameId) -> Opnd { Opnd(k = OpndK.OkFrame, v = i64(usize(k))) }
-pub o_sym := fn(id : usize) -> Opnd { Opnd(k = OpndK.OkSym, v = i64(id)) }
+pub o_sym := fn(id : SymId) -> Opnd { Opnd(k = OpndK.OkSym, v = i64(usize(id))) }
 pub o_fn := fn(i : FnId) -> Opnd { Opnd(k = OpndK.OkFn, v = i64(usize(i))) }
 
 ## A blank instruction of op `o`: every operand absent, every attribute `…None`.
@@ -643,6 +676,17 @@ put_fn_opnd := fn(in out sb : rt::StrBuf, p : IrProg, v : i64) {
   put(sb, "@f")
   put_i(sb, v)
 }
+## A symbol operand: `@<name>` when the program holds it, else its index.
+put_sym_opnd := fn(in out sb : rt::StrBuf, p : IrProg, v : i64) {
+  if v >= 0 and usize(v) < prog_nsyms(p) {
+    nm := sym_name(p, SymId(usize(v)))
+    put(sb, "@")
+    put(sb, nm)
+    return
+  }
+  put(sb, "@s")
+  put_i(sb, v)
+}
 ## An operand.
 put_opnd := fn(in out sb : rt::StrBuf, p : IrProg, k : OpndK, v : i64) {
   match k {
@@ -650,7 +694,7 @@ put_opnd := fn(in out sb : rt::StrBuf, p : IrProg, k : OpndK, v : i64) {
     OkVReg => { put(sb, "%"); put_i(sb, v) }
     OkImm => { put_i(sb, v) }
     OkFrame => { put(sb, "$"); put_i(sb, v) }
-    OkSym => { put(sb, "@s"); put_i(sb, v) }
+    OkSym => { put_sym_opnd(sb, p, v) }
     OkFn => { put_fn_opnd(sb, p, v) }
     OkLabel => { put(sb, "L"); put_i(sb, v) }
   }
@@ -1525,17 +1569,17 @@ pub verify_prog := fn(p : IrProg, in out a : rt::Arena, in out sb : rt::StrBuf) 
   bad
 }
 
-## ───────────────────────────── the builder (slice 0a: NotYet for everything) ─────────────────────────────
+## ───────────────────────────── the builder's refusals ─────────────────────────────
 ##
-## The builder is the one place a language construct becomes IR (§3.1). In slice 0a it accepts no
-## construct: for every function it answers `NotYet(construct, span)` naming the FIRST construct it
-## meets in source order, and the target keeps its legacy emitter (§7.1 rule 1, function-level
-## fallback per D7). The construct names are the AST's own variant names, so a later slice claims its
-## reasons exactly (`scripts/ir_census.sh` ranks them).
+## The builder (`ir::build`, slice 1: `docs/ir-slice-1.md` §2) is the one place a language construct
+## becomes IR (§3.1). For a function it cannot build it answers `NotYet(construct, span)` naming the
+## first construct outside its subset, and the target keeps its legacy emitter (§7.1 rule 1,
+## function-level fallback per D7). The construct names are the AST's own variant names, so a later
+## slice claims its reasons exactly (`scripts/ir_census.sh` ranks them).
 
 ## The construct a `NotYet` names.
 pub Construct := enum {
-  CGeneric, CEmpty,
+  CGeneric, CEmpty, CSignature, CBodyless,
   SAssign, SWhile, SFieldAssign, SReturn, SIf, SMatch, SFor, SDerefAssign, SIndexAssign, SIndexFieldAssign,
   SFieldPathAssign, SLoop, SBreak, SContinue, SExprStmt, SCompIf, SCompFor, SCompMatch, SCompForRange,
   SUnchecked, SAllocWith,
@@ -1545,6 +1589,8 @@ pub Construct := enum {
 pub construct_name := fn(c : Construct) -> str {
   match c {
     CGeneric => { "generic function (needs a mono instance)" }; CEmpty => { "empty body" }
+    CSignature => { "signature (a parameter or result that is not a kernel scalar)" }
+    CBodyless => { "a declaration with no body (`@abi(syscall)`, `@extern`: slice 2)" }
     SAssign => { "stmt Assign" }; SWhile => { "stmt While" }; SFieldAssign => { "stmt FieldAssign" }
     SReturn => { "stmt Return" }; SIf => { "stmt If" }; SMatch => { "stmt Match" }; SFor => { "stmt For" }
     SDerefAssign => { "stmt DerefAssign" }; SIndexAssign => { "stmt IndexAssign" }
@@ -1666,28 +1712,6 @@ opt_expr_span := fn(e : ptr(Expr)) -> Option(u64) {
   Option(u64).None
 }
 
-## The span of the construct the last `build_fn` refused (always set: the function's name when the
-## construct itself carries no source position).
-mut NY_SPAN : u64 = 0
-
-## Build one function declaration. Slice 0a: always `NotYet`, naming the first construct met.
-pub build_fn := fn(dp : ptr(Decl)) -> Construct {
-  d : Decl = deref(dp)
-  NY_SPAN = u64(d.name_start)
-  if d.is_generic { return Construct.CGeneric }
-  if stmt_present(d.body_stmts) {
-    sp : Option(u64) = stmt_span(d.body_stmts)
-    match sp { Some(s) => { NY_SPAN = s }; None => {} }
-    return stmt_construct(d.body_stmts)
-  }
-  if expr_present(d.value) {
-    ep : Option(u64) = expr_span(d.value)
-    match ep { Some(s) => { NY_SPAN = s }; None => {} }
-    return expr_construct(d.value)
-  }
-  Construct.CEmpty
-}
-
 ## ───────────────────────────── the `alatyr ir <file>` report ─────────────────────────────
 ##
 ## One line per function that reaches the builder, in declaration order, then a summary:
@@ -1732,37 +1756,107 @@ put_loc := fn(in out sb : rt::StrBuf, src : ptr(u8), off : usize, paths : ptr(rt
   }
 }
 
-## Run the builder over every function declaration of `decls` and print the report. Answers the number
-## of functions built through the IR (0 in slice 0a).
-pub report_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), paths : ptr(rt::Vec), offs : ptr(rt::Vec), lens : ptr(rt::Vec)) -> usize {
+## Run the builder over every function declaration of `decls` and print the report: a built function's
+## verified IR, else its `NotYet`. The verifier runs on EVERY built function (§5). One it refuses is a
+## located internal error, never printed as if it were sound: its report line is `VerifyFailed(<rule> at
+## inst <n>)`, `alatyr: internal: IR verify <rule> in <function> at <file>:<line>:<col>` goes to stderr,
+## and it is counted in `IR_VERIFY_FAILED`, which makes the `ir` verb exit 70 (an internal error).
+## Answers the number of verifier refusals.
+pub report_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), paths : ptr(rt::Vec), offs : ptr(rt::Vec), lens : ptr(rt::Vec), in out ba : rt::Arena) -> usize {
+  p := prog_new(ba)
+  mut eb := rt::strbuf(ba, 65536)
   cnt := rt::vec_len(deref(decls))
   mut nfn : usize = 0
+  mut nbuilt : usize = 0
+  mut ngap : usize = 0
+  mut nbad : usize = 0
   mut i : usize = 0
   while i < cnt {
     ## unchecked-ok: `decls` holds Decl record addresses (the parser's `rt::Vec` of handles).
     dp : ptr(Decl) = unchecked bitcast(ptr(Decl), rt::vec_get(deref(decls), i))
     d : Decl = deref(dp)
     if d.is_fn and d.name_len != 0 {
-      c : Construct = build_fn(dp)
+      mut why := BuildWhy(c = Construct.CEmpty, w = NyWhy.NwOutside, span = u64(d.name_start))
+      out : BuildOut = build_one(p, decls, src, i, ba, why)
       put(sb, "fn ")
-      if d.mod_len != 0 { mnm := str_at((src + d.mod_start), d.mod_len); put(sb, mnm); put(sb, "::") }
-      fnm := str_at((src + d.name_start), d.name_len)
-      put(sb, fnm)
-      put(sb, " NotYet(")
-      put_construct(sb, c)
-      put(sb, ", ")
-      put_loc(sb, src, usize(NY_SPAN), paths, offs, lens)
-      put(sb, ")\n")
+      put_qual_name(sb, src, d)
+      match out {
+        Built(fid) => {
+          f := prog_fn(p, fid)
+          r : VRule = verify_fn(p, f, ba)
+          if vrule_is_ok(r) {
+            put(sb, " Built\n")
+            print_fn(sb, p, f)
+            nbuilt = nbuilt + 1
+          } else {
+            put(sb, " VerifyFailed(")
+            put_rule(sb, r)
+            put(sb, " at inst ")
+            put_u(sb, V_AT)
+            put(sb, ")\n")
+            report_verify_failure(eb, p, f, r, src, d, paths, offs, lens)
+            nbad = nbad + 1
+          }
+        }
+        Refused => {
+          wc : Construct = why.c
+          ww : NyWhy = why.w
+          put(sb, " NotYet(")
+          if nywhy_is_gap(ww) {
+            ngap = ngap + 1
+            wn := nywhy_name(ww)
+            put(sb, wn)
+            put(sb, ": ")
+          }
+          put_construct(sb, wc)
+          put(sb, ", ")
+          put_loc(sb, src, usize(why.span), paths, offs, lens)
+          put(sb, ")\n")
+        }
+      }
       nfn = nfn + 1
     }
     i = i + 1
   }
   put(sb, "ir: functions=")
   put_u(sb, nfn)
-  put(sb, " built=0 notyet=")
-  put_u(sb, nfn)
+  put(sb, " built=")
+  put_u(sb, nbuilt)
+  put(sb, " notyet=")
+  put_u(sb, nfn - nbuilt - nbad)
+  put(sb, " sema_gaps=")
+  put_u(sb, ngap)
+  put(sb, " verify_failed=")
+  put_u(sb, nbad)
   put(sb, "\n")
-  0
+  if eb.len != 0 { elen : usize = eb.len; ew := rt::sb_flush(eb, 2) }
+  IR_VERIFY_FAILED = IR_VERIFY_FAILED + nbad
+  nbad
+}
+## How many built functions the verifier refused in this process (the `ir` verb exits 70 when any did).
+mut IR_VERIFY_FAILED : usize = 0
+pub verify_failures := fn() -> usize { IR_VERIFY_FAILED }
+## `<module>::<name>` of a declaration, or `<name>` in the default module.
+put_qual_name := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
+  if d.mod_len != 0 { mnm := str_at((src + d.mod_start), d.mod_len); put(sb, mnm); put(sb, "::") }
+  fnm := str_at((src + d.name_start), d.name_len)
+  put(sb, fnm)
+}
+## The located internal error for a verifier refusal (§5): the rule, the function, and the source of
+## the offending instruction (the function's name when that instruction carries no span).
+report_verify_failure := fn(in out eb : rt::StrBuf, p : IrProg, f : ptr(mut IrFn), r : VRule, src : ptr(u8), d : Decl, paths : ptr(rt::Vec), offs : ptr(rt::Vec), lens : ptr(rt::Vec)) {
+  mut at : usize = d.name_start
+  if V_AT < fn_ninst(f) {
+    ip := fn_inst(f, V_AT)
+    if i_has_span(ip) { at = i_span(ip) }
+  }
+  put(eb, "alatyr: internal: IR verify ")
+  put_rule(eb, r)
+  put(eb, " in ")
+  put_qual_name(eb, src, d)
+  put(eb, " at ")
+  put_loc(eb, src, at, paths, offs, lens)
+  put(eb, "\n")
 }
 
 ## ───────────────────────────── the self-test (`alatyr ir --self-test`) ─────────────────────────────
@@ -2124,7 +2218,8 @@ st_line := fn(in out sb : rt::StrBuf, ok : bool, what : str) {
 pub self_test := fn(in out ca : rt::Arena) -> usize {
   mut a := rt::Arena(base = ca.base, off = 0, cap = 0)
   rt::arena_init(a, 67108864)
-  mut sb := rt::strbuf(a, 65536)
+  ## Room for a failing golden's whole report, printed beside its verdict.
+  mut sb := rt::strbuf(a, 4194304)
   mut fails : usize = 0
   ## Storage: a WBuf grows past any initial capacity and keeps every word.
   w := wb_new(a, 2)
@@ -2166,8 +2261,12 @@ pub self_test := fn(in out ca : rt::Arena) -> usize {
     if not pgood { fails = fails + 1 }
     w2 = w2 + 1
   }
+  ## The golden builds: real programs through the `ir` verb's whole pipeline (`ir::golden`).
+  mut ngold : usize = 0
+  gfails := golden_run(sb, a, ngold)
+  fails = fails + gfails
   put(sb, "ir self-test: ")
-  put_u(sb, st_plants() + 3 - fails)
+  put_u(sb, st_plants() + 3 + ngold - fails)
   put(sb, " passed, ")
   put_u(sb, fails)
   put(sb, " failed\n")
@@ -2302,6 +2401,16 @@ sty_record := fn() -> usize {
 pub sty_put := fn(e : ptr(Expr), t : VTy) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
   k := unchecked bitcast(usize, e)
+  sty_put_key(k, t)
+}
+## docs/ir-slice-1.md §2 — the value type of a BINDING, keyed by its declaration's name offset: an
+## unannotated local's type is known only where it is declared, and each use of it reads it here. The
+## key is the offset with the top bit set, a value no node address (an arena address) takes, so binding
+## keys and node keys share the one growing table without meeting.
+bind_key := fn(ns : usize) -> usize { ns | shl(usize(1), 63) }
+pub sty_bind_put := fn(ns : usize, t : VTy) { sty_put_key(bind_key(ns), t) }
+pub sty_bind_get := fn(ns : usize) -> VTy { sty_get_key(bind_key(ns)) }
+sty_put_key := fn(k : usize, t : VTy) {
   if STY_N * 2 >= STY_CAP { sty_grow() }
   ## An existing record is overwritten in place, so a context that refines a literal reaches every
   ## reader of the node.
@@ -2338,6 +2447,9 @@ sty_find := fn(k : usize) -> Option(u64) {
 pub sty_get := fn(e : ptr(Expr)) -> VTy {
   ## unchecked-ok: the node's address is the table key.
   k := unchecked bitcast(usize, e)
+  sty_get_key(k)
+}
+sty_get_key := fn(k : usize) -> VTy {
   ex := sty_find(k)
   match ex {
     Some(rw) => {
@@ -2518,6 +2630,8 @@ pub vty_u := fn(bytes : u64) -> VTy { VTy(cls = VCls.VcInt, bytes = bytes, sg = 
 pub vty_s := fn(bytes : u64) -> VTy { VTy(cls = VCls.VcInt, bytes = bytes, sg = Sgn.SgS) }
 pub vty_ptr := fn() -> VTy { VTy(cls = VCls.VcPtr, bytes = 8, sg = Sgn.SgNone) }
 pub vty_float := fn(bytes : u64) -> VTy { VTy(cls = VCls.VcFloat, bytes = bytes, sg = Sgn.SgNone) }
+## An aggregate value (a struct, an enum, an array, a `str`, a tuple): never an IR value (§3.2).
+pub vty_agg := fn() -> VTy { VTy(cls = VCls.VcAgg, bytes = 0, sg = Sgn.SgNone) }
 ## Has sema named a kernel type here (not absent, not unknown, not a literal still awaiting context)?
 vcls_known := fn(c : VCls) -> bool {
   match c { VcInt | VcBool | VcPtr | VcFloat | VcAgg => { true }; VcAbsent | VcUnknown | VcLit => { false } }
