@@ -2285,28 +2285,12 @@ pub ptr_target_pointee_n := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   ptr_target_pointee(src, ts, tl).n
 }
 
-## Is the preserved bitcast TARGET a complete pointer type (`ptr( [mut] T )`)? The parser preserves an
-## `Expr::Bitcast` in exactly four shapes: a `ptr(<sub-word scalar>)` target (kept for the pointee
-## width a `deref` must move), a bare narrow scalar target (kept for the destination word's
-## representation), a bare USER aggregate name (kept so a local bound from it resolves its fields),
-## and a `ptr(<user type>)` target (kept so such a local is a pointer-to-struct). This predicate
-## separates the two POINTER shapes from the aggregate one, and it is the second decision the
-## emitters must never disagree about: a POINTER value is one machine word, so the node lowers to its
-## inner value unchanged (Types §4.4 — a bitcast is the identity on the bits), whereas an aggregate
-## target is not a single word and has no scalar-position lowering on the non-x86 backends.
-##
-## The parse is `ptr_target_pointee`'s, so every spelling the grammar admits answers the same —
-## `ptr(u8)`, `ptr( mut u8 )` and `ptr (mut u8)` are all pointers. A fixed `"ptr("` prefix test (which
-## is all `bitcast_target_is_narrow_scalar` needs, because it only has to answer "not a narrow
-## scalar") would call `ptr (mut u8)` an aggregate and send a pointer to the aggregate fence.
-## #768 — the slot kind a NICHE-FOLDED `Some(p)` payload binding takes when the payload type `[ts, ts+tl)`
-## is `ptr(S)` / `ptr(E)` over a declared struct / enum: 7 (pointer-to-struct) or 6 (pointer-to-enum),
-## the kinds an annotated `p : ptr(S)` / `p : ptr(E)` local gets, so `deref(p).f`, `n := deref(p)` and
-## `match deref(p)` resolve the pointee. 0 for any other payload — the binding stays the scalar pointer
-## it was. The pointee span itself is `ptr_target_pointee_s`/`_n` (two scalars, for the same seed reason).
-pub niche_payload_ptr_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> u8 {
-  ps := ptr_target_pointee_s(src, ts, tl)
-  pn := ptr_target_pointee_n(src, ts, tl)
+## #768 / #858 — the slot kind a match payload binding takes when it POINTS at `[ps, ps+pn)`: 7
+## (pointer-to-struct) over a declared struct, 6 (pointer-to-enum) over a declared enum — the kinds an
+## annotated `p : ptr(S)` / `p : ptr(E)` local gets, so `deref(p).f`, `n := deref(p)` and
+## `match deref(p)` resolve the pointee. 0 for no pointee or any other one: the binding stays the
+## scalar word it was.
+pub pointee_agg_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), ps : usize, pn : usize) -> u8 {
   if pn == 0 { return 0 }
   if struct_decl_of(decls, src, ps, pn) >= 0 { return 7 }
   if enum_decl_of(decls, src, ps, pn) >= 0 { return 6 }
@@ -2321,6 +2305,20 @@ pub enum_elem_words := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, en : 
   1 + enum_inst_words(decls, src, es, en, a)
 }
 
+## Is the preserved bitcast TARGET a complete pointer type (`ptr( [mut] T )`)? The parser preserves an
+## `Expr::Bitcast` in exactly four shapes: a `ptr(<sub-word scalar>)` target (kept for the pointee
+## width a `deref` must move), a bare narrow scalar target (kept for the destination word's
+## representation), a bare USER aggregate name (kept so a local bound from it resolves its fields),
+## and a `ptr(<user type>)` target (kept so such a local is a pointer-to-struct). This predicate
+## separates the two POINTER shapes from the aggregate one, and it is the second decision the
+## emitters must never disagree about: a POINTER value is one machine word, so the node lowers to its
+## inner value unchanged (Types §4.4 — a bitcast is the identity on the bits), whereas an aggregate
+## target is not a single word and has no scalar-position lowering on the non-x86 backends.
+##
+## The parse is `ptr_target_pointee`'s, so every spelling the grammar admits answers the same —
+## `ptr(u8)`, `ptr( mut u8 )` and `ptr (mut u8)` are all pointers. A fixed `"ptr("` prefix test (which
+## is all `bitcast_target_is_narrow_scalar` needs, because it only has to answer "not a narrow
+## scalar") would call `ptr (mut u8)` an aggregate and send a pointer to the aggregate fence.
 pub bitcast_target_is_pointer := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
   ptr_target_pointee_n(src, ts, tl) != 0
 }
@@ -5037,6 +5035,61 @@ pub variant_payload_span := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, 
   if rn != 0 { return LSpan(s = rs, n = rn) }
   ## 1-component (or unit): fall back to the single-type view (handles the generic substitution).
   variant_payload_type(decls, src, es, en, vs, vn, a)
+}
+
+## #768 / #858 — what binding `bi` (0-based) of a match arm over variant `[vs, vn)` that binds `nbind`
+## names POINTS AT: the pointee span when its declared type is `ptr(T)` / `ptr(mut T)`, else `{0,0}`.
+## The component type is read in FULL from the variant's own `( … )` group in source: the parser keeps
+## only the HEAD token of a payload type in the `FieldDecl` (`B(ptr(N))` records `ptr`), so
+## `variant_payload_type` sees a pointee only when a generic instance substitutes the whole argument
+## (`Option(ptr(N))`'s `Some`, #768). An ordinary enum's `ptr(N)` came back as the bare `ptr`, a binding
+## typed from it had no pointee, and `deref(q).f` read 0 (#858). In a generic enum a component that is a
+## type parameter (`Some(T)` at `T = ptr(N)`) or a pointer to one (`B(ptr(T))` at `T = N`) resolves
+## through the instance's type argument. One name over a multi-component variant binds a tuple, not a
+## component, so a binding count that differs from the variant's arity answers `{0,0}`.
+pub variant_bind_pointee := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, en : usize, vs : usize, vn : usize, nbind : usize, bi : usize, a : rt::Arena) -> LSpan {
+  z := LSpan(s = 0, n = 0)
+  ar := alias_rhs(decls, src, es, en)
+  mut inst_s := es
+  mut inst_n := en
+  if ar.n != 0 { inst_s = ar.s; inst_n = ar.n }
+  ebn := base_type_name(src, inst_s, inst_n)
+  di := enum_decl_of(decls, src, ebn.s, ebn.n)
+  if di < 0 { return z }
+  d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
+  mut f := d.fields_head
+  while f != 0 {
+    fd := deref(fld_p(f))
+    if streq(src, fd.ns, fd.nl, vs, vn) and fd.arity >= 1 {
+      if nbind != fd.arity or bi >= nbind { return z }
+      ## The `( … )` group opens right after the variant name; `typearg_at` reads component `bi` of it.
+      mut op := fd.ns + fd.nl
+      while str_at((src + op), 1) != "(" { op = op + 1 }
+      comp := typearg_at(src, op, 0, bi)
+      if comp.n == 0 { return z }
+      mut ts := comp.s
+      mut tl := comp.n
+      if d.is_generic {
+        pos := param_pos(decls, usize(di), src, ts, tl, a)
+        if pos >= 0 {
+          ta := typearg_at(src, ebn.s, ebn.n, usize(pos))
+          if ta.n == 0 { return z }
+          ts = ta.s
+          tl = ta.n
+        }
+      }
+      ps := ptr_target_pointee_s(src, ts, tl)
+      pn := ptr_target_pointee_n(src, ts, tl)
+      if pn == 0 { return z }
+      if d.is_generic {
+        ppos := param_pos(decls, usize(di), src, ps, pn, a)
+        if ppos >= 0 { return typearg_at(src, ebn.s, ebn.n, usize(ppos)) }
+      }
+      return LSpan(s = ps, n = pn)
+    }
+    f = fd.next
+  }
+  z
 }
 
 ## The max payload arity over **all** enum decls in the program. Sizes the enum-materialization

@@ -10514,6 +10514,9 @@ run_x86 issue828_option_ptr_nested_args 42
 # #852 — `Option(ptr(T))` as a payload component of another enum's variant: one folded payload word in the
 # local store and the return registers, and the match binding typed as the folded Option.
 run_x86 issue852_option_ptr_enum_payload 42
+# #858 — a field read through an ordinary enum payload's `ptr(S)` binding (one payload, a component of a
+# multi-payload variant, `ptr(mut S)`, a generic `ptr(T)`, statement/value/tail matches) read 0.
+run_x86 issue858_enum_ptr_payload_field 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.

@@ -27,7 +27,7 @@ fld_p := ast::fld_p
 (Arm, Decl, Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
 (push_str, push_int) := strbuf
 (CSpan, LCtx, num_lit_value, var_name_span) := lower_ctx
-(base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_byte_place, is_niche_folded, niche_payload_ptr_kind, payload_folded_ty, ptr_target_pointee_s, ptr_target_pointee_n, layout_kind, layout_kind_is_byte, layout_kind_is_packed, repr_tag_code, struct_decl_of, struct_words, variant_index, variant_payload_type) := lower_layout
+(base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_byte_place, is_niche_folded, payload_folded_ty, pointee_agg_kind, layout_kind, layout_kind_is_byte, layout_kind_is_packed, repr_tag_code, struct_decl_of, struct_words, variant_bind_pointee, variant_index, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
@@ -767,17 +767,28 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
         ## (7) / pointer-to-enum (6) kind an annotated `p : ptr(S)` local gets. As a bare scalar its
         ## pointee was unknown, so `deref(p).f` and `n := deref(p); n.f` read 0 with no diagnostic.
         mut pkind : u8 = 0
-        if pview.n == 0 { pkind = niche_payload_ptr_kind(cx.decls, cx.src, pty.s, pty.n) }
-        if pkind != 0 {
-          pview_s = ptr_target_pointee_s(cx.src, pty.s, pty.n)
-          pview_l = ptr_target_pointee_n(cx.src, pty.s, pty.n)
+        if pview.n == 0 {
+          ppt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+          pkind = pointee_agg_kind(cx.decls, cx.src, ppt.s, ppt.n)
+          if pkind != 0 { pview_s = ppt.s; pview_l = ppt.n }
         }
         svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = pview_s, snl = pview_l, ek = pkind, estride = 1, eek = pview_eek, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
       } else {
+        ## #852 — a component that is itself a niche-folded `Option(ptr(T))` binds as that one-word Option
+        ## (ek 3). #858 — a component typed `ptr(S)` / `ptr(E)` (a one-payload `B(q)` or any component of
+        ## `D(k, q)`) is the same pointer-to-struct / pointer-to-enum local as the folded `Some(p)` above;
+        ## bound untyped, `deref(q).f` had no pointee and read 0.
         mpf := payload_folded_ty(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, usize(bi), deref(cx.mar))
-        mut mpk : u8 = 0
-        if mpf.n != 0 { mpk = 3 }
-        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = mpf.s, snl = mpf.n, ek = mpk, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+        bpt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+        mut bkind : u8 = 0
+        mut bks := 0
+        mut bkl := 0
+        if mpf.n != 0 { bkind = 3; bks = mpf.s; bkl = mpf.n }
+        else {
+          bkind = pointee_agg_kind(cx.decls, cx.src, bpt.s, bpt.n)
+          if bkind != 0 { bks = bpt.s; bkl = bpt.n }
+        }
+        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = bks, snl = bkl, ek = bkind, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
       }
       bi += 1
       bnd = bnd_next(bnd)

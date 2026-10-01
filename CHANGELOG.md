@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A field read through an enum payload's `ptr(S)` binding reads the field.** `match e { B(q) =>
+  deref(q).w }` over `B(ptr(N))` compiled clean and read 0 on x86_64 — also for a component of a
+  multi-payload variant, a `ptr(mut N)` payload written through, and a generic `B(ptr(T))`. The parser
+  keeps only a payload type's head token (`ptr`), so the binding had no pointee; #768 had covered only
+  `Option(ptr(S))`, whose generic substitution supplies the whole type. The binding's pointee is now read
+  from the variant's declared component type in every match form (#858).
 - **An enum variant may carry an `Option(ptr(T))` payload.** The payload was stored as a two-word enum,
   and constructing the variant from a folded local was refused. A match binding over the payload was
   untyped, so matching it again inside the arm was refused too. The payload component's declared type now
