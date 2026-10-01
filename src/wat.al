@@ -2274,20 +2274,23 @@ wat_decls := fn() -> ptr(rt::Vec) { unchecked bitcast(ptr(rt::Vec), WAT_DECLS) }
 ## WAT is a separate emitter, so keep the same source-ordered facts in a small per-function table here.
 ## Kind 1 is a comptime value and kind 2 is a later ordinary binding that shadows it. The source offset
 ## makes branch-local uses deterministic even though this collector visits nested lists recursively.
-mut WAT_CT_N := 0
-mut WAT_CT_NS : [usize; 128] = [0; 128]
-mut WAT_CT_NL : [usize; 128] = [0; 128]
-mut WAT_CT_OFF : [usize; 128] = [0; 128]
-mut WAT_CT_EXPR : [usize; 128] = [0; 128]
-mut WAT_CT_KIND : [u8; 128] = [0; 128]
+## Every ordinary assignment is an event, so the table grows with the function (#801): it held 128
+## events, and a function with more assignments could not be emitted for wasm at all. An event is four
+## words of an `rt` word table: name start (also its source offset), name length, expression, kind.
+mut WAT_CT_N : usize = 0
+mut WAT_CT_BASE : rt::WTab = rt::WTab(0)
+mut WAT_CT_CAP : rt::Words = rt::Words(0)
 
 wat_ct_record := fn(ns : usize, nl : usize, v : ptr(Expr), kind : u8) {
-  if WAT_CT_N >= 128 { panic("wasm: local comptime binding table exceeds 128 events") }
-  WAT_CT_NS[WAT_CT_N] = ns
-  WAT_CT_NL[WAT_CT_N] = nl
-  WAT_CT_OFF[WAT_CT_N] = ns
-  WAT_CT_EXPR[WAT_CT_N] = unchecked bitcast(usize, v)
-  WAT_CT_KIND[WAT_CT_N] = kind
+  mut cb := WAT_CT_BASE
+  mut cc := WAT_CT_CAP
+  rt::wtab_reserve(cb, cc, rt::wtab_words(WAT_CT_N, 4), rt::wtab_words(WAT_CT_N + 1, 4))
+  WAT_CT_BASE = cb
+  WAT_CT_CAP = cc
+  rt::wtab_set(WAT_CT_BASE, rt::wtab_at(WAT_CT_N, 4, 0), ns)
+  rt::wtab_set(WAT_CT_BASE, rt::wtab_at(WAT_CT_N, 4, 1), nl)
+  rt::wtab_set(WAT_CT_BASE, rt::wtab_at(WAT_CT_N, 4, 2), unchecked bitcast(usize, v))
+  rt::wtab_set(WAT_CT_BASE, rt::wtab_at(WAT_CT_N, 4, 3), usize(kind))
   WAT_CT_N = WAT_CT_N + 1
 }
 
@@ -2336,19 +2339,19 @@ wat_ct_collect := fn(head : ptr(mut Stmt), src : ptr(u8)) {
 }
 
 ## Return the latest visible comptime expression for a variable use, or null after an ordinary shadow.
-## A bounded table and a fail-loud overflow keep unsupported/untrusted source from becoming a silent
-## runtime local or an accidental value.
+## The table holds every event of the function, so no binding is ever missing from this answer.
 wat_ct_expr := fn(ns : usize, nl : usize, use_s : usize, src : ptr(u8)) -> ptr(Expr) {
   mut found : u8 = 0
   mut found_off := 0
   mut result : usize = 0
-  mut i := 0
+  mut i : usize = 0
   while i < WAT_CT_N {
-    if WAT_CT_OFF[i] <= use_s and WAT_CT_NL[i] == nl and streq(src, WAT_CT_NS[i], nl, ns, nl) {
-      if found == 0 or WAT_CT_OFF[i] >= found_off {
-        found = WAT_CT_KIND[i]
-        found_off = WAT_CT_OFF[i]
-        if found == 1 { result = WAT_CT_EXPR[i] } else { result = 0 }
+    eoff := rt::wtab_get(WAT_CT_BASE, rt::wtab_at(i, 4, 0))
+    if eoff <= use_s and rt::wtab_get(WAT_CT_BASE, rt::wtab_at(i, 4, 1)) == nl and streq(src, eoff, nl, ns, nl) {
+      if found == 0 or eoff >= found_off {
+        found = u8(rt::wtab_get(WAT_CT_BASE, rt::wtab_at(i, 4, 3)))
+        found_off = eoff
+        if found == 1 { result = rt::wtab_get(WAT_CT_BASE, rt::wtab_at(i, 4, 2)) } else { result = 0 }
       }
     }
     i = i + 1

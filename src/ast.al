@@ -815,20 +815,20 @@ pub stmt_null := fn() -> ptr(mut Stmt) { unchecked bitcast(ptr(mut Stmt), 0) }
 ## the FN-6 expression-callee site set below: no pass that only needs control-flow semantics sees a new
 ## enum field, while fmt can recover the exact spelling.  The key is updated on every parser/clone
 ## construction, including the unlabeled case, so an arena address reused by a second parse cannot retain
-## stale metadata.  Bounded + fail-loud keeps a large source from silently changing targets in fmt.
+## stale metadata.  The table grows with the program (#801): an entry is three words (node, span start,
+## span length) in an `rt` word table, so no source has more labels than it can hold.
 pub LabelSpan := struct { s : usize, n : usize }
-mut LABEL_NODE : [usize; 4096] = [0; 4096]
-mut LABEL_START : [usize; 4096] = [0; 4096]
-mut LABEL_LEN : [usize; 4096] = [0; 4096]
-mut LABEL_N := 0
+mut LABEL_BASE : rt::WTab = rt::WTab(0)
+mut LABEL_CAP : rt::Words = rt::Words(0)
+mut LABEL_N : usize = 0
 
 label_mark := fn(k : usize, s : usize, n : usize) {
   if k == 0 { return }
-  mut i := 0
+  mut i : usize = 0
   while i < LABEL_N {
-    if LABEL_NODE[i] == k {
-      LABEL_START[i] = s
-      LABEL_LEN[i] = n
+    if rt::wtab_get(LABEL_BASE, rt::wtab_at(i, 3, 0)) == k {
+      rt::wtab_set(LABEL_BASE, rt::wtab_at(i, 3, 1), s)
+      rt::wtab_set(LABEL_BASE, rt::wtab_at(i, 3, 2), n)
       return
     }
     i = i + 1
@@ -836,17 +836,21 @@ label_mark := fn(k : usize, s : usize, n : usize) {
   ## Unlabeled control-flow nodes need no table entry.  Still clear a matching old key above so a reused
   ## arena address cannot inherit a label from an earlier parse.
   if s == 0 or n == 0 { return }
-  if LABEL_N >= 4096 { panic("selfhost: control-label metadata table exhausted (limit 4096)") }
-  LABEL_NODE[LABEL_N] = k
-  LABEL_START[LABEL_N] = s
-  LABEL_LEN[LABEL_N] = n
+  mut lb := LABEL_BASE
+  mut lc := LABEL_CAP
+  rt::wtab_reserve(lb, lc, rt::wtab_words(LABEL_N, 3), rt::wtab_words(LABEL_N + 1, 3))
+  LABEL_BASE = lb
+  LABEL_CAP = lc
+  rt::wtab_set(LABEL_BASE, rt::wtab_at(LABEL_N, 3, 0), k)
+  rt::wtab_set(LABEL_BASE, rt::wtab_at(LABEL_N, 3, 1), s)
+  rt::wtab_set(LABEL_BASE, rt::wtab_at(LABEL_N, 3, 2), n)
   LABEL_N = LABEL_N + 1
 }
 
 label_lookup := fn(k : usize) -> LabelSpan {
-  mut i := 0
+  mut i : usize = 0
   while i < LABEL_N {
-    if LABEL_NODE[i] == k { return LabelSpan(s = LABEL_START[i], n = LABEL_LEN[i]) }
+    if rt::wtab_get(LABEL_BASE, rt::wtab_at(i, 3, 0)) == k { return LabelSpan(s = rt::wtab_get(LABEL_BASE, rt::wtab_at(i, 3, 1)), n = rt::wtab_get(LABEL_BASE, rt::wtab_at(i, 3, 2))) }
     i = i + 1
   }
   LabelSpan(s = 0, n = 0)
@@ -885,30 +889,35 @@ pub expr_label_span := fn(p : ptr(Expr)) -> LabelSpan {
 ## parser records the call site's borrowed name-span START (`cs`) here. A source byte offset is UNIQUE
 ## per occurrence — the `fs` of `fs[0](10)` occurs once — so the key can never collide with an ordinary
 ## call's callee span, it survives AST CLONING for a generic instance (the clone copies `cs`), and it
-## needs no new node field. Bounded + fail-loud: a program with more than `512` expression-callee sites
-## is rejected rather than silently mis-lowered.
-mut ECALLEE_K : [usize; 512] = [0; 512]
+## needs no new node field. The set grows with the program (#801): it is an `rt` word table, one word
+## per site, so there is no count of expression-callee sites past which a program is refused.
+mut ECALLEE_BASE : rt::WTab = rt::WTab(0)
+mut ECALLEE_CAP : rt::Words = rt::Words(0)
 mut ECALLEE_N : usize = 0
 
 ## Record the call site whose callee NAME SPAN starts at `k` as an EXPRESSION-callee call. Idempotent —
 ## the driver parses the package more than once (the enum pre-scan pass discards its AST), and the same
 ## site then re-registers with the same key.
 pub ecallee_mark := fn(k : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < ECALLEE_N {
-    if ECALLEE_K[i] == k { return }
+    if rt::wtab_get(ECALLEE_BASE, rt::wtab_at(i, 1, 0)) == k { return }
     i = i + 1
   }
-  if ECALLEE_N >= 512 { panic("selfhost: FN-6 - too many expression-callee call sites (limit 512)") }
-  ECALLEE_K[ECALLEE_N] = k
+  mut eb := ECALLEE_BASE
+  mut ec := ECALLEE_CAP
+  rt::wtab_reserve(eb, ec, rt::wtab_words(ECALLEE_N, 1), rt::wtab_words(ECALLEE_N + 1, 1))
+  ECALLEE_BASE = eb
+  ECALLEE_CAP = ec
+  rt::wtab_set(ECALLEE_BASE, rt::wtab_at(ECALLEE_N, 1, 0), k)
   ECALLEE_N = ECALLEE_N + 1
 }
 
 ## Is the call whose callee NAME SPAN starts at `k` an EXPRESSION-callee call (argument 0 IS the callee)?
 pub ecallee_is := fn(k : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < ECALLEE_N {
-    if ECALLEE_K[i] == k { return true }
+    if rt::wtab_get(ECALLEE_BASE, rt::wtab_at(i, 1, 0)) == k { return true }
     i = i + 1
   }
   false
@@ -936,31 +945,25 @@ pub ecallee_is := fn(k : usize) -> bool {
 ## behind by a rewound arena (`bitcast_identity_reset` is called at every AST-arena rewind as well)
 ## cannot rewrite anything else. A control label recorded on the operand node follows it to the copy.
 ##
-## The table is its own anonymous mapping, grown by nothing: 1 Mi entries of 3 words is 24 MiB of
-## address space the kernel only backs as it is touched. It is never bumped out of a compile arena,
-## because the compiler's own output must not move with an instrument of the parser.
-mut BCI_BASE : usize = 0
+## The table is an `rt` word table (its own anonymous mapping), three words per entry, grown by
+## `rt::wtab_reserve` as entries arrive (#801) — it used to stop at 1 Mi entries. It is never bumped
+## out of a compile arena, because the compiler's own output must not move with an instrument of the
+## parser. `BCI_CAP` counts words.
+mut BCI_BASE : rt::WTab = rt::WTab(0)
 mut BCI_LEN : usize = 0
-mut BCI_CAP : usize = 0
+mut BCI_CAP : rt::Words = rt::Words(0)
 
-bci_word := fn(i : usize, k : usize) -> ptr(mut usize) {
-  unchecked bitcast(ptr(mut usize), BCI_BASE + (i * 3 + k) * 8)
-}
 
 ## Record the identity-class `Bitcast` node at `p`, written with the target `src[s .. s+n]`.
 pub bitcast_identity_record := fn(p : ptr(Expr), s : usize, n : usize) {
-  if BCI_CAP == 0 {
-    cap : usize = 1048576
-    fdm1 := 0 - 1
-    r := rt::sys_mmap(9, 0, cap * 24, 3, 34, fdm1, 0)
-    if r < 0 { panic("selfhost: bitcast table initialization failed (mmap)") }
-    BCI_BASE = unchecked bitcast(usize, r)
-    BCI_CAP = cap
-  }
-  if BCI_LEN >= BCI_CAP { panic("selfhost: too many identity-class bitcasts (limit 1048576)") }
-  deref(bci_word(BCI_LEN, 0)) = unchecked bitcast(usize, p)
-  deref(bci_word(BCI_LEN, 1)) = s
-  deref(bci_word(BCI_LEN, 2)) = n
+  mut bb := BCI_BASE
+  mut bc := BCI_CAP
+  rt::wtab_reserve(bb, bc, rt::wtab_words(BCI_LEN, 3), rt::wtab_words(BCI_LEN + 1, 3))
+  BCI_BASE = bb
+  BCI_CAP = bc
+  rt::wtab_set(BCI_BASE, rt::wtab_at(BCI_LEN, 3, 0), unchecked bitcast(usize, p))
+  rt::wtab_set(BCI_BASE, rt::wtab_at(BCI_LEN, 3, 1), s)
+  rt::wtab_set(BCI_BASE, rt::wtab_at(BCI_LEN, 3, 2), n)
   BCI_LEN = BCI_LEN + 1
 }
 
@@ -971,7 +974,7 @@ pub bitcast_identity_has := fn(p : ptr(Expr), s : usize, n : usize) -> bool {
   mut i := BCI_LEN
   while i > 0 {
     i = i - 1
-    if deref(bci_word(i, 0)) == k and deref(bci_word(i, 1)) == s and deref(bci_word(i, 2)) == n { return true }
+    if rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 0)) == k and rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 1)) == s and rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 2)) == n { return true }
   }
   false
 }
@@ -999,10 +1002,10 @@ bci_operand := fn(p : ptr(Expr), s : usize, n : usize) -> ptr(Expr) {
 pub bitcast_identity_erase := fn(lo : usize, hi : usize) {
   mut i := 0
   while i < BCI_LEN {
-    k := deref(bci_word(i, 0))
+    k := rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 0))
     if k >= lo and k < hi {
       np := unchecked bitcast(ptr(mut Expr), k)
-      inner := bci_operand(np, deref(bci_word(i, 1)), deref(bci_word(i, 2)))
+      inner := bci_operand(np, rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 1)), rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 2)))
       if unchecked bitcast(usize, inner) != 0 {
         ## Copy the operand's whole 64-byte node slot word by word (`parser::newnode` allocates every
         ## `Expr` in a 64-byte slot). A whole-enum `deref(np) = deref(inner)` is what this means, but the
