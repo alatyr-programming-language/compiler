@@ -5560,6 +5560,15 @@ emit_dump_status := fn(nwrote : isize, want : usize) -> usize {
   return flush_status(nwrote, want)
 }
 
+## `docs/ir.md` slice 0b — a twin emit verb over a PACKAGE (`alatyr wat|aarch64|riscv64 <pkg>/package.al`)
+## takes the very pipeline `-o` takes: the same manifest validation, module and dependency discovery,
+## ambient library closure, target and output rejects and build flags. Only the last step differs — the
+## program is checked and the twin emits it (`driver::compile_files_twin`) instead of x86 GAS being
+## linked. It used to compile the manifest file as if it were the program, so `_start` called a `main`
+## no module defined: 138 LINK rows on aarch64/riscv64 and 70 ASSEMBLE rows on wasm (§2.2). 0 = not a
+## twin package emit; otherwise 1 + the driver's twin code (0 wasm, 1 aarch64, 2 riscv64).
+mut CLI_TWIN_PKG : usize = 0
+
 pub run_cli := fn(in out a : rt::Arena) -> usize {
   mut cmd := read_cmdline(a)
   mut n := arg_count(cmd)
@@ -5604,6 +5613,11 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     else if ends_with(first, ".al") == false and path_exists(a, first) == false {
       return cli_unknown_arg_diag(a, first)
     }
+  }
+  ## slice 0b — a twin emit verb over a package manifest continues as `-o` does (see `CLI_TWIN_PKG`).
+  if (mode == 7 or mode == 8 or mode == 9) and n >= 3 {
+    tpk := arg_at(cmd, fi)
+    if ends_with(tpk, "package.al") and path_exists(a, tpk) { CLI_TWIN_PKG = mode - 6 ; mode = 1 }
   }
   if mode == 4 {
     ## scaffold a new package directory — takes a NAME, not a file list; no compilation.
@@ -6177,6 +6191,16 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## build link then splits the single `.s` into per-module `.o`. Mode 0 (GAS dump to stdout) passes 0 →
   ## the whole-buffer peephole, byte-identical output (the fixpoint dump path is untouched). Buffer sized
   ## for word0 + N×(start,len): 262144 B / 16 = 16384 spans >> the module count.
+  if CLI_TWIN_PKG != 0 {
+    ## slice 0b — the package is resolved, validated and configured exactly as for `-o`; check it, then
+    ## let the twin emit it to stdout (the emit verbs' contract: a refused program writes nothing).
+    tcrc := driver::check_files(paths, a, lim_ceiling)
+    if tcrc != 0 { return tcrc }
+    mut tsb := driver::compile_files_twin(paths, a, CLI_TWIN_PKG - 1)
+    tsblen := tsb.len
+    td := rt::sb_flush(tsb, 1)
+    return emit_dump_status(td, tsblen)
+  }
   mut spb := 0
   if mode != 0 and osplit_on(a) { spb = rt::bump(a, 262144) }
   mut sb := driver::compile_files_target(paths, a, entry_sym, lim_ceiling, spb, artifact_kind == "object" or artifact_kind == "static_lib" or artifact_kind == "shared_lib")

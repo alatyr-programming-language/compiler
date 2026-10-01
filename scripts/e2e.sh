@@ -911,6 +911,33 @@ check_trap_names() {
   fi
 }
 
+# `docs/ir.md` slice 0b — a twin emit verb over a PACKAGE manifest takes the package pipeline `-o` takes
+# (module and dependency discovery, the `main` module as entry). It used to compile the manifest file
+# itself as the program, so `_start` called a `main` nothing defined: link failure on aarch64/riscv64,
+# a wat2wasm refusal on wasm, for every package fixture (§2.2: 138 LINK + 70 ASSEMBLE rows). Both
+# packages exit 42 on x86_64; the second one reaches its code through a path dependency.
+check_twin_package() {
+  local d="$T/twin_pkg" name got
+  mkdir -p "$d"
+  for name in nested_modules dep_alias_use; do
+    local pkg="$E2E_TEST/package/$name/package.al"
+    [ -f "$pkg" ] || { echo "MISS twin_package: no $pkg"; fail=1; continue; }
+    if command -v aarch64-unknown-linux-gnu-as >/dev/null 2>&1 && command -v qemu-aarch64 >/dev/null 2>&1; then
+      if "$CC" aarch64 "$pkg" > "$d/$name.a64.s" 2>/dev/null && aarch64-unknown-linux-gnu-as "$d/$name.a64.s" -o "$d/$name.a64.o" 2>/dev/null \
+        && aarch64-unknown-linux-gnu-ld "$d/$name.a64.o" -o "$d/$name.a64.elf" 2>/dev/null; then
+        _e2e_exec qemu-aarch64 "$d/$name.a64.elf" >/dev/null 2>&1; got=$?
+        if [ "$got" = 42 ]; then echo "ok   twin_package $name(a64): 42"; else echo "FAIL twin_package $name(a64): got $got want 42"; fail=1; fi
+      else echo "FAIL twin_package $name(a64): emit/as/ld"; fail=1; fi
+    fi
+    if command -v wat2wasm >/dev/null 2>&1 && command -v wasmtime >/dev/null 2>&1; then
+      if "$CC" wat "$pkg" > "$d/$name.wat" 2>/dev/null && wat2wasm "$d/$name.wat" -o "$d/$name.wasm" 2>/dev/null; then
+        _e2e_exec wasmtime "$d/$name.wasm" >/dev/null 2>&1; got=$?
+        if [ "$got" = 42 ]; then echo "ok   twin_package $name(wat): 42"; else echo "FAIL twin_package $name(wat): got $got want 42"; fail=1; fi
+      else echo "FAIL twin_package $name(wat): emit/wat2wasm"; fail=1; fi
+    fi
+  done
+}
+
 # Modules §4.3 — ordinary one-hop module re-export. The source keeps `facade` and the entry module
 # in one focused front-end input so the non-x86 resolver sees `pub math := std::math`; the check is
 # structural because the WAT backend is the consumer of driver::d_qual_target. A missing rewrite
@@ -11002,6 +11029,7 @@ check_backend_determinism
 check_large_source
 check_ir_dev_verb
 check_trap_names
+check_twin_package
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
 ## direct calls, value+statement `if`, `while`, `return`.

@@ -6231,15 +6231,30 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## it: there is no qualified callee to resolve and nothing to prune.
   mut ed := decls
   if n > 1 and D_IR_ALL == 0 {
-    ems := rt::vec_get(mod_start, n - 1)
-    eml := rt::vec_get(mod_len, n - 1)
+    ## The entry module the prune keeps reachability from: the last module, or — for a package
+    ## (`compile_files_twin`) — the module named `main`, which is the package's entry exactly as the
+    ## x86 package build names it (`_start` → `main__main`, falling back to the last module).
+    mut entry_k := n - 1
+    if D_PKG_ENTRY != 0 {
+      mut mk := 0
+      while mk < n {
+        mnl := rt::vec_get(name_len, mk)
+        if mnl == 4 and str_at((strbuf::strbuf_base(bld) + rt::vec_get(name_start, mk)), mnl) == "main" { entry_k = mk }
+        mk += 1
+      }
+    }
+    ems := rt::vec_get(mod_start, entry_k)
+    eml := rt::vec_get(mod_len, entry_k)
     D_EMS = ems
     D_EML = eml
     ## WAT AGGREGATE-COMPARE GUARD (see its note): retry WITHOUT the ambient closure, reproducing the
     ## exact single-file pipeline whose trap this program had before the closure made the comparison
     ## reachable. Only the wat backend needs it — aarch64/riscv64 compare aggregate contents correctly.
     mut watagg := false
-    if backend == 0 { watagg = d_entry_aggcmp(decls, ptr(na), base, ems, eml) }
+    ## Not on a RAW module list (a package, a cross-target test): `d_ambient_paths` hands a raw list back
+    ## unchanged, so the retry would rebuild the very same program and recurse without end (measured:
+    ## `alatyr wat` on a package whose entry compares aggregates never returned).
+    if backend == 0 and D_RAW_PATHS == 0 { watagg = d_entry_aggcmp(decls, ptr(na), base, ems, eml) }
     if watagg {
       D_NOLIB = 1
       rsb := d_compile_file_multi(path, backend)
@@ -6346,6 +6361,19 @@ pub compile_file_ir := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
 ## rows), with no ambient closure and no reachability prune — every function of every listed module
 ## reaches the builder. `paths` is newline-joined, like the cross-test package path.
 mut D_IR_ALL : usize = 0
+## `docs/ir.md` slice 0b — a twin emit verb over a PACKAGE (`cli::twin_package_emit`): the resolved
+## module list (dependencies, the package's own modules, the ambient library closure) goes through the
+## same multi-module front end the single-file verbs use, raw (no second import resolution), with the
+## package's `main` module as the prune's entry.
+mut D_PKG_ENTRY : usize = 0
+pub compile_files_twin := fn(paths : str, in out a : Arena, backend : usize) -> strbuf::StrBuf {
+  D_RAW_PATHS = 1
+  D_PKG_ENTRY = 1
+  mut out := d_compile_file_multi(paths, backend)
+  D_RAW_PATHS = 0
+  D_PKG_ENTRY = 0
+  out
+}
 pub compile_files_ir_raw := fn(paths : str, in out a : Arena) -> strbuf::StrBuf {
   D_RAW_PATHS = 1
   D_IR_ALL = 1
