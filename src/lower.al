@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n, niche_payload_ptr_kind, payload_folded_ty, enum_elem_words, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n, pointee_agg_kind, variant_bind_pointee, payload_folded_ty, enum_elem_words, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -22948,17 +22948,26 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
           } else if folded {
             ## The folded `Some` payload is the staged pointer word itself, not the ordinary
             ## payload slot at `sbase-1`. #768 — over `ptr(S)` / `ptr(E)` it carries the pointee kind.
-            mut rpk : u8 = 0
+            rpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+            rpk := pointee_agg_kind(cx.decls, cx.src, rpt.s, rpt.n)
             mut rps := 0
             mut rpl := 0
-            if pty.n != 0 { rpk = niche_payload_ptr_kind(cx.decls, cx.src, pty.s, pty.n) }
-            if rpk != 0 { rps = ptr_target_pointee_s(cx.src, pty.s, pty.n); rpl = ptr_target_pointee_n(cx.src, pty.s, pty.n) }
+            if rpk != 0 { rps = rpt.s; rpl = rpt.n }
             svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = rps, snl = rpl, ek = rpk, estride = 1, eek = 0, is_ref = false))
           } else {
-bpf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
-mut bpk : u8 = 0
-if bpf.n != 0 { bpk = 3 }
-svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = bpf.s, snl = bpf.n, ek = bpk, estride = 1, eek = 0, is_ref = false))
+            ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
+            ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
+            bpf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
+            tbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+            mut tbk : u8 = 0
+            mut tbs := 0
+            mut tbl := 0
+            if bpf.n != 0 { tbk = 3; tbs = bpf.s; tbl = bpf.n }
+            else {
+              tbk = pointee_agg_kind(cx.decls, cx.src, tbpt.s, tbpt.n)
+              if tbk != 0 { tbs = tbpt.s; tbl = tbpt.n }
+            }
+            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = tbs, snl = tbl, ek = tbk, estride = 1, eek = 0, is_ref = false))
           }
           bi += 1
           bnd = bnd_next(bnd)
@@ -23685,17 +23694,26 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
           }
           ## #768 — the pointer-to-struct / pointer-to-enum kind, as in `emit_enum_match`'s twin.
           mut pkind2 : u8 = 0
-          if pview2.n == 0 { pkind2 = niche_payload_ptr_kind(cx.decls, cx.src, ptys2, ptyn2) }
-          if pkind2 != 0 {
-            pview_s2 = ptr_target_pointee_s(cx.src, ptys2, ptyn2)
-            pview_l2 = ptr_target_pointee_n(cx.src, ptys2, ptyn2)
+          if pview2.n == 0 {
+            ppt2 := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
+            pkind2 = pointee_agg_kind(cx.decls, cx.src, ppt2.s, ppt2.n)
+            if pkind2 != 0 { pview_s2 = ppt2.s; pview_l2 = ppt2.n }
           }
           svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = pview_s2, snl = pview_l2, ek = pkind2, estride = 1, eek = pview_eek2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
         } else {
+          ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
+          ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
           spf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
-          mut spk : u8 = 0
-          if spf.n != 0 { spk = 3 }
-          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = spf.s, snl = spf.n, ek = spk, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+          sbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
+          mut sbk : u8 = 0
+          mut sbs := 0
+          mut sbl := 0
+          if spf.n != 0 { sbk = 3; sbs = spf.s; sbl = spf.n }
+          else {
+            sbk = pointee_agg_kind(cx.decls, cx.src, sbpt.s, sbpt.n)
+            if sbk != 0 { sbs = sbpt.s; sbl = sbpt.n }
+          }
+          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = sbs, snl = sbl, ek = sbk, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
         }
         bi += 1
         bnd = bnd_next(bnd)

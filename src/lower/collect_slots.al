@@ -23,7 +23,7 @@ assign_is_reassign := ast::assign_is_reassign
 local_is_comptime := ast::binding_is_comptime
 (Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
 (SVec, CSpan, arg_expr_at, var_name_span) := lower_ctx
-(base_type_name, enum_decl_of, enum_inst_words, is_niche_folded, niche_payload_ptr_kind, ptr_target_pointee_s, ptr_target_pointee_n, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
+(base_type_name, enum_decl_of, enum_inst_words, is_niche_folded, pointee_agg_kind, variant_bind_pointee, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
 ## place band moved to `src/lower/place.al`; a bare child-to-child call would bind through the
 ## unique-declaration leniency, which `scripts/callee_module_check.sh` cannot see.
@@ -755,9 +755,10 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
                   ## #768 — a folded `Some(p)` over `ptr(S)` / `ptr(E)`: type `p` as the pointer-to-struct /
                   ## pointer-to-enum local an annotation would give it, so `n := deref(p)` in the arm binds a
                   ## struct copy (the emit-time alias in `emit_match` carries the same kind).
-                  mpk := niche_payload_ptr_kind(decls, src, mpty.s, mpty.n)
-                  if mpk == 7 { bind_ptrstruct_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), ptr_target_pointee_s(src, mpty.s, mpty.n), ptr_target_pointee_n(src, mpty.s, mpty.n)) }
-                  else if mpk == 6 { bind_ptrenum_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), ptr_target_pointee_s(src, mpty.s, mpty.n), ptr_target_pointee_n(src, mpty.s, mpty.n)) }
+                  mpt := variant_bind_pointee(decls, src, mes, mel, am.vs, am.vl, 1, 0, a)
+                  mpk := pointee_agg_kind(decls, src, mpt.s, mpt.n)
+                  if mpk == 7 { bind_ptrstruct_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
+                  else if mpk == 6 { bind_ptrenum_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
                 }
               }
             }
