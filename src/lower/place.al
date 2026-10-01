@@ -46,9 +46,27 @@ Expr := ast::Expr
 (lower_show_src_line) := lower::ctfold
 
 ## Shared core of `agg_field_arg_parts`: is `base.<[fs,fl)>` an aggregate field, and how to address it?
+## The struct TYPE of an aggregate field's BASE, as every `agg_field_of` consumer must see it: the
+## pointee type of a pointer-rooted base (`ptr_place_root`: a by-ref struct param, or `deref(p)` over a
+## pointer-to-struct local or param), else `base_struct_span`'s answer. The by-value field arms ask
+## this before they ask `agg_field_of`, so a base this resolves is a base `agg_field_of` can address.
+pub agg_base_struct_span := fn(base : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
+  pr := ptr_place_root(base, cx)
+  if pr.found { return CSpan(s = pr.tys, n = pr.tyn) }
+  base_struct_span(base, cx)
+}
+##
+## #792 — a POINTER-ROOTED base is `ptr_place_root`'s: a by-reference struct param (`Var`, ek 2 +
+## is_ref) or `deref(p)` over a pointer-to-struct local or param (ek 7). Both slots hold the address
+## of the struct's word 0, so `is_ref` here means exactly that and the consumer LOADS the slot
+## (`emit_ptr_root_addr`). `base_struct_span` has no `Deref` arm, so `deref(p).op` over an enum field
+## was not an aggregate field at all: returned by value it became the null enum (wrong arm, wrong
+## payload), and passed as an argument its first WORD was handed over as the callee's block pointer
+## (SIGSEGV). For a by-ref param the answer is unchanged (same type span, same field offset).
 pub agg_field_of := fn(base : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx)) -> AggFld {
   mut res := AggFld(ok = false, is_ref = false, ent_idx = 0, slot = 0, fi = 0)
-  bt := base_struct_span(base, cx)
+  proot := ptr_place_root(base, cx)
+  bt := agg_base_struct_span(base, cx)
   if bt.n != 0 {
     ft := field_type_span(cx.decls, cx.src, bt.s, bt.n, fs, fl, deref(cx.mar))
     ftb := base_type_name(cx.src, ft.s, ft.n)
@@ -73,7 +91,10 @@ pub agg_field_of := fn(base : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx))
         panic("selfhost: an AGGREGATE field of a standard-byte-layout struct (the source line above) cannot be passed or returned BY VALUE yet — the by-value paths address it by WORD index while its containing struct is laid out in BYTES, which would hand the callee the wrong block. Bind it to its own local first (`c := o.inner`) and pass THAT.")
       }
       fbr := field_base_ref(base, fs, fl, cx)
-      if fbr.is_ref {
+      if proot.found {
+        pfi := field_word_offset(cx.decls, cx.src, proot.tys, proot.tyn, fs, fl, deref(cx.mar))
+        res = AggFld(ok = true, is_ref = true, ent_idx = proot.ent_idx, slot = 0, fi = pfi)
+      } else if fbr.is_ref {
         res = AggFld(ok = true, is_ref = true, ent_idx = fbr.ent_idx, slot = 0, fi = fbr.fi)
       } else {
         res = AggFld(ok = true, is_ref = false, ent_idx = 0, slot = field_slot(base, fs, fl, cx), fi = 0)
@@ -81,6 +102,16 @@ pub agg_field_of := fn(base : ptr(Expr), fs : usize, fl : usize, cx : ptr(LCtx))
     }
   }
   res
+}
+## The word-0 address of a POINTER-ROOTED aggregate place into %rax — the one load behind every
+## `AggFld.is_ref` consumer. The root slot (a by-ref struct param, or the pointer under `deref(p)`)
+## HOLDS that address, so it is loaded, never `leaq`'d: `emit_agg_base_addr` decides by the slot's own
+## `is_ref`, which a pointer LOCAL (ek 7, `is_ref = false`) does not carry. For a by-ref param the
+## text is byte-identical to `emit_agg_base_addr`'s `movq`.
+pub emit_ptr_root_addr := fn(ent : SlotEntry, in out sb : strbuf::StrBuf) {
+  push_str(sb, "  movq -")
+  push_int(sb, (i64(ent.off) + 1) * 8)
+  push_str(sb, "(%rbp), %rax\n")
 }
 ## Count the reserved element FILLER slots (`ns == 0 && nl == 0`) reserved for an array. §4 UP-GROWING:
 ## `bind_array_slot` now pushes the `nel*stride` fillers BELOW the base (before it), so scan DOWNWARD

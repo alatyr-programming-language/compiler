@@ -91,7 +91,7 @@ ecallee_is := ast::ecallee_is
 ## serialized `CLAYOUT` lanes S3(a)-S3(d) touched. The types (`AggFld`, `FPParts`, `FieldAgg`,
 ## `IFPlace`, `StdFieldPath`, `StdIdxOne`, `StdIdxPath`) stay HERE — the parent constructs and reads
 ## them too, and the child builds them through the §3/TYPE-ANCESTOR chain.
-(agg_field_of, agg_arr_fill_count, slot_elem_stride_bytes, field_place_parts, standard_field_path, std_idx_path, std_idx_leaf_is_agg, std_idx_byte_field_eek, std_idx_one, resolve_idx_field_place, emit_addr_of, field_read_agg, emit_elem_copy_in, emit_index_addr) := place
+(agg_field_of, agg_base_struct_span, emit_ptr_root_addr, agg_arr_fill_count, slot_elem_stride_bytes, field_place_parts, standard_field_path, std_idx_path, std_idx_leaf_is_agg, std_idx_byte_field_eek, std_idx_one, resolve_idx_field_place, emit_addr_of, field_read_agg, emit_elem_copy_in, emit_index_addr) := place
 (emit_rodata_decl) := rodata
 (scan_str_arg_expr, scan_str_arg_stmts, scan_agg_width_expr, scan_agg_width_stmts, scan_agg_arg_expr, scan_agg_arg_stmts, agg_unbound_sret_block) := scratch
 
@@ -4193,7 +4193,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   if afa.ok {
     if afa.is_ref {
       aent := deref(svec_at(SlotEntry, cx.slots, afa.ent_idx))
-      emit_agg_base_addr(aent, sb)
+      emit_ptr_root_addr(aent, sb)
       if afa.fi != 0 { push_str(sb, "  addq $"); push_int(sb, afa.fi * 8); push_str(sb, ", %rax\n") }
       push_str(sb, "  pushq %rax\n")
     } else {
@@ -10090,7 +10090,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       ## words. Without this arm an enum `Field` fell to the `_` fallback (disc 0, payload 0), so a
       ## two-arm `match` on the result matched NEITHER arm. Gated on the field's type resolving to an
       ## ENUM — every other `Field` keeps the byte-identical fallback below.
-      fbt := base_struct_span(fbase, cx)
+      fbt := agg_base_struct_span(fbase, cx)
       fft := field_type_span(cx.decls, cx.src, fbt.s, fbt.n, ffs, ffl, deref(cx.mar))
       ffbn := base_type_name(cx.src, fft.s, fft.n)
       mut ffw := 0
@@ -10106,7 +10106,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       if ffa.ok == false { panic("selfhost: returning this enum FIELD by value is unsupported — its place could not be resolved; bind it to a local (`c := <field>`) and return that") }
       if ffa.is_ref {
         aent := deref(svec_at(SlotEntry, cx.slots, ffa.ent_idx))
-        emit_agg_base_addr(aent, sb)
+        emit_ptr_root_addr(aent, sb)
         if ffa.fi != 0 { push_str(sb, "  addq $") ; push_int(sb, ffa.fi * 8) ; push_str(sb, ", %rax\n") }
         push_str(sb, "  movq %rax, %r11\n")
         for k in 0..ffw {
@@ -11133,7 +11133,7 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## fallback, which writes `$0` into %rax/%rdx: a SILENT ZERO struct return. Gated on the field's
       ## type resolving to a STRUCT — every other `Field` (scalar / `str` / unresolvable) keeps the
       ## byte-identical fallback, so `src/`+`lib/` are untouched.
-      fbt := base_struct_span(fbase, cx)
+      fbt := agg_base_struct_span(fbase, cx)
       fft := field_type_span(cx.decls, cx.src, fbt.s, fbt.n, ffs, ffl, deref(cx.mar))
       ffbn := base_type_name(cx.src, fft.s, fft.n)
       mut ffw := 0
@@ -11149,7 +11149,7 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       if ffa.ok == false { panic("selfhost: returning this struct FIELD by value is unsupported — its place could not be resolved; bind it to a local (`c := <field>`) and return that") }
       if ffa.is_ref {
         aent := deref(svec_at(SlotEntry, cx.slots, ffa.ent_idx))
-        emit_agg_base_addr(aent, sb)
+        emit_ptr_root_addr(aent, sb)
         if ffa.fi != 0 { push_str(sb, "  addq $") ; push_int(sb, ffa.fi * 8) ; push_str(sb, ", %rax\n") }
         push_str(sb, "  movq %rax, %r11\n")
         for k in 0..ffw {
