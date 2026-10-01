@@ -253,6 +253,9 @@ a64_target_arch := fn() -> str { "aarch64" }
 
 
 a64_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
+  ## slice 0b — the closed `build.*` profile-flag predicates fold with x86's own function.
+  bcf := lower::ctfold::closed_cond_fold(cond, src)
+  if bcf >= 0 { return bcf }
   mut r := 0 - 1
   match deref(cond) {
     Expr::Bin(op, l, rr) => {

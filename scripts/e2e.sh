@@ -963,6 +963,19 @@ check_twin_package() {
   done
 }
 
+# `docs/ir.md` slice 0b — the twins fold a `comptime if build.<flag>` with x86's own function
+# (`lower::ctfold::closed_cond_fold`), so a flag the selected profile does not carry is refused alike on
+# every backend; before, the twins left the `comptime if` unfolded and trapped at run time.
+check_twin_build_flag() {
+  local pkg="$E2E_TEST/package/profile_cli/package.al" b rc
+  [ -f "$pkg" ] || { echo "MISS twin_build_flag: no $pkg"; fail=1; return; }
+  for b in aarch64 riscv64 wat; do
+    "$CC" "$b" "$pkg" > /dev/null 2> "$T/twin_flag.err"; rc=$?
+    if [ "$rc" != 0 ] && grep -q 'build.<name> — flag not declared' "$T/twin_flag.err"; then echo "ok   twin_build_flag($b): refused as x86 refuses"
+    else echo "FAIL twin_build_flag($b): rc=$rc"; fail=1; fi
+  done
+}
+
 # Modules §4.3 — ordinary one-hop module re-export. The source keeps `facade` and the entry module
 # in one focused front-end input so the non-x86 resolver sees `pub math := std::math`; the check is
 # structural because the WAT backend is the consumer of driver::d_qual_target. A missing rewrite
@@ -11073,6 +11086,7 @@ check_ir_dev_verb
 check_trap_names
 check_sign_census
 check_twin_package
+check_twin_build_flag
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
 ## direct calls, value+statement `if`, `while`, `return`.

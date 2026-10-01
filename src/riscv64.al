@@ -147,6 +147,9 @@ rv_target_arch := fn() -> str { "riscv64" }
 ## composed with `and`/`or`/`not` (op codes 40/41/42). A `verify.checked`
 ## / `match typeinfo(T)` predicate is unfoldable here (-1). FLAT ifs + self-recursion (no nested match).
 rv_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
+  ## slice 0b — the closed `build.*` profile-flag predicates fold with x86's own function.
+  bcf := lower::ctfold::closed_cond_fold(cond, src)
+  if bcf >= 0 { return bcf }
   mut r := 0 - 1
   match deref(cond) {
     Expr::Bin(op, l, rr) => {
