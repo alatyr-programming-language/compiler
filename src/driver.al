@@ -6213,6 +6213,29 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     nstr = pc2.nstr
     k += 1
   }
+  ## `docs/ir-slice-1.md` §1 (slice 1a): sema TYPES the tree the twins are about to emit. The shared
+  ## IR's builder reads every expression's value type from sema's side table, which is keyed by node
+  ## address, so the types must be recorded over THESE nodes, not over the separate parse
+  ## `check_file_emit` checks. That separate check stays the verdict; this run only records, and its
+  ## answer is deliberately unused, so no accept/refuse decision moves.
+  ## It runs HERE, on the freshly parsed tree and before any desugar or prune, for the same reason the
+  ## x86 build runs sema before lowering: sema folds the capability queries (`compiles(…)`,
+  ## `resolves(…)`) in place, and it must see the program the user wrote. Run after the prune, it folded
+  ## them against the pruned vector and two of them answered a different value than x86 (measured:
+  ## `query_qualified_public` 3 on aarch64/riscv64, `query_constructor_binary_positive` 2 on wasm, where
+  ## x86 answers 42). A node a later desugar creates carries no record; the builder answers `NotYet`
+  ## for it, and the census counts it as a sema gap to close (owner decision D6).
+  ## The reason the check used to need its own parse, `lower_layout`'s name caches aliasing between the
+  ## checked and the pruned vector, is gone: `layout_cache_use` invalidates both caches when the vector
+  ## or its length changes.
+  ## The package-module table sema consults (`sema::set_package_modules`) belongs to whichever check
+  ## ran last: here, `check_file_emit`'s, whose spans point into ITS source buffer and whose table
+  ## header was a local of `d_manifest_set_sema_modules` (gone by now). Reading it crashed this run on
+  ## a package root (`test/package/root_single/package.al`, SIGSEGV in `sema_module_in_package`). The
+  ## twins' front half does not model a package yet (slice 0b's package roots), so this run sees none.
+  pkr := sema::set_package_modules(0, 0)
+  ir::sty_enable()
+  styped := sema::check_program(ptr(decls), base, ptr(na))
   ## Match the ordinary compile paths: lift parsed local lambdas before any lowering-side
   ## normalization or backend emission. This multi-file path previously passed Expr::Lambda
   ## through unchanged, while compile/compile_program/compile_files_mode all lift exactly once.
