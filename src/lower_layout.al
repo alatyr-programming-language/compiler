@@ -20,6 +20,10 @@ arg_p := ast::arg_p
 ## Do two source spans denote the same name (content equality), mirroring nameres/sema.
 ## (Duplicated from `lower.al` — a 4-line leaf so the module is self-contained; cross-module
 ## constant churn is avoided.)
+## docs/ir.md §3.8.5 — the signedness census hook (`ir::sign_row`), reachable from `lower` and its
+## children, where the name `ir` is `lower`'s own child module (`src/lower/ir.al`).
+pub ir_sign_row := fn(who : str, op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8), signed : bool) { ir::sign_row(who, op, l, r, src, signed) }
+pub ir_sign_open := fn() -> bool { ir::sign_open() }
 streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -> bool {
   ## PERF: length-first fast reject — most scan comparisons are against a different-length name, and this
   ## skips constructing both str views + the byte compare. Byte-neutral.

@@ -5175,6 +5175,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           ## BOTH operands are PROVABLY unsigned, switch to the UNSIGNED codes (`a64_ucond`) so a
           ## `u64`/`usize` comparison across 2^63 is correct (mirrors the x86_64 `is_unsigned_cmp` gate).
           ucmp := a64_cmp_unsigned(l, r, params_head, body_head, src, a)
+          if op == 24 or op == 25 or op == 26 or op == 27 { ir::sign_row("aarch64", op, l, r, src, not ucmp) }
           mut cnd := a64_cond(op)
           if ucmp { cnd = a64_ucond(op) }
           push_str(sb, "  cmp x0, x1\n  cset x0, ") ; push_str(sb, cnd) ; push_str(sb, "\n")
@@ -5192,6 +5193,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         dl := a64_operand_signed(l, params_head, body_head, src, a)
         dr := a64_operand_signed(r, params_head, body_head, src, a)
         dsigned := dl or dr
+        if op == 19 or op == 29 { ir::sign_row("aarch64", op, l, r, src, dsigned) }
         ## NARROW-WIDTH WRAP (§4 value model): truncate a narrow-typed (uN/iN, N<64) +/-/* result to its
         ## width — the x86_64 built-in dual. Computed BEFORE the arith so the checked overflow guard
         ## (native-width only) can be skipped for a narrow op.
@@ -5304,6 +5306,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_a64_expr(sn, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "  mov x1, x0\n  ldr x0, [sp], #16\n")
         ssigned := a64_operand_signed(sv, params_head, body_head, src, a)
+        if nm == "shr" { ir::sign_row("aarch64", 0, sv, sn, src, ssigned) }
         ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
         ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual.
         ## Before #683 both were native here: `shl(u8(1), 8)` ran, and `unchecked shl(u8(1), 9)` kept 512.

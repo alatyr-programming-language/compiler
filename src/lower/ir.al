@@ -201,6 +201,7 @@ ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), cx : 
     }
     mut sop := 19                                           ## shl → shlq
     if cnm == "shr" {
+      lower_layout::ir_sign_row("x86_64", 0, a0, a1, cx.src, is_signed_expr(a0, cx))
       if is_signed_expr(a0, cx) { sop = 21 } else { sop = 20 }   ## signed → sarq (21), else shrq (20)
     }
     regalloc::ra_ir_emit(sop, 3, i64(t), 0, 0)              ## <shl|shr|sar>q %cl, t
@@ -308,6 +309,8 @@ ir_emit_div_guard := fn(rok : usize, rov : i64, signed : bool) {
 ## LEFT operand (`0 - x` / `0 * x`) skips the guard, exactly as the text path's `expr_is_zero(l)` does.
 ir_lower_bin := fn(op : u8, l : ptr(Expr), r : ptr(Expr), cx : ptr(LCtx), unch : bool) -> IROperand {
   dsigned := is_signed_expr(l, cx) or is_signed_expr(r, cx)
+  ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
+  if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned) }
   ## A NEGATED operand (`30 + -a`) forces the SIGNED overflow guard — `-a`'s runtime word is a large
   ## unsigned pattern, so the unsigned CARRY guard would spuriously trap a sum that fits as a signed
   ## wrapping subtraction (mirrors the text-path `gsigned` rule).
@@ -420,6 +423,7 @@ ir_lower_cond := fn(c : ptr(Expr), lfalse : usize, cx : ptr(LCtx), unch : bool) 
         lo := ir_to_reg(ir_lower_expr(l, cx, unch))
         ro := ir_lower_expr(r, cx, unch)
         ucmp := is_unsigned_cmp(l, r, cx)
+        if op == 24 or op == 25 or op == 26 or op == 27 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, not ucmp) }
         regalloc::ra_ir_emit(4, lo.k, lo.v, ro.k, ro.v)              ## cmp L, R
         regalloc::ra_ir_emit(9, 4, i64(lfalse), 1, i64(ir_neg_cc(op, ucmp)))
       } else {

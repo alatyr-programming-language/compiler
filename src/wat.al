@@ -5211,7 +5211,9 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## Bind the mnemonic to a local FIRST (an inline str-returning call as a push_str arg scrambles
         ## its {ptr,len} under the seed — the documented wat-emit scar).
         mut cop := wat_cmpop(op)
-        if wat_cmp_unsigned(l, r, params_head, body_head, src, a) { cop = wat_ucmpop(op) }
+        wcu := wat_cmp_unsigned(l, r, params_head, body_head, src, a)
+        if wcu { cop = wat_ucmpop(op) }
+        if op == 24 or op == 25 or op == 26 or op == 27 { ir::sign_row("wasm", op, l, r, src, not wcu) }
         push_str(sb, "(i64.extend_i32_u (")
         push_str(sb, cop)
         push_str(sb, " ")
@@ -5223,6 +5225,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         dl := wat_operand_signed(l, params_head, body_head, src, a)
         dr := wat_operand_signed(r, params_head, body_head, src, a)
         opname := wat_binop(op, dl or dr)
+        if op == 19 or op == 29 { ir::sign_row("wasm", op, l, r, src, dl or dr) }
         ## NARROW-WIDTH WRAP (§4 value model): a +/-/* over a narrow-typed (uN/iN, N<64) operand truncates
         ## its result — the wat dual is an `(i64.and … mask)` / `(i64.extendN_s …)` WRAPPING the binop.
         mut nw := ""
@@ -5409,7 +5412,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         wspost := wat_narrow_post(wsnw)
         push_str(sb, wspre)
         if wscn == "shl" { push_str(sb, "(i64.shl ") }
-        else if wscn == "shr" { if wat_operand_signed(wsv, params_head, body_head, src, a) { push_str(sb, "(i64.shr_s ") } else { push_str(sb, "(i64.shr_u ") } }
+        else if wscn == "shr" { ir::sign_row("wasm", 0, wsv, wsn, src, wat_operand_signed(wsv, params_head, body_head, src, a)); if wat_operand_signed(wsv, params_head, body_head, src, a) { push_str(sb, "(i64.shr_s ") } else { push_str(sb, "(i64.shr_u ") } }
         else if wscn == "rotl" { push_str(sb, "(i64.rotl ") }
         else { push_str(sb, "(i64.rotr ") }
         emit_wat_expr(wsv, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)

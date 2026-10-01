@@ -4412,6 +4412,10 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
       if isnot { push_str(sb, "  seqz a0, a0\n") }
       if iscmp and isfcmp and (not isnot) { rv_emit_fcmp(op, sb) }
       if iscmp and (not isfcmp) and (not isnot) { rv_emit_cmp(op, rv_cmp_unsigned(l, r, params_head, body_head, src, a), sb) }
+      ## docs/ir.md §3.8.5 — the census row for this ordering's signedness (only when fd 97 is open).
+      if iscmp and (not isfcmp) and (not isnot) and (op == 24 or op == 25 or op == 26 or op == 27) and ir::sign_open() {
+        ir::sign_row("riscv64", op, l, r, src, not rv_cmp_unsigned(l, r, params_head, body_head, src, a))
+      }
       if (not iscmp) and isflt and (not isnot) {
         ## FLOAT arithmetic: bits in a0/a1 → ft0/ft1, FP op, bits back to a0. Detect on the whole Bin `e`
         ## (destructured operands mis-lower through the detector). `+`/`-`/`*`/`/` only.
@@ -4426,6 +4430,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         dl := rv_operand_signed(l, params_head, body_head, src, a)
         dr := rv_operand_signed(r, params_head, body_head, src, a)
         dsigned := dl or dr
+        if op == 19 or op == 29 { ir::sign_row("riscv64", op, l, r, src, dsigned) }
         ## NARROW-WIDTH WRAP (§4 value model): truncate a narrow-typed (uN/iN, N<64) +/-/* result.
         ## Computed BEFORE the arith so the checked overflow guard (native-width only) can skip a narrow op.
         mut nw := ""
@@ -4541,6 +4546,7 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
         emit_rv_expr(rsn, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "  mv a1, a0\n  ld a0, 0(sp)\n  addi sp, sp, 16\n")
         rssigned := rv_operand_signed(rsv, params_head, body_head, src, a)
+        if nm == "shr" { ir::sign_row("riscv64", 0, rsv, rsn, src, rssigned) }
         ## A SUB-WORD operand bounds the count by ITS width (Concurrency §6.1) and its result is
         ## narrowed back to that width — the x86_64 `emit_shift_width_guard`/`_narrow_result` dual (#683).
         rsnw := rv_operand_narrow(rsv, params_head, body_head, src, a)
