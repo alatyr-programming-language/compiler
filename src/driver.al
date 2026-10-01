@@ -29,7 +29,7 @@ vec := alloc::vec
 strbuf := rt
 io := std::io
 (Decl, Token, Stmt, Expr, Arg, Param, Arm, Bind, FieldDecl, local_is_mut) := ast
-(bnd_ns, bnd_nl, bnd_next) := ast
+(bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 fld_p := ast::fld_p
 param_p := ast::param_p
 arm_p := ast::arm_p
@@ -821,7 +821,7 @@ d_cap_locals := fn(head : ptr(mut Stmt), na : ptr(mut rt::Arena), locals : ptr(r
         while arm != 0 {
           am := deref(arm_p(arm))
           mut bd := am.binds_head
-          while unchecked bitcast(usize, bd) != 0 { rt::vec_push(deref(locals), bnd_ns(bd) * 1024 + bnd_nl(bd)); bd = bnd_next(bd) }
+          loop { match bd { Some(bdq) => { rt::vec_push(deref(locals), bnd_ns(bdq) * 1024 + bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }
           d_cap_locals(am.body_stmts, na, locals, unhandled)
           arm = am.next
         }
@@ -2514,9 +2514,9 @@ d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(E
   ## §2.3 — `Some` is present (yield and continue), `None` is absent (leave the loop)
   dummy := parser::newnode(na, Expr.Num(0, 0, 0))
   brk := parser::snode(na, Stmt.Break(unchecked bitcast(ptr(Expr), 0), 0, ast::stmt_null()))
-  armn := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = ast::arm_null(), vs = nos, vl = nol, binds_head = unchecked bitcast(ptr(mut Bind), 0), body_stmts = brk, hi = 0))
-  bh := parser::bnode(na, Bind(ns = pys, nl = pyl, next = unchecked bitcast(ptr(mut Bind), 0)))
-  arms := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = armn, vs = sms, vl = sml, binds_head = bh, body_stmts = bindst, hi = 0))
+  armn := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = ast::arm_null(), vs = nos, vl = nol, binds_head = Option.None, body_stmts = brk, hi = 0))
+  bh := parser::bnode(na, Bind(ns = pys, nl = pyl, next = Option.None))
+  arms := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = armn, vs = sms, vl = sml, binds_head = Option.Some(bh), body_stmts = bindst, hi = 0))
   mst := parser::snode(na, Stmt.Match(parser::newnode(na, Expr.Var(ops, opl)), arms, ast::stmt_null()))
   ## `__foropt<N> := next(__forit<N>)`, then the match — both inside the loop
   nca := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(its, itl)), next = ast::arg_null()))

@@ -27,7 +27,7 @@
 ## take >6 params (verified), but a NEW struct RETURN type mis-lowers under the frozen seed → resolve
 ## struct-type spans via separate usize accessors, never a returned struct.
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, Param, Stmt, local_is_mut) := ast
-(bnd_ns, bnd_nl, bnd_next) := ast
+(bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 fld_p := ast::fld_p
 param_p := ast::param_p
 arm_p := ast::arm_p
@@ -1283,7 +1283,7 @@ a64_std_load_scalar := fn(off : i64, ts : usize, tl : usize, in out sb : rt::Str
 ## offsets; a direct byte array is written byte-by-byte, while a nested word-granular aggregate keeps
 ## its natural word fields at the standard field offset. This is intentionally a constructor-only
 ## consumer in S3(a); whole-value copies use the existing word copy once their byte offset is aligned.
-a64_std_store_value := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+a64_std_store_value := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   es := a64_arrty_elem(src, ts, tl)
   if es.n != 0 {
     mut bytearr := false
@@ -1324,7 +1324,7 @@ a64_std_store_value := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsi
   i64(standard_type_byte_size(decls, src, ts, tl, wsize, a))
 }
 
-a64_std_store_struct := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+a64_std_store_struct := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   sns := expr_struct_lit_ns(pe)
   snl := expr_struct_lit_nl(pe)
   di := struct_decl_of(decls, src, sns, snl)
@@ -1349,7 +1349,7 @@ a64_std_store_struct := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a 
 ## `[sp]` because evaluating a field value clobbers the scratch registers. This is used only by the
 ## byte-tier ARRAY-ELEMENT assignment; the pre-existing word-relative payload writer remains untouched
 ## for every word-tier element and every non-array aggregate path.
-a64_std_store_value_atptr := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+a64_std_store_value_atptr := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsize : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   es := a64_arrty_elem(src, ts, tl)
   if es.n != 0 {
     if scalar_byte_size(src, es.s, es.n) == 1 and ex_is_array_lit(pe) {
@@ -1384,7 +1384,7 @@ a64_std_store_value_atptr := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usiz
   i64(standard_type_byte_size(decls, src, ts, tl, wsize, a))
 }
 
-a64_std_store_struct_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+a64_std_store_struct_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   sns := expr_struct_lit_ns(pe)
   snl := expr_struct_lit_nl(pe)
   di := struct_decl_of(decls, src, sns, snl)
@@ -1837,20 +1837,23 @@ mut A64_ARM_VL := 0
 ## emitters, while a nested payload body can still refer to an outer binding. Keep each outer list and
 ## its frame base available for the Var resolver; direct inner bindings retain shadowing precedence.
 mut A64_BIND_DEPTH : i64 = 0
-mut A64_BIND_HEADS : [usize; 32] = [0; 32]
+mut A64_BIND_HEADS : [Option(ptr(mut Bind)); 32] = [Option.None; 32]
 mut A64_BIND_BASES : [i64; 32] = [0; 32]
 
-a64_bind_push := fn(head : ptr(mut Bind), base : i64) {
-  if unchecked bitcast(usize, head) != 0 {
-    if A64_BIND_DEPTH >= 32 { panic("aarch64: match binding nesting exceeds 32 levels") }
-    A64_BIND_HEADS[A64_BIND_DEPTH] = unchecked bitcast(usize, head)
-    A64_BIND_BASES[A64_BIND_DEPTH] = base
-    A64_BIND_DEPTH = A64_BIND_DEPTH + 1
+a64_bind_push := fn(head : Option(ptr(mut Bind)), base : i64) {
+  match head {
+    Some(_h) => {
+      if A64_BIND_DEPTH >= 32 { panic("aarch64: match binding nesting exceeds 32 levels") }
+      A64_BIND_HEADS[A64_BIND_DEPTH] = head
+      A64_BIND_BASES[A64_BIND_DEPTH] = base
+      A64_BIND_DEPTH = A64_BIND_DEPTH + 1
+    }
+    None => {}
   }
 }
 
-a64_bind_pop := fn(head : ptr(mut Bind)) {
-  if unchecked bitcast(usize, head) != 0 { A64_BIND_DEPTH = A64_BIND_DEPTH - 1 }
+a64_bind_pop := fn(head : Option(ptr(mut Bind))) {
+  match head { Some(_h) => { A64_BIND_DEPTH = A64_BIND_DEPTH - 1 }; None => {} }
 }
 
 a64_match_tmp_offset := fn() -> i64 {
@@ -1931,20 +1934,18 @@ a64_cf_mutable_value := fn(e : ptr(Expr), src : ptr(u8)) -> i64 {
 ## The current match arm's payload BINDING-list head (pointer bits), so an IMPLICIT generic call in the
 ## body (`hash(p)`, p the payload binding) can infer its type-arg from the binding's payload type via the
 ## A64_ARM_* variant context. Set (save/restore) per arm in emit_a64_match_arms; 0 = not inside an arm.
-mut A64_ARM_BINDS := 0
+mut A64_ARM_BINDS : Option(ptr(mut Bind)) = Option.None
 ## The AGGREGATE payload-type span of binding `[ns,nl]` — non-0/0 ONLY when it is the CURRENT arm's SINGLE
 ## payload binding AND the variant's payload type is a struct / enum / str (§8 piece 3b). Such a binding is
 ## an aggregate living at frame offset `bind_base + 8` (word 1 of the scrutinee's {disc,payload} block); a
 ## scalar / multi-binding payload keeps the ordinary scalar bind path (0/0 here). Uses the A64_ARM_* arm
 ## context; `bind_base` (threaded) gives the frame offset.
-a64_bind_agg_span := fn(bind_head : ptr(mut Bind), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
+a64_bind_agg_span := fn(bind_head : Option(ptr(mut Bind)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut rs := 0
   mut rn := 0
   if A64_ARM_ENL != 0 {
     bidx := bind_list_index(bind_head, src, ns, nl, a)
-    mut cnt := 0
-    mut b := bind_head
-    while unchecked bitcast(usize, b) != 0 { cnt = cnt + 1 ; b = bnd_next(b) }
+    cnt := bind_count(bind_head)
     if bidx == 0 and cnt == 1 {
       pty := variant_payload_type(decls, src, A64_ARM_ENS, A64_ARM_ENL, A64_ARM_VS, A64_ARM_VL, a)
       isagg := pty.n != 0 and (struct_decl_of(decls, src, pty.s, pty.n) >= 0 or enum_decl_of(decls, src, pty.s, pty.n) >= 0 or str_at((src + pty.s), pty.n) == "str")
@@ -1995,7 +1996,7 @@ emit_a64_print_run := fn(in out sb : rt::StrBuf, lbl : usize, off : i64, len : i
 ## and `bl __print_i64`/`bl __print_u64` by the hole's static signedness (`a64_hole_signed`). A trailing
 ## newline (println) is a final 1-byte write of
 ## `.Lprnl`. Mirrors wat.al's emit_print_template.
-emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), ss : usize, sl : usize, lbl : usize, nl : bool, ah : ptr(mut Arg), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), ss : usize, sl : usize, lbl : usize, nl : bool, ah : ptr(mut Arg), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   raw := str_at((src + ss), sl * 4 + 16)
   firstarg := deref(arg_p(ah))
   mut argp := firstarg.next
@@ -2618,12 +2619,10 @@ a64_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_he
     ## a Var naming the CURRENT match arm's SINGLE payload BINDING (`hash(p)` inside `T.(var)(p) => …`):
     ## infer T from the variant's payload type (A64_ARM_* context). Verified against the arm's bind list
     ## (A64_ARM_BINDS) so an unrelated local is never mis-resolved. Enables the enum-derive recursion.
-    if tl == 0 and vnl != 0 and A64_ARM_ENL != 0 and A64_ARM_BINDS != 0 {
-      bh := unchecked bitcast(ptr(mut Bind), A64_ARM_BINDS)
+    if tl == 0 and vnl != 0 and A64_ARM_ENL != 0 {
+      bh := A64_ARM_BINDS
       bidx := bind_list_index(bh, src, vns, vnl, a)
-      mut bcnt := 0
-      mut bb := bh
-      while unchecked bitcast(usize, bb) != 0 { bcnt = bcnt + 1 ; bb = bnd_next(bb) }
+      bcnt := bind_count(bh)
       if bidx == 0 and bcnt == 1 {
         pty := variant_payload_type(decls, src, A64_ARM_ENS, A64_ARM_ENL, A64_ARM_VS, A64_ARM_VL, a)
         if pty.n != 0 { ts = pty.s ; tl = pty.n }
@@ -3501,7 +3500,7 @@ a64_place_ok := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8), para
 ## the index expression runs — that emit clobbers every scratch register — then the scaled index is added
 ## to the popped base. Bounds vs the array type's STATIC element count, dropped under `unchecked` (CG-7);
 ## `b.lo` also traps a negative i64 index (a huge unsigned).
-emit_a64_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   mut et := CSpan(s = 0, n = 0)
   mut estride := i64(0)
   mut nel := i64(0)
@@ -3546,7 +3545,7 @@ emit_a64_place_idx_addr := fn(base : ptr(Expr), idx : ptr(Expr), in out sb : rt:
 
 ## Emit the ADDRESS of the place `e` into x0 (assumes a64_place_ok). Flat standalone ifs — an if/else-if
 ## chain as a fn body reads as a tail value-if under the lean lower.
-emit_a64_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   isf := ex_is_field(e)
   isi := ex_is_index(e)
   mut isd := false
@@ -3619,7 +3618,7 @@ a64_param_is_out_scalar := fn(params_head : ptr(mut Param), src : ptr(u8), idx :
 ## contributes its frame address; an OUT/IN-OUT parameter forwards the pointer already stored in its slot.
 ## Globals use their data label. The caller has already established that the callee parameter is scalar,
 ## so a non-Var form is retained as the existing value path rather than widening this backend slice.
-a64_emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+a64_emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   mut done := false
   match deref(e) {
     Expr::Var(ns, nl) => {
@@ -4529,7 +4528,7 @@ a64_int_const_expr := fn(e : ptr(Expr)) -> bool {
   }
   r
 }
-a64_direct_float_num := fn(e : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec), body_head : ptr(mut Stmt), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, bind_head : ptr(mut Bind)) -> bool {
+a64_direct_float_num := fn(e : ptr(Expr), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec), body_head : ptr(mut Stmt), params_head : ptr(mut Param), pcount : i64, a : rt::Arena, bind_head : Option(ptr(mut Bind))) -> bool {
   mut r := false
   if ann_scan_float(src, ns + nl) == false { return r }
   if a64_int_const_expr(e) { return true }
@@ -4772,7 +4771,7 @@ a64_bound_lambda := fn(body : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usi
   return 0 - 1
 }
 
-emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   match deref(e) {
     Expr::FnRef(fnpos, fms, fml) => {
       push_str(sb, "  adrp x0, ") ; a64_emit_lambda_label(sb, src, fms, fml, fnpos)
@@ -4797,11 +4796,9 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         mut bi := A64_BIND_DEPTH
         while bi > 0 and bidx < 0 {
           bi = bi - 1
-          bh := unchecked bitcast(ptr(mut Bind), A64_BIND_HEADS[bi])
-          if unchecked bitcast(usize, bh) != 0 {
-            bx := bind_list_index(bh, src, ns, nl, a)
-            if bx >= 0 { bidx = bx ; bbase = A64_BIND_BASES[bi] }
-          }
+          bh := A64_BIND_HEADS[bi]
+          bx := bind_list_index(bh, src, ns, nl, a)
+          if bx >= 0 { bidx = bx ; bbase = A64_BIND_BASES[bi] }
         }
       }
       isstruct := a64_local_struct_nl(body_head, src, ns, nl, a) != 0
@@ -6132,7 +6129,7 @@ emit_a64_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, end
           oensV := A64_ARM_ENS ; oenlV := A64_ARM_ENL ; ovsV := A64_ARM_VS ; ovlV := A64_ARM_VL
           ocvs := A64_CFVAR_S ; ocvl := A64_CFVAR_L ; obV := A64_ARM_BINDS
           A64_ARM_ENS = ens ; A64_ARM_ENL = enl ; A64_ARM_VS = vfm.ns ; A64_ARM_VL = vfm.nl
-          A64_CFVAR_S = vfm.ns ; A64_CFVAR_L = vfm.nl ; A64_ARM_BINDS = unchecked bitcast(usize, am.binds_head)
+          A64_CFVAR_S = vfm.ns ; A64_CFVAR_L = vfm.nl ; A64_ARM_BINDS = am.binds_head
           a64_bind_push(am.binds_head, eoff)
           if hasexprV { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
           if dostmtV { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
@@ -6172,7 +6169,7 @@ emit_a64_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, end
     A64_ARM_ENL = enl
     A64_ARM_VS = evs
     A64_ARM_VL = evl
-    A64_ARM_BINDS = unchecked bitcast(usize, am.binds_head)
+    A64_ARM_BINDS = am.binds_head
     a64_bind_push(am.binds_head, eoff)
     if am.wild != 2 and hasexpr { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
     if am.wild != 2 and dostmt { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
@@ -6195,7 +6192,7 @@ emit_a64_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, end
 ## block is byte-identical to the slice-VIEW binding: word0 = &base[lo] (= x29 + array-base-off + lo*8),
 ## word1 = hi - lo. Only a scalar-element frame ARRAY-LOCAL base is supported (the x86 `estride==1` case);
 ## anything else — or an agg-region overflow (an under-count) — is a LOUD `brk`, never silent corruption.
-emit_a64_slice_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_slice_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   sbase := ex_slice_base(e)
   bns := ex_var_ns(sbase)
   bnl := ex_var_nl(sbase)
@@ -6234,7 +6231,7 @@ emit_a64_slice_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
 ## a LOUD `brk`. Bumps A64_AGG by the struct's words; an overflow past A64_AGG_LIM (an under-reservation)
 ## is a loud `brk`, never silent frame corruption. Distinct blocks (monotonic bump) → multiple / nested
 ## aggregate-value args in one call never alias.
-emit_a64_u8_pair_return := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_u8_pair_return := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ## AAPCS64 carries this two-byte aggregate in the low two bytes of x0. Stage the first field because
   ## evaluating the second may clobber every scratch register, then combine the two narrow values.
   mut g := ex_struct_lit_args(e)
@@ -6255,7 +6252,7 @@ emit_a64_u8_pair_return := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Are
   if k != 2 { push_str(sb, "  brk #0 // malformed native u8-pair return\n") }
 }
 
-emit_a64_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ns := expr_struct_lit_ns(e)
   nl := expr_struct_lit_nl(e)
   words := i64(struct_words(decls, src, ns, nl, a))
@@ -6452,7 +6449,7 @@ a64_store_enum_place_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrB
 ## Returns the words written, 0 when `pe` is not such a call, so every other value keeps the byte-identical
 ## one-word emit. `a64_call_ret_enum_span` is already gated to `1 <= w <= 8`, the register budget; a WIDER
 ## enum returns 0/0 there and stays on its existing (x8/SRET) route rather than being half-stored here.
-a64_store_enum_call_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+a64_store_enum_call_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   cre := a64_call_ret_enum_span(pe, decls, src, a)
   if cre.n == 0 { return 0 }
   ## ISSUE #497 — a RAW-UNION-returning CALL. §8 delivers such a call the same way it delivers an enum:
@@ -6490,7 +6487,7 @@ a64_store_enum_call_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, 
 ## still hold the call's result at this point, so the base is loaded into x9 — NOT the x1 the surrounding
 ## writer uses, which is payload word 0 here — and kept for the whole block: the stores in between touch
 ## no register and cannot disturb it.
-a64_store_enum_call_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+a64_store_enum_call_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   cre := a64_call_ret_enum_span(pe, decls, src, a)
   if cre.n == 0 { return 0 }
   ## ISSUE #497, the POINTER-relative twin of the raw-union call arm in `a64_store_enum_call_at`.
@@ -6527,7 +6524,7 @@ a64_store_enum_call_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
 ## {ptr, len} (2 words). This is the shared multi-word enum-payload writer used by the enum-LOCAL construct
 ## and the enum-VALUE call-arg materialization. A non-scalar struct field payload is a LOUD `brk` (its
 ## reserved width is still returned so following offsets stay consistent).
-emit_a64_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+emit_a64_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   if expr_is_struct_lit(pe) {
     ## A STRUCT literal: write each field at its RUNNING byte offset via the same multi-word writer, so a
     ## field that is itself a nested STRUCT (or enum/str) lands in full and the following fields stay
@@ -6656,7 +6653,7 @@ emit_a64_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
 ## literal at a RUNTIME index: the one-word-per-argument positional store it replaces dropped every word
 ## of an aggregate field past the first AND mis-aligned every field after it. For an ALL-SCALAR literal
 ## the emitted text is byte-identical to that positional store.
-emit_a64_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) -> i64 {
+emit_a64_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) -> i64 {
   if expr_is_struct_lit(pe) {
     sns := expr_struct_lit_ns(pe)
     snl := expr_struct_lit_nl(pe)
@@ -6731,7 +6728,7 @@ emit_a64_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::St
   return 1
 }
 
-emit_a64_enumval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_enumval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ens := expr_enum_lit_ns(e)
   enl := expr_enum_lit_nl(e)
   vidx := variant_index(decls, src, ens, enl, expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)
@@ -6762,7 +6759,7 @@ emit_a64_enumval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
 ## a tail struct-returning CALL (the callee already delivered the regs — just emit the call); a struct
 ## Var LOCAL (read its frame words → x_k) or struct PARAM (by-reference — its slot holds the base ptr, read
 ## through it). All-scalar, ≤8 words; anything else is a LOUD `brk`.
-emit_a64_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ## Tuple literals are Expr::ArrayLit, not StructLit.  Deliver scalar components in reverse stack
   ## order so component k lands in xk, exactly matching the x86 tuple-return convention.
   if ex_is_array_lit(e) {
@@ -6859,7 +6856,7 @@ emit_a64_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
         vidx := variant_index(decls, src, eens, eenl, am.vs, am.vl, a)
         if am.wild != 1 { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, eeoff) ; push_str(sb, "]\n  ldr x1, =") ; push_int(sb, vidx) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .Lsvarmskip") ; push_int(sb, aid) ; push_str(sb, "\n") }
         oens := A64_ARM_ENS ; oenl := A64_ARM_ENL ; ovs := A64_ARM_VS ; ovl := A64_ARM_VL ; obN := A64_ARM_BINDS
-        A64_ARM_ENS = eens ; A64_ARM_ENL = eenl ; A64_ARM_VS = am.vs ; A64_ARM_VL = am.vl ; A64_ARM_BINDS = unchecked bitcast(usize, am.binds_head)
+        A64_ARM_ENS = eens ; A64_ARM_ENL = eenl ; A64_ARM_VS = am.vs ; A64_ARM_VL = am.vl ; A64_ARM_BINDS = am.binds_head
         emit_a64_struct_value(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eeoff)
         A64_ARM_ENS = oens ; A64_ARM_ENL = oenl ; A64_ARM_VS = ovs ; A64_ARM_VL = ovl ; A64_ARM_BINDS = obN
         push_str(sb, "  b .Lsvmend") ; push_int(sb, endid) ; push_str(sb, "\n")
@@ -6909,7 +6906,7 @@ emit_a64_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
 ## the caller-supplied destination (spilled at A64_SRET_SLOT) into x9, then word-copy the struct into
 ## [x9 + k*8]. Supports a struct LOCAL var (`return v`) and a struct LITERAL (`return S(…)`); anything
 ## else keeps the fail-loud `brk` (never a silent wrong value). x10 is the copy scratch (x8/x9 reserved).
-emit_a64_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   mut done := false
   ## `return v` — v is a struct LOCAL: copy its frame slots into the destination.
   ns := ex_var_ns(e)
@@ -7037,7 +7034,7 @@ emit_a64_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
 ## a tail enum-returning CALL (callee already delivered), and an enum Var LOCAL / by-reference PARAM (read
 ## the {disc, payload…} words → x_k). A narrow variant leaves the unused high regs uninitialized — the
 ## caller stores the enum's full width but a matched arm never reads past its own payload. ≤8 words.
-emit_a64_enum_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_enum_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   if expr_is_enum_lit(e) {
     vidx := variant_index(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)
     push_str(sb, "  ldr x0, =") ; push_int(sb, vidx) ; push_str(sb, "\n  str x0, [sp, #-16]!\n")
@@ -7095,7 +7092,7 @@ emit_a64_enum_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
 ## leave the block ADDRESS in x0 (the by-reference aggregate-argument convention, §8 piece 2). The callee
 ## delivers word k in x_k (x0..x_(w-1)); store them into the block, then hand its address by reference —
 ## exactly like emit_a64_aggval_arg but sourcing the words from the register struct-return.
-emit_a64_callret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_callret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   crs := a64_call_ret_struct_span(e, decls, src, a)
   words := i64(struct_words(decls, src, crs.s, crs.n, a))
   ok := crs.n != 0 and (A64_AGG + words * 8) <= A64_AGG_LIM
@@ -7113,7 +7110,7 @@ emit_a64_callret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
 ## Materialize an enum-RETURNING CALL `f(…)` passed as a call ARGUMENT into a reserved A64_AGG block and
 ## leave the block ADDRESS in x0 (§8 piece 3). The callee delivers word 0 = disc, word k+1 = payload in
 ## x0..x_(w-1); store them into the block (full enum width), then pass its address by reference.
-emit_a64_enumret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_enumret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   cre := a64_call_ret_enum_span(e, decls, src, a)
   words := 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a))
   ok := cre.n != 0 and (A64_AGG + words * 8) <= A64_AGG_LIM
@@ -7136,7 +7133,7 @@ emit_a64_enumret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
 ## restored so a nested SRET argument allocates its own distinct block), then pass that same block by
 ## reference — the aggregate-parameter ABI. Was a RAW SIGSEGV: the call fell through to the scalar argument
 ## path with no x8 wired at all, so the callee wrote 9+ words through whatever x8 happened to hold.
-emit_a64_sretcall_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_sretcall_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   srs := a64_call_ret_sret_span(e, decls, src, a)
   words := i64(struct_words(decls, src, srs.s, srs.n, a))
   ok := srs.n != 0 and (A64_AGG + words * 8) <= A64_AGG_LIM
@@ -7157,7 +7154,7 @@ emit_a64_sretcall_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
 ## and both sites used to emit the `bl` with x8 holding whatever was there (SIGSEGV). Give it a scratch
 ## block — the argument-position hand-off (`emit_a64_sretcall_arg`) minus passing the block on. The
 ## block is sized into the frame by `a64_discard_sret_words`. x86_64's dual is #711.
-emit_a64_discarded := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_discarded := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   dsw := a64_discard_sret_words(e, src, a, decls)
   if dsw == 0 {
     emit_a64_expr(e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -7178,7 +7175,7 @@ emit_a64_discarded := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
 ## The wide-ENUM analogue of emit_a64_sretcall_arg (§8 piece 3, > 8 words): an enum-returning CALL wider than
 ## the 8-register budget also delivers through x8, so as a call ARGUMENT it needs the same reserved block +
 ## x8 hand-off + by-reference pass. Same latent raw-SIGSEGV shape, closed the same way.
-emit_a64_enumsret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_enumsret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ers := a64_call_ret_enum_sret_span(e, decls, src, a)
   words := 1 + i64(enum_max_arity(decls, src, ers.s, ers.n, a))
   ok := ers.n != 0 and (A64_AGG + words * 8) <= A64_AGG_LIM
@@ -7198,7 +7195,7 @@ emit_a64_enumsret_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
 ## word-granular, so pack the low byte of each local element at this ABI boundary. A direct call already
 ## returns the same carrier in x0/x1 and is forwarded unchanged. This is deliberately limited to the
 ## shared `[u8; N]`, 1 <= N <= 16, classifier; every other array shape remains a located trap.
-emit_a64_byte_array_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, nel : i64, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_byte_array_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, nel : i64, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   mut done := false
   match deref(e) {
     Expr::Var(ns, nl) => {
@@ -7259,7 +7256,7 @@ emit_a64_epilogue := fn(frame : i64, in out sb : rt::StrBuf) {
   push_str(sb, "  ret\n")
 }
 
-emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64, bind_head : ptr(mut Bind), bind_base : i64) {
+emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : ptr(mut Param), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64, bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   mut s := list_head
   while s != 0 {
     st := deref(stmt_p(Stmt, s))
@@ -8739,8 +8736,8 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
   if a64_fn_is_naked(src, d.name_start, d.name_len) {
     emit_a64_export(sb, src, d.name_start, d.name_len)
     if d.kind == 5 { push_str(sb, "__test") ; push_int(sb, i64(A64_TEST_DECL_INDEX)) } else if d.name_len == 0 { a64_emit_lambda_label(sb, src, d.mod_start, d.mod_len, d.name_start) } else { a64_emit_fn_label(sb, src, d) } ; push_str(sb, ":\n")
-    emit_a64_stmts(unchecked bitcast(usize, d.body_stmts), sb, a, src, ephead, pcount, d.body_stmts, decls, frame, unchecked bitcast(ptr(mut Bind), 0), 0)
-    if not ex_is_no_tail(d.value) { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+    emit_a64_stmts(unchecked bitcast(usize, d.body_stmts), sb, a, src, ephead, pcount, d.body_stmts, decls, frame, Option.None, 0)
+    if not ex_is_no_tail(d.value) { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, Option.None, 0) }
     return
   }
   ## FLOAT ABI (SysV / AAPCS64): float params arrive in d0–d7, integer params in x0–x7 (INDEPENDENT
@@ -8930,11 +8927,11 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
     pi += 1
   }
   void := d.ret_tl == 0
-  emit_a64_stmts(unchecked bitcast(usize, d.body_stmts), sb, a, src, ephead, pcount, d.body_stmts, decls, frame, unchecked bitcast(ptr(mut Bind), 0), 0)
+  emit_a64_stmts(unchecked bitcast(usize, d.body_stmts), sb, a, src, ephead, pcount, d.body_stmts, decls, frame, Option.None, 0)
   has_tail := not ex_is_no_tail(d.value)
   ## A void function may still end in a value-position CALL whose result is discarded by the language.
   ## Its side effect is real; dropping Decl.value here loses the final `bl` (not merely a return value).
-  if void and has_tail { emit_a64_discarded(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+  if void and has_tail { emit_a64_discarded(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, Option.None, 0) }
   ## emit the trailing expression as the fn value — UNLESS it is the no-tail sentinel (the body's last
   ## statement, e.g. a tail match, already left the value in x0; emitting -1 would clobber it).
   if (not void) and has_tail {
@@ -8942,11 +8939,11 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
     ## 2b — same as the explicit-Return path at Stmt::Return); a 1..8-word struct-returning fn's trailing
     ## value delivers word k → x_k (§8 piece 2); an enum-returning fn delivers disc+payload (§8 piece 3);
     ## otherwise the scalar emit. These four are mutually exclusive (see the A64_RET_* set-up in this fn).
-    if byte_ret_n >= 1 { emit_a64_byte_array_value(d.value, sb, byte_ret_n, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
-    if A64_RET_SRET_NL != 0 { emit_a64_sret_store(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
-    if A64_RET_STRUCT_NL != 0 { emit_a64_struct_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
-    if A64_RET_ENUM_NL != 0 { emit_a64_enum_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
-    if byte_ret_n == 0 and A64_RET_STRUCT_NL == 0 and A64_RET_ENUM_NL == 0 and A64_RET_SRET_NL == 0 { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, unchecked bitcast(ptr(mut Bind), 0), 0) }
+    if byte_ret_n >= 1 { emit_a64_byte_array_value(d.value, sb, byte_ret_n, a, src, ephead, pcount, d.body_stmts, decls, Option.None, 0) }
+    if A64_RET_SRET_NL != 0 { emit_a64_sret_store(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, Option.None, 0) }
+    if A64_RET_STRUCT_NL != 0 { emit_a64_struct_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, Option.None, 0) }
+    if A64_RET_ENUM_NL != 0 { emit_a64_enum_value(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, Option.None, 0) }
+    if byte_ret_n == 0 and A64_RET_STRUCT_NL == 0 and A64_RET_ENUM_NL == 0 and A64_RET_SRET_NL == 0 { emit_a64_expr(d.value, sb, a, src, ephead, pcount, d.body_stmts, decls, Option.None, 0) }
   }
   emit_a64_epilogue(frame, sb)
   A64_SUB_GPS = 0

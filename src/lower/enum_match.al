@@ -24,7 +24,7 @@
 strbuf := rt
 arm_p := ast::arm_p
 fld_p := ast::fld_p
-(Arm, Decl, Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
+(Arm, Decl, Expr, Stmt, bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 (push_str, push_int) := strbuf
 (CSpan, LCtx, num_lit_value, var_name_span) := lower_ctx
 (base_type_name, enum_decl_of, enum_inst_words, enum_repr_ty, field_byte_place, is_niche_folded, payload_folded_ty, pointee_agg_kind, layout_kind, layout_kind_is_byte, layout_kind_is_packed, repr_tag_code, struct_decl_of, struct_words, variant_bind_pointee, variant_index, variant_payload_type) := lower_layout
@@ -656,9 +656,7 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
     } else if folded {
       ## nullary `None` (binds none) ⟺ `word == 0`; payload `Some` (binds one) ⟺ `word != 0`. The bind
       ## count avoids resolving the parenthesized `Option(ptr(T))` span through `enum_decl_of`.
-      mut fnb := 0
-      mut fcb := am.binds_head
-      while unchecked bitcast(usize, fcb) != 0 { fnb = fnb + 1; fcb = bnd_next(fcb) }
+      fnb := bind_count(am.binds_head)
       if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }          ## None ⟺ null (0)
       else { push_str(sb, "  cmpq $0, %r12\n  jne ") }                ## Some ⟺ nonzero pointer
       emit_label(sb, lbody)
@@ -696,9 +694,7 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
     ## the `check`/sema crash: `Ok(bt : Ty)` was bound as a 1-word scalar → passed by-value to a
     ## by-ref `Ty` param → deref of the tag value. The payload TYPE is resolved via the enum's
     ## variant + the instance's type-args (`variant_payload_type`, generic-aware).
-    mut nbind := 0
-    mut cb := am2.binds_head
-    while unchecked bitcast(usize, cb) != 0 { nbind = nbind + 1; cb = bnd_next(cb) }
+    nbind := bind_count(am2.binds_head)
     pty := variant_payload_type(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, deref(cx.mar))
     mut agg_ek : u8 = 0
     mut agg_ess := 0
@@ -733,65 +729,70 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
     }
     mut bnd := am2.binds_head
     mut bi := 0
-    while unchecked bitcast(usize, bnd) != 0 {
-      bmns := bnd_ns(bnd)
-      bmnl := bnd_nl(bnd)
-      if agg_ek == 5 {
-        ## Match aliases point into the enum's already-reserved payload block rather than owning a
-        ## newly allocated array block. Mirror bind_array_slot's filler metadata solely for checked
-        ## bounds recovery (`agg_arr_fill_count`); the filler `off`s are intentionally irrelevant.
-        for fi in 0..(agg_nel * agg_estride) {
-          svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+    loop {
+      match bnd {
+        Some(bndq) => {
+          bmns := bnd_ns(bndq)
+          bmnl := bnd_nl(bndq)
+          if agg_ek == 5 {
+            ## Match aliases point into the enum's already-reserved payload block rather than owning a
+            ## newly allocated array block. Mirror bind_array_slot's filler metadata solely for checked
+            ## bounds recovery (`agg_arr_fill_count`); the filler `off`s are intentionally irrelevant.
+            for fi in 0..(agg_nel * agg_estride) {
+              svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+            }
+            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = agg_ess, snl = agg_esl, ek = 5, estride = agg_estride, eek = 2, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+          } else if agg_ek != 0 {
+            ## aggregate payload (struct ek 2 / enum ek 3): the payload words live inline at
+            ## `base+1 …`; record the type span so a field/aggregate use resolves + is passed by-ref.
+            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+          } else if folded {
+            ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`si.base`) — the pointer occupies the
+            ## whole slot (no separate payload word), so bind `p` there as a scalar (ek 0) pointer value.
+            ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
+            ## still lowers as the two-word str view. eek 13 identifies this niche provenance; eek 6 is
+            ## reserved for the pre-existing call-derived pointer-to-view binding.
+            mut pview_s := 0
+            mut pview_l := 0
+            mut pview_eek : u8 = 0
+            pview := niche_str_ptr_span(cx.src, pty.s, pty.n)
+            if pview.n != 0 {
+              pview_s = pview.s
+              pview_l = pview.n
+              pview_eek = 13
+            }
+            ## #768 — a `ptr(S)` / `ptr(E)` payload over a declared aggregate binds as the pointer-to-struct
+            ## (7) / pointer-to-enum (6) kind an annotated `p : ptr(S)` local gets. As a bare scalar its
+            ## pointee was unknown, so `deref(p).f` and `n := deref(p); n.f` read 0 with no diagnostic.
+            mut pkind : u8 = 0
+            if pview.n == 0 {
+              ppt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+              pkind = pointee_agg_kind(cx.decls, cx.src, ppt.s, ppt.n)
+              if pkind != 0 { pview_s = ppt.s; pview_l = ppt.n }
+            }
+            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = pview_s, snl = pview_l, ek = pkind, estride = 1, eek = pview_eek, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+          } else {
+            ## #852 — a component that is itself a niche-folded `Option(ptr(T))` binds as that one-word Option
+            ## (ek 3). #858 — a component typed `ptr(S)` / `ptr(E)` (a one-payload `B(q)` or any component of
+            ## `D(k, q)`) is the same pointer-to-struct / pointer-to-enum local as the folded `Some(p)` above;
+            ## bound untyped, `deref(q).f` had no pointee and read 0.
+            mpf := payload_folded_ty(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, usize(bi), deref(cx.mar))
+            bpt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+            mut bkind : u8 = 0
+            mut bks := 0
+            mut bkl := 0
+            if mpf.n != 0 { bkind = 3; bks = mpf.s; bkl = mpf.n }
+            else {
+              bkind = pointee_agg_kind(cx.decls, cx.src, bpt.s, bpt.n)
+              if bkind != 0 { bks = bpt.s; bkl = bpt.n }
+            }
+            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = bks, snl = bkl, ek = bkind, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+          }
+          bi += 1
+          bnd = bnd_next(bndq)
         }
-        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = agg_ess, snl = agg_esl, ek = 5, estride = agg_estride, eek = 2, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
-      } else if agg_ek != 0 {
-        ## aggregate payload (struct ek 2 / enum ek 3): the payload words live inline at
-        ## `base+1 …`; record the type span so a field/aggregate use resolves + is passed by-ref.
-        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
-      } else if folded {
-        ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`si.base`) — the pointer occupies the
-        ## whole slot (no separate payload word), so bind `p` there as a scalar (ek 0) pointer value.
-        ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
-        ## still lowers as the two-word str view. eek 13 identifies this niche provenance; eek 6 is
-        ## reserved for the pre-existing call-derived pointer-to-view binding.
-        mut pview_s := 0
-        mut pview_l := 0
-        mut pview_eek : u8 = 0
-        pview := niche_str_ptr_span(cx.src, pty.s, pty.n)
-        if pview.n != 0 {
-          pview_s = pview.s
-          pview_l = pview.n
-          pview_eek = 13
-        }
-        ## #768 — a `ptr(S)` / `ptr(E)` payload over a declared aggregate binds as the pointer-to-struct
-        ## (7) / pointer-to-enum (6) kind an annotated `p : ptr(S)` local gets. As a bare scalar its
-        ## pointee was unknown, so `deref(p).f` and `n := deref(p); n.f` read 0 with no diagnostic.
-        mut pkind : u8 = 0
-        if pview.n == 0 {
-          ppt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
-          pkind = pointee_agg_kind(cx.decls, cx.src, ppt.s, ppt.n)
-          if pkind != 0 { pview_s = ppt.s; pview_l = ppt.n }
-        }
-        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = pview_s, snl = pview_l, ek = pkind, estride = 1, eek = pview_eek, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
-      } else {
-        ## #852 — a component that is itself a niche-folded `Option(ptr(T))` binds as that one-word Option
-        ## (ek 3). #858 — a component typed `ptr(S)` / `ptr(E)` (a one-payload `B(q)` or any component of
-        ## `D(k, q)`) is the same pointer-to-struct / pointer-to-enum local as the folded `Some(p)` above;
-        ## bound untyped, `deref(q).f` had no pointee and read 0.
-        mpf := payload_folded_ty(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, usize(bi), deref(cx.mar))
-        bpt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
-        mut bkind : u8 = 0
-        mut bks := 0
-        mut bkl := 0
-        if mpf.n != 0 { bkind = 3; bks = mpf.s; bkl = mpf.n }
-        else {
-          bkind = pointee_agg_kind(cx.decls, cx.src, bpt.s, bpt.n)
-          if bkind != 0 { bks = bpt.s; bkl = bpt.n }
-        }
-        svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = bks, snl = bkl, ek = bkind, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+        None => { break }
       }
-      bi += 1
-      bnd = bnd_next(bnd)
     }
     ov_cvs := cx.cf_curvar_s; ov_cvl := cx.cf_curvar_l
     if am2.wild == 0 { cx.cf_curvar_s = am2.vs; cx.cf_curvar_l = am2.vl }

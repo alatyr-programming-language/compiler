@@ -21,7 +21,7 @@ local_type_span := ast::local_type_span
 local_is_uninit := ast::local_is_uninit
 assign_is_reassign := ast::assign_is_reassign
 local_is_comptime := ast::binding_is_comptime
-(Expr, Stmt, bnd_ns, bnd_nl, bnd_next) := ast
+(Expr, Stmt, bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 (SVec, CSpan, arg_expr_at, var_name_span) := lower_ctx
 (base_type_name, enum_decl_of, enum_inst_words, is_niche_folded, pointee_agg_kind, variant_bind_pointee, is_union_decl, struct_decl_of, struct_words, union_words, variant_payload_type) := lower_layout
 ## SIBLING child, reached by an EXPLICIT qualified path (Modules §4). It was a bare name until the
@@ -741,24 +741,26 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
         while arm != 0 {
           am := deref(arm_p(arm))
           if mes != 0 {
-            mut mnb := 0
-            mut mcb := am.binds_head
-            while unchecked bitcast(usize, mcb) != 0 { mnb = mnb + 1; mcb = bnd_next(mcb) }
+            mnb := bind_count(am.binds_head)
             if mnb == 1 {
               mpty := variant_payload_type(decls, src, mes, mel, am.vs, am.vl, a)
               if mpty.n != 0 {
-                mbh := am.binds_head
-                mpbn := base_type_name(src, mpty.s, mpty.n)
-                if struct_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_struct_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, struct_words(decls, src, mpty.s, mpty.n, a)) }
-                else if enum_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_enum_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, 1 + enum_inst_words(decls, src, mpty.s, mpty.n, a)) }
-                else if is_niche_folded(src, mes, mel) {
-                  ## #768 — a folded `Some(p)` over `ptr(S)` / `ptr(E)`: type `p` as the pointer-to-struct /
-                  ## pointer-to-enum local an annotation would give it, so `n := deref(p)` in the arm binds a
-                  ## struct copy (the emit-time alias in `emit_match` carries the same kind).
-                  mpt := variant_bind_pointee(decls, src, mes, mel, am.vs, am.vl, 1, 0, a)
-                  mpk := pointee_agg_kind(decls, src, mpt.s, mpt.n)
-                  if mpk == 7 { bind_ptrstruct_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
-                  else if mpk == 6 { bind_ptrenum_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
+                match am.binds_head {
+                  Some(mbh) => {
+                    mpbn := base_type_name(src, mpty.s, mpty.n)
+                    if struct_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_struct_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, struct_words(decls, src, mpty.s, mpty.n, a)) }
+                    else if enum_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_enum_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, 1 + enum_inst_words(decls, src, mpty.s, mpty.n, a)) }
+                    else if is_niche_folded(src, mes, mel) {
+                      ## #768 — a folded `Some(p)` over `ptr(S)` / `ptr(E)`: type `p` as the pointer-to-struct /
+                      ## pointer-to-enum local an annotation would give it, so `n := deref(p)` in the arm binds a
+                      ## struct copy (the emit-time alias in `emit_match` carries the same kind).
+                      mpt := variant_bind_pointee(decls, src, mes, mel, am.vs, am.vl, 1, 0, a)
+                      mpk := pointee_agg_kind(decls, src, mpt.s, mpt.n)
+                      if mpk == 7 { bind_ptrstruct_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
+                      else if mpk == 6 { bind_ptrenum_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
+                    }
+                  }
+                  None => {}
                 }
               }
             }
