@@ -10531,6 +10531,12 @@ run_x86 issue808_option_ptr_array 42
 # #809 — a direct `match` over an `Option(ptr(T))` field reached through a mutable global, an array element
 # or a pointer (`deref(p).next`) is typed from the field's declaration; it was refused as untyped.
 run_x86 issue809_option_ptr_field_match 42
+# #826 — a global struct whose `Option(ptr(T))` field precedes other fields: each `.data` cell is sized by the
+# field's declared type (the folded field took two words and shifted every later field).
+run_x86 issue826_option_ptr_global_struct_field 42
+# #846 — `deref(p) = S(…)` pushes each field by its declared type: a folded `Option(ptr(T))` field literal
+# stores its one folded word (a `Some` stored the 0 placeholder).
+run_x86 issue846_option_ptr_deref_struct_lit 42
 # #823 — a `mut` global of type `Option(ptr(T))` is one folded word in `.data`; its store, read, `match`
 # and argument hand-off use the fold (it was a two-word enum whose payload had lost its pointee).
 run_x86 issue823_option_ptr_global 42

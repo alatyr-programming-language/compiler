@@ -1047,13 +1047,13 @@ wat_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
           sdd := deref(decl_get(decls, usize(sd)))
           mut fc := 0
           mut f := sdd.fields_head
-          while f != 0 { fc = fc + 1 ; f = deref(fld_p(f)).next }
+          loop { match f { Some(fq) => { fc = fc + 1 ; f = deref(fld_p(fq)).next }; None => { break } } }
           r = i64(fc)
         } else if ed >= 0 {
           edd := deref(decl_get(decls, usize(ed)))
           mut vc := 0
           mut vf := edd.fields_head
-          while vf != 0 { vc = vc + 1 ; vf = deref(fld_p(vf)).next }
+          loop { match vf { Some(vfq) => { vc = vc + 1 ; vf = deref(fld_p(vfq)).next }; None => { break } } }
           r = i64(vc)
         } else if str_at((src + rt.s), 1) == "(" {
           ## TUPLE component count = top-level commas + 1 (scanned inline over the `(…)` source span).
@@ -1460,12 +1460,17 @@ enum_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut ok := true
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if fd.arity == 1 {
-      if field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) != 1 { ok = false }
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if fd.arity == 1 {
+          if field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) != 1 { ok = false }
+        }
+        f = fd.next
+      }
+      None => { break }
     }
-    f = fd.next
   }
   ok
 }
@@ -1584,13 +1589,18 @@ wat_try_success_disc := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : u
   mut f := d.fields_head
   mut idx := 0
   mut res := 0
-  while f != 0 {
-    fd := deref(fld_p(f))
-    nm := str_at((src + fd.ns), fd.nl)
-    if nm == "Some" { res = idx }
-    if nm == "Ok" { res = idx }
-    idx += 1
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        nm := str_at((src + fd.ns), fd.nl)
+        if nm == "Some" { res = idx }
+        if nm == "Ok" { res = idx }
+        idx += 1
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -4216,10 +4226,15 @@ struct_all_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut ok := true
-  while f != 0 {
-    fd := deref(fld_p(f))
-    if field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) != 1 { ok = false }
-    f = fd.next
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if field_words(decls, src, fd.ts, fd.tl, fd.wsize, a) != 1 { ok = false }
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   ok
 }
@@ -4397,15 +4412,21 @@ wat_std_store_struct := fn(pe : ptr(Expr), bidx : i64, off : i64, in out sb : rt
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut g := ex_struct_lit_args(pe)
-  while f != 0 and g != 0 {
-    fd := deref(fld_p(f))
-    ga := deref(arg_p(g))
-    bo := standard_field_byte_offset(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
-    ft := field_type_span(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
-    if bo >= 0 and ft.n != 0 { _sw := wat_std_store_value(ga.e, bidx, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-    if bo < 0 or ft.n == 0 { push_str(sb, "    (unreachable) (; unresolved standard struct field ;)\n") }
-    f = fd.next
-    g = ga.next
+  loop {
+    match f {
+      Some(fq) => {
+        if not (g != 0) { break }
+        fd := deref(fld_p(fq))
+        ga := deref(arg_p(g))
+        bo := standard_field_byte_offset(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
+        ft := field_type_span(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
+        if bo >= 0 and ft.n != 0 { _sw := wat_std_store_value(ga.e, bidx, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        if bo < 0 or ft.n == 0 { push_str(sb, "    (unreachable) (; unresolved standard struct field ;)\n") }
+        f = fd.next
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   i64(standard_type_byte_size(decls, src, sn.s, sn.n, 1, a))
 }
@@ -4427,21 +4448,27 @@ wat_std_store_tmp_u8_pair := fn(pe : ptr(Expr), in out sb : rt::StrBuf, a : rt::
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
   mut g := ex_struct_lit_args(pe)
-  while f != 0 and g != 0 {
-    fd := deref(fld_p(f))
-    ga := deref(arg_p(g))
-    bo := standard_field_byte_offset(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
-    ft := field_type_span(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
-    if bo >= 0 and ft.n != 0 and scalar_byte_size(src, ft.s, ft.n) == 1 {
-      push_str(sb, "(i64.store8 ")
-      emit_wat_tmp_addr(sb, bo)
-      push_str(sb, " ")
-      emit_wat_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      push_str(sb, ") ")
+  loop {
+    match f {
+      Some(fq) => {
+        if not (g != 0) { break }
+        fd := deref(fld_p(fq))
+        ga := deref(arg_p(g))
+        bo := standard_field_byte_offset(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
+        ft := field_type_span(decls, src, sn.s, sn.n, fd.ns, fd.nl, a)
+        if bo >= 0 and ft.n != 0 and scalar_byte_size(src, ft.s, ft.n) == 1 {
+          push_str(sb, "(i64.store8 ")
+          emit_wat_tmp_addr(sb, bo)
+          push_str(sb, " ")
+          emit_wat_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, ") ")
+        }
+        if bo < 0 or ft.n == 0 or scalar_byte_size(src, ft.s, ft.n) != 1 { push_str(sb, "(unreachable) (; unresolved native u8-pair field ;) ") }
+        f = fd.next
+        g = ga.next
+      }
+      None => { break }
     }
-    if bo < 0 or ft.n == 0 or scalar_byte_size(src, ft.s, ft.n) != 1 { push_str(sb, "(unreachable) (; unresolved native u8-pair field ;) ") }
-    f = fd.next
-    g = ga.next
   }
   i64(standard_type_byte_size(decls, src, sn.s, sn.n, 1, a))
 }
@@ -6536,25 +6563,30 @@ emit_wat_stmt_match := fn(arm : usize, es : usize, en : usize, sidx : i64, fn_he
       } else {
         edd := deref(decl_get(decls, usize(edi)))
         mut vf := edd.fields_head
-        while vf != 0 {
-          vfm := deref(fld_p(vf))
-          vvidx := variant_index(decls, src, es, en, vfm.ns, vfm.nl, a)
-          push_str(sb, "    (if (i64.eq (i64.load ")
-          emit_wat_addr(sb, sidx, 0)
-          push_str(sb, ") (i64.const ")
-          push_int(sb, vvidx)
-          push_str(sb, ")) (then\n")
-          oens := WAT_ARM_ENS ; oenl := WAT_ARM_ENL ; ovs := WAT_ARM_VS ; ovl := WAT_ARM_VL
-          obinds := WAT_ARM_BINDS ; ocvs := WAT_CFVAR_S ; ocvl := WAT_CFVAR_L
-          WAT_ARM_ENS = es ; WAT_ARM_ENL = en ; WAT_ARM_VS = vfm.ns ; WAT_ARM_VL = vfm.nl
-          WAT_ARM_BINDS = am.binds_head ; WAT_CFVAR_S = vfm.ns ; WAT_CFVAR_L = vfm.nl
-          wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, vfm.ns, vfm.nl, src, a, decls))
-          emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
-          wat_bind_pop(am.binds_head)
-          WAT_ARM_ENS = oens ; WAT_ARM_ENL = oenl ; WAT_ARM_VS = ovs ; WAT_ARM_VL = ovl
-          WAT_ARM_BINDS = obinds ; WAT_CFVAR_S = ocvs ; WAT_CFVAR_L = ocvl
-          push_str(sb, "    ))\n")
-          vf = vfm.next
+        loop {
+          match vf {
+            Some(vfq) => {
+              vfm := deref(fld_p(vfq))
+              vvidx := variant_index(decls, src, es, en, vfm.ns, vfm.nl, a)
+              push_str(sb, "    (if (i64.eq (i64.load ")
+              emit_wat_addr(sb, sidx, 0)
+              push_str(sb, ") (i64.const ")
+              push_int(sb, vvidx)
+              push_str(sb, ")) (then\n")
+              oens := WAT_ARM_ENS ; oenl := WAT_ARM_ENL ; ovs := WAT_ARM_VS ; ovl := WAT_ARM_VL
+              obinds := WAT_ARM_BINDS ; ocvs := WAT_CFVAR_S ; ocvl := WAT_CFVAR_L
+              WAT_ARM_ENS = es ; WAT_ARM_ENL = en ; WAT_ARM_VS = vfm.ns ; WAT_ARM_VL = vfm.nl
+              WAT_ARM_BINDS = am.binds_head ; WAT_CFVAR_S = vfm.ns ; WAT_CFVAR_L = vfm.nl
+              wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, vfm.ns, vfm.nl, src, a, decls))
+              emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
+              wat_bind_pop(am.binds_head)
+              WAT_ARM_ENS = oens ; WAT_ARM_ENL = oenl ; WAT_ARM_VS = ovs ; WAT_ARM_VL = ovl
+              WAT_ARM_BINDS = obinds ; WAT_CFVAR_S = ocvs ; WAT_CFVAR_L = ocvl
+              push_str(sb, "    ))\n")
+              vf = vfm.next
+            }
+            None => { break }
+          }
         }
         emit_wat_stmt_match(am.next, es, en, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
       }
@@ -7801,13 +7833,18 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
             ov_fs := WAT_CF_FLD_S ; ov_fl := WAT_CF_FLD_L
             ov_ts := WAT_CF_TY_S ; ov_tl := WAT_CF_TY_L
             mut cfd := csd.fields_head
-            while cfd != 0 {
-              cfdd := deref(fld_p(cfd))
-              WAT_CF_VAR_S = cvs ; WAT_CF_VAR_L = cvl
-              WAT_CF_FLD_S = cfdd.ns ; WAT_CF_FLD_L = cfdd.nl
-              WAT_CF_TY_S = cfdd.ts ; WAT_CF_TY_L = cfdd.tl
-              emit_wat_stmts(cbody, fn_head, nested, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
-              cfd = cfdd.next
+            loop {
+              match cfd {
+                Some(cfdq) => {
+                  cfdd := deref(fld_p(cfdq))
+                  WAT_CF_VAR_S = cvs ; WAT_CF_VAR_L = cvl
+                  WAT_CF_FLD_S = cfdd.ns ; WAT_CF_FLD_L = cfdd.nl
+                  WAT_CF_TY_S = cfdd.ts ; WAT_CF_TY_L = cfdd.tl
+                  emit_wat_stmts(cbody, fn_head, nested, false, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+                  cfd = cfdd.next
+                }
+                None => { break }
+              }
             }
             WAT_CF_VAR_S = ov_vs ; WAT_CF_VAR_L = ov_vl
             WAT_CF_FLD_S = ov_fs ; WAT_CF_FLD_L = ov_fl

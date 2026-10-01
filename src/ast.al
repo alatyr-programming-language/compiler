@@ -575,7 +575,7 @@ pub Decl := struct {
   is_generic : bool,            ## generic fn (first param `T : type`) OR generic struct `Name(T)`; monomorphized per type
   params_head : ptr(mut Param),  ## fn params: arena-linked Param list head (0/null = none)
   body_stmts : ptr(mut Stmt),   ## fn body: arena-linked Stmt list head (0/null = none); `value` is the trailing return expr
-  fields_head : ptr(mut FieldDecl),  ## struct field / enum variant list head (0/null = none)
+  fields_head : Option(ptr(mut FieldDecl)),  ## struct field / enum variant list head (`None` = none)
   ret_ts : usize,               ## fn return type span start (the `R` of `-> R`); 0/0 = none
   ret_tl : usize,               ## fn return type span length
   ## MODULE tier: the source span of the MODULE this decl belongs to (the name after a
@@ -622,16 +622,23 @@ pub Decl := struct {
 ## length expression references a comptime VALUE parameter of a generic type-function
 ## (`[u64; N/64]` in `fn(comptime N : u64) -> type {…}`); the layout folds it per instantiation
 ## (`lower_layout::ct_arr_len` / `eff_field_wsize`), so a literal-length field is unchanged.
-pub FieldDecl := struct { ns : usize, nl : usize, arity : usize, next : ptr(mut FieldDecl), ts : usize, tl : usize, wsize : usize }
+pub FieldDecl := struct { ns : usize, nl : usize, arity : usize, next : Option(ptr(mut FieldDecl)), ts : usize, tl : usize, wsize : usize }
 
-## `FieldDecl`-list plumbing (§6 ptr-typing). `Decl.fields_head` / `FieldDecl.next` are `ptr(mut
-## FieldDecl)`. `fld_p` is the typed IDENTITY accessor: a walk reads a node via `deref(fld_p(h))` (or
-## `deref(fld_p(h)).next`) so the lean lower resolves the pointee struct from `fld_p`'s RETURN type
-## (`deref_call_struct_span` fallback) — a bare `deref(<field-read local>)` does NOT resolve it. `fld_null`
-## is the empty-list / end sentinel. A literal `0` still works for a `ptr(mut FieldDecl)` STRUCT FIELD
-## (null ptr; verified check+run), so only reassigned LOCALS need `fld_null()`.
+## `FieldDecl`-list plumbing (§6 ptr-typing). `Decl.fields_head` / `FieldDecl.next` are
+## `Option(ptr(mut FieldDecl))` — absence is `Option` (strict forms §1), never a null pointer. A walk reads a
+## node through the `Some(q)` payload via `deref(fld_p(q))`:
+##   mut f := d.fields_head
+##   loop { match f { Some(fq) => { fd := deref(fld_p(fq)); …; f = fd.next }; None => { break } } }
 pub fld_p := fn(p : ptr(mut FieldDecl)) -> ptr(mut FieldDecl) { p }
-pub fld_null := fn() -> ptr(mut FieldDecl) { unchecked bitcast(ptr(mut FieldDecl), 0) }
+## The node a list position `h` names, for a walk whose caller has already established that the list
+## cannot end here; an absent node is the located internal error `msg`, never a null dereference.
+pub fld_at := fn(h : Option(ptr(mut FieldDecl)), msg : str) -> ptr(mut FieldDecl) {
+  match h { Some(q) => { q }; None => { panic(msg) } }
+}
+## Does the field / variant list `h` hold at least one entry?
+pub fld_any := fn(h : Option(ptr(mut FieldDecl))) -> bool {
+  match h { Some(_q) => { true }; None => { false } }
+}
 
 ## A function **parameter** (arena-linked): its source name span `[ns, ns+nl)`, its type
 ## annotation span `[ts, ts+tl)` (the `T` of `name : T` — sema resolves it to a `Ty` to
