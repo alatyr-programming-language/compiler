@@ -159,7 +159,7 @@ is_global_agg_arg := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : 
 ## pointer destination), so two of them in one call need two DISTINCT blocks. `src/`+`lib/` declare no
 ## wide-enum-returning fn → `aggpeak` is unchanged there → fixpoint-neutral.
 arg_is_agg_value := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> bool {
-  require_agg_blocks(e, decls, src, a) != 0 or struct_lit_info(e).is_s or enum_lit_info(e).is_e or array_lit_info(e).is_a or struct_ret_call(e, decls, src, a) or sret_ret_call(e, decls, src, a) or gen_ret_sret_span(e, decls, src, a).n != 0 or enum_sret_ret_call(e, decls, src, a) or fixed_array_byte_return_len(e, decls, src, a) >= 1 or is_global_agg_arg(e, decls, src, a)
+  require_agg_blocks(e, decls, src, a) != 0 or call_agg_field(e, decls, src, a).ok or struct_lit_info(e).is_s or enum_lit_info(e).is_e or array_lit_info(e).is_a or struct_ret_call(e, decls, src, a) or sret_ret_call(e, decls, src, a) or gen_ret_sret_span(e, decls, src, a).n != 0 or enum_sret_ret_call(e, decls, src, a) or fixed_array_byte_return_len(e, decls, src, a) >= 1 or is_global_agg_arg(e, decls, src, a)
 }
 
 ## WIDTH of one expression that can be MATERIALIZED into the aggregate-value pool. This is deliberately
@@ -172,6 +172,13 @@ agg_value_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
     w := require_agg_words(ra.under, decls, src, a)
     if w == 0 { panic("selfhost: aggregate-value scratch width could not resolve checked aggregate type") }
     return w
+  }
+  ## #791 — an aggregate field off a struct-returning call takes the field's words, or for a WIDE
+  ## (SRET) root the whole result the callee writes through the hidden pointer.
+  caf := call_agg_field(e, decls, src, a)
+  if caf.ok {
+    if caf.sret { return caf.rwords }
+    return caf.words
   }
   sli := struct_lit_info(e)
   if sli.is_s {

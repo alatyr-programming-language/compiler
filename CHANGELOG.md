@@ -145,6 +145,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   pointee, and a local bound from `deref(src)` (`v : E = deref(src)`, or inferred) took one scalar
   word, so a later copy carried the tag alone and a `match` on it could not see an enum. An enum
   pointee is now copied whole, `1 + payload` words, exactly as a struct pointee already was.
+- **An enum or struct field read straight off a struct-returning call works on x86_64 (#791).**
+  `is_c(mk().kind)` passed the field's first word as the callee's block pointer and crashed with
+  SIGSEGV, and `fn() -> K { mk().kind }` returned the null enum. Such a field is now delivered from the
+  call's result (staged in a temporary block when it is an argument), for enum, payload-enum and
+  nested-struct fields, and for a wide (hidden-pointer) result passed as an argument.
 ## 0.2.6 — 2026-10-01
 
 - **Seed promotion; no emitted byte moves.** The frozen bootstrap `seed/alatyr` advances from 0.2.5 to

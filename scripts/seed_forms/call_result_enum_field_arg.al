@@ -1,7 +1,8 @@
 ## Seed-forms registry entry `call_result_enum_field_arg` (scripts/seed_forms.tsv) — NOT a corpus fixture.
 ## An enum-typed field of a call's struct result passed straight as an argument, `is_c(mk().kind)`.
 ## `src/sema.al` (`resolve_kind`) records the SEGFAULT against the seed and binds the result first.
-## Measured, the tree compiler segfaults too. State `tree`, #791. Due: 42.
+## The tree compiler segfaulted too until #791 fixed the tree. State `seed`: the tree answers 42 and
+## the frozen seed still segfaults. Due: 42.
 K := enum { KA, KB, KC }
 T := struct { a : u64, kind : K, b : u64 }
 mk := fn() -> T { T(a = 1, kind = K.KC, b = 2) }
