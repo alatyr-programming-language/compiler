@@ -353,6 +353,33 @@ if [ -z "$sfr_cover" ]; then
   fail=1; sfr_cover="UNKNOWN — no coverage line"
 fi
 
+# The IR VERIFIER stage (`docs/ir.md` §5, `docs/ir-slice-1.md` §5.2). The shared IR's builder runs over
+# every function of the tracked test/ corpus, lib/ and src/ (`alatyr ir`), and the verifier runs on
+# every function it builds. A refusal is a located internal error, so ANY `VerifyFailed` line, an `ir`
+# run's internal-error exit 70, a crash, a timeout or a run with no summary fails the gate. The stage
+# proves it can fail before it is believed: `ir_census.sh --self-test` feeds the decision planted report
+# directories (a clean one that must pass, one per failure class that must fail by name), and the
+# census refuses to count anything until `alatyr ir --self-test` has shown every verifier rule refusing
+# its planted violation. Inert: nothing emitted depends on the IR before slice 1c.
+echo "### IR VERIFIER (every built function of test/, lib/, src/ must verify; planted refusals must fail) ###"
+IRV_LOG="$LOGDIR/full_ir_verify.log"
+bash scripts/ir_census.sh --self-test > "$IRV_LOG" 2>&1
+irv_st_rc=$?
+ALATYR="$ROOT/target/debug/alatyr" bash scripts/ir_census.sh --gate --quiet --jobs "${ALATYR_IR_JOBS:-8}" >> "$IRV_LOG" 2>&1
+irv_rc=$?
+grep -E "^(ir_census self-test:|ir self-test:|  (set|corpus|lib/|src/) |ir census gate:|\*\*\* ir census gate)" "$IRV_LOG"
+irv_cover="$(grep -E "^ir census gate: " "$IRV_LOG" | tail -1 | sed 's/^ir census gate: //')"
+if [ "$irv_st_rc" != 0 ] || [ "$irv_rc" != 0 ]; then
+  echo "  FAILURES (from $IRV_LOG): census self-test rc=$irv_st_rc, verifier gate rc=$irv_rc"
+  grep -E "^(FAIL|  failed corpus runs|    |  VERIFIER REFUSALS)" "$IRV_LOG" | head -20 | sed 's/^/  /'
+  fail=1
+fi
+if [ -z "$irv_cover" ]; then
+  echo "  (scripts/ir_census.sh --gate printed no 'ir census gate:' coverage line — what it verified is"
+  echo "   unknown, treating as a failure)"
+  fail=1; irv_cover="UNKNOWN — no coverage line"
+fi
+
 # The STRICT-FORMS check, typed half (issue #691). `p == 0` with `p : ptr(T)` is invisible to a
 # tokenizer, and the checker already names it: the #529 instrument writes each implicit usize<->ptr
 # crossing to fd 98. The Stage2 compiler checks the MERGE BASE and this tree (the base from its own
@@ -448,6 +475,7 @@ elif [ "$sw_status" = "RAN" ]; then
   echo "    strict forms:    $sf_cover"
   echo "    strict typed:    $st_cover"
   echo "    seed forms:      $sfr_cover"
+  echo "    ir verifier:     $irv_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
@@ -460,6 +488,7 @@ else
   echo "    strict forms:    $sf_cover"
   echo "    strict typed:    $st_cover"
   echo "    seed forms:      $sfr_cover"
+  echo "    ir verifier:     $irv_cover"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
