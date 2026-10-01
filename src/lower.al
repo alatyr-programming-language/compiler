@@ -17505,6 +17505,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## `+`, below) AND by division signedness (op 19/29). Overflow traps at NATIVE width only; a
       ## narrow-typed op keeps its §4 value-model WRAP (the truncation below), not a trap.
       dsigned := is_signed_expr(l, cx) or is_signed_expr(r, cx)
+      ## docs/ir.md §3.8.5 — the census row for this division's signedness (no-op unless fd 97 is open).
+      if op == 19 or op == 29 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, dsigned) }
       mut ovf_narrow := false
       if op == 16 or op == 17 or op == 18 {
         mut owt := expr_type_span(l, cx)
@@ -17669,6 +17671,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## setcc (`setb`/`seta`/`setbe`/`setae`) so a `u64`/`usize` comparison whose operands straddle
       ## 2^63 (`0 < u64::MAX`) is correct instead of reading the high-bit operand as negative.
       ucmp := is_unsigned_cmp(l, r, cx)
+      if op == 24 or op == 25 or op == 26 or op == 27 { lower_layout::ir_sign_row("x86_64", op, l, r, cx.src, not ucmp) }
       if op == 24 { if ucmp { push_str(sb, "  cmpq %rbx, %rax\n  setb %al\n  movzbq %al, %rax\n") } else { push_str(sb, "  cmpq %rbx, %rax\n  setl %al\n  movzbq %al, %rax\n") } }
       if op == 25 { if ucmp { push_str(sb, "  cmpq %rbx, %rax\n  seta %al\n  movzbq %al, %rax\n") } else { push_str(sb, "  cmpq %rbx, %rax\n  setg %al\n  movzbq %al, %rax\n") } }
       if op == 26 { if ucmp { push_str(sb, "  cmpq %rbx, %rax\n  setbe %al\n  movzbq %al, %rax\n") } else { push_str(sb, "  cmpq %rbx, %rax\n  setle %al\n  movzbq %al, %rax\n") } }
@@ -18428,6 +18431,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         push_str(sb, "  movb %bl, %cl\n")
         if callee == "shl" { push_str(sb, "  shlq %cl, %rax\n") }
         else if callee == "shr" {
+          lower_layout::ir_sign_row("x86_64", 0, sa0, sa1, cx.src, is_signed_expr(sa0, cx))
           if is_signed_expr(sa0, cx) { push_str(sb, "  sarq %cl, %rax\n") }
           else { push_str(sb, "  shrq %cl, %rax\n") }
         }

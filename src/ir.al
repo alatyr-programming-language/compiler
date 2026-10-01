@@ -2176,3 +2176,352 @@ pub self_test := fn(in out ca : rt::Arena) -> usize {
   if wr != isize(outlen) { fails = fails + 1 }
   fails
 }
+
+## ───────────────────────────── the sema side table (docs/ir.md §3.8, owner decision D6) ─────────────────────────────
+##
+## Sema is the single source of types (D6). While it checks a program it records, for every expression
+## node it types, the VALUE type the expression has — class, width and signedness — keyed by the node's
+## address. The IR builder will copy it onto the IR value (§3.8 step 2) instead of re-deriving it from
+## the expression's shape; in slice 0a only the census reads it.
+##
+## Recording is OFF unless a consumer asks for it (`sty_enable`, or the census channel below being
+## open), so an ordinary build maps nothing and runs no extra code past one flag test per expression.
+## The table lives in its own anonymous mappings, never in a compile arena, because the compiler's own
+## output must not move with an instrument (the #529 bitcast table's rule). It GROWS: the key/value
+## arrays rehash into a mapping twice the size at half load, and the records come from chunks that are
+## never moved, so a record's address stays valid for the whole run.
+
+## The class of a recorded value type. `VcAbsent` is "sema never typed this node"; `VcUnknown` is
+## "sema typed it and could not name a kernel type" — a sema gap to close, never a default (§3.8.4);
+## `VcLit` is an integer literal (or a literal-only expression) whose type comes from its context and
+## no context has given it one.
+pub VCls := enum { VcAbsent, VcUnknown, VcLit, VcInt, VcBool, VcPtr, VcFloat, VcAgg }
+pub VTy := struct { cls : VCls, bytes : u64, sg : Sgn }
+vcls_code := fn(c : VCls) -> u64 {
+  match c { VcAbsent => { 0 }; VcUnknown => { 1 }; VcLit => { 2 }; VcInt => { 3 }; VcBool => { 4 }; VcPtr => { 5 }; VcFloat => { 6 }; VcAgg => { 7 } }
+}
+pub vcls_is_int := fn(c : VCls) -> bool {
+  match c { VcInt => { true }; VcAbsent | VcUnknown | VcLit | VcBool | VcPtr | VcFloat | VcAgg => { false } }
+}
+pub vcls_is_lit := fn(c : VCls) -> bool {
+  match c { VcLit => { true }; VcAbsent | VcUnknown | VcInt | VcBool | VcPtr | VcFloat | VcAgg => { false } }
+}
+pub vty_unknown := fn() -> VTy { VTy(cls = VCls.VcUnknown, bytes = 0, sg = Sgn.SgNone) }
+pub vty_lit := fn() -> VTy { VTy(cls = VCls.VcLit, bytes = 0, sg = Sgn.SgNone) }
+pub vty_bool := fn() -> VTy { VTy(cls = VCls.VcBool, bytes = 1, sg = Sgn.SgNone) }
+pub vty_int := fn(bytes : u64, sg : Sgn) -> VTy { VTy(cls = VCls.VcInt, bytes = bytes, sg = sg) }
+## The recorded type's class, read through a copy (#792).
+pub vty_cls := fn(t : VTy) -> VCls { t.cls }
+
+mut STY_ON : bool = false
+mut STY_KEYS : usize = 0    ## address of the key array (node addresses)
+mut STY_USED : usize = 0    ## address of the occupancy array (1 = the slot holds a key)
+mut STY_VALS : usize = 0    ## address of the value array (record addresses)
+mut STY_CAP : usize = 0     ## slots, a power of two
+mut STY_N : usize = 0       ## occupied slots
+mut STY_RB : usize = 0      ## the current record chunk
+mut STY_ROFF : usize = 0
+mut STY_RCAP : usize = 0
+
+## Turn recording on. Idempotent.
+pub sty_enable := fn() { STY_ON = true }
+pub sty_on := fn() -> bool { STY_ON or sign_open() }
+pub sty_len := fn() -> usize { STY_N }
+
+## A fresh zeroed anonymous mapping of `bytes` bytes (`mmap` answers zero-filled pages).
+sty_map := fn(bytes : usize) -> usize {
+  fdm1 := 0 - 1
+  r := rt::sys_mmap(9, 0, bytes, 3, 34, fdm1, 0)
+  if r < 0 { panic("selfhost: ir — sema type table mapping failed (mmap)") }
+  ## unchecked-ok: `mmap` answered a non-negative address; it is the mapping's base.
+  unchecked bitcast(usize, r)
+}
+## The address of word `i` of the mapping at `base`.
+sty_word := fn(base : usize, i : usize) -> ptr(mut usize) {
+  ## unchecked-ok: `base` is an 8-byte-aligned mapping of at least `i + 1` words (every caller bounds `i`).
+  unchecked bitcast(ptr(mut usize), base + i * 8)
+}
+## The slot a key hashes to: multiplicative hashing of the node address (nodes are 8-byte aligned).
+sty_home := fn(k : usize, cap : usize) -> usize {
+  ## unchecked-ok: a hash is modular by intent; the product's overflow is the mixing, not an error.
+  h : usize = unchecked { shr(k, 3) * 2654435761 }
+  shr(h, 8) % cap
+}
+## Is slot `i` of the occupancy array at `used` taken? Occupancy is its own array, so no key value is
+## reserved to mean "free".
+sty_taken := fn(used : usize, i : usize) -> bool { deref(sty_word(used, i)) == 1 }
+## Insert or overwrite `k -> v` in the arrays at (keys, vals, used) of `cap` slots, WITHOUT growing.
+## Answers whether a new slot was taken.
+sty_place := fn(keys : usize, vals : usize, used : usize, cap : usize, k : usize, v : usize) -> bool {
+  mut i := sty_home(k, cap)
+  mut probes : usize = 0
+  while probes < cap {
+    if not sty_taken(used, i) {
+      deref(sty_word(keys, i)) = k
+      deref(sty_word(vals, i)) = v
+      deref(sty_word(used, i)) = 1
+      return true
+    }
+    if deref(sty_word(keys, i)) == k { deref(sty_word(vals, i)) = v; return false }
+    i = (i + 1) % cap
+    probes = probes + 1
+  }
+  panic("selfhost: ir — sema type table full (rehash missed)")
+  false
+}
+## Double the table (or create it) and reinsert every entry.
+sty_grow := fn() {
+  mut nc : usize = STY_CAP * 2
+  if nc == 0 { nc = 65536 }
+  nk := sty_map(nc * 8)
+  nv := sty_map(nc * 8)
+  nu := sty_map(nc * 8)
+  mut i : usize = 0
+  while i < STY_CAP {
+    if sty_taken(STY_USED, i) { fresh := sty_place(nk, nv, nu, nc, deref(sty_word(STY_KEYS, i)), deref(sty_word(STY_VALS, i))) }
+    i = i + 1
+  }
+  STY_KEYS = nk
+  STY_VALS = nv
+  STY_USED = nu
+  STY_CAP = nc
+}
+## A new record slot of `size(VTy)` bytes from the current chunk (a fresh chunk when it is spent).
+sty_record := fn() -> usize {
+  rs : usize = size(VTy)
+  if STY_ROFF + rs > STY_RCAP {
+    STY_RCAP = 1048576
+    STY_RB = sty_map(STY_RCAP)
+    STY_ROFF = 0
+  }
+  p := STY_RB + STY_ROFF
+  STY_ROFF = STY_ROFF + rs
+  p
+}
+## Record (or re-record) the value type of the node at `e`.
+pub sty_put := fn(e : ptr(Expr), t : VTy) {
+  ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
+  k := unchecked bitcast(usize, e)
+  if STY_N * 2 >= STY_CAP { sty_grow() }
+  ## An existing record is overwritten in place, so a context that refines a literal reaches every
+  ## reader of the node.
+  ex := sty_find(k)
+  match ex {
+    Some(rw) => {
+      ## unchecked-ok: every value word is a record address `sty_record` handed out.
+      rp : ptr(mut VTy) = unchecked bitcast(ptr(mut VTy), usize(rw))
+      deref(rp) = t
+    }
+    None => {
+      ra := sty_record()
+      ## unchecked-ok: `sty_record` answered a fresh `size(VTy)`-byte slot of a live mapping.
+      rp2 : ptr(mut VTy) = unchecked bitcast(ptr(mut VTy), ra)
+      deref(rp2) = t
+      if sty_place(STY_KEYS, STY_VALS, STY_USED, STY_CAP, k, ra) { STY_N = STY_N + 1 }
+    }
+  }
+}
+## The record address stored for key `k`, if any.
+sty_find := fn(k : usize) -> Option(u64) {
+  if STY_CAP == 0 { return Option(u64).None }
+  mut i := sty_home(k, STY_CAP)
+  mut probes : usize = 0
+  while probes < STY_CAP {
+    if not sty_taken(STY_USED, i) { return Option(u64).None }
+    if deref(sty_word(STY_KEYS, i)) == k { return Option(u64).Some(u64(deref(sty_word(STY_VALS, i)))) }
+    i = (i + 1) % STY_CAP
+    probes = probes + 1
+  }
+  Option(u64).None
+}
+## The value type recorded for the node at `e` (`VcAbsent` when sema never typed it).
+pub sty_get := fn(e : ptr(Expr)) -> VTy {
+  ## unchecked-ok: the node's address is the table key.
+  k := unchecked bitcast(usize, e)
+  ex := sty_find(k)
+  match ex {
+    Some(rw) => {
+      ## unchecked-ok: every value word is a record address `sty_record` handed out.
+      rp : ptr(mut VTy) = unchecked bitcast(ptr(mut VTy), usize(rw))
+      t : VTy = deref(rp)
+      return t
+    }
+    None => {}
+  }
+  VTy(cls = VCls.VcAbsent, bytes = 0, sg = Sgn.SgNone)
+}
+
+## ───────────────────────────── the signedness differential census (docs/ir.md §3.8.5) ─────────────────────────────
+##
+## For every `/`, `%`, ordering compare and `shr` the compiler meets, each LEGACY emitter writes the
+## signedness it chose, and sema writes the signedness its recorded operand types imply. A disagreement
+## is a #764-class wrong value found mechanically. The channel is file descriptor 97, the convention of
+## the #299 (fd 99) and #529 (fd 98) census instruments: it is open only when the harness opens it
+## (`alatyr <verb> <file> 97>rows`), an ordinary run writes nothing, and no emitted byte depends on it.
+##
+## A row is keyed by SOURCE TEXT, not by address, because sema and a twin's emitter run over two
+## different parses of the same files:
+##   #sign <who> <op-byte> <lcol> <rcol> <answer> |<the source line>
+## `who` is `sema`, `x86_64`, `aarch64`, `riscv64` or `wasm`; `lcol`/`rcol` are the 1-based columns of the
+## operands' leftmost tokens on that line (`?` when an operand has no source position); `answer` is `s`
+## or `u`, and for sema also `lit` (literal-only, no context typed it) or `?` (sema could not type it).
+mut SIGN_PROBED : bool = false
+mut SIGN_OPEN : bool = false
+sign_fd := fn() -> usize { 97 }
+pub sign_open := fn() -> bool {
+  if not SIGN_PROBED {
+    SIGN_PROBED = true
+    SIGN_OPEN = rt::sys_write(1, sign_fd(), 0, 0) == 0
+  }
+  SIGN_OPEN
+}
+## Is `op` one of the signedness-dependent binary operators the census follows?
+pub sign_op_followed := fn(op : u8) -> bool { op == 19 or op == 29 or op == 24 or op == 25 or op == 26 or op == 27 }
+## The start of the line holding offset `off`.
+line_start := fn(src : ptr(u8), off : usize) -> usize {
+  mut p := off
+  while p > 0 and str_at((src + p - 1), 1) != "\n" { p = p - 1 }
+  p
+}
+## `<col>` of an expression's leftmost token (1-based, relative to `ls`), or `?`.
+put_col := fn(in out sb : rt::StrBuf, e : ptr(Expr), src : ptr(u8)) {
+  sp : Option(u64) = expr_span(e)
+  match sp {
+    Some(s) => {
+      su := usize(s)
+      put_u(sb, su - line_start(src, su) + 1)
+    }
+    None => { put(sb, "?") }
+  }
+}
+## The leftmost source offset of the pair: the left operand's, else the right's.
+pair_span := fn(l : ptr(Expr), r : ptr(Expr)) -> Option(u64) {
+  sl : Option(u64) = expr_span(l)
+  match sl { Some(s) => { return Option(u64).Some(s) }; None => {} }
+  expr_span(r)
+}
+## The source line holding the pair (` |`, the line, a newline).
+put_line := fn(in out sb : rt::StrBuf, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) {
+  put(sb, " |")
+  sp : Option(u64) = pair_span(l, r)
+  match sp {
+    Some(s) => {
+      su := usize(s)
+      ls := line_start(src, su)
+      mut le := su
+      end := ast::src_extent()
+      while le < end and str_at((src + le), 1) != "\n" { le = le + 1 }
+      ln := str_at((src + ls), le - ls)
+      put(sb, ln)
+    }
+    None => {}
+  }
+  put(sb, "\n")
+}
+## The one row buffer: a 64 KiB mapping made on the first row and reused (a row is written whole).
+mut SIGN_BUF : usize = 0
+mut SIGN_BUF_MAPPED : bool = false
+sign_buf := fn() -> rt::StrBuf {
+  if not SIGN_BUF_MAPPED { SIGN_BUF = sty_map(65536); SIGN_BUF_MAPPED = true }
+  ## unchecked-ok: `SIGN_BUF` is the address of a live 64 KiB mapping made just above.
+  d : ptr(mut u8) = unchecked bitcast(ptr(mut u8), SIGN_BUF)
+  rt::StrBuf(data = d, len = 0, cap = 65536)
+}
+## Write one census row to fd 97.
+sign_emit := fn(who : str, op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8), answer : str) {
+  mut sb := sign_buf()
+  put(sb, "#sign ")
+  put(sb, who)
+  put(sb, " ")
+  ## The AST operator byte (`0` for the `shr` builtin): `scripts/sign_census.sh` names it, so this
+  ## file keeps no second copy of the operator-spelling table (`lower::op_symbol`).
+  put_u(sb, usize(op))
+  put(sb, " ")
+  put_col(sb, l, src)
+  put(sb, " ")
+  put_col(sb, r, src)
+  put(sb, " ")
+  put(sb, answer)
+  put_line(sb, l, r, src)
+  rowlen : usize = sb.len
+  w := rt::sb_flush(sb, sign_fd())
+  if w != isize(rowlen) { SIGN_LOST = SIGN_LOST + 1 }
+}
+## Rows a short or failed write lost (a census whose channel can go quiet must say so).
+mut SIGN_LOST : usize = 0
+## A legacy emitter's decision: `signed` is what it chose for the operation over (`l`, `r`).
+pub sign_row := fn(who : str, op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8), signed : bool) {
+  if not sign_open() { return }
+  if signed { sign_emit(who, op, l, r, src, "s") } else { sign_emit(who, op, l, r, src, "u") }
+}
+
+## Sema's answer for a site: the signedness of the first operand whose recorded type is an integer.
+sema_answer := fn(l : ptr(Expr), r : ptr(Expr)) -> str {
+  lt : VTy = sty_get(l)
+  rt0 : VTy = sty_get(r)
+  lc : VCls = vty_cls(lt)
+  rc : VCls = vty_cls(rt0)
+  ls : Sgn = lt.sg
+  rs : Sgn = rt0.sg
+  if vcls_is_int(lc) { return sgn_name(ls) }
+  if vcls_is_int(rc) { return sgn_name(rs) }
+  if vcls_is_lit(lc) and vcls_is_lit(rc) { return "lit" }
+  "?"
+}
+## The followed sites sema met, recorded while it checks so the rows are written only once every
+## context has refined its literals (`sign_flush_sema`, on `check_program`'s accepting exit).
+mut SITES : usize = 0     ## address of a site-array mapping (node addresses)
+mut SITES_N : usize = 0
+mut SITES_CAP : usize = 0
+pub sign_site := fn(e : ptr(Expr)) {
+  if not sign_open() { return }
+  if SITES_N >= SITES_CAP {
+    mut nc := SITES_CAP * 2
+    if nc == 0 { nc = 65536 }
+    nb := sty_map(nc * 8)
+    mut i : usize = 0
+    while i < SITES_N { deref(sty_word(nb, i)) = deref(sty_word(SITES, i)); i = i + 1 }
+    SITES = nb
+    SITES_CAP = nc
+  }
+  ## unchecked-ok: the node's address is stored as a word; `site_expr` reads it back.
+  deref(sty_word(SITES, SITES_N)) = unchecked bitcast(usize, e)
+  SITES_N = SITES_N + 1
+}
+## unchecked-ok: every site word was stored by `sign_site` from a `ptr(Expr)`.
+site_expr := fn(i : usize) -> ptr(Expr) { unchecked bitcast(ptr(Expr), deref(sty_word(SITES, i))) }
+## One sema row for the site at `e` (a followed `Bin`, or a `shr(x, n)` call).
+sign_sema_row := fn(e : ptr(Expr), src : ptr(u8)) {
+  match deref(e) {
+    Expr::Bin(op, l, r) => { ans := sema_answer(l, r); sign_emit("sema", op, l, r, src, ans) }
+    Expr::Call(cs, cl, na, ah) => {
+      if na == 2 {
+        a0 := deref(arg_p(ah))
+        a1 := deref(arg_p(a0.next))
+        ans2 := sema_answer(a0.e, a1.e)
+        sign_emit("sema", 0, a0.e, a1.e, src, ans2)
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+}
+## Write every recorded sema site, then forget them (a later check in the same process starts clean).
+pub sign_flush_sema := fn(src : ptr(u8)) {
+  if not sign_open() { return }
+  mut i : usize = 0
+  while i < SITES_N { sign_sema_row(site_expr(i), src); i = i + 1 }
+  SITES_N = 0
+}
+pub vty_u := fn(bytes : u64) -> VTy { VTy(cls = VCls.VcInt, bytes = bytes, sg = Sgn.SgU) }
+pub vty_s := fn(bytes : u64) -> VTy { VTy(cls = VCls.VcInt, bytes = bytes, sg = Sgn.SgS) }
+pub vty_ptr := fn() -> VTy { VTy(cls = VCls.VcPtr, bytes = 8, sg = Sgn.SgNone) }
+pub vty_float := fn(bytes : u64) -> VTy { VTy(cls = VCls.VcFloat, bytes = bytes, sg = Sgn.SgNone) }
+## Has sema named a kernel type here (not absent, not unknown, not a literal still awaiting context)?
+vcls_known := fn(c : VCls) -> bool {
+  match c { VcInt | VcBool | VcPtr | VcFloat | VcAgg => { true }; VcAbsent | VcUnknown | VcLit => { false } }
+}
+pub vty_known := fn(t : VTy) -> bool { c : VCls = t.cls; vcls_known(c) }
+pub vty_is_int := fn(t : VTy) -> bool { c : VCls = t.cls; vcls_is_int(c) }
+pub vty_is_lit := fn(t : VTy) -> bool { c : VCls = t.cls; vcls_is_lit(c) }

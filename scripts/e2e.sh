@@ -911,6 +911,31 @@ check_trap_names() {
   fi
 }
 
+# `docs/ir.md` §3.8 / slice 0a — sema's side table of value types and the signedness census channel
+# (fd 97). The probe program is generated, so the corpus manifest gains no row. It holds #764's
+# literal-only dividend (`x : i64 = (0 - 7) % 9`, whose type comes only from its annotation), a signed
+# call-result dividend and a `u64` ordering; sema must type all three, and the x86_64 and aarch64
+# emitters must each report their own decision for every site. With fd 97 closed the same compilation
+# writes nothing extra. On the parent compiler fd 97 receives nothing.
+check_sign_census() {
+  local d="$T/sign_census" rc
+  mkdir -p "$d"
+  printf '%s\n' 'f := fn() -> i64 { return 0 - 7 }' 'main := fn() -> u64 {' '  a : i64 = f()' \
+    '  x : i64 = (0 - 7) % 9' '  q := a / 7' '  u : u64 = 5' '  if u < 3 { return 1 }' '  if x < 0 { return 42 }' '  7' '}' > "$d/p.al"
+  "$CC" "$d/p.al" > "$d/x86.s" 2>/dev/null 97> "$d/x86.rows"; rc=$?
+  "$CC" aarch64 "$d/p.al" > /dev/null 2>/dev/null 97> "$d/a64.rows"
+  "$CC" "$d/p.al" > "$d/x86_closed.s" 2>/dev/null
+  if [ "$rc" = 0 ] && grep -q '^#sign sema 29 14 23 s |  x : i64 = (0 - 7) % 9$' "$d/x86.rows" \
+    && grep -q '^#sign sema 19 8 12 s |  q := a / 7$' "$d/x86.rows" \
+    && grep -q '^#sign sema 24 6 10 u |  if u < 3 { return 1 }$' "$d/x86.rows" \
+    && grep -q '^#sign x86_64 29 14 23 [su] |' "$d/x86.rows" && grep -q '^#sign aarch64 24 6 10 [su] |' "$d/a64.rows" \
+    && cmp -s "$d/x86.s" "$d/x86_closed.s"; then
+    echo "ok   sign_census: sema types the sites (literal by context), each emitter reports, emission unchanged"
+  else
+    echo "FAIL sign_census: rc=$rc"; sed 's/^/     /' "$d/x86.rows" | head -12; fail=1
+  fi
+}
+
 # Modules §4.3 — ordinary one-hop module re-export. The source keeps `facade` and the entry module
 # in one focused front-end input so the non-x86 resolver sees `pub math := std::math`; the check is
 # structural because the WAT backend is the consumer of driver::d_qual_target. A missing rewrite
@@ -11002,6 +11027,7 @@ check_backend_determinism
 check_large_source
 check_ir_dev_verb
 check_trap_names
+check_sign_census
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
 ## the x86_64 / WASM backends — literals, params, locals+reassignment, arithmetic/comparison/bitwise,
 ## direct calls, value+statement `if`, `while`, `return`.

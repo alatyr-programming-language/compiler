@@ -8101,7 +8101,170 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
 ## type; a `StructLit` field value must match the field's declared type → the struct type; a
 ## `Field` access needs a struct base → the field's type; an `EnumLit` → the enum type. The
 ## span carried in a `Mismatch` is the offending sub-expression's. Fallible (`?`); recurses.
+## ── docs/ir.md §3.8, owner decision D6: sema is the single source of types ──────────────────────────────
+##
+## Every expression `check_expr` types is also RECORDED, in the side table `ir::sty_*`, as the value type
+## it has — class, width, signedness (`ir::VTy`) — keyed by the node. Recording runs only when a
+## consumer asked for it (`ir::sty_on()`: the IR dev verb or the signedness census channel), so an
+## ordinary check or build runs one flag test per expression and nothing else, and no verdict changes:
+## the recorder reads what `check_expr` answered and the declarations it already resolved; it never
+## refuses anything. The recorded type comes, in order, from the name `check_expr`'s own `Ty` carries
+## (a local's declared type, a call's declared result, a cast's target), then from the node's shape
+## over its children's records (`sema_vty_shape`). A literal-only expression is `VcLit` until a context
+## gives it a type (an annotated binding, a `return`, the fn's tail, or the other operand of a binary
+## operator — Types §2.3), and the context REWRITES its record (`sema_vty_push`). An expression sema
+## cannot type stays `VcUnknown`: the census counts it as a sema gap, and nothing defaults it (§3.8.4).
 pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> Result(Ty, CheckErr) {
+  r := check_expr_core(e, decls, upto, src, a, locals, nloc)
+  if ir::sty_on() {
+    match r {
+      Result::Ok(t) => { sema_vty_record(e, t, decls, src) }
+      Result::Err(x) => {}
+    }
+  }
+  r
+}
+## Record `e`'s value type from the `Ty` `check_expr` answered, and remember it as a census site.
+sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)) {
+  mut vt : ir::VTy = ir::vty_unknown()
+  if t.nl != 0 { vt = sema_vty_name(src, t.ns, t.nl, decls) }
+  if not ir::vty_known(vt) { vt = sema_vty_shape(e, decls, src) }
+  ir::sty_put(e, vt)
+  if sema_vty_site(e, src) { ir::sign_site(e) }
+}
+## The kernel value type a type NAME `[s, s+n)` denotes: a scalar by its name, a brand by its
+## underlying type (one level, Types §4.2), anything else unknown to this slice.
+sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -> ir::VTy {
+  sv : ir::VTy = sema_vty_scalar(src, s, n)
+  if ir::vty_known(sv) { return sv }
+  bu := brand_underlying(decls, src, s, n)
+  if bu.n != 0 { return sema_vty_scalar(src, bu.s, bu.n) }
+  sv
+}
+sema_vty_scalar := fn(src : ptr(u8), s : usize, n : usize) -> ir::VTy {
+  bn := base_type_name(src, s, n)
+  if bn.n == 0 { return ir::vty_unknown() }
+  tx := str_at((src + bn.s), bn.n)
+  if tx == "u8" { return ir::vty_u(1) }
+  if tx == "u16" { return ir::vty_u(2) }
+  if tx == "u32" or tx == "char" { return ir::vty_u(4) }
+  if tx == "u64" or tx == "usize" { return ir::vty_u(8) }
+  if tx == "i8" { return ir::vty_s(1) }
+  if tx == "i16" { return ir::vty_s(2) }
+  if tx == "i32" { return ir::vty_s(4) }
+  if tx == "i64" or tx == "isize" { return ir::vty_s(8) }
+  if tx == "bool" { return ir::vty_bool() }
+  if tx == "f32" { return ir::vty_float(4) }
+  if tx == "f64" { return ir::vty_float(8) }
+  if tx == "ptr" { return ir::vty_ptr() }
+  ir::vty_unknown()
+}
+## The value type of `e` from its shape and its children's records (they are typed first).
+sema_vty_shape := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
+  match deref(e) {
+    Expr::Num(v, s, n) => { ir::vty_lit() }
+    Expr::BoolLit(v) => { ir::vty_bool() }
+    Expr::Bin(op, l, r) => { sema_vty_bin(op, l, r) }
+    Expr::Unchecked(inner) => { sema_vty_child(inner) }
+    Expr::Bitcast(inner, ts, tl) => { sema_vty_name(src, ts, tl, decls) }
+    Expr::Call(cs, cl, na, ah) => { sema_vty_call(e, cs, cl, na, ah, decls, src) }
+    Expr::If(c, th, el) => { sema_vty_join(th, el) }
+    Expr::Var | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref
+      | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
+      | Expr::Lambda | Expr::FnRef | Expr::Loop => { ir::vty_unknown() }
+  }
+}
+## A child's record, `VcUnknown` when sema never typed it.
+sema_vty_child := fn(c : ptr(Expr)) -> ir::VTy {
+  ct : ir::VTy = ir::sty_get(c)
+  if ir::vty_known(ct) or ir::vty_is_lit(ct) { return ct }
+  ir::vty_unknown()
+}
+## Is operator byte `op` a comparison or a boolean operator (its result is `bool`)?
+sema_vty_op_is_bool := fn(op : u8) -> bool {
+  op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 or op == 40 or op == 41 or op == 42
+}
+## A binary operator: a literal operand takes the other operand's integer type (Types §2.3); an
+## arithmetic result has the operands' type, a comparison's is `bool`.
+sema_vty_bin := fn(op : u8, l : ptr(Expr), r : ptr(Expr)) -> ir::VTy {
+  lt : ir::VTy = sema_vty_child(l)
+  rt0 : ir::VTy = sema_vty_child(r)
+  mut res : ir::VTy = ir::vty_unknown()
+  if ir::vty_is_int(lt) {
+    if ir::vty_is_lit(rt0) { sema_vty_push(r, lt) }
+    res = lt
+  } else if ir::vty_is_int(rt0) {
+    if ir::vty_is_lit(lt) { sema_vty_push(l, rt0) }
+    res = rt0
+  } else if ir::vty_is_lit(lt) and ir::vty_is_lit(rt0) {
+    res = ir::vty_lit()
+  }
+  if sema_vty_op_is_bool(op) { return ir::vty_bool() }
+  res
+}
+## Both arms of a value `if` have one type; a literal arm takes the other's.
+sema_vty_join := fn(th : ptr(Expr), el : ptr(Expr)) -> ir::VTy {
+  tt : ir::VTy = sema_vty_child(th)
+  et : ir::VTy = sema_vty_child(el)
+  if ir::vty_is_int(tt) {
+    if ir::vty_is_lit(et) { sema_vty_push(el, tt) }
+    return tt
+  }
+  if ir::vty_is_int(et) {
+    if ir::vty_is_lit(tt) { sema_vty_push(th, et) }
+    return et
+  }
+  if ir::vty_is_lit(tt) and ir::vty_is_lit(et) { return ir::vty_lit() }
+  ir::vty_unknown()
+}
+## A call: its declared result; the shift/rotate builtins take their first operand's type.
+sema_vty_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
+  nm := str_at((src + cs), cl)
+  if na == 2 and (nm == "shr" or nm == "shl" or nm == "rotl" or nm == "rotr") {
+    a0 := deref(arg_p(ah))
+    return sema_vty_child(a0.e)
+  }
+  ct := expr_call_result_ty(e, decls, rt::vec_len(deref(decls)), src)
+  if ct.nl != 0 { return sema_vty_name(src, ct.ns, ct.nl, decls) }
+  ir::vty_unknown()
+}
+## A context gives the literal-only expression `e` the type `t`: rewrite its record, and its literal
+## parts' (an arithmetic operand, an `unchecked` body, a value `if`'s arms).
+sema_vty_push := fn(e : ptr(Expr), t : ir::VTy) {
+  cur : ir::VTy = ir::sty_get(e)
+  if not ir::vty_is_lit(cur) { return }
+  ir::sty_put(e, t)
+  match deref(e) {
+    Expr::Bin(op, l, r) => {
+      if not sema_vty_op_is_bool(op) { sema_vty_push(l, t); sema_vty_push(r, t) }
+    }
+    Expr::Unchecked(inner) => { sema_vty_push(inner, t) }
+    Expr::If(c, th, el) => { sema_vty_push(th, t); sema_vty_push(el, t) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+}
+## A declared type `[s, s+n)` is the context of `e` (an annotated binding, a `return`, a fn's tail).
+sema_vty_ctx := fn(e : ptr(Expr), s : usize, n : usize, decls : ptr(rt::Vec), src : ptr(u8)) {
+  if not ir::sty_on() or n == 0 { return }
+  t : ir::VTy = sema_vty_name(src, s, n, decls)
+  if ir::vty_is_int(t) { sema_vty_push(e, t) }
+}
+## The declared result type of the fn being checked, for `return` contexts.
+mut SEMA_VTY_RET_S : usize = 0
+mut SEMA_VTY_RET_N : usize = 0
+## Is `e` a site the signedness census follows (`/`, `%`, an ordering compare, a `shr` call)?
+sema_vty_site := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
+  match deref(e) {
+    Expr::Bin(op, l, r) => { ir::sign_op_followed(op) }
+    Expr::Call(cs, cl, na, ah) => { na == 2 and str_at((src + cs), cl) == "shr" }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { false }
+  }
+}
+check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), nloc : usize) -> Result(Ty, CheckErr) {
   ## `bitcast(T, v)` has the type `T`, never `v`'s (Types §4.3; #716 for the in-match arm). Every
   ## bitcast now reaches the checker as an `Expr::Bitcast` node — the identity class the lowerers
   ## erase is erased only at emit time (`ast::bitcast_identity_erase`) — so this is where an explicit
@@ -11278,6 +11441,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## aggregate copy outrun the destination's proven layout.
         tv := check_expr_da_mode(v, decls, upto, src, a, locals, cnt, da,
           not assign_is_reassign(src, ns, nl) and ann.n == 0)?
+        ## docs/ir.md §3.8 — the annotation is the literal-only initializer's context (Types §2.3).
+        sema_vty_ctx(v, ann.s, ann.n, decls, src)
         ## Comptime §2.2 — the bounded worker slice admits only closed scalar literals/arithmetic and
         ## nullary user-enum values. The lower erases such bindings, so reject a runtime-dependent or
         ## otherwise unsupported initializer before it can be mistaken for a normal local slot.
@@ -11793,6 +11958,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## type and the declared return type are KNOWN and differ is it a `Mismatch`. This
         ## covers returns nested in if/while/match branches (ret_kind threads into those bodies).
         rr := check_expr_da(rv, decls, upto, src, a, locals, cnt, da)
+        ## docs/ir.md §3.8 — the declared result type is a `return` value's context.
+        sema_vty_ctx(rv, SEMA_VTY_RET_S, SEMA_VTY_RET_N, decls, src)
         match rr {
           Result::Ok(cr) => {
             if not kind_is_unknown(ret_kind) { ptrint_probe_site("RESULT-RET", "retexpr", true, cr.kind, ret_kind, s_of(rv, a), src) }
@@ -13371,6 +13538,8 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   if failed == false and no_tail == false {
     if expr_has_unbound(d.value, decls, upto, src, a, ptr(locals), nloc) and not da_bad_expr(d.value, ptr(da), src) { mark_failed(ptr(locals), unbound_code(d.value, decls, upto, src, a, ptr(locals), nloc)) }
     rv := check_expr_da(d.value, decls, upto, src, a, ptr(locals), nloc, ptr(da))
+    ## docs/ir.md §3.8 — the declared result type is the tail value's context.
+    sema_vty_ctx(d.value, d.ret_ts, d.ret_tl, decls, src)
     match rv {
       Result::Ok(bt) => {
         ## the body's value type `bt` must match the declared return type `-> R`. NOTE: a body
@@ -13465,6 +13634,8 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
 ## no expressions to check (skip).
 check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> Result(usize, CheckErr) {
   ptrint_probe_decl(d)
+  SEMA_VTY_RET_S = d.ret_ts
+  SEMA_VTY_RET_N = d.ret_tl
   SEMA_DECL_PARAMS = unchecked bitcast(usize, d.params_head)
   if d.kind == 1 { return check_fn(d, decls, upto, src, a) }
   if d.kind == 0 {
@@ -17213,5 +17384,8 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
   brand_probe_summary()
   ptrint_probe_summary()
   qh_probe_summary()
+  ## docs/ir.md §3.8.5 — sema's rows of the signedness census, written only now that every context
+  ## has refined its literals (a no-op unless fd 97 is open).
+  ir::sign_flush_sema(src)
   0
 }
