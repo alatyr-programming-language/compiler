@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A type function without its arguments is refused in every type position (#857).** `Option` is a
+  function of types; only `Option(T)` is a `type` (Comptime §10, Types §6.2). The checker accepted the
+  bare name as a parameter type, a result type, a local annotation, a struct field and an enum payload
+  (`B(Option)`, or any payload of a multi-payload variant), and the same held for `Result`, a user
+  `Box := fn(T : type) -> type {…}` and, as a field or payload, a bare `ptr`. Each is now a located
+  `check`/build diagnostic at the bare name: ``type function `Option` is not a type until it is applied``.
+  Programs the specification declares invalid that used to compile are now refused (a PATCH, not a break).
 - **A field read through an enum payload's `ptr(S)` binding reads the field.** `match e { B(q) =>
   deref(q).w }` over `B(ptr(N))` compiled clean and read 0 on x86_64 — also for a component of a
   multi-payload variant, a `ptr(mut N)` payload written through, and a generic `B(ptr(T))`. The parser

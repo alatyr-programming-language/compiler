@@ -6711,6 +6711,35 @@ emit_reject_has aarch64 issue803_array_lit_range_local "type mismatch at line 5"
 emit_reject_has riscv64 issue803_array_lit_range_local "type mismatch at line 5"
 check_accept issue803_array_lit_range_ok
 run issue803_array_lit_range_ok 42
+# Issue #857 / Comptime §10 + Types §6.2 — a type function (`Option`, `Result`, a user `Box := fn(T : type)
+# -> type {…}`) or the `ptr` constructor written WITHOUT its arguments is not a `type`; it was accepted in
+# a parameter, a result, a local annotation, a struct field and an enum payload (single and multi). Each
+# reject is located at the bare name; the control keeps every applied spelling accepted and runs to 42.
+build_reject_has issue857_unapplied_param 'type function `Option` is not a type until it is applied'
+check_reject_has issue857_unapplied_param "at line 3 in issue857_unapplied_param"
+build_reject_has issue857_unapplied_ret 'type function `Option` is not a type until it is applied'
+check_reject_has issue857_unapplied_ret "at line 3 in issue857_unapplied_ret"
+build_reject_has issue857_unapplied_local 'type function `Option` is not a type until it is applied'
+check_reject_has issue857_unapplied_local "at line 4 in issue857_unapplied_local"
+build_reject_has issue857_unapplied_field 'type function `Option` is not a type until it is applied'
+check_reject_has issue857_unapplied_field "at line 3 in issue857_unapplied_field"
+build_reject_has issue857_unapplied_payload 'type function `Option` is not a type until it is applied'
+check_reject_has issue857_unapplied_payload "at line 3 in issue857_unapplied_payload"
+build_reject_has issue857_unapplied_payload_multi 'type function `Option` is not a type until it is applied'
+check_reject_has issue857_unapplied_payload_multi "at line 3 in issue857_unapplied_payload_multi"
+build_reject_has issue857_unapplied_user_generic 'type function `Box` is not a type until it is applied'
+check_reject_has issue857_unapplied_user_generic "at line 4 in issue857_unapplied_user_generic"
+build_reject_has issue857_unapplied_result 'type function `Result` is not a type until it is applied'
+check_reject_has issue857_unapplied_result "at line 3 in issue857_unapplied_result"
+build_reject_has issue857_unapplied_ptr 'type function `ptr` is not a type until it is applied'
+check_reject_has issue857_unapplied_ptr "at line 3 in issue857_unapplied_ptr"
+build_reject_has issue857_unapplied_ptr_field 'type function `ptr` is not a type until it is applied'
+check_reject_has issue857_unapplied_ptr_field "at line 2 in issue857_unapplied_ptr_field"
+emit_reject_has wat issue857_unapplied_param 'type function `Option` is not a type until it is applied'
+emit_reject_has aarch64 issue857_unapplied_payload 'type function `Option` is not a type until it is applied'
+emit_reject_has riscv64 issue857_unapplied_payload_multi 'type function `Option` is not a type until it is applied'
+check_accept issue857_applied_ok
+run issue857_applied_ok 42
 # Issue #752 — `x := <call>?` over a multi-word Ok payload binds every payload word (x86_64 returned 0).
 run issue752_try_multiword_payload 42
 build_reject_has reject_try_multiword_value "multi-word Ok payload"
