@@ -1287,24 +1287,17 @@ struct_field_def := fn(rec : usize, k : usize) -> FDef {
   FDef(ds = rt::vec_get(sv, rec + 5 + k * 4 + 2), dl = rt::vec_get(sv, rec + 5 + k * 4 + 3))
 }
 
-## The declaration-order INDEX of a struct literal field whose NAME is the FInit node at handle `fih`,
-## within the struct RECORD at offset `urec`. A thin scalar-returning shim over `struct_field_idx` so
-## the FInit deref stays isolated (a `deref(finit_p(...)).field` is the proven read shape). Returns -1
-## for a field the struct has no such name for (an unknown-field diagnostic at the call site).
-finit_field_idx := fn(pc : PC, urec : usize, fih : usize) -> i64 {
-  fi := deref(finit_p(unchecked bitcast(ptr(mut FInit), fih)))
+## The declaration-order INDEX of the struct literal field initializer `q` (its field NAME) within the
+## struct RECORD at offset `urec`; -1 for a name the struct has no such field for (an unknown-field
+## diagnostic at the call site).
+finit_field_idx := fn(pc : PC, urec : usize, q : ptr(mut FInit)) -> i64 {
+  fi := deref(finit_p(q))
   return struct_field_idx(pc, urec, fi.fs, fi.fl)
 }
-## The value-expr of the FInit node at handle `fih` (isolated deref).
-finit_expr := fn(fih : usize) -> ptr(Expr) {
-  fi := deref(finit_p(unchecked bitcast(ptr(mut FInit), fih)))
-  return fi.e
-}
-## The `next` handle of the FInit node at handle `fih` (isolated deref).
-finit_next := fn(fih : usize) -> usize {
-  fi := deref(finit_p(unchecked bitcast(ptr(mut FInit), fih)))
-  return unchecked bitcast(usize, fi.next)
-}
+## The value-expr of the field initializer `q`.
+finit_expr := fn(q : ptr(mut FInit)) -> ptr(Expr) { deref(finit_p(q)).e }
+## The initializer after `q`, or `None` at the end of the list.
+finit_next := fn(q : ptr(mut FInit)) -> Option(ptr(mut FInit)) { deref(finit_p(q)).next }
 
 ## Re-lex + parse a struct-field DEFAULT expression from its source span `[ds, ds+dl)` (a slice of
 ## `pc.src`, source-scanned by `driver::collect_struct_table`) into a value `Expr`. Mirrors the driver's
@@ -2181,20 +2174,16 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           ## TYP-8): `P(y = 6, x = 5)` and `P(x = 5, y = 6)` both emit values in `x, y` order, so the
           ## positional struct-assign every backend already does is correct. The reorder is inlined here
           ## with scalar-only locals (a multi-word-struct-returning helper mis-lowers under the seed).
-          mut fihead := 0
-          mut fitail := 0
+          mut fihead : Option(ptr(mut FInit)) = Option.None
+          mut fitail : Option(ptr(mut FInit)) = Option.None
           while cur(pc).kind != 11 and cur(pc).kind != 0 {
             fnm := cur(pc)                ## the field NAME token (span used to resolve its decl index)
             pc.idx = pc.idx + 1           ## field name
             pc.idx = pc.idx + 1           ## '='
             fe := p_or(pc)
-            finew := finode(pc.arena, FInit(fs = fnm.start, fl = fnm.len, e = fe, next = unchecked bitcast(ptr(mut FInit), 0)))
-            if fihead == 0 { fihead = unchecked bitcast(usize, finew) } else {
-              fip := finit_p(unchecked bitcast(ptr(mut FInit), fitail))
-              fiold := deref(fip)
-              deref(fip) = FInit(fs = fiold.fs, fl = fiold.fl, e = fiold.e, next = finew)
-            }
-            fitail = unchecked bitcast(usize, finew)
+            finew := finode(pc.arena, FInit(fs = fnm.start, fl = fnm.len, e = fe, next = Option.None))
+            match fitail { Some(ft0) => { deref(ft0).next = Option.Some(finew) }; None => { fihead = Option.Some(finew) } }
+            fitail = Option.Some(finew)
             if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between fields
           }
           pc.idx = pc.idx + 1             ## ')'
@@ -2208,13 +2197,18 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
             ## Struct type not in the field-order table (forward-ref / generic-inst head / single-pass
             ## path): keep the provided order verbatim (historical positional behavior — an in-declaration-
             ## order literal is byte-identical, so src/lib + the fixpoint are unaffected).
-            mut g := fihead
-            while g != 0 {
-              fnew := gnode(pc.arena, Arg(e = finit_expr(g), next = unchecked bitcast(ptr(mut Arg), 0)))
-              if fhead == 0 { fhead = unchecked bitcast(usize, fnew) } else { fp := arg_p(ftail); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = fnew) }
-              ftail = unchecked bitcast(usize, fnew)
-              fnf += 1
-              g = finit_next(g)
+            mut fig := fihead
+            loop {
+              match fig {
+                Some(gq) => {
+                  fnew := gnode(pc.arena, Arg(e = finit_expr(gq), next = unchecked bitcast(ptr(mut Arg), 0)))
+                  if fhead == 0 { fhead = unchecked bitcast(usize, fnew) } else { fp := arg_p(ftail); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = fnew) }
+                  ftail = unchecked bitcast(usize, fnew)
+                  fnf += 1
+                  fig = finit_next(gq)
+                }
+                None => { break }
+              }
             }
           } else {
             urec := usize(rec)
@@ -2223,11 +2217,16 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
             ## `hi`) with no provider and no default are dropped = suffix partial init (v1).
             mut lastprov : i64 = 0 - 1
             mut g1 := fihead
-            while g1 != 0 {
-              fidx := finit_field_idx(pc, urec, g1)
-              if fidx < 0 { sfail("selfhost: unknown field name in struct construction (no such field on this struct type)") }
-              if fidx > lastprov { lastprov = fidx }
-              g1 = finit_next(g1)
+            loop {
+              match g1 {
+                Some(g1q) => {
+                  fidx := finit_field_idx(pc, urec, g1q)
+                  if fidx < 0 { sfail("selfhost: unknown field name in struct construction (no such field on this struct type)") }
+                  if fidx > lastprov { lastprov = fidx }
+                  g1 = finit_next(g1q)
+                }
+                None => { break }
+              }
             }
             ## A DEFAULTED field (spec Types §9.4 / TYP-8) is ALWAYS materialized when omitted, at ANY
             ## position — so the reordered list must extend to the highest index that has EITHER a provider
@@ -2249,9 +2248,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
               mut fval := expr_null()
               mut m := 0
               mut g2 := fihead
-              while g2 != 0 {
-                if finit_field_idx(pc, urec, g2) == k { fval = finit_expr(g2); m += 1 }
-                g2 = finit_next(g2)
+              loop {
+                match g2 {
+                  Some(g2q) => {
+                    if finit_field_idx(pc, urec, g2q) == k { fval = finit_expr(g2q); m += 1 }
+                    g2 = finit_next(g2q)
+                  }
+                  None => { break }
+                }
               }
               if m > 1 { sfail("selfhost: duplicate field name in struct construction (the same field written twice)") }
               if m == 0 {
