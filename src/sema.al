@@ -8361,12 +8361,17 @@ sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), 
     if d.is_fn and name_matches(src, d.name_start, d.name_len, cs, cl) {
       mut pp := d.params_head
       mut g := ah
-      ## null-ok: Param.next / Arg.next — both lists end in a null link (ast.al "0 = end").
-      while unchecked bitcast(usize, pp) != 0 and unchecked bitcast(usize, g) != 0 {
-        pm := deref(param_p(pp))
+      ## null-ok: Arg.next — an argument list ends in a null link (ast.al "0 = end").
+      while unchecked bitcast(usize, g) != 0 {
         ga := deref(arg_p(g))
-        sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
-        pp = pm.next
+        match pp {
+          Some(pq) => {
+            pm := deref(param_p(pq))
+            sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
+            pp = pm.next
+          }
+          None => { return }
+        }
         g = ga.next
       }
       return

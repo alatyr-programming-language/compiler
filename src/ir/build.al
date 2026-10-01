@@ -959,11 +959,18 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   mut g := ah
   while ib_arg_present(g) {
     ga := deref(arg_p(g))
-    pm := deref(param_p(pp))
-    avo : Option(VRegId) = ib_arg(bp, a, e, pm, ga.e)
-    match avo { Some(av) => { k1 := wb_push(args, a, usize(av)) }; None => { return CallOut.CoRefused } }
+    ## An argument with no parameter left is a call sema would not accept; the builder refuses it
+    ## rather than read past the list.
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        avo : Option(VRegId) = ib_arg(bp, a, e, pm, ga.e)
+        match avo { Some(av) => { k1 := wb_push(args, a, usize(av)) }; None => { return CallOut.CoRefused } }
+        pp = pm.next
+      }
+      None => { return CallOut.CoRefused }
+    }
     g = ga.next
-    pp = pm.next
   }
   f := ib_b_f(bp)
   mut it := inst0(Op.OpCall)
@@ -1418,18 +1425,23 @@ pub build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize,
   mut bb := nb
   bp := ptr(mut bb)
   mut pp := d.params_head
-  while ib_param_present(pp) {
-    pm := deref(param_p(pp))
-    pk : Option(IbKS) = ib_name_ks(src, pm.ts, pm.tl)
-    match pk {
-      Some(kk) => {
-        if pm.pmode != 0 { why.c = Construct.CSignature; return BuildOut.Refused }
-        pv := new_param(f, a, kk.ty, kk.sg)
-        ib_bind(bp, a, pm.ns, pm.nl, pv)
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        pk : Option(IbKS) = ib_name_ks(src, pm.ts, pm.tl)
+        match pk {
+          Some(kk) => {
+            if pm.pmode != 0 { why.c = Construct.CSignature; return BuildOut.Refused }
+            pv := new_param(f, a, kk.ty, kk.sg)
+            ib_bind(bp, a, pm.ns, pm.nl, pv)
+          }
+          None => { why.c = Construct.CSignature; return BuildOut.Refused }
+        }
+        pp = pm.next
       }
-      None => { why.c = Construct.CSignature; return BuildOut.Refused }
+      None => { break }
     }
-    pp = pm.next
   }
   has_tail := expr_present(d.value) and not lower_layout::ex_is_no_tail(d.value)
   if has_ret and not has_tail { ib_bs_tail(bp, a, d.body_stmts) } else { ib_bs(bp, a, d.body_stmts) }
@@ -1451,5 +1463,3 @@ pub build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize,
   fid := prog_add(p, a, f)
   BuildOut.Built(fid)
 }
-## null-ok: Param.next — a parameter list ends in a null link (ast.al; the field is not an Option).
-ib_param_present := fn(p : ptr(mut Param)) -> bool { unchecked bitcast(usize, p) != 0 }
