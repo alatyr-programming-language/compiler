@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A module global or constant passed as a call argument is its value, whatever the function's first
+  parameter is.** The x86_64 argument lowering looked a bare name up in the frame-slot table, where a
+  global has no entry, and took the unbound answer — entry 0, the first parameter. Behind a
+  by-reference first parameter (`Option(ptr(T))`, a struct, an enum, a `str`) the global was passed as
+  that parameter's address, so `eq2(7, 1, G1, G2)` answered false. The lookup now answers `None` for a
+  name that is not a local, and the argument takes the value path (#864).
 - **An enum variant may carry an `Option(ptr(T))` payload.** The payload was stored as a two-word enum,
   and constructing the variant from a folded local was refused. A match binding over the payload was
   untyped, so matching it again inside the arm was refused too. The payload component's declared type now
