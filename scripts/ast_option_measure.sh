@@ -16,6 +16,8 @@
 # (hunks, functions touched, per module), whether the frozen seed accepts the tree, and optionally e2e.
 set -u
 CC0="$1"; BASE="$2"; E2E="${3:-}"
+# absolute: the base-tree GAS below is emitted from a temporary directory
+case "$CC0" in /*) ;; *) CC0="$PWD/$CC0" ;; esac
 ulimit -c 0
 mkdir -p target
 "$CC0" build package.al >/dev/null 2>target/am_build0.err || { echo "FAIL: the tree compiler cannot build this tree:"; head -c 600 target/am_build0.err; exit 1; }
