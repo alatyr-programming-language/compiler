@@ -37,7 +37,7 @@ stmt_label_span := ast::stmt_label_span
 ## `lower::guard_*` use, so `check` and `build` agree to the byte / kind / count (CT-4/CT-5). `lower_layout`
 ## does not depend on sema → no import cycle. (`struct_decl_of`/`base_type_name`/`brand_underlying` added
 ## for the is-KIND + field-COUNT fold — they classify the resolved type exactly as the lower's own fold.)
-(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, qualified_type_decl, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc, is_union_decl) := lower_layout
+(struct_words, struct_decl_of, enum_decl_of, enum_inst_words, is_niche_folded, base_type_name, name_tail, brand_underlying, type_name_known, qualified_type_name_known, qualified_type_decl, array_type_lit, typearg_at, tuple_typearg_span, param_tuple_open_at, layout_type_size_bytes, is_bool_niche_pending, is_view_type, layout_kind, layout_kind_is_byte, is_packed, std_struct_has_byte_layout, std_struct_has_aggregate_field, subst_field_ty, array_type_has_array_element, enum_dup_disc, is_union_decl) := lower_layout
 ## §8 `@repr(T)` tag-type primitives (shared with `lower::validate_repr`) for the LOCATED @repr reject:
 ## sema classifies an enum's `@repr(T)` tag exactly as the build's `validate_repr` does (same span
 ## extraction, same integer/capacity classification), so `check` and `build` agree byte-for-byte on
@@ -16503,6 +16503,11 @@ sema_global_ref_bad := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : us
 ## lower's `global_arr_enum` classifier and keeping the declaration/read/write layout in one shape.
 sema_enum_global_array_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8)) -> bool {
   if not sema_is_global_decl(d, src) { return false }
+  ## #824 — a `[Option(ptr(T)); N]` global is one word per element (lower's `global_folded_elem_span`),
+  ## so its element is an ordinary one-word value, not the multi-word enum element this fence guards.
+  gdt := local_type_span(src, d.name_start, d.name_len)
+  gde := array_elem_span(src, gdt.s, gdt.n)
+  if is_niche_folded(src, gde.s, gde.n) { return false }
   first := expr_array_first(d.value)
   if unchecked bitcast(usize, first) == 0 { return false }
   ep := expr_enum_parts(first)

@@ -2576,11 +2576,14 @@ is_mut_enum_global_var := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8))
 ## This is the ONE place the four sides of an enum-element array global agree on its layout — the
 ## `.data` image (`[disc, payload…, pad]` per element), the whole-element READ (`e := GE[i]`), the
 ## `match GE[i]` scrutinee, and the element WRITE — so a stride mismatch between them is impossible.
-## Takes the already-resolved value pointer (never a name) so no caller pays a decl scan for it.
+## Takes the already-resolved value pointer; the name `[gs, gs+gn)` is asked only for the #824
+## declared-element check.
 GAEnum := struct { is_e : bool, es : usize, el : usize, stride : usize, nel : usize }
-global_arr_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), gv : ptr(Expr), a : rt::Arena) -> GAEnum {
+global_arr_enum := fn(decls : ptr(rt::Vec), src : ptr(u8), gs : usize, gn : usize, gv : ptr(Expr), a : rt::Arena) -> GAEnum {
   z := GAEnum(is_e = false, es = 0, el = 0, stride = 0, nel = 0)
   if unchecked bitcast(usize, gv) == 0 { return z }
+  ## #824 — an `[Option(ptr(T)); N]` global is a one-word-per-element array, not an enum array.
+  if global_folded_elem_span(decls, src, gs, gn).n != 0 { return z }
   ali := array_lit_info(gv)
   if ali.is_a == false { return z }
   if ali.nel == 0 { return z }
@@ -2670,6 +2673,17 @@ global_folded_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
   lt := local_type_span(src, d.name_start, d.name_len)
   if is_niche_folded(src, lt.s, lt.n) { return CSpan(s = lt.s, n = lt.n) }
   CSpan(s = 0, n = 0)
+}
+## #824 — the NICHE-FOLDED ELEMENT type of a module-level array global declared `[Option(ptr(T)); N]`
+## (`mut GS : [Option(ptr(T)); N] = [Option.None; N]`), else 0/0. Such an array is N words, one per
+## element (None = 0): a scalar-word array to its `.data` image, element read and element store, which is
+## why `global_arr_enum` declines it; `folded_array_elem_of` names its elements' fold.
+global_folded_elem_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> CSpan {
+  di := global_array_decl_idx(decls, src, ns, nl)
+  if di < 0 { return CSpan(s = 0, n = 0) }
+  d := deref(decl_get(decls, usize(di)))
+  ## The same annotation question a LOCAL `[Option(ptr(T)); N]` asks (#808), at the declaration's name.
+  folded_array_elem_span(src, d.name_start, d.name_len)
 }
 ## The STATIC ELEMENT COUNT of a module-level fixed ARRAY global. Array literals carry their count in the
 ## AST; an `embed(...)` initializer is a StrLit, so recover N from the declaration's `[T; N]` annotation.
@@ -20274,7 +20288,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## would take ONE word at `LABEL + i*8` (the middle of a `1 + max-payload`-word element) and
         ## pass it off as the enum: a silent wrong-discriminant/garbage-payload read. The supported
         ## shapes (`e := GE[i]`, `match GE[i]`) are claimed BEFORE `emit_gas` ever sees the Index.
-        if global_arr_enum(cx.decls, cx.src, gamgv, a).is_e {
+        if global_arr_enum(cx.decls, cx.src, gav.s, gav.n, gamgv, a).is_e {
           panic("selfhost: an ENUM-element ARRAY GLOBAL element `GE[i]` in a VALUE position (a call argument, a return, an operand) is not lowered — the element is `1 + max-payload` words, not one. Bind it first (`e := GE[i]`) or `match GE[i]` directly. [fail-loud guard: never a silent one-word read]")
         }
         if array_lit_info(gamgv).is_a or global_array_byte_eek(cx.decls, cx.src, gav.s, gav.n) != 0 {
@@ -21376,7 +21390,7 @@ index_value_layout := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8), decls 
           ## (`1 + enum_inst_words` words: disc + widest payload) so a following `match e` / payload read
           ## works; `emit_elem_copy_in` copies element i's words out of the global's `.data`.
           if res.is_agg == false {
-            gaen := global_arr_enum(decls, src, global_arr_value(slots, decls, src, bvn.s, bvn.n), a)
+            gaen := global_arr_enum(decls, src, bvn.s, bvn.n, global_arr_value(slots, decls, src, bvn.s, bvn.n), a)
             if gaen.is_e {
               res = IVLayout(is_agg = true, arr = b, idx = i, stride = gaen.stride, eek = 3, ess = gaen.es, esl = gaen.el)
             }
@@ -21904,7 +21918,8 @@ folded_value_span := fn(v : ptr(Expr), expect : CSpan, slots : ptr(SVec), decls 
 folded_array_elem_of := fn(ab : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   avn := var_name_span(ab)
   if avn.n != 0 {
-    if slot_of(slots, src, avn.s, avn.n) < 0 { return CSpan(s = 0, n = 0) }
+    ## #824 — an array GLOBAL (no frame slot) declared `[Option(ptr(T)); N]`.
+    if slot_of(slots, src, avn.s, avn.n) < 0 { return global_folded_elem_span(decls, src, avn.s, avn.n) }
     aent := deref(svec_at(SlotEntry, slots, entry_of(slots, src, avn.s, avn.n)))
     if streq(src, aent.ns, aent.nl, avn.s, avn.n) and aent.ek == 5 and aent.eek == 3 and is_niche_folded(src, aent.sns, aent.snl) { return CSpan(s = aent.sns, n = aent.snl) }
     return CSpan(s = 0, n = 0)
@@ -25037,7 +25052,7 @@ emit_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx
           gesli := struct_lit_info(arg_expr_at(array_lit_info(gfor_mgv).ehead, 0, a))
           ## an ENUM-element array global: the loop var would be bound as a SCALAR and each iteration
           ## would read ONE word at `LABEL + i*8` — mid-element, a silent wrong-discriminant read.
-          if global_arr_enum(cx.decls, cx.src, gfor_mgv, a).is_e {
+          if global_arr_enum(cx.decls, cx.src, fv.s, fv.n, gfor_mgv, a).is_e {
             panic("selfhost: `for x in <ENUM-element ARRAY GLOBAL>` is not lowered (the loop var would be a single word, not the enum's `1 + max-payload`) — index it instead (`for i in 0..N { match GE[i] { … } }`). [fail-loud guard: never a silent mid-element read]")
           }
           if gesli.is_s {
@@ -29293,7 +29308,8 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
           ## An ENUM element (`[E.A(5), E.B(7)]`) is `[disc, payload…, pad]` at the UNIFORM element
           ## stride `1 + enum_inst_words` fixed by element 0 (`global_arr_enum` — the same helper the
           ## strided read / `match` / write use, so all four agree by construction).
-          gaen := global_arr_enum(decls, src, d.value, a)
+          gaen := global_arr_enum(decls, src, d.name_start, d.name_len, d.value, a)
+          gfe := global_folded_elem_span(decls, src, d.name_start, d.name_len)
           ## A `str`-ELEMENT array global (`G := ["abc", "XYZ"]` / `mut G : [str; N] = […]`, issue #495)
           ## images each element as its two-word `{ptr, len}` cell — the `.rodata` bytes label then the
           ## byte length — at the 2-word element stride `global_arr_str` fixes, ASCENDING, so element `k`
@@ -29315,6 +29331,10 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
                 panic("selfhost: a module-level ARRAY global MIXES `str` elements with non-str ones — every element must be a str (they share one 2-word `.data` stride). [fail-loud guard: never a mis-strided image]")
               }
               emit_global_data_cells(ekx, sb, decls, src, a)
+            } else if gfe.n != 0 {
+              ## #824 — a folded `Option(ptr(T))` element is ONE word; only `None` (0) has a link-time value.
+              if enum_lit_full(ekx).is_e == false or enum_lit_full(ekx).np != 0 { panic("selfhost: a module-level [Option(ptr(T)); N] global must be initialized with Option.None elements (assign the Some values at run time)") }
+              push_str(sb, "  .quad 0\n")
             } else if gaen.is_e {
               ## ENUM element `k`: its variant INDEX as the discriminant word, then its payload words,
               ## then zero padding out to the array's element stride — so a NULLARY variant and a
