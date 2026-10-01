@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.9 — 2026-10-02
+
+- **Seed promotion; the bootstrap stores a folded `None` field through a pointer.** The frozen
+  `seed/alatyr` advances from 0.2.8 to 0.2.9 so it carries #846's fix, which the AST FieldDecl list
+  migration (#848) needs. Seed to Stage1 moves exactly 4 lines in 2 functions: the `when` neuter of a
+  declaration now stores its folded `None` field list as 0, not 1. Stage1, Stage2 and Stage3 emit
+  identical GAS (1 430 461 lines) and Stage2 == Stage3 in the binary, all answering `alatyr 0.2.9`;
+  `seed/VERSION` records the hashes.
 - **`deref(p) = S(…)` stores an `Option(ptr(T))` field literal correctly.** Storing a struct literal
   through a pointer pushed each field as a scalar, so `Some(q)` stored None (the `0` placeholder). Each
   field is now pushed by its declared type (#846).
