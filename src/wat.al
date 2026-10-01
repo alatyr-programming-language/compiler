@@ -2099,6 +2099,25 @@ wat_is_agg_place := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : 
   false
 }
 
+## #844 — is `e` an operand whose wasm value is an AGGREGATE's block address rather than a scalar? An
+## arithmetic op over one is a user operator call. `expr_is_struct_var` alone saw only a NAMED struct
+## local, so a struct LITERAL or a struct-returning CALL (`S(a = 40) + 2`) reached the scalar `i64.add`
+## and added a block address: x86_64 answers 42, wasm answered 2.
+wat_operand_is_aggregate := fn(e : ptr(Expr), params_head : ptr(mut Param), body_head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> bool {
+  if expr_is_struct_var(e, params_head, body_head, src, a, decls) { return true }
+  match deref(e) {
+    Expr::StructLit => { return true }
+    Expr::Call(cs, cl, na, ah) => {
+      rs := callee_ret_struct(decls, src, cs, cl, ah, a)
+      if rs.n != 0 { return true }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  false
+}
+
 ## The ENUM-type name of a FIELD read `<place>.<f>` whose declared field type names an enum decl, else
 ## {0,0}. ISSUE #449: §8 delivers an enum BY REFERENCE, and on WASM a struct's enum FIELD holds a
 ## POINTER to the `{disc, payload…}` block exactly as an enum PARAM does — only an enum LOCAL's slot IS
@@ -5227,7 +5246,7 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         push_str(sb, " ")
         emit_wat_expr(r, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, "))")
-      } else if is_arith_op(op) and (not expr_is_struct_var(l, params_head, body_head, src, a, decls)) and (not expr_is_struct_var(r, params_head, body_head, src, a, decls)) {
+      } else if is_arith_op(op) and (not wat_operand_is_aggregate(l, params_head, body_head, src, a, decls)) and (not wat_operand_is_aggregate(r, params_head, body_head, src, a, decls)) {
         dl := wat_operand_signed(l, params_head, body_head, src, a)
         dr := wat_operand_signed(r, params_head, body_head, src, a)
         opname := wat_binop(op, dl or dr)
@@ -5348,10 +5367,15 @@ emit_wat_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         emit_wat_expr(r, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         push_str(sb, ")")
         push_str(sb, post)
+      } else if is_arith_op(op) {
+        ## #844: an arithmetic op over an AGGREGATE operand is a call to a user operator function
+        ## (`@inline + := fn(x : S, y : u64)`), which wasm does not lower until IR slice 2 gives every
+        ## backend one mangling and the aggregate calling convention. Trap, named and located by the
+        ## construct (docs/ir.md slice 0a part iii style), instead of adding the operand's block address.
+        push_str(sb, "(unreachable) (; unsupported call: user operator over aggregate (slice 2) ;)\n")
       } else {
-        ## an unhandled op byte (no WASM stack-op) or a struct operand (user operator-overload) —
-        ## trap rather than silently defaulting to i64.add / adding addresses.
-        push_str(sb, "(unreachable) (; unsupported binary op or struct operand ;)\n")
+        ## an unhandled op byte (no WASM stack-op) — trap rather than silently defaulting to i64.add.
+        push_str(sb, "(unreachable) (; unsupported binary op ;)\n")
       }
     }
     Expr::If(c, t, el) => {
