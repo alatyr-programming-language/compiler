@@ -24,9 +24,10 @@
 ## same order `src/lower.al`'s own prologue uses. Keep it.
 strbuf := rt
 param_p := ast::param_p
+param_same := ast::param_same
 stmt_p := ast::stmt_p
 local_type_span := ast::local_type_span
-(Arg, Expr, Stmt) := ast
+(Arg, Expr, Param, Stmt) := ast
 (push_str, push_int) := strbuf
 (CSpan, LCtx, arg_expr_at, var_name_span) := lower_ctx
 (enum_decl_of, struct_decl_of, struct_words) := lower_layout
@@ -152,10 +153,15 @@ fn_decl_by_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usiz
 pub fnval_ty_pos := fn(cs : usize, cl : usize, src : ptr(u8), a : rt::Arena) -> usize {
   mut pc := EMIT_PARAMS
   mut pr := 0
-  while pc != 0 {
-    pm := deref(param_p(pc))
-    if streq(src, pm.ns, pm.nl, cs, cl) and str_at((src + pm.ts), pm.tl) == "fn" { pr = pm.ts }
-    pc = pm.next
+  loop {
+    match pc {
+      Some(pcq) => {
+        pm := deref(param_p(pcq))
+        if streq(src, pm.ns, pm.nl, cs, cl) and str_at((src + pm.ts), pm.tl) == "fn" { pr = pm.ts }
+        pc = pm.next
+      }
+      None => { break }
+    }
   }
   if pr != 0 { return pr }
   if EMIT_BODY == 0 { return 0 }
@@ -212,7 +218,7 @@ fnval_ret_ty := fn(cs : usize, cl : usize, decls : ptr(rt::Vec), src : ptr(u8), 
 ## self-build paid the walk ~6× per builtin/intrinsic call (`u64(x)`, `panic(m)`, `byte_at(…)` — the
 ## bulk of the calls whose name resolves to no fn decl).
 mut FNVR_BODY : usize = 0
-mut FNVR_PARAMS : usize = 0
+mut FNVR_PARAMS : Option(ptr(mut Param)) = Option.None
 mut FNVR_CS : usize = 0
 mut FNVR_CL : usize = 0
 mut FNVR_S : usize = 0
@@ -223,7 +229,7 @@ pub ind_call_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
   mut res := CSpan(s = 0, n = 0)
   match deref(e) {
     Expr::Call(cs, cl, nargs, args_head) => {
-      if FNVR_OK and FNVR_BODY == EMIT_BODY and FNVR_PARAMS == EMIT_PARAMS and FNVR_CS == cs and FNVR_CL == cl {
+      if FNVR_OK and FNVR_BODY == EMIT_BODY and param_same(FNVR_PARAMS, EMIT_PARAMS) and FNVR_CS == cs and FNVR_CL == cl {
         return CSpan(s = FNVR_S, n = FNVR_N)
       }
       if ret_call_target(decls, src, cs, cl, nargs, args_head, a) < 0 {
@@ -411,12 +417,17 @@ pub fnval_param_fmask := fn(cs : usize, cl : usize, cx : ptr(LCtx)) -> usize {
   d := deref(decl_get(cx.decls, usize(di)))
   mut pp := d.params_head
   mut k := 0
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if k < 6 and param_is_float_sse(pm, cx.src) { m = m + bit }
-    bit = bit * 2
-    pp = pm.next
-    k = k + 1
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if k < 6 and param_is_float_sse(pm, cx.src) { m = m + bit }
+        bit = bit * 2
+        pp = pm.next
+        k = k + 1
+      }
+      None => { break }
+    }
   }
   m
 }
@@ -471,10 +482,15 @@ ecallee_localty := fn(ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> C
   mut pcur := EMIT_PARAMS
   mut ps := 0
   mut pn := 0
-  while pcur != 0 {
-    pm := deref(param_p(pcur))
-    if streq(src, pm.ns, pm.nl, ns, nl) { ps = pm.ns ; pn = pm.nl }
-    pcur = pm.next
+  loop {
+    match pcur {
+      Some(pcurq) => {
+        pm := deref(param_p(pcurq))
+        if streq(src, pm.ns, pm.nl, ns, nl) { ps = pm.ns ; pn = pm.nl }
+        pcur = pm.next
+      }
+      None => { break }
+    }
   }
   if pn != 0 {
     lt := local_type_span(src, ps, pn)
@@ -675,11 +691,16 @@ pub lam_cap_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), lidx : usize, la
   mut pp := d.params_head
   mut k := 0
   mut r := false
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if k + ncap >= larity and param_is_float_sse(pm, src) { r = true }
-    pp = pm.next
-    k = k + 1
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if k + ncap >= larity and param_is_float_sse(pm, src) { r = true }
+        pp = pm.next
+        k = k + 1
+      }
+      None => { break }
+    }
   }
   r
 }

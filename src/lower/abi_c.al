@@ -24,7 +24,7 @@
 strbuf := rt
 fld_p := ast::fld_p
 param_p := ast::param_p
-(Arg, Decl, Expr) := ast
+(Arg, Decl, Expr, Param) := ast
 (push_str, push_int) := strbuf
 (CSpan, LCtx, arg_expr_at) := lower_ctx
 (decl_is_variadic, type_is_variadic_rest) := lower_attrs
@@ -95,26 +95,31 @@ pub abi_c_param_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, 
   mut pp := d.params_head
   mut k := 0
   mut res := 1
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if k == pidx {
-      sdi := struct_decl_of(decls, src, pm.ts, pm.tl)
-      if sdi >= 0 {
-        ## ≤ 16 bytes (≤ 2 words) → register eightbytes; > 16 bytes (MEMORY class) → the word count is
-        ## the number of stack words the struct occupies (passed BY VALUE on the stack, increment 3a).
-        res = if abi_c_is_u8_pair(decls, src, pm.ts, pm.tl) { 1 } else { struct_words(decls, src, pm.ts, pm.tl, a) }
-      } else if str_at((src + pm.ts), pm.tl) == "str" {
-        ## a `str` is a 2-word {ptr, len} aggregate → two INTEGER eightbytes (increment 3c).
-        res = 2
-      } else if enum_decl_of(decls, src, pm.ts, pm.tl) >= 0 {
-        ## an enum is a {disc, payload} aggregate → 1 + max-payload words, all INTEGER (increment 3c).
-        res = 1 + enum_inst_words(decls, src, pm.ts, pm.tl, a)
-      } else {
-        res = 1
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if k == pidx {
+          sdi := struct_decl_of(decls, src, pm.ts, pm.tl)
+          if sdi >= 0 {
+            ## ≤ 16 bytes (≤ 2 words) → register eightbytes; > 16 bytes (MEMORY class) → the word count is
+            ## the number of stack words the struct occupies (passed BY VALUE on the stack, increment 3a).
+            res = if abi_c_is_u8_pair(decls, src, pm.ts, pm.tl) { 1 } else { struct_words(decls, src, pm.ts, pm.tl, a) }
+          } else if str_at((src + pm.ts), pm.tl) == "str" {
+            ## a `str` is a 2-word {ptr, len} aggregate → two INTEGER eightbytes (increment 3c).
+            res = 2
+          } else if enum_decl_of(decls, src, pm.ts, pm.tl) >= 0 {
+            ## an enum is a {disc, payload} aggregate → 1 + max-payload words, all INTEGER (increment 3c).
+            res = 1 + enum_inst_words(decls, src, pm.ts, pm.tl, a)
+          } else {
+            res = 1
+          }
+        }
+        k += 1
+        pp = pm.next
       }
+      None => { break }
     }
-    k += 1
-    pp = pm.next
   }
   res
 }
@@ -126,11 +131,16 @@ pub abi_c_param_tyspan := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64, pi
   mut pp := d.params_head
   mut k := 0
   mut res := CSpan(s = 0, n = 0)
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if k == pidx { res = CSpan(s = pm.ts, n = pm.tl) }
-    k += 1
-    pp = pm.next
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if k == pidx { res = CSpan(s = pm.ts, n = pm.tl) }
+        k += 1
+        pp = pm.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -231,14 +241,19 @@ pub abi_c_param_is_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64, pi
   mut pp := d.params_head
   mut k := 0
   mut res := false
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    ## a struct, an enum, OR a `str` is an AGGREGATE — anchored on the value stack by its word-0
-    ## ADDRESS (see `emit_arg`), so its eightbytes are LOADED from `[address]` into registers, unlike
-    ## a scalar which pops straight into its register (increment 3c adds enum/str to the struct case).
-    if k == pidx and (struct_decl_of(decls, src, pm.ts, pm.tl) >= 0 or enum_decl_of(decls, src, pm.ts, pm.tl) >= 0 or str_at((src + pm.ts), pm.tl) == "str") { res = true }
-    k += 1
-    pp = pm.next
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        ## a struct, an enum, OR a `str` is an AGGREGATE — anchored on the value stack by its word-0
+        ## ADDRESS (see `emit_arg`), so its eightbytes are LOADED from `[address]` into registers, unlike
+        ## a scalar which pops straight into its register (increment 3c adds enum/str to the struct case).
+        if k == pidx and (struct_decl_of(decls, src, pm.ts, pm.tl) >= 0 or enum_decl_of(decls, src, pm.ts, pm.tl) >= 0 or str_at((src + pm.ts), pm.tl) == "str") { res = true }
+        k += 1
+        pp = pm.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -327,11 +342,14 @@ abi_c_fixed_count := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
   mut k := 0
-  mut last := 0
-  while pp != 0 { last = pp; k = k + 1; pp = deref(param_p(pp)).next }
-  if last != 0 {
-    lp := deref(param_p(last))
-    if type_is_variadic_rest(src, lp.ts, lp.tl) { return usize(k - 1) }
+  mut last : Option(ptr(mut Param)) = Option.None
+  loop { match pp { Some(ppq) => { last = pp; k = k + 1; pp = deref(param_p(ppq)).next }; None => { break } } }
+  match last {
+    Some(lq) => {
+      lp := deref(param_p(lq))
+      if type_is_variadic_rest(src, lp.ts, lp.tl) { return usize(k - 1) }
+    }
+    None => {}
   }
   usize(k)
 }
