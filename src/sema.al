@@ -29,6 +29,8 @@ ecallee_is := ast::ecallee_is
 fld_p := ast::fld_p
 fld_any := ast::fld_any
 param_p := ast::param_p
+param_any := ast::param_any
+param_at := ast::param_at
 arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
@@ -572,7 +574,7 @@ mut PTRINT_MOD_NL : usize = 0
 mut PTRINT_DECL_NS : usize = 0
 ## Issue #697 — the parameter list of the declaration `check_decl` is checking (as a word), so a local
 ## annotation can tell the enclosing function's `T : type` parameters from unknown type names.
-mut SEMA_DECL_PARAMS : usize = 0
+mut SEMA_DECL_PARAMS : Option(ptr(mut Param)) = Option.None
 mut PTRINT_DECL_NL : usize = 0
 ## Issue #529 step (d) — the `unchecked` GRANT column. Memory §4.5 makes a pointer fabricated from an
 ## integer ill-formed OUTSIDE an `unchecked` grant, so a place already inside one differs in kind from
@@ -3214,11 +3216,16 @@ callee_elided_alloc_idx := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
       if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) and d.arity == nargs + 1 {
         mut pp := d.params_head
         mut k : i64 = 0
-        while pp != 0 {
-          pm := deref(param_p(pp))
-          if pm.ppl != 0 and str_at((src + pm.ts), pm.tl) == "ptr" and str_at((src + pm.pps), pm.ppl) == "Arena" { r = k }
-          k += 1
-          pp = pm.next
+        loop {
+          match pp {
+            Some(ppq) => {
+              pm := deref(param_p(ppq))
+              if pm.ppl != 0 and str_at((src + pm.ts), pm.tl) == "ptr" and str_at((src + pm.pps), pm.ppl) == "Arena" { r = k }
+              k += 1
+              pp = pm.next
+            }
+            None => { break }
+          }
         }
       }
     }
@@ -3717,11 +3724,16 @@ callee_param_is_type := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s 
       if d.kind == 1 and d.is_generic and name_matches(src, d.name_start, d.name_len, s, n) {
         mut pp := d.params_head
         mut k := 0
-        while pp != 0 {
-          pm := deref(param_p(pp))
-          if k == pidx and str_at((src + pm.ts), pm.tl) == "type" { r = true }
-          k += 1
-          pp = pm.next
+        loop {
+          match pp {
+            Some(ppq) => {
+              pm := deref(param_p(ppq))
+              if k == pidx and str_at((src + pm.ts), pm.tl) == "type" { r = true }
+              k += 1
+              pp = pm.next
+            }
+            None => { break }
+          }
         }
       }
     }
@@ -5155,11 +5167,13 @@ sema_operator_overload_exists := fn(decls : ptr(rt::Vec), src : ptr(u8), op : u8
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and d.name_len == sym.len and str_at((src + d.name_start), d.name_len) == sym {
-      mut p := d.params_head
-      if p != 0 {
-        pm := deref(param_p(p))
-        pt := base_type_name(src, pm.ts, pm.tl)
-        if pt.n != 0 and streq(src, pt.s, pt.n, at.s, at.n) { found = true }
+      match d.params_head {
+        Some(pq) => {
+          pm := deref(param_p(pq))
+          pt := base_type_name(src, pm.ts, pm.tl)
+          if pt.n != 0 and streq(src, pt.s, pt.n, at.s, at.n) { found = true }
+        }
+        None => {}
       }
     }
     i += 1
@@ -5279,11 +5293,16 @@ sema_direct_param_span := fn(decls : ptr(rt::Vec), di : i64, pidx : usize) -> VS
   d := deref(decl_get(decls, usize(di)))
   mut p := d.params_head
   mut i := 0
-  while p != 0 {
-    pm := deref(param_p(p))
-    if i == pidx { return VSpan(s = pm.ts, n = pm.tl) }
-    i += 1
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if i == pidx { return VSpan(s = pm.ts, n = pm.tl) }
+        i += 1
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   VSpan(s = 0, n = 0)
 }
@@ -5293,11 +5312,16 @@ sema_direct_param_mode := fn(decls : ptr(rt::Vec), di : i64, pidx : usize) -> u8
   d := deref(decl_get(decls, usize(di)))
   mut p := d.params_head
   mut i := 0
-  while p != 0 {
-    pm := deref(param_p(p))
-    if i == pidx { return pm.pmode }
-    i += 1
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if i == pidx { return pm.pmode }
+        i += 1
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   255
 }
@@ -5563,18 +5587,24 @@ literal_overload_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize
       mut pp := d.params_head
       mut gg := args_head
       mut matches := true
-      while pp != 0 and gg != 0 {
-        pm := deref(param_p(pp))
-        ga := deref(arg_p(gg))
-        lc := sema_literal_class(ga.e)
-        bn := base_type_name(src, pm.ts, pm.tl)
-        if lc == 1 and not sema_int_overload_param(src, bn.s, bn.n) { matches = false }
-        else if lc == 2 and not sema_float_overload_param(src, bn.s, bn.n) { matches = false }
-        else if lc == 0 { matches = false }
-        pp = pm.next
-        gg = ga.next
+      loop {
+        match pp {
+          Some(ppq) => {
+            if not (gg != 0) { break }
+            pm := deref(param_p(ppq))
+            ga := deref(arg_p(gg))
+            lc := sema_literal_class(ga.e)
+            bn := base_type_name(src, pm.ts, pm.tl)
+            if lc == 1 and not sema_int_overload_param(src, bn.s, bn.n) { matches = false }
+            else if lc == 2 and not sema_float_overload_param(src, bn.s, bn.n) { matches = false }
+            else if lc == 0 { matches = false }
+            pp = pm.next
+            gg = ga.next
+          }
+          None => { break }
+        }
       }
-      if matches and pp == 0 and gg == 0 { nfound += 1 }
+      if matches and not param_any(pp) and gg == 0 { nfound += 1 }
     }
     }
     i += 1
@@ -5596,11 +5626,16 @@ callee_param_type_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), 
       if d.kind == 1 and name_matches(src, d.name_start, d.name_len, s, n) {
         mut pp := d.params_head
         mut k := 0
-        while pp != 0 {
-          pm := deref(param_p(pp))
-          if k == pidx { r = VSpan(s = pm.ts, n = pm.tl) }
-          k += 1
-          pp = pm.next
+        loop {
+          match pp {
+            Some(ppq) => {
+              pm := deref(param_p(ppq))
+              if k == pidx { r = VSpan(s = pm.ts, n = pm.tl) }
+              k += 1
+              pp = pm.next
+            }
+            None => { break }
+          }
         }
       }
     }
@@ -6830,9 +6865,15 @@ sema_generic_result_arg := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
   mut k := 0
   mut pp := d.params_head
   mut found := false
-  while pp != 0 and not found {
-    pm := deref(param_p(pp))
-    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, rs, rn) { found = true } else { k += 1; pp = pm.next }
+  loop {
+    match pp {
+      Some(ppq) => {
+        if not (not found) { break }
+        pm := deref(param_p(ppq))
+        if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, rs, rn) { found = true } else { k += 1; pp = pm.next }
+      }
+      None => { break }
+    }
   }
   if not found { return z }
   mut g := expr_call_args_head(e)
@@ -7340,11 +7381,16 @@ callee_param_ty := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usi
     if d.kind == 1 and streq(src, d.name_start, d.name_len, s, n) {
       mut pp := d.params_head
       mut k := 0
-      while pp != 0 {
-        pm := deref(param_p(pp))
-        if k == pidx { r = resolve_ty(src, pm.ts, pm.tl, decls, upto) }
-        k += 1
-        pp = pm.next
+      loop {
+        match pp {
+          Some(ppq) => {
+            pm := deref(param_p(ppq))
+            if k == pidx { r = resolve_ty(src, pm.ts, pm.tl, decls, upto) }
+            k += 1
+            pp = pm.next
+          }
+          None => { break }
+        }
       }
     }
     }
@@ -7358,8 +7404,8 @@ decl_is_variadic := fn(d : Decl, src : ptr(u8)) -> bool {
   if d.arity == 0 { return false }
   mut p := d.params_head
   mut last := d.params_head
-  while p != 0 { pm := deref(param_p(p)); last = p; p = pm.next }
-  lp := deref(param_p(last))
+  loop { match p { Some(pq) => { pm := deref(param_p(pq)); last = p; p = pm.next }; None => { break } } }
+  lp := deref(param_p(param_at(last, "selfhost: variadic check on a fn without parameters")))
   lp.tl >= 2 and str_at((src + lp.ts), 2) == ".."
 }
 
@@ -7371,21 +7417,27 @@ decl_is_slice_variadic := fn(d : Decl) -> bool {
   if d.arity == 0 { return false }
   mut p := d.params_head
   mut last := d.params_head
-  while p != 0 { pm := deref(param_p(p)); last = p; p = pm.next }
-  deref(param_p(last)).pmode == 3
+  loop { match p { Some(pq) => { pm := deref(param_p(pq)); last = p; p = pm.next }; None => { break } } }
+  deref(param_p(param_at(last, "selfhost: variadic check on a fn without parameters"))).pmode == 3
 }
 
 ## Do the parameters `[nargs, stop)` of a fn (its `params_head` list) ALL carry a §5.1 default? `stop`
 ## lets comptime-variadic arity check cover only the FIXED params before the `...` rest.
-params_defaults_cover_until := fn(params_head : ptr(mut Param), stop : usize, src : ptr(u8), nargs : usize, a : ptr(mut rt::Arena)) -> bool {
+params_defaults_cover_until := fn(params_head : Option(ptr(mut Param)), stop : usize, src : ptr(u8), nargs : usize, a : ptr(mut rt::Arena)) -> bool {
   mut pp := params_head
   mut k := 0
   mut ok := true
-  while pp != 0 and k < stop {
-    pm := deref(param_p(pp))
-    if k >= nargs and not (str_at((src + pm.ts), pm.tl) != "ptr" and pm.pps != 0) { ok = false }
-    k += 1
-    pp = pm.next
+  loop {
+    match pp {
+      Some(ppq) => {
+        if not (k < stop) { break }
+        pm := deref(param_p(ppq))
+        if k >= nargs and not (str_at((src + pm.ts), pm.tl) != "ptr" and pm.pps != 0) { ok = false }
+        k += 1
+        pp = pm.next
+      }
+      None => { break }
+    }
   }
   ok
 }
@@ -7396,7 +7448,7 @@ params_defaults_cover_until := fn(params_head : ptr(mut Param), stop : usize, sr
 ## `Expr` pointer there; `pps` is read as a pointee span ONLY for a `ptr` param, so this reuse is
 ## unambiguous). A trailing param WITHOUT a default → false (a genuine arity error). `src/` has no
 ## defaults → every trailing param fails the test, so a short call stays rejected → check unchanged.
-params_defaults_cover := fn(params_head : ptr(mut Param), arity : usize, src : ptr(u8), nargs : usize, a : ptr(mut rt::Arena)) -> bool {
+params_defaults_cover := fn(params_head : Option(ptr(mut Param)), arity : usize, src : ptr(u8), nargs : usize, a : ptr(mut rt::Arena)) -> bool {
   params_defaults_cover_until(params_head, arity, src, nargs, a)
 }
 
@@ -9968,14 +10020,19 @@ call_arg_ct_param_span := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), 
         if d.is_generic or decl_is_variadic(d, src) or decl_is_slice_variadic(d) { blocked = true }
         mut pp := d.params_head
         mut k : usize = 0
-        while pp != 0 {
-          pm := deref(param_p(pp))
-          if k == pidx {
-            if pm.pmode == 0 { out = VSpan(s = pm.ts, n = pm.tl) }
-            else { blocked = true }
+        loop {
+          match pp {
+            Some(ppq) => {
+              pm := deref(param_p(ppq))
+              if k == pidx {
+                if pm.pmode == 0 { out = VSpan(s = pm.ts, n = pm.tl) }
+                else { blocked = true }
+              }
+              k += 1
+              pp = pm.next
+            }
+            None => { break }
           }
-          k += 1
-          pp = pm.next
         }
       }
     }
@@ -10117,21 +10174,26 @@ call_arg_lit_incompatible := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8
         if decl_is_slice_variadic(d) { giveup = true }
         mut pp := d.params_head
         mut k : usize = 0
-        while pp != 0 {
-          pm := deref(param_p(pp))
-          if k == pidx and pm.pmode == 0 { found = true; pts = pm.ts; ptl = pm.tl }
-          ## pmode 1 = an ARRAY `[T; N]`, SLICE `[T]` or TUPLE `(T0, …)` parameter — an N-word
-          ## BY-REFERENCE aggregate whose `ts`/`tl` holds only the ELEMENT type (ast.al `Param`), so the
-          ## whitelist cannot be asked about it. What IS provable without the element type is the
-          ## `ltag 1 / dtag 7` row itself: a bare integer or bool literal is ONE word, and §3.4's "a
-          ## literal takes its type from context" is about the numeric TYPE it takes, never about
-          ## becoming an aggregate (Types §9.4). Every other literal form still gives up here — in
-          ## particular a StrLit, because `embed(path)` folds to a StrLit NODE whose spec surface IS
-          ## `[u8; N]` (Comptime §2.4), and because `str` is itself a `{ptr, len}` two-word value.
-          if k == pidx and pm.pmode == 1 { isagg = true }
-          if k == pidx and pm.pmode != 0 and pm.pmode != 1 { giveup = true }
-          k += 1
-          pp = pm.next
+        loop {
+          match pp {
+            Some(ppq) => {
+              pm := deref(param_p(ppq))
+              if k == pidx and pm.pmode == 0 { found = true; pts = pm.ts; ptl = pm.tl }
+              ## pmode 1 = an ARRAY `[T; N]`, SLICE `[T]` or TUPLE `(T0, …)` parameter — an N-word
+              ## BY-REFERENCE aggregate whose `ts`/`tl` holds only the ELEMENT type (ast.al `Param`), so the
+              ## whitelist cannot be asked about it. What IS provable without the element type is the
+              ## `ltag 1 / dtag 7` row itself: a bare integer or bool literal is ONE word, and §3.4's "a
+              ## literal takes its type from context" is about the numeric TYPE it takes, never about
+              ## becoming an aggregate (Types §9.4). Every other literal form still gives up here — in
+              ## particular a StrLit, because `embed(path)` folds to a StrLit NODE whose spec surface IS
+              ## `[u8; N]` (Comptime §2.4), and because `str` is itself a `{ptr, len}` two-word value.
+              if k == pidx and pm.pmode == 1 { isagg = true }
+              if k == pidx and pm.pmode != 0 and pm.pmode != 1 { giveup = true }
+              k += 1
+              pp = pm.next
+            }
+            None => { break }
+          }
         }
       }
     }
@@ -11197,13 +11259,19 @@ sema_lambda_binds_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, x
   hit
 }
 
-sema_lambda_binds_name := fn(ph : ptr(mut Param), bh : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+sema_lambda_binds_name := fn(ph : Option(ptr(mut Param)), bh : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
   mut p := ph
   mut hit := false
-  while p != 0 and not hit {
-    pm := deref(param_p(p))
-    if streq(src, pm.ns, pm.nl, xs, xl) { hit = true }
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        if not (not hit) { break }
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, xs, xl) { hit = true }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   if not hit { hit = sema_lambda_binds_stmts(bh, src, xs, xl, a) }
   hit
@@ -11212,7 +11280,7 @@ sema_lambda_binds_name := fn(ph : ptr(mut Param), bh : ptr(mut Stmt), src : ptr(
 ## Return the lambda's `fn` source position if it mentions an enclosing local; otherwise 0. The
 ## existing conservative expression walker is intentional: it recognizes the ordinary value-bearing
 ## lambda forms without expanding closure ABI/dyn or unrelated residual expression cases.
-sema_lambda_capture_span := fn(ph : ptr(mut Param), bh : ptr(mut Stmt), val : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
+sema_lambda_capture_span := fn(ph : Option(ptr(mut Param)), bh : ptr(mut Stmt), val : ptr(Expr), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
   mut bad := 0
   mut i := 0
   while i < nloc and bad == 0 {
@@ -11358,7 +11426,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## Issue #697 — an annotation naming no type is a located refusal, never an annotation that
         ## silently constrains nothing.
         if not assign_is_reassign(src, ns, nl) and ann.n != 0 {
-          lau := sema_local_ann_type_unknown(unchecked bitcast(ptr(mut Param), SEMA_DECL_PARAMS), decls, src, ann.s, ann.n)
+          lau := sema_local_ann_type_unknown(SEMA_DECL_PARAMS, decls, src, ann.s, ann.n)
           if lau != 0 { mark_failed(locals, lau) }
         }
         ## Issue #215 bounded fallback: reject the exact direct annotation in the shared semantic pass,
@@ -13195,19 +13263,24 @@ sema_da_index_write_unready := fn(da : ptr(DA), src : ptr(u8), root : VSpan, bas
 ## True if `[s, n)` names an `out` / `in out` parameter of the fn whose params are `params_head`
 ## (pmode == 2, ast.al). Such a parameter is a reference to the CALLER's place, which outlives the
 ## callee (Memory §5.3.1) — so storing a callee-local's address into it escapes upward.
-is_out_param := fn(params_head : ptr(mut Param), src : ptr(u8), s : usize, n : usize, a : ptr(mut rt::Arena)) -> bool {
+is_out_param := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), s : usize, n : usize, a : ptr(mut rt::Arena)) -> bool {
   mut pp := params_head
   mut res := false
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if pm.pmode == 2 and streq(src, pm.ns, pm.nl, s, n) { res = true }
-    pp = pm.next
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if pm.pmode == 2 and streq(src, pm.ns, pm.nl, s, n) { res = true }
+        pp = pm.next
+      }
+      None => { break }
+    }
   }
   res
 }
 
 ## Walk a `Match`'s arms for a store-escape (below), recursing into each arm's statement body.
-arms_store_escape := fn(head : ptr(mut Arm), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : ptr(mut Param)) -> bool {
+arms_store_escape := fn(head : ptr(mut Arm), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : Option(ptr(mut Param))) -> bool {
   mut arm := head
   mut res := false
   while arm != 0 {
@@ -13225,7 +13298,7 @@ arms_store_escape := fn(head : ptr(mut Arm), locals : ptr(LVec), nloc : usize, s
 ## if/while/for/match branch is caught too. Conservative + sound: only a bare `ptr(<local>)` stored
 ## into a genuine module mut global (not a same/inner-scope binding) is flagged. (Escape via an `out`
 ## parameter / into an aggregate field is a follow-up.)
-stmts_store_escape := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : ptr(mut Param)) -> bool {
+stmts_store_escape := fn(head : ptr(mut Stmt), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : Option(ptr(mut Param))) -> bool {
   mut cur := head
   mut res := false
   while cur != 0 {
@@ -13318,34 +13391,39 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   mut fspan_word := 0
   mut locals := lvec_new(a, 16, ptr(failed_word), ptr(fspan_word), d.mod_start, d.mod_len)
   mut pp := d.params_head
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    mut pt := resolve_ty(src, pm.ts, pm.tl, decls, upto)
-    mut ptag : TyKind = pt.kind
-    ## Issue #557 — an enum parameter whose type is declared in a later-sorted module; recorded under
-    ## the hidden enum tag 10 so only `value_agg_ty`'s consumers see it (see `late_enum_ann_ty`).
-    lpe := late_enum_ann_ty(src, pm.ts, pm.tl, decls, upto)
-    if kind_is_unknown(ptag) and kind_is_enum(lpe.kind) { ptag = TyKind.TyHiddenEnum; pt = lpe }
-    ## Issue #656 — the POINTER twin of the line above: `e : ptr(E)` whose pointee enum is declared in
-    ## a LATER-sorted module. The tag is already 5 and stays 5; only the pointee NAME the `upto` prefix
-    ## could not see is filled in, so the recording becomes identical to the one an earlier-sorted
-    ## enum's module already produces (see `late_enum_ptr_ty`).
-    lpp := late_enum_ptr_ty(src, pm.ts, pm.tl, decls, upto)
-    if kind_is_ptr(ptag) and pt.nl == 0 and kind_is_ptr(lpp.kind) { pt = lpp }
-    mut pbyte := tag_of_kind(ptag)
-    if pm.pmode == 2 { pbyte = tag_with_mut(pbyte) }
-    ## Array-shaped parameters are already caller-backed places in the existing ABI (pmode 1: a
-    ## `[T; N]` and the tuple parameters that share that representation); keep their element writes
-    ## compatible with the pre-existing aggregate-parameter contract. Scalar parameters still require
-    ## the explicit `out`/`in out` pmode 2 marker below. This is one half of a pair: the concept has
-    ## its OWN provenance value since #626, and the reason it may be written through is stated at the
-    ## `prov_array_param()` reader in `sema_write_mutability`. Until #626 it borrowed the range-slice
-    ## view's "mutable backing" value, and the only thing holding that alias together was that both
-    ## concepts happened to want the same answer from that one reader.
-    mut pprov : u8 = 0
-    if pm.pmode == 1 { pprov = prov_array_param() }
-    lvec_push(locals, Local(ns = pm.ns, nl = pm.nl, tag = pbyte, prov = pprov, tns = pt.ns, tnl = pt.nl))
-    pp = pm.next
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        mut pt := resolve_ty(src, pm.ts, pm.tl, decls, upto)
+        mut ptag : TyKind = pt.kind
+        ## Issue #557 — an enum parameter whose type is declared in a later-sorted module; recorded under
+        ## the hidden enum tag 10 so only `value_agg_ty`'s consumers see it (see `late_enum_ann_ty`).
+        lpe := late_enum_ann_ty(src, pm.ts, pm.tl, decls, upto)
+        if kind_is_unknown(ptag) and kind_is_enum(lpe.kind) { ptag = TyKind.TyHiddenEnum; pt = lpe }
+        ## Issue #656 — the POINTER twin of the line above: `e : ptr(E)` whose pointee enum is declared in
+        ## a LATER-sorted module. The tag is already 5 and stays 5; only the pointee NAME the `upto` prefix
+        ## could not see is filled in, so the recording becomes identical to the one an earlier-sorted
+        ## enum's module already produces (see `late_enum_ptr_ty`).
+        lpp := late_enum_ptr_ty(src, pm.ts, pm.tl, decls, upto)
+        if kind_is_ptr(ptag) and pt.nl == 0 and kind_is_ptr(lpp.kind) { pt = lpp }
+        mut pbyte := tag_of_kind(ptag)
+        if pm.pmode == 2 { pbyte = tag_with_mut(pbyte) }
+        ## Array-shaped parameters are already caller-backed places in the existing ABI (pmode 1: a
+        ## `[T; N]` and the tuple parameters that share that representation); keep their element writes
+        ## compatible with the pre-existing aggregate-parameter contract. Scalar parameters still require
+        ## the explicit `out`/`in out` pmode 2 marker below. This is one half of a pair: the concept has
+        ## its OWN provenance value since #626, and the reason it may be written through is stated at the
+        ## `prov_array_param()` reader in `sema_write_mutability`. Until #626 it borrowed the range-slice
+        ## view's "mutable backing" value, and the only thing holding that alias together was that both
+        ## concepts happened to want the same answer from that one reader.
+        mut pprov : u8 = 0
+        if pm.pmode == 1 { pprov = prov_array_param() }
+        lvec_push(locals, Local(ns = pm.ns, nl = pm.nl, tag = pbyte, prov = pprov, tns = pt.ns, tnl = pt.nl))
+        pp = pm.next
+      }
+      None => { break }
+    }
   }
   ## Keep the scalar error code in a frame home while the internal Result path is active. The lean
   ## lower otherwise loses the sibling failure-state write when the Err payload is discarded.
@@ -13353,11 +13431,16 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   mut failed := false
   mut pbad := 0
   mut pp0 := d.params_head
-  while pp0 != 0 {
-    pm0 := deref(param_p(pp0))
-    pt0 := resolve_ty(src, pm0.ts, pm0.tl, decls, upto)
-    if kind_is_struct(pt0.kind) and layout_kind_is_byte(layout_kind(decls, src, pt0.ns, pt0.nl, deref(a))) and std_struct_has_aggregate_field(decls, src, pt0.ns, pt0.nl, deref(a)) { pbad = pm0.ns }
-    pp0 = pm0.next
+  loop {
+    match pp0 {
+      Some(pp0q) => {
+        pm0 := deref(param_p(pp0q))
+        pt0 := resolve_ty(src, pm0.ts, pm0.tl, decls, upto)
+        if kind_is_struct(pt0.kind) and layout_kind_is_byte(layout_kind(decls, src, pt0.ns, pt0.nl, deref(a))) and std_struct_has_aggregate_field(decls, src, pt0.ns, pt0.nl, deref(a)) { pbad = pm0.ns }
+        pp0 = pm0.next
+      }
+      None => { break }
+    }
   }
   if pbad != 0 { failed = true; err = located_err(pbad) }
   no_tail := expr_is_no_tail(d.value)
@@ -13547,7 +13630,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
 ## no expressions to check (skip).
 check_decl := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> Result(usize, CheckErr) {
   ptrint_probe_decl(d)
-  SEMA_DECL_PARAMS = unchecked bitcast(usize, d.params_head)
+  SEMA_DECL_PARAMS = d.params_head
   if d.kind == 1 { return check_fn(d, decls, upto, src, a) }
   if d.kind == 0 {
     mut failed_word := 0
@@ -13633,14 +13716,28 @@ same_fn_signature := fn(a0 : Decl, b0 : Decl, src : ptr(u8), ar : ptr(mut rt::Ar
   if a0.arity != b0.arity { return false }
   mut ap := a0.params_head
   mut bp := b0.params_head
-  while ap != 0 and bp != 0 {
-    pa := deref(param_p(ap))
-    pb := deref(param_p(bp))
-    if not streq(src, pa.ts, pa.tl, pb.ts, pb.tl) { return false }
-    ap = pa.next
-    bp = pb.next
+  mut same := true
+  loop {
+    match ap {
+      Some(apq) => {
+        match bp {
+          Some(bpq) => {
+            pa := deref(param_p(apq))
+            pb := deref(param_p(bpq))
+            if not streq(src, pa.ts, pa.tl, pb.ts, pb.tl) { same = false; break }
+            ap = pa.next
+            bp = pb.next
+          }
+          None => { same = false; break }
+        }
+      }
+      None => {
+        if param_any(bp) { same = false }
+        break
+      }
+    }
   }
-  ap == 0 and bp == 0
+  same
 }
 
 ## Selected target projections used by declaration-guard folding. The CLI publishes the complete
@@ -13985,11 +14082,13 @@ sema_aggregate_conversion_exists := fn(decls : ptr(rt::Vec), upto : usize, src :
     if d.kind == 1 and d.is_fn and not d.is_generic and d.arity == 1 and sema_fn_is_convert(src, d.name_start, d.name_len) {
       rb := base_type_name(src, d.ret_ts, d.ret_tl)
       if rb.n != 0 and streq(src, rb.s, rb.n, cs, cl) and sema_decl_visible_from(src, d, caller_s, caller_l) {
-        pm := d.params_head
-        if pm != 0 {
-          p0 := deref(param_p(pm))
-          pb := base_type_name(src, p0.ts, p0.tl)
-          if pb.n != 0 and streq(src, pb.s, pb.n, agg.ns, agg.nl) { return true }
+        match d.params_head {
+          Some(pmq) => {
+            p0 := deref(param_p(pmq))
+            pb := base_type_name(src, p0.ts, p0.tl)
+            if pb.n != 0 and streq(src, pb.s, pb.n, agg.ns, agg.nl) { return true }
+          }
+          None => {}
         }
       }
     }
@@ -14002,14 +14101,18 @@ sema_aggregate_conversion_exists := fn(decls : ptr(rt::Vec), upto : usize, src :
 ## parameter name and re-read the top-level components from source. Arrays, nested tuples and other
 ## parameter forms deliberately return false.
 sema_two_word_tuple_param := fn(d : Decl, src : ptr(u8)) -> bool {
-  if d.params_head == 0 { return false }
-  p0 := deref(param_p(d.params_head))
-  open := param_tuple_open_at(src, p0.ns, p0.nl)
-  if open < 0 { return false }
-  t0 := typearg_at(src, usize(open), 0, 0)
-  t1 := typearg_at(src, usize(open), 0, 1)
-  t2 := typearg_at(src, usize(open), 0, 2)
-  t0.n != 0 and t1.n != 0 and t2.n == 0
+  match d.params_head {
+    Some(p0q) => {
+      p0 := deref(param_p(p0q))
+      open := param_tuple_open_at(src, p0.ns, p0.nl)
+      if open < 0 { return false }
+      t0 := typearg_at(src, usize(open), 0, 0)
+      t1 := typearg_at(src, usize(open), 0, 1)
+      t2 := typearg_at(src, usize(open), 0, 2)
+      t0.n != 0 and t1.n != 0 and t2.n == 0
+    }
+    None => { false }
+  }
 }
 ## True iff an in-scope, non-generic one-parameter @convert accepts the bounded two-word tuple and
 ## returns the builtin target `[cs,cl)`. This is the tuple counterpart of the landed named-aggregate
@@ -14251,7 +14354,7 @@ sema_guard_pred_resolve := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
 ## positionally to the call args `ah`, each first resolved through the caller instance's `tp`), then recurse
 ## `sema_guard_fold_inst`. Byte-mirror of `lower::guard_pred_call_fold`; the `SGuardTP` is built as THIS fn's
 ## OWN top-level local (the lean-lower aggregate-local frame-home rule the lower's helper also observes).
-sema_guard_pred_call_fold := fn(be : ptr(Expr), ph : ptr(mut Param), ah : usize, tp : ptr(SGuardTP), decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> i64 {
+sema_guard_pred_call_fold := fn(be : ptr(Expr), ph : Option(ptr(mut Param)), ah : usize, tp : ptr(SGuardTP), decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> i64 {
   mut i1s := 0
   mut i1l := 0
   mut t1s := 0
@@ -14267,19 +14370,24 @@ sema_guard_pred_call_fold := fn(be : ptr(Expr), ph : ptr(mut Param), ah : usize,
   mut pp := ph
   mut ag := ah
   mut slot := 0
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if str_at((src + pm.ts), pm.tl) == "type" and ag != 0 {
-      aa := deref(arg_p(ag))
-      av := expr_var_span(aa.e)
-      rv := sema_guard_resolve_tp(tp, src, av.s, av.n)
-      if slot == 0 { i1s = pm.ns ; i1l = pm.nl ; t1s = rv.s ; t1l = rv.n }
-      else if slot == 1 { i2s = pm.ns ; i2l = pm.nl ; t2s = rv.s ; t2l = rv.n }
-      else if slot == 2 { i3s = pm.ns ; i3l = pm.nl ; t3s = rv.s ; t3l = rv.n }
-      slot += 1
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if str_at((src + pm.ts), pm.tl) == "type" and ag != 0 {
+          aa := deref(arg_p(ag))
+          av := expr_var_span(aa.e)
+          rv := sema_guard_resolve_tp(tp, src, av.s, av.n)
+          if slot == 0 { i1s = pm.ns ; i1l = pm.nl ; t1s = rv.s ; t1l = rv.n }
+          else if slot == 1 { i2s = pm.ns ; i2l = pm.nl ; t2s = rv.s ; t2l = rv.n }
+          else if slot == 2 { i3s = pm.ns ; i3l = pm.nl ; t3s = rv.s ; t3l = rv.n }
+          slot += 1
+        }
+        if ag != 0 { agn := deref(arg_p(ag)) ; ag = agn.next }
+        pp = pm.next
+      }
+      None => { break }
     }
-    if ag != 0 { agn := deref(arg_p(ag)) ; ag = agn.next }
-    pp = pm.next
   }
   itp := SGuardTP(gp_s = i1s, gp_l = i1l, its = t1s, itl = t1l,
                   gp2_s = i2s, gp2_l = i2l, its2 = t2s, itl2 = t2l,
@@ -14393,21 +14501,26 @@ sema_when_guard_false_span := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize
   mut slot := 0
   mut pp := gd.params_head
   mut ag := ah
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if str_at((src + pm.ts), pm.tl) == "type" and ag != 0 {
-      aa := deref(arg_p(ag))
-      av0 := expr_var_span(aa.e)
-      mut av := av0
-      tv := tuple_typearg_span(aa.e, src)
-      if tv.n != 0 { av = VSpan(s = tv.s, n = tv.n) }
-      if slot == 0 { i1s = pm.ns ; i1l = pm.nl ; t1s = av.s ; t1l = av.n }
-      else if slot == 1 { i2s = pm.ns ; i2l = pm.nl ; t2s = av.s ; t2l = av.n }
-      else if slot == 2 { i3s = pm.ns ; i3l = pm.nl ; t3s = av.s ; t3l = av.n }
-      slot += 1
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if str_at((src + pm.ts), pm.tl) == "type" and ag != 0 {
+          aa := deref(arg_p(ag))
+          av0 := expr_var_span(aa.e)
+          mut av := av0
+          tv := tuple_typearg_span(aa.e, src)
+          if tv.n != 0 { av = VSpan(s = tv.s, n = tv.n) }
+          if slot == 0 { i1s = pm.ns ; i1l = pm.nl ; t1s = av.s ; t1l = av.n }
+          else if slot == 1 { i2s = pm.ns ; i2l = pm.nl ; t2s = av.s ; t2l = av.n }
+          else if slot == 2 { i3s = pm.ns ; i3l = pm.nl ; t3s = av.s ; t3l = av.n }
+          slot += 1
+        }
+        if ag != 0 { agn := deref(arg_p(ag)) ; ag = agn.next }
+        pp = pm.next
+      }
+      None => { break }
     }
-    if ag != 0 { agn := deref(arg_p(ag)) ; ag = agn.next }
-    pp = pm.next
   }
   tp := SGuardTP(gp_s = i1s, gp_l = i1l, its = t1s, itl = t1l,
                  gp2_s = i2s, gp2_l = i2l, its2 = t2s, itl2 = t2l,
@@ -15405,13 +15518,18 @@ sema_param_array_open := fn(src : ptr(u8), ts : usize) -> usize {
 sema_nested_array_param_bad := fn(d : Decl, src : ptr(u8)) -> usize {
   if d.kind != 1 { return 0 }
   mut pp := d.params_head
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if pm.pmode == 1 and pm.tl == 1 and str_at((src + pm.ts), 1) == "[" {
-      open := sema_param_array_open(src, pm.ts)
-      if open != 0 { return open }
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if pm.pmode == 1 and pm.tl == 1 and str_at((src + pm.ts), 1) == "[" {
+          open := sema_param_array_open(src, pm.ts)
+          if open != 0 { return open }
+        }
+        pp = pm.next
+      }
+      None => { break }
     }
-    pp = pm.next
   }
   0
 }
@@ -15422,14 +15540,19 @@ sema_nested_array_param_bad := fn(d : Decl, src : ptr(u8)) -> usize {
 sema_slice_sugar_reject := fn(d : Decl, src : ptr(u8)) -> usize {
   if d.kind != 1 { return 0 }
   mut pp := d.params_head
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if pm.pmode == 1 {
-      open := sema_param_array_open(src, pm.ts)
-      if open != 0 and sema_slice_sugar_at(src, open) { return located_err(open) }
-      if open == 0 and sema_slice_sugar_at(src, pm.ts) { return located_err(d.name_start) }
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if pm.pmode == 1 {
+          open := sema_param_array_open(src, pm.ts)
+          if open != 0 and sema_slice_sugar_at(src, open) { return located_err(open) }
+          if open == 0 and sema_slice_sugar_at(src, pm.ts) { return located_err(d.name_start) }
+        }
+        pp = pm.next
+      }
+      None => { break }
     }
-    pp = pm.next
   }
   if d.ret_tl != 0 and sema_slice_sugar_at(src, d.ret_ts) {
     if d.ret_ts != 0 { return located_err(d.ret_ts) }
@@ -15467,7 +15590,7 @@ sema_type_alias_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
   false
 }
 
-sema_signature_type_head_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
+sema_signature_type_head_unknown := fn(ph : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
   if n == 0 or not _sident1(src, s) { return 0 }
   mut i := 1
   while i < n {
@@ -15500,11 +15623,16 @@ sema_signature_type_head_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec)
 sema_signature_type_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
   if d.is_fn == false { return 0 }
   mut pp := d.params_head
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    r0 := sema_signature_type_head_unknown(d.params_head, decls, src, pm.ts, pm.tl)
-    if r0 != 0 { return r0 }
-    pp = pm.next
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        r0 := sema_signature_type_head_unknown(d.params_head, decls, src, pm.ts, pm.tl)
+        if r0 != 0 { return r0 }
+        pp = pm.next
+      }
+      None => { break }
+    }
   }
   if d.ret_tl != 0 {
     r1 := sema_signature_type_head_unknown(d.params_head, decls, src, d.ret_ts, d.ret_tl)
@@ -15520,7 +15648,7 @@ sema_signature_type_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) 
 ## for the pointee of a `ptr(…)` annotation, bare or path-qualified (see the qualified branch for how
 ## little a path is trusted). `ph` is the enclosing function's parameter list, so its own `T : type`
 ## parameters stay names rather than references.
-sema_local_ann_type_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> usize {
+sema_local_ann_type_unknown := fn(ph : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize) -> usize {
   if tl == 0 { return 0 }
   r0 := sema_signature_type_head_unknown(ph, decls, src, ts, tl)
   if r0 != 0 { return r0 }
@@ -15601,11 +15729,16 @@ qualified_generic_span_reject := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : us
 sema_qualified_generic_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
   if d.kind != 1 { return 0 }
   mut pp := d.params_head
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    r := qualified_generic_span_reject(decls, src, pm.ts, pm.tl)
-    if r != 0 { return r }
-    pp = pm.next
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        r := qualified_generic_span_reject(decls, src, pm.ts, pm.tl)
+        if r != 0 { return r }
+        pp = pm.next
+      }
+      None => { break }
+    }
   }
   if d.ret_tl != 0 { return qualified_generic_span_reject(decls, src, d.ret_ts, d.ret_tl) }
   0
@@ -16062,17 +16195,22 @@ sema_vis_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, c
 ## own signature a §3 violation (measured: 27 corpus fixtures). The caller passes the param list
 ## explicitly, so the body walk (which has no enclosing declaration) can pass 0; the signature fence
 ## `sema_signature_type_head_unknown` asks through this one test too (#697 removed its private copy).
-sema_param_type_name := fn(ph : ptr(mut Param), src : ptr(u8), s : usize, n : usize) -> bool {
+sema_param_type_name := fn(ph : Option(ptr(mut Param)), src : ptr(u8), s : usize, n : usize) -> bool {
   mut pp := ph
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, s, n) { return true }
-    pp = pm.next
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if str_at((src + pm.ts), pm.tl) == "type" and streq(src, pm.ns, pm.nl, s, n) { return true }
+        pp = pm.next
+      }
+      None => { break }
+    }
   }
   false
 }
 
-sema_vis_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, cs : usize, cl : usize, ph : ptr(mut Param)) -> usize {
+sema_vis_type_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, cs : usize, cl : usize, ph : Option(ptr(mut Param))) -> usize {
   if tl == 0 { return 0 }
   bn := base_type_name(src, ts, tl)
   if bn.n == 0 { return 0 }
@@ -16392,11 +16530,16 @@ sema_vis_declared := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
   while i < cnt {
     d := deref(decl_get(decls, i))
     mut pp := d.params_head
-    while pp != 0 {
-      pm := deref(param_p(pp))
-      r0 := sema_vis_type_span(decls, src, pm.ts, pm.tl, d.mod_start, d.mod_len, d.params_head)
-      if r0 != 0 { return r0 }
-      pp = pm.next
+    loop {
+      match pp {
+        Some(ppq) => {
+          pm := deref(param_p(ppq))
+          r0 := sema_vis_type_span(decls, src, pm.ts, pm.tl, d.mod_start, d.mod_len, d.params_head)
+          if r0 != 0 { return r0 }
+          pp = pm.next
+        }
+        None => { break }
+      }
     }
     if d.is_fn and d.ret_tl != 0 {
       r1 := sema_vis_type_span(decls, src, d.ret_ts, d.ret_tl, d.mod_start, d.mod_len, d.params_head)
@@ -16534,7 +16677,7 @@ sema_vis_all_bodies := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::A
         mut fs := 0
         mut locals := lvec_new(a, 16, ptr(fw), ptr(fs), d.mod_start, d.mod_len)
         mut pp := d.params_head
-        while pp != 0 { pm := deref(param_p(pp)); sema_collect_name(ptr(locals), src, pm.ns, pm.nl); pp = pm.next }
+        loop { match pp { Some(ppq) => { pm := deref(param_p(ppq)); sema_collect_name(ptr(locals), src, pm.ns, pm.nl); pp = pm.next }; None => { break } } }
         sema_collect_stmts(d.body_stmts, ptr(locals), src, a)
         vr0 := sema_vis_stmts(d.body_stmts, decls, src, d.mod_start, d.mod_len, ptr(locals), deref(locals).len, a)
         if vr0 != 0 { return sema_visibility_err(vr0) }
@@ -16730,6 +16873,28 @@ sema_enum_global_array_use_bad := fn(base : ptr(Expr), decls : ptr(rt::Vec), upt
   0
 }
 
+## Push each parameter of a lambda's `Param` list that is not already a local onto `locals`; return the
+## new local count. The list head is a parameter (not a copy of a match binding) so the cursor walk below is
+## the ordinary typed `Option(ptr(mut Param))` walk.
+sema_lambda_push_params := fn(h : Option(ptr(mut Param)), locals : ptr(LVec), nloc : usize, src : ptr(u8)) -> usize {
+  mut cnt := nloc
+  mut lp := h
+  loop {
+    match lp {
+      Some(lpq) => {
+        pm := deref(param_p(lpq))
+        if not local_in(locals, cnt, src, pm.ns, pm.nl) {
+          lvec_push(deref(locals), Local(ns = pm.ns, nl = pm.nl, tag = 0, prov = 0, tns = 0, tnl = 0))
+          cnt += 1
+        }
+        lp = pm.next
+      }
+      None => { break }
+    }
+  }
+  cnt
+}
+
 ## Context-aware structural walk for the global enum-array boundary. `allow_root` is used only for the
 ## supported whole-element root forms: a binding RHS, a write place, or a match scrutinee. Every nested
 ## expression is a VALUE consumer, so `f(GE[i])`, arithmetic, returns, and branch values are rejected
@@ -16832,18 +16997,9 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
       sema_enum_global_array_value_bad(ix, decls, upto, src, locals, nloc, a, false)
     }
     Expr::Unchecked(inner) => { sema_enum_global_array_value_bad(inner, decls, upto, src, locals, nloc, a, false) }
-    Expr::Lambda(pos, ph, rts, rtl, bh, value) => {
+    Expr::Lambda(pos, lamph, rts, rtl, bh, value) => {
       lambda_base := nloc
-      mut lambda_cnt := nloc
-      mut lp := ph
-      while lp != 0 {
-        pm := deref(param_p(lp))
-        if not local_in(locals, lambda_cnt, src, pm.ns, pm.nl) {
-          lvec_push(deref(locals), Local(ns = pm.ns, nl = pm.nl, tag = 0, prov = 0, tns = 0, tnl = 0))
-          lambda_cnt += 1
-        }
-        lp = pm.next
-      }
+      lambda_cnt := sema_lambda_push_params(lamph, locals, nloc, src)
       bad10 := sema_enum_global_array_value_bad_stmts(bh, decls, upto, src, locals, lambda_cnt, a)
       if bad10 != 0 { lvec_truncate(deref(locals), lambda_base); return bad10 }
       bad11 := sema_enum_global_array_value_bad(value, decls, upto, src, locals, lambda_cnt, a, false)
@@ -17049,7 +17205,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       r
     }
     Expr::StructLit(ss, sl, nf, fh) => {
-      mut r := sema_vis_type_span(decls, src, ss, sl, cs, cl, unchecked bitcast(ptr(mut Param), 0))
+      mut r := sema_vis_type_span(decls, src, ss, sl, cs, cl, Option.None)
       mut g := fh
       while g != 0 and r == 0 {
         ga := deref(arg_p(g))
@@ -17059,7 +17215,7 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       r
     }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
-      mut r := sema_vis_type_span(decls, src, es, el, cs, cl, unchecked bitcast(ptr(mut Param), 0))
+      mut r := sema_vis_type_span(decls, src, es, el, cs, cl, Option.None)
       mut g := ph
       while g != 0 and r == 0 {
         ga := deref(arg_p(g))

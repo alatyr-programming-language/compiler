@@ -403,7 +403,7 @@ pub Expr := enum {
   ## FN-6 function VALUE `fn(sig){body}` in expression position. Fields mirror a fn Decl: fnpos (the
   ## `fn` src offset = unique label id), params head, ret-type span, body stmt head, trailing value. A
   ## driver-level pass (`driver`'s lift) rewrites it to FnRef + appends a synthetic fn decl.
-  Lambda(usize, ptr(mut Param), usize, usize, usize, ptr(Expr)),
+  Lambda(usize, Option(ptr(mut Param)), usize, usize, usize, ptr(Expr)),
   ## Reference to a lifted lambda as a value → code pointer `leaq <mod>__lam<fnpos>(%rip)`. Leaf.
   FnRef(usize, usize, usize),
   ## A representation-significant `bitcast` is PRESERVED rather than identity-erased. Fields are the
@@ -545,7 +545,7 @@ pub bind_count := fn(h : Option(ptr(mut Bind))) -> usize {
 ## (`value` = the trailing return expr, `body_stmts` = the body statement list,
 ## `params_head`/`arity` the params); 2 a **struct** `Name := struct { … }`; 3 an **enum**
 ## `Name := enum { … }` (`fields_head` = the field/variant list head). `is_fn` mirrors
-## `kind == 1`. The parameters are an **arena-linked `Param` list** (`params_head`, 0 = none),
+## `kind == 1`. The parameters are an **arena-linked `Param` list** (`params_head`, `None` = none),
 ## `arity` their count — up to **6** (the System V integer argument registers); >6 would need
 ## stack args (deferred).
 ## GENERICS tier: a **generic function** has a leading comptime type
@@ -573,7 +573,7 @@ pub Decl := struct {
   value : ptr(Expr),
   is_fn : bool, kind : u8, arity : usize,
   is_generic : bool,            ## generic fn (first param `T : type`) OR generic struct `Name(T)`; monomorphized per type
-  params_head : ptr(mut Param),  ## fn params: arena-linked Param list head (0/null = none)
+  params_head : Option(ptr(mut Param)),  ## fn params: arena-linked Param list head (`None` = none)
   body_stmts : ptr(mut Stmt),   ## fn body: arena-linked Stmt list head (0/null = none); `value` is the trailing return expr
   fields_head : Option(ptr(mut FieldDecl)),  ## struct field / enum variant list head (`None` = none)
   ret_ts : usize,               ## fn return type span start (the `R` of `-> R`); 0/0 = none
@@ -667,13 +667,25 @@ pub fld_any := fn(h : Option(ptr(mut FieldDecl))) -> bool {
 ## For a POINTER param `p : ptr([mut] T)`, `ts`/`tl` is `ptr` (so sema/lower see a pointer) and
 ## `pps`/`ppl` is the POINTEE type span `T` (0/0 for a non-pointer) — lower uses it so a
 ## `match deref(p)` over a `ptr(Enum)` resolves the enum's variants (the arena-AST shape).
-pub Param := struct { ns : usize, nl : usize, next : ptr(mut Param), ts : usize, tl : usize, pmode : u8, pps : usize, ppl : usize }
+pub Param := struct { ns : usize, nl : usize, next : Option(ptr(mut Param)), ts : usize, tl : usize, pmode : u8, pps : usize, ppl : usize }
 
-## `Param`-list plumbing (§6 ptr-typing). `Decl.params_head` / `Param.next` are `ptr(mut Param)`;
-## `param_p` is the typed IDENTITY accessor (walks read `deref(param_p(h))` so the pointee resolves via
-## the return-type fallback), `param_null` the empty/end sentinel. See `fld_p`/`fld_null` for the recipe.
+## `Param`-list plumbing (§6 ptr-typing, strict forms §1). `Decl.params_head` / `Param.next` are
+## `Option(ptr(mut Param))` (`None` = end); `param_p` is the typed IDENTITY accessor applied to a `Some`
+## payload (walks read `deref(param_p(q))`). See `fld_p` / `fld_any` / `fld_at` for the recipe.
 pub param_p := fn(p : ptr(mut Param)) -> ptr(mut Param) { p }
-pub param_null := fn() -> ptr(mut Param) { unchecked bitcast(ptr(mut Param), 0) }
+pub param_any := fn(h : Option(ptr(mut Param))) -> bool { match h { Some(_q) => { true }; None => { false } } }
+pub param_at := fn(h : Option(ptr(mut Param)), msg : str) -> ptr(mut Param) {
+  match h { Some(q) => { q }; None => { panic(msg) } }
+}
+## Are `x` and `y` the SAME parameter list (both absent, or the same head node)?
+pub param_same := fn(x : Option(ptr(mut Param)), y : Option(ptr(mut Param))) -> bool {
+  mut r := false
+  match x {
+    Some(xp) => { match y { Some(yp) => { r = xp == yp }; None => {} } }
+    None => { match y { Some(_yp) => {}; None => { r = true } } }
+  }
+  r
+}
 
 ## A function-call **argument** (arena-linked): the argument expression + `next` (0 = end).
 ## Walked in declaration order — argument `i` is delivered in System V integer register `i`.

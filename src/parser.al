@@ -16,7 +16,7 @@
 ## 28 != 30 ; 38 => .
 vec := alloc::vec
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, FInit, LabelSpan, Param, Stmt, Token) := ast
-(param_p, param_null) := ast
+(param_p) := ast
 stmt_null := ast::stmt_null
 arm_p := ast::arm_p
 bind_count := ast::bind_count
@@ -336,7 +336,7 @@ pub pnode := fn(a : ptr(mut rt::Arena), val : Param) -> ptr(mut Param) {
 ## param-link. `pub` so the driver's FN-6 capture pass can link appended capture params HERE (in the
 ## parser module) — the identical store mis-lowers in the driver module (a cross-module codegen quirk,
 ## the mirror of the driver-reads-decls-fine / parser-doesn't one), writing a pointer instead of copying.
-pub set_param_next := fn(a : ptr(mut rt::Arena), h : ptr(mut Param), nx : ptr(mut Param)) {
+pub set_param_next := fn(a : ptr(mut rt::Arena), h : ptr(mut Param), nx : Option(ptr(mut Param))) {
   pm := deref(param_p(h))
   upd := Param(ns = pm.ns, nl = pm.nl, next = nx, ts = pm.ts, tl = pm.tl, pmode = pm.pmode, pps = pm.pps, ppl = pm.ppl)
   deref(param_p(h)) = upd
@@ -747,16 +747,21 @@ pub clone_stmts := fn(a : ptr(mut rt::Arena), head : ptr(mut Stmt), ok : ptr(mut
 }
 
 ## Clone a Param chain (fresh nodes; names/types/pmode copied verbatim), linked via `set_param_next`.
-pub clone_params := fn(a : ptr(mut rt::Arena), ph : ptr(mut Param), ok : ptr(mut bool)) -> ptr(mut Param) {
-  mut head := param_null()
-  mut tail := param_null()
+pub clone_params := fn(a : ptr(mut rt::Arena), ph : Option(ptr(mut Param)), ok : ptr(mut bool)) -> Option(ptr(mut Param)) {
+  mut head : Option(ptr(mut Param)) = Option.None
+  mut tail : Option(ptr(mut Param)) = Option.None
   mut p := ph
-  while unchecked bitcast(usize, p) != 0 {
-    pm := deref(param_p(p))
-    np := pnode(a, Param(ns = pm.ns, nl = pm.nl, next = unchecked bitcast(ptr(mut Param), 0), ts = pm.ts, tl = pm.tl, pmode = pm.pmode, pps = pm.pps, ppl = pm.ppl))
-    if unchecked bitcast(usize, head) == 0 { head = np } else { set_param_next(a, tail, np) }
-    tail = np
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        np := pnode(a, Param(ns = pm.ns, nl = pm.nl, next = Option.None, ts = pm.ts, tl = pm.tl, pmode = pm.pmode, pps = pm.pps, ppl = pm.ppl))
+        match tail { Some(tl0) => { set_param_next(a, tl0, Option.Some(np)) }; None => { head = Option.Some(np) } }
+        tail = Option.Some(np)
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   head
 }
@@ -1511,24 +1516,16 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       }
       llparen := cur(pc).start            ## the `(` that opens the list (for the unclosed reject)
       pc.idx = pc.idx + 1                 ## '('
-      mut lphead := param_null()
-      mut lptail := param_null()
+      mut lphead : Option(ptr(mut Param)) = Option.None
+      mut lptail : Option(ptr(mut Param)) = Option.None
       while cur(pc).kind != 11 and cur(pc).kind != 0 {
         lpn := cur(pc); pc.idx = pc.idx + 1     ## param name
         pc.idx = pc.idx + 1                     ## ':'
         lpt := cur(pc)                          ## type head token
         while cur(pc).kind != 9 and cur(pc).kind != 11 and cur(pc).kind != 0 { pc.idx = pc.idx + 1 }
-        lpnew := pnode(pc.arena, Param(ns = lpn.start, nl = lpn.len, next = unchecked bitcast(ptr(mut Param), 0), ts = lpt.start, tl = lpt.len, pmode = 0, pps = 0, ppl = 0))
-        if unchecked bitcast(usize, lphead) == 0 { lphead = lpnew } else {
-          lold := deref(lptail)
-          ## build the updated Param in a LOCAL first, THEN store — a `deref(ptr) = Param(...)` inline
-          ## struct-ctor store mis-lowers in the seed (the store-through-pointer scar), so the `.next`
-          ## link was silently dropped and a 2+-param lambda saw only its first parameter (§1 spill
-          ## count reads `d.arity`). Mirrors the top-level fn param-link (see below at ~2819).
-          lupd := Param(ns = lold.ns, nl = lold.nl, next = lpnew, ts = lold.ts, tl = lold.tl, pmode = lold.pmode, pps = lold.pps, ppl = lold.ppl)
-          deref(lptail) = lupd
-        }
-        lptail = lpnew
+        lpnew := pnode(pc.arena, Param(ns = lpn.start, nl = lpn.len, next = Option.None, ts = lpt.start, tl = lpt.len, pmode = 0, pps = 0, ppl = 0))
+        match lptail { Some(lt0) => { deref(lt0).next = Option.Some(lpnew) }; None => { lphead = Option.Some(lpnew) } }
+        lptail = Option.Some(lpnew)
         if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ','
       }
       ## The list MUST be closed by `)` — see the top-level fn decl for why this is reported as the
@@ -5405,7 +5402,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ## decl, so `check`'s per-limit substring scan (`span_has_limit`) can't false-match a normal decl.
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = lts, name_len = ltl, value = ph,
-      is_fn = false, kind = 0, arity = 99, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      is_fn = false, kind = 0, arity = 99, is_generic = false, params_head = Option.None,
       body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = lts, ret_tl = ltl,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
@@ -5577,7 +5574,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     pc.idx = pc.idx + 1                       ## '}'
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = ds, name_len = dl, value = tbody,
-      is_fn = true, kind = 5, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      is_fn = true, kind = 5, arity = 0, is_generic = false, params_head = Option.None,
       body_stmts = tstmts, fields_head = Option.None, ret_ts = trt.start, ret_tl = trt.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
@@ -5606,7 +5603,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     lastt := tok_at(pc, pc.idx - 1)
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = 0, name_len = 0, value = php,
-      is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
       body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = gopen.start, ret_tl = lastt.start + lastt.len - gopen.start,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
@@ -5648,7 +5645,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     }
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = aroot,
-      is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
       body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = awhen, alias_ts = 0, alias_tl = 0)))
   }
@@ -5674,7 +5671,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ph := newnode(pc.arena, Expr.Num(0, 0, 0))
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = ph,
-      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = Option.None,
       body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = ut.start, ret_tl = ut.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
@@ -5735,7 +5732,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       ph := newnode(pc.arena, Expr.Num(0, 0, 0))
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = ph,
-        is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+        is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
         body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = als_ts, ret_tl = als_tl,
         mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
@@ -5827,7 +5824,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     }
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = rph,
-      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = Option.None,
       body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = ut.start, ret_tl = utl,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
@@ -5910,8 +5907,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ## (the `: T` annotation is skipped — types are sema's job). Up to 6 (the System V
     ## integer argument registers); a 7th+ param would need stack args (deferred).
     mut arity := 0
-    mut phead := param_null()
-    mut ptail := param_null()
+    mut phead : Option(ptr(mut Param)) = Option.None
+    mut ptail : Option(ptr(mut Param)) = Option.None
     ## saw a `comptime` VALUE parameter (`comptime N : u64`, Comptime §10) anywhere in the list —
     ## recorded so a fn that is NOT a type-function carrying one can fail LOUD below (TYP-10
     ## slice A implements comptime value params on type-functions only).
@@ -6112,13 +6109,9 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       ## an ARRAY param carries its static length N in `pps` (no pointee/default there) → the lower reads
       ## it for the `a[i]` bounds check.
       if p_is_arr { fpps = p_arrlen }
-      pnew := pnode(pc.arena, Param(ns = pn.start, nl = pn.len, next = unchecked bitcast(ptr(mut Param), 0), ts = pts, tl = ptl, pmode = p_pmode, pps = fpps, ppl = ppl))
-      if unchecked bitcast(usize, phead) == 0 { phead = pnew } else {
-        old := deref(ptail)
-        upd := Param(ns = old.ns, nl = old.nl, next = pnew, ts = old.ts, tl = old.tl, pmode = old.pmode, pps = old.pps, ppl = old.ppl)
-        deref(ptail) = upd
-      }
-      ptail = pnew
+      pnew := pnode(pc.arena, Param(ns = pn.start, nl = pn.len, next = Option.None, ts = pts, tl = ptl, pmode = p_pmode, pps = fpps, ppl = ppl))
+      match ptail { Some(pt0) => { deref(pt0).next = Option.Some(pnew) }; None => { phead = Option.Some(pnew) } }
+      ptail = Option.Some(pnew)
       arity += 1
       if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between params
     }
@@ -6141,10 +6134,15 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ## `src/`'s own generics all have a single leading `T : type`, so this stays fixpoint-neutral.
     mut is_generic := false
     mut gp := phead
-    while gp != 0 {
-      gpm := deref(param_p(gp))
-      if str_eq(str_at(pc.src + gpm.ts, gpm.tl), "type") { is_generic = true }
-      gp = gpm.next
+    loop {
+      match gp {
+        Some(gpq) => {
+          gpm := deref(param_p(gpq))
+          if str_eq(str_at(pc.src + gpm.ts, gpm.tl), "type") { is_generic = true }
+          gp = gpm.next
+        }
+        None => { break }
+      }
     }
     ## A COMPTIME VALUE parameter on a glyph-OPERATOR fn (`@inline + := fn(comptime N : u64,
     ## a : uint(N), b : uint(N)) -> uint(N)`, TYP-10 slice B) also makes the decl GENERIC: it is
@@ -6397,7 +6395,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     placeholder := newnode(pc.arena, Expr.Num(0, 0, 0))
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = placeholder,
-      is_fn = false, kind = k, arity = 0, is_generic = is_gen_struct, params_head = unchecked bitcast(ptr(mut Param), 0),
+      is_fn = false, kind = k, arity = 0, is_generic = is_gen_struct, params_head = Option.None,
       body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = fhead, ret_ts = 0, ret_tl = 0,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = swhen, alias_ts = 0, alias_tl = 0)))
   }
@@ -6414,7 +6412,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ph := newnode(pc.arena, Expr.Num(0, 0, 0))
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = ph,
-      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+      is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = Option.None,
       body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = ut.start, ret_tl = ut.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
@@ -6486,7 +6484,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
   if alias_out_tl == 0 { alias_out_ts = plain_ts; alias_out_tl = plain_tl }
   Result(usize, ParseErr).Ok(dnode(da, Decl(
     name_start = name.start, name_len = name.len, value = root,
-    is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+    is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
     body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
     mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = vwhen,
     alias_ts = alias_out_ts, alias_tl = alias_out_tl)))

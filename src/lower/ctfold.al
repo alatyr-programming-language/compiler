@@ -35,6 +35,7 @@ arg_p := ast::arg_p
 arm_p := ast::arm_p
 fld_p := ast::fld_p
 param_p := ast::param_p
+param_any := ast::param_any
 stmt_p := ast::stmt_p
 (Arg, Decl, Expr, Param, Stmt) := ast
 (push_str, push_int) := strbuf
@@ -423,13 +424,19 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Ar
         mut p := d.params_head
         mut g := ah
         mut ok := true
-        while p != 0 and g != 0 {
-          pm := param_p(p)
-          if not comptime_query_arg_ok(deref(arg_p(g)).e, pm, cx, a) { ok = false }
-          p = deref(pm).next
-          g = deref(arg_p(g)).next
+        loop {
+          match p {
+            Some(pq) => {
+              if not (g != 0) { break }
+              pm := param_p(pq)
+              if not comptime_query_arg_ok(deref(arg_p(g)).e, pm, cx, a) { ok = false }
+              p = deref(pm).next
+              g = deref(arg_p(g)).next
+            }
+            None => { break }
+          }
         }
-        if p != 0 or g != 0 { ok = false }
+        if param_any(p) or g != 0 { ok = false }
         if ok { found = true }
       }
     }

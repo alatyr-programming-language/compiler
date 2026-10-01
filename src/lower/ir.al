@@ -1458,12 +1458,17 @@ ir_check_call := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize,
     if not ir_native_scalar(src, cd.ret_ts, cd.ret_tl) { IRP_OK = false }         ## scalar return
     if cd.arity != na { IRP_OK = false }
     mut pp := cd.params_head
-    while pp != 0 {
-      pm := deref(param_p(pp))
-      if pm.pmode != 0 { IRP_OK = false }           ## no out / in out (by-ref)
-      if pm.tl == 2 and str_at((src + pm.ts), 2) == ".." { IRP_OK = false }   ## no comptime-variadic
-      if not ir_native_scalar(src, pm.ts, pm.tl) { IRP_OK = false }           ## all params native scalar
-      pp = pm.next
+    loop {
+      match pp {
+        Some(ppq) => {
+          pm := deref(param_p(ppq))
+          if pm.pmode != 0 { IRP_OK = false }           ## no out / in out (by-ref)
+          if pm.tl == 2 and str_at((src + pm.ts), 2) == ".." { IRP_OK = false }   ## no comptime-variadic
+          if not ir_native_scalar(src, pm.ts, pm.tl) { IRP_OK = false }           ## all params native scalar
+          pp = pm.next
+        }
+        None => { break }
+      }
     }
     IRP_NCALL = IRP_NCALL + 1
     IRP_NCALLARG = IRP_NCALLARG + na
@@ -1693,34 +1698,39 @@ pub is_scalar_leaf_shape := fn(d : Decl, p : ptr(PCtx)) -> bool {
   IRARR_N = 0
   mut pp := d.params_head
   mut ppidx := 0
-  while pp != 0 {
-    pm := deref(param_p(pp))
-    if pm.pmode != 0 { return false }
-    if not ir_native_scalar(p.src, pm.ts, pm.tl) {
-      ## a by-ref STRUCT param (all-scalar fields → barriered field reads) OR a `Slice(native-scalar-word)` /
-      ## bounded `Slice(u8)` PARAM (iterated by `for x in s`). A byte slice is not a native scalar ABI param;
-      ## it is admitted only as an aggregate view iterable with the dedicated zero-ext load.
-      slelem := slice_param_elem_span(p.src, pm.ns, pm.nl)
-      slbase := base_type_name(p.src, pm.ts, pm.tl)
-      is_slice := slelem.n != 0 and str_at((p.src + slbase.s), slbase.n) == "Slice" and (ir_native_scalar(p.src, slelem.s, slelem.n) or str_at((p.src + slelem.s), slelem.n) == "u8")
-      if is_slice {
-        if IRSL_N >= 4 { return false }
-        IRSL_S[IRSL_N] = pm.ns
-        IRSL_L[IRSL_N] = pm.nl
-        IRSL_PIDX[IRSL_N] = ppidx
-        IRSL_N = IRSL_N + 1
-      } else {
-        if not ir_all_scalar_struct(p.src, p.decls, pm.ts, pm.tl) { return false }
-        if IRSP_N >= 8 { return false }
-        IRSP_S[IRSP_N] = pm.ns
-        IRSP_L[IRSP_N] = pm.nl
-        IRSP_TS[IRSP_N] = pm.ts
-        IRSP_TL[IRSP_N] = pm.tl
-        IRSP_N = IRSP_N + 1
+  loop {
+    match pp {
+      Some(ppq) => {
+        pm := deref(param_p(ppq))
+        if pm.pmode != 0 { return false }
+        if not ir_native_scalar(p.src, pm.ts, pm.tl) {
+          ## a by-ref STRUCT param (all-scalar fields → barriered field reads) OR a `Slice(native-scalar-word)` /
+          ## bounded `Slice(u8)` PARAM (iterated by `for x in s`). A byte slice is not a native scalar ABI param;
+          ## it is admitted only as an aggregate view iterable with the dedicated zero-ext load.
+          slelem := slice_param_elem_span(p.src, pm.ns, pm.nl)
+          slbase := base_type_name(p.src, pm.ts, pm.tl)
+          is_slice := slelem.n != 0 and str_at((p.src + slbase.s), slbase.n) == "Slice" and (ir_native_scalar(p.src, slelem.s, slelem.n) or str_at((p.src + slelem.s), slelem.n) == "u8")
+          if is_slice {
+            if IRSL_N >= 4 { return false }
+            IRSL_S[IRSL_N] = pm.ns
+            IRSL_L[IRSL_N] = pm.nl
+            IRSL_PIDX[IRSL_N] = ppidx
+            IRSL_N = IRSL_N + 1
+          } else {
+            if not ir_all_scalar_struct(p.src, p.decls, pm.ts, pm.tl) { return false }
+            if IRSP_N >= 8 { return false }
+            IRSP_S[IRSP_N] = pm.ns
+            IRSP_L[IRSP_N] = pm.nl
+            IRSP_TS[IRSP_N] = pm.ts
+            IRSP_TL[IRSP_N] = pm.tl
+            IRSP_N = IRSP_N + 1
+          }
+        }
+        ppidx = ppidx + 1
+        pp = pm.next
       }
+      None => { break }
     }
-    ppidx = ppidx + 1
-    pp = pm.next
   }
   ## body walk.
   IRB_N = 0
@@ -1745,7 +1755,7 @@ pub is_scalar_leaf_shape := fn(d : Decl, p : ptr(PCtx)) -> bool {
   IRP_MS = d.mod_start
   IRP_ML = d.mod_len
   mut qp := d.params_head
-  while qp != 0 { qpm := deref(param_p(qp)); ir_bound_add(qpm.ns, qpm.nl); qp = qpm.next }
+  loop { match qp { Some(qpq) => { qpm := deref(param_p(qpq)); ir_bound_add(qpm.ns, qpm.nl); qp = qpm.next }; None => { break } } }
   ir_collect_binds(d.body_stmts)
   ir_check_stmts(p.src, p.decls, d.body_stmts, false)
   ir_check_expr(p.src, p.decls, d.value, false)

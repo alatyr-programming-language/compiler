@@ -112,19 +112,22 @@ pub type_is_variadic_rest := fn(src : ptr(u8), ts : usize, tl : usize) -> bool {
 pub decl_is_variadic := fn(d : Decl, src : ptr(u8), a : rt::Arena) -> bool {
   if d.is_fn == false { return false }
   mut pp := d.params_head
-  mut last := 0
-  while pp != 0 { last = unchecked bitcast(usize, pp); pp = deref(param_p(pp)).next }
-  if last == 0 { return false }
-  lp := deref(param_p(last))
-  type_is_variadic_rest(src, lp.ts, lp.tl)
+  mut last : Option(ptr(mut Param)) = Option.None
+  loop { match pp { Some(ppq) => { last = pp; pp = deref(param_p(ppq)).next }; None => { break } } }
+  match last {
+    Some(lq) => { lp := deref(param_p(lq)); type_is_variadic_rest(src, lp.ts, lp.tl) }
+    None => { false }
+  }
 }
 
 ## Whether fn decl `d`'s LAST parameter is a runtime slice-variadic `...T` (pmode == 3).
 pub decl_is_slice_variadic := fn(d : Decl) -> bool {
   if d.is_fn == false { return false }
   mut pp := d.params_head
-  mut last := 0
-  while pp != 0 { last = unchecked bitcast(usize, pp); pp = deref(param_p(pp)).next }
-  if last == 0 { return false }
-  deref(param_p(last)).pmode == 3
+  mut last : Option(ptr(mut Param)) = Option.None
+  loop { match pp { Some(ppq) => { last = pp; pp = deref(param_p(ppq)).next }; None => { break } } }
+  match last {
+    Some(lq) => { deref(param_p(lq)).pmode == 3 }
+    None => { false }
+  }
 }

@@ -32,6 +32,7 @@ fld_p := ast::fld_p
 fld_at := ast::fld_at
 fld_any := ast::fld_any
 param_p := ast::param_p
+param_any := ast::param_any
 arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
@@ -3296,11 +3297,11 @@ fmt_param_mode := fn(src : ptr(u8), ns : usize) -> usize {
 ## `when` guard: both are recovered from source AFTER the return type, so counting them needs the
 ## guard scan hoisted above the parameter list. Under-counting only ever leaves a line long; it
 ## never wraps one that fits.
-emit_fmt_params := fn(params_head : ptr(mut Param), reserve : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
+emit_fmt_params := fn(params_head : Option(ptr(mut Param)), reserve : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
   mark := sb.len
   ind := fmt_sb_indent(sb)
   fmt_emit_params_body(params_head, ind, false, sb, src, a)
-  if params_head != 0 {
+  if param_any(params_head) {
     if fmt_wrap_needed_res(sb, mark, reserve) { fmt_emit_params_body(params_head, ind, true, sb, src, a) }
   }
   return
@@ -3309,46 +3310,54 @@ emit_fmt_params := fn(params_head : ptr(mut Param), reserve : usize, in out sb :
 ## The parameter list itself, in either spelling (`multi` = the §4.3.3 wrapped form). ONE renderer with
 ## two spellings, so the `comptime` / `in` / `out` / `in out` markers and the type-span recovery below
 ## — every one of which a second copy could silently drop — are written exactly once.
-fmt_emit_params_body := fn(params_head : ptr(mut Param), ind : usize, multi : bool, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
+fmt_emit_params_body := fn(params_head : Option(ptr(mut Param)), ind : usize, multi : bool, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
   push_str(sb, "(")
   if multi { push_str(sb, "\n") }
   mut p := params_head
   mut first := true
-  while p != 0 {
-    pm := deref(param_p(p))
-    if multi { fmt_emit_spaces(sb, ind + 2) }
-    if not multi { if not first { push_str(sb, ", ") } }
-    if fmt_param_is_comptime(src, pm.ns) { push_str(sb, "comptime ") }
-    md := fmt_param_mode(src, pm.ns)
-    if md == 1 { push_str(sb, "in ") }
-    if md == 2 { push_str(sb, "out ") }
-    if md == 3 { push_str(sb, "in out ") }
-    push_str(sb, str_at((src + pm.ns), pm.nl))
-    mut tys : usize = 0
-    mut tyn : usize = 0
-    scanned := fmt_param_type_span(src, pm.ns, pm.nl, ptr(tys), ptr(tyn))
-    if scanned {
-      push_str(sb, " : ")
-      push_str(sb, str_at((src + tys), tyn))
-    }
-    if (not scanned) and pm.tl != 0 {
-      push_str(sb, " : ")
-      push_str(sb, str_at((src + pm.ts), fmt_fnty_len(src, pm.ts, pm.tl)))
-    }
-    ## FAIL-LOUD when the parsed list disagrees with the written one: this parameter's type text
-    ## SWALLOWS the next parameter's name. That happens for a `dyn fn(u64) -> u64` parameter, which the
-    ## front end splits into TWO parameters (`d : dyn` + `fn : u64`) — no rendering of that node list is
-    ## the program the user wrote, so panic instead of emitting a guess (a wrong render is a silent
-    ## miscompile of the source; a refused format is not). `dyn` in a LOCAL binding is unaffected.
-    if scanned {
-      if pm.next != 0 {
-        nx := deref(param_p(pm.next))
-        if nx.ns < tys + tyn { panic("selfhost: fmt — this parameter list does not round-trip: a parameter type overlaps the next parameter's name (a `dyn fn(…)` parameter is split in two by the front end)") }
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if multi { fmt_emit_spaces(sb, ind + 2) }
+        if not multi { if not first { push_str(sb, ", ") } }
+        if fmt_param_is_comptime(src, pm.ns) { push_str(sb, "comptime ") }
+        md := fmt_param_mode(src, pm.ns)
+        if md == 1 { push_str(sb, "in ") }
+        if md == 2 { push_str(sb, "out ") }
+        if md == 3 { push_str(sb, "in out ") }
+        push_str(sb, str_at((src + pm.ns), pm.nl))
+        mut tys : usize = 0
+        mut tyn : usize = 0
+        scanned := fmt_param_type_span(src, pm.ns, pm.nl, ptr(tys), ptr(tyn))
+        if scanned {
+          push_str(sb, " : ")
+          push_str(sb, str_at((src + tys), tyn))
+        }
+        if (not scanned) and pm.tl != 0 {
+          push_str(sb, " : ")
+          push_str(sb, str_at((src + pm.ts), fmt_fnty_len(src, pm.ts, pm.tl)))
+        }
+        ## FAIL-LOUD when the parsed list disagrees with the written one: this parameter's type text
+        ## SWALLOWS the next parameter's name. That happens for a `dyn fn(u64) -> u64` parameter, which the
+        ## front end splits into TWO parameters (`d : dyn` + `fn : u64`) — no rendering of that node list is
+        ## the program the user wrote, so panic instead of emitting a guess (a wrong render is a silent
+        ## miscompile of the source; a refused format is not). `dyn` in a LOCAL binding is unaffected.
+        if scanned {
+          match pm.next {
+            Some(nxq) => {
+              nx := deref(param_p(nxq))
+              if nx.ns < tys + tyn { panic("selfhost: fmt — this parameter list does not round-trip: a parameter type overlaps the next parameter's name (a `dyn fn(…)` parameter is split in two by the front end)") }
+            }
+            None => {}
+          }
+        }
+        if multi { push_str(sb, ",\n") }
+        first = false
+        p = pm.next
       }
+      None => { break }
     }
-    if multi { push_str(sb, ",\n") }
-    first = false
-    p = pm.next
   }
   if multi { fmt_emit_spaces(sb, ind) }
   push_str(sb, ")")
@@ -4044,14 +4053,20 @@ emit_fmt_enum := fn(d : Decl, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Are
 ## The NAME of the fn's first type-parameter (a param annotated `: type`), else "" — this is the `T`
 ## a `comptime for … in typeinfo(T).fields` / `comptime match typeinfo(T)` inside the body refers to
 ## (the node stores only the member kind, not `T`), so fmt threads it in to reconstruct the iterable.
-fmt_type_param := fn(params_head : ptr(mut Param), src : ptr(u8), a : rt::Arena) -> str {
+fmt_type_param := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), a : rt::Arena) -> str {
   mut p := params_head
   mut r := ""
   mut found := false
-  while p != 0 and (not found) {
-    pm := deref(param_p(p))
-    if pm.tl != 0 and str_at((src + pm.ts), pm.tl) == "type" { r = str_at((src + pm.ns), pm.nl) ; found = true }
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        if not ((not found)) { break }
+        pm := deref(param_p(pq))
+        if pm.tl != 0 and str_at((src + pm.ts), pm.tl) == "type" { r = str_at((src + pm.ns), pm.nl) ; found = true }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   r
 }

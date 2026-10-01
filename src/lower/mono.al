@@ -23,7 +23,8 @@ arg_p := ast::arg_p
 arm_p := ast::arm_p
 stmt_p := ast::stmt_p
 local_type_span := ast::local_type_span
-(Arg, Decl, Expr, Stmt) := ast
+(Arg, Decl, Expr, Param, Stmt) := ast
+param_any := ast::param_any
 (CSpan, arg_expr_at, var_name_span) := lower_ctx
 (base_type_name, enum_decl_of, enum_inst_words, struct_decl_of, struct_words, typearg_at) := lower_layout
 
@@ -235,7 +236,7 @@ collect_agg_lit_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
 ## and this pass had registered no instance. Distinguishing "unresolvable" from "resolved, and not a
 ## multi-word aggregate" is what keeps the fallback below from registering a DEAD instance for a
 ## comparison the emit gate will decline anyway.
-collect_operand_type_unknown := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : usize) -> bool {
+collect_operand_type_unknown := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) -> bool {
   vn := var_name_span(e)
   if vn.n == 0 { return false }
   if COLLECT_BODY != 0 {
@@ -246,7 +247,7 @@ collect_operand_type_unknown := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : pt
   if pt.n != 0 { return false }
   true
 }
-collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : usize) -> CSpan {
+collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) -> CSpan {
   lt := collect_agg_lit_type(e, decls, src, a)
   if lt.n != 0 { return lt }
   if struct_lit_info(e).is_s or enum_lit_info(e).is_e { return CSpan(s = 0, n = 0) }
@@ -297,7 +298,7 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
 ## when the receiver isn't a resolvable Var (a type-name arg / literal → no receiver redirection).
 ## Returns the FULL type span (`Result(u64, u64)`) so both the base name (redirect) and the type-args
 ## (implicit-tag inference) are recoverable.
-pub recv_full_pre := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), penv : usize, a : rt::Arena) -> CSpan {
+pub recv_full_pre := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), penv : Option(ptr(mut Param)), a : rt::Arena) -> CSpan {
   vn := var_name_span(e)
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
   mut ts := 0
@@ -325,14 +326,14 @@ pub recv_full_emit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a :
     ltp := block_decl_type(EMIT_BODY, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
   }
-  if tl == 0 and EMIT_PARAMS != 0 {
+  if tl == 0 and param_any(EMIT_PARAMS) {
     pt := param_type_of(vn.s, vn.n, EMIT_PARAMS, src, a)
     if pt.n != 0 { ts = pt.s; tl = pt.n }
   }
   if tl == 0 { return CSpan(s = 0, n = 0) }
   CSpan(s = ts, n = tl)
 }
-pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : usize) {
+pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) {
   match deref(e) {
     Expr::Num(v, s, n) => {}
     Expr::Var(s, n) => {}
@@ -543,7 +544,7 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
 
 ## Walk a body statement list, recording every generic-fn call's instantiation (recursing
 ## into nested branch/arm/loop statement lists). Mirrors `emit_rodata_stmts`.
-pub collect_insts_stmts := fn(head : ptr(mut Stmt), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : usize) {
+pub collect_insts_stmts := fn(head : ptr(mut Stmt), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) {
   mut s := head
   while s != 0 {
     st := deref(stmt_p(Stmt, s))

@@ -399,19 +399,24 @@ iface_emit_fn := fn(in out b : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), 
   mut slice_variadic := false
   mut p := deref(dp).params_head
   mut pi := 0
-  while p != 0 {
-    pm := deref(param_p(p))
-    h = iface_hash_uint(h, usize(pi))
-    h = iface_hash_uint(h, usize(pm.pmode))
-    h = iface_hash_uint(h, usize(param_is_comptime(src, pm.ns)))
-    h = iface_hash_span(h, src, pm.ts, pm.tl)
-    h = iface_hash_span(h, src, pm.pps, pm.ppl)
-    if pm.next == 0 {
-      variadic = type_is_variadic_rest(src, pm.ts, pm.tl)
-      slice_variadic = pm.pmode == 3
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        h = iface_hash_uint(h, usize(pi))
+        h = iface_hash_uint(h, usize(pm.pmode))
+        h = iface_hash_uint(h, usize(param_is_comptime(src, pm.ns)))
+        h = iface_hash_span(h, src, pm.ts, pm.tl)
+        h = iface_hash_span(h, src, pm.pps, pm.ppl)
+        if pm.next == 0 {
+          variadic = type_is_variadic_rest(src, pm.ts, pm.tl)
+          slice_variadic = pm.pmode == 3
+        }
+        p = pm.next
+        pi += 1
+      }
+      None => { break }
     }
-    p = pm.next
-    pi += 1
   }
   push_str(b, "decl kind=")
   push_str(b, iface_kind(deref(dp).kind))
@@ -446,21 +451,26 @@ iface_emit_fn := fn(in out b : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), 
   push_byte(b, 10)
   p = deref(dp).params_head
   pi = 0
-  while p != 0 {
-    pm := deref(param_p(p))
-    push_str(b, "param index=")
-    iface_push_uint(b, pi)
-    push_str(b, " mode=")
-    iface_push_uint(b, usize(pm.pmode))
-    push_str(b, " comptime=")
-    iface_push_bool(b, param_is_comptime(src, pm.ns))
-    push_str(b, " type=")
-    iface_push_span(b, src, pm.ts, pm.tl)
-    push_str(b, " pointee=")
-    iface_push_span(b, src, pm.pps, pm.ppl)
-    push_byte(b, 10)
-    p = pm.next
-    pi += 1
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        push_str(b, "param index=")
+        iface_push_uint(b, pi)
+        push_str(b, " mode=")
+        iface_push_uint(b, usize(pm.pmode))
+        push_str(b, " comptime=")
+        iface_push_bool(b, param_is_comptime(src, pm.ns))
+        push_str(b, " type=")
+        iface_push_span(b, src, pm.ts, pm.tl)
+        push_str(b, " pointee=")
+        iface_push_span(b, src, pm.pps, pm.ppl)
+        push_byte(b, 10)
+        p = pm.next
+        pi += 1
+      }
+      None => { break }
+    }
   }
   h
 }
