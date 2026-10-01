@@ -2278,19 +2278,19 @@ wat_decls := fn() -> ptr(rt::Vec) { unchecked bitcast(ptr(rt::Vec), WAT_DECLS) }
 ## events, and a function with more assignments could not be emitted for wasm at all. An event is four
 ## words of an `rt` word table: name start (also its source offset), name length, expression, kind.
 mut WAT_CT_N : usize = 0
-mut WAT_CT_BASE : usize = 0
-mut WAT_CT_CAP : usize = 0
+mut WAT_CT_BASE : rt::WTab = rt::WTab(0)
+mut WAT_CT_CAP : rt::Words = rt::Words(0)
 
 wat_ct_record := fn(ns : usize, nl : usize, v : ptr(Expr), kind : u8) {
   mut cb := WAT_CT_BASE
   mut cc := WAT_CT_CAP
-  rt::wtab_reserve(cb, cc, WAT_CT_N * 4, (WAT_CT_N + 1) * 4)
+  rt::wtab_reserve(cb, cc, rt::wtab_words(WAT_CT_N, 4), rt::wtab_words(WAT_CT_N + 1, 4))
   WAT_CT_BASE = cb
   WAT_CT_CAP = cc
-  rt::wtab_set(WAT_CT_BASE, WAT_CT_N * 4, ns)
-  rt::wtab_set(WAT_CT_BASE, WAT_CT_N * 4 + 1, nl)
-  rt::wtab_set(WAT_CT_BASE, WAT_CT_N * 4 + 2, unchecked bitcast(usize, v))
-  rt::wtab_set(WAT_CT_BASE, WAT_CT_N * 4 + 3, usize(kind))
+  rt::wtab_set(WAT_CT_BASE, rt::wtab_at(WAT_CT_N, 4, 0), ns)
+  rt::wtab_set(WAT_CT_BASE, rt::wtab_at(WAT_CT_N, 4, 1), nl)
+  rt::wtab_set(WAT_CT_BASE, rt::wtab_at(WAT_CT_N, 4, 2), unchecked bitcast(usize, v))
+  rt::wtab_set(WAT_CT_BASE, rt::wtab_at(WAT_CT_N, 4, 3), usize(kind))
   WAT_CT_N = WAT_CT_N + 1
 }
 
@@ -2346,12 +2346,12 @@ wat_ct_expr := fn(ns : usize, nl : usize, use_s : usize, src : ptr(u8)) -> ptr(E
   mut result : usize = 0
   mut i : usize = 0
   while i < WAT_CT_N {
-    eoff := rt::wtab_get(WAT_CT_BASE, i * 4)
-    if eoff <= use_s and rt::wtab_get(WAT_CT_BASE, i * 4 + 1) == nl and streq(src, eoff, nl, ns, nl) {
+    eoff := rt::wtab_get(WAT_CT_BASE, rt::wtab_at(i, 4, 0))
+    if eoff <= use_s and rt::wtab_get(WAT_CT_BASE, rt::wtab_at(i, 4, 1)) == nl and streq(src, eoff, nl, ns, nl) {
       if found == 0 or eoff >= found_off {
-        found = u8(rt::wtab_get(WAT_CT_BASE, i * 4 + 3))
+        found = u8(rt::wtab_get(WAT_CT_BASE, rt::wtab_at(i, 4, 3)))
         found_off = eoff
-        if found == 1 { result = rt::wtab_get(WAT_CT_BASE, i * 4 + 2) } else { result = 0 }
+        if found == 1 { result = rt::wtab_get(WAT_CT_BASE, rt::wtab_at(i, 4, 2)) } else { result = 0 }
       }
     }
     i = i + 1

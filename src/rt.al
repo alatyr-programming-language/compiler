@@ -102,43 +102,60 @@ pub rec_get := fn(addr : ptr(mut u8), i : usize) -> usize {
 ## mis-resolved. Such a table now lives in its own anonymous mapping, and `wtab_reserve` grows it
 ## before an append would pass its end, so its size is whatever the walk that fills it reaches. It is
 ## never bumped out of a compile arena, so a table growing cannot move the compiler's output.
-## A table is two words its owner keeps: `base` (the mapping's address, a word handle) and `cap` (its
-## size in words; 0 = the table owns no mapping yet, and `base` is then never read).
+## A table is two values its owner keeps, each a BRAND (AGENTS.md rule 10), so an address, a word
+## count and a word index cannot be passed for one another:
+##   `WTab`   the address of the table's mapping (a handle only `wtab_*` reads);
+##   `Words`  a number of words: the table's capacity, the words in use, the words an append needs;
+##   `WordIx` the index of one word.
+## An owner computes them only through `wtab_at` / `wtab_words`, from its entry index and entry width.
+## A capacity of `Words(0)` is a table that owns no mapping yet, and its `WTab` is then never read.
+pub WTab := brand(usize)
+pub Words := brand(usize)
+pub WordIx := brand(usize)
 pub sys_munmap := @abi(syscall) fn(num : usize, addr : usize, len : usize) -> isize
+
+## The word of field `f` of entry `e` in a table of `w`-word entries.
+pub wtab_at := fn(e : usize, w : usize, f : usize) -> WordIx { WordIx(e * w + f) }
+## The words `n` entries of `w` words occupy.
+pub wtab_words := fn(n : usize, w : usize) -> Words { Words(n * w) }
 
 ## Make the table (`base`, `cap`) hold at least `need` words, keeping its first `used` words. Grows by
 ## doubling (at least 512 words), so appending one entry at a time costs amortized O(1).
-pub wtab_reserve := fn(in out base : usize, in out cap : usize, used : usize, need : usize) {
-  if need <= cap { return }
+pub wtab_reserve := fn(in out base : WTab, in out cap : Words, used : Words, need : Words) {
+  have : usize = usize(cap)
+  want : usize = usize(need)
+  if want <= have { return }
   mut nc : usize = 512
-  if cap > nc { nc = cap }
-  while nc < need { nc = nc * 2 }
+  if have > nc { nc = have }
+  while nc < want { nc = nc * 2 }
   fdm1 := 0 - 1
   r := sys_mmap(9, 0, nc * 8, 3, 34, fdm1, 0)
   if r < 0 { panic("rt: word table growth failed (mmap)") }
   ## unchecked-ok: a successful anonymous mmap returns the mapping's address (r >= 0 checked above).
-  nb := unchecked bitcast(usize, r)
-  for i in 0..used { wtab_set(nb, i, wtab_get(base, i)) }
-  if cap > 0 { freed := sys_munmap(11, base, cap * 8) }
+  nb := WTab(unchecked bitcast(usize, r))
+  keep : usize = usize(used)
+  for i in 0..keep { wtab_set(nb, WordIx(i), wtab_get(base, WordIx(i))) }
+  wtab_free(base, cap)
   base = nb
-  cap = nc
+  cap = Words(nc)
 }
 
 ## Release the table (`base`, `cap`); a table that never grew owns nothing.
-pub wtab_free := fn(base : usize, cap : usize) {
-  if cap > 0 { freed := sys_munmap(11, base, cap * 8) }
+pub wtab_free := fn(base : WTab, cap : Words) {
+  n : usize = usize(cap)
+  if n > 0 { freed := sys_munmap(11, usize(base), n * 8) }
 }
 
 ## Word `i` of the table at `base` (the owner keeps `i` below the words it reserved).
-pub wtab_get := fn(base : usize, i : usize) -> usize {
+pub wtab_get := fn(base : WTab, i : WordIx) -> usize {
   ## unchecked-ok: `base` is a mapping `wtab_reserve` returned; word `i` lies inside it.
-  rec_get(unchecked bitcast(ptr(mut u8), base), i)
+  rec_get(unchecked bitcast(ptr(mut u8), usize(base)), usize(i))
 }
 
 ## Store `x` as word `i` of the table at `base`.
-pub wtab_set := fn(base : usize, i : usize, x : usize) {
+pub wtab_set := fn(base : WTab, i : WordIx, x : usize) {
   ## unchecked-ok: `base` is a mapping `wtab_reserve` returned; word `i` lies inside it.
-  rec_set(unchecked bitcast(ptr(mut u8), base), i, x)
+  rec_set(unchecked bitcast(ptr(mut u8), usize(base)), usize(i), x)
 }
 
 ## A `str`-element vector (path B): a `str` is two words {ptr, len}, so each element is a 2-word

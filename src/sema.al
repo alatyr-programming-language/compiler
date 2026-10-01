@@ -12423,22 +12423,22 @@ stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut r
 ## length) pairs that grow with the function (#801): they used to hold 256 labels, and a function with
 ## more was refused with a located error although it was valid.
 LabelTarget := enum { CodePoint, Loop }
-CodePointLabels := struct { pts : usize, pts_cap : usize, npts : usize, loops : usize, loops_cap : usize, nloops : usize }
+CodePointLabels := struct { pts : rt::WTab, pts_cap : rt::Words, npts : usize, loops : rt::WTab, loops_cap : rt::Words, nloops : usize }
 ## Is `[s, s+n)` one of the `cnt` (start, length) pairs of the table at `base`?
-label_table_has := fn(base : usize, cnt : usize, src : ptr(u8), s : usize, n : usize) -> bool {
+label_table_has := fn(base : rt::WTab, cnt : usize, src : ptr(u8), s : usize, n : usize) -> bool {
   mut i : usize = 0
   mut found := false
   while i < cnt and not found {
-    if streq(src, rt::wtab_get(base, i * 2), rt::wtab_get(base, i * 2 + 1), s, n) { found = true }
+    if streq(src, rt::wtab_get(base, rt::wtab_at(i, 2, 0)), rt::wtab_get(base, rt::wtab_at(i, 2, 1)), s, n) { found = true }
     i += 1
   }
   found
 }
 ## Append the pair (`s`, `n`) after the `cnt` pairs of the table (`base`, `cap`), growing it first.
-label_table_push := fn(in out base : usize, in out cap : usize, cnt : usize, s : usize, n : usize) {
-  rt::wtab_reserve(base, cap, cnt * 2, cnt * 2 + 2)
-  rt::wtab_set(base, cnt * 2, s)
-  rt::wtab_set(base, cnt * 2 + 1, n)
+label_table_push := fn(in out base : rt::WTab, in out cap : rt::Words, cnt : usize, s : usize, n : usize) {
+  rt::wtab_reserve(base, cap, rt::wtab_words(cnt, 2), rt::wtab_words(cnt + 1, 2))
+  rt::wtab_set(base, rt::wtab_at(cnt, 2, 0), s)
+  rt::wtab_set(base, rt::wtab_at(cnt, 2, 1), n)
 }
 codepoint_label_add := fn(labels : ptr(mut CodePointLabels), src : ptr(u8), s : usize, n : usize, t : LabelTarget) -> CheckErr {
   if s == 0 or n == 0 { return 0 }
@@ -13275,7 +13275,7 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
   ## Locate structural rejections at the FN's declaration name (a `break`/`continue` AST node carries
   ## no span, and a missing result is a whole-fn property) — an honest "invalid at line N in <module>"
   ## rather than "location not tracked" (§1 item 6).
-  mut code_labels := CodePointLabels(pts = 0, pts_cap = 0, npts = 0, loops = 0, loops_cap = 0, nloops = 0)
+  mut code_labels := CodePointLabels(pts = rt::WTab(0), pts_cap = rt::Words(0), npts = 0, loops = rt::WTab(0), loops_cap = rt::Words(0), nloops = 0)
   cpl := codepoint_collect_stmts(d.body_stmts, ptr(code_labels), src, a)
   if cpl != 0 { failed = true; err = cpl }
   if failed == false {

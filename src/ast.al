@@ -818,17 +818,17 @@ pub stmt_null := fn() -> ptr(mut Stmt) { unchecked bitcast(ptr(mut Stmt), 0) }
 ## stale metadata.  The table grows with the program (#801): an entry is three words (node, span start,
 ## span length) in an `rt` word table, so no source has more labels than it can hold.
 pub LabelSpan := struct { s : usize, n : usize }
-mut LABEL_BASE : usize = 0
-mut LABEL_CAP : usize = 0
+mut LABEL_BASE : rt::WTab = rt::WTab(0)
+mut LABEL_CAP : rt::Words = rt::Words(0)
 mut LABEL_N : usize = 0
 
 label_mark := fn(k : usize, s : usize, n : usize) {
   if k == 0 { return }
   mut i : usize = 0
   while i < LABEL_N {
-    if rt::wtab_get(LABEL_BASE, i * 3) == k {
-      rt::wtab_set(LABEL_BASE, i * 3 + 1, s)
-      rt::wtab_set(LABEL_BASE, i * 3 + 2, n)
+    if rt::wtab_get(LABEL_BASE, rt::wtab_at(i, 3, 0)) == k {
+      rt::wtab_set(LABEL_BASE, rt::wtab_at(i, 3, 1), s)
+      rt::wtab_set(LABEL_BASE, rt::wtab_at(i, 3, 2), n)
       return
     }
     i = i + 1
@@ -838,19 +838,19 @@ label_mark := fn(k : usize, s : usize, n : usize) {
   if s == 0 or n == 0 { return }
   mut lb := LABEL_BASE
   mut lc := LABEL_CAP
-  rt::wtab_reserve(lb, lc, LABEL_N * 3, (LABEL_N + 1) * 3)
+  rt::wtab_reserve(lb, lc, rt::wtab_words(LABEL_N, 3), rt::wtab_words(LABEL_N + 1, 3))
   LABEL_BASE = lb
   LABEL_CAP = lc
-  rt::wtab_set(LABEL_BASE, LABEL_N * 3, k)
-  rt::wtab_set(LABEL_BASE, LABEL_N * 3 + 1, s)
-  rt::wtab_set(LABEL_BASE, LABEL_N * 3 + 2, n)
+  rt::wtab_set(LABEL_BASE, rt::wtab_at(LABEL_N, 3, 0), k)
+  rt::wtab_set(LABEL_BASE, rt::wtab_at(LABEL_N, 3, 1), s)
+  rt::wtab_set(LABEL_BASE, rt::wtab_at(LABEL_N, 3, 2), n)
   LABEL_N = LABEL_N + 1
 }
 
 label_lookup := fn(k : usize) -> LabelSpan {
   mut i : usize = 0
   while i < LABEL_N {
-    if rt::wtab_get(LABEL_BASE, i * 3) == k { return LabelSpan(s = rt::wtab_get(LABEL_BASE, i * 3 + 1), n = rt::wtab_get(LABEL_BASE, i * 3 + 2)) }
+    if rt::wtab_get(LABEL_BASE, rt::wtab_at(i, 3, 0)) == k { return LabelSpan(s = rt::wtab_get(LABEL_BASE, rt::wtab_at(i, 3, 1)), n = rt::wtab_get(LABEL_BASE, rt::wtab_at(i, 3, 2))) }
     i = i + 1
   }
   LabelSpan(s = 0, n = 0)
@@ -891,8 +891,8 @@ pub expr_label_span := fn(p : ptr(Expr)) -> LabelSpan {
 ## call's callee span, it survives AST CLONING for a generic instance (the clone copies `cs`), and it
 ## needs no new node field. The set grows with the program (#801): it is an `rt` word table, one word
 ## per site, so there is no count of expression-callee sites past which a program is refused.
-mut ECALLEE_BASE : usize = 0
-mut ECALLEE_CAP : usize = 0
+mut ECALLEE_BASE : rt::WTab = rt::WTab(0)
+mut ECALLEE_CAP : rt::Words = rt::Words(0)
 mut ECALLEE_N : usize = 0
 
 ## Record the call site whose callee NAME SPAN starts at `k` as an EXPRESSION-callee call. Idempotent —
@@ -901,15 +901,15 @@ mut ECALLEE_N : usize = 0
 pub ecallee_mark := fn(k : usize) {
   mut i : usize = 0
   while i < ECALLEE_N {
-    if rt::wtab_get(ECALLEE_BASE, i) == k { return }
+    if rt::wtab_get(ECALLEE_BASE, rt::wtab_at(i, 1, 0)) == k { return }
     i = i + 1
   }
   mut eb := ECALLEE_BASE
   mut ec := ECALLEE_CAP
-  rt::wtab_reserve(eb, ec, ECALLEE_N, ECALLEE_N + 1)
+  rt::wtab_reserve(eb, ec, rt::wtab_words(ECALLEE_N, 1), rt::wtab_words(ECALLEE_N + 1, 1))
   ECALLEE_BASE = eb
   ECALLEE_CAP = ec
-  rt::wtab_set(ECALLEE_BASE, ECALLEE_N, k)
+  rt::wtab_set(ECALLEE_BASE, rt::wtab_at(ECALLEE_N, 1, 0), k)
   ECALLEE_N = ECALLEE_N + 1
 }
 
@@ -917,7 +917,7 @@ pub ecallee_mark := fn(k : usize) {
 pub ecallee_is := fn(k : usize) -> bool {
   mut i : usize = 0
   while i < ECALLEE_N {
-    if rt::wtab_get(ECALLEE_BASE, i) == k { return true }
+    if rt::wtab_get(ECALLEE_BASE, rt::wtab_at(i, 1, 0)) == k { return true }
     i = i + 1
   }
   false
@@ -949,25 +949,21 @@ pub ecallee_is := fn(k : usize) -> bool {
 ## `rt::wtab_reserve` as entries arrive (#801) — it used to stop at 1 Mi entries. It is never bumped
 ## out of a compile arena, because the compiler's own output must not move with an instrument of the
 ## parser. `BCI_CAP` counts words.
-mut BCI_BASE : usize = 0
+mut BCI_BASE : rt::WTab = rt::WTab(0)
 mut BCI_LEN : usize = 0
-mut BCI_CAP : usize = 0
+mut BCI_CAP : rt::Words = rt::Words(0)
 
-bci_word := fn(i : usize, k : usize) -> ptr(mut usize) {
-  ## unchecked-ok: BCI_BASE is the table's mapping and entry `i` lies inside its reserved words.
-  unchecked bitcast(ptr(mut usize), BCI_BASE + (i * 3 + k) * 8)
-}
 
 ## Record the identity-class `Bitcast` node at `p`, written with the target `src[s .. s+n]`.
 pub bitcast_identity_record := fn(p : ptr(Expr), s : usize, n : usize) {
   mut bb := BCI_BASE
   mut bc := BCI_CAP
-  rt::wtab_reserve(bb, bc, BCI_LEN * 3, (BCI_LEN + 1) * 3)
+  rt::wtab_reserve(bb, bc, rt::wtab_words(BCI_LEN, 3), rt::wtab_words(BCI_LEN + 1, 3))
   BCI_BASE = bb
   BCI_CAP = bc
-  deref(bci_word(BCI_LEN, 0)) = unchecked bitcast(usize, p)
-  deref(bci_word(BCI_LEN, 1)) = s
-  deref(bci_word(BCI_LEN, 2)) = n
+  rt::wtab_set(BCI_BASE, rt::wtab_at(BCI_LEN, 3, 0), unchecked bitcast(usize, p))
+  rt::wtab_set(BCI_BASE, rt::wtab_at(BCI_LEN, 3, 1), s)
+  rt::wtab_set(BCI_BASE, rt::wtab_at(BCI_LEN, 3, 2), n)
   BCI_LEN = BCI_LEN + 1
 }
 
@@ -978,7 +974,7 @@ pub bitcast_identity_has := fn(p : ptr(Expr), s : usize, n : usize) -> bool {
   mut i := BCI_LEN
   while i > 0 {
     i = i - 1
-    if deref(bci_word(i, 0)) == k and deref(bci_word(i, 1)) == s and deref(bci_word(i, 2)) == n { return true }
+    if rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 0)) == k and rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 1)) == s and rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 2)) == n { return true }
   }
   false
 }
@@ -1006,10 +1002,10 @@ bci_operand := fn(p : ptr(Expr), s : usize, n : usize) -> ptr(Expr) {
 pub bitcast_identity_erase := fn(lo : usize, hi : usize) {
   mut i := 0
   while i < BCI_LEN {
-    k := deref(bci_word(i, 0))
+    k := rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 0))
     if k >= lo and k < hi {
       np := unchecked bitcast(ptr(mut Expr), k)
-      inner := bci_operand(np, deref(bci_word(i, 1)), deref(bci_word(i, 2)))
+      inner := bci_operand(np, rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 1)), rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 2)))
       if unchecked bitcast(usize, inner) != 0 {
         ## Copy the operand's whole 64-byte node slot word by word (`parser::newnode` allocates every
         ## `Expr` in a 64-byte slot). A whole-enum `deref(np) = deref(inner)` is what this means, but the

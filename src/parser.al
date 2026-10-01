@@ -607,8 +607,8 @@ arg_null := fn() -> ptr(mut Arg) { unchecked bitcast(ptr(mut Arg), 0) }
 ## The stack is an `rt` word table, two words (name start, name length) per frame, and it grows with the
 ## loop nesting (#801). It used to be 64 frames that SKIPPED a push past the 64th loop while every exit
 ## still popped, so below that depth a `break name` resolved against the wrong frames.
-mut P_LBL_BASE : usize = 0
-mut P_LBL_CAP : usize = 0
+mut P_LBL_BASE : rt::WTab = rt::WTab(0)
+mut P_LBL_CAP : rt::Words = rt::Words(0)
 mut P_LOOP_SP : usize = 0
 mut P_PEND_S := 0
 mut P_PEND_L := 0
@@ -619,8 +619,8 @@ lbl_depth := fn(src : usize, s : usize, n : usize) -> i64 {
   mut i := P_LOOP_SP
   while i > 0 {
     i = i - 1
-    fs := rt::wtab_get(P_LBL_BASE, i * 2)
-    fl := rt::wtab_get(P_LBL_BASE, i * 2 + 1)
+    fs := rt::wtab_get(P_LBL_BASE, rt::wtab_at(i, 2, 0))
+    fl := rt::wtab_get(P_LBL_BASE, rt::wtab_at(i, 2, 1))
     if fl != 0 and str_eq(str_at(src + fs, fl), str_at(src + s, n)) {
       return i64((P_LOOP_SP - 1) - i)
     }
@@ -631,11 +631,11 @@ lbl_depth := fn(src : usize, s : usize, n : usize) -> i64 {
 lbl_push := fn() {
   mut lb := P_LBL_BASE
   mut lc := P_LBL_CAP
-  rt::wtab_reserve(lb, lc, P_LOOP_SP * 2, (P_LOOP_SP + 1) * 2)
+  rt::wtab_reserve(lb, lc, rt::wtab_words(P_LOOP_SP, 2), rt::wtab_words(P_LOOP_SP + 1, 2))
   P_LBL_BASE = lb
   P_LBL_CAP = lc
-  rt::wtab_set(P_LBL_BASE, P_LOOP_SP * 2, P_PEND_S)
-  rt::wtab_set(P_LBL_BASE, P_LOOP_SP * 2 + 1, P_PEND_L)
+  rt::wtab_set(P_LBL_BASE, rt::wtab_at(P_LOOP_SP, 2, 0), P_PEND_S)
+  rt::wtab_set(P_LBL_BASE, rt::wtab_at(P_LOOP_SP, 2, 1), P_PEND_L)
   P_LOOP_SP = P_LOOP_SP + 1
   P_PEND_S = 0
   P_PEND_L = 0

@@ -1130,17 +1130,17 @@ str_lt := fn(astr : str, s1 : usize, l1 : usize, s2 : usize, l2 : usize) -> bool
 ## newline-joined `str`. The table grows with the list (#801): it used to be two 256-entry arrays, and a
 ## package with more module files silently LOST every path past the 256th.
 sort_path_lines := fn(in out a : rt::Arena, astr : str) -> str {
-  mut tb : usize = 0
-  mut tc : usize = 0
+  mut tb := rt::WTab(0)
+  mut tc := rt::Words(0)
   mut n : usize = 0
   mut p := 0
   while p < astr.len {
     mut e := p
     while e < astr.len and bytes(astr)[e] != 10 { e = e + 1 }
     if e > p {
-      rt::wtab_reserve(tb, tc, n * 2, n * 2 + 2)
-      rt::wtab_set(tb, n * 2, p)
-      rt::wtab_set(tb, n * 2 + 1, e - p)
+      rt::wtab_reserve(tb, tc, rt::wtab_words(n, 2), rt::wtab_words(n + 1, 2))
+      rt::wtab_set(tb, rt::wtab_at(n, 2, 0), p)
+      rt::wtab_set(tb, rt::wtab_at(n, 2, 1), e - p)
       n += 1
     }
     p = e + 1
@@ -1150,22 +1150,22 @@ sort_path_lines := fn(in out a : rt::Arena, astr : str) -> str {
     mut mnj := i
     mut j := i + 1
     while j < n {
-      if str_lt(astr, rt::wtab_get(tb, j * 2), rt::wtab_get(tb, j * 2 + 1), rt::wtab_get(tb, mnj * 2), rt::wtab_get(tb, mnj * 2 + 1)) { mnj = j }
+      if str_lt(astr, rt::wtab_get(tb, rt::wtab_at(j, 2, 0)), rt::wtab_get(tb, rt::wtab_at(j, 2, 1)), rt::wtab_get(tb, rt::wtab_at(mnj, 2, 0)), rt::wtab_get(tb, rt::wtab_at(mnj, 2, 1))) { mnj = j }
       j += 1
     }
-    ts := rt::wtab_get(tb, i * 2)
-    tl := rt::wtab_get(tb, i * 2 + 1)
-    rt::wtab_set(tb, i * 2, rt::wtab_get(tb, mnj * 2))
-    rt::wtab_set(tb, i * 2 + 1, rt::wtab_get(tb, mnj * 2 + 1))
-    rt::wtab_set(tb, mnj * 2, ts)
-    rt::wtab_set(tb, mnj * 2 + 1, tl)
+    ts := rt::wtab_get(tb, rt::wtab_at(i, 2, 0))
+    tl := rt::wtab_get(tb, rt::wtab_at(i, 2, 1))
+    rt::wtab_set(tb, rt::wtab_at(i, 2, 0), rt::wtab_get(tb, rt::wtab_at(mnj, 2, 0)))
+    rt::wtab_set(tb, rt::wtab_at(i, 2, 1), rt::wtab_get(tb, rt::wtab_at(mnj, 2, 1)))
+    rt::wtab_set(tb, rt::wtab_at(mnj, 2, 0), ts)
+    rt::wtab_set(tb, rt::wtab_at(mnj, 2, 1), tl)
     i += 1
   }
   mut out := rt::strbuf(a, astr.len + 16)
   ab := unchecked bitcast(usize, astr.ptr)
   mut k : usize = 0
   while k < n {
-    kp := rt::push_str(out, str_at(ab + rt::wtab_get(tb, k * 2), rt::wtab_get(tb, k * 2 + 1)))
+    kp := rt::push_str(out, str_at(ab + rt::wtab_get(tb, rt::wtab_at(k, 2, 0)), rt::wtab_get(tb, rt::wtab_at(k, 2, 1))))
     kn := rt::push_byte(out, 10)
     k += 1
   }
