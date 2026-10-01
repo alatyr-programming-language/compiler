@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.6 — 2026-10-01
+
+- **Seed promotion; no emitted byte moves.** The frozen bootstrap `seed/alatyr` advances from 0.2.5 to
+  0.2.6 so the compiler's source may grow past about 7 MB (#814: the 0.2.5 seed reserved 56 bytes per
+  source byte for its PASS-1 tables) and may use arrays of `Option(ptr(T))` and direct `match`es over
+  `Option(ptr(T))` fields (#808, #809). The 0.2.5 seed already emits this tree's GAS byte for byte, so
+  seed, Stage1, Stage2 and Stage3 are identical in GAS (1 396 590 lines) and Stage1..3 in the binary,
+  all answering `alatyr 0.2.6`; `seed/VERSION` records the hashes.
 - **A struct local declared without an initializer gets its full frame slot on aarch64 and riscv64
   (#817).** `mut p : P` followed by `p = P(x = 40, y = 2)` reserved one word, sized from the parser's
   one-word placeholder, so the assignment wrote `p.y` over the next local: a copy `q := p` read
