@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An enum variant may carry an `Option(ptr(T))` payload.** The payload was stored as a two-word enum,
+  and constructing the variant from a folded local was refused. A match binding over the payload was
+  untyped, so matching it again inside the arm was refused too. The payload component's declared type now
+  decides both: one folded word in the local store and in the return registers, and a binding typed as
+  the folded Option (#852).
 - **An array-literal element out of range for its element type is refused.** `a : [u8; 2] = [1, 300]`
   and `f([1, 300])` into `xs : [u8; 2]` compiled and stored 44; each element is now range-checked in
   the declared element type, as `x : u8 = 300` already was, and refused at the element's line (Types
