@@ -10546,6 +10546,11 @@ run_x86 issue852_option_ptr_enum_payload 42
 # #858 — a field read through an ordinary enum payload's `ptr(S)` binding (one payload, a component of a
 # multi-payload variant, `ptr(mut S)`, a generic `ptr(T)`, statement/value/tail matches) read 0.
 run_x86 issue858_enum_ptr_payload_field 42
+# #864 — a scalar module global or constant passed as a bare call argument is its value whatever the
+# calling function's first parameter is; behind a by-reference first parameter (`Option(ptr(T))`, a
+# struct, an enum, a `str`) the argument lowering read the first parameter's frame slot instead.
+run issue864_global_arg 42
+run_x86 issue864_global_arg_str 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.

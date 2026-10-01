@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A module global or constant passed as a call argument is its value, whatever the function's first
+  parameter is.** The x86_64 argument lowering looked a bare name up in the frame-slot table, where a
+  global has no entry, and took the unbound answer — entry 0, the first parameter. Behind a
+  by-reference first parameter (`Option(ptr(T))`, a struct, an enum, a `str`) the global was passed as
+  that parameter's address, so `eq2(7, 1, G1, G2)` answered false. The lookup now answers `None` for a
+  name that is not a local, and the argument takes the value path (#864).
 - **A type function without its arguments is refused in every type position (#857).** `Option` is a
   function of types; only `Option(T)` is a `type` (Comptime §10, Types §6.2). The checker accepted the
   bare name as a parameter type, a result type, a local annotation, a struct field and an enum payload

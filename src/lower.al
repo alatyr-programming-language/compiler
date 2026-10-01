@@ -3141,34 +3141,47 @@ bind_comptime_shadow := fn(in out cts : SVec, s : usize, n : usize) {
   svec_push(cts, SlotEntry(ns = s, nl = n, off = s, sns = 0, snl = 0, ek = 254, estride = 0, eek = 0, is_ref = false))
 }
 
-## Look up the full slot ENTRY for a name (last match wins), so a `Field` read can recover
-## both the base offset and the struct TYPE name (to resolve the field index). Returns a
-## sentinel entry (sns = snl = 0, off = 0) if unbound — sema rejects that case upstream.
-## The INDEX of the slot entry for a name (last match wins); 0 if unbound (sema rejects that
-## upstream, so callers read entry 0's data harmlessly rather than a zero sentinel). Returns the
-## index — NOT the `SlotEntry` by value (a 9-word struct return is truncated to 3 words; see
-## `svec_at`). Callers recover the full entry with `deref(svec_at(SlotEntry, slots, entry_of(…)))`,
-## a 9-word copy resolved by the `SlotEntry` type-arg.
-entry_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> usize {
+## The INDEX of the frame-slot entry a name is bound to (last match wins), or `None` when the name is
+## not a local or a parameter of the function being lowered — a module global, a module constant, a
+## function. This is THE name-to-frame-slot scan; `entry_of` below is its sentinel adapter. A caller
+## that can meet a non-local name asks this one, so "not a frame slot" is a variant it must handle
+## rather than an index it can mistake for slot 0 (#864). Returns the index — NOT the `SlotEntry` by
+## value (a 9-word struct return is truncated to 3 words; see `svec_at`). Callers recover the full
+## entry with `deref(svec_at(SlotEntry, slots, i))`, a 9-word copy resolved by the type-arg.
+local_entry := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> Option(u64) {
   cnt := svec_len(slots)
   st := svec_stride()
   base := deref(slots).base
-  mut res := 0
-  mut found := false
+  mut res : Option(u64) = Option(u64).None
   mut i := 0
   while i < cnt {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
     if deref(e).nl == n {
-      if streq(src, deref(e).ns, n, s, n) { res = i ; found = true }
+      if streq(src, deref(e).ns, n, s, n) { res = Option(u64).Some(u64(i)) }
     }
     i += 1
   }
-  ## The name is NOT a bound local/param. Every place-resolution path reaches here, so this is where a
-  ## module-global reference the emitter cannot address used to be handed entry 0 (the unbound
-  ## sentinel, `off = 0`) and silently lowered as `-8(%rbp)`. Reject it instead; a name that is not a
-  ## global anywhere in the program keeps the historical sentinel behaviour untouched.
-  if found == false { reject_gref_unresolved_pub(src, s, n) }
   res
+}
+
+## `local_entry` for the callers that only ever ask about a bound name: the entry index, or 0 if
+## unbound (sema rejects that upstream, so such a caller reads entry 0's data rather than a zero
+## sentinel). Entry 0 is the function's FIRST frame slot, so a caller that can meet a module global
+## must ask `local_entry` instead — #864 was the call-argument path taking that 0 as the first
+## parameter's slot.
+entry_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> usize {
+  le : Option(u64) = local_entry(slots, src, s, n)
+  match le {
+    Some(i) => { usize(i) }
+    ## The name is NOT a bound local/param. Every place-resolution path reaches here, so this is where
+    ## a module-global reference the emitter cannot address used to be handed entry 0 (the unbound
+    ## sentinel, `off = 0`) and silently lowered as `-8(%rbp)`. Reject it instead; a name that is not a
+    ## global anywhere in the program keeps the historical sentinel behaviour untouched.
+    None => {
+      reject_gref_unresolved_pub(src, s, n)
+      0
+    }
+  }
 }
 
 ## ------------------------------------------------------------------------------------------------
@@ -4678,7 +4691,16 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
   if global_view_field_arg(e, cx, a) { panic("selfhost: a `str`/view FIELD of a module-level GLOBAL cannot be passed as a call argument yet - bind it to a local first (`v := G.f` then pass `v`)") }
   match deref(e) {
     Expr::Var(s, n) => {
-      ent = deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
+      ## #864 — only a LOCAL or PARAMETER is a frame place. A module global or constant has no slot:
+      ## `ent` keeps the scalar default above, and the value path at the bottom resolves the name. The
+      ## sentinel lookup handed it entry 0 — the first parameter — so behind a by-reference first
+      ## parameter (`Option(ptr(T))`, a struct, an enum, a `str`) the global was passed as that
+      ## parameter's address.
+      vle : Option(u64) = local_entry(cx.slots, cx.src, s, n)
+      match vle {
+        Some(vei) => { ent = deref(svec_at(SlotEntry, cx.slots, usize(vei))) }
+        None => {}
+      }
       if ent.ek == 5 and ent.is_ref and (ent.eek == 2 or ent.eek == 3) {
         push_str(sb, "  leaq -")
         push_int(sb, (i64(ent.off) + 1) * 8)
