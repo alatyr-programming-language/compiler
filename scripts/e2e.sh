@@ -10498,6 +10498,9 @@ run_x86 issue824_option_ptr_global_array 42
 # #828 — nested calls passing `Option(ptr(T))` values with no frame home (field reads, call results, an
 # element, a global): every staged folded word fits the measured agg-temp pool (#815).
 run_x86 issue828_option_ptr_nested_args 42
+# #852 — `Option(ptr(T))` as a payload component of another enum's variant: one folded payload word in the
+# local store and the return registers, and the match binding typed as the folded Option.
+run_x86 issue852_option_ptr_enum_payload 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.

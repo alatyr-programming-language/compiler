@@ -104,7 +104,7 @@ ecallee_is := ast::ecallee_is
 ## Name-imports for the decl-layout queries this back end leans on (the `lower_layout::` module
 ## is a 13-char qualifier repeated ~40× otherwise). Bare names read as the layout vocabulary
 ## they are; none clashes with a local definition.
-(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n, niche_payload_ptr_kind, enum_elem_words, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
+(struct_words, struct_decl_of, field_word_offset, field_words, enum_decl_of, enum_max_arity_all, variant_index, max_enum_arity_all, enum_inst_words, variant_payload_type, variant_payload_span, typearg_at, brand_underlying, name_tail, base_type_name, subst_field_ty, is_packed, scalar_byte_size, type_byte_size, type_byte_align, is_view_type, field_byte_size, is_packed_aggregate, packed_field_byte_offset, packed_struct_bytes, field_offset_attr, field_align_attr, field_endian_attr, packed_field_endian, round_up_to, packed_struct_align, struct_align_attr, enum_repr_ty, repr_tag_code, repr_ty_is_integer, repr_ty_capacity, is_niche_folded, is_bool_niche_pending, ct_arr_len, eff_field_wsize, ct_param_value, ct_bind_push, ct_bind_pop, ct_bind_depth, ct_bound_value, alias_rhs, enum_dup_disc, is_union_decl, union_words, union_member_ty, require_pred, array_type_lit, std_struct_has_byte_layout, std_struct_has_direct_byte_layout, layout_kind, layout_kind_is_packed, layout_kind_is_byte, standard_field_byte_offset, standard_struct_bytes, standard_struct_align, standard_type_byte_align, standard_type_byte_size, layout_type_size_bytes, layout_field_offset_bytes, layout_struct_is_word_stored, std_struct_is_byte_writable, std_struct_is_word_granular, std_struct_has_aggregate_field, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, layout_elem_stride_bytes, array_elem_word_reservation, std_array_elem_byte_tier, bitcast_target_is_narrow_scalar, bitcast_narrow_bytes, bitcast_narrow_is_signed, narrow_signed_min, ptr_target_pointee_s, ptr_target_pointee_n, niche_payload_ptr_kind, payload_folded_ty, enum_elem_words, generic_overload_set_count, gen_tparam_count_supported, lit_arith_i64) := lower_layout
 
 ## Shared foundation extracted to `lower_ctx` (§6 decomposition): the SlotEntry vector type + the generic
 ## arena node-pointer helper. Imported by name so the ~hundreds of `node_ptr(...)` call sites are unchanged.
@@ -9932,7 +9932,10 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       mut pw := 0
       mut pcall := false
       mut parray := false
-      if phead != 0 and np == 1 {
+      ## #852 — a payload declared `Option(ptr(T))` is one folded word: it takes the scalar register
+      ## path with `emit_store_value`, never the multi-word enum shift.
+      pf0 := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, 0, deref(cx.mar))
+      if phead != 0 and np == 1 and pf0.n == 0 {
         ga0 := deref(arg_p(phead))
         reject_unsupported_enum_call_payload(es, el, vs, vl, ga0.e, cx, a)
         apw := enum_lit_array_payload_words(e, cx.decls, cx.src, a)
@@ -10070,14 +10073,22 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
         mut cnt := 0
         while gs != 0 {
           gsa := deref(arg_p(gs))
-          if payload_agg_words(gsa.e, cx, a) != 0 or payload_enum_words(gsa.e, cx, a) != 0 { allscalar = false }
+          gsf := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, usize(cnt), deref(cx.mar))
+          if gsf.n == 0 and (payload_agg_words(gsa.e, cx, a) != 0 or payload_enum_words(gsa.e, cx, a) != 0) { allscalar = false }
           cnt += 1
           gs = gsa.next
         }
         if allscalar == false { panic("selfhost: a multi-field enum variant with a multi-word aggregate field returned by value is unsupported") }
         if cnt > 6 { panic("selfhost: an enum variant with more than 6 payload words returned by value exceeds the return-register budget") }
         mut gp := phead
-        while gp != 0 { gpa := deref(arg_p(gp)); emit_gas(gpa.e, sb, cx, a, nl); gp = gpa.next }
+        mut gk : usize = 0
+        while gp != 0 {
+          gpa := deref(arg_p(gp))
+          gpf := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, gk, deref(cx.mar))
+          emit_store_value(gpa.e, CSpan(s = gpf.s, n = gpf.n), sb, cx, a, nl)
+          gk += 1
+          gp = gpa.next
+        }
         mut jj := 0
         while jj < cnt {
           push_str(sb, "  popq ")
@@ -10098,7 +10109,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
             if unchecked bitcast(usize, f0) != 0 { emit_gas(f0, sb, cx, a, nl) } else { push_str(sb, "  pushq $0\n") }
             push_str(sb, "  popq %rdx\n")
           } else {
-            emit_gas(ga.e, sb, cx, a, nl)
+            emit_store_value(ga.e, CSpan(s = pf0.s, n = pf0.n), sb, cx, a, nl)
             push_str(sb, "  popq %rdx\n")
           }
         } else {
@@ -22372,6 +22383,7 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
       ## i.e. slot `base + 1 + i` (byte offset -(base + i + 2) * 8(%rbp)).
       mut g := phead
       mut i := 0
+      mut pci : usize = 0
       while g != 0 {
         ga := deref(arg_p(g))
         reject_unsupported_enum_call_payload(es, el, vs, vl, ga.e, cx, a)
@@ -22392,7 +22404,17 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
         }
         psi := struct_lit_info(ga.e)
         pstr := str_lit_info(ga.e)
-        if psi.is_s {
+        ## #852 — a payload component declared `Option(ptr(T))` is one folded word, whatever its value
+        ## form (a bare `Option.Some/None`, a folded local or field, a call).
+        pft := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, pci, deref(cx.mar))
+        pci += 1
+        if pft.n != 0 {
+          emit_store_value(ga.e, CSpan(s = pft.s, n = pft.n), sb, cx, a, nl)
+          push_str(sb, "  popq %rax\n  movq %rax, -")
+          push_int(sb, (base - i) * 8)
+          push_str(sb, "(%rbp)\n")
+          i += 1
+        } else if psi.is_s {
           ## a STRUCT-literal payload (`V(P(a=…, …))`) — store ALL its words at the payload slots
           ## `base+1+i …` via `emit_struct_assign` (its base slot is `base+1+i`), then advance `i`
           ## by the struct's word count. Was `emit_gas` → a placeholder `$0` (a struct is not a
@@ -22933,7 +22955,10 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
             if rpk != 0 { rps = ptr_target_pointee_s(cx.src, pty.s, pty.n); rpl = ptr_target_pointee_n(cx.src, pty.s, pty.n) }
             svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = rps, snl = rpl, ek = rpk, estride = 1, eek = 0, is_ref = false))
           } else {
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+bpf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
+mut bpk : u8 = 0
+if bpf.n != 0 { bpk = 3 }
+svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = bpf.s, snl = bpf.n, ek = bpk, estride = 1, eek = 0, is_ref = false))
           }
           bi += 1
           bnd = bnd_next(bnd)
@@ -23197,7 +23222,10 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64
       mut ebnd := eam2.binds_head
       mut ebi := 0
       while unchecked bitcast(usize, ebnd) != 0 {
-        svec_push(deref(cx.slots), SlotEntry(ns = bnd_ns(ebnd), nl = bnd_nl(ebnd), off = sbase - 1 - ebi, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+        epf := payload_folded_ty(cx.decls, cx.src, ses, sel, eam2.vs, eam2.vl, usize(ebi), deref(cx.mar))
+        mut epk : u8 = 0
+        if epf.n != 0 { epk = 3 }
+        svec_push(deref(cx.slots), SlotEntry(ns = bnd_ns(ebnd), nl = bnd_nl(ebnd), off = sbase - 1 - ebi, sns = epf.s, snl = epf.n, ek = epk, estride = 1, eek = 0, is_ref = false))
         ebi += 1
         ebnd = bnd_next(ebnd)
       }
@@ -23664,7 +23692,10 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
           }
           svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = pview_s2, snl = pview_l2, ek = pkind2, estride = 1, eek = pview_eek2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
         } else {
-          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+          spf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
+          mut spk : u8 = 0
+          if spf.n != 0 { spk = 3 }
+          svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = spf.s, snl = spf.n, ek = spk, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
         }
         bi += 1
         bnd = bnd_next(bnd)

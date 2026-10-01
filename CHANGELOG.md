@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An enum variant may carry an `Option(ptr(T))` payload.** The payload was stored as a two-word enum,
+  and constructing the variant from a folded local was refused. A match binding over the payload was
+  untyped, so matching it again inside the arm was refused too. The payload component's declared type now
+  decides both: one folded word in the local store and in the return registers, and a binding typed as
+  the folded Option (#852).
 - **`alatyr fmt` keeps the type arguments of a single-payload enum variant.** It rendered the variant
   from the payload's head token, so `B(Option(ptr(mut N)))` became `B(Option)` and `B(ptr(u64))` became
   `B(ptr)` — exit 0, idempotent, and still compiling (#857), so only the program's behaviour changed:

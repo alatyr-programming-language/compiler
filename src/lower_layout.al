@@ -4509,6 +4509,23 @@ enum_max_arity_of_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), di : usize, a 
   mx
 }
 
+## #852 — the declared type of payload component `k` (0-based) of variant `[vs, vs+vn)` of the enum whose
+## head span is `[es, es+en)`, when it is a NICHE-FOLDED `Option(ptr(T))`, else 0/0. A folded component is
+## ONE payload word, so a construction stores its one folded word (not a two-word enum) and a match
+## binding over it is typed as the folded Option (`match q { Some(r) => … }` inside the arm).
+pub payload_folded_ty := fn(decls : ptr(rt::Vec), src : ptr(u8), es : usize, en : usize, vs : usize, vn : usize, k : usize, a : rt::Arena) -> LSpan {
+  z := LSpan(s = 0, n = 0)
+  if k == 0 {
+    pt := variant_payload_type(decls, src, es, en, vs, vn, a)
+    if is_niche_folded(src, pt.s, pt.n) { return pt }
+  }
+  tup := variant_payload_span(decls, src, es, en, vs, vn, a)
+  if tup.n == 0 or str_at((src + tup.s), 1) != "(" { return z }
+  ct := typearg_at(src, tup.s, 0, k)
+  if is_niche_folded(src, ct.s, ct.n) { return ct }
+  z
+}
+
 ## The word size of a bare TYPE-name span `[s, s+n)`: a struct → its `struct_words`, an enum →
 ## `1 + enum_max_arity` (disc + widest payload), else a scalar/pointer/unresolved → 1. The leaf
 ## sizer used by `enum_inst_words` when a generic variant's payload is a concrete type-arg.
@@ -4524,6 +4541,8 @@ pub agg_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a
   ## WHOLE name and would miss the `Option` decl), but size the INSTANCE (`enum_inst_words`, full
   ## span) so a substituted aggregate payload is counted — not `enum_max_arity` (the param-generic
   ## sizer). Mutual recursion agg_words↔enum_inst_words terminates for non-recursive types.
+  ## #852 — a niche-folded `Option(ptr(T))` is one word in every position, a payload included.
+  if is_niche_folded(src, s, n) { return 1 }
   ebn := base_type_name(src, s, n)
   if qualified_enum_decl_of(decls, src, ebn.s, ebn.n) >= 0 { return 1 + enum_inst_words(decls, src, s, n, a) }
   if str_at((src + s), n) == "str" { return 2 }   ## a `str` value is a 2-word {ptr, len}
