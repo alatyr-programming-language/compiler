@@ -4159,6 +4159,11 @@ DIAG_QUALIFIED_PRIVATE_CONST_MARKER := 6900000000000000000
 ## byte-identical.
 DIAG_UNRESOLVED_QUAL_HEAD_MARKER := 6901000000000000000
 DIAG_UNRESOLVED_QUAL_HEAD_SLOT := 128
+## Issue #857 / Comptime §10 + Types §6.2 — the sema-side UNAPPLIED TYPE FUNCTION class
+## (`sema::UNAPPLIED_TYPE_FN_DIAG_MARKER`), payload 128-wide exactly like the unresolved-head class:
+## the low 7 bits are the name's LENGTH, the rest its source offset. It sits between the
+## unresolved-`::`-head and enum-field-access windows, so only the former's upper bound moves.
+DIAG_UNAPPLIED_TYPE_FN_MARKER := 6901500000000000000
 ## CT-12 / Comptime §2.6 — the COMPTIME guard-failure class (shared with sema::comptime_err). Above
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
@@ -4277,7 +4282,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   global_init_call := code >= DIAG_GLOBAL_INIT_CALL_MARKER and code < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := code >= DIAG_GLOBAL_AGG_MARKER and code < DIAG_GLOBAL_INIT_CALL_MARKER
   private_const := code >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and code < DIAG_UNRESOLVED_QUAL_HEAD_MARKER
-  unresolved_qual_head := code >= DIAG_UNRESOLVED_QUAL_HEAD_MARKER and code < DIAG_ENUM_FIELD_ACCESS_MARKER
+  unresolved_qual_head := code >= DIAG_UNRESOLVED_QUAL_HEAD_MARKER and code < DIAG_UNAPPLIED_TYPE_FN_MARKER
+  unapplied_type_fn := code >= DIAG_UNAPPLIED_TYPE_FN_MARKER and code < DIAG_ENUM_FIELD_ACCESS_MARKER
   enum_field_access := code >= DIAG_ENUM_FIELD_ACCESS_MARKER and code < DIAG_CT_MARKER
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_BRAND_CONVERSION_MARKER
@@ -4351,6 +4357,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   } else if unresolved_qual_head {
     raw = code - DIAG_UNRESOLVED_QUAL_HEAD_MARKER
     span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
+  } else if unapplied_type_fn {
+    raw = code - DIAG_UNAPPLIED_TYPE_FN_MARKER
+    span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
   } else if enum_dup_disc {
     raw = code - DIAG_ENUM_DUP_DISC_MARKER
     span = raw / 4
@@ -4388,7 +4397,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or enum_field_access or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::fd_str(2, "@limits(")
       wk1 := rt::fd_str(2, limit_name(kind))
@@ -4418,6 +4427,13 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if multidim_array { wkmda := rt::fd_str(2, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { wkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
     else if enum_field_access { wkefa := rt::fd_str(2, "a FIELD ACCESS on an ENUM value: an enum value is a discriminant plus ONE variant's payload and has no fields at all (Types §6.2/§9.4) — reach the payload through `match` and its binding patterns, not through a field name") }
+    else if unapplied_type_fn {
+      wkua0 := rt::fd_str(2, "type function `")
+      wkua1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
+      wkua2 := rt::fd_str(2, "` is not a type until it is applied: a type position needs type arguments, write `")
+      wkua3 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
+      wkua4 := rt::fd_str(2, "(T)` (Comptime §10, Types §6.2)")
+    }
     else if unresolved_qual_head {
       wkuqh0 := rt::fd_str(2, "no module, type, or alias named `")
       wkuqh1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
@@ -7033,7 +7049,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   global_init_call := r >= DIAG_GLOBAL_INIT_CALL_MARKER and r < DIAG_STANDARD_TUPLE_GLOBAL_MARKER
   gagg := r >= DIAG_GLOBAL_AGG_MARKER and r < DIAG_GLOBAL_INIT_CALL_MARKER
   private_const := r >= DIAG_QUALIFIED_PRIVATE_CONST_MARKER and r < DIAG_UNRESOLVED_QUAL_HEAD_MARKER
-  unresolved_qual_head := r >= DIAG_UNRESOLVED_QUAL_HEAD_MARKER and r < DIAG_ENUM_FIELD_ACCESS_MARKER
+  unresolved_qual_head := r >= DIAG_UNRESOLVED_QUAL_HEAD_MARKER and r < DIAG_UNAPPLIED_TYPE_FN_MARKER
+  unapplied_type_fn := r >= DIAG_UNAPPLIED_TYPE_FN_MARKER and r < DIAG_ENUM_FIELD_ACCESS_MARKER
   enum_field_access := r >= DIAG_ENUM_FIELD_ACCESS_MARKER and r < DIAG_CT_MARKER
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_BRAND_CONVERSION_MARKER
@@ -7107,6 +7124,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   } else if unresolved_qual_head {
     raw = r - DIAG_UNRESOLVED_QUAL_HEAD_MARKER
     span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
+  } else if unapplied_type_fn {
+    raw = r - DIAG_UNAPPLIED_TYPE_FN_MARKER
+    span = raw / DIAG_UNRESOLVED_QUAL_HEAD_SLOT
   } else if enum_dup_disc {
     raw = r - DIAG_ENUM_DUP_DISC_MARKER
     span = raw / 4
@@ -7145,7 +7165,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or enum_field_access or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
@@ -7178,6 +7198,13 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if multidim_array { dwkmda := rt::fd_str(2, "a local [[u8; 2]; 2] or [[u64; 2]; 2] is not supported yet (nested fixed-array lowering is not safe)") }
     else if private_const { dwkv := rt::fd_str(2, "qualified private constant is not visible from this module") }
     else if enum_field_access { dwkefa := rt::fd_str(2, "a FIELD ACCESS on an ENUM value: an enum value is a discriminant plus ONE variant's payload and has no fields at all (Types §6.2/§9.4) — reach the payload through `match` and its binding patterns, not through a field name") }
+    else if unapplied_type_fn {
+      dwkua0 := rt::fd_str(2, "type function `")
+      dwkua1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
+      dwkua2 := rt::fd_str(2, "` is not a type until it is applied: a type position needs type arguments, write `")
+      dwkua3 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))
+      dwkua4 := rt::fd_str(2, "(T)` (Comptime §10, Types §6.2)")
+    }
     else if unresolved_qual_head {
       dwkuqh0 := rt::fd_str(2, "no module, type, or alias named `")
       dwkuqh1 := rt::fd_str(2, str_at(base + span, raw % DIAG_UNRESOLVED_QUAL_HEAD_SLOT))

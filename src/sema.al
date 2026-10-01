@@ -234,6 +234,19 @@ unresolved_qual_head_err := fn(s : usize, n : usize) -> CheckErr {
   if hn > UNRESOLVED_QUAL_HEAD_LEN_CAP { hn = UNRESOLVED_QUAL_HEAD_LEN_CAP }
   UNRESOLVED_QUAL_HEAD_DIAG_MARKER + diag_span(s) * 128 + hn
 }
+## Issue #857 / Comptime §10 + Types §6.2 — a TYPE FUNCTION (`Option`, `Result`, a user
+## `Box := fn(T : type) -> type {…}`) written in a type position WITHOUT its arguments. Only the
+## application yields a `type`; the bare name is a function of types. The payload is 128-wide, the
+## shape of the unresolved-head class above: the low 7 bits are the name's LENGTH (capped) and the rest
+## its source offset, so the message quotes the exact spelling. The class sits between the
+## unresolved-`::`-head and enum-field-access windows, so only the former's upper bound moves and every
+## other decoded CheckErr range stays byte-identical.
+UNAPPLIED_TYPE_FN_DIAG_MARKER := 6901500000000000000
+unapplied_type_fn_err := fn(s : usize, n : usize) -> CheckErr {
+  mut hn := n
+  if hn > UNRESOLVED_QUAL_HEAD_LEN_CAP { hn = UNRESOLVED_QUAL_HEAD_LEN_CAP }
+  UNAPPLIED_TYPE_FN_DIAG_MARKER + diag_span(s) * 128 + hn
+}
 ## Issue #693 / Types §6.2 + §9.4 — a FIELD ACCESS whose OWNER is an ENUM VALUE. An enum value is a
 ## discriminant plus the payload of ONE variant; it has no field table at all, so `v.a` names nothing,
 ## whatever `a` happens to spell in a neighbouring struct. Measured on the parent, the read answered a
@@ -15613,6 +15626,10 @@ sema_type_alias_known := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : 
 }
 
 sema_signature_type_head_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> usize {
+  ## Issue #857 / Comptime §10 — a type function (or bare `ptr`) in this type position must be applied.
+  ## The one decision, asked for a parameter, a result and a local annotation through this one door.
+  ru := sema_unapplied_type_fn_span(decls, src, ph, s, n)
+  if ru != 0 { return ru }
   if n == 0 or not _sident1(src, s) { return 0 }
   mut i := 1
   while i < n {
@@ -15640,6 +15657,95 @@ sema_signature_type_head_unknown := fn(ph : ptr(mut Param), decls : ptr(rt::Vec)
   if brand_underlying(decls, src, s, n).n != 0 { return 0 }
   if sema_type_alias_known(decls, src, s, n) { return 0 }
   located_err(s)
+}
+
+## Issue #857 — is `[s, s+n)` the name of a (declared) TYPE FUNCTION: a generic struct/enum declaration, written
+## either `Name(T) := struct {…}` or `Name := fn(T : type) -> type { return struct {…} }`? The parser
+## desugars both to an `is_generic` decl that is not a fn (a generic FN is `is_generic` and `is_fn`).
+sema_type_fn_named := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.is_generic and d.is_fn == false and streq(src, d.name_start, d.name_len, s, n) { return true }
+    i += 1
+  }
+  false
+}
+
+## Issue #857 — the offset just past the `)` that closes the `(` at `q`.
+sema_paren_end := fn(src : ptr(u8), q0 : usize) -> usize {
+  mut q := q0
+  mut depth := 0
+  mut scanning := true
+  while scanning {
+    c := str_at((src + q), 1)
+    if c == "(" { depth += 1 }
+    if c == ")" { depth -= 1 }
+    q += 1
+    if depth == 0 { scanning = false }
+  }
+  q
+}
+
+## Issue #857 — the ONE decision that a type function in a type position must be applied. Scans the
+## type text that starts at `[s, s+n)`: the recorded head, extended over the balanced `( … )` that
+## follows it (`ptr(Box)`, `Option(Box)`, `fn(Option) -> u8` keep their inner names in source, the
+## parser records only the head). Every identifier in that text that names a type function and is not
+## followed by `(` is an unapplied use, located at the identifier. The enclosing declaration's own
+## `T : type` parameters are names, not references (`ph`).
+sema_unapplied_type_fn_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ph : ptr(mut Param), s : usize, n : usize) -> usize {
+  if n == 0 { return 0 }
+  mut e := s + n
+  mut q := e
+  while _sws1(src, q) { q += 1 }
+  if str_at((src + q), 1) == "(" { e = sema_paren_end(src, q) }
+  sema_unapplied_type_fn_text(decls, src, ph, s, e)
+}
+
+## The scan half of `sema_unapplied_type_fn_span`, over the explicit text `[s, e)`.
+sema_unapplied_type_fn_text := fn(decls : ptr(rt::Vec), src : ptr(u8), ph : ptr(mut Param), s : usize, e : usize) -> usize {
+  mut i := s
+  while i < e {
+    if _sident1(src, i) {
+      mut j := i
+      while j < e and _sident1(src, j) { j += 1 }
+      c0 := bytes(str_at((src + i), 1))[0]
+      is_word := not (c0 >= 48 and c0 <= 57)
+      ## `ptr` is the builtin pointer type constructor: `ptr` alone is no type either (Memory §4.1).
+      is_ctor := is_word and (sema_type_fn_named(decls, src, i, j - i) or str_at((src + i), j - i) == "ptr")
+      if is_ctor and not sema_param_type_name(ph, src, i, j - i) {
+        mut k := j
+        while _sws1(src, k) { k += 1 }
+        if str_at((src + k), 1) != "(" { return unapplied_type_fn_err(i, j - i) }
+      }
+      i = j
+    } else { i += 1 }
+  }
+  0
+}
+
+## Issue #857 — the struct-field and enum-payload type positions of a user declaration (parameters,
+## the result and local annotations go through `sema_signature_type_head_unknown`). The parser records
+## only a variant's FIRST payload head, so a payload list is re-read from the source after the variant
+## name, paren-balanced, exactly as written. A variant's `arity` is its payload count and a struct
+## field's is 0, which tells the two apart without a kind code.
+sema_unapplied_type_fn_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
+  mut f := d.fields_head
+  ## null-ok: FieldDecl.next — a struct's field / an enum's variant list ends in a null link (ast.al "0 = end")
+  while unchecked bitcast(usize, f) != 0 {
+    fd := deref(fld_p(f))
+    mut p := fd.ns + fd.nl
+    while _sws1(src, p) { p += 1 }
+    if fd.arity != 0 and str_at((src + p), 1) == "(" {
+      r0 := sema_unapplied_type_fn_text(decls, src, d.params_head, p, sema_paren_end(src, p))
+      if r0 != 0 { return r0 }
+    }
+    r1 := sema_unapplied_type_fn_span(decls, src, d.params_head, fd.ts, fd.tl)
+    if r1 != 0 { return r1 }
+    f = fd.next
+  }
+  0
 }
 
 sema_signature_type_reject := fn(d : Decl, decls : ptr(rt::Vec), src : ptr(u8)) -> usize {
@@ -17383,6 +17489,9 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
       ## their dedicated validation paths.
       st := sema_signature_type_reject(d, decls, src)
       if st != 0 { return st }
+      ## Issue #857 / Comptime §10: a type function in a type position must be applied.
+      ut := sema_unapplied_type_fn_reject(d, decls, src)
+      if ut != 0 { return ut }
       ## Types §1/§4.1 + Modules §2: a qualified type argument is a concrete comptime type value whose
       ## declaration identity includes its module. Unknown/unsupported paths are located rejects.
       qg := sema_qualified_generic_reject(d, decls, src)
