@@ -684,14 +684,15 @@ pub arg_p := fn(p : ptr(mut Arg)) -> ptr(mut Arg) { p }
 pub arg_null := fn() -> ptr(mut Arg) { unchecked bitcast(ptr(mut Arg), 0) }
 
 ## A struct-literal **field initializer** `f = v` collected AT PARSE (arena-linked): the field
-## NAME span `[fs, fs+fl)`, the value expr, and `next` (0 = end). Used ONLY transiently inside the
+## NAME span `[fs, fs+fl)`, the value expr, and `next`. Used ONLY transiently inside the
 ## struct-literal parse to REORDER named field values into the struct's DECLARATION order (TYP-8
 ## — construction is BY NAME, not by source position). The reordered result is an ordinary `Arg` list
 ## stored on the `StructLit` node, so no other pass ever sees a `FInit` — it is parser-internal, and
 ## the emitted AST is byte-identical for an already-in-declaration-order literal (fixpoint-neutral).
-pub FInit := struct { fs : usize, fl : usize, e : ptr(Expr), next : ptr(mut FInit) }
+## Absence is `Option` (strict forms §1): the list head is `None` for an empty literal and the last
+## initializer's `next` is `None`.
+pub FInit := struct { fs : usize, fl : usize, e : ptr(Expr), next : Option(ptr(mut FInit)) }
 pub finit_p := fn(p : ptr(mut FInit)) -> ptr(mut FInit) { p }
-pub finit_null := fn() -> ptr(mut FInit) { unchecked bitcast(ptr(mut FInit), 0) }
 
 ## A function-body statement: a local binding / reassignment `name (:= | =) <expr>`
 ## (Assign: name span, value, next), a `while <cmp> { <stmts> }` loop (While: cond,
