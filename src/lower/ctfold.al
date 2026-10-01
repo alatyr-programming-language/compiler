@@ -204,9 +204,16 @@ build_flag_bool := fn(name : str) -> i64 {
   return 0
 }
 
-build_flag_str_eq := fn(name : str, rhs : str) -> i64 {
+## Is the profile value `val` the RHS spelled `head` (a string literal, tail empty) or `head.tail` (an
+## enum variant `E.V`)? Compared in pieces, so no RHS text has to be assembled into a buffer.
+rhs_text_is := fn(val : str, head : str, tail : str) -> bool {
+  if tail.len == 0 { return val == head }
+  if val.len != head.len + 1 + tail.len { return false }
+  str_at(val.ptr, head.len) == head and str_at(val.ptr + head.len, 1) == "." and str_at(val.ptr + head.len + 1, tail.len) == tail
+}
+build_flag_str_eq := fn(name : str, head : str, tail : str) -> i64 {
   if BUILD_FLAGS_N == 0 {
-    if name == "profile" { if rhs == "debug" { return 1 } return 0 }
+    if name == "profile" { if rhs_text_is("debug", head, tail) { return 1 } return 0 }
     panic("selfhost: build.<name> comparison — flag not declared in the manifest profile_flags")
   }
   c := build_flag_scan(name)
@@ -228,13 +235,13 @@ build_flag_str_eq := fn(name : str, rhs : str) -> i64 {
         mut ve := le
         while ve > e + 1 and (bytes(blob)[ve - 1] == 32 or bytes(blob)[ve - 1] == 9 or bytes(blob)[ve - 1] == 10 or bytes(blob)[ve - 1] == 13 or bytes(blob)[ve - 1] == 41 or bytes(blob)[ve - 1] == 93 or bytes(blob)[ve - 1] == 125) { ve = ve - 1 }
         val := str_at(bb + e + 1, ve - (e + 1))
-        if val == rhs { return 1 }
+        if rhs_text_is(val, head, tail) { return 1 }
         return 0
       }
     }
     i = le + 1
   }
-  if name == "profile" { if rhs == "debug" { return 1 } return 0 }
+  if name == "profile" { if rhs_text_is("debug", head, tail) { return 1 } return 0 }
   panic("selfhost: build.<name> comparison — flag not declared in the manifest profile_flags")
   return 0
 }
@@ -257,44 +264,39 @@ build_flag_int_eq := fn(name : str, rhs : i64) -> i64 {
   return 0
 }
 
-build_cmp_rhs_text := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> str {
+## The RHS of a `build.<name> == …` comparison in two pieces: a string literal is its own text (tail
+## empty); `E.V` — a `Field`, or an `EnumLit` when `E` names a known enum (parser.al §1840) — is the
+## head `E` and the tail `V`, matching the manifest blob's `mode=Mode.slow` token (cli.al `mf_token`).
+## An empty head means the RHS is no such form.
+build_cmp_rhs_head := fn(e : ptr(Expr), src : ptr(u8)) -> str {
   match deref(e) {
     Expr::StrLit(rs, rn, rl, _ps, _pn) => { return str_at((src + rs), rn) }
     Expr::Field(rb, rfs, rfl) => {
       rvn := var_name_span(rb)
-      if rvn.n != 0 {
-        mut sb := rt::strbuf(a, rvn.n + rfl + 16)
-        k1 := rt::push_str(sb, str_at((src + rvn.s), rvn.n))
-        k2 := rt::push_byte(sb, 46)
-        k3 := rt::push_str(sb, str_at((src + rfs), rfl))
-        return str_at(sb.data, sb.len)
-      }
-      return ""
+      return str_at((src + rvn.s), rvn.n)
     }
-    ## `E.V` — a nullary enum-variant reference. When `E` names a KNOWN enum the parser emits an `EnumLit`
-    ## (not a `Field`, see parser.al §1840); rebuild the canonical `E.V` text (matching the manifest blob's
-    ## `mode=Mode.slow` token, cli.al `mf_token`) so an enum-typed profile flag compares by variant.
-    Expr::EnumLit(ees, eel, evs, evl, enp, eah) => {
-      if eel != 0 {
-        mut eb := rt::strbuf(a, eel + evl + 16)
-        j1 := rt::push_str(eb, str_at((src + ees), eel))
-        j2 := rt::push_byte(eb, 46)
-        j3 := rt::push_str(eb, str_at((src + evs), evl))
-        return str_at(eb.data, eb.len)
-      }
-      return ""
-    }
+    Expr::EnumLit(ees, eel, evs, evl, enp, eah) => { return str_at((src + ees), eel) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::AddrOf | Expr::Deref | Expr::ArrayLit | Expr::Index | Expr::Try
       | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
       | Expr::Bitcast | Expr::Loop => { return "" }
   }
 }
+build_cmp_rhs_tail := fn(e : ptr(Expr), src : ptr(u8)) -> str {
+  match deref(e) {
+    Expr::Field(rb, rfs, rfl) => { return str_at((src + rfs), rfl) }
+    Expr::EnumLit(ees, eel, evs, evl, enp, eah) => { return str_at((src + evs), evl) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index
+      | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda
+      | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return "" }
+  }
+}
 
 ## The `build.<name>` LHS of a comptime `build.<name> == …` comparison (Tooling §2.6/§2.7): the flag-NAME
 ## span when `l` is a `Field` whose base `Var` is `build`, else `n == 0`. A SEPARATE fn so the caller
 ## (`comptime_cond_eval`'s `Bin` arm) needs no nested `match deref(l)` inside a `match` arm — a self-host
-## lower idiom limit (mirrors `build_cmp_rhs_text` / `arch_rhs_name`, and the `decl_guard_fold` note).
+## lower idiom limit (mirrors `build_cmp_rhs_head` / `arch_rhs_name`, and the `decl_guard_fold` note).
 build_lhs_flag_name := fn(l : ptr(Expr), src : ptr(u8)) -> CSpan {
   match deref(l) {
     Expr::Field(lb, lfs, lfl) => {
@@ -307,6 +309,46 @@ build_lhs_flag_name := fn(l : ptr(Expr), src : ptr(u8)) -> CSpan {
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return CSpan(s = 0, n = 0) }
   }
+}
+
+## `docs/ir.md` slice 0b — the CLOSED profile-flag predicates of a `comptime if`, folded with no lowering
+## context, so every backend folds them with this one function: `build.<flag>` (a bool flag), and
+## `build.<flag> == / != "str" | E.V | N`. Answers 1 / 0, or -1 when `cond` is none of these forms; an
+## undeclared or mistyped flag fails loud inside the `build_flag_*` readers, on every backend alike.
+## `comptime_cond_eval` (x86) and the twins' `*_comp_cond_fold` ask this first. Before it the twins did
+## not know `build.*` at all and left the `comptime if` unfolded (a located trap) where x86 folded it or
+## refused the build (§2.2's "comptime and generics" family).
+pub closed_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
+  match deref(cond) {
+    Expr::Field(b, fs, fl) => {
+      vn := var_name_span(b)
+      if vn.n != 0 and str_at((src + vn.s), vn.n) == "build" { return build_flag_bool(str_at((src + fs), fl)) }
+      return -1
+    }
+    Expr::Bin(op, l, r) => { return closed_cmp_fold(op, l, r, src) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef
+      | Expr::Bitcast | Expr::Loop => { return -1 }
+  }
+}
+## The `build.<flag> == / != rhs` half of `closed_cond_fold` (its own fn: no nested `match` in an arm).
+closed_cmp_fold := fn(op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) -> i64 {
+  if i64(op) != 20 and i64(op) != 28 { return -1 }
+  bfn := build_lhs_flag_name(l, src)
+  if bfn.n == 0 { return -1 }
+  mut eqv : i64 = 0 - 1
+  if guard_expr_is_num(r) {
+    eqv = build_flag_int_eq(str_at((src + bfn.s), bfn.n), guard_expr_num(r))
+  } else {
+    rhead := build_cmp_rhs_head(r, src)
+    if rhead.len == 0 { return -1 }
+    rtail := build_cmp_rhs_tail(r, src)
+    eqv = build_flag_str_eq(str_at((src + bfn.s), bfn.n), rhead, rtail)
+  }
+  if i64(op) == 20 { return eqv }
+  if eqv == 1 { return 0 }
+  1
 }
 
 ## Emit a bare `build.<name>` VALUE expression as an immediate push (Tooling §2.7): a bool flag → 0/1, an
@@ -925,35 +967,10 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
       return cr
     }
     Expr::Bin(op, l, r) => {
-      ## `comptime if build.<name> == "str"` / `== E.V` (Tooling §2.6/§2.7) — fold a str/enum-typed
-      ## profile flag from the SELECTED profile blob. LHS is `build.<name>` (a `Field` whose base `Var`
-      ## is `build`); RHS is a string literal or an `E.V` enum reference (`build_cmp_rhs_text`). Only
-      ## `==`(20)/`!=`(28); an undeclared flag FAILS LOUD inside `build_flag_str_eq` (never a silent 0).
-      ## Placed FIRST so it wins over the arch/type-name arms (whose RHS helpers do not match `build.*`).
-      if i64(op) == 20 or i64(op) == 28 {
-        bfn := build_lhs_flag_name(l, src)
-        if bfn.n != 0 {
-          rtext := build_cmp_rhs_text(r, src, a)
-          if rtext.len != 0 {
-            eqv := build_flag_str_eq(str_at((src + bfn.s), bfn.n), rtext)
-            if i64(op) == 20 { return eqv }
-            if eqv == 1 { return 0 }
-            return 1
-          }
-        }
-      }
-      ## `comptime if build.<name> == N` / `!= N` (Tooling §2.7) — fold a declared integer profile
-      ## flag against the bare numeric RHS. Keep this next to the str/enum arm: both are closed profile
-      ## facts, and the helper gives a type-mismatch/undeclared flag a fail-loud boundary.
-      if i64(op) == 20 or i64(op) == 28 {
-        bfn := build_lhs_flag_name(l, src)
-        if bfn.n != 0 and guard_expr_is_num(r) {
-          eqv := build_flag_int_eq(str_at((src + bfn.s), bfn.n), guard_expr_num(r))
-          if i64(op) == 20 { return eqv }
-          if eqv == 1 { return 0 }
-          return 1
-        }
-      }
+      ## `build.<name> == "str" | E.V | N` (Tooling §2.6/§2.7) — the closed profile-flag compare, shared
+      ## with the twins (`closed_cond_fold`). Placed FIRST so it wins over the arch/type-name arms.
+      bcf := closed_cmp_fold(op, l, r, src)
+      if bcf >= 0 { return bcf }
       ## TARGET gating `target.<facet> == / != <Enum>.<variant>` (Comptime §9.2, Tooling §2.7) — the
       ## four machine facets plus selected artifact `kind` are folded against the current build, with the
       ## OPERATOR honoured. The previous fold read only the RHS `Arch.<name>` and returned the `==`
@@ -1055,12 +1072,8 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
         if cx.vchk { return 1 }
         return 0
       }
-      ## `comptime if build.<flag>` (Tooling §2.7) — fold a bool profile flag from the selected profile;
-      ## undeclared / non-bool fails LOUD inside `build_flag_bool` (never a silent 0).
-      if vn.n != 0 and str_at((src + vn.s), vn.n) == "build" {
-        return build_flag_bool(str_at((src + fs), fl))
-      }
-      return -1
+      ## `comptime if build.<flag>` (Tooling §2.7) — the closed bool-flag fold shared with the twins.
+      return closed_cond_fold(cond, src)
     }
     Expr::Match(scrut, arms_head) => {
       ## `match typeinfo(X) { <Kind>(_) => true; _ => false }` — a structural is-KIND test, folded by
