@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.8 — 2026-10-02
+
+- **Seed promotion; the bootstrap stops miscompiling its own global arguments.** The frozen
+  `seed/alatyr` advances from 0.2.7 to 0.2.8 so it carries #864's fix: the 0.2.7 seed passed a module
+  global as a call argument from the calling function's first frame slot when that parameter is
+  by-reference, and the compiler's own source hit it in four functions. Seed to Stage1 moves exactly
+  those 10 loads; Stage1, Stage2 and Stage3 emit identical GAS (1 429 695 lines) and Stage2 == Stage3
+  in the binary, all answering `alatyr 0.2.8`; `seed/VERSION` records the hashes.
 - **A module global or constant passed as a call argument is its value, whatever the function's first
   parameter is.** The x86_64 argument lowering looked a bare name up in the frame-slot table, where a
   global has no entry, and took the unbound answer — entry 0, the first parameter. Behind a

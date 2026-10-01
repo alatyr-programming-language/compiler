@@ -61,13 +61,13 @@ rs-ancestor: 55fba9086aeb2d197e4a1fe9c266722989a60abb
 # tree on every run, so a promotion that forgets to update them fails the gate instead of leaving the
 # file quietly describing a different compiler.
 #
-current-seed-sha256: 1ec875d96dc4987c13313b5bb51e19b1df9059b9cb00c36aa04a672fe9b5ccb8
-current-seed-version: 0.2.7
+current-seed-sha256: 117916a008746e922435005666afaf1ded06ef362f2638ed33eb340303785f3e
+current-seed-version: 0.2.8
 #
-# Promoted:      2026-10-01 (see the last entry in this file)
+# Promoted:      2026-10-02 (see the last entry in this file)
 # Promoted stage: Stage2, of a Stage1 == Stage2 == Stage3 convergence
-# GAS at promotion: 1425931 lines
-# GAS SHA-256:   61321e7fa2d2e93cb93fe79c5521d6d3ed30fba83873ebad6a444c0786d134e5
+# GAS at promotion: 1429695 lines
+# GAS SHA-256:   adaf1e21950c0aa058f6d5ba43f1595b079c283b0c468e87a171645ca9442fb0
 #
 # `current-seed-version` is the `version` field of `package.al` at the moment of the promotion, and by
 # the versioning order in CHANGELOG.md the two must agree at all times: the version moves ON a
@@ -1553,4 +1553,31 @@ current-seed-version: 0.2.7
 # 1b4c8c86d13b4dd4c346b152dacf0a711390f4cdbf7595fcf60bde4be2b655af (5329064 B).
 #
 # VERSION 0.2.6 -> 0.2.7, PATCH: no emitted byte moves; the frozen bootstrap advances.
+# The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
+
+# ---------------------------------------------------------------------------------------------
+# 0.2.7 -> 0.2.8   promoted 2026-10-02   seed/alatyr := Stage2
+#
+# WHY: #864 (PR #867) — a module global passed as a call argument was read from frame slot 0 when
+# the calling function's first parameter is by-reference. The compiler's own source was miscompiled
+# by it in four functions, and the AST Param -> Option(ptr) migration (#863, #529) multiplies that
+# shape across the backends. The tree also carries #856/#858/#852/#857 fixes and slices 0b part 2a
+# and 1a (#851, #853), none of which changes what the compiler emits for itself.
+#
+# THE DELTA: 10 lines in 4 functions (cli manifest_validate_target_call, driver
+# d_ovl_wat_separable, ir verify_prog, wat emit_wat_fn), each `movq -8(%rbp), %rax` becoming
+# `movq <module>__<GLOBAL>(%rip), %rax`.
+# One sentence: a global passed as a call argument is now read from its symbol, not from the first
+# parameter's frame slot.
+#
+# CONVERGENCE (bump first; native x86_64 omen):
+# Stage1 == Stage2 == Stage3 GAS byte-identical RAW at 1429695 lines.
+# GAS SHA-256: adaf1e21950c0aa058f6d5ba43f1595b079c283b0c468e87a171645ca9442fb0.
+# Stage2 == Stage3 BINARY SHA-256:
+# 117916a008746e922435005666afaf1ded06ef362f2638ed33eb340303785f3e (5411152 B).
+# All three answer `alatyr 0.2.8`.
+# Superseded seed (0.2.7) SHA-256:
+# 1ec875d96dc4987c13313b5bb51e19b1df9059b9cb00c36aa04a672fe9b5ccb8 (5398080 B).
+#
+# VERSION 0.2.7 -> 0.2.8, PATCH: the frozen bootstrap stops miscompiling its own global arguments.
 # The specification pin (1.0.0 plus post-tag commits to b4e7979) did not move.
