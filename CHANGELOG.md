@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An enum variant may carry an `Option(ptr(T))` payload.** The payload was stored as a two-word enum,
+  and constructing the variant from a folded local was refused. A match binding over the payload was
+  untyped, so matching it again inside the arm was refused too. The payload component's declared type now
+  decides both: one folded word in the local store and in the return registers, and a binding typed as
+  the folded Option (#852).
 - **`deref(p) = S(…)` stores an `Option(ptr(T))` field literal correctly.** Storing a struct literal
   through a pointer pushed each field as a scalar, so `Some(q)` stored None (the `0` placeholder). Each
   field is now pushed by its declared type (#846).
