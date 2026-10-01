@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`alatyr fmt` keeps the type arguments of a single-payload enum variant.** It rendered the variant
+  from the payload's head token, so `B(Option(ptr(mut N)))` became `B(Option)` and `B(ptr(u64))` became
+  `B(ptr)` — exit 0, idempotent, and still compiling (#857), so only the program's behaviour changed:
+  #854's fixture SIGSEGVs after `fmt`. Every payloaded variant now copies its payload group from
+  source (#856).
+
 ## 0.2.7 — 2026-10-01
 
 - **Seed promotion; no emitted byte moves.** The frozen bootstrap `seed/alatyr` advances from 0.2.6 to
