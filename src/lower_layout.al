@@ -1819,7 +1819,15 @@ pub field_words := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usiz
     ## an ENUM-typed field occupies `1 (discriminant) + max payload arity` words — the parser defaults
     ## its `wsize` to 1, which would let the NEXT field overwrite the enum's payload (a silent
     ## struct-with-enum-field miscompile). Count it like an enum local/element slot.
-    if enum_decl_of(decls, src, ts, tl) >= 0 {
+    ## #792 — a GENERIC enum instance field (`span : Option(u64)`, `r : Result(u64, E)`) is looked up by
+    ## its BASE name, as the struct branch above already is: the full parenthesized span names no decl,
+    ## so the field was sized as ONE scalar word while its constructor stores `[disc, payload]` — the
+    ## next field's store then overwrote the payload, and every read of the field returned that next
+    ## field as the payload. The niche-folded `Option(ptr(T))` is exactly pointer-width (Types §6.2/§8),
+    ## and `is_niche_folded` is the one place that decides it, so it keeps its single word.
+    if is_niche_folded(src, ts, tl) { return 1 }
+    gebn := base_type_name(src, ts, tl)
+    if enum_decl_of(decls, src, gebn.s, gebn.n) >= 0 {
       ## RAW UNION fields overlap at offset 0 and reserve only the maximum member width, with no
       ## discriminant word. A union is represented by the existing kind-3 decl shape, so this
       ## distinction must happen before the ordinary enum `1 + payload` sizing or a following

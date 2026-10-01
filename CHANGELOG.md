@@ -133,6 +133,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   `deref(q).v` on a clean build. The declared type now decides the one-word `.data` cell, the store,
   the read, a `match` on the global and passing it as an argument (#823).
 
+- **An enum or `Option(u64)` field read through a pointer gives its value on x86_64 (#792).**
+  `deref(p).op` over an enum field returned the null enum by value (a `match` took the wrong arm), and
+  passed straight as an argument (`code(deref(p).op)`) it crashed with SIGSEGV; a payload enum field read
+  the same way gave 0. An `Option(u64)` (any generic enum instance) struct FIELD was laid out as one word
+  while its constructor stored two, so the payload read back as the next field and `size` was one word
+  short. Pointer-rooted aggregate fields now resolve through the same place as a by-reference
+  parameter's, and a generic enum field is sized by its declaration (`Option(ptr(T))` stays one folded word).
 ## 0.2.6 — 2026-10-01
 
 - **Seed promotion; no emitted byte moves.** The frozen bootstrap `seed/alatyr` advances from 0.2.5 to
