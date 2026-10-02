@@ -17,12 +17,13 @@
 vec := alloc::vec
 (Arg, Arm, Bind, Decl, Expr, FieldDecl, FInit, LabelSpan, Param, Stmt, Token) := ast
 (param_p) := ast
-stmt_null := ast::stmt_null
 arm_p := ast::arm_p
 bind_count := ast::bind_count
 arg_p := ast::arg_p
 arg_at := ast::arg_at
 stmt_p := ast::stmt_p
+stmt_last := ast::stmt_last
+stmt_next := ast::stmt_next
 stmt_label_mark := ast::stmt_label_mark
 stmt_label_span := ast::stmt_label_span
 expr_label_mark := ast::expr_label_mark
@@ -710,51 +711,60 @@ pub clone_expr := fn(a : ptr(mut rt::Arena), e : ptr(Expr), ok : ptr(mut bool)) 
     Expr::StructLit(cs, cl, n, ah) => { cah := clone_args(a, ah, ok); r = newnode(a, Expr.StructLit(cs, cl, n, cah)) }
     Expr::EnumLit(es, el, vs, vl, n, ah) => { cah := clone_args(a, ah, ok); r = newnode(a, Expr.EnumLit(es, el, vs, vl, n, cah)) }
     Expr::ArrayLit(n, ah) => { cah := clone_args(a, ah, ok); r = newnode(a, Expr.ArrayLit(n, cah)) }
-    Expr::Loop(b) => { cb := clone_stmts(a, b, ok); r = newnode(a, Expr.Loop(cb)); ls := expr_label_span(e); expr_label_mark(r, ls.s, ls.n) }
+    Expr::Loop(b) => { cbs := clone_stmts(a, b, ok); r = newnode(a, Expr.Loop(cbs)); ls := expr_label_span(e); expr_label_mark(r, ls.s, ls.n) }
     Expr::Match | Expr::CompField | Expr::Lambda => { deref(ok) = false }
   }
   r
 }
 
-## Clone ONE statement (its `next` is set to 0 — the caller links the spine); the original's `next`
-## handle is written to `nxout` so the spine walker advances without a second match.
-clone_one_stmt := fn(a : ptr(mut rt::Arena), st : ptr(mut Stmt), ok : ptr(mut bool), nxout : ptr(mut usize)) -> ptr(mut Stmt) {
+## Clone ONE statement (its `next` is `None` — the caller links the spine); `None` = not cloneable
+## (`ok` is cleared), which ends the spine walk.
+clone_one_stmt := fn(a : ptr(mut rt::Arena), st : ptr(mut Stmt), ok : ptr(mut bool)) -> Option(ptr(mut Stmt)) {
   x := deref(stmt_p(Stmt, st))
-  mut r := stmt_null()
+  mut r : Option(ptr(mut Stmt)) = Option.None
   match x {
-    Stmt::Assign(ns, nl, v, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cv := clone_expr(a, v, ok); r = snode(a, Stmt.Assign(ns, nl, cv, 0)) }
-    Stmt::Return(rv, nx) => { deref(nxout) = unchecked bitcast(usize, nx); mut crv := expr_null(); if unchecked bitcast(usize, rv) != 0 { crv = clone_expr(a, rv, ok) }; r = snode(a, Stmt.Return(crv, 0)) }
-    Stmt::ExprStmt(e, nx) => { deref(nxout) = unchecked bitcast(usize, nx); ce := clone_expr(a, e, ok); r = snode(a, Stmt.ExprStmt(ce, 0)); ls := stmt_label_span(st); stmt_label_mark(r, ls.s, ls.n) }
-    Stmt::If(c, th, el, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cc := clone_expr(a, c, ok); cth := clone_stmts(a, th, ok); cel := clone_stmts(a, el, ok); r = snode(a, Stmt.If(cc, cth, cel, 0)) }
-    Stmt::While(c, b, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cc := clone_expr(a, c, ok); cb := clone_stmts(a, b, ok); r = snode(a, Stmt.While(cc, cb, 0)); ls := stmt_label_span(st); stmt_label_mark(r, ls.s, ls.n) }
-    Stmt::For(fns, fnl, lo, hi, b, nx) => { deref(nxout) = unchecked bitcast(usize, nx); mut clo := expr_null(); if unchecked bitcast(usize, lo) != 0 { clo = clone_expr(a, lo, ok) }; mut chi := expr_null(); if unchecked bitcast(usize, hi) != 0 { chi = clone_expr(a, hi, ok) }; cb := clone_stmts(a, b, ok); r = snode(a, Stmt.For(fns, fnl, clo, chi, cb, 0)); ls := stmt_label_span(st); stmt_label_mark(r, ls.s, ls.n) }
-    Stmt::Loop(b, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cb := clone_stmts(a, b, ok); r = snode(a, Stmt.Loop(cb, 0)); ls := stmt_label_span(st); stmt_label_mark(r, ls.s, ls.n) }
-    Stmt::Unchecked(b, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cb := clone_stmts(a, b, ok); r = snode(a, Stmt.Unchecked(cb, 0)) }
-    Stmt::Break(bv, bd, nx) => { deref(nxout) = unchecked bitcast(usize, nx); mut cbv := expr_null(); if unchecked bitcast(usize, bv) != 0 { cbv = clone_expr(a, bv, ok) }; r = snode(a, Stmt.Break(cbv, bd, 0)); ls := stmt_label_span(st); stmt_label_mark(r, ls.s, ls.n) }
-    Stmt::Continue(cd, nx) => { deref(nxout) = unchecked bitcast(usize, nx); r = snode(a, Stmt.Continue(cd, 0)); ls := stmt_label_span(st); stmt_label_mark(r, ls.s, ls.n) }
-    Stmt::DerefAssign(p, v, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cp := clone_expr(a, p, ok); cv := clone_expr(a, v, ok); r = snode(a, Stmt.DerefAssign(cp, cv, 0)) }
-    Stmt::IndexAssign(b, ix, v, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cb := clone_expr(a, b, ok); cix := clone_expr(a, ix, ok); cv := clone_expr(a, v, ok); r = snode(a, Stmt.IndexAssign(cb, cix, cv, 0)) }
-    Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cfv := clone_expr(a, fv, ok); r = snode(a, Stmt.FieldAssign(bns, bnl, ffs, ffl, cfv, 0)) }
-    Stmt::FieldPathAssign(pl, fpv, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cpl := clone_expr(a, pl, ok); cfpv := clone_expr(a, fpv, ok); r = snode(a, Stmt.FieldPathAssign(cpl, cfpv, 0)) }
-    Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cb := clone_expr(a, b, ok); cix := clone_expr(a, ix, ok); cv := clone_expr(a, v, ok); r = snode(a, Stmt.IndexFieldAssign(cb, cix, ffs, ffl, cv, 0)) }
-    Stmt::AllocWith(ae, b, nx) => { deref(nxout) = unchecked bitcast(usize, nx); cae := clone_expr(a, ae, ok); cb := clone_stmts(a, b, ok); r = snode(a, Stmt.AllocWith(cae, cb, 0)) }
+    Stmt::Assign(ns, nl, v, nx) => { cv := clone_expr(a, v, ok); nn := snode(a, Stmt.Assign(ns, nl, cv, Option.None)); r = Option.Some(nn) }
+    Stmt::Return(rv, nx) => { mut crv := expr_null(); if unchecked bitcast(usize, rv) != 0 { crv = clone_expr(a, rv, ok) }; nn := snode(a, Stmt.Return(crv, Option.None)); r = Option.Some(nn) }
+    Stmt::ExprStmt(e, nx) => { ce := clone_expr(a, e, ok); nn := snode(a, Stmt.ExprStmt(ce, Option.None)); r = Option.Some(nn); ls := stmt_label_span(st); stmt_label_mark(nn, ls.s, ls.n) }
+    Stmt::If(c, th, el, nx) => { cc := clone_expr(a, c, ok); cth := clone_stmts(a, th, ok); cel := clone_stmts(a, el, ok); nn := snode(a, Stmt.If(cc, cth, cel, Option.None)); r = Option.Some(nn) }
+    Stmt::While(c, b, nx) => { cc := clone_expr(a, c, ok); cbs := clone_stmts(a, b, ok); nn := snode(a, Stmt.While(cc, cbs, Option.None)); r = Option.Some(nn); ls := stmt_label_span(st); stmt_label_mark(nn, ls.s, ls.n) }
+    Stmt::For(fns, fnl, lo, hi, b, nx) => { mut clo := expr_null(); if unchecked bitcast(usize, lo) != 0 { clo = clone_expr(a, lo, ok) }; mut chi := expr_null(); if unchecked bitcast(usize, hi) != 0 { chi = clone_expr(a, hi, ok) }; cbs := clone_stmts(a, b, ok); nn := snode(a, Stmt.For(fns, fnl, clo, chi, cbs, Option.None)); r = Option.Some(nn); ls := stmt_label_span(st); stmt_label_mark(nn, ls.s, ls.n) }
+    Stmt::Loop(b, nx) => { cbs := clone_stmts(a, b, ok); nn := snode(a, Stmt.Loop(cbs, Option.None)); r = Option.Some(nn); ls := stmt_label_span(st); stmt_label_mark(nn, ls.s, ls.n) }
+    Stmt::Unchecked(b, nx) => { cbs := clone_stmts(a, b, ok); nn := snode(a, Stmt.Unchecked(cbs, Option.None)); r = Option.Some(nn) }
+    Stmt::Break(bv, bd, nx) => { mut cbv := expr_null(); if unchecked bitcast(usize, bv) != 0 { cbv = clone_expr(a, bv, ok) }; nn := snode(a, Stmt.Break(cbv, bd, Option.None)); r = Option.Some(nn); ls := stmt_label_span(st); stmt_label_mark(nn, ls.s, ls.n) }
+    Stmt::Continue(cd, nx) => { nn := snode(a, Stmt.Continue(cd, Option.None)); r = Option.Some(nn); ls := stmt_label_span(st); stmt_label_mark(nn, ls.s, ls.n) }
+    Stmt::DerefAssign(p, v, nx) => { cp := clone_expr(a, p, ok); cv := clone_expr(a, v, ok); nn := snode(a, Stmt.DerefAssign(cp, cv, Option.None)); r = Option.Some(nn) }
+    Stmt::IndexAssign(b, ix, v, nx) => { cb := clone_expr(a, b, ok); cix := clone_expr(a, ix, ok); cv := clone_expr(a, v, ok); nn := snode(a, Stmt.IndexAssign(cb, cix, cv, Option.None)); r = Option.Some(nn) }
+    Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { cfv := clone_expr(a, fv, ok); nn := snode(a, Stmt.FieldAssign(bns, bnl, ffs, ffl, cfv, Option.None)); r = Option.Some(nn) }
+    Stmt::FieldPathAssign(pl, fpv, nx) => { cpl := clone_expr(a, pl, ok); cfpv := clone_expr(a, fpv, ok); nn := snode(a, Stmt.FieldPathAssign(cpl, cfpv, Option.None)); r = Option.Some(nn) }
+    Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { cb := clone_expr(a, b, ok); cix := clone_expr(a, ix, ok); cv := clone_expr(a, v, ok); nn := snode(a, Stmt.IndexFieldAssign(cb, cix, ffs, ffl, cv, Option.None)); r = Option.Some(nn) }
+    Stmt::AllocWith(ae, b, nx) => { cae := clone_expr(a, ae, ok); cbs := clone_stmts(a, b, ok); nn := snode(a, Stmt.AllocWith(cae, cbs, Option.None)); r = Option.Some(nn) }
     ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-    Stmt::Match | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { deref(nxout) = 0; deref(ok) = false }
+    Stmt::Match | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { deref(ok) = false }
   }
   r
 }
 
 ## Clone a Stmt LIST, linking the fresh nodes via `set_stmt_next` (the safe link store).
-pub clone_stmts := fn(a : ptr(mut rt::Arena), head : ptr(mut Stmt), ok : ptr(mut bool)) -> ptr(mut Stmt) {
-  mut nhead := stmt_null()
-  mut ntail := stmt_null()
-  mut st := head
-  while unchecked bitcast(usize, st) != 0 {
-    mut nx := 0
-    ns := clone_one_stmt(a, st, ok, ptr(nx))
-    if unchecked bitcast(usize, nhead) == 0 { nhead = ns } else { set_stmt_next(a, ntail, ns) }
-    ntail = ns
-    st = unchecked bitcast(ptr(mut Stmt), nx)
+pub clone_stmts := fn(a : ptr(mut rt::Arena), head : Option(ptr(mut Stmt)), ok : ptr(mut bool)) -> Option(ptr(mut Stmt)) {
+  mut nhead : Option(ptr(mut Stmt)) = Option.None
+  mut ntail : Option(ptr(mut Stmt)) = Option.None
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        cs : Option(ptr(mut Stmt)) = clone_one_stmt(a, stq, ok)
+        match cs {
+          Some(ns) => {
+            match ntail { Some(nt0) => { set_stmt_next(a, nt0, Option.Some(ns)) }; None => { nhead = Option.Some(ns) } }
+            ntail = Option.Some(ns)
+          }
+          None => { break }
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
+    }
   }
   nhead
 }
@@ -825,32 +835,36 @@ renum_str_args := fn(a : ptr(mut rt::Arena), ah : Option(ptr(mut Arg)), base : u
   }
 }
 ## RENUMBER string-literal labels across a cloned STATEMENT list (mirrors `clone_one_stmt`'s variants).
-pub renum_str_stmts := fn(a : ptr(mut rt::Arena), head : ptr(mut Stmt), base : usize) {
-  mut st := head
-  while unchecked bitcast(usize, st) != 0 {
-    x := deref(stmt_p(Stmt, st))
-    mut nx := 0
-    match x {
-      Stmt::Assign(ns, nl, v, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, v, base) }
-      Stmt::Return(rv, n2) => { nx = unchecked bitcast(usize, n2); if unchecked bitcast(usize, rv) != 0 { renum_str_expr(a, rv, base) } }
-      Stmt::ExprStmt(e, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, e, base) }
-      Stmt::If(c, th, el, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, c, base); renum_str_stmts(a, th, base); renum_str_stmts(a, el, base) }
-      Stmt::While(c, b, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, c, base); renum_str_stmts(a, b, base) }
-      Stmt::For(fns, fnl, lo, hi, b, n2) => { nx = unchecked bitcast(usize, n2); if unchecked bitcast(usize, lo) != 0 { renum_str_expr(a, lo, base) }; if unchecked bitcast(usize, hi) != 0 { renum_str_expr(a, hi, base) }; renum_str_stmts(a, b, base) }
-      Stmt::Loop(b, n2) => { nx = unchecked bitcast(usize, n2); renum_str_stmts(a, b, base) }
-      Stmt::Unchecked(b, n2) => { nx = unchecked bitcast(usize, n2); renum_str_stmts(a, b, base) }
-      Stmt::Break(bv, bd, n2) => { nx = unchecked bitcast(usize, n2); if unchecked bitcast(usize, bv) != 0 { renum_str_expr(a, bv, base) } }
-      Stmt::Continue(cd, n2) => { nx = unchecked bitcast(usize, n2) }
-      Stmt::DerefAssign(p, v, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, p, base); renum_str_expr(a, v, base) }
-      Stmt::IndexAssign(b, ix, v, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, b, base); renum_str_expr(a, ix, base); renum_str_expr(a, v, base) }
-      Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, fv, base) }
-      Stmt::FieldPathAssign(pl, fpv, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, pl, base); renum_str_expr(a, fpv, base) }
-      Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, b, base); renum_str_expr(a, ix, base); renum_str_expr(a, v, base) }
-      Stmt::AllocWith(ae, b, n2) => { nx = unchecked bitcast(usize, n2); renum_str_expr(a, ae, base); renum_str_stmts(a, b, base) }
-      ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
-      Stmt::Match | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { nx = 0 }
+pub renum_str_stmts := fn(a : ptr(mut rt::Arena), head : Option(ptr(mut Stmt)), base : usize) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, n2) => { renum_str_expr(a, v, base) }
+          Stmt::Return(rv, n2) => { if unchecked bitcast(usize, rv) != 0 { renum_str_expr(a, rv, base) } }
+          Stmt::ExprStmt(e, n2) => { renum_str_expr(a, e, base) }
+          Stmt::If(c, th, el, n2) => { renum_str_expr(a, c, base); renum_str_stmts(a, th, base); renum_str_stmts(a, el, base) }
+          Stmt::While(c, b, n2) => { renum_str_expr(a, c, base); renum_str_stmts(a, b, base) }
+          Stmt::For(fns, fnl, lo, hi, b, n2) => { if unchecked bitcast(usize, lo) != 0 { renum_str_expr(a, lo, base) }; if unchecked bitcast(usize, hi) != 0 { renum_str_expr(a, hi, base) }; renum_str_stmts(a, b, base) }
+          Stmt::Loop(b, n2) => { renum_str_stmts(a, b, base) }
+          Stmt::Unchecked(b, n2) => { renum_str_stmts(a, b, base) }
+          Stmt::Break(bv, bd, n2) => { if unchecked bitcast(usize, bv) != 0 { renum_str_expr(a, bv, base) } }
+          Stmt::Continue(cd, n2) => {}
+          Stmt::DerefAssign(p, v, n2) => { renum_str_expr(a, p, base); renum_str_expr(a, v, base) }
+          Stmt::IndexAssign(b, ix, v, n2) => { renum_str_expr(a, b, base); renum_str_expr(a, ix, base); renum_str_expr(a, v, base) }
+          Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, n2) => { renum_str_expr(a, fv, base) }
+          Stmt::FieldPathAssign(pl, fpv, n2) => { renum_str_expr(a, pl, base); renum_str_expr(a, fpv, base) }
+          Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, n2) => { renum_str_expr(a, b, base); renum_str_expr(a, ix, base); renum_str_expr(a, v, base) }
+          Stmt::AllocWith(ae, b, n2) => { renum_str_expr(a, ae, base); renum_str_stmts(a, b, base) }
+          ## #544 stage 1 — enumerated once #680/#660 made this `match` checked: a new variant is refused here.
+          Stmt::Match | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => { break }
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), nx)
   }
 }
 
@@ -988,7 +1002,7 @@ set_arm_body := fn(a : ptr(mut rt::Arena), h : ptr(mut Arm), b : ptr(Expr)) {
   o := deref(arm_p(h))
   deref(arm_p(h)) = Arm(wild = o.wild, lit = o.lit, body = b, next = o.next, vs = o.vs, vl = o.vl, binds_head = o.binds_head, body_stmts = o.body_stmts, hi = o.hi)
 }
-set_arm_body_stmts := fn(a : ptr(mut rt::Arena), h : ptr(mut Arm), bs : ptr(mut Stmt)) {
+set_arm_body_stmts := fn(a : ptr(mut rt::Arena), h : ptr(mut Arm), bs : Option(ptr(mut Stmt))) {
   o := deref(arm_p(h))
   deref(arm_p(h)) = Arm(wild = o.wild, lit = o.lit, body = o.body, next = o.next, vs = o.vs, vl = o.vl, binds_head = o.binds_head, body_stmts = bs, hi = o.hi)
 }
@@ -1091,7 +1105,7 @@ parse_pat_alt := fn(in out pc : PC) -> ptr(mut Arm) {
     else if cur(pc).kind == 37 { pc.idx = pc.idx + 1; hi = pat_endpoint(pc); w = 6 }
   }
   dummy := newnode(pc.arena, Expr.Num(0, 0, 0))
-  anode(pc.arena, Arm(wild = w, lit = lit, body = dummy, next = Option.None, vs = vs, vl = vl, binds_head = bhead, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), hi = hi))
+  anode(pc.arena, Arm(wild = w, lit = lit, body = dummy, next = Option.None, vs = vs, vl = vl, binds_head = bhead, body_stmts = Option.None, hi = hi))
 }
 
 ## Is the cursor on a pointer intrinsic `mem :: (addr|val) (` — the `::`-path shape this toy
@@ -1574,22 +1588,22 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         zlb := reject_here(pc, "selfhost: a `fn` SIGNATURE must be followed by a braced BODY `{ ... }` - the input ends or continues with something else, so this function has no body (a truncated file, a partial copy, or a bad merge)")
       }
       pc.idx = pc.idx + 1                 ## '{'
-      mut lshead := 0
-      mut lstail := 0
+      mut lshead : Option(ptr(mut Stmt)) = Option.None
+      mut lstail : Option(ptr(mut Stmt)) = Option.None
       mut lbody := newnode(pc.arena, Expr.Num(0 - 1, 0, 0))
       while cur(pc).kind != 13 and cur(pc).kind != 0 {
         if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }
         else if stmt_starts(pc) {
           ls := p_stmt(pc)
-          if lshead == 0 { lshead = ls } else { set_stmt_next(pc.arena, stmt_last(lstail, pc.arena), ls) }
-          lstail = ls
+          match lstail { Some(lt0) => { set_stmt_next(pc.arena, stmt_last(lt0), Option.Some(ls)) }; None => { lshead = Option.Some(ls) } }
+          lstail = Option.Some(ls)
         } else {
           le := p_or(pc)
           if cur(pc).kind == 13 or cur(pc).kind == 0 { lbody = le }
           else {
-            les := snode(pc.arena, Stmt.ExprStmt(le, 0))
-            if lshead == 0 { lshead = unchecked bitcast(usize, les) } else { set_stmt_next(pc.arena, stmt_last(lstail, pc.arena), les) }
-            lstail = unchecked bitcast(usize, les)
+            les := snode(pc.arena, Stmt.ExprStmt(le, Option.None))
+            match lstail { Some(lt0) => { set_stmt_next(pc.arena, stmt_last(lt0), Option.Some(les)) }; None => { lshead = Option.Some(les) } }
+            lstail = Option.Some(les)
           }
         }
       }
@@ -1614,10 +1628,10 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       pc.idx = pc.idx + 1                 ## 'loop'
       pc.idx = pc.idx + 1                 ## '{'
       lbl_push()
-      lbody := p_stmts(pc)
+      lbstmts := p_stmts(pc)
       lbl_pop()
       pc.idx = pc.idx + 1                 ## '}'
-      lexpr := newnode(pc.arena, Expr.Loop(lbody))
+      lexpr := newnode(pc.arena, Expr.Loop(lbstmts))
       expr_label_mark(lexpr, loop_label_s, loop_label_l)
       return lexpr
     }
@@ -1710,7 +1724,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           pc.idx = pc.idx + 1                 ## '=>'
           tbe := p_or(pc)                     ## EXPRESSION body
           pc.idx = pc.idx + 1                 ## '}' (comptime-for body close)
-          anew2 := anode(pc.arena, Arm(wild = 2, lit = 0, body = tbe, next = Option.None, vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), hi = 0))
+          anew2 := anode(pc.arena, Arm(wild = 2, lit = 0, body = tbe, next = Option.None, vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = Option.None, hi = 0))
           match armt {
             Some(armt0) => {
               ap2 := arm_p(armt0)
@@ -3356,49 +3370,12 @@ p_place_val := fn(in out pc : PC, place : ptr(Expr)) -> ptr(mut Expr) {
 ## `var.field = <cmp>`, or `name (:= | =) <cmp>` (local binding / reassignment — both `Assign`).
 ## Returns the new statement's arena handle (its `next` is linked by `p_stmts`).
 ## ---- DEFER chain helpers (below) shall not be re-entered before this point ---------------------
-## The next-statement handle (`nx`) of statement `h` — a parser-side chain walk (the safe READ mirror
-## of `set_stmt_next`'s per-variant stores). EXHAUSTIVE over `Stmt` so the walk always terminates.
-p_stmt_nx := fn(h : usize, a : rt::Arena) -> usize {
-  st := deref(stmt_p(Stmt, h))
-  match st {
-    Stmt::Assign(ns, nl, v, nx) => { nx }
-    Stmt::While(c, b, nx) => { nx }
-    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { nx }
-    Stmt::FieldPathAssign(pl, pv, nx) => { nx }
-    Stmt::Return(rv, nx) => { nx }
-    Stmt::If(c, th, el, nx) => { nx }
-    Stmt::Match(sc, ah, nx) => { nx }
-    Stmt::For(fns, fnl, flo, fhi, fb, nx) => { nx }
-    Stmt::DerefAssign(p, v, nx) => { nx }
-    Stmt::IndexAssign(b, i, v, nx) => { nx }
-    Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { nx }
-    Stmt::Loop(b, nx) => { nx }
-    Stmt::Unchecked(b, nx) => { nx }
-    Stmt::AllocWith(ae, b, nx) => { nx }
-    Stmt::Break(bv, bd, nx) => { nx }
-    Stmt::Continue(cd, nx) => { nx }
-    Stmt::ExprStmt(e, nx) => { nx }
-    Stmt::CompIf(c, th, el, nx) => { nx }
-    Stmt::CompFor(vs, vl, iv, b, nx) => { nx }
-    Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { nx }
-    Stmt::CompMatch(sc, ah, nx) => { nx }
-  }
-}
 ## The LAST statement of the chain beginning at `h` (walks `.next`). For the zero-step case — every
 ## statement that ISN'T a `defer { }` block (a single node) — returns `h` unchanged, so a parent list
 ## linked via `set_stmt_next(arena, stmt_last(tail), s)` is byte-identical to the plain
 ## `set_stmt_next(arena, tail, s)` for ALL existing source. A `defer { }` desugars to a multi-node
 ## chain (`__deferblk()` → block statements → `__deferblkend()`), and this lets the parent list append
 ## to the chain's TAIL so the markers + block statements stay intact in the list.
-stmt_last := fn(h : ptr(mut Stmt), a : rt::Arena) -> ptr(mut Stmt) {
-  mut cur := unchecked bitcast(usize, h)
-  mut res := h
-  while unchecked bitcast(usize, res) != 0 {
-    cur = unchecked bitcast(usize, res)
-    res = unchecked bitcast(ptr(mut Stmt), p_stmt_nx(cur, a))
-  }
-  unchecked bitcast(ptr(mut Stmt), cur)
-}
 ## Does expression `e` contain a `?` (Expr::Try) anywhere in its tree? A recursive scan used ONLY by
 ## the `defer { }` validator (`defer_stmts_clean`) to reject an early-exit (`?`) inside a cleanup block.
 ## Exhaustive over `Expr` (including an expression-position match's arm bodies and a value-position
@@ -3440,33 +3417,39 @@ defer_expr_try := fn(e : ptr(Expr)) -> bool {
 ## the comptime forms). A jump out of a cleanup would leave the remainder of the block unrun / jump
 ## into the enclosing scope's stale labels — a SILENT partial-cleanup miscompile; reject it (the defer
 ## handler panics). EXHAUSTIVE over `Stmt` so the walk always terminates.
-defer_stmts_clean := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
-  mut s := head
+defer_stmts_clean := fn(head : Option(ptr(mut Stmt)), a : rt::Arena) -> bool {
+  mut s : Option(ptr(mut Stmt)) = head
   mut ok := true
-  while s != 0 and ok {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Return(rv, nx) => { ok = false ; s = nx }
-      Stmt::Break(bv, bd, nx) => { ok = false ; s = nx }
-      Stmt::Continue(cd, nx) => { ok = false ; s = nx }
-      Stmt::While(c, b, nx) => { if defer_expr_try(c) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-      Stmt::Loop(b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-      Stmt::If(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th, a) == false or defer_stmts_clean(el, a) == false { ok = false } ; s = nx }
-      Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if defer_expr_try(flo) or defer_expr_try(fhi) or defer_stmts_clean(fb, a) == false { ok = false } ; s = nx }
-      Stmt::DerefAssign(p, v, nx) => { if defer_expr_try(p) or defer_expr_try(v) { ok = false } ; s = nx }
-      Stmt::IndexAssign(b, i, v, nx) => { if defer_expr_try(b) or defer_expr_try(i) or defer_expr_try(v) { ok = false } ; s = nx }
-      Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { if defer_expr_try(b) or defer_expr_try(i) or defer_expr_try(v) { ok = false } ; s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { if defer_expr_try(fv) { ok = false } ; s = nx }
-      Stmt::FieldPathAssign(pl, v, nx) => { if defer_expr_try(pl) or defer_expr_try(v) { ok = false } ; s = nx }
-      Stmt::Assign(ns, nl, v, nx) => { if defer_expr_try(v) { ok = false } ; s = nx }
-      Stmt::ExprStmt(e, nx) => { if defer_expr_try(e) { ok = false } ; s = nx }
-      Stmt::Unchecked(b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-      Stmt::AllocWith(ae, b, nx) => { if defer_expr_try(ae) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-      Stmt::CompIf(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th, a) == false or defer_stmts_clean(el, a) == false { ok = false } ; s = nx }
-      Stmt::CompFor(vs, vl, iv, b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if defer_expr_try(lo) or defer_expr_try(hi) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-      Stmt::CompMatch(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
+  loop {
+    match s {
+      Some(sq) => {
+        if not (ok) { break }
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Return(rv, nx) => { ok = false ; s = nx }
+          Stmt::Break(bv, bd, nx) => { ok = false ; s = nx }
+          Stmt::Continue(cd, nx) => { ok = false ; s = nx }
+          Stmt::While(c, b, nx) => { if defer_expr_try(c) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
+          Stmt::Loop(b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
+          Stmt::If(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th, a) == false or defer_stmts_clean(el, a) == false { ok = false } ; s = nx }
+          Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if defer_expr_try(flo) or defer_expr_try(fhi) or defer_stmts_clean(fb, a) == false { ok = false } ; s = nx }
+          Stmt::DerefAssign(p, v, nx) => { if defer_expr_try(p) or defer_expr_try(v) { ok = false } ; s = nx }
+          Stmt::IndexAssign(b, i, v, nx) => { if defer_expr_try(b) or defer_expr_try(i) or defer_expr_try(v) { ok = false } ; s = nx }
+          Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { if defer_expr_try(b) or defer_expr_try(i) or defer_expr_try(v) { ok = false } ; s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { if defer_expr_try(fv) { ok = false } ; s = nx }
+          Stmt::FieldPathAssign(pl, v, nx) => { if defer_expr_try(pl) or defer_expr_try(v) { ok = false } ; s = nx }
+          Stmt::Assign(ns, nl, v, nx) => { if defer_expr_try(v) { ok = false } ; s = nx }
+          Stmt::ExprStmt(e, nx) => { if defer_expr_try(e) { ok = false } ; s = nx }
+          Stmt::Unchecked(b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
+          Stmt::AllocWith(ae, b, nx) => { if defer_expr_try(ae) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
+          Stmt::CompIf(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th, a) == false or defer_stmts_clean(el, a) == false { ok = false } ; s = nx }
+          Stmt::CompFor(vs, vl, iv, b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
+          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if defer_expr_try(lo) or defer_expr_try(hi) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
+          Stmt::CompMatch(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
+        }
+      }
+      None => { break }
     }
   }
   ok
@@ -3551,7 +3534,7 @@ qual_place_assign_head := fn(pc : PC) -> usize {
   0
 }
 
-p_stmt := fn(in out pc : PC) -> usize {
+p_stmt := fn(in out pc : PC) -> ptr(mut Stmt) {
   ## `geo::G = …` / `geo::TAB[i] = …` — a QUALIFIED PLACE. Consume the module-path HEAD so every
   ## statement form below keys on the final segment (see `qual_place_assign_head`).
   qph := qual_place_assign_head(pc)
@@ -3592,10 +3575,10 @@ p_stmt := fn(in out pc : PC) -> usize {
       ty_e := newnode(pc.arena, Expr.Var(ts, 5))
       ty_arg := gnode(pc.arena, Arg(e = ty_e, next = Option.Some(arena_arg)))
       calln := newnode(pc.arena, Expr.Call(ai_s, 10, 3, Option.Some(ty_arg)))
-      return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, calln, 0)))
+      return snode(pc.arena, Stmt.Assign(nm.start, nm.len, calln, Option.None))
     }
     callq := newnode(pc.arena, Expr.Call(ai_s, 10, 2, Option.Some(arena_arg)))
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, callq, 0)))
+    return snode(pc.arena, Stmt.Assign(nm.start, nm.len, callq, Option.None))
   }
   ## `unchecked { <stmts> }` — the STATEMENT verification-mode block (Grammar §130: `unchecked (expr |
   ## block)`). Parse the braced statement list and wrap it in `Stmt.Unchecked`; the lower lowers the
@@ -3607,7 +3590,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## '{'
     ubody := p_stmts(pc)
     pc.idx = pc.idx + 1                 ## '}'
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.Unchecked(ubody, 0)))
+    return snode(pc.arena, Stmt.Unchecked(ubody, Option.None))
   }
   ## `alloc::with(A) { <stmts> }` — the AMBIENT-ALLOCATOR scope (MEM-5 / Grammar §130 alloc-with-region).
   ## `A` becomes the ambient allocator for the body; a call in the body omitting an allocator param gets
@@ -3619,7 +3602,7 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## '{'
     wbody := p_stmts(pc)
     pc.idx = pc.idx + 1                 ## '}'
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.AllocWith(aexpr, wbody, 0)))
+    return snode(pc.arena, Stmt.AllocWith(aexpr, wbody, Option.None))
   }
   ## `mut name … = v` — a mutable binding. The self-host compiler binds every local to a frame
   ## slot regardless (mutability is the front end's concern, not lowering's), so the `mut`
@@ -3644,14 +3627,14 @@ p_stmt := fn(in out pc : PC) -> usize {
       pc.idx = pc.idx + 1                 ## '{'
       cthen := p_stmts(pc)
       pc.idx = pc.idx + 1                 ## '}'
-      mut celse := 0
+      mut celse : Option(ptr(mut Stmt)) = Option.None
       if tok_kw(pc, "else") {
         pc.idx = pc.idx + 1               ## 'else'
         pc.idx = pc.idx + 1               ## '{'
         celse = p_stmts(pc)
         pc.idx = pc.idx + 1               ## '}'
       }
-      return unchecked bitcast(usize, snode(pc.arena, Stmt.CompIf(ccond, cthen, celse, 0)))
+      return snode(pc.arena, Stmt.CompIf(ccond, cthen, celse, Option.None))
     }
     ## `comptime for <var> in typeinfo(T).fields/.variants { body }` — a COLLECTION comptime-for,
     ## parsed into a `CompFor` node the lower unrolls over the instance type's members. A RANGE form
@@ -3686,7 +3669,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         pkbody := p_stmts(pc)
         pc.idx = pc.idx + 1               ## '}'
         pnull := unchecked bitcast(ptr(Expr), 0)
-        return unchecked bitcast(usize, snode(pc.arena, Stmt.CompForRange(pvtok.start, pvtok.len, plo, pnull, pkbody, 0)))
+        return snode(pc.arena, Stmt.CompForRange(pvtok.start, pvtok.len, plo, pnull, pkbody, Option.None))
       }
       if isrange == false {
         pc.idx = pc.idx + 1               ## 'for'
@@ -3699,7 +3682,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         itn := field_tail_name(iter)
         mut isvar : u8 = 0
         if itn.n != 0 and str_eq(str_at(pc.src + itn.s, itn.n), "variants") { isvar = 1 }
-        return unchecked bitcast(usize, snode(pc.arena, Stmt.CompFor(vtok.start, vtok.len, isvar, cfbody, 0)))
+        return snode(pc.arena, Stmt.CompFor(vtok.start, vtok.len, isvar, cfbody, Option.None))
       } else {
         ## RANGE form `comptime for i in lo .. hi { body }` — parse the bounds + body into a
         ## `CompForRange` node; the lower UNROLLS it at compile time (the loop var binds each constant).
@@ -3713,7 +3696,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         pc.idx = pc.idx + 1               ## '{'
         crbody := p_stmts(pc)
         pc.idx = pc.idx + 1               ## '}'
-        return unchecked bitcast(usize, snode(pc.arena, Stmt.CompForRange(rvtok.start, rvtok.len, rlo, rhi, crbody, 0)))
+        return snode(pc.arena, Stmt.CompForRange(rvtok.start, rvtok.len, rlo, rhi, crbody, Option.None))
       }
     }
     ## `comptime match typeinfo(T) { Struct(_) => {…} … _ => {…} }` — a COMPTIME kind-dispatch parsed
@@ -3748,13 +3731,13 @@ p_stmt := fn(in out pc : PC) -> usize {
         ## so it is not mis-consumed as a block (the former unconditional `{`-skip ate the `comptime`
         ## keyword and DRIFTED, corrupting the enclosing decl — why `alloc::fmt::display` lost its
         ## generic-ness). A block body keeps the multi-statement `p_stmts` path.
-        mut cmbody := 0
+        mut cmbody : Option(ptr(mut Stmt)) = Option.None
         if cur(pc).kind == 12 {
           pc.idx = pc.idx + 1               ## '{'
           cmbody = p_stmts(pc)
           pc.idx = pc.idx + 1               ## '}'
         } else {
-          cmbody = p_stmt(pc)
+          cmbody = Option.Some(p_stmt(pc))
         }
         dummycm := newnode(pc.arena, Expr.Num(0, 0, 0))
         anewcm := anode(pc.arena, Arm(wild = cw, lit = 0, body = dummycm, next = Option.None, vs = cvs, vl = cvl, binds_head = Option.None, body_stmts = cmbody, hi = 0))
@@ -3771,7 +3754,7 @@ p_stmt := fn(in out pc : PC) -> usize {
         if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }
       }
       pc.idx = pc.idx + 1                 ## '}'
-      return unchecked bitcast(usize, snode(pc.arena, Stmt.CompMatch(cmscrut, cmhead, 0)))
+      return snode(pc.arena, Stmt.CompMatch(cmscrut, cmhead, Option.None))
     }
     ## A comptime binding uses the ordinary binding parser below. Validate its head before entering
     ## the legacy fallback, which is retained only for unsupported comptime block syntax.
@@ -3838,7 +3821,7 @@ p_stmt := fn(in out pc : PC) -> usize {
       }
     }
     dummy := newnode(pc.arena, Expr.Num(0, 0, 0))
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.ExprStmt(dummy, 0)))
+    return snode(pc.arena, Stmt.ExprStmt(dummy, Option.None))
     }
   }
   ## `defer (expr | block)` (Control Flow §9.3 / Memory §5.8) — register a cleanup action that runs
@@ -3883,23 +3866,24 @@ p_stmt := fn(in out pc : PC) -> usize {
       ## so the block statements stay inline in the chain and every scan pass sees them.
       bs := synth_ident_span(pc, "__deferblk")
       bcall := newnode(pc.arena, Expr.Call(bs, 10, 0, Option.None))
-      bstart := snode(pc.arena, Stmt.ExprStmt(bcall, 0))
+      bstart := snode(pc.arena, Stmt.ExprStmt(bcall, Option.None))
       be := synth_ident_span(pc, "__deferblkend")
       bcall2 := newnode(pc.arena, Expr.Call(be, 13, 0, Option.None))
-      bend := snode(pc.arena, Stmt.ExprStmt(bcall2, 0))
-      if unchecked bitcast(usize, dblk) == 0 {
-        set_stmt_next(pc.arena, bstart, bend)
-      } else {
-        set_stmt_next(pc.arena, bstart, dblk)                    ## marker → first block statement
-        set_stmt_next(pc.arena, stmt_last(dblk, pc.arena), bend) ## last block stmt → end marker
+      bend := snode(pc.arena, Stmt.ExprStmt(bcall2, Option.None))
+      match dblk {
+        Some(dq) => {
+          set_stmt_next(pc.arena, bstart, dblk)                    ## marker → first block statement
+          set_stmt_next(pc.arena, stmt_last(dq), Option.Some(bend)) ## last block stmt → end marker
+        }
+        None => { set_stmt_next(pc.arena, bstart, Option.Some(bend)) }
       }
-      return unchecked bitcast(usize, bstart)
+      return bstart
     }
     dact := p_or(pc)                    ## the cleanup expression (a call, overwhelmingly)
     darg := gnode(pc.arena, Arg(e = dact, next = Option.None))
     dcs := synth_ident_span(pc, "__defer")
     dcall := newnode(pc.arena, Expr.Call(dcs, 7, 1, Option.Some(darg)))
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.ExprStmt(dcall, 0)))
+    return snode(pc.arena, Stmt.ExprStmt(dcall, Option.None))
   }
   ## `@label(name) <loop>` (Control Flow §2.1/§6, CF-4): the structured-label attribute precedes a
   ## loop. Record the pending name span; the loop handler immediately below consumes it via `lbl_push`,
@@ -3924,9 +3908,9 @@ p_stmt := fn(in out pc : PC) -> usize {
     body := p_stmts(pc)
     lbl_pop()
     pc.idx = pc.idx + 1                 ## '}'
-    wstmt := snode(pc.arena, Stmt.While(cond, body, 0))
+    wstmt := snode(pc.arena, Stmt.While(cond, body, Option.None))
     stmt_label_mark(wstmt, loop_label_s, loop_label_l)
-    return unchecked bitcast(usize, wstmt)
+    return wstmt
   }
   ## `loop { <stmts> }` — an infinite loop (exited only by `break`). The body is a statement
   ## list; lower emits a back-edge with no guard.
@@ -3939,9 +3923,9 @@ p_stmt := fn(in out pc : PC) -> usize {
     body := p_stmts(pc)
     lbl_pop()
     pc.idx = pc.idx + 1                 ## '}'
-    lstmt := snode(pc.arena, Stmt.Loop(body, 0))
+    lstmt := snode(pc.arena, Stmt.Loop(body, Option.None))
     stmt_label_mark(lstmt, loop_label_s, loop_label_l)
-    return unchecked bitcast(usize, lstmt)
+    return lstmt
   }
   ## `break [name] [<expr>]` (Control Flow §7): exit an enclosing loop, optionally targeting a labeled
   ## loop (`break name`) and/or yielding a value (`break v` — §7.2, loop-as-expression). §7.1
@@ -3959,9 +3943,9 @@ p_stmt := fn(in out pc : PC) -> usize {
     }
     mut bval := expr_null()
     if cur(pc).kind != 13 and cur(pc).kind != 30 and cur(pc).kind != 0 { bval = p_or(pc) }
-    bstmt := snode(pc.arena, Stmt.Break(bval, bdepth, 0))
+    bstmt := snode(pc.arena, Stmt.Break(bval, bdepth, Option.None))
     stmt_label_mark(bstmt, break_label_s, break_label_l)
-    return unchecked bitcast(usize, bstmt)
+    return bstmt
   }
   ## `continue [name]` — skip to the next iteration of the target loop (§7.1). `continue name` targets a
   ## labeled LOOP; a bare `continue` targets the nearest loop (depth 0). Carries no value (§7.2).
@@ -3974,9 +3958,9 @@ p_stmt := fn(in out pc : PC) -> usize {
       d := lbl_depth(unchecked bitcast(usize, pc.src), cur(pc).start, cur(pc).len)
       if d >= 0 { cdepth = usize(d); continue_label_s = cur(pc).start; continue_label_l = cur(pc).len; pc.idx = pc.idx + 1 }
     }
-    cstmt := snode(pc.arena, Stmt.Continue(cdepth, 0))
+    cstmt := snode(pc.arena, Stmt.Continue(cdepth, Option.None))
     stmt_label_mark(cstmt, continue_label_s, continue_label_l)
-    return unchecked bitcast(usize, cstmt)
+    return cstmt
   }
   ## `return <cmp>` — an early return statement.
   if tok_kw(pc, "return") {
@@ -3992,10 +3976,10 @@ p_stmt := fn(in out pc : PC) -> usize {
       ## multi-word `Expr.Num(0)` arg yields a stray handle, not the node pointer). Mirrors the
       ## proven `dummy := newnode(…)` pattern in the match-arm handler.
       z := newnode(pc.arena, Expr.Num(0, 0, 0))
-      return unchecked bitcast(usize, snode(pc.arena, Stmt.Return(z, 0)))
+      return snode(pc.arena, Stmt.Return(z, Option.None))
     }
     rv := p_or(pc)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.Return(rv, 0)))
+    return snode(pc.arena, Stmt.Return(rv, Option.None))
   }
   ## `if <cmp> { <stmts> } [ else { <stmts> } ]` — a statement-position if. The branch
   ## bodies are STATEMENT LISTS (parsed with `p_stmts`), not single expressions. An `else`
@@ -4006,21 +3990,21 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## '{'
     then_head := p_stmts(pc)
     pc.idx = pc.idx + 1                 ## '}'
-    mut else_head := 0
+    mut else_head : Option(ptr(mut Stmt)) = Option.None
     if tok_kw(pc, "else") {
       pc.idx = pc.idx + 1               ## 'else'
       ## `else if …` — the else branch is a single nested `if` STATEMENT (parsed recursively),
       ## so an arbitrary `if … else if … else …` chain works without a brace per level. The
       ## else-list is then a one-element list (the nested if's `next` is 0); lower walks it.
       if tok_kw(pc, "if") {
-        else_head = p_stmt(pc)
+        else_head = Option.Some(p_stmt(pc))
       } else {
         pc.idx = pc.idx + 1             ## '{'
         else_head = p_stmts(pc)
         pc.idx = pc.idx + 1             ## '}'
       }
     }
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.If(cond, then_head, else_head, 0)))
+    return snode(pc.arena, Stmt.If(cond, then_head, else_head, Option.None))
   }
   ## `match <cmp> { <pat> => { <stmts> } ; … }` — a statement-position match. Each arm BODY is
   ## a STATEMENT LIST (in braces), parsed with `p_stmts`. The pattern parsing (int literal /
@@ -4134,7 +4118,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
       }
     }
     pc.idx = pc.idx + 1                 ## '}'
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.Match(scrut, armh, 0)))
+    return snode(pc.arena, Stmt.Match(scrut, armh, Option.None))
   }
   ## `for <i> in <lo> .. <hi> { <stmts> }` — a counted for loop. `for`/`in` are keywords
   ## (kind 2, `tok_kw`); `..` is the range token (kind 31). The bounds are full expressions
@@ -4155,9 +4139,9 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
       fbody := p_stmts(pc)
       lbl_pop()
       pc.idx = pc.idx + 1               ## '}'
-      fstmt := snode(pc.arena, Stmt.For(iv.start, iv.len, lo, hi, fbody, 0))
+      fstmt := snode(pc.arena, Stmt.For(iv.start, iv.len, lo, hi, fbody, Option.None))
       stmt_label_mark(fstmt, loop_label_s, loop_label_l)
-      return unchecked bitcast(usize, fstmt)
+      return fstmt
     }
     ## ITERABLE form `for x in <slice> { … }` (no `..`) — `lo` is the iterable; the loop var binds
     ## each ELEMENT. Marked by a NULL `hi` (fhi == 0), which the lower desugars to a counted loop
@@ -4168,9 +4152,9 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     lbl_pop()
     pc.idx = pc.idx + 1                 ## '}'
     nullhi : ptr(mut Expr) = unchecked bitcast(ptr(mut Expr), 0)
-    istmt := snode(pc.arena, Stmt.For(iv.start, iv.len, lo, nullhi, ibody, 0))
+    istmt := snode(pc.arena, Stmt.For(iv.start, iv.len, lo, nullhi, ibody, Option.None))
     stmt_label_mark(istmt, loop_label_s, loop_label_l)
-    return unchecked bitcast(usize, istmt)
+    return istmt
   }
   ## `@label(name) <instruction>` — a DIRECT CODE-POINT label. Keep the existing Stmt::ExprStmt
   ## shape and recover the label through the AST side table, just like structured loop labels; this
@@ -4180,11 +4164,11 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     code_label_s := P_PEND_S
     code_label_l := P_PEND_L
     code := p_or(pc)
-    cstmt := snode(pc.arena, Stmt.ExprStmt(code, 0))
+    cstmt := snode(pc.arena, Stmt.ExprStmt(code, Option.None))
     stmt_label_mark(cstmt, code_label_s, code_label_l)
     P_PEND_S = 0
     P_PEND_L = 0
-    return unchecked bitcast(usize, cstmt)
+    return cstmt
   }
   ## `deref(p).field[index] = v` — an element WRITE through a pointer-derived struct array field.
   ## Keep this before the scalar field path below: both start with the same `deref(…).field` prefix,
@@ -4192,13 +4176,13 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if deref_field_index_path_assign_starts(pc) {
     dipplace := p_field(pc)
     dipval := p_place_val(pc, dipplace)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldPathAssign(dipplace, dipval, 0)))
+    return snode(pc.arena, Stmt.FieldPathAssign(dipplace, dipval, Option.None))
   }
   if deref_field_index_assign_starts(pc) {
     difplace := p_field(pc)
     difval := p_place_val(pc, difplace)
     difix := index_parts(difplace)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(difix.b, difix.i, difval, 0)))
+    return snode(pc.arena, Stmt.IndexAssign(difix.b, difix.i, difval, Option.None))
   }
   ## `deref(p).field = v` / `deref(node.next).field = v` — a FIELD WRITE THROUGH a pointer (the store
   ## dual of the `deref(p).f` READ). Checked BEFORE the whole-value `deref(p) = v` store below: that
@@ -4210,7 +4194,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if deref_field_assign_starts(pc) {
     dfplace := p_field(pc)              ## parses `deref(p).field` into Field(Deref(p), field)
     dfpval := p_place_val(pc, dfplace)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldPathAssign(dfplace, dfpval, 0)))
+    return snode(pc.arena, Stmt.FieldPathAssign(dfplace, dfpval, Option.None))
   }
   ## `deref(p) = <cmp>` — a STORE through a pointer (a `DerefAssign` statement). The
   ## pointer factor `deref(p)` parses to a `Deref` expr; its inner pointer expression is
@@ -4223,7 +4207,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     pc.idx = pc.idx + 1                 ## ')'
     dplc := newnode(pc.arena, Expr.Deref(ptr))
     dval := p_place_val(pc, dplc)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.DerefAssign(ptr, dval, 0)))
+    return snode(pc.arena, Stmt.DerefAssign(ptr, dval, Option.None))
   }
   ## `arr[i] = <cmp>` — an array element WRITE (a `[` after the base ident, then a
   ## bracket-balanced index, `]`, and `=`). Recorded as an `IndexAssign` (base + index +
@@ -4241,7 +4225,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if deep_idx_field_assign_starts(pc) {
     dplace := p_field(pc)               ## parses `xs[i].f1.f2` into Field(Field(Index(xs,i),f1),f2)
     dpval := p_place_val(pc, dplace)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldPathAssign(dplace, dpval, 0)))
+    return snode(pc.arena, Stmt.FieldPathAssign(dplace, dpval, Option.None))
   }
   ## `xs[i].arr[j] = <cmp>` — a write into an ARRAY FIELD of an array-of-struct ELEMENT. `p_field`
   ## parses the LHS into `Index(Field(Index(xs,i), arr), j)`; `index_parts` unwraps the OUTER Index to
@@ -4252,13 +4236,13 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     atarget := p_field(pc)              ## parses `xs[i].arr[j]` into Index(Field(Index(xs,i),arr), j)
     aval := p_place_val(pc, atarget)
     aix := index_parts(atarget)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(aix.b, aix.i, aval, 0)))
+    return snode(pc.arena, Stmt.IndexAssign(aix.b, aix.i, aval, Option.None))
   }
   if idx_field_assign_starts(pc) {
     ftarget := p_field(pc)              ## parses `a[i].f` into Field(Index(arr,idx), f)
     ifval := p_place_val(pc, ftarget)
     ifp := idx_field_parts(ftarget)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexFieldAssign(ifp.arr, ifp.idx, ifp.fs, ifp.fl, ifval, 0)))
+    return snode(pc.arena, Stmt.IndexFieldAssign(ifp.arr, ifp.idx, ifp.fs, ifp.fl, ifval, Option.None))
   }
   ## `v.field[i] = <cmp>` — a NESTED PLACE write (a struct field that is an array). `p_field`
   ## parses `v.field[i]` into `Index(Field(Var(v), field), idx)`; `index_parts` unwraps it to a
@@ -4272,13 +4256,13 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     fptarget := p_field(pc)
     fpival := p_place_val(pc, fptarget)
     fpix := index_parts(fptarget)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(fpix.b, fpix.i, fpival, 0)))
+    return snode(pc.arena, Stmt.IndexAssign(fpix.b, fpix.i, fpival, Option.None))
   }
   if field_index_assign_starts(pc) {
     ftarget := p_field(pc)              ## parses `v.field[i]` into Index(Field(Var(v),field), idx)
     fival := p_place_val(pc, ftarget)
     fix := index_parts(ftarget)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(fix.b, fix.i, fival, 0)))
+    return snode(pc.arena, Stmt.IndexAssign(fix.b, fix.i, fival, Option.None))
   }
   ## `t.N[i] = <cmp>` — an INDEX inside a tuple component's direct array. `p_field` parses the
   ## complete place as `Index(Index(Var(t), Num(N)), i)`; `index_parts` unwraps the outer index and
@@ -4287,7 +4271,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     ttarget := p_field(pc)
     tval := p_place_val(pc, ttarget)
     tix := index_parts(ttarget)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(tix.b, tix.i, tval, 0)))
+    return snode(pc.arena, Stmt.IndexAssign(tix.b, tix.i, tval, Option.None))
   }
   ## `"abc"[0] = v` / `"abc"[i] += v` — the target is an element of a STRING LITERAL. A literal is a
   ## value-expression (Memory §1.6) whose bytes are emitted once into read-only data; it owns no
@@ -4303,7 +4287,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     target := p_field(pc)               ## parses `arr[i]` into an `Index(base, idx)`
     ival := p_place_val(pc, target)
     ix := index_parts(target)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(ix.b, ix.i, ival, 0)))
+    return snode(pc.arena, Stmt.IndexAssign(ix.b, ix.i, ival, Option.None))
   }
   ## `t.N.M = <cmp>` — a NESTED TUPLE-element write (both indices numeric, `.<int>.<int>`). `p_field`
   ## parses `t.N.M` into `Index(Index(Var(t), Num(N)), Num(M))`; `index_parts` unwraps the OUTER Index to
@@ -4316,7 +4300,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     ttarget := p_field(pc)              ## parses `t.N.M` into Index(Index(Var(t),Num(N)),Num(M))
     tval := p_place_val(pc, ttarget)
     tix := index_parts(ttarget)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(tix.b, tix.i, tval, 0)))
+    return snode(pc.arena, Stmt.IndexAssign(tix.b, tix.i, tval, Option.None))
   }
   ## `t.N = <cmp>` — a ONE-level TUPLE-element write (numeric `.<int>`). `p_field` parses `t.N` into
   ## `Index(Var(t), Num(N))`; `index_parts` unwraps it to an `IndexAssign` — the STORE dual of the tuple
@@ -4328,7 +4312,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     starget := p_field(pc)              ## parses `t.N` into Index(Var(t), Num(N))
     sval := p_place_val(pc, starget)
     six := index_parts(starget)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.IndexAssign(six.b, six.i, sval, 0)))
+    return snode(pc.arena, Stmt.IndexAssign(six.b, six.i, sval, Option.None))
   }
   ## `o.i.v = <cmp>` — a NESTED field mutation (≥2 `.field` levels). Parse the LHS place via `p_field`
   ## (→ `Field(Field(Var(o), i), v)`), then `=`, then the value; record a `FieldPathAssign`. Checked
@@ -4336,7 +4320,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if field_path_assign_starts(pc) {
     place := p_field(pc)                ## parses `o.i.v` into a nested `Field`
     fpval := p_place_val(pc, place)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldPathAssign(place, fpval, 0)))
+    return snode(pc.arena, Stmt.FieldPathAssign(place, fpval, Option.None))
   }
   ## `5 = 3` / `f() = 65` / `[1,2,3][0] = 65` / `bytes(s)[0] = 65` — the store target is a
   ## VALUE-expression. Memory §1.6 is normative ("a store's left operand MUST be a place-expression;
@@ -4365,11 +4349,11 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
       base_e := newnode(pc.arena, Expr.Var(nm.start, nm.len))
       cur_fv := newnode(pc.arena, Expr.Field(base_e, fld.start, fld.len))
       compound := newnode(pc.arena, Expr.Bin(u8(fco), cur_fv, rhs))
-      return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldAssign(nm.start, nm.len, fld.start, fld.len, compound, 0)))
+      return snode(pc.arena, Stmt.FieldAssign(nm.start, nm.len, fld.start, fld.len, compound, Option.None))
     }
     pc.idx = pc.idx + 1                 ## '='
     fval := p_or(pc)
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.FieldAssign(nm.start, nm.len, fld.start, fld.len, fval, 0)))
+    return snode(pc.arena, Stmt.FieldAssign(nm.start, nm.len, fld.start, fld.len, fval, Option.None))
   }
   pc.idx = pc.idx + 1                   ## ident
   ## `name : T` — an explicitly uninitialized local. Preserve the existing Stmt.Assign shape with a
@@ -4379,7 +4363,7 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
   if uninit_end != 0 {
     while cur(pc).kind != 0 and cur(pc).start < uninit_end { pc.idx = pc.idx + 1 }
     z := newnode(pc.arena, Expr.Num(0, 0, 0))
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, z, 0)))
+    return snode(pc.arena, Stmt.Assign(nm.start, nm.len, z, Option.None))
   }
   ## `name : T = v` — a TYPED binding. The type annotation is sema's concern, not lowering's
   ## (lower sizes the slot from the value), so skip from the `:` to the binding `=` (kind 21).
@@ -4396,11 +4380,11 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
     rhs := p_or(pc)
     lhs := newnode(pc.arena, Expr.Var(nm.start, nm.len))
     compound := newnode(pc.arena, Expr.Bin(u8(nco), lhs, rhs))
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, compound, 0)))
+    return snode(pc.arena, Stmt.Assign(nm.start, nm.len, compound, Option.None))
   }
   pc.idx = pc.idx + 1                   ## ':=' or '='
   val := p_or(pc)
-  unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, val, 0)))
+  snode(pc.arena, Stmt.Assign(nm.start, nm.len, val, Option.None))
 }
 
 ## Whether the cursor starts a statement: `while`, `ident (:= | =)`, or a struct field
@@ -5117,7 +5101,7 @@ tuple_index_assign_starts := fn(pc : PC) -> bool {
 ## by gdb: snode stored the Assign correctly (ns=21585) but set_stmt_next overwrote it). The WRITE
 ## uses the snode shape `deref(node_ptr(Stmt,…)) = upd` (a local). Layout-agnostic (works under both
 ## Stage-0 up-growing + the self-host down-growing).
-pub set_stmt_next := fn(a : ptr(mut rt::Arena), h : ptr(mut Stmt), nx : ptr(mut Stmt)) {
+pub set_stmt_next := fn(a : ptr(mut rt::Arena), h : ptr(mut Stmt), nx : Option(ptr(mut Stmt))) {
   st := deref(stmt_p(Stmt, h))
   match st {
     Stmt::Assign(ns, nl, v, o) => { upd := Stmt.Assign(ns, nl, v, nx); deref(stmt_p(Stmt, h)) = upd }
@@ -5164,10 +5148,16 @@ mut P_DEFER_DEPTH := 0
 ## handler: a `defer` lexically INSIDE a `defer { }` registers a cleanup inside a cleanup — ill-formed in
 ## this slice (the lower does not allow a defer's block to contain another defer) — so it is rejected.
 mut P_DEFER_BLK_NEST := 0
-p_stmts := fn(in out pc : PC) -> usize {
+## One statement of a braced body: a `stmt_starts` form, else a bare expression statement.
+p_stmt_or_expr := fn(in out pc : PC) -> ptr(mut Stmt) {
+  if stmt_starts(pc) { return p_stmt(pc) }
+  e := p_or(pc)
+  snode(pc.arena, Stmt.ExprStmt(e, Option.None))
+}
+p_stmts := fn(in out pc : PC) -> Option(ptr(mut Stmt)) {
   P_DEFER_DEPTH = P_DEFER_DEPTH + 1
-  mut head := 0
-  mut tail := 0
+  mut head : Option(ptr(mut Stmt)) = Option.None
+  mut tail : Option(ptr(mut Stmt)) = Option.None
   while cur(pc).kind != 13 and cur(pc).kind != 0 {
     ## Skip an optional `;` statement SEPARATOR (kind 30). The lean lexer emits no newline tokens,
     ## so statements are normally newline-separated with nothing in the stream between them; but the
@@ -5176,15 +5166,9 @@ p_stmts := fn(in out pc : PC) -> usize {
     if cur(pc).kind == 30 {
       pc.idx = pc.idx + 1
     } else {
-      mut s := 0
-      if stmt_starts(pc) {
-        s = p_stmt(pc)
-      } else {
-        e := p_or(pc)
-        s = unchecked bitcast(usize, snode(pc.arena, Stmt.ExprStmt(e, 0)))
-      }
-      if head == 0 { head = s } else { set_stmt_next(pc.arena, stmt_last(tail, pc.arena), s) }
-      tail = s
+      s := p_stmt_or_expr(pc)
+      match tail { Some(tl0) => { set_stmt_next(pc.arena, stmt_last(tl0), Option.Some(s)) }; None => { head = Option.Some(s) } }
+      tail = Option.Some(s)
     }
   }
   P_DEFER_DEPTH = P_DEFER_DEPTH - 1
@@ -5459,7 +5443,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = lts, name_len = ltl, value = ph,
       is_fn = false, kind = 0, arity = 99, is_generic = false, params_head = Option.None,
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = lts, ret_tl = ltl,
+      body_stmts = Option.None, fields_head = Option.None, ret_ts = lts, ret_tl = ltl,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   ## An optional `pub` visibility prefix (Modules §4.1): every module of the self-host
@@ -5609,24 +5593,24 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     while cur(pc).kind != 12 and cur(pc).kind != 0 { pc.idx = pc.idx + 1 }
     pc.idx = pc.idx + 1                       ## '{'
     ## body: statements + an optional trailing return expr (the fn-body shape, kept local here).
-    mut shead := 0
-    mut stail := 0
+    mut shead : Option(ptr(mut Stmt)) = Option.None
+    mut stail : Option(ptr(mut Stmt)) = Option.None
     mut tbody := newnode(pc.arena, Expr.Num(0, 0, 0))
     while cur(pc).kind != 13 and cur(pc).kind != 0 {
       if stmt_starts(pc) {
         s := p_stmt(pc)
-        if shead == 0 { shead = s } else { set_stmt_next(pc.arena, stmt_last(stail, pc.arena), s) }
-        stail = s
+        match stail { Some(st0) => { set_stmt_next(pc.arena, stmt_last(st0), Option.Some(s)) }; None => { shead = Option.Some(s) } }
+        stail = Option.Some(s)
       } else {
         e := p_or(pc)
         if cur(pc).kind == 13 or cur(pc).kind == 0 { tbody = e } else {
-          es := snode(pc.arena, Stmt.ExprStmt(e, 0))
-          if shead == 0 { shead = unchecked bitcast(usize, es) } else { set_stmt_next(pc.arena, stmt_last(stail, pc.arena), es) }
-          stail = unchecked bitcast(usize, es)
+          es := snode(pc.arena, Stmt.ExprStmt(e, Option.None))
+          match stail { Some(st0) => { set_stmt_next(pc.arena, stmt_last(st0), Option.Some(es)) }; None => { shead = Option.Some(es) } }
+          stail = Option.Some(es)
         }
       }
     }
-    tstmts := shead
+    tstmts : Option(ptr(mut Stmt)) = shead
     pc.idx = pc.idx + 1                       ## '}'
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = ds, name_len = dl, value = tbody,
@@ -5660,7 +5644,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = 0, name_len = 0, value = php,
       is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = gopen.start, ret_tl = lastt.start + lastt.len - gopen.start,
+      body_stmts = Option.None, fields_head = Option.None, ret_ts = gopen.start, ret_tl = lastt.start + lastt.len - gopen.start,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   name := cur(pc)
@@ -5702,7 +5686,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = aroot,
       is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
+      body_stmts = Option.None, fields_head = Option.None, ret_ts = 0, ret_tl = 0,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = awhen, alias_ts = 0, alias_tl = 0)))
   }
   if cur(pc).kind != 5 { return Result(usize, ParseErr).Err(ParseErr.Expected(5)) }
@@ -5728,7 +5712,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = ph,
       is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = Option.None,
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = ut.start, ret_tl = ut.len,
+      body_stmts = Option.None, fields_head = Option.None, ret_ts = ut.start, ret_tl = ut.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   ## MODULE-ALIAS import — `name := mod::sub` (e.g. `vec := alloc::vec`, `io := std::io`): the RHS
@@ -5789,7 +5773,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = ph,
         is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
-        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = als_ts, ret_tl = als_tl,
+        body_stmts = Option.None, fields_head = Option.None, ret_ts = als_ts, ret_tl = als_tl,
         mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
   }
@@ -5881,7 +5865,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = rph,
       is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = Option.None,
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = ut.start, ret_tl = utl,
+      body_stmts = Option.None, fields_head = Option.None, ret_ts = ut.start, ret_tl = utl,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   else if cur(pc).kind == 33 and tok_at(pc, pc.idx + 1).kind == 1 and not str_eq(str_at(pc.src + tok_at(pc, pc.idx + 1).start, tok_at(pc, pc.idx + 1).len), "abi") {
@@ -6287,7 +6271,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = eph,
         is_fn = true, kind = 1, arity = arity, is_generic = false, params_head = phead,
-        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = rt.start, ret_tl = rt.len,
+        body_stmts = Option.None, fields_head = Option.None, ret_ts = rt.start, ret_tl = rt.len,
         mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
     ## A SYSCALL-ABI fn has NO body — the `-> R` is the whole declaration. Emit a kind-4 Decl
@@ -6297,7 +6281,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = ph,
         is_fn = true, kind = 4, arity = arity, is_generic = false, params_head = phead,
-        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = rt.start, ret_tl = rt.len,
+        body_stmts = Option.None, fields_head = Option.None, ret_ts = rt.start, ret_tl = rt.len,
         mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
     ## TYPE-FUNCTION generic form — `Name := fn(T : type) -> type { [@owning] struct {…} }` (the
@@ -6322,7 +6306,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
       return Result(usize, ParseErr).Ok(dnode(da, Decl(
         name_start = name.start, name_len = name.len, value = placeholder,
         is_fn = false, kind = tk, arity = 0, is_generic = true, params_head = phead,
-        body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = tfh, ret_ts = 0, ret_tl = 0,
+        body_stmts = Option.None, fields_head = tfh, ret_ts = 0, ret_tl = 0,
         mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
     }
     ## A MULTI-TOKEN return type — `Result(Decl, ParseErr)` / `scoped ptr(mut T)` / `ptr(T)` — has
@@ -6369,8 +6353,8 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     ## `return` (or any statement) leaves no tail expr → the internal sentinel `Num(-1)` (lower's
     ## `emit_fn` falls through to the epilogue, where the early `return` already delivered). Keep
     ## this distinct from a real tail literal `0`, which is a valid function result.
-    mut shead := 0
-    mut stail := 0
+    mut shead : Option(ptr(mut Stmt)) = Option.None
+    mut stail : Option(ptr(mut Stmt)) = Option.None
     mut body := newnode(pc.arena, Expr.Num(0 - 1, 0, 0))
     while cur(pc).kind != 13 and cur(pc).kind != 0 {
       ## Skip an optional `;` statement SEPARATOR (kind 30) — two statements on one line
@@ -6382,20 +6366,20 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
         pc.idx = pc.idx + 1
       } else if stmt_starts(pc) {
         s := p_stmt(pc)
-        if shead == 0 { shead = s } else { set_stmt_next(pc.arena, stmt_last(stail, pc.arena), s) }
-        stail = s
+        match stail { Some(st0) => { set_stmt_next(pc.arena, stmt_last(st0), Option.Some(s)) }; None => { shead = Option.Some(s) } }
+        stail = Option.Some(s)
       } else {
         e := p_or(pc)
         if cur(pc).kind == 13 or cur(pc).kind == 0 {
           body = e                            ## trailing return expression (`}`/EOF follows)
         } else {
-          es := snode(pc.arena, Stmt.ExprStmt(e, 0))
-          if shead == 0 { shead = unchecked bitcast(usize, es) } else { set_stmt_next(pc.arena, stmt_last(stail, pc.arena), es) }
-          stail = unchecked bitcast(usize, es)
+          es := snode(pc.arena, Stmt.ExprStmt(e, Option.None))
+          match stail { Some(st0) => { set_stmt_next(pc.arena, stmt_last(st0), Option.Some(es)) }; None => { shead = Option.Some(es) } }
+          stail = Option.Some(es)
         }
       }
     }
-    stmts := shead
+    stmts : Option(ptr(mut Stmt)) = shead
     pc.idx = pc.idx + 1                       ## '}'
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = body,
@@ -6452,7 +6436,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = placeholder,
       is_fn = false, kind = k, arity = 0, is_generic = is_gen_struct, params_head = Option.None,
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = fhead, ret_ts = 0, ret_tl = 0,
+      body_stmts = Option.None, fields_head = fhead, ret_ts = 0, ret_tl = 0,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = swhen, alias_ts = 0, alias_tl = 0)))
   }
   ## `Name := brand(U)` — a NOMINAL BRAND over an underlying scalar type `U` (the
@@ -6469,7 +6453,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
     return Result(usize, ParseErr).Ok(dnode(da, Decl(
       name_start = name.start, name_len = name.len, value = ph,
       is_fn = false, kind = 0, arity = 1, is_generic = false, params_head = Option.None,
-      body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = ut.start, ret_tl = ut.len,
+      body_stmts = Option.None, fields_head = Option.None, ret_ts = ut.start, ret_tl = ut.len,
       mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)))
   }
   rhs_idx := pc.idx                        ## first token of the RHS (for the alias-shape scan below)
@@ -6541,7 +6525,7 @@ pub parse_decl := fn(in out pc : PC, in out da : rt::Arena) -> Result(usize, Par
   Result(usize, ParseErr).Ok(dnode(da, Decl(
     name_start = name.start, name_len = name.len, value = root,
     is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
-    body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
+    body_stmts = Option.None, fields_head = Option.None, ret_ts = 0, ret_tl = 0,
     mod_start = pc.mod_s, mod_len = pc.mod_l, when_cond = vwhen,
     alias_ts = alias_out_ts, alias_tl = alias_out_tl)))
 }

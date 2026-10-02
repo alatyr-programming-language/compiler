@@ -295,101 +295,106 @@ emit_rodata_expr := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, src : ptr(u8),
 
 ## Walk a body statement list, emitting the `.rodata` entry for any string literal in any
 ## sub-expression (and recursing into nested branch/arm/loop statement lists).
-emit_rodata_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, src : ptr(u8), a : rt::Arena, seen : ptr(mut rt::Vec)) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { emit_rodata_expr(v, sb, src, a, seen); s = nx }
-      Stmt::While(c, b, nx) => {
-        emit_rodata_expr(c, sb, src, a, seen)
-        emit_rodata_stmts(b, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::Loop(b, nx) => {
-        emit_rodata_stmts(b, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::Unchecked(b, nx) => {
-        emit_rodata_stmts(b, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::AllocWith(ae, b, nx) => {
-        emit_rodata_expr(ae, sb, src, a, seen)
-        emit_rodata_stmts(b, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { emit_rodata_expr(e, sb, src, a, seen); s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { emit_rodata_expr(fv, sb, src, a, seen); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { emit_rodata_expr(fpv, sb, src, a, seen); s = nx }
-      Stmt::Return(rv, nx) => { emit_rodata_expr(rv, sb, src, a, seen); s = nx }
-      Stmt::If(c, th, el, nx) => {
-        emit_rodata_expr(c, sb, src, a, seen)
-        emit_rodata_stmts(th, sb, src, a, seen)
-        emit_rodata_stmts(el, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::Match(sc, ah, nx) => {
-        emit_rodata_expr(sc, sb, src, a, seen)
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              ## a STR-LITERAL pattern arm (`wild == 4`): emit the pattern StrLit's `.ascii` rodata.
-              if am.wild == 4 { emit_rodata_expr(unchecked bitcast(ptr(Expr), usize(am.lit)), sb, src, a, seen) }
-              ## #673: one shared body per OR-pattern arm group — walk it once (`ast::arm_body_first_use`).
-              if arm_body_first_use(ah, armq) { emit_rodata_stmts(am.body_stmts, sb, src, a, seen) }
-              arm = am.next
+emit_rodata_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, src : ptr(u8), a : rt::Arena, seen : ptr(mut rt::Vec)) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { emit_rodata_expr(v, sb, src, a, seen); s = nx }
+          Stmt::While(c, b, nx) => {
+            emit_rodata_expr(c, sb, src, a, seen)
+            emit_rodata_stmts(b, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::Loop(b, nx) => {
+            emit_rodata_stmts(b, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::Unchecked(b, nx) => {
+            emit_rodata_stmts(b, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::AllocWith(ae, b, nx) => {
+            emit_rodata_expr(ae, sb, src, a, seen)
+            emit_rodata_stmts(b, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { emit_rodata_expr(e, sb, src, a, seen); s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { emit_rodata_expr(fv, sb, src, a, seen); s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { emit_rodata_expr(fpv, sb, src, a, seen); s = nx }
+          Stmt::Return(rv, nx) => { emit_rodata_expr(rv, sb, src, a, seen); s = nx }
+          Stmt::If(c, th, el, nx) => {
+            emit_rodata_expr(c, sb, src, a, seen)
+            emit_rodata_stmts(th, sb, src, a, seen)
+            emit_rodata_stmts(el, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::Match(sc, ah, nx) => {
+            emit_rodata_expr(sc, sb, src, a, seen)
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  ## a STR-LITERAL pattern arm (`wild == 4`): emit the pattern StrLit's `.ascii` rodata.
+                  if am.wild == 4 { emit_rodata_expr(unchecked bitcast(ptr(Expr), usize(am.lit)), sb, src, a, seen) }
+                  ## #673: one shared body per OR-pattern arm group — walk it once (`ast::arm_body_first_use`).
+                  if arm_body_first_use(ah, armq) { emit_rodata_stmts(am.body_stmts, sb, src, a, seen) }
+                  arm = am.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
+            s = nx
+          }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+            emit_rodata_expr(flo, sb, src, a, seen)
+            if unchecked bitcast(usize, fhi) != 0 { emit_rodata_expr(fhi, sb, src, a, seen) }   ## fhi==0 = for-over-iterable
+            emit_rodata_stmts(fb, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::CompIf(ccond, cthen, celse, nx) => {
+            emit_rodata_stmts(cthen, sb, src, a, seen)
+            emit_rodata_stmts(celse, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => {
+            emit_rodata_stmts(cb, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::CompForRange(crvs, crvl, crlo, crhi, crb, nx) => {
+            emit_rodata_stmts(crb, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::CompMatch(cmsc, cmah, nx) => {
+            mut car : Option(ptr(mut Arm)) = cmah
+            loop { match car { Some(carq) => { cam := deref(arm_p(carq)); emit_rodata_stmts(cam.body_stmts, sb, src, a, seen); car = cam.next }; None => { break } } }
+            s = nx
+          }
+          Stmt::DerefAssign(ptr, val, nx) => {
+            emit_rodata_expr(ptr, sb, src, a, seen)
+            emit_rodata_expr(val, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::IndexAssign(ib, ii, iv, nx) => {
+            emit_rodata_expr(ib, sb, src, a, seen)
+            emit_rodata_expr(ii, sb, src, a, seen)
+            emit_rodata_expr(iv, sb, src, a, seen)
+            s = nx
+          }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
+            emit_rodata_expr(fia, sb, src, a, seen)
+            emit_rodata_expr(fii, sb, src, a, seen)
+            emit_rodata_expr(fiv, sb, src, a, seen)
+            s = nx
           }
         }
-        s = nx
       }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-        emit_rodata_expr(flo, sb, src, a, seen)
-        if unchecked bitcast(usize, fhi) != 0 { emit_rodata_expr(fhi, sb, src, a, seen) }   ## fhi==0 = for-over-iterable
-        emit_rodata_stmts(fb, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::CompIf(ccond, cthen, celse, nx) => {
-        emit_rodata_stmts(cthen, sb, src, a, seen)
-        emit_rodata_stmts(celse, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => {
-        emit_rodata_stmts(cb, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::CompForRange(crvs, crvl, crlo, crhi, crb, nx) => {
-        emit_rodata_stmts(crb, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::CompMatch(cmsc, cmah, nx) => {
-        mut car : Option(ptr(mut Arm)) = cmah
-        loop { match car { Some(carq) => { cam := deref(arm_p(carq)); emit_rodata_stmts(cam.body_stmts, sb, src, a, seen); car = cam.next }; None => { break } } }
-        s = nx
-      }
-      Stmt::DerefAssign(ptr, val, nx) => {
-        emit_rodata_expr(ptr, sb, src, a, seen)
-        emit_rodata_expr(val, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::IndexAssign(ib, ii, iv, nx) => {
-        emit_rodata_expr(ib, sb, src, a, seen)
-        emit_rodata_expr(ii, sb, src, a, seen)
-        emit_rodata_expr(iv, sb, src, a, seen)
-        s = nx
-      }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
-        emit_rodata_expr(fia, sb, src, a, seen)
-        emit_rodata_expr(fii, sb, src, a, seen)
-        emit_rodata_expr(fiv, sb, src, a, seen)
-        s = nx
-      }
+      None => { break }
     }
   }
 }

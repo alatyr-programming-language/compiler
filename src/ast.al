@@ -403,7 +403,7 @@ pub Expr := enum {
   ## FN-6 function VALUE `fn(sig){body}` in expression position. Fields mirror a fn Decl: fnpos (the
   ## `fn` src offset = unique label id), params head, ret-type span, body stmt head, trailing value. A
   ## driver-level pass (`driver`'s lift) rewrites it to FnRef + appends a synthetic fn decl.
-  Lambda(usize, Option(ptr(mut Param)), usize, usize, usize, ptr(Expr)),
+  Lambda(usize, Option(ptr(mut Param)), usize, usize, Option(ptr(mut Stmt)), ptr(Expr)),
   ## Reference to a lifted lambda as a value → code pointer `leaq <mod>__lam<fnpos>(%rip)`. Leaf.
   FnRef(usize, usize, usize),
   ## A representation-significant `bitcast` is PRESERVED rather than identity-erased. Fields are the
@@ -424,7 +424,7 @@ pub Expr := enum {
   ## as `Stmt::Loop` but marks the loop frame value-bearing, so each `break <expr>` inside leaves its
   ## value on the stack at the done-label (the consuming decl/assign/return pops it — the stack model
   ## the `Expr::If` arm uses). `src/`+`lib/` never use a loop in value position → dormant, fixpoint-safe.
-  Loop(ptr(mut Stmt)),
+  Loop(Option(ptr(mut Stmt))),
 }
 
 ## One `match` arm. The `wild` field is the arm KIND discriminant: 0 = integer/enum-variant
@@ -454,7 +454,7 @@ pub Expr := enum {
 pub Arm := struct {
   wild : u8, lit : i64, body : ptr(Expr), next : Option(ptr(mut Arm)),
   vs : usize, vl : usize, binds_head : Option(ptr(mut Bind)),
-  body_stmts : ptr(mut Stmt),
+  body_stmts : Option(ptr(mut Stmt)),
   hi : i64,                     ## range-pattern upper bound (wild 5/6); `lit` is the lower bound
 }
 
@@ -501,17 +501,16 @@ pub arm_at := fn(h : Option(ptr(mut Arm)), msg : str) -> ptr(mut Arm) {
 ## zero body is nothing to walk, so it is always reported first-use rather than deduplicated.
 pub arm_body_first_use := fn(head : Option(ptr(mut Arm)), arm : ptr(mut Arm)) -> bool {
   am := deref(arm_p(arm))
-  bs := unchecked bitcast(usize, am.body_stmts)
   be := unchecked bitcast(usize, am.body)
-  if bs == 0 and be == 0 { return true }
+  if not stmt_any(am.body_stmts) and be == 0 { return true }
   mut p : Option(ptr(mut Arm)) = head
   loop {
     match p {
       Some(pq) => {
         if pq == arm { break }
         pm := deref(arm_p(pq))
-        if bs != 0 and unchecked bitcast(usize, pm.body_stmts) == bs { return false }
-        if bs == 0 and unchecked bitcast(usize, pm.body) == be { return false }
+        if stmt_any(am.body_stmts) and stmt_same(pm.body_stmts, am.body_stmts) { return false }
+        if not stmt_any(am.body_stmts) and unchecked bitcast(usize, pm.body) == be { return false }
         p = pm.next
       }
       None => { break }
@@ -586,7 +585,7 @@ pub Decl := struct {
   is_fn : bool, kind : u8, arity : usize,
   is_generic : bool,            ## generic fn (first param `T : type`) OR generic struct `Name(T)`; monomorphized per type
   params_head : Option(ptr(mut Param)),  ## fn params: arena-linked Param list head (`None` = none)
-  body_stmts : ptr(mut Stmt),   ## fn body: arena-linked Stmt list head (0/null = none); `value` is the trailing return expr
+  body_stmts : Option(ptr(mut Stmt)),   ## fn body: arena-linked Stmt list head (0/null = none); `value` is the trailing return expr
   fields_head : Option(ptr(mut FieldDecl)),  ## struct field / enum variant list head (`None` = none)
   ret_ts : usize,               ## fn return type span start (the `R` of `-> R`); 0/0 = none
   ret_tl : usize,               ## fn return type span length
@@ -753,34 +752,34 @@ pub finit_p := fn(p : ptr(mut FInit)) -> ptr(mut FInit) { p }
 ##
 ## `next` links the arena-linked sequence (0 = end).
 pub Stmt := enum {
-  Assign(usize, usize, ptr(Expr), ptr(mut Stmt)),
-  While(ptr(Expr), ptr(mut Stmt), ptr(mut Stmt)),
-  FieldAssign(usize, usize, usize, usize, ptr(Expr), ptr(mut Stmt)),
-  Return(ptr(Expr), ptr(mut Stmt)),
-  If(ptr(Expr), ptr(mut Stmt), ptr(mut Stmt), ptr(mut Stmt)),
-  Match(ptr(Expr), Option(ptr(mut Arm)), ptr(mut Stmt)),
-  For(usize, usize, ptr(Expr), ptr(Expr), ptr(mut Stmt), ptr(mut Stmt)),
+  Assign(usize, usize, ptr(Expr), Option(ptr(mut Stmt))),
+  While(ptr(Expr), Option(ptr(mut Stmt)), Option(ptr(mut Stmt))),
+  FieldAssign(usize, usize, usize, usize, ptr(Expr), Option(ptr(mut Stmt))),
+  Return(ptr(Expr), Option(ptr(mut Stmt))),
+  If(ptr(Expr), Option(ptr(mut Stmt)), Option(ptr(mut Stmt)), Option(ptr(mut Stmt))),
+  Match(ptr(Expr), Option(ptr(mut Arm)), Option(ptr(mut Stmt))),
+  For(usize, usize, ptr(Expr), ptr(Expr), Option(ptr(mut Stmt)), Option(ptr(mut Stmt))),
   ## POINTER tier: a store through a pointer `deref(p) = <expr>` — the `ptr` expression,
   ## the value expression, and `next`. Lower lowers the value, lowers the pointer, and stores
   ## the value `movq %val, (%ptr)`. The store dual of the `Deref` READ expression.
-  DerefAssign(ptr(Expr), ptr(Expr), ptr(mut Stmt)),
+  DerefAssign(ptr(Expr), ptr(Expr), Option(ptr(mut Stmt))),
   ## ARRAY tier: an element write `a[i] = <expr>` — the base array expression, the index
   ## expression, the value expression, and `next`. Lower computes the element address
   ## `base + i * 8` (the index a RUNTIME value, SIB addressing) and stores the value. The
   ## store dual of the `Index` READ expression. (Only `arr[i] = e` for an array LOCAL base
   ## is supported; a nested place like `a[i].f = e` is deferred.)
-  IndexAssign(ptr(Expr), ptr(Expr), ptr(Expr), ptr(mut Stmt)),
+  IndexAssign(ptr(Expr), ptr(Expr), ptr(Expr), Option(ptr(mut Stmt))),
   ## ARRAY-OF-AGGREGATE tier: an element-field write `a[i].f = <expr>` — the array base
   ## expression, the index expression, the field NAME span `[fs, fs+fl)`, the value expression,
   ## and `next`. Lower computes the element address (`emit_index_addr`), subtracts the field
   ## offset (`f * 8`, the down-growing convention), and stores the value. The store dual of the
   ## `Field(Index(...), f)` READ expression — for an array whose element type is a struct.
-  IndexFieldAssign(ptr(Expr), ptr(Expr), usize, usize, ptr(Expr), ptr(mut Stmt)),
+  IndexFieldAssign(ptr(Expr), ptr(Expr), usize, usize, ptr(Expr), Option(ptr(mut Stmt))),
   ## NESTED-FIELD tier: a store to a MULTI-level field place `o.i.v = <expr>` — the place is a nested
   ## `Field(Field(Var(o), i), v)` expression, then the value + `next`. Lower resolves the place's frame
   ## slot via `field_slot` (which walks the nested `Field` recursively) and stores. The store dual of a
   ## nested `Field` READ. (Single-level `o.f = e` stays the lighter `FieldAssign`.)
-  FieldPathAssign(ptr(Expr), ptr(Expr), ptr(mut Stmt)),
+  FieldPathAssign(ptr(Expr), ptr(Expr), Option(ptr(mut Stmt))),
   ## CONTROL FLOW: an infinite `loop { <stmts> }` (Loop: the body statement-list head, next) —
   ## lower emits a back-edge with no guard; the only way out is a `break`. A `break` statement
   ## (Break: value, depth, next) exits an enclosing `loop`/`while`/`for` — lower jumps to that loop's
@@ -792,16 +791,16 @@ pub Stmt := enum {
   ## a `for`'s increment, so the index still advances); `depth` resolves `continue name` the same way.
   ## The depth-0 emit is byte-identical to the pre-label lowering (`src/`+`lib/` use only bare
   ## `break`/`continue` with no value → depth 0, value 0 → fixpoint-neutral).
-  Loop(ptr(mut Stmt), ptr(mut Stmt)),
-  Break(ptr(Expr), usize, ptr(mut Stmt)),
-  Continue(usize, ptr(mut Stmt)),
+  Loop(Option(ptr(mut Stmt)), Option(ptr(mut Stmt))),
+  Break(ptr(Expr), usize, Option(ptr(mut Stmt))),
+  Continue(usize, Option(ptr(mut Stmt))),
   ## A bare EXPRESSION statement `f(args)` / `mod::f(args)` / `expr?` — a call (or any
   ## expression) evaluated for its side effects, its result DISCARDED (ExprStmt: the expression,
   ## next). Distinguished from a trailing return expression by being followed by more of the
   ## body (the body parser treats the LAST expr before `}` as the return; anything earlier is an
   ## ExprStmt). Lower emits the expression and drops the result. The pervasive statement shape in
   ## the passes (`lexer::lex_all(lx, toks)`, `vec::push(out, d)`, `sb?`).
-  ExprStmt(ptr(Expr), ptr(mut Stmt)),
+  ExprStmt(ptr(Expr), Option(ptr(mut Stmt))),
   ## COMPTIME control flow: `comptime if <cond> { then } else { else }` (CompIf: the condition
   ## expr, the then-statement-list head, the else-statement-list head (0 = none), next). The lean
   ## lower EVALUATES the condition at compile time and emits ONLY the taken branch's statements
@@ -809,7 +808,7 @@ pub Stmt := enum {
   ## → else). A condition it cannot fold at compile time (`match typeinfo(T)` — needs the typeinfo
   ## value) emits NEITHER branch (deferred to the full comptime evaluator). `comptime for` /
   ## `comptime match` are still consumed as no-ops by the parser (not represented here yet).
-  CompIf(ptr(Expr), ptr(mut Stmt), ptr(mut Stmt), ptr(mut Stmt)),
+  CompIf(ptr(Expr), Option(ptr(mut Stmt)), Option(ptr(mut Stmt)), Option(ptr(mut Stmt))),
   ## COMPTIME iteration `comptime for <var> in typeinfo(T).fields { body }` (CompFor: the loop-var
   ## name span `[vs, vs+vl)`, `is_variants` (0 = `.fields`, 1 = `.variants`), the body-statement-list
   ## head, next). The lean lower UNROLLS it over the instance type's FieldDecl/variant list (in a
@@ -817,48 +816,92 @@ pub Stmt := enum {
   ## the loop var bound, resolving `<var>.type` (the member's type, a comptime TYPE value) and
   ## `v.(<var>)` (`CompField` → the member access). A range-based `comptime for i in lo .. hi` (the
   ## array-length case) is NOT this node — the parser consumes it as a no-op (deferred).
-  CompFor(usize, usize, u8, ptr(mut Stmt), ptr(mut Stmt)),
+  CompFor(usize, usize, u8, Option(ptr(mut Stmt)), Option(ptr(mut Stmt))),
   ## COMPTIME kind-dispatch `comptime match typeinfo(T) { Struct(_) => … Enum(_) => … _ => … }`
   ## (CompMatch: the scrutinee `typeinfo(T)`, the arm-list head, next). The lower EVALUATES T's KIND
   ## (struct/enum/array/scalar, in a mono instance) and emits ONLY the arm whose variant name matches
   ## (or the `_` arm). The sibling of `comptime if (match typeinfo(T) {…})`; derive's `eq`/`lt` use it.
-  CompMatch(ptr(Expr), Option(ptr(mut Arm)), ptr(mut Stmt)),
+  CompMatch(ptr(Expr), Option(ptr(mut Arm)), Option(ptr(mut Stmt))),
   ## COMPTIME RANGE iteration `comptime for <var> in <lo> .. <hi> { body }` (CompForRange: the loop-var
   ## name span `[vs, vs+vl)`, the `lo`/`hi` bound exprs (compile-time integer constants), the
   ## body-statement-list head, next). The lower UNROLLS it at compile time: for each `k` in `lo..hi` it
   ## emits the body with `<var>` bound to the COMPTIME CONSTANT `k` (a `Var` use of the loop var emits
   ## the immediate). The compile-time work is fully erased — no runtime loop. Distinct from the
   ## typeinfo `CompFor` (which iterates a type's members, not a numeric range).
-  CompForRange(usize, usize, ptr(Expr), ptr(Expr), ptr(mut Stmt), ptr(mut Stmt)),
+  CompForRange(usize, usize, ptr(Expr), ptr(Expr), Option(ptr(mut Stmt)), Option(ptr(mut Stmt))),
   ## VERIFICATION-MODE block `unchecked { <stmts> }` (Grammar §130: `unchecked (expr | block)`; the
   ## STATEMENT form — the expression form is `Expr::Unchecked`). Lowers its body statement-list head with
   ## `verify.checked` FALSE (overflow/bounds guards comptime-absent), restoring the mode after. Carries
   ## the body-list head + `next`. `src/` uses only the EXPRESSION form (`unchecked { base + off }` in a
   ## value position), never this statement form, so it is dormant for the self-host build.
-  Unchecked(ptr(mut Stmt), ptr(mut Stmt)),
+  Unchecked(Option(ptr(mut Stmt)), Option(ptr(mut Stmt))),
   ## AMBIENT-ALLOCATOR scope `alloc::with(A) { <stmts> }` (MEM-5 / Memory §5.2.1; Grammar §130
   ## `alloc-with-region`): establishes the allocator place `A` (an `Arena` value or `ptr(mut Arena)`) as
   ## the ambient allocator for the body. A call in the body that OMITS an allocator parameter (a
   ## `ptr(mut Arena)` param, Functions §5.5) has `ptr(A)`/`A` injected. Carries the allocator EXPR + the
   ## body-list head + `next`. `src/` uses explicit allocator args, never this scope → dormant.
-  AllocWith(ptr(Expr), ptr(mut Stmt), ptr(mut Stmt)),
+  AllocWith(ptr(Expr), Option(ptr(mut Stmt)), Option(ptr(mut Stmt))),
 }
 
 ## `Stmt`-list plumbing (§6 ptr-typing). Every `Stmt` variant's `next` (and the nested stmt-list heads
 ## — `While`/`For`/`Loop`/`CompFor` bodies, `If`/`CompIf` then/else) plus `Decl.body_stmts` /
-## `Arm.body_stmts` are `ptr(mut Stmt)` (absolute pointers). `stmt_p` is the typed IDENTITY accessor:
-## the dispatch reads `st := deref(stmt_p(Stmt, h))` then `match st { Stmt::… }`, and the leading `Stmt`
-## type-arg lets the seed's `call_first_enum_span` bind `st` as an enum local (ek 3) so the match resolves — a plain
-## `deref(<field-read local>)` would not (the reason `Stmt` needed the lower change first). The overloaded
-## stmt-head plumbing params (`head`/`list_head`/`body_head`/`bh`, which also name Arm/Arg heads) stay
-## `usize` handles — they hold the pointer bits and resolve through `stmt_p` (checker lenient on usize<->ptr).
-## NOTE the leading `T : type` param: the read is `deref(stmt_p(Stmt, h))`, so the CALL's first arg is the
-## enum type name `Stmt` — which the FROZEN seed's `call_first_enum_span` already resolves (the node_ptr
-## first-arg-type-name convention). This binds `st := deref(stmt_p(Stmt, h))` as an enum local with NO
-## reseed (the return-type fallback in `deref_call_enum_span` would also work, but only once the seed has
-## it — a reseed; the type-arg form needs nothing new in the seed). `T` is comptime-erased.
+## `Arm.body_stmts` are `Option(ptr(mut Stmt))` (`None` = end of list / empty list; `stmt_p` applies to a
+## `Some` payload). `stmt_p` is the typed IDENTITY accessor: the dispatch reads
+## `st := deref(stmt_p(Stmt, h))` then `match st { Stmt::… }`, and the leading `Stmt` type-arg lets the
+## seed's `call_first_enum_span` bind `st` as an enum local (ek 3) so the match resolves — a plain
+## `deref(<field-read local>)` would not. `T` is comptime-erased. The pass-plumbing params that thread a
+## statement-list head are `Option(ptr(mut Stmt))` too; a single node stays `ptr(mut Stmt)`.
 pub stmt_p := fn(T : type, p : ptr(mut Stmt)) -> ptr(mut Stmt) { p }
-pub stmt_null := fn() -> ptr(mut Stmt) { unchecked bitcast(ptr(mut Stmt), 0) }
+pub stmt_any := fn(h : Option(ptr(mut Stmt))) -> bool { match h { Some(_q) => { true }; None => { false } } }
+pub stmt_at := fn(h : Option(ptr(mut Stmt)), msg : str) -> ptr(mut Stmt) {
+  match h { Some(q) => { q }; None => { panic(msg) } }
+}
+## List identity: both lists are empty, or both start at the same node (the `Option` form of `h == g`).
+pub stmt_same := fn(x : Option(ptr(mut Stmt)), y : Option(ptr(mut Stmt))) -> bool {
+  mut r := false
+  match x {
+    Some(xp) => { match y { Some(yp) => { r = xp == yp }; None => {} } }
+    None => { match y { Some(_yp) => {}; None => { r = true } } }
+  }
+  r
+}
+## The LAST statement of the chain beginning at node `h` (walks `next`); `h` itself when it has no successor.
+pub stmt_last := fn(h : ptr(mut Stmt)) -> ptr(mut Stmt) {
+  mut cur := h
+  loop {
+    nx : Option(ptr(mut Stmt)) = stmt_next(cur)
+    match nx { Some(nq) => { cur = nq }; None => { break } }
+  }
+  cur
+}
+## The `next` link of a statement node, exhaustive over `Stmt`: a new variant must not silently truncate a
+## chain walk at the first statement after it.
+pub stmt_next := fn(h : ptr(mut Stmt)) -> Option(ptr(mut Stmt)) {
+  st := deref(stmt_p(Stmt, h))
+  match st {
+    Stmt::Assign(ns, nl, v, nx) => { nx }
+    Stmt::While(c, b, nx) => { nx }
+    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { nx }
+    Stmt::Return(rv, nx) => { nx }
+    Stmt::If(c, th, el, nx) => { nx }
+    Stmt::Match(sc, ah, nx) => { nx }
+    Stmt::For(fns, fnl, flo, fhi, fb, nx) => { nx }
+    Stmt::DerefAssign(p, v, nx) => { nx }
+    Stmt::IndexAssign(b, i, v, nx) => { nx }
+    Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { nx }
+    Stmt::FieldPathAssign(pl, pv, nx) => { nx }
+    Stmt::Loop(b, nx) => { nx }
+    Stmt::Break(bv, bd, nx) => { nx }
+    Stmt::Continue(cd, nx) => { nx }
+    Stmt::ExprStmt(e, nx) => { nx }
+    Stmt::CompIf(c, th, el, nx) => { nx }
+    Stmt::CompFor(vs, vl, iv, b, nx) => { nx }
+    Stmt::CompMatch(sc, ah, nx) => { nx }
+    Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { nx }
+    Stmt::Unchecked(b, nx) => { nx }
+    Stmt::AllocWith(ae, b, nx) => { nx }
+  }
+}
 
 ## ── STRUCTURED-LABEL SOURCE SPANS ────────────────────────────────────────────────────────────────
 ## The control-flow AST intentionally stores only the resolved LOOP DEPTH on Break/Continue and keeps

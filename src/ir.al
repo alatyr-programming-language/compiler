@@ -1625,12 +1625,9 @@ pub construct_name := fn(c : Construct) -> str {
   }
 }
 
-## The AST ends every list with a null link and marks an absent optional child with a null pointer.
-## These two predicates are the only places this module spells that null. They cannot yet be written
-## as a `match` over `Option(ptr(T))`: matching such a parameter or local and dereferencing its payload
-## SIGSEGVs on x86_64 today, on `main` and on the frozen seed (#789).
-## null-ok: blocked by #789 — Decl.body_stmts / Stmt.next are null-terminated AST links.
-stmt_present := fn(p : ptr(mut Stmt)) -> bool { unchecked bitcast(usize, p) != 0 }
+## The AST marks an absent optional child with a null pointer. This predicate is the only place this module
+## spells that null. It cannot yet be written as a `match` over `Option(ptr(T))`: matching such a parameter
+## or local and dereferencing its payload SIGSEGVs on x86_64 today, on `main` and on the frozen seed (#789).
 ## null-ok: blocked by #789 — Decl.value, Stmt::Return's and Stmt::Break's value are null when absent.
 expr_present := fn(e : ptr(Expr)) -> bool { unchecked bitcast(usize, e) != 0 }
 
