@@ -619,7 +619,7 @@ ptrint_grant_name := fn() -> str {
 }
 ## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF for
 ## one that is closed or opened read-only, and touches no memory in either case.
-ptrint_probe_open := fn() -> bool { rt::sys_write(1, ptrint_probe_fd(), 0, 0) == 0 }
+ptrint_probe_open := fn() -> bool { not SEMA_LIB_RECORDING and rt::sys_write(1, ptrint_probe_fd(), 0, 0) == 0 }
 ## The row buffer, in the instrument's OWN freshly mapped arena: bumping a compile arena would move
 ## addresses the compiler's own output depends on, so an instrument that shared them could not claim
 ## byte-identical emission. Mapped only when the channel is open.
@@ -2676,7 +2676,7 @@ mut BRAND_PROBE_HITS : usize = 0
 ## Is the census channel open? `write(fd, NULL, 0)` returns 0 for a writable descriptor and -EBADF
 ## for one that is closed or opened read-only, and touches no memory in either case — so this one
 ## syscall is the whole gate.
-brand_probe_open := fn() -> bool { rt::sys_write(1, brand_probe_fd(), 0, 0) == 0 }
+brand_probe_open := fn() -> bool { not SEMA_LIB_RECORDING and rt::sys_write(1, brand_probe_fd(), 0, 0) == 0 }
 ## A census row is assembled in the instrument's OWN freshly mapped arena and flushed in one write.
 ## The compile arenas are deliberately untouched: bumping one would move addresses the compiler's own
 ## output depends on, so an instrument that shared them could not claim byte-identical emission. The
@@ -17026,7 +17026,7 @@ mut QH_PROBE_LOST : usize = 0
 ## The census channel, byte-for-byte the #299/#529 instrument's: fd 99, opened by the probe harness
 ## and closed on an ordinary run, so an ordinary run maps nothing and writes nothing.
 qh_probe_fd := fn() -> usize { 99 }
-qh_probe_open := fn() -> bool { rt::sys_write(1, qh_probe_fd(), 0, 0) == 0 }
+qh_probe_open := fn() -> bool { not SEMA_LIB_RECORDING and rt::sys_write(1, qh_probe_fd(), 0, 0) == 0 }
 qh_probe_send := fn(in out sb : rt::StrBuf) {
   n := rt::push_byte(sb, 10)
   w := rt::sb_flush(sb, qh_probe_fd())
@@ -18436,6 +18436,90 @@ sema_vis_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), 
   r
 }
 
+## ── docs/ir.md §3.8.6: sema RECORDS the bodies of ambient-library declarations ─────────────────────────
+##
+## The loop in `check_program` TRUSTS a library declaration: it is kept for resolution and its body is
+## not re-checked, so a check gap on a stdlib feature cannot reject a well-typed user program (§1 item
+## 5). That left every expression of `lib/` without a record in the side table (`VcAbsent`) — measured
+## by the #683 slice-1e probe as 561 of the corpus's 676 distinct untyped operand lines — and the IR
+## may not default a type sema did not record (D6, #786).
+##
+## So when a consumer asked for records (`ir::sty_on()`), a library declaration is checked by
+## `check_decl` exactly as a user one is, for its RECORDS only. The verdict stays TRUST: what this walk
+## answers never refuses the program, and the instruments a check moves — the #529/#299/#580 census
+## counters, and the #580 unresolved-head report, which IS a verdict — are put back as they were, with
+## their channels silent while it runs (`SEMA_LIB_RECORDING`). A finding is not dropped: a refused body
+## or an unresolved `::` head is written to the census channel as a `#semalib` row
+## (`ir::sign_lib_row`), and §3.8.6 lists the ones measured, each with its issue. With records off —
+## every ordinary x86_64 check and build — none of this runs: no verdict, no emitted byte, no cost moves.
+## The twins' record run always records, but not library bodies yet (`SEMA_LIB_RECORDS` below).
+mut SEMA_LIB_RECORDING : bool = false
+## Whether this compilation records library bodies at all (§3.8.6). The twins' record run turns it off:
+## their IR builder would select from the IR every library function whose records the walk completes,
+## which moves twin emission — measured as 66 corpus outputs and 3 manifest rows (the link/assemble
+## diagnostics of already-failing builds; every run unchanged). That move is its own oracle transition,
+## so until it lands the twins keep their library functions where they are.
+mut SEMA_LIB_RECORDS : bool = true
+pub set_lib_records := fn(on : bool) -> i64 {
+  SEMA_LIB_RECORDS = on
+  0
+}
+## The instrument state a declaration check moves, taken before a library record and put back after.
+SemaInstruments := struct {
+  calls : usize, unequal : usize, seam : usize, rows : usize, brk : usize, arith : usize, lost : usize,
+  mod_ns : usize, mod_nl : usize, decl_ns : usize, decl_nl : usize, grant : usize, granted : usize,
+  sinks : usize, hits : usize, blost : usize,
+  qseen : usize, qunres : usize, qfs : usize, qfn : usize, qlost : usize
+}
+sema_instruments_take := fn() -> SemaInstruments {
+  SemaInstruments(calls = PTRINT_CALLS, unequal = PTRINT_UNEQUAL, seam = PTRINT_SEAM, rows = PTRINT_ROWS,
+    brk = PTRINT_BREAK, arith = PTRINT_ARITH, lost = PTRINT_LOST, mod_ns = PTRINT_MOD_NS, mod_nl = PTRINT_MOD_NL,
+    decl_ns = PTRINT_DECL_NS, decl_nl = PTRINT_DECL_NL, grant = PTRINT_GRANT, granted = PTRINT_GRANTED,
+    sinks = BRAND_PROBE_SINKS, hits = BRAND_PROBE_HITS, blost = BRAND_PROBE_LOST,
+    qseen = QH_SEEN, qunres = QH_UNRESOLVED, qfs = QH_FIRST_S, qfn = QH_FIRST_N, qlost = QH_PROBE_LOST)
+}
+sema_instruments_put := fn(in s : SemaInstruments) {
+  PTRINT_CALLS = s.calls
+  PTRINT_UNEQUAL = s.unequal
+  PTRINT_SEAM = s.seam
+  PTRINT_ROWS = s.rows
+  PTRINT_BREAK = s.brk
+  PTRINT_ARITH = s.arith
+  PTRINT_LOST = s.lost
+  PTRINT_MOD_NS = s.mod_ns
+  PTRINT_MOD_NL = s.mod_nl
+  PTRINT_DECL_NS = s.decl_ns
+  PTRINT_DECL_NL = s.decl_nl
+  PTRINT_GRANT = s.grant
+  PTRINT_GRANTED = s.granted
+  BRAND_PROBE_SINKS = s.sinks
+  BRAND_PROBE_HITS = s.hits
+  BRAND_PROBE_LOST = s.blost
+  QH_SEEN = s.qseen
+  QH_UNRESOLVED = s.qunres
+  QH_FIRST_S = s.qfs
+  QH_FIRST_N = s.qfn
+  QH_PROBE_LOST = s.qlost
+}
+## Check library declaration `d` (index `upto`) for its records; report what a user check would refuse.
+sema_lib_record := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) {
+  kept := sema_instruments_take()
+  SEMA_LIB_RECORDING = true
+  QH_UNRESOLVED = 0
+  QH_FIRST_S = 0
+  QH_FIRST_N = 0
+  cr := check_decl(d, decls, upto, src, a)
+  mut refused := false
+  match cr {
+    Result::Ok(c) => { refused = c != 0 }
+    Result::Err(e) => { refused = true }
+  }
+  if refused { ir::sign_lib_row(ir::LibFinding.LfRefused, d.mod_start, d.mod_len, d.name_start, d.name_len, d.name_start, src) }
+  if QH_UNRESOLVED != 0 { ir::sign_lib_row(ir::LibFinding.LfHead, d.mod_start, d.mod_len, d.name_start, d.name_len, QH_FIRST_S, src) }
+  SEMA_LIB_RECORDING = false
+  sema_instruments_put(kept)
+}
+
 pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
   ## PERF: build the per-decl name-hash pre-filter for the O(cnt) `name_matches` resolution scans.
   build_sema_dnh(decls, src, deref(a))
@@ -18482,7 +18566,10 @@ pub check_program := fn(decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Are
     ## parity — a check-gap on a stdlib feature must not reject a well-typed user program, §1 item 5).
     ## #655 — by PROVENANCE (the driver's published table), not by the `__` in the mangled name: a
     ## nested submodule of the package under check spells its name the same way and is not a library.
-    if sema_module_is_lib(src, d.mod_start, d.mod_len) { }
+    ## docs/ir.md §3.8.6 — when records are wanted, the body is still walked for them, verdict-free.
+    if sema_module_is_lib(src, d.mod_start, d.mod_len) {
+      if SEMA_LIB_RECORDS and ir::sty_on() and not guard_is_false(d, src) { sema_lib_record(d, decls, i, src, a) }
+    }
     ## a FALSE `when`-guarded decl (CT-5, Comptime §9) is "as if absent" for THIS target: skip its
     ## duplicate + body check entirely, exactly as `lower::emit_program` neuters it before emission.
     else if guard_is_false(d, src) { }

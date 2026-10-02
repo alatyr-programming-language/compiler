@@ -415,6 +415,43 @@ removes the question instead:
    change), a reporting script can compare, for every `/ % >> < <= > >=` in the corpus, `lib/` and
    `src/`, sema's recorded signedness against what each legacy emitter's shape inference answers. Every
    disagreement is a #764-class wrong value found mechanically instead of by a generator's luck.
+6. **Library bodies are recorded too.** `check_program` TRUSTS a declaration of an ambient library
+   module — it resolves against it but does not refuse a program over its body, so a check gap on a
+   stdlib feature cannot reject a well-typed user program. Until slice 1e's prerequisite (a) that also
+   meant `lib/` had no records at all: the slice-1e probe measured 561 of the corpus's 676 distinct
+   untyped (`VcAbsent`) operand lines at x86's legacy signedness decisions in `lib/`. Now, whenever a
+   consumer has asked for records (`ir::sty_on()`), each library declaration is checked by
+   `check_decl` exactly as a user one is, **for its records only** (`sema_lib_record`): the verdict
+   stays TRUST, the census instruments the walk would move are restored, and with records off — every
+   ordinary x86_64 check and build — nothing runs. The twins' record run (which always records) does
+   not walk library bodies yet (`sema::set_lib_records(false)`): with the walk, their builder selects
+   from the IR every library function whose records it completes, which moved 66 corpus outputs and 3
+   manifest rows (only the link/assemble diagnostics of builds that already failed; every run
+   unchanged) — an oracle transition of its own. What a user-code check would refuse is not dropped;
+   it is reported on the census channel:
+
+   ```
+   #semalib refused <module>::<decl> |<the declaration's line>   check_decl refused the body
+   #semalib head <module>::<decl> |<the line of the head>        a `::` head resolves to nothing (#580)
+   ```
+
+   A refused body keeps the records made before the refusal and none after it. Measured over the
+   corpus when this landed (after `lib/base/slice.al`'s `bytes_eq`/`hash_bytes` became `pub`: they
+   were private and called from `alloc::string`, `alloc::strmap` and `std::os`, which Modules §3
+   refuses):
+
+   | finding | bodies | cause |
+   |---|---|---|
+   | refused | `base::derive::eq`/`lt`/`hash`, `alloc::fmt::display`, `std::os::args`/`env`/`read_cmdline`/`read_environ`, `base::u128::%`/`/`, `base::num::+` ×4 | a local spelled like a declaration of the USER's root module resolves to it (`f`, `sb`, `add`) — only in programs that declare one (#882) |
+   | refused | `std::fmt::write_buf_file` | `[u8]` and `Slice(u8)` are two types to sema (#883) |
+   | refused | `std::serialize::read_len` | a `match` whose arms all diverge (`return` / `panic`) reads as a missing result (#667) |
+   | head | 46 functions of `alloc::*`, `std::fmt`, `std::os` | sibling heads (`strbuf::`, `io::`, `os::`) and `alloc::get` naming base's allocator — the #580 decision |
+
+   After it, 44 distinct untyped operand lines remain in `lib/` (46 match a `lib/` line by text; two of
+   them, `i = i + 1` and `k = k + 1`, are the corpus programs' own), all in bodies sema checks once
+   generically while the emitter sees a clone: a type function's methods (`base::u128`'s `uint(N)`),
+   `comptime if`/`comptime for` branches, and generic instances (`allocate(…, T, …)`, `Option.get`) —
+   prerequisite (b).
 
 **What slice 1 closes structurally.** Slice 1 (scalar core) consumes the recorded type, so on the three
 twins it closes the scalar shapes of the family: **#764** (all dividend shapes are scalar), **#766**'s

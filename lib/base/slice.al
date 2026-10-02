@@ -254,7 +254,7 @@ pub filter_into := fn(T : type, src : Slice(T), pred : fn(x : T) -> bool, dst : 
 ## `bytes_eq` — content equality of two byte slices: equal length and equal
 ## bytes, short-circuiting (the `[u8]` counterpart of `str_eq`, §3.6). The reuse
 ## primitive for byte-keyed lookups (a hash map's key compare).
-bytes_eq := fn(a : Slice(u8), b : Slice(u8)) -> bool {
+pub bytes_eq := fn(a : Slice(u8), b : Slice(u8)) -> bool {
   if a.len != b.len {
     return false
   }
@@ -328,7 +328,7 @@ slice_cmp := fn(T : type, a : Slice(T), b : Slice(T)) -> isize {
 ## Comptime §5: the `Hash` derive's byte-level core). `h := h*prime + byte`,
 ## wrapping (so `unchecked`). The reuse primitive for byte-keyed hash maps; the
 ## structural `Hash` over arbitrary fields rides `typeinfo` (a later step).
-hash_bytes := fn(s : Slice(u8)) -> u64 {
+pub hash_bytes := fn(s : Slice(u8)) -> u64 {
   mut h : u64 = 1469598103934665603
   mut i : usize = 0
   while i < s.len {

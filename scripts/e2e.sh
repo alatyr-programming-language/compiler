@@ -962,6 +962,26 @@ check_sign_census() {
   fi
 }
 
+# `docs/ir.md` §3.8.6 — sema RECORDS library bodies whenever records are wanted (here: fd 97 open), and
+# the verdict on them stays TRUST. The generated probe reaches `std::io::print_uint`, whose `n / 10`
+# (`n : u64`) lives only in `lib/std/io.al`: before the record pass sema never typed it, so no
+# `#sign sema` row named it. The probe declares no root name a library local could be captured by
+# (#882), so no library body it loads may be reported refused; and with fd 97 open the emitted GAS is
+# the GAS of the closed run.
+check_sema_lib_bodies() {
+  local d="$T/sema_lib_bodies" rc
+  mkdir -p "$d"
+  printf '%s\n' 'main := fn() -> u64 {' '  n : i64 = -42' '  w := std::io::print_int(n)' '  if w == 3 { return 42 }' '  1' '}' > "$d/p.al"
+  "$CC" "$d/p.al" > "$d/open.s" 2>/dev/null 97> "$d/rows"; rc=$?
+  "$CC" "$d/p.al" > "$d/closed.s" 2>/dev/null
+  if [ "$rc" = 0 ] && grep -qF '#sign sema 19 16 20 u |    print_uint(n / 10)' "$d/rows" \
+    && ! grep -q '^#semalib refused ' "$d/rows" && cmp -s "$d/open.s" "$d/closed.s"; then
+    echo "ok   sema_lib_bodies: a library body's site carries sema's record, nothing refused, emission unchanged"
+  else
+    echo "FAIL sema_lib_bodies: rc=$rc"; grep -E '^#semalib|print_uint\(n / 10\)' "$d/rows" | sed 's/^/     /' | head -12; fail=1
+  fi
+}
+
 # `docs/ir.md` slice 0b — a twin emit verb over a PACKAGE manifest takes the package pipeline `-o` takes
 # (module and dependency discovery, the `main` module as entry). It used to compile the manifest file
 # itself as the program, so `_start` called a `main` nothing defined: link failure on aarch64/riscv64,
@@ -11179,6 +11199,7 @@ check_ir_dev_verb
 check_ir_build
 check_trap_names
 check_sign_census
+check_sema_lib_bodies
 check_twin_package
 check_twin_build_flag
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
