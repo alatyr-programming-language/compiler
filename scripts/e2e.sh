@@ -10579,6 +10579,9 @@ run_x86 issue858_enum_ptr_payload_field 42
 # struct, an enum, a `str`) the argument lowering read the first parameter's frame slot instead.
 run issue864_global_arg 42
 run_x86 issue864_global_arg_str 42
+# #865 — a local annotated `Option(ptr(T))` and initialized from a component of a multi-payload variant's
+# pattern is the one-word folded Option: it can be walked with `match` (the AST list migrations' shape).
+run_x86 issue865_option_ptr_payload_local 42
 run alloc_with_elision 42
 ## MEM-5 nested lexical allocator scope: omitted `with_capacity` follows inner ambient, then restores
 ## outer ambient; an explicit `ptr(outer)` remains explicit even inside the nested scope.

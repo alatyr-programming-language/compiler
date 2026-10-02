@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A local annotated `Option(ptr(T))` may be initialized from a multi-payload variant's pattern
+  binding.** `mut lp : Option(ptr(mut P)) = h` over `Lam(a, h, b) => …` was refused with "cannot see the
+  scrutinee's enum type" when `lp` was matched, even with the annotation: the local was sized from its
+  initializer before the pattern component was typed. The annotation alone now makes it the one-word
+  folded Option (#865).
+
 ## 0.2.9 — 2026-10-02
 
 - **Seed promotion; the bootstrap stores a folded `None` field through a pointer.** The frozen
