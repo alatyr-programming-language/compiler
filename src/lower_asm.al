@@ -5,6 +5,8 @@
 ## `(`-line — that parser footgun binds `rt(push_str,…)` across the newline; see the idiomatic-style memo).
 (Arg, Expr) := ast
 arg_p := ast::arg_p
+arg_at := ast::arg_at
+arg_any := ast::arg_any
 (push_str, push_int) := rt
 (LCtx, node_ptr, var_name_span, num_lit, arg_expr_at, asm_str_span, asm_digit) := lower_ctx
 ## The located-diagnostic helper the whole lower shares (`lower::ctfold`, reached by the EXPLICIT
@@ -100,18 +102,18 @@ pub is_raw_instr_call := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> bool
       nm := str_at((src + cs), cl)
       if (nm == "syscall" or nm == "ret") and na == 0 { true }
       else if nm == "asm" and na >= 1 { true }   ## `asm("…GAS…", op…)` raw escape, {i}-substituted (§4/§11)
-      else if nm == "jmp" and na == 1 and ah != 0 {
-        a0 := deref(arg_p(ah))
+      else if nm == "jmp" and na == 1 and arg_any(ah) {
+        a0 := deref(arg_at(ah, "argument list ended early"))
         dv := var_name_span(a0.e)
         if dv.n != 0 and x86_gpreg(str_at((src + dv.s), dv.n)) == "" { true } else { false }
       }
       else if (nm == "negq" or nm == "notq") and na == 1 {   ## 1-operand register-form (`negq(rax)` → `negq %rax`)
-        a0 := deref(arg_p(ah))
+        a0 := deref(arg_at(ah, "argument list ended early"))
         dv := var_name_span(a0.e)
         if dv.n != 0 { x86_gpreg(str_at((src + dv.s), dv.n)) != "" } else { false }
       }
       else if (nm == "movq" or nm == "addq" or nm == "subq" or nm == "andq" or nm == "orq" or nm == "xorq" or nm == "shlq" or nm == "shrq" or nm == "sarq" or nm == "imulq") and na == 2 {
-        a0 := deref(arg_p(ah))
+        a0 := deref(arg_at(ah, "argument list ended early"))
         dv := var_name_span(a0.e)
         if dv.n != 0 { x86_gpreg(str_at((src + dv.s), dv.n)) != "" } else { false }
       } else { false }
@@ -140,7 +142,7 @@ pub emit_raw_instr := fn(e : ptr(Expr), in out sb : rt::StrBuf, cx : ptr(LCtx), 
         ## (zero-based) is replaced by the GAS spelling of operand `i` (arg `i+1`; arg 0 is the template):
         ## a register `Var` → `%reg`, else a `Num` immediate → `$N`. A `{` not followed by a digit is
         ## literal (so no-operand templates emit verbatim). Single-line template (no `\n` escape).
-        a0 := deref(arg_p(ah))
+        a0 := deref(arg_at(ah, "argument list ended early"))
         sp := asm_str_span(a0.e)
         push_str(sb, "  ")
         mut j := 0
@@ -173,7 +175,7 @@ pub emit_raw_instr := fn(e : ptr(Expr), in out sb : rt::StrBuf, cx : ptr(LCtx), 
         push_str(sb, "\n")
       }
       else if nm == "jmp" {
-        a0 := deref(arg_p(ah))
+        a0 := deref(arg_at(ah, "argument list ended early"))
         dv := var_name_span(a0.e)
         push_str(sb, "  jmp ")
         emit_code_label_name(sb, cx, dv.s, dv.n)
@@ -183,7 +185,7 @@ pub emit_raw_instr := fn(e : ptr(Expr), in out sb : rt::StrBuf, cx : ptr(LCtx), 
         ## 1-operand register-form (`negq(rax)` → `negq %rax` two's-complement negate; `notq` bitwise NOT).
         ## BIND `dreg` before pushing (a nested `push_str(sb, x86_gpreg(str_at(…)))` — a call-returning-str
         ## passed inline as the arg — crashes the seed; the 2-operand path binds it too).
-        a0 := deref(arg_p(ah))
+        a0 := deref(arg_at(ah, "argument list ended early"))
         dv := var_name_span(a0.e)
         dreg := x86_gpreg(str_at((cx.src + dv.s), dv.n))
         push_str(sb, "  ")
@@ -197,10 +199,10 @@ pub emit_raw_instr := fn(e : ptr(Expr), in out sb : rt::StrBuf, cx : ptr(LCtx), 
         ## destination-first (spec §2.2) → AT&T `<mnem> <src>, <dest>` (the mnemonic is a valid GAS spelling as-is).
         ## `addq(rax, rbx)` => `addq %rbx, %rax` (rax += rbx); `shlq(rax, 2)` => `shlq $2, %rax` (a shift-by-immediate,
         ## the common form). `dest` is a register; `src` is a register or an immediate.
-        a0 := deref(arg_p(ah))
+        a0 := deref(arg_at(ah, "argument list ended early"))
         dv := var_name_span(a0.e)
         dreg := x86_gpreg(str_at((cx.src + dv.s), dv.n))
-        a1 := deref(arg_p(a0.next))
+        a1 := deref(arg_at(a0.next, "argument list ended early"))
         push_str(sb, "  ")
         push_str(sb, nm)
         push_str(sb, " ")

@@ -366,13 +366,13 @@ callee_is_c_variadic := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, c
 ## Is variadic arg `k`'s EXPRESSION a float (SSE) value? A C-variadic trailing arg has no declared param
 ## type, so it is classed by its own expression (`is_float_expr`): an f64/f32 value rides an XMM register,
 ## an integer/pointer value an integer register.
-vac_arg_is_float := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), a : rt::Arena, k : usize) -> bool {
+vac_arg_is_float := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), a : rt::Arena, k : usize) -> bool {
   is_float_expr(arg_expr_at(args_head, k, a), cx)
 }
 
 ## Variadic-aware INTEGER-register eightbyte count of arg `k`: a fixed arg defers to `abi_c_arg_int_words`;
 ## a variadic arg is a scalar (float → 0 int words, else → 1).
-vac_int_words := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> usize {
+vac_int_words := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> usize {
   if k >= nfixed {
     if vac_arg_is_float(cx, args_head, a, k) { return 0 }
     return 1
@@ -382,7 +382,7 @@ vac_int_words := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), a : rt::Arena, cid
 
 ## Variadic-aware SSE-register eightbyte count of arg `k` (the dual of `vac_int_words`): a variadic float
 ## arg → 1 SSE word, else 0.
-vac_sse_words := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> usize {
+vac_sse_words := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> usize {
   if k >= nfixed {
     if vac_arg_is_float(cx, args_head, a, k) { return 1 }
     return 0
@@ -391,26 +391,26 @@ vac_sse_words := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), a : rt::Arena, cid
 }
 
 ## Variadic-aware TOTAL word count of arg `k` (a variadic scalar arg → 1).
-vac_param_words := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> usize {
+vac_param_words := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> usize {
   if k >= nfixed { return 1 }
   abi_c_param_words(cx.decls, cx.src, a, cidx, k)
 }
 
 ## Variadic-aware MEMORY-class test (a variadic scalar arg is never MEMORY).
-vac_is_mem := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> bool {
+vac_is_mem := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> bool {
   if k >= nfixed { return false }
   abi_c_param_is_mem(cx.decls, cx.src, a, cidx, k)
 }
 
 ## Variadic-aware AGGREGATE test (a variadic scalar arg is never an aggregate — anchored by VALUE).
-vac_is_agg := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> bool {
+vac_is_agg := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> bool {
   if k >= nfixed { return false }
   abi_c_param_is_agg(cx.decls, cx.src, cidx, k)
 }
 
 ## Variadic-aware float-scalar test for the register pop-and-route loop: a variadic arg keys on its
 ## expression, a fixed arg on its declared param type.
-vac_is_float := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> bool {
+vac_is_float := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), a : rt::Arena, cidx : i64, nfixed : usize, k : usize) -> bool {
   if k >= nfixed { return vac_arg_is_float(cx, args_head, a, k) }
   callee_param_is_float(cx.decls, cx.src, a, cidx, k)
 }
@@ -485,7 +485,7 @@ abi_c_stack_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx
 ## that classes the trailing VARIADIC args (`k >= nfixed`) by their own EXPRESSION (`args_head`), via the
 ## `vac_*` wrappers. For a non-variadic call (`nfixed == nvals`) every wrapper defers to the declared-param
 ## classing → identical placement. Needs `cx` (for `is_float_expr` on a variadic arg).
-vac_arg_disp := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), cidx : i64, j : usize, sret_shift : usize, nfixed : usize) -> ACDisp {
+vac_arg_disp := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), cidx : i64, j : usize, sret_shift : usize, nfixed : usize) -> ACDisp {
   a := arena_of(cx)
   mut iu := sret_shift
   mut su := 0
@@ -514,7 +514,7 @@ vac_arg_disp := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), cidx : i64, j : usi
 }
 
 ## Variadic-aware TOTAL stack-argument-area word count (the calling-side dual of `abi_c_stack_words`).
-vac_stack_words := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), cidx : i64, nvals : usize, sret_shift : usize, nfixed : usize) -> usize {
+vac_stack_words := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), cidx : i64, nvals : usize, sret_shift : usize, nfixed : usize) -> usize {
   a := arena_of(cx)
   mut iu := sret_shift
   mut su := 0
@@ -541,7 +541,7 @@ vac_stack_words := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), cidx : i64, nval
 ## The number of XMM (SSE) registers actually used to pass `nvals` args of the `@abi(c)` call — the SysV
 ## variadic requirement is that `%al` hold this count (0..8) before a `call` to a variadic function.
 ## Mirrors `vac_arg_disp`'s greedy register simulation, summing the SSE register words placed.
-vac_xmm_count := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), cidx : i64, nvals : usize, sret_shift : usize, nfixed : usize) -> usize {
+vac_xmm_count := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), cidx : i64, nvals : usize, sret_shift : usize, nfixed : usize) -> usize {
   a := arena_of(cx)
   mut iu := sret_shift
   mut su := 0
@@ -577,7 +577,7 @@ vac_xmm_count := fn(cx : ptr(LCtx), args_head : ptr(mut Arg), cidx : i64, nvals 
 ## A 16-byte all-integer struct delivers p.x → %rdi, p.y → %rsi; an all-float `D{f64,f64}` → %xmm0,%xmm1;
 ## a mixed `M{i64,f64}` → i64/%rdi + f64/%xmm0. Fixpoint-neutral (gated on `callee_is_abi_c`; `src/`
 ## declares no `@abi(c)` fn). Still fails loud on register-overflow scalar spill (> 6 int / > 8 sse).
-pub emit_abi_c_call_args := fn(args_head : ptr(mut Arg), nvals : usize, cidx : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) -> usize {
+pub emit_abi_c_call_args := fn(args_head : Option(ptr(mut Arg)), nvals : usize, cidx : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) -> usize {
   a := arena_of(cx)
   aggsave := cx.agg_next
   ## SRET: an @abi(c) MEMORY-struct return rides a hidden %rdi result pointer (shift the real int args to

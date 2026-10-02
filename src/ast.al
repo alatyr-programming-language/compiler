@@ -330,10 +330,10 @@ pub Expr := enum {
   Bin(u8, ptr(Expr), ptr(Expr)),
   If(ptr(Expr), ptr(Expr), ptr(Expr)),
   Match(ptr(Expr), Option(ptr(mut Arm))),
-  Call(usize, usize, usize, ptr(mut Arg)),
-  StructLit(usize, usize, usize, ptr(mut Arg)),
+  Call(usize, usize, usize, Option(ptr(mut Arg))),
+  StructLit(usize, usize, usize, Option(ptr(mut Arg))),
   Field(ptr(Expr), usize, usize),
-  EnumLit(usize, usize, usize, usize, usize, ptr(mut Arg)),
+  EnumLit(usize, usize, usize, usize, usize, Option(ptr(mut Arg))),
   ## POINTER tier: `ptr(<place>)` (the address of a local-var place; lower `leaq`s its
   ## frame slot) and `deref(<ptr>)` (a load through a pointer value; lower loads `(%reg)`).
   ## A `deref(p) = v` STORE is `Stmt::DerefAssign`. Pointer values are word-sized scalars.
@@ -362,7 +362,7 @@ pub Expr := enum {
   ## Index/Field path and receives a dedicated conservative DA/codegen slice when `a` is a
   ## fixed array field of simple structs. Dynamic indices and deeper aggregate paths remain
   ## fail-loud frontiers. NO bounds checking (the toy grammar is `unchecked`-style — out-of-range is UB).
-  ArrayLit(usize, ptr(mut Arg)),
+  ArrayLit(usize, Option(ptr(mut Arg))),
   Index(ptr(Expr), ptr(Expr)),
   ## TRYABLE tier (`?` operator): `<inner>?` over a tryable enum value (`Result`/`Option`,
   ## both ordinary user enums). CONVENTION: the SUCCESS variant is at discriminant index 0
@@ -701,18 +701,19 @@ pub param_same := fn(x : Option(ptr(mut Param)), y : Option(ptr(mut Param))) -> 
 
 ## A function-call **argument** (arena-linked): the argument expression + `next` (0 = end).
 ## Walked in declaration order — argument `i` is delivered in System V integer register `i`.
-pub Arg := struct { e : ptr(Expr), next : ptr(mut Arg) }
+pub Arg := struct { e : ptr(Expr), next : Option(ptr(mut Arg)) }
 
 ## `Arg`-list plumbing (§6 ptr-typing). `Arg.next` and the arg-list HEADS in the `Expr::Call` /
 ## `StructLit` / `EnumLit` / `ArrayLit` enum payloads (call args / struct fields / enum payloads / array
-## elements) are `ptr(mut Arg)`. `arg_p` is the typed IDENTITY accessor — an arg read is
-## `deref(arg_p(h))` / `deref(arg_p(h)).e` / `.next`, so the lean lower resolves the pointee STRUCT from
-## `arg_p`'s return type (an `Arg` is read as a struct copy, never matched). The pass-plumbing params +
-## carrier struct fields that thread an arg-head (`args_head`/`ehead`/`phead`/`head`/`ah`, `EFull.phead`,
-## `CallInfo.ah`, …) stay `usize` handles — they hold the pointer bits and resolve through `arg_p`
-## (the checker is lenient on usize<->ptr); only the LINK field + the enum-payload heads carry the ptr type.
+## elements) are `Option(ptr(mut Arg))` (`None` = no args; `arg_p` applies to a `Some` payload). `arg_p` is
+## the typed IDENTITY accessor — an arg read is `deref(arg_p(h))` / `deref(arg_p(h)).e` / `.next`, so the
+## lean lower resolves the pointee STRUCT from `arg_p`'s return type (an `Arg` is read as a struct copy,
+## never matched). The pass-plumbing params that thread an arg-head are `Option(ptr(mut Arg))` too.
 pub arg_p := fn(p : ptr(mut Arg)) -> ptr(mut Arg) { p }
-pub arg_null := fn() -> ptr(mut Arg) { unchecked bitcast(ptr(mut Arg), 0) }
+pub arg_any := fn(h : Option(ptr(mut Arg))) -> bool { match h { Some(_q) => { true }; None => { false } } }
+pub arg_at := fn(h : Option(ptr(mut Arg)), msg : str) -> ptr(mut Arg) {
+  match h { Some(q) => { q }; None => { panic(msg) } }
+}
 
 ## A struct-literal **field initializer** `f = v` collected AT PARSE (arena-linked): the field
 ## NAME span `[fs, fs+fl)`, the value expr, and `next`. Used ONLY transiently inside the

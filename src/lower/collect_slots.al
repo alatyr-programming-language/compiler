@@ -172,7 +172,8 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
             ## type is the un-substituted param `T`). Recover the full instance type (`Option(Option(T))`) so
             ## the slot sizes correctly and the outer match binds the inner-enum payload as an enum. A SCALAR
             ## payload (the common case) synthesizes nothing → keeps the bare span (byte-identical).
-            arg0e := arg_expr_at(enum_lit_full(v).phead, 0, a)
+            efl0 := enum_lit_full(v)
+            arg0e := arg_expr_at(efl0.phead, 0, a)
             mut es2 := ei.es
             mut el2 := ei.el
             if enum_lit_full(v).np >= 1 {
@@ -807,7 +808,8 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ## `else`) would deref entry_of == -1 = garbage.
           gmgv := if fbv.n != 0 { mut_global_value(decls, src, fbv.s, fbv.n) } else { unchecked bitcast(ptr(Expr), 0) }
           if unchecked bitcast(usize, gmgv) != 0 and array_lit_info(gmgv).is_a {
-            gesli := struct_lit_info(arg_expr_at(array_lit_info(gmgv).ehead, 0, a))
+            gmgvehi := array_lit_info(gmgv)
+            gesli := struct_lit_info(arg_expr_at(gmgvehi.ehead, 0, a))
             if gesli.is_s { lv_agg = 2; lv_es = gesli.ss; lv_el = gesli.sl }
           } else if fbv.n != 0 {
             fse := deref(svec_at(SlotEntry, slots, entry_of(slots, src, fbv.s, fbv.n)))

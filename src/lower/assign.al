@@ -22,6 +22,7 @@
 ## order `src/lower.al`'s own prologue uses. Keep it.
 strbuf := rt
 arg_p := ast::arg_p
+arg_at := ast::arg_at
 fld_p := ast::fld_p
 fld_at := ast::fld_at
 (Decl, Expr, FieldDecl, local_is_uninit, local_type_span) := ast
@@ -318,7 +319,7 @@ pub emit_packed_store_rax := fn(in out sb : strbuf::StrBuf, sz : usize, off : i6
 ## scalar field ≤ 1 word, so the packed bytes always fit in the reserved block), so ONLY the byte
 ## offsets + store widths change; the base slot math is shared with the word-sized path. Walks the
 ## `FieldDecl` list (byte sizes) alongside the value list, mirroring `emit_struct_assign`'s idioms.
-pub emit_packed_assign := fn(ss : usize, sl : usize, fhead : usize, base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+pub emit_packed_assign := fn(ss : usize, sl : usize, fhead : Option(ptr(mut Arg)), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   di := struct_decl_of(cx.decls, cx.src, ss, sl)
   mut fd : Option(ptr(mut FieldDecl)) = Option.None
   if di >= 0 {
@@ -326,106 +327,116 @@ pub emit_packed_assign := fn(ss : usize, sl : usize, fhead : usize, base : i64, 
     ddd := deref(decl_at(Decl, ddh))
     fd = ddd.fields_head
   }
-  mut g := fhead
+  mut g : Option(ptr(mut Arg)) = fhead
   mut boff := 0
-  while g != 0 {
-    ga := deref(arg_p(g))
-    mut sz := 8
-    mut fdnext : Option(ptr(mut FieldDecl)) = Option.None
-    mut eo := -1
-    mut ea := -1
-    mut eb := -1
-    mut ats := 0
-    mut atl := 0
-    mut awsize := 1
-    mut is_agg := false
-    mut is_byte_arr := false
-    match fd {
-      Some(fdq) => {
-        fdn := deref(fld_p(fdq))
-        sz = scalar_byte_size(cx.src, fdn.ts, fdn.tl)
-        fdnext = fdn.next
-        eo = field_offset_attr(cx.src, fdn.ns)          ## §8 explicit @offset(N) on this field, or -1
-        ea = field_align_attr(cx.src, fdn.ns)           ## §8 @align(N) on this field, or -1
-        eb = field_endian_attr(cx.src, fdn.ns)          ## §8 @endian(big)=1 / @endian(little)=0, or -1
-        ats = fdn.ts
-        atl = fdn.tl
-        awsize = fdn.wsize
-        aes := array_elem_span(cx.src, fdn.ts, fdn.tl)
-        if aes.n != 0 and byte_type_eek(cx.src, aes.s, aes.n) != 0 { is_byte_arr = true }
-        ## §8 aggregate FIELD (str / nested struct / enum / array) in a packed struct — a multi-word value
-        ## stored via the word-model emitters at an 8-aligned slot (byte→slot), not a scalar sized store.
-        is_agg = is_packed_aggregate(cx.decls, cx.src, fdn.ts, fdn.tl, fdn.wsize)
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        mut sz := 8
+        mut fdnext : Option(ptr(mut FieldDecl)) = Option.None
+        mut eo := -1
+        mut ea := -1
+        mut eb := -1
+        mut ats := 0
+        mut atl := 0
+        mut awsize := 1
+        mut is_agg := false
+        mut is_byte_arr := false
+        match fd {
+          Some(fdq) => {
+            fdn := deref(fld_p(fdq))
+            sz = scalar_byte_size(cx.src, fdn.ts, fdn.tl)
+            fdnext = fdn.next
+            eo = field_offset_attr(cx.src, fdn.ns)          ## §8 explicit @offset(N) on this field, or -1
+            ea = field_align_attr(cx.src, fdn.ns)           ## §8 @align(N) on this field, or -1
+            eb = field_endian_attr(cx.src, fdn.ns)          ## §8 @endian(big)=1 / @endian(little)=0, or -1
+            ats = fdn.ts
+            atl = fdn.tl
+            awsize = fdn.wsize
+            aes := array_elem_span(cx.src, fdn.ts, fdn.tl)
+            if aes.n != 0 and byte_type_eek(cx.src, aes.s, aes.n) != 0 { is_byte_arr = true }
+            ## §8 aggregate FIELD (str / nested struct / enum / array) in a packed struct — a multi-word value
+            ## stored via the word-model emitters at an 8-aligned slot (byte→slot), not a scalar sized store.
+            is_agg = is_packed_aggregate(cx.decls, cx.src, fdn.ts, fdn.tl, fdn.wsize)
+          }
+          None => {}
+        }
+        ## `@align(N)` raises the running cursor to a multiple of N; a field carrying `@offset(N)` sits at
+        ## byte N (overriding the cursor), the cursor continuing after it (overlap allowed, union-like).
+        ## Mirrors `packed_field_byte_offset` so the store offsets match the read offsets exactly.
+        mut cur := boff
+        if ea >= 1 { cur = i64(round_up_to(usize(cur), usize(ea))) }
+        if eo >= 0 { cur = eo }
+        if is_byte_arr {
+          ## Explicit byte arrays are the one aggregate shape proven to be byte-contiguous here. Their
+          ## literal elements are emitted as sized byte stores at the packed field offset; do not route
+          ## them through the word aggregate emitters, whose 8-byte alignment requirement is intentional
+          ## for the still-deferred general aggregate case.
+          ali := array_lit_info(ga.e)
+          if ali.is_a == false { panic("selfhost: a packed byte-array field initializer must be an array literal in this slice") }
+          mut ae : Option(ptr(mut Arg)) = ali.ehead
+          mut k := 0
+          loop {
+            match ae {
+              Some(aeq) => {
+                av := deref(arg_p(aeq))
+                emit_gas(av.e, sb, cx, a, nl)
+                push_str(sb, "  popq %rax\n  movb %al, -")
+                push_int(sb, (base + 1) * 8 - cur - i64(k))
+                push_str(sb, "(%rbp)\n")
+                k = k + 1
+                ae = av.next
+              }
+              None => { break }
+            }
+          }
+          boff = cur + i64(awsize)
+        } else if is_agg {
+          ## The aggregate keeps its natural 8-byte alignment inside the packed struct (the word-model
+          ## emitters store whole words), so its byte offset MUST be 8-aligned — else fail LOUD (unaligned
+          ## multi-word packing is a deferred slice, never a silent miscompile). Byte `cur` → slot
+          ## `base - cur/8`: a field at byte `cur` (8-aligned) is the word slot whose lowest address is
+          ## `rbp-((base+1)*8 - cur)`, i.e. slot `base - cur/8` in the down-growing block — exactly where the
+          ## word-model emitters (`emit_struct_assign`/`emit_str_assign`/…) lay the aggregate's words, so a
+          ## scalar OVERLAY read (`@offset(cur+k)`) of any word lands on the right byte.
+          if (cur / 8) * 8 != cur { panic("selfhost: an aggregate/str field in a @packed struct must be 8-byte aligned — use @offset(8*k) or @align(8) (unaligned aggregate packing is a deferred slice)") }
+          aslot := base - (cur / 8)
+          nsli := struct_lit_info(ga.e)
+          sli := str_lit_info(ga.e)
+          eli := enum_lit_info(ga.e)
+          ali := array_lit_info(ga.e)
+          if nsli.is_s { emit_struct_assign(ga.e, aslot, sb, cx, a) }
+          else if sli.is_s { emit_str_assign(ga.e, aslot, sb) }
+          else if eli.is_e {
+            ## A union field is a raw offset-0 aggregate, not an enum's `[disc,payload]` pair.
+            if is_union_decl(cx.decls, cx.src, ats, atl) { emit_union_assign(ga.e, aslot, sb, cx, a, nl) }
+            else { emit_enum_assign(ga.e, aslot, sb, cx, a, nl) }
+          }
+          else if ali.is_a { emit_array_assign(ga.e, aslot, sb, cx, nl) }
+          boff = cur + i64(field_byte_size(cx.decls, cx.src, ats, atl, awsize, a))
+        } else {
+          emit_gas(ga.e, sb, cx, a, nl)
+          push_str(sb, "  popq %rax\n")
+          ## §8 @endian(big): byte-REVERSE the value before the sized store so its bytes land MSB-first on the
+          ## little-endian x86 native (the load reverses them back). `sz == 1` and native/`little` need no swap.
+          if eb == 1 and sz == 2 { push_str(sb, "  rolw $8, %ax\n") }
+          else if eb == 1 and sz == 4 { push_str(sb, "  bswap %eax\n") }
+          else if eb == 1 and sz == 8 { push_str(sb, "  bswap %rax\n") }
+          disp := (base + 1) * 8 - cur
+          if sz == 1 { push_str(sb, "  movb %al, -") }
+          else if sz == 2 { push_str(sb, "  movw %ax, -") }
+          else if sz == 4 { push_str(sb, "  movl %eax, -") }
+          else { push_str(sb, "  movq %rax, -") }
+          push_int(sb, disp)
+          push_str(sb, "(%rbp)\n")
+          boff = cur + i64(sz)
+        }
+        fd = fdnext
+        g = ga.next
       }
-      None => {}
+      None => { break }
     }
-    ## `@align(N)` raises the running cursor to a multiple of N; a field carrying `@offset(N)` sits at
-    ## byte N (overriding the cursor), the cursor continuing after it (overlap allowed, union-like).
-    ## Mirrors `packed_field_byte_offset` so the store offsets match the read offsets exactly.
-    mut cur := boff
-    if ea >= 1 { cur = i64(round_up_to(usize(cur), usize(ea))) }
-    if eo >= 0 { cur = eo }
-    if is_byte_arr {
-      ## Explicit byte arrays are the one aggregate shape proven to be byte-contiguous here. Their
-      ## literal elements are emitted as sized byte stores at the packed field offset; do not route
-      ## them through the word aggregate emitters, whose 8-byte alignment requirement is intentional
-      ## for the still-deferred general aggregate case.
-      ali := array_lit_info(ga.e)
-      if ali.is_a == false { panic("selfhost: a packed byte-array field initializer must be an array literal in this slice") }
-      mut ae := ali.ehead
-      mut k := 0
-      while ae != 0 {
-        av := deref(arg_p(ae))
-        emit_gas(av.e, sb, cx, a, nl)
-        push_str(sb, "  popq %rax\n  movb %al, -")
-        push_int(sb, (base + 1) * 8 - cur - i64(k))
-        push_str(sb, "(%rbp)\n")
-        k = k + 1
-        ae = av.next
-      }
-      boff = cur + i64(awsize)
-    } else if is_agg {
-      ## The aggregate keeps its natural 8-byte alignment inside the packed struct (the word-model
-      ## emitters store whole words), so its byte offset MUST be 8-aligned — else fail LOUD (unaligned
-      ## multi-word packing is a deferred slice, never a silent miscompile). Byte `cur` → slot
-      ## `base - cur/8`: a field at byte `cur` (8-aligned) is the word slot whose lowest address is
-      ## `rbp-((base+1)*8 - cur)`, i.e. slot `base - cur/8` in the down-growing block — exactly where the
-      ## word-model emitters (`emit_struct_assign`/`emit_str_assign`/…) lay the aggregate's words, so a
-      ## scalar OVERLAY read (`@offset(cur+k)`) of any word lands on the right byte.
-      if (cur / 8) * 8 != cur { panic("selfhost: an aggregate/str field in a @packed struct must be 8-byte aligned — use @offset(8*k) or @align(8) (unaligned aggregate packing is a deferred slice)") }
-      aslot := base - (cur / 8)
-      nsli := struct_lit_info(ga.e)
-      sli := str_lit_info(ga.e)
-      eli := enum_lit_info(ga.e)
-      ali := array_lit_info(ga.e)
-      if nsli.is_s { emit_struct_assign(ga.e, aslot, sb, cx, a) }
-      else if sli.is_s { emit_str_assign(ga.e, aslot, sb) }
-      else if eli.is_e {
-        ## A union field is a raw offset-0 aggregate, not an enum's `[disc,payload]` pair.
-        if is_union_decl(cx.decls, cx.src, ats, atl) { emit_union_assign(ga.e, aslot, sb, cx, a, nl) }
-        else { emit_enum_assign(ga.e, aslot, sb, cx, a, nl) }
-      }
-      else if ali.is_a { emit_array_assign(ga.e, aslot, sb, cx, nl) }
-      boff = cur + i64(field_byte_size(cx.decls, cx.src, ats, atl, awsize, a))
-    } else {
-      emit_gas(ga.e, sb, cx, a, nl)
-      push_str(sb, "  popq %rax\n")
-      ## §8 @endian(big): byte-REVERSE the value before the sized store so its bytes land MSB-first on the
-      ## little-endian x86 native (the load reverses them back). `sz == 1` and native/`little` need no swap.
-      if eb == 1 and sz == 2 { push_str(sb, "  rolw $8, %ax\n") }
-      else if eb == 1 and sz == 4 { push_str(sb, "  bswap %eax\n") }
-      else if eb == 1 and sz == 8 { push_str(sb, "  bswap %rax\n") }
-      disp := (base + 1) * 8 - cur
-      if sz == 1 { push_str(sb, "  movb %al, -") }
-      else if sz == 2 { push_str(sb, "  movw %ax, -") }
-      else if sz == 4 { push_str(sb, "  movl %eax, -") }
-      else { push_str(sb, "  movq %rax, -") }
-      push_int(sb, disp)
-      push_str(sb, "(%rbp)\n")
-      boff = cur + i64(sz)
-    }
-    fd = fdnext
-    g = ga.next
   }
 }
 
@@ -441,83 +452,93 @@ pub emit_packed_assign := fn(ss : usize, sl : usize, fhead : usize, base : i64, 
 ## word-granular `emit_struct_assign`, so every leaf lands at `standard_field_byte_offset` summed down
 ## the chain, which is exactly the sum `layout_field_offset_bytes` gives every READER, and exactly
 ## what `a64_std_store_struct` / `rv_std_store_struct` / `wat_std_store_struct` already did.
-emit_standard_assign := fn(ss : usize, sl : usize, fhead : usize, base : i64, bias : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_standard_assign := fn(ss : usize, sl : usize, fhead : Option(ptr(mut Arg)), base : i64, bias : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   di := struct_decl_of(cx.decls, cx.src, ss, sl)
   if di < 0 { panic("selfhost: standard-layout struct construction has no declaration") }
   ddh := rt::vec_get(deref(cx.decls), usize(di))
   ddd := deref(decl_at(Decl, ddh))
   mut fd := ddd.fields_head
-  mut g := fhead
-  while g != 0 {
-    ga := deref(arg_p(g))
-    fdn := deref(fld_p(fld_at(fd, "selfhost: standard-layout struct construction has more values than fields")))
-    eff := subst_field_ty(cx.decls, cx.src, ss, sl, fdn.ts, fdn.tl, deref(cx.mar))
-    ew := eff_field_wsize(cx.decls, cx.src, ss, sl, fdn.ts, fdn.tl, fdn.wsize, deref(cx.mar))
-    bo0 := standard_field_byte_offset(cx.decls, cx.src, ss, sl, fdn.ns, fdn.nl, deref(cx.mar))
-    if bo0 < 0 { panic("selfhost: standard-layout struct field has no byte offset") }
-    bo := bias + bo0
-    aes := array_elem_span(cx.src, eff.s, eff.n)
-    mut beek := u8(0)
-    if aes.n != 0 { beek = byte_type_eek(cx.src, aes.s, aes.n) }
-    if beek != 0 {
-      ali := array_lit_info(ga.e)
-      if ali.is_a == false { panic("selfhost: a standard-layout byte-array field initializer must be an array literal") }
-      mut ae := ali.ehead
-      mut k := 0
-      while ae != 0 {
-        av := deref(arg_p(ae))
-        if struct_lit_info(av.e).is_s or enum_lit_info(av.e).is_e or str_lit_info(av.e).is_s or array_lit_info(av.e).is_a { panic("selfhost: a standard-layout byte-array field literal must contain scalar elements") }
-        emit_gas(av.e, sb, cx, a, nl)
-        push_str(sb, "  popq %rax\n  movb %al, -")
-        push_int(sb, (base + 1) * 8 - bo - i64(k))
-        push_str(sb, "(%rbp)\n")
-        k += 1
-        ae = av.next
+  mut g : Option(ptr(mut Arg)) = fhead
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        fdn := deref(fld_p(fld_at(fd, "selfhost: standard-layout struct construction has more values than fields")))
+        eff := subst_field_ty(cx.decls, cx.src, ss, sl, fdn.ts, fdn.tl, deref(cx.mar))
+        ew := eff_field_wsize(cx.decls, cx.src, ss, sl, fdn.ts, fdn.tl, fdn.wsize, deref(cx.mar))
+        bo0 := standard_field_byte_offset(cx.decls, cx.src, ss, sl, fdn.ns, fdn.nl, deref(cx.mar))
+        if bo0 < 0 { panic("selfhost: standard-layout struct field has no byte offset") }
+        bo := bias + bo0
+        aes := array_elem_span(cx.src, eff.s, eff.n)
+        mut beek := u8(0)
+        if aes.n != 0 { beek = byte_type_eek(cx.src, aes.s, aes.n) }
+        if beek != 0 {
+          ali := array_lit_info(ga.e)
+          if ali.is_a == false { panic("selfhost: a standard-layout byte-array field initializer must be an array literal") }
+          mut ae : Option(ptr(mut Arg)) = ali.ehead
+          mut k := 0
+          loop {
+            match ae {
+              Some(aeq) => {
+                av := deref(arg_p(aeq))
+                if struct_lit_info(av.e).is_s or enum_lit_info(av.e).is_e or str_lit_info(av.e).is_s or array_lit_info(av.e).is_a { panic("selfhost: a standard-layout byte-array field literal must contain scalar elements") }
+                emit_gas(av.e, sb, cx, a, nl)
+                push_str(sb, "  popq %rax\n  movb %al, -")
+                push_int(sb, (base + 1) * 8 - bo - i64(k))
+                push_str(sb, "(%rbp)\n")
+                k += 1
+                ae = av.next
+              }
+              None => { break }
+            }
+          }
+        } else if struct_decl_of(cx.decls, cx.src, eff.s, eff.n) >= 0 {
+          ## CLAYOUT S3(b) — THE RECURSION. A nested STRUCT field is a value whose standard layout
+          ## starts at the containing field's §6.1 byte offset, so writing it is THIS function again with
+          ## `bias = bo`. S3(a) could not do that: it handed the child to `emit_struct_assign`, the
+          ## word-per-field constructor, while aarch64/riscv64/wat recursed byte-precisely — so for a child
+          ## whose two images differ the four backends built four different memory images. Measured then on
+          ## `struct { data : [u8;8], inner : struct { a : u16, b : u16 } }`: the child went in at
+          ## child-words 0/1 (bytes 8 and 16) while `o.inner.b` was read at byte 10, so x86_64 answered 0
+          ## where its own three siblings answered 22, and all four were made to refuse rather than let one
+          ## be wrong (I11). Now one writer, one set of offsets.
+          ##
+          ## `std_struct_is_byte_writable` is that writer's domain, defined ONCE in `lower_layout` and
+          ## asked by all four backends. It needs no 8-boundary guard, because the recursion stores at
+          ## ARBITRARY byte offsets — the S3(a) guard existed only because `emit_struct_assign` addresses
+          ## whole SLOTS, and it is also why that guard never saw the defect: `bo` was 8, perfectly
+          ## aligned. A child OUTSIDE the domain but still word-stored keeps the word constructor, which is
+          ## sound precisely because word-granular MEANS its §6.1 offsets are its word offsets times 8 — so
+          ## shapes the byte writer has no store for (a `[u64; 3]` field, a `str`, an enum) keep working on
+          ## x86_64 exactly as before. A child in NEITHER set stays fail-loud. The nested layout
+          ## decision is now expressed directly as the three semantic cases; the parser accepts this
+          ## chain, so no temporary flags are needed to avoid the retired desynchronisation.
+          if std_struct_is_byte_writable(cx.decls, cx.src, eff.s, eff.n, deref(cx.mar)) {
+            emit_standard_value(ga.e, base, bo, sb, cx, a, nl)
+          } else if layout_struct_is_word_stored(cx.decls, cx.src, eff.s, eff.n, deref(cx.mar)) {
+            if (bo / 8) * 8 != bo { panic("selfhost: a standard-layout nested struct field written by the word constructor must start at an 8-byte boundary") }
+            emit_struct_assign(ga.e, base - bo / 8, sb, cx, a, nl)
+          } else {
+            panic("selfhost: a standard-layout struct's nested aggregate field must be writable by the byte-precise whole-value writer (scalar / byte-array / nested-struct fields only) or by the plain word constructor — a @packed child, or one carrying a str, enum, union, tuple or non-byte array field, is written by a different constructor than the one that reads it; bind the inner value to its own local instead")
+          }
+        } else if str_at((cx.src + eff.s), eff.n) == "str" or enum_decl_of(cx.decls, cx.src, eff.s, eff.n) >= 0 or ew > 1 {
+          panic("selfhost: standard-layout struct construction with this nested aggregate field is not yet supported by all byte consumers")
+        } else {
+          sz := scalar_byte_size(cx.src, eff.s, eff.n)
+          emit_gas(ga.e, sb, cx, a, nl)
+          push_str(sb, "  popq %rax\n")
+          if sz == 1 { push_str(sb, "  movb %al, -") }
+          else if sz == 2 { push_str(sb, "  movw %ax, -") }
+          else if sz == 4 { push_str(sb, "  movl %eax, -") }
+          else { push_str(sb, "  movq %rax, -") }
+          push_int(sb, (base + 1) * 8 - bo)
+          push_str(sb, "(%rbp)\n")
+        }
+        fd = fdn.next
+        g = ga.next
       }
-    } else if struct_decl_of(cx.decls, cx.src, eff.s, eff.n) >= 0 {
-      ## CLAYOUT S3(b) — THE RECURSION. A nested STRUCT field is a value whose standard layout
-      ## starts at the containing field's §6.1 byte offset, so writing it is THIS function again with
-      ## `bias = bo`. S3(a) could not do that: it handed the child to `emit_struct_assign`, the
-      ## word-per-field constructor, while aarch64/riscv64/wat recursed byte-precisely — so for a child
-      ## whose two images differ the four backends built four different memory images. Measured then on
-      ## `struct { data : [u8;8], inner : struct { a : u16, b : u16 } }`: the child went in at
-      ## child-words 0/1 (bytes 8 and 16) while `o.inner.b` was read at byte 10, so x86_64 answered 0
-      ## where its own three siblings answered 22, and all four were made to refuse rather than let one
-      ## be wrong (I11). Now one writer, one set of offsets.
-      ##
-      ## `std_struct_is_byte_writable` is that writer's domain, defined ONCE in `lower_layout` and
-      ## asked by all four backends. It needs no 8-boundary guard, because the recursion stores at
-      ## ARBITRARY byte offsets — the S3(a) guard existed only because `emit_struct_assign` addresses
-      ## whole SLOTS, and it is also why that guard never saw the defect: `bo` was 8, perfectly
-      ## aligned. A child OUTSIDE the domain but still word-stored keeps the word constructor, which is
-      ## sound precisely because word-granular MEANS its §6.1 offsets are its word offsets times 8 — so
-      ## shapes the byte writer has no store for (a `[u64; 3]` field, a `str`, an enum) keep working on
-      ## x86_64 exactly as before. A child in NEITHER set stays fail-loud. The nested layout
-      ## decision is now expressed directly as the three semantic cases; the parser accepts this
-      ## chain, so no temporary flags are needed to avoid the retired desynchronisation.
-      if std_struct_is_byte_writable(cx.decls, cx.src, eff.s, eff.n, deref(cx.mar)) {
-        emit_standard_value(ga.e, base, bo, sb, cx, a, nl)
-      } else if layout_struct_is_word_stored(cx.decls, cx.src, eff.s, eff.n, deref(cx.mar)) {
-        if (bo / 8) * 8 != bo { panic("selfhost: a standard-layout nested struct field written by the word constructor must start at an 8-byte boundary") }
-        emit_struct_assign(ga.e, base - bo / 8, sb, cx, a, nl)
-      } else {
-        panic("selfhost: a standard-layout struct's nested aggregate field must be writable by the byte-precise whole-value writer (scalar / byte-array / nested-struct fields only) or by the plain word constructor — a @packed child, or one carrying a str, enum, union, tuple or non-byte array field, is written by a different constructor than the one that reads it; bind the inner value to its own local instead")
-      }
-    } else if str_at((cx.src + eff.s), eff.n) == "str" or enum_decl_of(cx.decls, cx.src, eff.s, eff.n) >= 0 or ew > 1 {
-      panic("selfhost: standard-layout struct construction with this nested aggregate field is not yet supported by all byte consumers")
-    } else {
-      sz := scalar_byte_size(cx.src, eff.s, eff.n)
-      emit_gas(ga.e, sb, cx, a, nl)
-      push_str(sb, "  popq %rax\n")
-      if sz == 1 { push_str(sb, "  movb %al, -") }
-      else if sz == 2 { push_str(sb, "  movw %ax, -") }
-      else if sz == 4 { push_str(sb, "  movl %eax, -") }
-      else { push_str(sb, "  movq %rax, -") }
-      push_int(sb, (base + 1) * 8 - bo)
-      push_str(sb, "(%rbp)\n")
+      None => { break }
     }
-    fd = fdn.next
-    g = ga.next
   }
 }
 
@@ -603,20 +624,25 @@ emit_standard_scalar_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in ou
     push_str(sb, "(%rax)\n")
   }
   mut fd := ddd.fields_head
-  mut g := struct_lit_fields(val)
-  while g != 0 {
-    ga := deref(arg_p(g))
-    fdn := deref(fld_p(fld_at(fd, "selfhost: standard-layout pointer struct construction has more values than fields")))
-    eff := subst_field_ty(cx.decls, cx.src, dts.s, dts.n, fdn.ts, fdn.tl, deref(cx.mar))
-    bo := standard_field_byte_offset(cx.decls, cx.src, dts.s, dts.n, fdn.ns, fdn.nl, deref(cx.mar))
-    if bo < 0 { panic("selfhost: standard-layout pointer struct field has no byte offset") }
-    emit_gas(ga.e, sb, cx, a, nl)
-    ## The field value is now on top of the saved destination pointer, so the pointer is one word
-    ## below it. Load it before `emit_packed_store_rax` pops the value.
-    push_str(sb, "  movq 8(%rsp), %rax\n")
-    emit_packed_store_rax(sb, scalar_byte_size(cx.src, eff.s, eff.n), bo, false)
-    fd = fdn.next
-    g = ga.next
+  mut g : Option(ptr(mut Arg)) = struct_lit_fields(val)
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        fdn := deref(fld_p(fld_at(fd, "selfhost: standard-layout pointer struct construction has more values than fields")))
+        eff := subst_field_ty(cx.decls, cx.src, dts.s, dts.n, fdn.ts, fdn.tl, deref(cx.mar))
+        bo := standard_field_byte_offset(cx.decls, cx.src, dts.s, dts.n, fdn.ns, fdn.nl, deref(cx.mar))
+        if bo < 0 { panic("selfhost: standard-layout pointer struct field has no byte offset") }
+        emit_gas(ga.e, sb, cx, a, nl)
+        ## The field value is now on top of the saved destination pointer, so the pointer is one word
+        ## below it. Load it before `emit_packed_store_rax` pops the value.
+        push_str(sb, "  movq 8(%rsp), %rax\n")
+        emit_packed_store_rax(sb, scalar_byte_size(cx.src, eff.s, eff.n), bo, false)
+        fd = fdn.next
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   push_str(sb, "  popq %rax\n")
   true
@@ -715,11 +741,16 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
       ## value-fn named call never reaches here (`d_rewrite_named_call` rewrote it to a `Call`).
       if di < 0 {
         mut badz := false
-        mut gz := fhead
-        while gz != 0 {
-          gaz := deref(arg_p(gz))
-          if array_lit_info(gaz.e).is_a { badz = true }
-          gz = gaz.next
+        mut gz : Option(ptr(mut Arg)) = fhead
+        loop {
+          match gz {
+            Some(gzq) => {
+              gaz := deref(arg_p(gzq))
+              if array_lit_info(gaz.e).is_a { badz = true }
+              gz = gaz.next
+            }
+            None => { break }
+          }
         }
         if badz { panic("selfhost: a struct construction's head does not resolve to a declared struct type — an unknown type constructor (e.g. `X(128)(words = […])` with no `X` declared) cannot materialize an array-literal field; declare the type or fix the name") }
       }
@@ -729,170 +760,175 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
         ddd := deref(decl_at(Decl, ddh))
         fd = ddd.fields_head
       }
-      mut g := fhead
+      mut g : Option(ptr(mut Arg)) = fhead
       mut off := 0
-      while g != 0 {
-        ga := deref(arg_p(g))
-        ## Bind the FieldDecl to a struct LOCAL and read `.wsize`/`.next` from it — an INLINE
-        ## `deref(fld_p(fd)).field` read is `Field(Deref(<call>), …)`, which the
-        ## self-host lower does not lower (no deref-of-call Field path → `pushq $0`), so b.out read
-        ## both as 0: the first field's wsize 0 (no off advance) + `next` 0 (fd→0) collapsed every
-        ## struct-ctor arg's field 0 onto field 1. The `fdn := deref(node_ptr(…))` copy is the proven
-        ## `ga := deref(node_ptr(Arg,…))` shape both compilers handle.
-        mut wsz := 1
-        mut fdnext : Option(ptr(mut FieldDecl)) = Option.None
-        mut is_str_fld := false
-        mut is_folded_fld := false
-        ## ISSUE #462 — is this field's declared type an ORDINARY `[disc, payload…]` enum? Read from
-        ## the SUBSTITUTED span (`effc`), so a generic `v : T` instantiated to an enum counts while the
-        ## raw `T` does not. A niche-folded `Option(ptr(T))` and a raw union are excluded for the same
-        ## reason `emit_enum_place_words_at` excludes them: their width is not `1 + arity` and each
-        ## already has its own writer (`emit_folded_option_assign` / `emit_union_assign`).
-        mut is_enum_fld := false
-        match fd {
-          Some(fdq) => {
-            fdn := deref(fld_p(fdq))
-            ## the field's TRUE word width — struct-aware (a struct-typed field occupies its struct's
-            ## word count; the parser defaults its `wsize` to 1). MUST match the READ side's
-            ## `field_word_offset` (which also sums `field_words`), or a nested field reads a wrong slot.
-            ## NESTED-GENERIC: substitute a type-PARAM field to the instance's aggregate type-arg (`v : T`
-            ## → `Pair` in `Box(Pair(u64))`) so `off` advances by the true width, exactly as the bind
-            ## (`struct_words`) + read (`field_word_offset`) sides do (gated to aggregate type-args).
-            effc := subst_field_ty(cx.decls, cx.src, irs.s, irs.n, fdn.ts, fdn.tl, deref(cx.mar))
-            ## COMPTIME-VALUE-GENERIC: a `[T; <expr>]` field (parser `wsize` 0) stores its array
-            ## literal into the FOLDED length's words (`uint(192)` → 3), matching the bind/read sides.
-            efw := eff_field_wsize(cx.decls, cx.src, irs.s, irs.n, fdn.ts, fdn.tl, fdn.wsize, deref(cx.mar))
-            wsz = field_words(cx.decls, cx.src, effc.s, effc.n, efw, deref(cx.mar))
-            fdnext = fdn.next
-            ## Types §9.4 — read the SUBSTITUTED type (`effc`), not the raw declared one: a type-PARAM
-            ## field of a `str`-instantiated generic (`v : T` in `Box(str)`) is a 2-word `{ptr, len}`
-            ## value, but the RAW span is `T`, so the str probe missed and the field fell to the
-            ## `wsz > 1` array branch — which matches only an `ArrayLit` and stored NOTHING (`b.v.len`
-            ## read 0: a SILENT MISCOMPILE). `subst_field_ty` returns the declared span unchanged for a
-            ## non-generic field, so every pre-existing `name : str` field is byte-identical.
-            if str_at((cx.src + effc.s), effc.n) == "str" { is_str_fld = true }
-            ## §8 `@niche`: a NICHE-FOLDED `Option(ptr(T))` field is ONE word (`field_words` == 1). Its enum
-            ## LITERAL initializer must be stored FOLDED (`Some(p)`=p, `None`=0) — not as a `[disc, payload]`
-            ## pair, which would spill the payload into the NEXT field's slot (its `wsz` is only 1). Gated by
-            ## `is_niche_folded` → every non-folded enum field keeps the byte-identical `emit_enum_assign`.
-            if is_niche_folded(cx.src, effc.s, effc.n) { is_folded_fld = true }
-            if is_folded_fld == false and is_union_decl(cx.decls, cx.src, effc.s, effc.n) == false {
-              if enum_decl_of(cx.decls, cx.src, effc.s, effc.n) >= 0 { is_enum_fld = true }
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            ## Bind the FieldDecl to a struct LOCAL and read `.wsize`/`.next` from it — an INLINE
+            ## `deref(fld_p(fd)).field` read is `Field(Deref(<call>), …)`, which the
+            ## self-host lower does not lower (no deref-of-call Field path → `pushq $0`), so b.out read
+            ## both as 0: the first field's wsize 0 (no off advance) + `next` 0 (fd→0) collapsed every
+            ## struct-ctor arg's field 0 onto field 1. The `fdn := deref(node_ptr(…))` copy is the proven
+            ## `ga := deref(node_ptr(Arg,…))` shape both compilers handle.
+            mut wsz := 1
+            mut fdnext : Option(ptr(mut FieldDecl)) = Option.None
+            mut is_str_fld := false
+            mut is_folded_fld := false
+            ## ISSUE #462 — is this field's declared type an ORDINARY `[disc, payload…]` enum? Read from
+            ## the SUBSTITUTED span (`effc`), so a generic `v : T` instantiated to an enum counts while the
+            ## raw `T` does not. A niche-folded `Option(ptr(T))` and a raw union are excluded for the same
+            ## reason `emit_enum_place_words_at` excludes them: their width is not `1 + arity` and each
+            ## already has its own writer (`emit_folded_option_assign` / `emit_union_assign`).
+            mut is_enum_fld := false
+            match fd {
+              Some(fdq) => {
+                fdn := deref(fld_p(fdq))
+                ## the field's TRUE word width — struct-aware (a struct-typed field occupies its struct's
+                ## word count; the parser defaults its `wsize` to 1). MUST match the READ side's
+                ## `field_word_offset` (which also sums `field_words`), or a nested field reads a wrong slot.
+                ## NESTED-GENERIC: substitute a type-PARAM field to the instance's aggregate type-arg (`v : T`
+                ## → `Pair` in `Box(Pair(u64))`) so `off` advances by the true width, exactly as the bind
+                ## (`struct_words`) + read (`field_word_offset`) sides do (gated to aggregate type-args).
+                effc := subst_field_ty(cx.decls, cx.src, irs.s, irs.n, fdn.ts, fdn.tl, deref(cx.mar))
+                ## COMPTIME-VALUE-GENERIC: a `[T; <expr>]` field (parser `wsize` 0) stores its array
+                ## literal into the FOLDED length's words (`uint(192)` → 3), matching the bind/read sides.
+                efw := eff_field_wsize(cx.decls, cx.src, irs.s, irs.n, fdn.ts, fdn.tl, fdn.wsize, deref(cx.mar))
+                wsz = field_words(cx.decls, cx.src, effc.s, effc.n, efw, deref(cx.mar))
+                fdnext = fdn.next
+                ## Types §9.4 — read the SUBSTITUTED type (`effc`), not the raw declared one: a type-PARAM
+                ## field of a `str`-instantiated generic (`v : T` in `Box(str)`) is a 2-word `{ptr, len}`
+                ## value, but the RAW span is `T`, so the str probe missed and the field fell to the
+                ## `wsz > 1` array branch — which matches only an `ArrayLit` and stored NOTHING (`b.v.len`
+                ## read 0: a SILENT MISCOMPILE). `subst_field_ty` returns the declared span unchanged for a
+                ## non-generic field, so every pre-existing `name : str` field is byte-identical.
+                if str_at((cx.src + effc.s), effc.n) == "str" { is_str_fld = true }
+                ## §8 `@niche`: a NICHE-FOLDED `Option(ptr(T))` field is ONE word (`field_words` == 1). Its enum
+                ## LITERAL initializer must be stored FOLDED (`Some(p)`=p, `None`=0) — not as a `[disc, payload]`
+                ## pair, which would spill the payload into the NEXT field's slot (its `wsz` is only 1). Gated by
+                ## `is_niche_folded` → every non-folded enum field keeps the byte-identical `emit_enum_assign`.
+                if is_niche_folded(cx.src, effc.s, effc.n) { is_folded_fld = true }
+                if is_folded_fld == false and is_union_decl(cx.decls, cx.src, effc.s, effc.n) == false {
+                  if enum_decl_of(cx.decls, cx.src, effc.s, effc.n) >= 0 { is_enum_fld = true }
+                }
+              }
+              None => {}
             }
-          }
-          None => {}
-        }
-        nsli := struct_lit_info(ga.e)
-        if nsli.is_s {
-          ## a NESTED struct field (`i = I(…)`) — recurse to store the inner struct's words at the
-          ## field's base slot (arbitrary nesting). A scalar emit of a `StructLit` would drop it to 0.
-          emit_struct_assign(ga.e, base - off, sb, cx, a)
-        } else if is_str_fld {
-          ## a `str` FIELD (`name = "hi"`) — a 2-word `{ptr, len}` value; store it exactly as a str
-          ## LOCAL binding (ptr at `base+off+1`, len at `base+off+2`), matching the `g.name.ptr`/`.len`
-          ## read side (`str_field_place`). A LITERAL keeps the byte-identical `emit_str_assign`; any
-          ## OTHER str value (a str `Var`/param, a `sub`/`str_at`/`bytes` view, a range slice, a
-          ## str-returning call) materializes its pair via `emit_str_pair` — it previously hit
-          ## `emit_str_assign`'s `_ => {}` and stored NOTHING (`b.v.len` read 0, a SILENT MISCOMPILE).
-          emit_pair_field_store(ga.e, base - off, sb, cx, a, nl)
-        } else if is_folded_fld and enum_lit_info(ga.e).is_e {
-          ## §8 `@niche`: a folded `Option(ptr(T))` field with an enum-literal init — store the ONE folded
-          ## word (`Some(p)`=p / `None`=0) at the field's word 0. `match s.o` reads it back via the folded
-          ## branch of `try_field_enum_scrut`. (A folded field initialized by a VAR falls to the scalar
-          ## path below — a folded local is one word, stored + loaded scalar-correctly.)
-          emit_folded_option_assign(ga.e, base - off, sb, cx, a, nl)
-        } else if enum_lit_info(ga.e).is_e and is_union_decl(cx.decls, cx.src, effc.s, effc.n) {
-          ## A raw union field stores its constructor payload at the field's word 0. Do not route
-          ## through emit_enum_assign, which would write a discriminant and shift the payload by one.
-          emit_union_assign(ga.e, base - off, sb, cx, a, nl)
-        } else if enum_lit_info(ga.e).is_e {
-          ## an ENUM FIELD (`c = Col.G(40)`) — store its discriminant + payload words at the field's
-          ## base (its `field_words` == `1 + max_arity` > 1, so it would otherwise fall to the array
-          ## branch and be dropped, since an `EnumLit` isn't an `ArrayLit`). `match s.c` reads it back
-          ## via `try_field_enum_scrut`.
-          emit_enum_assign(ga.e, base - off, sb, cx, a, nl)
-        } else if is_enum_fld and enum_ret_call_d(ga.e, cx.decls, cx.src, a) {
-          ## ISSUE #462 — an ENUM field fed by an enum-returning CALL (`Boxed(p = mk())`). The value is
-          ## neither a `StructLit` nor an `EnumLit` nor a `Var`, so it walked past every branch above and
-          ## landed in the `wsz > 1` ARRAY branch, whose `emit_array_assign` matches only an `ArrayLit`
-          ## and whose `_ => {}` emitted NOTHING — the call was not even made and the field kept whatever
-          ## the frame slot held (0 in the reproducer): a silent wrong value on the REFERENCE backend,
-          ## the same dropped-store mechanism as #461/#465 in a different writer.
-          ## No new arithmetic: `emit_enum_place_words_at` (#461, extended by #465) already delivers a
-          ## non-literal enum's complete `{disc, payload…}` block to the frame base whose word 0 is
-          ## `base`, and the enum-returning-call arm of it is exactly the one the `h.t = mk()` ASSIGNMENT
-          ## path already uses. A struct-literal field's word k lives at `-(base - off - k + 1)*8(%rbp)`,
-          ## which is that contract with `base - off` as the base — so the call is a delegation, not a
-          ## fourth copy. `false` means nothing was emitted; make that a located reject rather than the
-          ## dropped store this issue is about (#464's rule: the emitter REPORTS whether it fired).
-          if emit_enum_place_words_at(ga.e, base - off, sb, cx, a, nl) == false {
-            panic("selfhost: a struct field's enum-returning call has no addressable return words here")
-          }
-        } else if var_agg_info(ga.e, cx.slots, cx.src).ek != 0 {
-          ## a struct/enum VAR field value (`inner = s`, `p = q`) — COPY the source aggregate's `wsz`
-          ## words into the field's slot. The `wsz > 1` array branch below matches only an `ArrayLit`,
-          ## so a bound-var aggregate value fell through to `emit_array_assign`'s `_ => {}` and stored
-          ## NOTHING (the field read word 0 as 0 — a silent-wrong-data corner's
-          ## generic-struct-LITERAL EMIT case, but general to any struct literal). Field word k lives at
-          ## logical slot `base - off - k`; a LOCAL source keeps source word k at frame word k, a by-REF
-          ## PARAM holds a pointer with word k at `-(k*8)(ptr)` (the same shape as the `x := <var>` copy).
-          fsvn := var_name_span(ga.e)
-          fsent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fsvn.s, fsvn.n)))
-          if fsent.is_ref {
-            push_str(sb, "  movq -")
-            push_int(sb, i64((fsent.off + 1) * 8))
-            push_str(sb, "(%rbp), %rax\n")
-            for k in 0..wsz {
-              push_str(sb, "  movq ")
-              push_int(sb, i64(k * 8))
-              push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
-              push_int(sb, (base - off - i64(k) + 1) * 8)
+            nsli := struct_lit_info(ga.e)
+            if nsli.is_s {
+              ## a NESTED struct field (`i = I(…)`) — recurse to store the inner struct's words at the
+              ## field's base slot (arbitrary nesting). A scalar emit of a `StructLit` would drop it to 0.
+              emit_struct_assign(ga.e, base - off, sb, cx, a)
+            } else if is_str_fld {
+              ## a `str` FIELD (`name = "hi"`) — a 2-word `{ptr, len}` value; store it exactly as a str
+              ## LOCAL binding (ptr at `base+off+1`, len at `base+off+2`), matching the `g.name.ptr`/`.len`
+              ## read side (`str_field_place`). A LITERAL keeps the byte-identical `emit_str_assign`; any
+              ## OTHER str value (a str `Var`/param, a `sub`/`str_at`/`bytes` view, a range slice, a
+              ## str-returning call) materializes its pair via `emit_str_pair` — it previously hit
+              ## `emit_str_assign`'s `_ => {}` and stored NOTHING (`b.v.len` read 0, a SILENT MISCOMPILE).
+              emit_pair_field_store(ga.e, base - off, sb, cx, a, nl)
+            } else if is_folded_fld and enum_lit_info(ga.e).is_e {
+              ## §8 `@niche`: a folded `Option(ptr(T))` field with an enum-literal init — store the ONE folded
+              ## word (`Some(p)`=p / `None`=0) at the field's word 0. `match s.o` reads it back via the folded
+              ## branch of `try_field_enum_scrut`. (A folded field initialized by a VAR falls to the scalar
+              ## path below — a folded local is one word, stored + loaded scalar-correctly.)
+              emit_folded_option_assign(ga.e, base - off, sb, cx, a, nl)
+            } else if enum_lit_info(ga.e).is_e and is_union_decl(cx.decls, cx.src, effc.s, effc.n) {
+              ## A raw union field stores its constructor payload at the field's word 0. Do not route
+              ## through emit_enum_assign, which would write a discriminant and shift the payload by one.
+              emit_union_assign(ga.e, base - off, sb, cx, a, nl)
+            } else if enum_lit_info(ga.e).is_e {
+              ## an ENUM FIELD (`c = Col.G(40)`) — store its discriminant + payload words at the field's
+              ## base (its `field_words` == `1 + max_arity` > 1, so it would otherwise fall to the array
+              ## branch and be dropped, since an `EnumLit` isn't an `ArrayLit`). `match s.c` reads it back
+              ## via `try_field_enum_scrut`.
+              emit_enum_assign(ga.e, base - off, sb, cx, a, nl)
+            } else if is_enum_fld and enum_ret_call_d(ga.e, cx.decls, cx.src, a) {
+              ## ISSUE #462 — an ENUM field fed by an enum-returning CALL (`Boxed(p = mk())`). The value is
+              ## neither a `StructLit` nor an `EnumLit` nor a `Var`, so it walked past every branch above and
+              ## landed in the `wsz > 1` ARRAY branch, whose `emit_array_assign` matches only an `ArrayLit`
+              ## and whose `_ => {}` emitted NOTHING — the call was not even made and the field kept whatever
+              ## the frame slot held (0 in the reproducer): a silent wrong value on the REFERENCE backend,
+              ## the same dropped-store mechanism as #461/#465 in a different writer.
+              ## No new arithmetic: `emit_enum_place_words_at` (#461, extended by #465) already delivers a
+              ## non-literal enum's complete `{disc, payload…}` block to the frame base whose word 0 is
+              ## `base`, and the enum-returning-call arm of it is exactly the one the `h.t = mk()` ASSIGNMENT
+              ## path already uses. A struct-literal field's word k lives at `-(base - off - k + 1)*8(%rbp)`,
+              ## which is that contract with `base - off` as the base — so the call is a delegation, not a
+              ## fourth copy. `false` means nothing was emitted; make that a located reject rather than the
+              ## dropped store this issue is about (#464's rule: the emitter REPORTS whether it fired).
+              if emit_enum_place_words_at(ga.e, base - off, sb, cx, a, nl) == false {
+                panic("selfhost: a struct field's enum-returning call has no addressable return words here")
+              }
+            } else if var_agg_info(ga.e, cx.slots, cx.src).ek != 0 {
+              ## a struct/enum VAR field value (`inner = s`, `p = q`) — COPY the source aggregate's `wsz`
+              ## words into the field's slot. The `wsz > 1` array branch below matches only an `ArrayLit`,
+              ## so a bound-var aggregate value fell through to `emit_array_assign`'s `_ => {}` and stored
+              ## NOTHING (the field read word 0 as 0 — a silent-wrong-data corner's
+              ## generic-struct-LITERAL EMIT case, but general to any struct literal). Field word k lives at
+              ## logical slot `base - off - k`; a LOCAL source keeps source word k at frame word k, a by-REF
+              ## PARAM holds a pointer with word k at `-(k*8)(ptr)` (the same shape as the `x := <var>` copy).
+              fsvn := var_name_span(ga.e)
+              fsent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, fsvn.s, fsvn.n)))
+              if fsent.is_ref {
+                push_str(sb, "  movq -")
+                push_int(sb, i64((fsent.off + 1) * 8))
+                push_str(sb, "(%rbp), %rax\n")
+                for k in 0..wsz {
+                  push_str(sb, "  movq ")
+                  push_int(sb, i64(k * 8))
+                  push_str(sb, "(%rax), %rcx\n  movq %rcx, -")
+                  push_int(sb, (base - off - i64(k) + 1) * 8)
+                  push_str(sb, "(%rbp)\n")
+                }
+              } else {
+                for k in 0..wsz {
+                  push_str(sb, "  movq -")
+                  push_frame_word(sb, fsent.off, k)
+                  push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
+                  push_int(sb, (base - off - i64(k) + 1) * 8)
+                  push_str(sb, "(%rbp)\n")
+                }
+              }
+            } else if wsz == 2 and pair_value_expr(ga.e, cx) {
+              ## Types §9.4 — a 2-word `{ptr, len}` FIELD (`Slice(T)`, `lib/base/slice.al`) initialized from
+              ## a VIEW value (`v = xs[lo..hi]`, or a slice/str `Var`). It is not a `StructLit`/`ArrayLit`
+              ## and `var_agg_info` reports ek 0 for a slice slot, so it fell through to `emit_array_assign`,
+              ## whose `_ => {}` stored NOTHING — `b.v.len` read 0, a SILENT MISCOMPILE. Store the pair
+              ## exactly like a slice LOCAL binding (ptr at word 0, len at word 1), which is what
+              ## `field_word_offset` + the `.len` field read expect.
+              emit_pair_field_store(ga.e, base - off, sb, cx, a, nl)
+            } else if wsz > 1 or array_lit_info(ga.e).is_a {
+              ## an ARRAY field — store the array-literal value's elements into the field's words. The
+              ## `array_lit_info` disjunct covers the ONE-ELEMENT array literal (`[u64; 1]`, parser
+              ## `wsize` 1 — TYP-10's `uint(64)` one-word instance included): gating on `wsz > 1` alone
+              ## dropped it to the scalar path, where a bare `ArrayLit` has no frame home and emitted
+              ## `$0` — a SILENT zero (a multi-element literal, `wsz > 1`, took this branch already).
+              ## An array-of-MULTI-WORD-STRUCT FIELD (`cells : [Cell; 3]`, `Cell` > 1 word) is now correctly
+              ## SIZED: `field_words` reserves `N * struct_words(T)` words for the field's frame block (was `N`,
+              ## which under-reserved it so element stores overran into adjacent slots / the saved `%rbp` — the
+              ## crash / silent-wrong that was previously rejected loud, Types §9.4). `emit_array_assign` places
+              ## each struct-literal / bound-struct-var element at its cumulative `struct_words(T)`-strided base,
+              ## so the whole `[Struct; N]` field is constructed in place. `off += wsz` (below) now advances by
+              ## the true field width. A scalar / 1-word-struct element is byte-identical to before (neutral).
+              ## #808 — an `[Option(ptr(T)); N]` field holds one folded word per element; the bare literal
+              ## heads (`Option.None`) name no type argument, so the FIELD's element type decides.
+              fafe := array_elem_span(cx.src, effc.s, effc.n)
+              if is_niche_folded(cx.src, fafe.s, fafe.n) { emit_folded_array_elems(ga.e, base - off, sb, cx, a, nl) }
+              else { emit_array_assign(ga.e, base - off, sb, cx, nl) }
+            } else {
+              emit_gas(ga.e, sb, cx, a, nl)
+              push_str(sb, "  popq %rax\n  movq %rax, -")
+              push_int(sb, (base - off + 1) * 8)
               push_str(sb, "(%rbp)\n")
             }
-          } else {
-            for k in 0..wsz {
-              push_str(sb, "  movq -")
-              push_frame_word(sb, fsent.off, k)
-              push_str(sb, "(%rbp), %rcx\n  movq %rcx, -")
-              push_int(sb, (base - off - i64(k) + 1) * 8)
-              push_str(sb, "(%rbp)\n")
-            }
+            off += i64(wsz)
+            fd = fdnext
+            g = ga.next
           }
-        } else if wsz == 2 and pair_value_expr(ga.e, cx) {
-          ## Types §9.4 — a 2-word `{ptr, len}` FIELD (`Slice(T)`, `lib/base/slice.al`) initialized from
-          ## a VIEW value (`v = xs[lo..hi]`, or a slice/str `Var`). It is not a `StructLit`/`ArrayLit`
-          ## and `var_agg_info` reports ek 0 for a slice slot, so it fell through to `emit_array_assign`,
-          ## whose `_ => {}` stored NOTHING — `b.v.len` read 0, a SILENT MISCOMPILE. Store the pair
-          ## exactly like a slice LOCAL binding (ptr at word 0, len at word 1), which is what
-          ## `field_word_offset` + the `.len` field read expect.
-          emit_pair_field_store(ga.e, base - off, sb, cx, a, nl)
-        } else if wsz > 1 or array_lit_info(ga.e).is_a {
-          ## an ARRAY field — store the array-literal value's elements into the field's words. The
-          ## `array_lit_info` disjunct covers the ONE-ELEMENT array literal (`[u64; 1]`, parser
-          ## `wsize` 1 — TYP-10's `uint(64)` one-word instance included): gating on `wsz > 1` alone
-          ## dropped it to the scalar path, where a bare `ArrayLit` has no frame home and emitted
-          ## `$0` — a SILENT zero (a multi-element literal, `wsz > 1`, took this branch already).
-          ## An array-of-MULTI-WORD-STRUCT FIELD (`cells : [Cell; 3]`, `Cell` > 1 word) is now correctly
-          ## SIZED: `field_words` reserves `N * struct_words(T)` words for the field's frame block (was `N`,
-          ## which under-reserved it so element stores overran into adjacent slots / the saved `%rbp` — the
-          ## crash / silent-wrong that was previously rejected loud, Types §9.4). `emit_array_assign` places
-          ## each struct-literal / bound-struct-var element at its cumulative `struct_words(T)`-strided base,
-          ## so the whole `[Struct; N]` field is constructed in place. `off += wsz` (below) now advances by
-          ## the true field width. A scalar / 1-word-struct element is byte-identical to before (neutral).
-          ## #808 — an `[Option(ptr(T)); N]` field holds one folded word per element; the bare literal
-          ## heads (`Option.None`) name no type argument, so the FIELD's element type decides.
-          fafe := array_elem_span(cx.src, effc.s, effc.n)
-          if is_niche_folded(cx.src, fafe.s, fafe.n) { emit_folded_array_elems(ga.e, base - off, sb, cx, a, nl) }
-          else { emit_array_assign(ga.e, base - off, sb, cx, nl) }
-        } else {
-          emit_gas(ga.e, sb, cx, a, nl)
-          push_str(sb, "  popq %rax\n  movq %rax, -")
-          push_int(sb, (base - off + 1) * 8)
-          push_str(sb, "(%rbp)\n")
+          None => { break }
         }
-        off += i64(wsz)
-        fd = fdnext
-        g = ga.next
       }
     }
     ## NOT A STRUCT LITERAL. This entry point is the word-granular CONSTRUCTOR: it lays a
@@ -1171,7 +1207,7 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
     ## evaluation (a field that is a call would clobber a held reg) and peeked per field. Scalar
     ## fields (word k at index k); a nested/wide field is a follow-up.
     emit_gas(dptr, sb, cx, a, nl)
-    mut g := struct_lit_fields(val)
+    mut g : Option(ptr(mut Arg)) = struct_lit_fields(val)
     mut k := 0
     ## Each field's DECLARED type, walked in step with the values (declaration order), so a folded
     ## `Option(ptr(T))` field takes its one folded word (`emit_store_value`) — a bare `Option.None` /
@@ -1180,24 +1216,29 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
     mut dfd : Option(ptr(mut FieldDecl)) = Option.None
     ddi := struct_decl_of(cx.decls, cx.src, dsl.ss, dsl.sl)
     if ddi >= 0 { dfd = (deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(ddi))))).fields_head }
-    while g != 0 {
-      ga := deref(arg_p(g))
-      mut dft := CSpan(s = 0, n = 0)
-      match dfd {
-        Some(dfq) => {
-          dfn := deref(fld_p(dfq))
-          dsub := subst_field_ty(cx.decls, cx.src, dsl.ss, dsl.sl, dfn.ts, dfn.tl, deref(cx.mar))
-          dft = CSpan(s = dsub.s, n = dsub.n)
-          dfd = dfn.next
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          mut dft := CSpan(s = 0, n = 0)
+          match dfd {
+            Some(dfq) => {
+              dfn := deref(fld_p(dfq))
+              dsub := subst_field_ty(cx.decls, cx.src, dsl.ss, dsl.sl, dfn.ts, dfn.tl, deref(cx.mar))
+              dft = CSpan(s = dsub.s, n = dsub.n)
+              dfd = dfn.next
+            }
+            None => {}
+          }
+          emit_store_value(ga.e, dft, sb, cx, a, nl)
+          push_str(sb, "  popq %rcx\n  movq (%rsp), %rax\n  movq %rcx, ")
+          push_int(sb, i64(k * 8))
+          push_str(sb, "(%rax)\n")
+          k = k + 1
+          g = ga.next
         }
-        None => {}
+        None => { break }
       }
-      emit_store_value(ga.e, dft, sb, cx, a, nl)
-      push_str(sb, "  popq %rcx\n  movq (%rsp), %rax\n  movq %rcx, ")
-      push_int(sb, i64(k * 8))
-      push_str(sb, "(%rax)\n")
-      k = k + 1
-      g = ga.next
     }
     push_str(sb, "  popq %rax\n")
   } else if elit_scalar_payloads(val, cx) {
@@ -1212,16 +1253,21 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
     push_str(sb, "  movq $")
     push_int(sb, disc)
     push_str(sb, ", %rcx\n  movq (%rsp), %rax\n  movq %rcx, (%rax)\n")
-    mut g := ef.phead
+    mut g : Option(ptr(mut Arg)) = ef.phead
     mut k := 1
-    while g != 0 {
-      ga := deref(arg_p(g))
-      emit_gas(ga.e, sb, cx, a, nl)
-      push_str(sb, "  popq %rcx\n  movq (%rsp), %rax\n  movq %rcx, ")
-      push_int(sb, i64(k * 8))
-      push_str(sb, "(%rax)\n")
-      k = k + 1
-      g = ga.next
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          emit_gas(ga.e, sb, cx, a, nl)
+          push_str(sb, "  popq %rcx\n  movq (%rsp), %rax\n  movq %rcx, ")
+          push_int(sb, i64(k * 8))
+          push_str(sb, "(%rax)\n")
+          k = k + 1
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     push_str(sb, "  popq %rax\n")
   } else if vw > 1 {
@@ -1647,7 +1693,8 @@ pub emit_st_index_field_assign := fn(fia : ptr(Expr), fii : ptr(Expr), ifs : usi
   wgmv := if wivn.n != 0 { mut_global_value(cx.decls, cx.src, wivn.s, wivn.n) } else { unchecked bitcast(ptr(Expr), 0) }
   mut w_done := false
   if unchecked bitcast(usize, wgmv) != 0 and array_lit_info(wgmv).is_a {
-    wesli := struct_lit_info(arg_expr_at(array_lit_info(wgmv).ehead, 0, a))
+    wgmvehi := array_lit_info(wgmv)
+    wesli := struct_lit_info(arg_expr_at(wgmvehi.ehead, 0, a))
     if wesli.is_s {
       wfi := struct_field_index(cx.decls, cx.src, wesli.ss, wesli.sl, ifs, ifl, a)
       if wfi >= 0 {
@@ -1754,7 +1801,8 @@ pub emit_st_index_assign := fn(ib : ptr(Expr), ii : ptr(Expr), iv : ptr(Expr), i
         push_str(sb, "  addq %rcx, %rax\n  popq %rbx\n  movb %bl, (%rax)\n")
         iga_done = true
       }
-      gaes := struct_lit_info(arg_expr_at(array_lit_info(gaiv).ehead, 0, a))
+      gaivehi := array_lit_info(gaiv)
+      gaes := struct_lit_info(arg_expr_at(gaivehi.ehead, 0, a))
       sivl := struct_lit_info(iv)
       ## RHS forms this GLOBAL struct-element path supports beyond a struct LITERAL. A struct
       ## GLOBAL array has NO frame slot, so the local-array whole-element arm below (gated on a

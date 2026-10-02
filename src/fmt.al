@@ -35,6 +35,8 @@ param_p := ast::param_p
 param_any := ast::param_any
 arm_p := ast::arm_p
 arg_p := ast::arg_p
+arg_at := ast::arg_at
+arg_any := ast::arg_any
 stmt_p := ast::stmt_p
 stmt_label_span := ast::stmt_label_span
 expr_label_span := ast::expr_label_span
@@ -504,18 +506,23 @@ fmt_if_wrap_needed := fn(in out sb : rt::StrBuf, mark : usize) -> bool {
 ## back at `ind`. A separate function on purpose: the self-host lower miscompiles an `Arg` read bound
 ## inside a nested `if` in a `match` arm whose expression is then handed to `emit_fmt_expr` (the
 ## landmine `fmt_emit_arraylit` documents), and the re-render is reached through exactly such an `if`.
-fmt_emit_arg_list_multi := fn(head : ptr(mut Arg), close : str, ind : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
+fmt_emit_arg_list_multi := fn(head : Option(ptr(mut Arg)), close : str, ind : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
   ## Every wrapped element is followed by its mandatory one-scalar trailing comma. Pass that tail
   ## through the expression boundary so a nested operator chain does not decide at column 100 and
   ## then become 101 when this renderer appends the comma.
   push_str(sb, "\n")
-  mut g := head
-  while g != 0 {
-    ga := deref(arg_p(g))
-    fmt_emit_spaces(sb, ind + 2)
-    emit_fmt_expr_res(ga.e, sb, src, a, decls, 1)
-    push_str(sb, ",\n")
-    g = ga.next
+  mut g : Option(ptr(mut Arg)) = head
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        fmt_emit_spaces(sb, ind + 2)
+        emit_fmt_expr_res(ga.e, sb, src, a, decls, 1)
+        push_str(sb, ",\n")
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   fmt_emit_spaces(sb, ind)
   push_str(sb, close)
@@ -526,21 +533,26 @@ fmt_emit_arg_list_multi := fn(head : ptr(mut Arg), close : str, ind : usize, in 
 ## list, an enum constructor's payload, and an array/list literal. An EMPTY list is never wrapped:
 ## `(\n)` is not a spelling of `()`, and a line that overflows around an argument-less call overflows
 ## for a reason no wrap of that call can fix.
-fmt_emit_arg_list := fn(head : ptr(mut Arg), open : str, close : str, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), reserve : usize) {
+fmt_emit_arg_list := fn(head : Option(ptr(mut Arg)), open : str, close : str, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), reserve : usize) {
   mark := sb.len
   ind := fmt_sb_indent(sb)
   push_str(sb, open)
-  mut g := head
+  mut g : Option(ptr(mut Arg)) = head
   mut first := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if not first { push_str(sb, ", ") }
-    emit_fmt_expr(ga.e, sb, src, a, decls)
-    first = false
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if not first { push_str(sb, ", ") }
+        emit_fmt_expr(ga.e, sb, src, a, decls)
+        first = false
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   push_str(sb, close)
-  if head != 0 {
+  if arg_any(head) {
     if fmt_wrap_needed_res(sb, mark, reserve) {
       push_str(sb, open)
       fmt_emit_arg_list_multi(head, close, ind, sb, src, a, decls)
@@ -553,25 +565,30 @@ fmt_emit_arg_list := fn(head : ptr(mut Arg), open : str, close : str, in out sb 
 ## with a trailing comma, `)` back at `ind`), else the single-line form. ONE renderer with two
 ## spellings on purpose — a second copy of the field-name recovery could drift from this one, and the
 ## by-name pairing it performs is the part whose divergence is a SILENT relabelling of the fields.
-fmt_emit_declfields := fn(head : ptr(mut Arg), fh : Option(ptr(mut FieldDecl)), ind : usize, multi : bool, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
+fmt_emit_declfields := fn(head : Option(ptr(mut Arg)), fh : Option(ptr(mut FieldDecl)), ind : usize, multi : bool, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
   push_str(sb, "(")
   if multi { push_str(sb, "\n") }
-  mut g := head
+  mut g : Option(ptr(mut Arg)) = head
   mut f := fh
   mut first := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    fd := deref(fld_p(fld_at(f, "selfhost: fmt — struct literal has more args than fields")))
-    if multi { fmt_emit_spaces(sb, ind + 2) }
-    if not multi { if not first { push_str(sb, ", ") } }
-    push_str(sb, str_at((src + fd.ns), fd.nl))
-    push_str(sb, " = ")
-    if multi { emit_fmt_expr_res(ga.e, sb, src, a, decls, 1) }
-    if not multi { emit_fmt_expr(ga.e, sb, src, a, decls) }
-    if multi { push_str(sb, ",\n") }
-    first = false
-    g = ga.next
-    f = fd.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        fd := deref(fld_p(fld_at(f, "selfhost: fmt — struct literal has more args than fields")))
+        if multi { fmt_emit_spaces(sb, ind + 2) }
+        if not multi { if not first { push_str(sb, ", ") } }
+        push_str(sb, str_at((src + fd.ns), fd.nl))
+        push_str(sb, " = ")
+        if multi { emit_fmt_expr_res(ga.e, sb, src, a, decls, 1) }
+        if not multi { emit_fmt_expr(ga.e, sb, src, a, decls) }
+        if multi { push_str(sb, ",\n") }
+        first = false
+        g = ga.next
+        f = fd.next
+      }
+      None => { break }
+    }
   }
   if multi { fmt_emit_spaces(sb, ind) }
   push_str(sb, ")")
@@ -581,27 +598,32 @@ fmt_emit_declfields := fn(head : ptr(mut Arg), fh : Option(ptr(mut FieldDecl)), 
 ## file): each field name is read off the literal's own `( … )` in source. The scan cursor restarts
 ## from `fopen + 1` on every call, so the wrapped re-render recovers exactly the same names as the
 ## single-line trial it replaces.
-fmt_emit_scanfields := fn(head : ptr(mut Arg), fopen : usize, ind : usize, multi : bool, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
+fmt_emit_scanfields := fn(head : Option(ptr(mut Arg)), fopen : usize, ind : usize, multi : bool, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
   push_str(sb, "(")
   if multi { push_str(sb, "\n") }
   mut scan := fopen + 1
-  mut g := head
+  mut g : Option(ptr(mut Arg)) = head
   mut first := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    mut fns : usize = 0
-    mut fnl : usize = 0
-    ok := struct_field_scan(src, ptr(scan), ptr(fns), ptr(fnl))
-    if ok == 0 { panic("selfhost: fmt — struct literal field name not found in source") }
-    if multi { fmt_emit_spaces(sb, ind + 2) }
-    if not multi { if not first { push_str(sb, ", ") } }
-    push_str(sb, str_at((src + fns), fnl))
-    push_str(sb, " = ")
-    if multi { emit_fmt_expr_res(ga.e, sb, src, a, decls, 1) }
-    if not multi { emit_fmt_expr(ga.e, sb, src, a, decls) }
-    if multi { push_str(sb, ",\n") }
-    first = false
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        mut fns : usize = 0
+        mut fnl : usize = 0
+        ok := struct_field_scan(src, ptr(scan), ptr(fns), ptr(fnl))
+        if ok == 0 { panic("selfhost: fmt — struct literal field name not found in source") }
+        if multi { fmt_emit_spaces(sb, ind + 2) }
+        if not multi { if not first { push_str(sb, ", ") } }
+        push_str(sb, str_at((src + fns), fnl))
+        push_str(sb, " = ")
+        if multi { emit_fmt_expr_res(ga.e, sb, src, a, decls, 1) }
+        if not multi { emit_fmt_expr(ga.e, sb, src, a, decls) }
+        if multi { push_str(sb, ",\n") }
+        first = false
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   if multi { fmt_emit_spaces(sb, ind) }
   push_str(sb, ")")
@@ -792,16 +814,22 @@ struct_field_scan := fn(src : ptr(u8), pos : ptr(mut usize), out_ns : ptr(mut us
 ## DRY-RUN the struct-literal field-name scan: does the source `( … )` opening at `fopen` spell a
 ## `name =` pair for EVERY argument in `ah`? The emitting loop pushes text as it goes and cannot back
 ## out, so the choice between the source-scan render and the decl-based fallback is made up front.
-fmt_structlit_names_ok := fn(src : ptr(u8), fopen : usize, ah : ptr(mut Arg)) -> bool {
+fmt_structlit_names_ok := fn(src : ptr(u8), fopen : usize, ah : Option(ptr(mut Arg))) -> bool {
   mut scan := fopen + 1
-  mut g := ah
+  mut g : Option(ptr(mut Arg)) = ah
   mut ok := true
-  while g != 0 and ok {
-    ga := deref(arg_p(g))
-    mut fns : usize = 0
-    mut fnl : usize = 0
-    if struct_field_scan(src, ptr(scan), ptr(fns), ptr(fnl)) == 0 { ok = false }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        if not (ok) { break }
+        ga := deref(arg_p(gq))
+        mut fns : usize = 0
+        mut fnl : usize = 0
+        if struct_field_scan(src, ptr(scan), ptr(fns), ptr(fnl)) == 0 { ok = false }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   ok
 }
@@ -854,19 +882,24 @@ pub fmt_find_ident := fn(src : ptr(u8), len : usize, w : str, wl : usize, out_s 
 ## mangled symbol carrying a literal `, ` (`generic_array_param` / `display_array` /
 ## `display_array_struct` / `comptime_typeinfo_n` / `comptime_for_typeinfo_n` all died that way).
 ## `n < 2` has no signal at all (`[e; 1]` and `[e]` are the same node), so it is left expanded.
-fmt_arraylit_is_fill := fn(n : usize, head : ptr(mut Arg)) -> bool {
+fmt_arraylit_is_fill := fn(n : usize, head : Option(ptr(mut Arg))) -> bool {
   if n < 2 { return false }
-  if unchecked bitcast(usize, head) == 0 { return false }
-  h0 := deref(arg_p(head))
+  if not arg_any(head) { return false }
+  h0 := deref(arg_at(head, "argument list ended early"))
   p0 := unchecked bitcast(usize, h0.e)
   if p0 == 0 { return false }
-  mut g := h0.next
+  mut g : Option(ptr(mut Arg)) = h0.next
   mut same := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    ep := unchecked bitcast(usize, ga.e)
-    if ep != p0 { same = false }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        ep := unchecked bitcast(usize, ga.e)
+        if ep != p0 { same = false }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   same
 }
@@ -902,9 +935,9 @@ fmt_expr_left_off := fn(e : ptr(Expr), src : ptr(u8)) -> usize {
 ## The offset of the bracket that OPENS this aggregate literal — a `(` for a TUPLE, a `[` for an
 ## array — found by walking left from the first element's own first byte over blanks. 0 when the
 ## element carries no usable offset, or when the byte found is neither bracket (never guess).
-fmt_arraylit_open := fn(n : usize, head : ptr(mut Arg), src : ptr(u8)) -> usize {
-  if unchecked bitcast(usize, head) == 0 { return 0 }
-  h0 := deref(arg_p(head))
+fmt_arraylit_open := fn(n : usize, head : Option(ptr(mut Arg)), src : ptr(u8)) -> usize {
+  if not arg_any(head) { return 0 }
+  h0 := deref(arg_at(head, "argument list ended early"))
   off := fmt_expr_left_off(h0.e, src)
   if off == 0 { return 0 }
   mut p := off
@@ -923,7 +956,7 @@ fmt_arraylit_open := fn(n : usize, head : ptr(mut Arg), src : ptr(u8)) -> usize 
 ## stopped compiling (`display_tuple`, `display_tuple_agg`, `tuple_lit_arg`, `comptime_typeinfo_n`).
 ## Recovered from the source bracket itself (`fmt_arraylit_open`); an unprovable bracket keeps the
 ## historical `[` rather than inventing a tuple.
-fmt_arraylit_is_tuple := fn(n : usize, head : ptr(mut Arg), src : ptr(u8)) -> bool {
+fmt_arraylit_is_tuple := fn(n : usize, head : Option(ptr(mut Arg)), src : ptr(u8)) -> bool {
   o := fmt_arraylit_open(n, head, src)
   if o == 0 { return false }
   return bytes(str_at((src + o), 1))[0] == 40                              ## '('
@@ -934,7 +967,7 @@ fmt_arraylit_is_tuple := fn(n : usize, head : ptr(mut Arg), src : ptr(u8)) -> bo
 ## `if` there and its expression is passed recursively to `emit_fmt_expr` (the formatter then crashes).
 ## Keep the element read in the loop-local `ga` shape, which is seed-safe and also handles written-out
 ## literals; `fill` only cuts the shared-node walk short after the first element.
-fmt_emit_arraylit := fn(n : usize, head : ptr(mut Arg), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), reserve : usize) {
+fmt_emit_arraylit := fn(n : usize, head : Option(ptr(mut Arg)), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), reserve : usize) {
   tup := fmt_arraylit_is_tuple(n, head, src)
   ## the `[e; N]` fill form is an ARRAY spelling only — a tuple never shares one element node.
   mut fill := fmt_arraylit_is_fill(n, head)
@@ -949,14 +982,19 @@ fmt_emit_arraylit := fn(n : usize, head : ptr(mut Arg), in out sb : rt::StrBuf, 
     }
   }
   if tup { push_str(sb, "(") } else { push_str(sb, "[") }
-  mut g := head
+  mut g : Option(ptr(mut Arg)) = head
   mut first := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if not first { push_str(sb, ", ") }
-    emit_fmt_expr(ga.e, sb, src, a, decls)
-    first = false
-    if fill { g = unchecked bitcast(ptr(mut Arg), 0) } else { g = ga.next }
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if not first { push_str(sb, ", ") }
+        emit_fmt_expr(ga.e, sb, src, a, decls)
+        first = false
+        if fill { g = Option.None } else { g = ga.next }
+      }
+      None => { break }
+    }
   }
   if fill { push_str(sb, "; ") ; dn := push_int(sb, i64(n)) }
   if tup { push_str(sb, ")") } else { push_str(sb, "]") }
@@ -1349,11 +1387,11 @@ fmt_chain_rooted_at := fn(e : ptr(Expr), cs : usize) -> bool {
 ## LITERALLY — `fs[0](10)` comes back as `fs(fs[0], 10)`, a DIFFERENT program (a silent miscompile of
 ## the source itself). Both halves must hold: the parser marked this site AND argument 0 is a chain
 ## rooted at the borrowed name (see `fmt_chain_rooted_at` for why the second half is not redundant).
-fmt_call_is_ecallee := fn(cs : usize, nn : usize, ah : ptr(mut Arg)) -> bool {
+fmt_call_is_ecallee := fn(cs : usize, nn : usize, ah : Option(ptr(mut Arg))) -> bool {
   if nn == 0 { return false }
-  if unchecked bitcast(usize, ah) == 0 { return false }
+  if not arg_any(ah) { return false }
   if ecallee_is(cs) == false { return false }
-  a0 := deref(arg_p(ah))
+  a0 := deref(arg_at(ah, "argument list ended early"))
   fmt_chain_rooted_at(a0.e, cs)
 }
 
@@ -1402,9 +1440,9 @@ fmt_dropped_call_len := fn(e : ptr(Expr), src : ptr(u8)) -> usize {
 ##     has the dot and the name adjacent on one line, so the restriction costs no real form.
 ## A qualified call (`std::fmt::print(x)`) ends in `:`, a bare call in whitespace/`(`/`,` — neither
 ## matches — and the FN-6 expression-callee shape is decided BEFORE this test, so it is unaffected.
-fmt_call_is_dot := fn(cs : usize, nn : usize, ah : ptr(mut Arg), src : ptr(u8)) -> bool {
+fmt_call_is_dot := fn(cs : usize, nn : usize, ah : Option(ptr(mut Arg)), src : ptr(u8)) -> bool {
   if nn == 0 { return false }
-  if unchecked bitcast(usize, ah) == 0 { return false }
+  if not arg_any(ah) { return false }
   if cs == 0 { return false }
   mut p := cs
   mut c := str_at((src + (p - 1)), 1)
@@ -1542,14 +1580,14 @@ emit_fmt_expr_core := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a
       ## UFCS / non-local-enum construction: `recv.method(args)` desugared to `method(recv, args)`.
       mut dc := false
       if ec == false { dc = fmt_call_is_dot(cs, nn, ah, src) }
-      mut g := ah
+      mut g : Option(ptr(mut Arg)) = ah
       if ec {
-        ga0 := deref(arg_p(ah))
+        ga0 := deref(arg_at(ah, "argument list ended early"))
         ## the callee chain is a postfix expression (highest precedence) — never needs grouping parens.
         emit_fmt_expr(ga0.e, sb, src, a, decls)
         g = ga0.next
       } else if dc {
-        da0 := deref(arg_p(ah))
+        da0 := deref(arg_at(ah, "argument list ended early"))
         ## a `Bin` receiver (`(a + b).m()`) must keep its grouping parens — `.` binds tighter than any
         ## operator, so an unparenthesized render would re-parse as `a + b.m()`.
         mut wrap := fmt_expr_prec(da0.e) < 100
@@ -2723,7 +2761,7 @@ fmt_defer_action := fn(e : ptr(Expr), src : ptr(u8)) -> ptr(Expr) {
   mut r := unchecked bitcast(ptr(Expr), 0)
   match deref(e) {
     Expr::Call(cs, cl, nn, ah) => {
-      if cl == 7 and nn == 1 and str_at((src + cs), 7) == "__defer" { r = deref(arg_p(ah)).e }
+      if cl == 7 and nn == 1 and str_at((src + cs), 7) == "__defer" { r = deref(arg_at(ah, "argument list ended early")).e }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
