@@ -69,7 +69,7 @@ dotted := fn(h : Holder) -> u64 {
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
   nofd := unchecked bitcast(usize, neg1)
-  m := unchecked sys_mmap(9, 0, 65536, 3, 34, nofd, 0)
+  m := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, nofd, 0)
   bp := unchecked bitcast(ptr(mut bits8), m)
 
   mut a1 := arena_over(bp, 64)

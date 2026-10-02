@@ -2046,7 +2046,7 @@ expr_var_name := fn(v : ptr(Expr)) -> WSpan {
 ## old behaviour, "so the sweep compares like-for-like") made `target.arch == Arch.x86_64` TRUE while
 ## emitting WASM, selecting x86-only bodies — including the raw x86 GAS `asm(…)` of `lib/std/thread.al`
 ## — into a WASM module. ONE accessor so the `comptime if` fold and the `when`-guard fold cannot drift.
-wat_target_arch := fn() -> str { "<none>" }
+pub wat_target_arch := fn() -> str { "<none>" }
 
 ## Fold a `comptime if <cond>` predicate at emit time — the wat dual of the x86 lower's `decl_guard_fold`.
 ## 1 = TRUE (emit the then-branch), 0 = FALSE (emit the else-branch), -1 = cannot fold (a typeinfo /

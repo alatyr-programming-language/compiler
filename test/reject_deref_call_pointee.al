@@ -17,7 +17,7 @@ mk := fn(T : type, base : usize) -> ptr(mut T) { return unchecked bitcast(ptr(mu
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   base := unchecked bitcast(usize, bitcast(ptr(mut bits8), bitcast(usize, r)))
   x := deref(mk((u64, u64), base))
   return 7

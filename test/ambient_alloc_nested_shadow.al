@@ -6,8 +6,8 @@ sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usiz
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  b1 := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
-  b2 := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  b1 := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  b2 := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   p1 := unchecked bitcast(ptr(mut bits8), bitcast(usize, b1))
   p2 := unchecked bitcast(ptr(mut bits8), bitcast(usize, b2))
   mut outer := arena_over(p1, 65536)

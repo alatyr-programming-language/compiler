@@ -9,7 +9,7 @@ inc_opt := fn(x : u64) -> Option(u64) { return Option(u64).Some(x + 1) }
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  r0 := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r0 := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   bp := unchecked bitcast(ptr(mut bits8), bitcast(usize, r0))
   mut ar := arena_over(bp, 65536)
   mut v := alloc::vec::new(u64, ptr(ar))          ## triggers base-prelude injection

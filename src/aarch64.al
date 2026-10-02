@@ -262,7 +262,7 @@ a64_match_arms_simple := fn(head : Option(ptr(mut Arm))) -> bool {
 ## to fold as `x86_64` "so the sweep compares like-for-like", which made `target.arch == Arch.x86_64`
 ## TRUE while emitting aarch64 instructions: a conformance defect that also made every library arch gate
 ## inert. ONE accessor so the `comptime if` fold and the `when`-guard fold can never drift apart.
-a64_target_arch := fn() -> str { "aarch64" }
+pub a64_target_arch := fn() -> str { "aarch64" }
 
 
 a64_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
@@ -2701,13 +2701,7 @@ a64_local_off := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl 
   off
 }
 
-a64_emit_fn_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
-  if not lower::is_root_mod(d.mod_start, d.mod_len) {
-    if d.mod_len == 0 { push_str(sb, "main") } else { push_str(sb, str_at((src + d.mod_start), d.mod_len)) }
-    push_str(sb, "__")
-  }
-  push_str(sb, str_at((src + d.name_start), d.name_len))
-}
+a64_emit_fn_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) { ir::put_fn_symbol(sb, src, d) }
 
 a64_callee_defined := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a : rt::Arena) -> bool {
   cnt := rt::vec_len(deref(decls))
@@ -2725,10 +2719,19 @@ a64_callee_defined := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
 ## (Modules §7.2) when the callee is a bodyless import, else the callee declaration's module-qualified
 ## label. The non-x86 driver has already resolved a qualified call to the target declaration's NAME span;
 ## use that declaration's module span here rather than the caller's context. `@extern` remains exact.
+## A call whose span IS a function declaration's own name span was resolved by the front half
+## (`driver::d_qual_expr`): that declaration is the callee — a bodyless `@abi(syscall)` trampoline too,
+## which is named by its module-qualified label (`docs/ir-slice-2.md`).
 a64_emit_bl_target := fn(in out sb : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) {
   cnt := rt::vec_len(deref(decls))
   mut target_i : i64 = 0 - 1
   mut i := 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if target_i < 0 and d.is_fn and d.name_start == cs and d.name_len == cl and cl != 0 { target_i = i64(i) }
+    i += 1
+  }
+  i = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if target_i < 0 and d.kind == 1 and streq(src, d.name_start, d.name_len, cs, cl) { target_i = i64(i) }
@@ -9642,6 +9645,9 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
       ## (`src/aarch64/isel.al`); every other one keeps its legacy emission (owner decision D7).
       if not (d.kind == lower_layout::DECL_KIND_FN and a64_isel_try(decls, i, sb, src, a)) { emit_a64_fn(d, sb, a, src, decls) }
     }
+    ## IR slice 2a: a bodyless `@abi(syscall)` declaration is a trampoline the shared IR builds
+    ## (`docs/ir-slice-2.md`). The legacy emitter has none, so a refused one stays absent, as before.
+    if d.kind == lower_layout::DECL_KIND_SYSCALL { sys_sel := a64_isel_try(decls, i, sb, src, a) }
     i += 1
   }
   ## emit one monomorphized instance per RECORDED (generic-fn, type) pair, with the instance
