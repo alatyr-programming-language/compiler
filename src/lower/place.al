@@ -451,11 +451,15 @@ pub emit_addr_of := fn(p : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)
       ## stride the element READ and WRITE take (`emit_idx_field_addr`). The word-stride path below
       ## answered `LABEL + i*8` — the middle of an earlier element — so `deref(ptr(mut G[i])).f` read and
       ## wrote the wrong words. Delegated, so the address and the element access cannot disagree.
-      if unchecked bitcast(usize, imgv) != 0 and array_lit_info(imgv).is_a and array_lit_info(imgv).nel > 0 {
-        if struct_lit_info(arg_expr_at(array_lit_info(imgv).ehead, 0, a)).is_s {
-          emit_idx_field_addr(base, idx, 0, sb, cx, nl)
-          push_str(sb, "  pushq %rax\n")
-          ia_done = true
+      if unchecked bitcast(usize, imgv) != 0 {
+        gsa := array_lit_info(imgv)
+        if gsa.is_a and gsa.nel > 0 {
+          gse := arg_expr_at(gsa.ehead, 0, a)
+          if struct_lit_info(gse).is_s {
+            emit_idx_field_addr(base, idx, 0, sb, cx, nl)
+            push_str(sb, "  pushq %rax\n")
+            ia_done = true
+          }
         }
       }
       if unchecked bitcast(usize, imgv) != 0 and ia_done == false {
