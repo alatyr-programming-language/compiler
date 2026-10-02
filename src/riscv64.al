@@ -29,6 +29,8 @@ arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 (push_str, push_int) := rt
+## The shared-IR instruction selector, a child module (`src/riscv64/isel.al`).
+(rv_isel_try) := isel
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
@@ -8284,7 +8286,9 @@ pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
     d := deref(decl_get(decls, i))
     if d.kind == 1 or (RV_TEST_MODE and d.kind == 5 and rv_test_selected(src, d.name_start, d.name_len)) {
       if d.kind == 5 { RV_TEST_DECL_INDEX = i }
-      emit_rv_fn(d, sb, a, src, decls)
+      ## IR slice 1c: a function the shared IR builds and verifies is emitted by the selector
+      ## (`src/riscv64/isel.al`); every other one keeps its legacy emission (owner decision D7).
+      if not (d.kind == lower_layout::DECL_KIND_FN and rv_isel_try(decls, i, sb, src, a)) { emit_rv_fn(d, sb, a, src, decls) }
     }
     i += 1
   }

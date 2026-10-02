@@ -3438,6 +3438,18 @@ pub ex_slice_hi := fn(v : ptr(Expr)) -> ptr(Expr) {
   match deref(v) { Expr::Slice(sb, slo, shi) => { r = shi } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
+## `Decl.kind` of a module VALUE declaration (a global or a constant). The parser's kind is still an
+## integer; this names the one value the shared-IR selectors ask about until it becomes an enum.
+pub DECL_KIND_VALUE : u8 = 0
+## `Decl.kind` of a function declaration, named for the same reason.
+pub DECL_KIND_FN : u8 = 1
+## Does module declaration `d` own the one-word scalar data cell each twin emits for a scalar global —
+## `<name>: .quad <init>` on aarch64/riscv64, `(global $<name> (mut i64) …)` on wasm? The twins'
+## `emit_*_program` data loops emit exactly these; an IR selector addresses a global (`addr @g`) only
+## through such a cell.
+pub global_has_scalar_cell := fn(d : Decl) -> bool {
+  d.is_fn == false and d.kind == DECL_KIND_VALUE and d.arity == 0 and d.name_len != 0 and ex_value_is_scalar(d.value)
+}
 ## Is `v` a compile-time SCALAR literal (a number or a bool), and what is its value? The two are
 ## separate because a value of 0 is indistinguishable from "not a literal" in the second answer.
 pub ex_value_is_scalar := fn(v : ptr(Expr)) -> bool {

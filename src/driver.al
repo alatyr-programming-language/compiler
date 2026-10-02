@@ -6400,6 +6400,8 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     }
     ed.len = ekept
   }
+  ## IR slice 1c: the twins' selectors locate each trap they emit (`<file>:<line>:<col>`, docs/ir.md §3.6).
+  ir::set_source_map(ptr(pv), ptr(src_off), ptr(src_len))
   mut out := strbuf::strbuf(tar, 67108864)
   if backend == 0 { wat::emit_wat_program(ptr(ed), out, base, strbuf::buf_len(bld), na) }
   if backend == 1 {

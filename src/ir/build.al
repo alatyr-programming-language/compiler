@@ -78,6 +78,13 @@ ib_bin_cc := fn(b : AstBin) -> Cc {
     BAdd | BSub | BMul | BDiv | BRem | BBand | BBor | BBxor | BAnd | BOr | BNot => { Cc.CcNone }
   }
 }
+## The predicate of the AST operator byte `op`, or `CcNone` when it is not a comparison: the one
+## decoding of a comparison operator, for a legacy emitter that still holds the byte (the AArch64
+## condition tables, `aarch64::isel`).
+pub ast_op_cc := fn(op : u8) -> Cc {
+  bo : Option(AstBin) = ib_bin_of(op)
+  match bo { Some(b) => { ib_bin_cc(b) }; None => { Cc.CcNone } }
+}
 ## The integer IR op of an arithmetic or bitwise operator (`OpMov` for the others, which never reach it).
 ib_bin_op := fn(b : AstBin) -> Op {
   match b {
@@ -441,10 +448,77 @@ ib_bx_callv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : u
 }
 
 ## A literal takes the type its context gave it (sema's record). One no context typed is refused
-## (§3.8.4: never a default).
+## (§3.8.4: never a default). A source literal is never negative; a negative one is a parser desugar
+## (`~x` is `x ^ -1`) and takes its canonical form at the type. A source literal the type cannot hold
+## is refused as a sema gap rather than wrapped (it can only arise inside a literal-only expression
+## `ib_lit_fold` could not fold).
 ib_bx_num := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), v : i64) -> Option(VRegId) {
   k := ib_ty(bp, e)?
-  d := ib_konst(bp, a, k, ib_canon(v, k))
+  cv := ib_canon(v, k)
+  if v >= 0 and cv != v { return ib_no(bp, e, NyWhy.NwLit) }
+  d := ib_konst(bp, a, k, cv)
+  Option(VRegId).Some(d)
+}
+
+## The exact value of a literal-only `+ - *` expression, when it and every step of it fit `i64` (a
+## comptime number is exact, Types §2.3; a value this cannot represent is not folded, and its literals
+## are then built at their own types, where `ib_bx_num` refuses one that does not fit).
+ib_lit_fold := fn(e : ptr(Expr)) -> Option(i64) {
+  match deref(e) {
+    Expr::Num(v, s, n) => {
+      if v < 0 { return Option(i64).None }
+      Option(i64).Some(v)
+    }
+    Expr::Bin(op, l, r) => {
+      bo : Option(AstBin) = ib_bin_of(op)
+      match bo {
+        Some(b) => {
+          lo : Option(i64) = ib_lit_fold(l)
+          ro : Option(i64) = ib_lit_fold(r)
+          match lo {
+            Some(x) => { match ro { Some(y) => { ib_lit_step(b, x, y) }; None => { Option(i64).None } } }
+            None => { Option(i64).None }
+          }
+        }
+        None => { Option(i64).None }
+      }
+    }
+    Expr::BoolLit | Expr::Var | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf
+      | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Call | Expr::Bitcast | Expr::Loop => { Option(i64).None }
+  }
+}
+## One exact `+ - *` step over `i64`, when the result fits; any other operator is not folded.
+IB_I64_MAX : i64 = 9223372036854775807
+IB_I64_MIN : i64 = 0 - 9223372036854775807 - 1
+IB_MUL_SAFE : i64 = 3037000499
+ib_lit_step := fn(b : AstBin, x : i64, y : i64) -> Option(i64) {
+  match b {
+    BAdd => {
+      if (y > 0 and x > IB_I64_MAX - y) or (y < 0 and x < IB_I64_MIN - y) { return Option(i64).None }
+      Option(i64).Some(x + y)
+    }
+    BSub => {
+      if (y < 0 and x > IB_I64_MAX + y) or (y > 0 and x < IB_I64_MIN + y) { return Option(i64).None }
+      Option(i64).Some(x - y)
+    }
+    BMul => {
+      ## Both factors within ±floor(sqrt(2^63 - 1)): the product cannot overflow. Larger ones are not folded.
+      if x > IB_MUL_SAFE or x < 0 - IB_MUL_SAFE or y > IB_MUL_SAFE or y < 0 - IB_MUL_SAFE { return Option(i64).None }
+      Option(i64).Some(x * y)
+    }
+    BDiv | BRem | BBand | BBor | BBxor | BEq | BNe | BLt | BGt | BLe | BGe | BAnd | BOr | BNot => { Option(i64).None }
+  }
+}
+## The folded value `v` of the literal-only expression `e` as a constant of sema's type for `e`. In a
+## checked scope a value the type cannot hold is refused (sema accepts only one that fits, so this is a
+## gap); inside `unchecked` it wraps to the type's width (CG-7).
+ib_lit_const := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), v : i64) -> Option(VRegId) {
+  k := ib_int_ty(bp, e)?
+  cv := ib_canon(v, k)
+  fits := cv == v and (v >= 0 or sgn_eq(k.sg, Sgn.SgS))
+  if not fits and not ib_b_unch(bp) { return ib_no(bp, e, NyWhy.NwLit) }
+  d := ib_konst(bp, a, k, cv)
   Option(VRegId).Some(d)
 }
 ## A literal's value in the canonical form of its type (§3.2): sign-extended from the width if signed,
@@ -661,6 +735,14 @@ ib_int_ty := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> Option(IbKS) {
 ## wrapping, V3). Checked `+ - *` trap `overflow`; `/` and `%` trap `div_zero`, and `div_overflow` for a
 ## signed `MIN / -1` (§4). Inside `unchecked`, `+ - *` wrap and `/ %` are the hardware op (D1, CG-7).
 ib_bx_arith := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : AstBin, l : ptr(Expr), r : ptr(Expr)) -> Option(VRegId) {
+  ## A literal-only `+ - *` is a comptime number (Types §2.3): its exact value takes the type the
+  ## context gave the expression, never each literal's. `a : i8 = 0 - 128` is -128, although sema types
+  ## the literal `128` at `i8` too, where it does not fit.
+  fo : Option(i64) = ib_lit_fold(e)
+  match fo {
+    Some(v) => { return ib_lit_const(bp, a, e, v) }
+    None => {}
+  }
   pr := ib_int_operands(bp, a, e, l, r)?
   k := IbKS(ty = pr.ty, sg = pr.sg)
   io : Op = ib_bin_op(b)

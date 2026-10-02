@@ -5641,6 +5641,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     wsbc := driver::check_file_emit(wpath, a)
     if wsbc != 0 { return wsbc }
     mut wsb := driver::compile_file_wat(wpath, a)
+    ## IR slice 1c: a built function the verifier refused is a located internal error, never emitted (docs/ir.md §5).
+    if ir::verify_failures() != 0 { return 70 }
     ## the emitted length is read BEFORE the flush and passed to `emit_dump_status`, so the surface's
     ## exit code reflects what actually reached stdout instead of a hardcoded 0.
     wsblen := wsb.len
@@ -5662,6 +5664,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     asbc := driver::check_file_emit(apath, a)
     if asbc != 0 { return asbc }
     mut asb := driver::compile_file_aarch64(apath, a)
+    ## IR slice 1c: a built function the verifier refused is a located internal error, never emitted (docs/ir.md §5).
+    if ir::verify_failures() != 0 { return 70 }
     ## the emitted length is read BEFORE the flush and passed to `emit_dump_status`, so the surface's
     ## exit code reflects what actually reached stdout instead of a hardcoded 0.
     asblen := asb.len
@@ -5682,6 +5686,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     rsbc := driver::check_file_emit(rpath, a)
     if rsbc != 0 { return rsbc }
     mut rsb := driver::compile_file_riscv64(rpath, a)
+    ## IR slice 1c: a built function the verifier refused is a located internal error, never emitted (docs/ir.md §5).
+    if ir::verify_failures() != 0 { return 70 }
     ## the emitted length is read BEFORE the flush and passed to `emit_dump_status`, so the surface's
     ## exit code reflects what actually reached stdout instead of a hardcoded 0.
     rsblen := rsb.len

@@ -50,6 +50,8 @@ stmt_p := ast::stmt_p
 stmt_label_span := ast::stmt_label_span
 local_is_comptime := ast::binding_is_comptime
 (push_str, push_int) := rt
+## The shared-IR instruction selector, a child module (`src/wat/isel.al`).
+(wat_isel_try) := isel
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 variant_payload_type := lower_layout::variant_payload_type
@@ -8465,7 +8467,9 @@ pub emit_wat_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   WAT_INST_N = 0
   for i in 0..cnt {
     d := deref(decl_get(decls, i))
-    if d.kind == 1 { emit_wat_fn(d, sb, a, src, decls) }
+    ## IR slice 1c: a function the shared IR builds and verifies is emitted by the selector
+    ## (`src/wat/isel.al`); every other one keeps its legacy emission (owner decision D7).
+    if d.kind == lower_layout::DECL_KIND_FN and not wat_isel_try(decls, i, sb, src, a) { emit_wat_fn(d, sb, a, src, decls) }
   }
   ## emit one monomorphized instance per RECORDED (generic-fn, type) pair. WAT_SUB_ITS/ITL select the
   ## instance; emit_wat_fn drops the leading type-param and mangles `$<fn>__<tag>`.
