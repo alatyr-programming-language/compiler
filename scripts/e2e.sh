@@ -982,6 +982,33 @@ check_sema_lib_bodies() {
   fi
 }
 
+# `docs/ir.md` §3.8.7 — sema RECORDS the code it does not check: a `comptime for` body (lower unrolls it),
+# a `comptime if` branch (lower selects it) and the receiver of `r.expect(m)` (desugared to
+# `expect(r, m)`, whose implicit type parameter used to swallow it). Before the records walk none of the
+# three sites had a `#sign sema` row. The query fixture's `compiles(…)` sits in a `comptime for` body and
+# is answered per field by lower; the walk must not fold it into the tree, so with fd 97 open both
+# programs emit the GAS of the closed run.
+check_sema_ct_records() {
+  local d="$T/sema_ct_records" rc q="$E2E_TEST/query_typeinfo_field_projection.al"
+  mkdir -p "$d"
+  printf '%s\n' 'g := fn(n : u64) -> Option(u64) { Option.Some(n) }' 'main := fn() -> u64 {' '  w : [u64; 2] = [1, 2]' \
+    '  u : u64 = 9' '  mut s : i64 = 0' '  comptime for i in 0 .. 2 { s = s + (0 - 7) / 3 }' \
+    '  comptime if target.arch == Arch.x86_64 { s = s % 5 }' '  x := g(u / 3).expect("m")' '  if s < 0 { return 42 }' '  x' '}' > "$d/p.al"
+  "$CC" "$d/p.al" > "$d/open.s" 2>/dev/null 97> "$d/rows"; rc=$?
+  "$CC" "$d/p.al" > "$d/closed.s" 2>/dev/null
+  "$CC" "$q" > "$d/q_open.s" 2>/dev/null 97> /dev/null
+  "$CC" "$q" > "$d/q_closed.s" 2>/dev/null
+  if [ "$rc" = 0 ] && grep -qF '#sign sema 19 39 48 s |  comptime for i in 0 .. 2 { s = s + (0 - 7) / 3 }' "$d/rows" \
+    && grep -qF '#sign sema 29 48 52 s |  comptime if target.arch == Arch.x86_64 { s = s % 5 }' "$d/rows" \
+    && grep -qF '#sign sema 19 10 14 u |  x := g(u / 3).expect("m")' "$d/rows" \
+    && ! grep -q '^#semact refused ' "$d/rows" && cmp -s "$d/open.s" "$d/closed.s" \
+    && [ -s "$d/q_closed.s" ] && cmp -s "$d/q_open.s" "$d/q_closed.s"; then
+    echo "ok   sema_ct_records: comptime bodies and an implicit-type receiver carry sema's records, emission unchanged"
+  else
+    echo "FAIL sema_ct_records: rc=$rc"; grep -E '^#semact|comptime (for|if)|expect' "$d/rows" | sed 's/^/     /' | head -12; fail=1
+  fi
+}
+
 # `docs/ir.md` slice 0b — a twin emit verb over a PACKAGE manifest takes the package pipeline `-o` takes
 # (module and dependency discovery, the `main` module as entry). It used to compile the manifest file
 # itself as the program, so `_start` called a `main` nothing defined: link failure on aarch64/riscv64,
@@ -11200,6 +11227,7 @@ check_ir_build
 check_trap_names
 check_sign_census
 check_sema_lib_bodies
+check_sema_ct_records
 check_twin_package
 check_twin_build_flag
 ## aarch64 backend (scalar kernel): cross-validate against the same expected exits as
