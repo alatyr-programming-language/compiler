@@ -457,6 +457,29 @@ if [ "$xd_st_rc" != 0 ] || [ "$xd_rc" != 0 ] || [ "$(grep -cE '^xbackend diff: p
   fail=1
 fi
 
+# The x86 DIFFERENTIAL of the shared IR (`docs/ir.md` §7.1 rule 5, IR slice 1d). Every corpus program
+# with a function the IR builds and `src/lower/isel.al` selects is built and run through the default x86
+# path and through the `alatyr x86-ir` dev verb, and the two exits and stdouts are compared. REPORTING
+# ONLY, by the cross-backend report's argument: each disagreement is a triage item (an IR bug, or a
+# legacy x86 bug the IR answers per the specification — #872's narrowing, the signedness family), so a
+# finding never sets `fail`. A broken self-test, an unreadable run, or a proof line that walked no
+# program with a selected function does: "found nothing" must be told apart from "compared nothing".
+echo "### IR DIFF (x86 vs x86-via-IR, reporting only, findings never gate) ###"
+IRD_LOG="$LOGDIR/full_ir_diff.log"
+bash scripts/ir_diff.sh --self-test > "$IRD_LOG" 2>&1
+ird_st_rc=$?
+ALATYR="$ROOT/target/debug/alatyr" bash scripts/ir_diff.sh --quiet --jobs "${ALATYR_IR_JOBS:-8}" >> "$IRD_LOG" 2>&1
+ird_rc=$?
+grep -E "^(ir_diff self-test:|ir diff:|  DISAGREE |  VERIFIER REFUSALS|    test/)" "$IRD_LOG"
+ird_cover="$(grep -E "^ir diff: " "$IRD_LOG" | tail -1 | sed 's/^ir diff: //')"
+ird_withir="$(sed -nE 's/^ir diff: programs=[0-9]+ with-ir=([0-9]+) .*/\1/p' "$IRD_LOG" | tail -1)"
+if [ "$ird_st_rc" != 0 ] || [ "$ird_rc" != 0 ] || [ -z "$ird_withir" ] || [ "$ird_withir" = 0 ]; then
+  echo "  scripts/ir_diff.sh failed its self-test, could not take the differential, or printed no"
+  echo "  'ir diff:' line with a program compared (from $IRD_LOG):"
+  grep -E "^(FAIL |ir_diff: )" "$IRD_LOG" | head -5 | sed 's/^/    /'
+  fail=1
+fi
+
 echo "### SWEEPS (conditional) ###"
 bash scripts/sweeps.sh "${SWEEP_ARGS[@]}" 2>&1 | tee "$LOGDIR/full_sweeps.log"
 [ "${PIPESTATUS[0]}" = 0 ] || fail=1
@@ -476,6 +499,7 @@ elif [ "$sw_status" = "RAN" ]; then
   echo "    strict typed:    $st_cover"
   echo "    seed forms:      $sfr_cover"
   echo "    ir verifier:     $irv_cover"
+  echo "    ir diff:         ${ird_cover:-NO COVERAGE LINE} (reporting only)"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"
@@ -489,6 +513,7 @@ else
   echo "    strict typed:    $st_cover"
   echo "    seed forms:      $sfr_cover"
   echo "    ir verifier:     $irv_cover"
+  echo "    ir diff:         ${ird_cover:-NO COVERAGE LINE} (reporting only)"
   echo "    corpus manifest: $cm_cover"
   echo "    fmt arbiter:     ${fc_line:-NO COVERAGE LINE}"
   echo "    idiom gate:      ${ig_line:-NO COVERAGE LINE}"

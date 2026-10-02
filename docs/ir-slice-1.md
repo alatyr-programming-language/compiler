@@ -121,6 +121,19 @@ One child module per target, as §6 names them: `src/aarch64/isel.al`, `src/risc
 4. **1d, `scripts/ir_diff.sh` and the x86 dev selector.** Reporting only. It proves the builder means
    what the reference lowering means before the twins' rows are trusted. It may land before 1c and
    then gates it.
+   *Landed as built (1d):* the verb is `alatyr x86-ir`, a prefix to the default surface:
+   `x86-ir <file>` is the GAS dump and `x86-ir -o <exe> <file>` the build. The verb sets
+   `lower::X86_IR_SELECT` and drops itself from argv, so the front half, peephole and link are the
+   default path's own. Under it sema records its side table over the x86 tree (`ir::sty_enable`), and
+   `emit_program`'s declaration loop hands each function to `x86_isel_try` (`src/lower/isel.al`,
+   prefixed `sx_`/`x86_` for #871). The selector uses frame slots and the legacy convention (`%rdi`..`%r9`,
+   `%rax`, the mangled label, caller-saved scratch only), and traps with `ud2`. It refuses more than six
+   parameters or arguments, a `_start`, and a function or callee whose label the legacy emitter spells
+   specially (overload suffix, `@abi(c)`, `@abi(naked)`, extern). `scripts/ir_diff.sh` builds every
+   corpus program with an IR-selected function both ways and compares phase, exit and stdout. It is a
+   reporting stage of `scripts/full.sh`. At landing: 313 programs, 461 selected functions, 310 agree.
+   The 3 that disagree are legacy x86 wrong values the IR answers per the spec: #872 (`conv_narrow`,
+   `int_narrow_conv`, Types §4.2) and #875 (`lower_bugA_neg_operand`, Types §3.2 / Concurrency §6.1).
 5. **1e, the x86 legacy signedness queries answer from the table.** It owes the seed promotion, so it
    is the integrator's act after the gate. The delta should be one sentence: "every ordering compare
    whose operands sema types unsigned now uses `setb/seta/setbe/setae`". A delta that does not fit that
