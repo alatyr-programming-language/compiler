@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.11 — 2026-10-02
+
+- **Seed promotion; the bootstrap traps an out-of-range checked narrowing.** The frozen `seed/alatyr`
+  advances from 0.2.10 to 0.2.11 so it carries #872's fix. Seed to Stage1 adds exactly 10 range
+  guards (50 lines) in 9 of the compiler's own functions, where it narrows a runtime value to `u8`;
+  none fires in the gate. Stage1, Stage2 and Stage3 emit identical GAS (1 519 612 lines) and
+  Stage2 == Stage3 in the binary, all answering `alatyr 0.2.11`; `seed/VERSION` records the hashes.
 - **aarch64, riscv64 and wasm emit scalar functions from the shared IR (IR slice 1c).** A function the
   IR builder builds and verifies is now emitted by a per-target instruction selector
   (`src/aarch64/isel.al`, `src/riscv64/isel.al`, `src/wat/isel.al`), not by the twin's legacy
