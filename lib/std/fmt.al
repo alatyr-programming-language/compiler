@@ -26,7 +26,7 @@ pub stdout := fn() -> Stdout { return Stdout(fd = 1) }
 ## fd, returning `Ok(count)` for the bytes the syscall accepted (a short write is
 ## legal; `write_all` loops) or the mapped `IoError` on a failed `write(2)`.
 pub write := fn(in out o : Stdout, bs : Slice(u8)) -> Result(usize, io::IoError) {
-  r := unchecked sys_write(1, o.fd, bs.ptr, bs.len)
+  r := unchecked sys_write(std::sysno::WRITE, o.fd, bs.ptr, bs.len)
   if r < 0 {
     e := i32(0 - r)
     return io::io_error_result(usize, e)
@@ -84,7 +84,7 @@ pub format := alloc::fmt::format
 ## result. A non-consuming scoped-reference read of the buffer.
 pub write_buf := fn(s : ptr(alloc::strbuf::StrBuf)) -> isize {
   p := unchecked bitcast(ptr(u8), bitcast(usize, alloc::strbuf::strbuf_base(s)))
-  unchecked sys_write(1, 1, p, alloc::strbuf::buf_len(s))
+  unchecked sys_write(std::sysno::WRITE, 1, p, alloc::strbuf::buf_len(s))
 }
 
 ## Write a built `StrBuf`'s bytes to a file at `path` (the std-tier file sink

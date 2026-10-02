@@ -45,7 +45,7 @@ ch_lock := fn(base : usize) {
     if r.1 {
       held = true
     } else {
-      fr := unchecked sys_futex(202, base, 0, 1, 0, 0, 0)
+      fr := unchecked sys_futex(std::sysno::FUTEX, base, 0, 1, 0, 0, 0)
     }
   }
 }
@@ -55,7 +55,7 @@ ch_lock := fn(base : usize) {
 ch_unlock := fn(base : usize) {
   sp : ptr(mut u64) = unchecked bitcast(ptr(mut u64), base)
   atomic::store(sp, 0, Ordering.seq_cst)
-  fr := unchecked sys_futex(202, base, 1, 1, 0, 0, 0)
+  fr := unchecked sys_futex(std::sysno::FUTEX, base, 1, 1, 0, 0, 0)
 }
 
 ## Create a `Channel(T)` with room for `cap` elements, backing the ring in arena `a` (mirrors
@@ -98,12 +98,12 @@ pub send := fn(T : type, ch : ptr(mut Channel(T)), v : T) {
       rp : ptr(mut u64) = unchecked bitcast(ptr(mut u64), raddr)
       old := atomic::fetch_add(rp, 1, Ordering.seq_cst)
       ch_unlock(base)
-      fw := unchecked sys_futex(202, raddr, 1, 1, 0, 0, 0)
+      fw := unchecked sys_futex(std::sysno::FUTEX, raddr, 1, 1, 0, 0, 0)
       done = true
     } else {
       seq := atomic::load(wp, Ordering.seq_cst)
       ch_unlock(base)
-      fr := unchecked sys_futex(202, waddr, 0, unchecked bitcast(usize, seq), 0, 0, 0)
+      fr := unchecked sys_futex(std::sysno::FUTEX, waddr, 0, unchecked bitcast(usize, seq), 0, 0, 0)
     }
   }
 }
@@ -137,12 +137,12 @@ pub recv := fn(T : type, ch : ptr(mut Channel(T))) -> T {
       wp : ptr(mut u64) = unchecked bitcast(ptr(mut u64), waddr)
       old := atomic::fetch_add(wp, 1, Ordering.seq_cst)
       ch_unlock(base)
-      fw := unchecked sys_futex(202, waddr, 1, 1, 0, 0, 0)
+      fw := unchecked sys_futex(std::sysno::FUTEX, waddr, 1, 1, 0, 0, 0)
       done = true
     } else {
       seq := atomic::load(rp, Ordering.seq_cst)
       ch_unlock(base)
-      fr := unchecked sys_futex(202, raddr, 0, unchecked bitcast(usize, seq), 0, 0, 0)
+      fr := unchecked sys_futex(std::sysno::FUTEX, raddr, 0, unchecked bitcast(usize, seq), 0, 0, 0)
     }
   }
   return out
@@ -174,7 +174,7 @@ pub try_send := fn(T : type, ch : ptr(mut Channel(T)), v : T) -> bool {
     rp : ptr(mut u64) = unchecked bitcast(ptr(mut u64), raddr)
     old := atomic::fetch_add(rp, 1, Ordering.seq_cst)
     ch_unlock(base)
-    fw := unchecked sys_futex(202, raddr, 1, 1, 0, 0, 0)
+    fw := unchecked sys_futex(std::sysno::FUTEX, raddr, 1, 1, 0, 0, 0)
     return true
   }
   ch_unlock(base)
@@ -205,7 +205,7 @@ pub try_recv := fn(T : type, ch : ptr(mut Channel(T))) -> Option(T) {
     wp : ptr(mut u64) = unchecked bitcast(ptr(mut u64), waddr)
     old := atomic::fetch_add(wp, 1, Ordering.seq_cst)
     ch_unlock(base)
-    fw := unchecked sys_futex(202, waddr, 1, 1, 0, 0, 0)
+    fw := unchecked sys_futex(std::sysno::FUTEX, waddr, 1, 1, 0, 0, 0)
     return Option(T).Some(out)
   }
   ch_unlock(base)
@@ -243,7 +243,7 @@ pub recv_opt := fn(T : type, ch : ptr(mut Channel(T))) -> Option(T) {
       wp : ptr(mut u64) = unchecked bitcast(ptr(mut u64), waddr)
       old := atomic::fetch_add(wp, 1, Ordering.seq_cst)
       ch_unlock(base)
-      fw := unchecked sys_futex(202, waddr, 1, 1, 0, 0, 0)
+      fw := unchecked sys_futex(std::sysno::FUTEX, waddr, 1, 1, 0, 0, 0)
       got = true
       done = true
     } else {
@@ -253,7 +253,7 @@ pub recv_opt := fn(T : type, ch : ptr(mut Channel(T))) -> Option(T) {
       } else {
         seq := atomic::load(rp, Ordering.seq_cst)
         ch_unlock(base)
-        fr := unchecked sys_futex(202, raddr, 0, unchecked bitcast(usize, seq), 0, 0, 0)
+        fr := unchecked sys_futex(std::sysno::FUTEX, raddr, 0, unchecked bitcast(usize, seq), 0, 0, 0)
       }
     }
   }
@@ -278,8 +278,8 @@ pub close := fn(T : type, ch : ptr(mut Channel(T))) {
   ro := atomic::fetch_add(rp, 1, Ordering.seq_cst)
   wo := atomic::fetch_add(wp, 1, Ordering.seq_cst)
   ch_unlock(base)
-  fr := unchecked sys_futex(202, raddr, 1, 2147483647, 0, 0, 0)
-  fw := unchecked sys_futex(202, waddr, 1, 2147483647, 0, 0, 0)
+  fr := unchecked sys_futex(std::sysno::FUTEX, raddr, 1, 2147483647, 0, 0, 0)
+  fw := unchecked sys_futex(std::sysno::FUTEX, waddr, 1, 2147483647, 0, 0, 0)
 }
 
 ## The outcome of a `select`: WHICH channel fired (`idx`, 0-based over the arguments), whether a value
@@ -347,7 +347,7 @@ pub select2_recv := fn(T : type, ch_a : ptr(mut Channel(T)), ch_b : ptr(mut Chan
               }
             }
             if done == false {
-              y := unchecked sys_sched_yield(24)
+              y := unchecked sys_sched_yield(std::sysno::SCHED_YIELD)
             }
           }
         }
@@ -415,7 +415,7 @@ pub select_recv := fn(T : type, chans : Slice(ptr(mut Channel(T)))) -> SelectRes
       if alleof {
         done = true
       } else {
-        y := unchecked sys_sched_yield(24)
+        y := unchecked sys_sched_yield(std::sysno::SCHED_YIELD)
       }
     }
   }

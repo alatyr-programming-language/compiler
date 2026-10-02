@@ -20,7 +20,7 @@ main := fn() -> u64 {
 
   ## a str slice local built over an arena page (up-growing), then passed
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   base := unchecked bitcast(usize, r)
   s0 := "ab"
   deref(unchecked bitcast(ptr(mut usize), base)) = bitcast(usize, s0.ptr)

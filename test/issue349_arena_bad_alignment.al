@@ -45,7 +45,7 @@ try_alloc := fn(in out a : Arena, size : usize, align : usize) -> u64 {
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  m := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  m := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   bp := unchecked bitcast(ptr(mut bits8), bitcast(usize, m))
 
   ## --- invalid: not a power of two ---

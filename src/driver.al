@@ -5955,6 +5955,7 @@ d_qual_expr := fn(e : ptr(Expr), ms : usize, ml : usize, decls : rt::Vec, na : p
     Expr::Field(b, ffs, ffl) => { d_qual_expr(b, ms, ml, decls, na, src) }
     Expr::Index(b, ix) => { d_qual_expr(b, ms, ml, decls, na, src); d_qual_expr(ix, ms, ml, decls, na, src) }
     Expr::If(c, th, el) => { d_qual_expr(c, ms, ml, decls, na, src); d_qual_expr(th, ms, ml, decls, na, src); d_qual_expr(el, ms, ml, decls, na, src) }
+    Expr::Var(vs, vl) => { d_qual_var(e, vs, vl, decls, src) }
     Expr::Call(cs, cl, nargs, ah) => {
       mut g : Option(ptr(mut Arg)) = ah
       loop {
@@ -5973,7 +5974,8 @@ d_qual_expr := fn(e : ptr(Expr), ms : usize, ml : usize, decls : rt::Vec, na : p
       d_mark_callee(cs, cl, ms, ml, decls, src)
       if D_QUAL_RW != 0 {
         D_QUAL_ARGS = ah
-        di := d_qual_target_ok(cs, cl, ms, ml, decls, src)
+        mut di := d_qual_target_ok(cs, cl, ms, ml, decls, src)
+        if di == 0 { di = d_own_syscall(cs, cl, ms, ml, decls, src) }
         if di != 0 {
           td := deref(decl_at(Decl, rt::vec_get(decls, di - 1)))
           nc := Expr.Call(td.name_start, td.name_len, nargs, ah)
@@ -5981,9 +5983,107 @@ d_qual_expr := fn(e : ptr(Expr), ms : usize, ml : usize, decls : rt::Vec, na : p
         }
       }
     }
-    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::EnumLit
+    Expr::Num | Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit
       | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+}
+## IR slice 2a (`docs/ir-slice-2.md`). A BARE call to a bodyless `@abi(syscall)` declaration of the
+## caller's own module (Modules: a bare name resolves in its own module first) — the 1-based index of
+## that declaration, else 0. The same call is declared in more than one library module (`sys_write` in
+## `std::io` and `std::fmt`), and each module calls its own trampoline, so the call is rewritten to the
+## declaration's own name span: the call site then carries the callee's identity, and every twin names
+## the trampoline by its module-qualified symbol (`ir::put_fn_symbol`).
+d_own_syscall := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::Vec, src : ptr(u8)) -> usize {
+  if d_colon_pos(src, cs, cl) >= 0 { return 0 }
+  cnt := rt::vec_len(decls)
+  mut r := 0
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d.is_fn and d.kind == lower_layout::DECL_KIND_SYSCALL and d.name_len == cl and cl != 0 {
+      if str_at((src + d.name_start), d.name_len) == str_at((src + cs), cl) and d_mod_seg_eq(src, d.mod_start, d.mod_len, ms, ml) { r = i + 1 }
+    }
+    i += 1
+  }
+  r
+}
+## Is `b` a byte of a path segment's identifier (`[A-Za-z0-9_]`)?
+d_path_ident_byte := fn(b : u8) -> bool {
+  (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or (b >= 48 and b <= 57) or b == 95
+}
+## The module path written before a qualified value's tail span `vs` (`std::sysno` of `std::sysno::MMAP`).
+## The parser keeps only the LAST segment as the `Var` span (`parser::p_factor`, "qualified VALUE
+## path"), so the head is read back from the source: the `ident ::` segments that end at `vs`.
+d_qual_head_before := fn(src : ptr(u8), vs : usize) -> CSpan {
+  mut start := vs
+  loop {
+    if start < 3 { break }
+    if str_at((src + start - 2), 2) != "::" { break }
+    mut b := start - 2
+    while b > 0 and d_path_ident_byte(bytes(str_at((src + b - 1), 1))[0]) { b = b - 1 }
+    if b == start - 2 { break }
+    start = b
+  }
+  if start == vs { return CSpan(s = 0, n = 0) }
+  CSpan(s = start, n = vs - 2 - start)
+}
+## The 1-based index of the module VALUE declaration a qualified name `m::…::NAME` names — a constant
+## or global of module `m::…`, `vs`/`vl` being the tail `NAME` — else 0.
+d_find_value_decl := fn(vs : usize, vl : usize, decls : rt::Vec, src : ptr(u8)) -> usize {
+  hd := d_qual_head_before(src, vs)
+  if hd.n == 0 or vl == 0 { return 0 }
+  hl := hd.n
+  ts := vs
+  tl := vl
+  cnt := rt::vec_len(decls)
+  mut r := 0
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.name_len == tl {
+      if str_at((src + d.name_start), d.name_len) == str_at((src + ts), tl) and d_mod_seg_eq(src, d.mod_start, d.mod_len, hd.s, hl) { r = i + 1 }
+    }
+    i += 1
+  }
+  r
+}
+## How many module value declarations are named `[vs, vs+vl)`, across every module.
+d_value_name_count := fn(vs : usize, vl : usize, decls : rt::Vec, src : ptr(u8)) -> usize {
+  cnt := rt::vec_len(decls)
+  mut k := 0
+  mut i := 0
+  while i < cnt {
+    d := deref(decl_at(Decl, rt::vec_get(decls, i)))
+    if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.name_len == vl and vl != 0 {
+      if str_at((src + d.name_start), d.name_len) == str_at((src + vs), vl) { k = k + 1 }
+    }
+    i += 1
+  }
+  k
+}
+## IR slice 2a. A qualified module value `m::NAME` (`std::sysno::MMAP`): the marking sweep keeps its
+## declaration reachable (the twins name a module value by its bare identifier, so it only has to be
+## emitted), and the rewriting sweep replaces the name with the declaration's own name span, so the
+## shared IR's builder, which resolves a name by that identity first, finds exactly it.
+d_qual_var := fn(e : ptr(Expr), vs : usize, vl : usize, decls : rt::Vec, src : ptr(u8)) {
+  di := d_find_value_decl(vs, vl, decls, src)
+  if di == 0 { return }
+  ## The twins read a module value by its BARE name, so this is sound only when no other module value
+  ## carries that name: otherwise the bare read could bind the wrong one (measured:
+  ## `test/package/module_global_shadow`'s `G + geo::G` answered 2 where 42 is due). Such a path keeps
+  ## today's located trap.
+  if d_value_name_count(vs, vl, decls, src) != 1 { return }
+  if D_KEEP != 0 {
+    ## unchecked-ok: `D_KEEP` holds the reachability block's arena address (see its declaration).
+    kb := unchecked bitcast(ptr(mut u8), D_KEEP)
+    if rt::rec_get(kb, di - 1) == 0 { rt::rec_set(kb, di - 1, 1) ; D_KEEP_CHANGED = 1 }
+  }
+  if D_QUAL_RW != 0 {
+    td := deref(decl_at(Decl, rt::vec_get(decls, di - 1)))
+    nv := Expr.Var(td.name_start, td.name_len)
+    ## unchecked-ok: the walker rewrites the node in place, as `d_qual_expr`'s call arm does (#760's typed handle is pending).
+    deref(unchecked bitcast(ptr(mut Expr), e)) = nv
   }
 }
 d_qual_stmts := fn(head : ptr(mut Stmt), ms : usize, ml : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
@@ -6482,6 +6582,13 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## own callee here, BEFORE the prune below walks callees by name, so the three twins emit them as
   ## ordinary calls. See `d_desugar_convert`.
   if backend == 0 or backend == 1 or backend == 2 or backend == 3 { d_desugar_convert(decls, ptr(na), base) }
+  ## IR slice 2a (`docs/ir-slice-2.md`): the `when` guards fold for THIS target before the prune
+  ## (Comptime §7.1), so a declaration gated on another architecture is already absent when reachability
+  ## and the duplicate-label guard below look at the decls. A per-target table (`std::sysno`, owner
+  ## decision D3) then keeps exactly its own row. Each emitter applies the same fold again (idempotent).
+  if backend == 0 { lower_layout::apply_when_guards(ptr(decls), base, wat::wat_target_arch()) }
+  if backend == 1 { lower_layout::apply_when_guards(ptr(decls), base, aarch64::a64_target_arch()) }
+  if backend == 2 { lower_layout::apply_when_guards(ptr(decls), base, riscv64::rv_target_arch()) }
   ## Resolve `mod::fn` / `alias::fn` callees to the target decl's BARE name and prune the injected
   ## `lib/` closure to what the program reaches — without this the module-unaware backends cannot use
   ## any of the decls this front end just supplied. A single-module compile (nothing injected) skips
