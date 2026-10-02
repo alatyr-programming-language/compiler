@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A local initialized from an enum payload's `ptr(S)` binding is typed (x86_64).** `m := deref(q)`
+  and `r := q` over `B(q) => …` took one untyped word, so `m.w` and `deref(r).v` read 0 (#861). An arm
+  with a `deref` copy now types the binding for its body; a plain copy is retyped in place as the
+  typed pointer. The compiler's own GAS is unchanged.
+
 ## 0.2.12 — 2026-10-02
 
 - **Seed promotion; the bootstrap traps an unrepresentable signedness change.** The frozen

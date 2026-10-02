@@ -52,6 +52,102 @@ folded_bind_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), s
   CSpan(s = 0, n = 0)
 }
 
+## #861 — what `scan_init_from` does at each `x := <b>` / `x := deref(<b>)` it finds for a payload
+## binding `b`: report a `deref` copy (the arm must type `b` before its locals are sized), or retype a
+## plain copy `x := b` as the typed pointer `b` is.
+InitScan := enum { FindDerefInit, RetypeCopies }
+
+## Walk `head` (every block depth) for locals initialized from the name `[bs, bs+bl)`. `FindDerefInit`
+## answers whether some `x := deref(b)` exists. `RetypeCopies` gives each `x := b` local that is still an
+## untyped one-word scalar the pointer kind `ek` over pointee `[ps, ps+pn)` (answers false).
+scan_init_from := fn(mode : InitScan, head : ptr(mut Stmt), bs : usize, bl : usize, src : ptr(u8), slots : ptr(SVec), ek : u8, ps : usize, pn : usize) -> bool {
+  mut s := head
+  ## unchecked-ok: the Stmt list's end is a null link until #886 makes it `Option(ptr(mut Stmt))`.
+  while unchecked bitcast(usize, s) != 0 { ## null-ok: Stmt.next is a null-terminated AST link (#886).
+    st := deref(stmt_p(Stmt, s))
+    match st {
+      Stmt::Assign(ns, nl, v, nx) => {
+        match mode {
+          FindDerefInit => { if expr_derefs_var(v, bs, bl, src) { return true } }
+          RetypeCopies => { if expr_is_var(v, bs, bl, src) { retype_ptr_copy(slots, src, ns, nl, ek, ps, pn) } }
+        }
+        s = nx
+      }
+      Stmt::While(c, b, nx) => { if scan_init_from(mode, b, bs, bl, src, slots, ek, ps, pn) { return true }; s = nx }
+      Stmt::Loop(b, nx) => { if scan_init_from(mode, b, bs, bl, src, slots, ek, ps, pn) { return true }; s = nx }
+      Stmt::Unchecked(b, nx) => { if scan_init_from(mode, b, bs, bl, src, slots, ek, ps, pn) { return true }; s = nx }
+      Stmt::AllocWith(ae, b, nx) => { if scan_init_from(mode, b, bs, bl, src, slots, ek, ps, pn) { return true }; s = nx }
+      Stmt::If(c, th, el, nx) => {
+        if scan_init_from(mode, th, bs, bl, src, slots, ek, ps, pn) { return true }
+        if scan_init_from(mode, el, bs, bl, src, slots, ek, ps, pn) { return true }
+        s = nx
+      }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)); if scan_init_from(mode, am.body_stmts, bs, bl, src, slots, ek, ps, pn) { return true }; arm = am.next }; None => { break } } }
+        s = nx
+      }
+      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if scan_init_from(mode, fb, bs, bl, src, slots, ek, ps, pn) { return true }; s = nx }
+      Stmt::CompIf(ccond, cthen, celse, nx) => {
+        if scan_init_from(mode, cthen, bs, bl, src, slots, ek, ps, pn) { return true }
+        if scan_init_from(mode, celse, bs, bl, src, slots, ek, ps, pn) { return true }
+        s = nx
+      }
+      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { if scan_init_from(mode, cb, bs, bl, src, slots, ek, ps, pn) { return true }; s = nx }
+      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if scan_init_from(mode, rb, bs, bl, src, slots, ek, ps, pn) { return true }; s = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => {
+        mut car : Option(ptr(mut Arm)) = cmah
+        loop { match car { Some(carq) => { cam := deref(arm_p(carq)); if scan_init_from(mode, cam.body_stmts, bs, bl, src, slots, ek, ps, pn) { return true }; car = cam.next }; None => { break } } }
+        s = nx
+      }
+      Stmt::Break(_bv, _bd, nx) => { s = nx }
+      Stmt::Continue(_cd, nx) => { s = nx }
+      Stmt::ExprStmt(e, nx) => { s = nx }
+      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+      Stmt::FieldPathAssign(pl, fpv, nx) => { s = nx }
+      Stmt::Return(rv, nx) => { s = nx }
+      Stmt::DerefAssign(ptr, val, nx) => { s = nx }
+      Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
+      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { s = nx }
+    }
+  }
+  false
+}
+
+## Is `v` the name `[bs, bs+bl)` itself?
+expr_is_var := fn(v : ptr(Expr), bs : usize, bl : usize, src : ptr(u8)) -> bool {
+  vn := var_name_span(v)
+  vn.n != 0 and streq(src, vn.s, vn.n, bs, bl)
+}
+
+## Is `v` `deref` of the name `[bs, bs+bl)`?
+expr_derefs_var := fn(v : ptr(Expr), bs : usize, bl : usize, src : ptr(u8)) -> bool {
+  match deref(v) {
+    Expr::Deref(p) => { return expr_is_var(p, bs, bl, src) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
+      | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
+      | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { return false }
+  }
+}
+
+## Give the local `[ns, ns+nl)` the pointer kind `ek` over `[ps, ps+pn)` when its slot is still the
+## untyped one-word scalar a copy of an untyped binding took (same frame word, so no layout moves).
+retype_ptr_copy := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usize, ek : u8, ps : usize, pn : usize) {
+  k := slot_of(slots, src, ns, nl)
+  if k < 0 { return }
+  ue := deref(svec_at(SlotEntry, slots, usize(k)))
+  if not streq(src, ue.ns, ue.nl, ns, nl) or ue.ek != 0 or ue.snl != 0 or ue.is_ref { return }
+  deref(svec_at(SlotEntry, slots, usize(k))) = SlotEntry(ns = ue.ns, nl = ue.nl, off = ue.off, sns = ps, snl = pn, ek = ek, estride = ue.estride, eek = ue.eek, is_ref = false, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l)
+}
+
+## Drop the name of slot entry `k`, keeping its frame word (an arm-local binding's collect-time type
+## must not leak to the rest of the function).
+unname_slot := fn(slots : ptr(SVec), k : usize) {
+  ue := deref(svec_at(SlotEntry, slots, k))
+  deref(svec_at(SlotEntry, slots, k)) = SlotEntry(ns = 0, nl = 0, off = ue.off, sns = ue.sns, snl = ue.snl, ek = ue.ek, estride = ue.estride, eek = ue.eek, is_ref = ue.is_ref, tmod_s = ue.tmod_s, tmod_l = ue.tmod_l)
+}
+
 pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), sub : ptr(Subst), ctslots : ptr(SVec)) {
   mut s := head
   while s != 0 {
@@ -781,7 +877,56 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
                   }
                 }
               }
+              ## #861 — a `ptr(S)` / `ptr(E)` payload binding `q` of an ORDINARY enum that a local in the arm
+              ## is initialized from took no type at collect time, so `m := deref(q)` reserved one untyped
+              ## word (its fields read 0) and `r := q` was an untyped scalar (`deref(r).f` read 0). A `deref`
+              ## copy needs `q` typed BEFORE the arm's locals are sized: only such an arm reserves the typed
+              ## entry (one word; `emit_match` still aliases `q` to the payload), unnamed after the arm since
+              ## payload names are arm-local. A plain copy `r := q` is retyped in place afterwards — the
+              ## same word, so no other frame moves.
+              plo := svec_len(ptr(slots))
+              if mes != 0 and is_niche_folded(src, mes, mel) == false {
+                pnb := bind_count(am.binds_head)
+                mut pb := am.binds_head
+                mut pbi : usize = 0
+                loop {
+                  match pb {
+                    Some(pbq) => {
+                      if slot_of(ptr(slots), src, bnd_ns(pbq), bnd_nl(pbq)) < 0 and scan_init_from(InitScan.FindDerefInit, am.body_stmts, bnd_ns(pbq), bnd_nl(pbq), src, ptr(slots), 0, 0, 0) {
+                        ppt := variant_bind_pointee(decls, src, mes, mel, am.vs, am.vl, pnb, pbi, a)
+                        ppk := pointee_agg_kind(decls, src, ppt.s, ppt.n)
+                        if ppk == 7 { bind_ptrstruct_slot(slots, src, bnd_ns(pbq), bnd_nl(pbq), ppt.s, ppt.n) }
+                        else if ppk == 6 { bind_ptrenum_slot(slots, src, bnd_ns(pbq), bnd_nl(pbq), ppt.s, ppt.n) }
+                      }
+                      pbi += 1
+                      pb = bnd_next(pbq)
+                    }
+                    None => { break }
+                  }
+                }
+              }
+              phi := svec_len(ptr(slots))
               collect_slots(slots, am.body_stmts, src, decls, a, synth, sub, ctslots)
+              for pk in plo..phi { unname_slot(ptr(slots), pk) }
+              if mes != 0 and is_niche_folded(src, mes, mel) == false {
+                rnb := bind_count(am.binds_head)
+                mut rb := am.binds_head
+                mut rbi : usize = 0
+                loop {
+                  match rb {
+                    Some(rbq) => {
+                      if slot_of(ptr(slots), src, bnd_ns(rbq), bnd_nl(rbq)) < 0 {
+                        rpt := variant_bind_pointee(decls, src, mes, mel, am.vs, am.vl, rnb, rbi, a)
+                        rpk := pointee_agg_kind(decls, src, rpt.s, rpt.n)
+                        if rpk == 7 or rpk == 6 { scan_init_from(InitScan.RetypeCopies, am.body_stmts, bnd_ns(rbq), bnd_nl(rbq), src, ptr(slots), rpk, rpt.s, rpt.n) }
+                      }
+                      rbi += 1
+                      rb = bnd_next(rbq)
+                    }
+                    None => { break }
+                  }
+                }
+              }
               arm = am.next
             }
             None => { break }
