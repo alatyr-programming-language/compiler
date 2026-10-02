@@ -5,7 +5,8 @@
 ##   2. every REPRESENTABLE literal still converts, including the exact boundaries 255 / 65535 /
 ##      4294967295 / 127 / 32767 and the negative bound -128.
 ##   3. a NON-LITERAL operand is §4.2's run-time narrowing, whose value is not a compile-time fact;
-##      it keeps truncating and is deliberately untouched by this unit.
+##      §9.1 does not reach it. §4.2 checks it (an out-of-range value traps, x86_64 since #872), so
+##      the out-of-range operands here are written inside `unchecked`, where they truncate (CG-7).
 ## The signed rows assert the VALUE, not an exit code: no cross-backend fixture asserted a negative
 ## number before (#444), and the signed half of §9.1's bound is exactly about them.
 main := fn() -> u64 {
@@ -24,8 +25,8 @@ main := fn() -> u64 {
   neg := i8(0 - 1)
   if i64(neg) != 0 - 1 { return 20 }
   v : u64 = 810
-  if u64(u8(v)) != 42 { return 21 }
+  if u64(unchecked u8(v)) != 42 { return 21 }
   s : u64 = 200
-  if i64(i8(s)) != 0 - 56 { return 22 }
+  if i64(unchecked i8(s)) != 0 - 56 { return 22 }
   42
 }

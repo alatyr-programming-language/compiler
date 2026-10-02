@@ -15460,7 +15460,8 @@ is_narrowing_conv := fn(name : str) -> bool {
 }
 ## Emit the width-narrowing of the integer value in %rax for `name(x)`: ZERO-extend the low N bits for
 ## an unsigned `uN`, SIGN-extend for a signed `iN` — the wrap/truncation semantics (`u8(810)` → 42,
-## `i8(200)` → -56). Native widths emit nothing (the bits already fill the word).
+## `i8(200)` → -56 inside `unchecked`; a checked scope runs `emit_int_fit_guard` first). Native widths
+## emit nothing (the bits already fill the word).
 emit_int_narrow_reg := fn(in out sb : strbuf::StrBuf, name : str) {
   if name == "u8" { push_str(sb, "  movzbq %al, %rax\n") }
   else if name == "u16" { push_str(sb, "  movzwq %ax, %rax\n") }
@@ -15468,6 +15469,24 @@ emit_int_narrow_reg := fn(in out sb : strbuf::StrBuf, name : str) {
   else if name == "i8" { push_str(sb, "  movsbq %al, %rax\n") }
   else if name == "i16" { push_str(sb, "  movswq %ax, %rax\n") }
   else if name == "i32" { push_str(sb, "  movslq %eax, %rax\n") }
+}
+
+## The CHECKED fit of the 64-bit integer in `%rax` into the narrow integer `name` (I11 / CG-8; Types
+## §4.2 narrow row): trap (`ud2`) unless the value is representable in `name`, leaving `%rax` as is.
+## An unsigned `uN` fits iff no bit at or above N is set (`shr $N` is zero) — that also refuses a
+## negative SIGNED source, whose high bits are set. A signed `iN` fits iff the sign-extension of its
+## low N bits is the whole word, and — when the source is an UNSIGNED integer (`src_unsigned`, from its
+## declared type) — bit 63 is clear, so a huge unsigned word whose low bits sign-extend back to itself
+## is not read as a negative. The IR's `fit` decides the same predicate on the twins. The caller emits
+## it only in a checked scope; `emit_int_narrow_reg` then canonicalises the fitted value.
+emit_int_fit_guard := fn(in out sb : strbuf::StrBuf, name : str, src_unsigned : bool) {
+  if name == "u8" { push_str(sb, "  movq %rax, %rcx\n  shrq $8, %rcx\n  jz 1f\n  ud2\n1:\n") }
+  else if name == "u16" { push_str(sb, "  movq %rax, %rcx\n  shrq $16, %rcx\n  jz 1f\n  ud2\n1:\n") }
+  else if name == "u32" { push_str(sb, "  movq %rax, %rcx\n  shrq $32, %rcx\n  jz 1f\n  ud2\n1:\n") }
+  else if name == "i8" { push_str(sb, "  movsbq %al, %rcx\n  cmpq %rcx, %rax\n  je 1f\n  ud2\n1:\n") }
+  else if name == "i16" { push_str(sb, "  movswq %ax, %rcx\n  cmpq %rcx, %rax\n  je 1f\n  ud2\n1:\n") }
+  else if name == "i32" { push_str(sb, "  movslq %eax, %rcx\n  cmpq %rcx, %rax\n  je 1f\n  ud2\n1:\n") }
+  if src_unsigned and (name == "i8" or name == "i16" or name == "i32") { push_str(sb, "  testq %rax, %rax\n  jns 1f\n  ud2\n1:\n") }
 }
 
 ## Restore the target representation of a narrow scalar bitcast in `%rax`. A SIGNED target reuses
@@ -18067,14 +18086,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             ## above bit N is set (`shr $N` nonzero); SIGNED iN overflows iff the sign-extension of the
             ## low N bits differs from the full value. Dropped under `unchecked`; skipped for a `0 - x`
             ## negation (`expr_is_zero`). The truncation below is then the `unchecked` value-model wrap.
-            if cx.vchk and (not expr_is_zero(l)) {
-              if wnm == "u8" { push_str(sb, "  movq %rax, %rcx\n  shrq $8, %rcx\n  jz 1f\n  ud2\n1:\n") }
-              else if wnm == "u16" { push_str(sb, "  movq %rax, %rcx\n  shrq $16, %rcx\n  jz 1f\n  ud2\n1:\n") }
-              else if wnm == "u32" { push_str(sb, "  movq %rax, %rcx\n  shrq $32, %rcx\n  jz 1f\n  ud2\n1:\n") }
-              else if wnm == "i8" { push_str(sb, "  movsbq %al, %rcx\n  cmpq %rcx, %rax\n  je 1f\n  ud2\n1:\n") }
-              else if wnm == "i16" { push_str(sb, "  movswq %ax, %rcx\n  cmpq %rcx, %rax\n  je 1f\n  ud2\n1:\n") }
-              else if wnm == "i32" { push_str(sb, "  movslq %eax, %rcx\n  cmpq %rcx, %rax\n  je 1f\n  ud2\n1:\n") }
-            }
+            ## Both operands have the result's type, so the 64-bit value's signedness is the target's.
+            if cx.vchk and (not expr_is_zero(l)) { emit_int_fit_guard(sb, wnm, false) }
             emit_int_narrow_reg(sb, wnm)
           }
         }
@@ -18613,10 +18626,23 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           emit_int_narrow_reg(sb, callee)
           push_str(sb, "  pushq %rax\n")
         } else if ck == 0 and is_narrowing_conv(callee) {
-          ## int→int to a SUB-NATIVE width `uN(x)`/`iN(x)` — truncate/wrap: zero- or sign-extend the low
-          ## N bits. A native-width int→int stays IDENTITY (value left on the stack, byte-identical).
+          ## int→int to a SUB-NATIVE width `uN(x)`/`iN(x)`. A SIZE DECREASE is Types §4.2's narrow row:
+          ## CHECKED by default — trap when the value does not fit — and inside `unchecked` (cx.vchk
+          ## false) it truncates: zero- or sign-extend the low N bits. The operand's width and signedness
+          ## come from its DECLARED type (strict form 5); an operand with no recorded type is a 64-bit word,
+          ## so narrowing it is a size decrease. A same-or-wider source (`i8(x : u8)`, `u16(x : i8)`) is
+          ## not a narrowing: it keeps the extension below. A literal operand needs no guard: Types §9.1
+          ## refuses one outside the target's range at compile time (#564). A native-width int→int stays
+          ## IDENTITY.
           ## (`callee` is the target-type name; a brand over a sub-width narrows via its `U(v)` desugar.)
+          mut src_bytes : usize = 8
+          if octs.n != 0 {
+            sbn := base_type_name(cx.src, octs.s, octs.n)
+            sbu := brand_underlying(cx.decls, cx.src, sbn.s, sbn.n)
+            src_bytes = if sbu.n != 0 { scalar_byte_size(cx.src, sbu.s, sbu.n) } else { scalar_byte_size(cx.src, sbn.s, sbn.n) }
+          }
           push_str(sb, "  popq %rax\n")
+          if cx.vchk and src_bytes > bitcast_narrow_bytes(callee) and not expr_is_numlit(a0) { emit_int_fit_guard(sb, callee, is_unsigned_expr(a0, cx)) }
           emit_int_narrow_reg(sb, callee)
           push_str(sb, "  pushq %rax\n")
         }

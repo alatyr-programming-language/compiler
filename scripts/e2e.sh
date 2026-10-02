@@ -2381,24 +2381,29 @@ main := fn() -> u64 {
 
   ## ---- CONTROL 3: a NON-LITERAL operand is §4.2's RUN-TIME narrowing, not §9.1's --------------
   ## §9.1 speaks about a literal, whose value is a compile-time fact. `u8(x)` for a run-time `x` is
-  ## the conversion table's own checked-narrow case, and this unit deliberately does not touch it:
-  ## it still truncates today (that residual is #564's `Out of scope` line, not this refusal's).
-  ## The row asserts the truncated VALUE, so a later checked-narrow trap changes this row on purpose.
-  _ctor_accept runtime_operand_untouched 'narrow := fn(x : u64) -> u8 { u8(x) }
+  ## the conversion table's own checked-narrow case, which this refusal does not touch: §4.2 makes it
+  ## trap when the value does not fit, and truncate inside `unchecked` (CG-7; x86_64 since #872). The
+  ## out-of-range operands below are therefore written inside `unchecked` and the rows assert the
+  ## truncated VALUE; the `_checked_trap` rows assert the checked form traps (132).
+  _ctor_accept runtime_operand_untouched 'narrow := fn(x : u64) -> u8 { unchecked u8(x) }
 main := fn() -> u64 {
   v : u64 = 810
-  if u64(u8(v)) != 42 { return 11 }
+  if u64(unchecked u8(v)) != 42 { return 11 }
   if u64(narrow(300)) != 44 { return 12 }
   s : u64 = 200
-  if i64(i8(s)) != 0 - 56 { return 13 }
+  if i64(unchecked i8(s)) != 0 - 56 { return 13 }
   42
 }' 42
+  _ctor_accept runtime_operand_checked_trap 'narrow := fn(x : u64) -> u8 { u8(x) }
+main := fn() -> u64 { u64(narrow(300)) }' 132
   ## …and a NAMED module constant is a `Var`, not a `Num`, so it is the same run-time class here.
   _ctor_accept named_constant_untouched 'K : u64 = 300
 main := fn() -> u64 {
-  if u64(u8(K)) != 44 { return 11 }
+  if u64(unchecked u8(K)) != 44 { return 11 }
   42
 }' 42
+  _ctor_accept named_constant_checked_trap 'K : u64 = 300
+main := fn() -> u64 { u64(u8(K)) }' 132
 
   ## ---- CONTROL 4: the neighbouring constructors this rule must NOT claim ----------------------
   ## A float target is judged by `int_lit_into_float_bad`, and a brand over a NON-integer block is
@@ -6160,6 +6165,7 @@ run nested_option 42
 run nested_option_literal 42
 run match_multibind_ptr 42
 run int_narrow_conv 42
+run int_narrow_conv_trap 132
 run inline_call 42
 run inline_stmt_body 42
 ## Proposal #3 / Codegen §3.5 — aggregate parameters and builtin `bytes(...)` must survive direct @inline expansion.
@@ -8726,8 +8732,11 @@ run ra_array_local 42
 # assert they now MATCH (was signed div on all three non-x86 backends — a silent miscompile).
 run unsigned_div 63
 # Integer width conversions on all four backends (§8; plain run so the sweeps validate the non-x86
-# backends now COMPUTE them rather than trap-as-unsupported). u8 masks, i8 sign-extends.
+# backends now COMPUTE them rather than trap-as-unsupported). Checked in-range u8 keeps its value,
+# `unchecked u8` masks, i8 sign-extends. Types §4.2: a CHECKED out-of-range narrowing traps (#872) —
+# plain `run`, so the sweeps assert the twins trap too.
 run conv_narrow 42
+run conv_narrow_trap 132
 run conv_signed 42
 run_x86 checked_array_oob 132
 run_x86 checked_agg_array_oob 132

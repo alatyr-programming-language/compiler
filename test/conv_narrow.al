@@ -1,13 +1,19 @@
-## §8 backend breadth: an UNSIGNED integer conversion `u8(x)` masks the low 8 bits on EVERY backend
-## (x86_64 movzbq, aarch64 uxtb, riscv64 andi, wasm i64.and). Formerly the three non-x86 backends
-## trapped on any `uN(x)`/`iN(x)` conversion as an unsupported builtin call, so what this row proves
-## first is that the conversion EXISTS on all four; the mask is then observed through the value.
+## §8 backend breadth: the integer conversion `u8(x)` exists on EVERY backend (x86_64, aarch64,
+## riscv64, wasm), checked by default and masking inside `unchecked`.
 ##
-## The masked operand is the u16 VALUE 810, not the bare literal `u8(810)` this row used to write.
-## Types §9.1 (#564) makes a literal outside the target type's range a compile error through the
-## `T(v)` spelling too, so `u8(810)` is refused now — and asserting 42 for it would have frozen the
-## silent wrap this compiler refuses into the corpus oracle (the #527 class). 810 IS representable in
-## u16, and §4.2's narrowing of a VALUE is the rule this row's own header always described (`u8(x)`).
-## Measured: the emitted mask is unchanged — one movzbq / uxtb / andi / i64.and, exactly as before.
-## 810 & 0xFF = 42. `test/reject_conv_narrow_literal.al` keeps the refused literal spelling.
-main := fn() -> u64 { return u8(u16(810)) }
+## Types §4.2 (narrow row): a narrowing `T(v)` is checked by default — it traps when the value does not
+## fit — and inside an `unchecked` scope it truncates (CG-7). This row asserted 42 for the CHECKED
+## `u8(u16(810))`, freezing a silent wrong value into the corpus oracle (#872). It now writes the two
+## spec forms side by side: the checked in-range `u8(k)` keeps its value, and the masking of the
+## out-of-range VALUE 810 is written inside `unchecked`, where §4.2 makes it the defined result
+## (810 & 0xFF = 42). `test/conv_narrow_trap.al` holds the checked out-of-range form, which traps;
+## `test/reject_conv_narrow_literal.al` keeps the refused literal spelling `u8(810)` (§9.1, #564).
+## The checked u8(42) keeps 42; the unchecked u8(810) masks to 42.
+main := fn() -> u64 {
+  k : u16 = 42
+  v : u16 = 810
+  c := u64(u8(k))
+  m := u64(unchecked u8(v))
+  if c != 42 { return 1 }
+  m
+}
