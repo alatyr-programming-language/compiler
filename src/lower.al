@@ -15548,6 +15548,44 @@ emit_int_fit_guard := fn(in out sb : strbuf::StrBuf, name : str, src_unsigned : 
   else if name == "i16" { push_str(sb, "  movswq %ax, %rcx\n  cmpq %rcx, %rax\n  je 1f\n  ud2\n1:\n") }
   else if name == "i32" { push_str(sb, "  movslq %eax, %rcx\n  cmpq %rcx, %rax\n  je 1f\n  ud2\n1:\n") }
   if src_unsigned and (name == "i8" or name == "i16" or name == "i32") { push_str(sb, "  testq %rax, %rax\n  jns 1f\n  ud2\n1:\n") }
+  ## A native-width target only ever misses the value across a signedness change (Types §4.2 numeric
+  ## row, #881): a signed source fits `u64`/`usize` iff it is not negative, an unsigned source fits
+  ## `i64`/`isize` iff bit 63 is clear — the same sign test either way.
+  if (not src_unsigned) and (name == "u64" or name == "usize") { push_str(sb, "  testq %rax, %rax\n  jns 1f\n  ud2\n1:\n") }
+  if src_unsigned and (name == "i64" or name == "isize") { push_str(sb, "  testq %rax, %rax\n  jns 1f\n  ud2\n1:\n") }
+}
+
+## The DECLARED signedness of an integer conversion's operand (strict form 5): from its recorded type,
+## a brand read through its underlying, else the positive signed/unsigned tests. Unknown — no recorded
+## integer type — is its own answer: it never claims a signedness change.
+IntSign := enum { IsSigned, IsUnsigned, IsUnknown }
+int_operand_sign := fn(e : ptr(Expr), octs : CSpan, cx : ptr(LCtx)) -> IntSign {
+  if octs.n != 0 {
+    sbn := base_type_name(cx.src, octs.s, octs.n)
+    sbu := brand_underlying(cx.decls, cx.src, sbn.s, sbn.n)
+    nm := if sbu.n != 0 { str_at((cx.src + sbu.s), sbu.n) } else { str_at((cx.src + sbn.s), sbn.n) }
+    if nm == "i8" or nm == "i16" or nm == "i32" or nm == "i64" or nm == "isize" { return IntSign.IsSigned }
+    if nm == "u8" or nm == "u16" or nm == "u32" or nm == "u64" or nm == "usize" { return IntSign.IsUnsigned }
+  }
+  if is_signed_expr(e, cx) { return IntSign.IsSigned }
+  if is_unsigned_expr(e, cx) { return IntSign.IsUnsigned }
+  IntSign.IsUnknown
+}
+## Can the checked int→int conversion `name(x)` meet a value `name` cannot hold (Types §4.4 "preserves
+## the value" + I11), so it needs `emit_int_fit_guard`? A SIZE DECREASE always can (§4.2 narrow row).
+## At the same or a larger width only a signedness change can (§4.2 numeric row, #881): a signed source
+## into any unsigned target (a negative value), and an unsigned source into a signed target of the SAME
+## width (its upper half); an unsigned source into a wider signed target always fits.
+int_conv_needs_fit := fn(name : str, sg : IntSign, src_bytes : usize) -> bool {
+  mut tb : usize = bitcast_narrow_bytes(name)
+  if tb == 0 { tb = 8 }
+  if src_bytes > tb { return true }
+  tu := name == "u8" or name == "u16" or name == "u32" or name == "u64" or name == "usize"
+  match sg {
+    IsSigned => { tu }
+    IsUnsigned => { (not tu) and src_bytes == tb }
+    IsUnknown => { false }
+  }
 }
 
 ## Restore the target representation of a narrow scalar bitcast in `%rax`. A SIGNED target reuses
@@ -18705,15 +18743,15 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
           push_str(sb, "  popq %rax\n  movq %rax, %xmm0\n  cvttsd2si %xmm0, %rax\n")
           emit_int_narrow_reg(sb, callee)
           push_str(sb, "  pushq %rax\n")
-        } else if ck == 0 and is_narrowing_conv(callee) {
-          ## int→int to a SUB-NATIVE width `uN(x)`/`iN(x)`. A SIZE DECREASE is Types §4.2's narrow row:
-          ## CHECKED by default — trap when the value does not fit — and inside `unchecked` (cx.vchk
-          ## false) it truncates: zero- or sign-extend the low N bits. The operand's width and signedness
-          ## come from its DECLARED type (strict form 5); an operand with no recorded type is a 64-bit word,
-          ## so narrowing it is a size decrease. A same-or-wider source (`i8(x : u8)`, `u16(x : i8)`) is
-          ## not a narrowing: it keeps the extension below. A literal operand needs no guard: Types §9.1
-          ## refuses one outside the target's range at compile time (#564). A native-width int→int stays
-          ## IDENTITY.
+        } else if ck == 0 {
+          ## int→int. CHECKED by default (Types §4.4 "preserves the value", I11): trap when the value
+          ## does not fit `callee` — a SIZE DECREASE (§4.2 narrow row) or, at the same or a larger width,
+          ## a signedness change (§4.2 numeric row, #881: `u64(x : i64)`, `i8(x : u8)`, `u16(x : i8)`);
+          ## `int_conv_needs_fit` is that decision. Inside `unchecked` (cx.vchk false) it reinterprets:
+          ## zero- or sign-extend the low N bits of a SUB-NATIVE target, identity at native width. The
+          ## operand's width and signedness come from its DECLARED type (strict form 5); an operand with
+          ## no recorded type is a 64-bit word of unknown signedness. A literal operand needs no guard:
+          ## Types §9.1 refuses one outside the target's range at compile time (#564).
           ## (`callee` is the target-type name; a brand over a sub-width narrows via its `U(v)` desugar.)
           mut src_bytes : usize = 8
           if octs.n != 0 {
@@ -18721,10 +18759,18 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             sbu := brand_underlying(cx.decls, cx.src, sbn.s, sbn.n)
             src_bytes = if sbu.n != 0 { scalar_byte_size(cx.src, sbu.s, sbu.n) } else { scalar_byte_size(cx.src, sbn.s, sbn.n) }
           }
-          push_str(sb, "  popq %rax\n")
-          if cx.vchk and src_bytes > bitcast_narrow_bytes(callee) and not expr_is_numlit(a0) { emit_int_fit_guard(sb, callee, is_unsigned_expr(a0, cx)) }
-          emit_int_narrow_reg(sb, callee)
-          push_str(sb, "  pushq %rax\n")
+          sg := int_operand_sign(a0, octs, cx)
+          guard := cx.vchk and (not expr_is_numlit(a0)) and int_conv_needs_fit(callee, sg, src_bytes)
+          narrow := is_narrowing_conv(callee)
+          if guard or narrow {
+            push_str(sb, "  popq %rax\n")
+            if guard {
+              src_u := match sg { IsUnsigned => { true }; IsSigned | IsUnknown => { false } }
+              emit_int_fit_guard(sb, callee, src_u)
+            }
+            if narrow { emit_int_narrow_reg(sb, callee) }
+            push_str(sb, "  pushq %rax\n")
+          }
         }
         ## §8.1 `@require(pred) T` VALIDITY CONTRACT: the value just constructed as `T(v)` is on the
         ## stack; when `T` (here `callee`) is a require-typed alias, CALL `pred(value)` and TRAP (`ud2`)

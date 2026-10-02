@@ -8737,7 +8737,11 @@ run unsigned_div 63
 # plain `run`, so the sweeps assert the twins trap too.
 run conv_narrow 42
 run conv_narrow_trap 132
+# Types §4.4 + I11 (§4.2 numeric row): a CHECKED signedness change of a value the target cannot hold
+# traps (#881); `unchecked` keeps the reinterpretation (conv_signed). Plain `run`: the twins trap too.
 run conv_signed 42
+run conv_signed_trap 132
+run conv_signed_width_trap 132
 run_x86 checked_array_oob 132
 run_x86 checked_agg_array_oob 132
 run_x86 checked_global_arr_read_oob 132
