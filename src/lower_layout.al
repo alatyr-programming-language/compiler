@@ -933,7 +933,7 @@ pub field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
 ## `{0,0}` when the span is not an array type (no leading `[`). The layout dual of `lower::array_elem_span`
 ## (duplicated here so `lower_layout` stays self-contained — a leaf like `streq`/`decl_at`). Drives the
 ## `[T; N]` field-width fold in `field_words`/`field_word_offset` below.
-arr_field_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
+pub arr_field_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
   if tl < 2 { return LSpan(s = 0, n = 0) }
   if str_at((src + ts), 1) != "[" { return LSpan(s = 0, n = 0) }
   mut es := ts + 1

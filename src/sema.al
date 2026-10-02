@@ -8469,7 +8469,7 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   r := check_expr_core(e, decls, upto, src, a, locals, nloc)
   if ir::sty_on() {
     match r {
-      Result::Ok(t) => { sema_vty_record(e, t, decls, src); sema_vty_var(e, locals, nloc, src, decls) }
+      Result::Ok(t) => { sema_vty_record(e, t, decls, src); sema_vty_var(e, locals, nloc, src, decls); sema_spell_record(e, locals, nloc, decls, src, a) }
       Result::Err(x) => {}
     }
   }
@@ -8508,21 +8508,20 @@ sema_vty_var := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, src : ptr(u8
 ## annotation, else its initializer's record, where a literal initializer takes the documented default
 ## `i64` (Types §9.1, as an unannotated local's does).
 sema_vty_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ir::VTy {
-  ann := global_type_span(decls, src, s, n)
-  if ann.n != 0 { return sema_vty_name(src, ann.s, ann.n, decls) }
-  cnt := rt::vec_len(deref(decls))
-  mut r : ir::VTy = ir::vty_unknown()
-  mut i : usize = 0
-  while i < cnt {
-    d := deref(decl_get(decls, i))
-    ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
-    if not d.is_fn and unchecked bitcast(usize, d.value) != 0 and streq(src, d.name_start, d.name_len, s, n) {
-      r = ir::sty_get(d.value)
-      if ir::vty_is_lit(r) { r = ir::vty_s(8) }
+  di := sema_rec_decl(decls, src, s, n, false)
+  match di {
+    Some(i) => {
+      d := deref(decl_get(decls, usize(i)))
+      ann := local_type_span(src, d.name_start, d.name_len)
+      if ann.n != 0 { return sema_vty_spell(sema_spell_at(ann.s, ann.n), decls, src) }
+      ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
+      if unchecked bitcast(usize, d.value) == 0 { return ir::vty_unknown() }
+      r : ir::VTy = ir::sty_get(d.value)
+      if ir::vty_is_lit(r) { return ir::vty_s(8) }
+      r
     }
-    i += 1
+    None => { ir::vty_unknown() }
   }
-  r
 }
 ## Record `e`'s value type from the `Ty` `check_expr` answered, and remember it as a census site.
 sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)) {
@@ -8598,7 +8597,7 @@ sema_vty_kind := fn(k : TyKind) -> ir::VTy {
 sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -> ir::VTy {
   sv : ir::VTy = sema_vty_scalar(src, s, n)
   if ir::vty_known(sv) { return sv }
-  bu := brand_underlying(decls, src, s, n)
+  bu := sema_brand_underlying(decls, rt::vec_len(deref(decls)), src, s, n)
   if bu.n != 0 { return sema_vty_scalar(src, bu.s, bu.n) }
   sv
 }
@@ -8734,9 +8733,7 @@ sema_vty_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Opti
     a0 := deref(arg_at(ah, "argument list ended early"))
     return sema_vty_child(a0.e)
   }
-  ct := expr_call_result_ty(e, decls, rt::vec_len(deref(decls)), src)
-  if ct.nl != 0 { return sema_vty_name(src, ct.ns, ct.nl, decls) }
-  ir::vty_unknown()
+  sema_vty_spell(sema_spell_call(cs, cl, na, decls, src), decls, src)
 }
 ## A context gives the literal-only expression `e` the type `t`: rewrite its record, and its literal
 ## parts' (an arithmetic operand, an `unchecked` body, a value `if`'s arms).
@@ -8760,6 +8757,284 @@ sema_vty_ctx := fn(e : ptr(Expr), s : usize, n : usize, decls : ptr(rt::Vec), sr
   if not ir::sty_on() or n == 0 { return }
   t : ir::VTy = sema_vty_name(src, s, n, decls)
   if ir::vty_is_int(t) { sema_vty_push(e, t) }
+}
+## ── docs/ir.md §3.8 item 8: the spelling of a value's type ─────────────────────────────────────────────
+##
+## `check_expr` answers a `Ty` the checker can afford to be tolerant with: it resolves names among the
+## declarations BEFORE the one being checked (`upto`), leaves a qualified callee's result, a `deref`, an
+## element and a value read through an unknown base UNKNOWN, and keeps a pointer's pointee only when it
+## is a struct or enum. That is the verdict's business and stays as it is. The recorder needs the
+## concrete type wherever the program declares one, so beside each node's value type it records the
+## SPELLING of that type (`ir::TySpell`, the declaration text naming it) and derives the value type from
+## it. Every step reads a declaration through the resolver the checker or the layout already uses —
+## `type_decl_index` (Modules §3 ranking) for a type, the visibility check's module-segment match for a
+## qualified name, `ptr_target_pointee` / `arr_field_elem_span` / `typearg_at` / `param_pos` for the
+## parts of a spelling — over the WHOLE program, since a declaration's position in it is not a scope rule
+## for types or functions. Where the type depends on an instance (a generic's type parameter) or no
+## single declaration answers (an overload set, two equally ranked candidates), nothing is recorded:
+## `VcUnknown`, never a guess.
+sema_spell_none := fn() -> ir::TySpell { ir::TySpell(s = 0, n = 0) }
+sema_spell_at := fn(s : usize, n : usize) -> ir::TySpell { ir::TySpell(s = s, n = n) }
+## Does the spelling `[s, s+n)` mention a type parameter of the declaration whose parameter list is
+## `ph` — any parameter of a generic type (`any`), only the `T : type` ones of a fn? Such a type is
+## the instance's, not the declaration's.
+sema_spell_mentions_param := fn(ph : Option(ptr(mut Param)), src : ptr(u8), s : usize, n : usize, any : bool) -> bool {
+  mut i : usize = 0
+  while i < n {
+    mut j : usize = i
+    while j < n and sema_gref_ident_byte(src, s + j) { j += 1 }
+    if j > i {
+      mut pp := ph
+      loop {
+        match pp {
+          Some(ppq) => {
+            pm := deref(param_p(ppq))
+            if streq(src, pm.ns, pm.nl, s + i, j - i) and (any or str_at((src + pm.ts), pm.tl) == "type") { return true }
+            pp = pm.next
+          }
+          None => { break }
+        }
+      }
+      i = j
+    } else {
+      i += 1
+    }
+  }
+  false
+}
+## The spelling of a declared type `[s, s+n)` written in the declaration being checked, unless it is
+## that declaration's type parameter or mentions one.
+sema_spell_decl := fn(s : usize, n : usize, src : ptr(u8)) -> ir::TySpell {
+  if n == 0 or sema_spell_mentions_param(SEMA_DECL_PARAMS, src, s, n, false) { return sema_spell_none() }
+  sema_spell_at(s, n)
+}
+## The kernel value type the spelling names: a scalar or a brand's underlying scalar (`sema_vty_name`),
+## else the class its resolved kind decides (an aggregate or a pointer).
+sema_vty_spell := fn(sp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
+  if sp.n == 0 { return ir::vty_unknown() }
+  vt : ir::VTy = sema_vty_name(src, sp.s, sp.n, decls)
+  if ir::vty_known(vt) { return vt }
+  sema_vty_kind(resolve_kind(src, sp.s, sp.n, decls, rt::vec_len(deref(decls))))
+}
+## The one declaration a name `[s, s+n)` written at `s` denotes, of the kind a call or a value read
+## wants (`want_fn`: a fn; else a module-level value binding). A qualified name is matched by its module
+## head (the segment match `sema_vis_pair` applies; a root alias `strbuf := rt` or a path alias
+## `vec := alloc::vec` is followed one hop, as `sema_qual_head_kinds` follows it). A bare name with one
+## candidate is that candidate; with several, the writing module's Modules §3 rank decides
+## (`type_mod_rank_from`, the rule `type_decl_index` applies to a type). `None` when nothing answers or
+## two candidates share the best rank — an overload set is not resolved here.
+sema_rec_decl := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, want_fn : bool) -> Option(u64) {
+  if n == 0 { return Option(u64).None }
+  cnt := rt::vec_len(deref(decls))
+  g := sema_gref_split(src, s, n)
+  mut ns := s
+  mut nl := n
+  mut hs : usize = 0
+  mut hl : usize = 0
+  if g.qual { ns = g.ns; nl = g.nl; hs = g.ms; hl = g.ml }
+  if nl == 0 { return Option(u64).None }
+  if g.qual and not sema_head_is_module(decls, src, hs, hl) {
+    al := sema_rec_head_alias(decls, src, hs, hl)
+    hs = al.s
+    hl = al.n
+    if hl == 0 { return Option(u64).None }
+  }
+  wm := sema_span_module(decls, src, s)
+  mut found : Option(u64) = Option(u64).None
+  mut hits : usize = 0
+  mut best : i64 = 0 - 2
+  mut at_best : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    mut kind_ok := d.kind == 1
+    if not want_fn { kind_ok = d.kind == 0 and not d.is_fn and d.arity == 0 and d.ret_tl == 0 }
+    if kind_ok and streq(src, d.name_start, d.name_len, ns, nl) and (not g.qual or sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl)) {
+      hits += 1
+      mut r : i64 = 0 - 1
+      if wm.found { r = lower_layout::type_mod_rank_from(src, d.mod_start, d.mod_len, wm.s, wm.n) }
+      if r > best { best = r; at_best = 1; found = Option(u64).Some(u64(i)) }
+      else if r == best { at_best += 1 }
+    }
+    i += 1
+  }
+  if hits == 1 { return found }
+  if hits == 0 or best < 0 or at_best != 1 { return Option(u64).None }
+  found
+}
+## Does some declaration live in the module `[hs, hs+hl)` names (by path, `std::fmt` ~ `std__fmt`)?
+sema_head_is_module := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize) -> bool {
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.mod_len != 0 and sema_mod_seg_eq(src, d.mod_start, d.mod_len, hs, hl) { return true }
+    i += 1
+  }
+  false
+}
+## The module path a head ALIAS `[hs, hs+hl)` stands for, in either parser shape `sema_qual_head_kinds`
+## names (a path alias's `ret` span, a root alias's `Var` value), when exactly one alias of that name
+## exists and its target is a module; `{0,0}` otherwise.
+sema_rec_head_alias := fn(decls : ptr(rt::Vec), src : ptr(u8), hs : usize, hl : usize) -> ir::TySpell {
+  cnt := rt::vec_len(deref(decls))
+  mut ts : usize = 0
+  mut tl : usize = 0
+  mut hits : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if not d.is_fn and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, hs, hl) {
+      if d.ret_tl != 0 { ts = d.ret_ts; tl = d.ret_tl; hits += 1 }
+      ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
+      else if unchecked bitcast(usize, d.value) != 0 {
+        rv := expr_var_span(d.value)
+        if rv.n != 0 { ts = rv.s; tl = rv.n; hits += 1 }
+      }
+    }
+    i += 1
+  }
+  if hits != 1 or not sema_head_is_module(decls, src, ts, tl) { return sema_spell_none() }
+  sema_spell_at(ts, tl)
+}
+## A call's result type: an integer conversion or a brand constructor is its callee's name (Types §4.3,
+## §4.2); a call of one resolved fn is that fn's `-> R`, unless `R` is the callee's type parameter.
+sema_spell_call := fn(cs : usize, cl : usize, na : usize, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::TySpell {
+  if cl == 0 { return sema_spell_none() }
+  cnt := rt::vec_len(deref(decls))
+  if na == 1 and (sema_builtin_integer_cast_name(str_at((src + cs), cl)) or sema_brand_underlying(decls, cnt, src, cs, cl).n != 0) { return sema_spell_at(cs, cl) }
+  di := sema_rec_decl(decls, src, cs, cl, true)
+  match di {
+    Some(i) => {
+      d := deref(decl_get(decls, usize(i)))
+      if d.ret_tl == 0 or sema_spell_mentions_param(d.params_head, src, d.ret_ts, d.ret_tl, false) { return sema_spell_none() }
+      sema_spell_at(d.ret_ts, d.ret_tl)
+    }
+    None => { sema_spell_none() }
+  }
+}
+## The declared type of field `[fs, fs+fl)` of the struct the spelling `bs` names, or of the struct its
+## `ptr(…)` points at (the checker's own auto-deref): the field's annotation, with a generic struct's
+## type parameter replaced by the instance's argument (`Box(u64)`'s `v : T` is `u64`); a field whose
+## type only mentions a parameter (`ptr(T)`) has no spelling of its own.
+sema_spell_field := fn(bs : ir::TySpell, fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  if bs.n == 0 { return sema_spell_none() }
+  mut ts := bs.s
+  mut tn := bs.n
+  pn := lower_layout::ptr_target_pointee_n(src, ts, tn)
+  if pn != 0 { ts = lower_layout::ptr_target_pointee_s(src, ts, tn); tn = pn }
+  bn := base_type_name(src, ts, tn)
+  if bn.n == 0 { return sema_spell_none() }
+  di := type_decl_index(decls, rt::vec_len(deref(decls)), src, bn.s, bn.n)
+  if di == 0 { return sema_spell_none() }
+  d := deref(decl_get(decls, di - 1))
+  if d.kind != 2 { return sema_spell_none() }
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) {
+          if d.is_generic {
+            pos := lower_layout::param_pos(decls, di - 1, src, fd.ts, fd.tl, deref(a))
+            if pos >= 0 {
+              ta := typearg_at(src, bn.s, bn.n, usize(pos))
+              return sema_spell_at(ta.s, ta.n)
+            }
+            if sema_spell_mentions_param(d.params_head, src, fd.ts, fd.tl, true) { return sema_spell_none() }
+          }
+          return sema_spell_at(fd.ts, fd.tl)
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  sema_spell_none()
+}
+## What `deref` of a value of type `sp` reads: the pointee inside `ptr(…)`.
+sema_spell_pointee := fn(sp : ir::TySpell, src : ptr(u8)) -> ir::TySpell {
+  if sp.n == 0 { return sema_spell_none() }
+  sema_spell_at(lower_layout::ptr_target_pointee_s(src, sp.s, sp.n), lower_layout::ptr_target_pointee_n(src, sp.s, sp.n))
+}
+## What an element read of a value of type `sp` reads: `[T; N]`'s `T`, `Slice(T)`'s `T`.
+sema_spell_elem := fn(sp : ir::TySpell, src : ptr(u8)) -> ir::TySpell {
+  if sp.n == 0 { return sema_spell_none() }
+  ae := lower_layout::arr_field_elem_span(src, sp.s, sp.n)
+  if ae.n != 0 { return sema_spell_at(ae.s, ae.n) }
+  bn := base_type_name(src, sp.s, sp.n)
+  if bn.n == 5 and str_at((src + bn.s), 5) == "Slice" {
+    ta := typearg_at(src, bn.s, bn.n, 0)
+    return sema_spell_at(ta.s, ta.n)
+  }
+  sema_spell_none()
+}
+## What `v?` yields for a `v` of type `sp`: the success payload of `Result(T, E)` / `Option(T)`.
+sema_spell_try := fn(sp : ir::TySpell, src : ptr(u8)) -> ir::TySpell {
+  if sp.n == 0 { return sema_spell_none() }
+  bn := base_type_name(src, sp.s, sp.n)
+  w := str_at((src + bn.s), bn.n)
+  if w == "Result" or w == "Option" {
+    ta := typearg_at(src, bn.s, bn.n, 0)
+    return sema_spell_at(ta.s, ta.n)
+  }
+  sema_spell_none()
+}
+## The declared type of the module-level value binding `[s, s+n)`: its annotation, else the type its
+## initializer was recorded with.
+sema_spell_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ir::TySpell {
+  di := sema_rec_decl(decls, src, s, n, false)
+  match di {
+    Some(i) => {
+      d := deref(decl_get(decls, usize(i)))
+      ann := local_type_span(src, d.name_start, d.name_len)
+      if ann.n != 0 { return sema_spell_at(ann.s, ann.n) }
+      ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
+      if unchecked bitcast(usize, d.value) != 0 { return ir::sty_spell_get(d.value) }
+      sema_spell_none()
+    }
+    None => { sema_spell_none() }
+  }
+}
+## The spelling of `e`'s type from its shape and its children's spellings (they are recorded first).
+sema_spell_shape := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  match deref(e) {
+    Expr::Var(vs, vl) => {
+      lo : Option(u64) = sema_vty_local_ns(locals, nloc, src, vs, vl)
+      match lo {
+        Some(dns) => { ir::sty_bind_spell_get(usize(dns)) }
+        None => { sema_spell_global(decls, src, vs, vl) }
+      }
+    }
+    Expr::Call(cs, cl, na, ah) => { sema_spell_call(cs, cl, na, decls, src) }
+    Expr::Field(b, fs, fl) => { sema_spell_field(ir::sty_spell_get(b), fs, fl, decls, src, a) }
+    Expr::Deref(p) => { sema_spell_pointee(ir::sty_spell_get(p), src) }
+    Expr::Index(b, i) => { sema_spell_elem(ir::sty_spell_get(b), src) }
+    Expr::Try(inner) => { sema_spell_try(ir::sty_spell_get(inner), src) }
+    Expr::Unchecked(inner) => { ir::sty_spell_get(inner) }
+    Expr::Bitcast(inner, ts, tl) => { sema_spell_decl(ts, tl, src) }
+    Expr::StructLit(scs, scl, snf, sfh) => { sema_spell_at(scs, scl) }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit | Expr::AddrOf | Expr::StrLit
+      | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { sema_spell_none() }
+  }
+}
+## Record `e`'s spelling, and the value type it names where the record so far has none.
+sema_spell_record := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) {
+  sp : ir::TySpell = sema_spell_shape(e, locals, nloc, decls, src, a)
+  if sp.n == 0 { return }
+  ir::sty_spell_put(e, sp)
+  cur : ir::VTy = ir::sty_get(e)
+  if ir::vty_known(cur) or ir::vty_is_lit(cur) { return }
+  vt : ir::VTy = sema_vty_spell(sp, decls, src)
+  if ir::vty_known(vt) { ir::sty_put(e, vt) }
+}
+## A binding declared with the spelling `sp`: its value type and its spelling, read by each use.
+sema_spell_bind := fn(ns : usize, sp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) {
+  ir::sty_bind_spell_put(ns, sp)
+  cur : ir::VTy = ir::sty_bind_get(ns)
+  if ir::vty_known(cur) { return }
+  vt : ir::VTy = sema_vty_spell(sp, decls, src)
+  if ir::vty_known(vt) { ir::sty_bind_put(ns, vt) }
 }
 ## The declared result type of the fn being checked, for `return` contexts.
 mut SEMA_VTY_RET_S : usize = 0
@@ -12320,6 +12595,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           mut bt0 : u8 = tag_of_kind(dt0.kind)
           if local_is_mut(src, ns) { bt0 = tag_with_mut(bt0) }
           lvec_push(deref(locals), Local(ns = ns, nl = nl, tag = bt0, prov = 0, tns = dt0.ns, tnl = dt0.nl))
+          if ir::sty_on() { sema_spell_bind(ns, sema_spell_decl(ann0.s, ann0.n, src), decls, src) }
           da_push_root(da, ns, nl)
           if kind_is_array(dt0.kind) { da_seed_array(deref(da), src, ns, nl, dt0) }
           cnt += 1
@@ -12365,6 +12641,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           mut bvt : ir::VTy = ir::sty_get(v)
           if ann.n != 0 { bvt = sema_vty_name(src, ann.s, ann.n, decls) }
           ir::sty_bind_put(ns, bvt)
+          ## docs/ir.md §3.8 item 8 — and the spelling its uses read a field, a pointee or an element through.
+          mut bsp : ir::TySpell = ir::sty_spell_get(v)
+          if ann.n != 0 { bsp = sema_spell_decl(ann.s, ann.n, src) }
+          sema_spell_bind(ns, bsp, decls, src)
         }
         ## Comptime §2.2 — the bounded worker slice admits only closed scalar literals/arithmetic and
         ## nullary user-enum values. The lower erases such bindings, so reject a runtime-dependent or
@@ -13183,6 +13463,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           vtag = TyKind.TyInt
         } else {
           tf := check_expr_da(flo, decls, upto, src, a, locals, cnt, da)?
+          ## docs/ir.md §3.8 item 8 — a for-in variable is an element of the iterable.
+          if ir::sty_on() { sema_spell_bind(fns, sema_spell_elem(ir::sty_spell_get(flo), src), decls, src) }
         }
         ## bind the loop variable (int for a range; the element type — left UNKNOWN, poison-tolerant —
         ## for a for-in) before checking the body.
@@ -14448,6 +14730,8 @@ check_fn := fn(d : Decl, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : 
         mut pprov : u8 = 0
         if pm.pmode == 1 { pprov = prov_array_param() }
         lvec_push(locals, Local(ns = pm.ns, nl = pm.nl, tag = pbyte, prov = pprov, tns = pt.ns, tnl = pt.nl))
+        ## docs/ir.md §3.8 item 8 — a parameter's declared type, read by each use of it.
+        if ir::sty_on() { sema_spell_bind(pm.ns, sema_spell_decl(pm.ts, pm.tl, src), decls, src) }
         pp = pm.next
       }
       None => { break }

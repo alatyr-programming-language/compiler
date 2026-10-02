@@ -2489,9 +2489,12 @@ sty_grow := fn() {
   STY_USED = nu
   STY_CAP = nc
 }
-## A new record slot of `size(VTy)` bytes from the current chunk (a fresh chunk when it is spent).
+## A new record slot from the current chunk (a fresh chunk when it is spent), large enough for either
+## record kind the table holds: a `VTy` or a `TySpell`.
 sty_record := fn() -> usize {
-  rs : usize = size(VTy)
+  mut rs : usize = size(VTy)
+  sp : usize = size(TySpell)
+  if sp > rs { rs = sp }
   if STY_ROFF + rs > STY_RCAP {
     STY_RCAP = 1048576
     STY_RB = sty_map(STY_RCAP)
@@ -2527,7 +2530,7 @@ sty_put_key := fn(k : usize, t : VTy) {
     }
     None => {
       ra := sty_record()
-      ## unchecked-ok: `sty_record` answered a fresh `size(VTy)`-byte slot of a live mapping.
+      ## unchecked-ok: `sty_record` answered a fresh slot of a live mapping, at least `size(VTy)` bytes.
       rp2 : ptr(mut VTy) = unchecked bitcast(ptr(mut VTy), ra)
       deref(rp2) = t
       if sty_place(STY_KEYS, STY_VALS, STY_USED, STY_CAP, k, ra) { STY_N = STY_N + 1 }
@@ -2565,6 +2568,58 @@ sty_get_key := fn(k : usize) -> VTy {
     None => {}
   }
   VTy(cls = VCls.VcAbsent, bytes = 0, sg = Sgn.SgNone)
+}
+## docs/ir.md §3.8 item 8 — the SPELLING of the type sema resolved for a node or a binding: the source
+## span `[s, s+n)` of the declaration text that names it (a parameter's or a field's annotation, a
+## callee's `-> R`, a pointer's pointee inside `ptr(…)`), `n == 0` when sema resolved none. It is the
+## recorder's own companion, never read by a builder: a value type (`VTy`) is enough to emit a scalar,
+## but reaching the scalar a field, a `deref` or an element holds needs the aggregate or pointer it is
+## read from, and only its spelling names that. Same table, own key space (bit 62), so a spelling key
+## meets neither a node key (an arena address) nor a binding key (bit 63 alone).
+pub TySpell := struct { s : usize, n : usize }
+spell_key := fn(k : usize) -> usize { k | shl(usize(1), 62) }
+pub sty_spell_put := fn(e : ptr(Expr), t : TySpell) {
+  ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
+  k := unchecked bitcast(usize, e)
+  sty_spell_put_key(spell_key(k), t)
+}
+pub sty_spell_get := fn(e : ptr(Expr)) -> TySpell {
+  ## unchecked-ok: the node's address is the table key.
+  k := unchecked bitcast(usize, e)
+  sty_spell_get_key(spell_key(k))
+}
+pub sty_bind_spell_put := fn(ns : usize, t : TySpell) { sty_spell_put_key(spell_key(bind_key(ns)), t) }
+pub sty_bind_spell_get := fn(ns : usize) -> TySpell { sty_spell_get_key(spell_key(bind_key(ns))) }
+sty_spell_put_key := fn(k : usize, t : TySpell) {
+  if STY_N * 2 >= STY_CAP { sty_grow() }
+  ex := sty_find(k)
+  match ex {
+    Some(rw) => {
+      ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
+      rp : ptr(mut TySpell) = unchecked bitcast(ptr(mut TySpell), usize(rw))
+      deref(rp) = t
+    }
+    None => {
+      ra := sty_record()
+      ## unchecked-ok: `sty_record` answered a fresh slot of a live mapping, at least `size(TySpell)` bytes.
+      rp2 : ptr(mut TySpell) = unchecked bitcast(ptr(mut TySpell), ra)
+      deref(rp2) = t
+      if sty_place(STY_KEYS, STY_VALS, STY_USED, STY_CAP, k, ra) { STY_N = STY_N + 1 }
+    }
+  }
+}
+sty_spell_get_key := fn(k : usize) -> TySpell {
+  ex := sty_find(k)
+  match ex {
+    Some(rw) => {
+      ## unchecked-ok: every value word under a spelling key is a record address `sty_record` handed out.
+      rp : ptr(mut TySpell) = unchecked bitcast(ptr(mut TySpell), usize(rw))
+      t : TySpell = deref(rp)
+      return t
+    }
+    None => {}
+  }
+  TySpell(s = 0, n = 0)
 }
 
 ## ───────────────────────────── the signedness differential census (docs/ir.md §3.8.5) ─────────────────────────────
