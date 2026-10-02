@@ -8775,6 +8775,27 @@ sema_vty_ctx := fn(e : ptr(Expr), s : usize, n : usize, decls : ptr(rt::Vec), sr
 ## `VcUnknown`, never a guess.
 sema_spell_none := fn() -> ir::TySpell { ir::TySpell(s = 0, n = 0) }
 sema_spell_at := fn(s : usize, n : usize) -> ir::TySpell { ir::TySpell(s = s, n = n) }
+## A declared type's WHOLE spelling. The parser keeps only the head token of some annotations (a
+## parameter's or a field's `ptr(mut T)` is recorded as `ptr`, a generic instance as `Vec`) and leaves
+## the `( … )` group in the source right after it — the recovery `ptr_pointee_span` and `typearg_at`
+## already rely on — so a head followed by `(` is extended over its balanced group.
+sema_spell_type := fn(s : usize, n : usize, src : ptr(u8)) -> ir::TySpell {
+  if n == 0 { return sema_spell_none() }
+  if str_at((src + s + n), 1) != "(" { return sema_spell_at(s, n) }
+  mut p : usize = s + n
+  mut depth : usize = 0
+  loop {
+    c := str_at((src + p), 1)
+    if c == "(" { depth += 1 }
+    else if c == ")" {
+      depth -= 1
+      if depth == 0 { break }
+    }
+    else if c == "\n" or c == "{" or c == "}" { return sema_spell_none() }
+    p += 1
+  }
+  sema_spell_at(s, p + 1 - s)
+}
 ## Does the spelling `[s, s+n)` mention a type parameter of the declaration whose parameter list is
 ## `ph` — any parameter of a generic type (`any`), only the `T : type` ones of a fn? Such a type is
 ## the instance's, not the declaration's.
@@ -8805,8 +8826,9 @@ sema_spell_mentions_param := fn(ph : Option(ptr(mut Param)), src : ptr(u8), s : 
 ## The spelling of a declared type `[s, s+n)` written in the declaration being checked, unless it is
 ## that declaration's type parameter or mentions one.
 sema_spell_decl := fn(s : usize, n : usize, src : ptr(u8)) -> ir::TySpell {
-  if n == 0 or sema_spell_mentions_param(SEMA_DECL_PARAMS, src, s, n, false) { return sema_spell_none() }
-  sema_spell_at(s, n)
+  sp : ir::TySpell = sema_spell_type(s, n, src)
+  if sp.n == 0 or sema_spell_mentions_param(SEMA_DECL_PARAMS, src, sp.s, sp.n, false) { return sema_spell_none() }
+  sp
 }
 ## The kernel value type the spelling names: a scalar or a brand's underlying scalar (`sema_vty_name`),
 ## else the class its resolved kind decides (an aggregate or a pointer).
@@ -8907,8 +8929,9 @@ sema_spell_call := fn(cs : usize, cl : usize, na : usize, decls : ptr(rt::Vec), 
   match di {
     Some(i) => {
       d := deref(decl_get(decls, usize(i)))
-      if d.ret_tl == 0 or sema_spell_mentions_param(d.params_head, src, d.ret_ts, d.ret_tl, false) { return sema_spell_none() }
-      sema_spell_at(d.ret_ts, d.ret_tl)
+      rs : ir::TySpell = sema_spell_type(d.ret_ts, d.ret_tl, src)
+      if rs.n == 0 or sema_spell_mentions_param(d.params_head, src, rs.s, rs.n, false) { return sema_spell_none() }
+      rs
     }
     None => { sema_spell_none() }
   }
@@ -8923,6 +8946,14 @@ sema_spell_field := fn(bs : ir::TySpell, fs : usize, fl : usize, decls : ptr(rt:
   mut tn := bs.n
   pn := lower_layout::ptr_target_pointee_n(src, ts, tn)
   if pn != 0 { ts = lower_layout::ptr_target_pointee_s(src, ts, tn); tn = pn }
+  ## a view (`str`, `[T]`) is the library pair `Slice(T)` (Types §7): its fields are that struct's
+  if sema_spell_is_view(sema_spell_at(ts, tn), src) {
+    vi := sema_view_decl(decls, src)
+    match vi {
+      Some(vdi) => { return sema_spell_view_field(usize(vdi), sema_spell_elem(sema_spell_at(ts, tn), src), fs, fl, decls, src, a) }
+      None => { return sema_spell_none() }
+    }
+  }
   bn := base_type_name(src, ts, tn)
   if bn.n == 0 { return sema_spell_none() }
   di := type_decl_index(decls, rt::vec_len(deref(decls)), src, bn.s, bn.n)
@@ -8941,9 +8972,60 @@ sema_spell_field := fn(bs : ir::TySpell, fs : usize, fl : usize, decls : ptr(rt:
               ta := typearg_at(src, bn.s, bn.n, usize(pos))
               return sema_spell_at(ta.s, ta.n)
             }
-            if sema_spell_mentions_param(d.params_head, src, fd.ts, fd.tl, true) { return sema_spell_none() }
           }
-          return sema_spell_at(fd.ts, fd.tl)
+          fsp : ir::TySpell = sema_spell_type(fd.ts, fd.tl, src)
+          if d.is_generic and sema_spell_mentions_param(d.params_head, src, fsp.s, fsp.n, true) { return sema_spell_none() }
+          return fsp
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  sema_spell_none()
+}
+## Is `sp` a view spelling — `str` (`[u8]`) or `[T]` — rather than a declared struct (Types §7)?
+sema_spell_is_view := fn(sp : ir::TySpell, src : ptr(u8)) -> bool {
+  if sp.n == 0 { return false }
+  if sp.n == 3 and str_at((src + sp.s), 3) == "str" { return true }
+  if str_at((src + sp.s), 1) != "[" { return false }
+  mut i : usize = 1
+  while i < sp.n {
+    if str_at((src + sp.s + i), 1) == ";" { return false }
+    i += 1
+  }
+  true
+}
+## The library's `Slice` declaration (lib/base/slice.al), the layout every view has, when exactly one
+## struct of that name is declared.
+sema_view_decl := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> Option(u64) {
+  cnt := rt::vec_len(deref(decls))
+  mut r : Option(u64) = Option(u64).None
+  mut hits : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.kind == 2 and d.name_len == 5 and str_at((src + d.name_start), 5) == "Slice" { r = Option(u64).Some(u64(i)); hits += 1 }
+    i += 1
+  }
+  if hits != 1 { return Option(u64).None }
+  r
+}
+## Field `[fs, fs+fl)` of a view whose element spelling is `el` (`{0,0}` for `str`, whose `u8` has no
+## spelling of its own): the `Slice` field's annotation, `T` replaced by the element.
+sema_spell_view_field := fn(di : usize, el : ir::TySpell, fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  d := deref(decl_get(decls, di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, fs, fl) {
+          pos := lower_layout::param_pos(decls, di, src, fd.ts, fd.tl, deref(a))
+          if pos >= 0 { return el }
+          fsp : ir::TySpell = sema_spell_type(fd.ts, fd.tl, src)
+          if sema_spell_mentions_param(d.params_head, src, fsp.s, fsp.n, true) { return sema_spell_none() }
+          return fsp
         }
         f = fd.next
       }
@@ -8988,7 +9070,7 @@ sema_spell_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usiz
     Some(i) => {
       d := deref(decl_get(decls, usize(i)))
       ann := local_type_span(src, d.name_start, d.name_len)
-      if ann.n != 0 { return sema_spell_at(ann.s, ann.n) }
+      if ann.n != 0 { return sema_spell_type(ann.s, ann.n, src) }
       ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
       if unchecked bitcast(usize, d.value) != 0 { return ir::sty_spell_get(d.value) }
       sema_spell_none()
@@ -9014,14 +9096,101 @@ sema_spell_shape := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : 
     Expr::Unchecked(inner) => { ir::sty_spell_get(inner) }
     Expr::Bitcast(inner, ts, tl) => { sema_spell_decl(ts, tl, src) }
     Expr::StructLit(scs, scl, snf, sfh) => { sema_spell_at(scs, scl) }
+    ## a sub-slice of a view is a view of the same element type
+    Expr::Slice(sb, slo, shi) => {
+      bsp : ir::TySpell = ir::sty_spell_get(sb)
+      if sema_spell_is_view(bsp, src) { bsp } else { sema_spell_none() }
+    }
     Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit | Expr::AddrOf | Expr::StrLit
-      | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { sema_spell_none() }
+      | Expr::ArrayLit | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { sema_spell_none() }
+  }
+}
+## The declared type of payload component `bi` of the variant `[vs, vs+vl)` (a pattern, possibly
+## qualified `E::V`) of the enum the scrutinee spelling `scs` names — or, with no scrutinee spelling,
+## the enum the pattern's own head names — for an arm binding `nbind` names. The component is read from
+## the variant's `( … )` group in source, as `lower_layout::variant_bind_pointee` reads it; a generic
+## enum's type parameter is replaced by the instance's argument. A binding count that differs from the
+## variant's arity binds a tuple, not a component: no spelling.
+sema_spell_payload := fn(scs : ir::TySpell, vs : usize, vl : usize, nbind : usize, bi : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
+  if vl == 0 { return sema_spell_none() }
+  g := sema_gref_split(src, vs, vl)
+  mut es := scs.s
+  mut en := scs.n
+  if en == 0 and g.qual { es = g.ms; en = g.ml }
+  if en == 0 { return sema_spell_none() }
+  mut vns := vs
+  mut vnl := vl
+  if g.qual { vns = g.ns; vnl = g.nl }
+  ebn := base_type_name(src, es, en)
+  if ebn.n == 0 { return sema_spell_none() }
+  di := type_decl_index(decls, rt::vec_len(deref(decls)), src, ebn.s, ebn.n)
+  if di == 0 { return sema_spell_none() }
+  d := deref(decl_get(decls, di - 1))
+  if d.kind != 3 { return sema_spell_none() }
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(fld_p(fq))
+        if streq(src, fd.ns, fd.nl, vns, vnl) {
+          if fd.arity != nbind or bi >= nbind { return sema_spell_none() }
+          mut op := fd.ns + fd.nl
+          while str_at((src + op), 1) == " " { op += 1 }
+          if str_at((src + op), 1) != "(" { return sema_spell_none() }
+          comp := typearg_at(src, op, 0, bi)
+          if comp.n == 0 { return sema_spell_none() }
+          if d.is_generic {
+            pos := lower_layout::param_pos(decls, di - 1, src, comp.s, comp.n, deref(a))
+            if pos >= 0 {
+              ta := typearg_at(src, ebn.s, ebn.n, usize(pos))
+              return sema_spell_at(ta.s, ta.n)
+            }
+            if sema_spell_mentions_param(d.params_head, src, comp.s, comp.n, true) { return sema_spell_none() }
+          }
+          return sema_spell_at(comp.s, comp.n)
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  sema_spell_none()
+}
+## Bind each payload variable of arm `am` over the scrutinee `sc` with its component's declared type.
+sema_spell_arm_binds := fn(sc : ptr(Expr), am : Arm, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) {
+  if not ir::sty_on() { return }
+  nb := bind_count(am.binds_head)
+  scs : ir::TySpell = ir::sty_spell_get(sc)
+  mut bi : usize = 0
+  mut bd := am.binds_head
+  loop {
+    match bd {
+      Some(bdq) => {
+        sema_spell_bind(bnd_ns(bdq), sema_spell_payload(scs, am.vs, am.vl, nb, bi, decls, src, a), decls, src)
+        bi += 1
+        bd = bnd_next(bdq)
+      }
+      None => { break }
+    }
   }
 }
 ## Record `e`'s spelling, and the value type it names where the record so far has none.
 sema_spell_record := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) {
   sp : ir::TySpell = sema_spell_shape(e, locals, nloc, decls, src, a)
-  if sp.n == 0 { return }
+  if sp.n == 0 {
+    ## an element of `str` is a `u8` (`str` is `[u8]`, Types §7), a type no declaration spells
+    match deref(e) {
+      Expr::Index(ib, ii) => {
+        bsp : ir::TySpell = ir::sty_spell_get(ib)
+        cur0 : ir::VTy = ir::sty_get(e)
+        if not ir::vty_known(cur0) and bsp.n == 3 and str_at((src + bsp.s), 3) == "str" { ir::sty_put(e, ir::vty_u(1)) }
+      }
+      Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+        | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice
+        | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+    }
+    return
+  }
   ir::sty_spell_put(e, sp)
   cur : ir::VTy = ir::sty_get(e)
   if ir::vty_known(cur) or ir::vty_is_lit(cur) { return }
@@ -9608,6 +9777,7 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
                 None => { break }
               }
             }
+            sema_spell_arm_binds(scrut, am, decls, src, a)
             cb := check_expr(am.body, decls, upto, src, a, locals, nl2)?
             lvec_truncate(deref(locals), base)
             nl2 = base
@@ -13269,6 +13439,7 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
                   None => { break }
                 }
               }
+              sema_spell_arm_binds(sc, am, decls, src, a)
               cnt = check_stmts(am.body_stmts, decls, upto, src, a, locals, cnt, da)?
               lvec_truncate(deref(locals), base)
               cnt = base
