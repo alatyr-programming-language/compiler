@@ -750,36 +750,41 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           ment := deref(svec_at(SlotEntry, slots, entry_of(slots, src, msc.s, msc.n)))
           if streq(src, ment.ns, ment.nl, msc.s, msc.n) and ment.ek == 3 { mes = ment.sns; mel = ment.snl }
         }
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          if mes != 0 {
-            mnb := bind_count(am.binds_head)
-            if mnb == 1 {
-              mpty := variant_payload_type(decls, src, mes, mel, am.vs, am.vl, a)
-              if mpty.n != 0 {
-                match am.binds_head {
-                  Some(mbh) => {
-                    mpbn := base_type_name(src, mpty.s, mpty.n)
-                    if struct_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_struct_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, struct_words(decls, src, mpty.s, mpty.n, a)) }
-                    else if enum_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_enum_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, 1 + enum_inst_words(decls, src, mpty.s, mpty.n, a)) }
-                    else if is_niche_folded(src, mes, mel) {
-                      ## #768 — a folded `Some(p)` over `ptr(S)` / `ptr(E)`: type `p` as the pointer-to-struct /
-                      ## pointer-to-enum local an annotation would give it, so `n := deref(p)` in the arm binds a
-                      ## struct copy (the emit-time alias in `emit_match` carries the same kind).
-                      mpt := variant_bind_pointee(decls, src, mes, mel, am.vs, am.vl, 1, 0, a)
-                      mpk := pointee_agg_kind(decls, src, mpt.s, mpt.n)
-                      if mpk == 7 { bind_ptrstruct_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
-                      else if mpk == 6 { bind_ptrenum_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if mes != 0 {
+                mnb := bind_count(am.binds_head)
+                if mnb == 1 {
+                  mpty := variant_payload_type(decls, src, mes, mel, am.vs, am.vl, a)
+                  if mpty.n != 0 {
+                    match am.binds_head {
+                      Some(mbh) => {
+                        mpbn := base_type_name(src, mpty.s, mpty.n)
+                        if struct_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_struct_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, struct_words(decls, src, mpty.s, mpty.n, a)) }
+                        else if enum_decl_of(decls, src, mpbn.s, mpbn.n) >= 0 { bind_enum_slot(slots, decls, src, bnd_ns(mbh), bnd_nl(mbh), mpty.s, mpty.n, 1 + enum_inst_words(decls, src, mpty.s, mpty.n, a)) }
+                        else if is_niche_folded(src, mes, mel) {
+                          ## #768 — a folded `Some(p)` over `ptr(S)` / `ptr(E)`: type `p` as the pointer-to-struct /
+                          ## pointer-to-enum local an annotation would give it, so `n := deref(p)` in the arm binds a
+                          ## struct copy (the emit-time alias in `emit_match` carries the same kind).
+                          mpt := variant_bind_pointee(decls, src, mes, mel, am.vs, am.vl, 1, 0, a)
+                          mpk := pointee_agg_kind(decls, src, mpt.s, mpt.n)
+                          if mpk == 7 { bind_ptrstruct_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
+                          else if mpk == 6 { bind_ptrenum_slot(slots, src, bnd_ns(mbh), bnd_nl(mbh), mpt.s, mpt.n) }
+                        }
+                      }
+                      None => {}
                     }
                   }
-                  None => {}
                 }
               }
+              collect_slots(slots, am.body_stmts, src, decls, a, synth, sub, ctslots)
+              arm = am.next
             }
+            None => { break }
           }
-          collect_slots(slots, am.body_stmts, src, decls, a, synth, sub, ctslots)
-          arm = am.next
         }
         s = nx
       }
@@ -858,8 +863,8 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
         s = nx
       }
       Stmt::CompMatch(cmsc, cmah, nx) => {
-        mut car := cmah
-        while car != 0 { cam := deref(arm_p(car)); collect_slots(slots, cam.body_stmts, src, decls, a, synth, sub, ctslots); car = cam.next }
+        mut car : Option(ptr(mut Arm)) = cmah
+        loop { match car { Some(carq) => { cam := deref(arm_p(carq)); collect_slots(slots, cam.body_stmts, src, decls, a, synth, sub, ctslots); car = cam.next }; None => { break } } }
         s = nx
       }
     }

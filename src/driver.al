@@ -554,13 +554,18 @@ d_lift_expr := fn(e : ptr(Expr), ms : usize, ml : usize, in out decls : rt::Vec,
   }
 }
 
-d_lift_arms := fn(ah : ptr(mut Arm), ms : usize, ml : usize, in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(mut rt::Arena)) {
-  mut arm := ah
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    d_lift_stmts(am.body_stmts, ms, ml, decls, na, tar)
-    if unchecked bitcast(usize, am.body) != 0 { d_lift_expr(am.body, ms, ml, decls, na, tar) }
-    arm = am.next
+d_lift_arms := fn(ah : Option(ptr(mut Arm)), ms : usize, ml : usize, in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(mut rt::Arena)) {
+  mut arm : Option(ptr(mut Arm)) = ah
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        d_lift_stmts(am.body_stmts, ms, ml, decls, na, tar)
+        if unchecked bitcast(usize, am.body) != 0 { d_lift_expr(am.body, ms, ml, decls, na, tar) }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
 }
 
@@ -839,13 +844,18 @@ d_cap_locals := fn(head : ptr(mut Stmt), na : ptr(mut rt::Arena), locals : ptr(r
       Stmt::AllocWith(ae, b, nx) => { d_cap_locals(b, na, locals, unhandled) }
       Stmt::Match(sc, ah, nx) => {
         ## each arm's payload binds (`E::A(x)` → x) are arm-scoped LOCALS; collect them + recurse arm bodies.
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          mut bd := am.binds_head
-          loop { match bd { Some(bdq) => { rt::vec_push(deref(locals), bnd_ns(bdq) * 1024 + bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }
-          d_cap_locals(am.body_stmts, na, locals, unhandled)
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              mut bd := am.binds_head
+              loop { match bd { Some(bdq) => { rt::vec_push(deref(locals), bnd_ns(bdq) * 1024 + bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }
+              d_cap_locals(am.body_stmts, na, locals, unhandled)
+              arm = am.next
+            }
+            None => { break }
+          }
         }
       }
       Stmt::CompIf(c, th, el, nx) => { d_cap_locals(th, na, locals, unhandled); d_cap_locals(el, na, locals, unhandled) }
@@ -878,12 +888,17 @@ d_cap_free_stmts := fn(head : ptr(mut Stmt), ph : Option(ptr(mut Param)), na : p
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_cap_free(fv, ph, na, decls, src, locals, caps, body, hardreject) }
       Stmt::Match(sc, ah, nx) => {
         d_cap_free(sc, ph, na, decls, src, locals, caps, body, hardreject)
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          d_cap_free_stmts(am.body_stmts, ph, na, decls, src, locals, caps, body, hardreject)
-          if unchecked bitcast(usize, am.body) != 0 { d_cap_free(am.body, ph, na, decls, src, locals, caps, body, hardreject) }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              d_cap_free_stmts(am.body_stmts, ph, na, decls, src, locals, caps, body, hardreject)
+              if unchecked bitcast(usize, am.body) != 0 { d_cap_free(am.body, ph, na, decls, src, locals, caps, body, hardreject) }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
       }
       ## comptime constructs: CompIf is FOLDED (handled like `if` — a capture in the kept branch resolves
@@ -2382,13 +2397,18 @@ d_local_binding := fn(head : ptr(mut Stmt), src : ptr(u8), vs : usize, vl : usiz
 }
 
 ## `d_local_binding` across a match arm list — each arm's statement body is an ordinary nested list.
-d_local_binding_arms := fn(ah : ptr(mut Arm), src : ptr(u8), vs : usize, vl : usize, na : ptr(mut rt::Arena)) -> DLocal {
-  mut arm := ah
+d_local_binding_arms := fn(ah : Option(ptr(mut Arm)), src : ptr(u8), vs : usize, vl : usize, na : ptr(mut rt::Arena)) -> DLocal {
+  mut arm : Option(ptr(mut Arm)) = ah
   mut r := DLocal(ns = 0, nl = 0, init = unchecked bitcast(ptr(Expr), 0))
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    if r.nl == 0 { rb := d_local_binding(am.body_stmts, src, vs, vl, na); if rb.nl != 0 { r = rb } }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if r.nl == 0 { rb := d_local_binding(am.body_stmts, src, vs, vl, na); if rb.nl != 0 { r = rb } }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   r
 }
@@ -2566,10 +2586,10 @@ d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(E
   ## §2.3 — `Some` is present (yield and continue), `None` is absent (leave the loop)
   dummy := parser::newnode(na, Expr.Num(0, 0, 0))
   brk := parser::snode(na, Stmt.Break(unchecked bitcast(ptr(Expr), 0), 0, ast::stmt_null()))
-  armn := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = ast::arm_null(), vs = nos, vl = nol, binds_head = Option.None, body_stmts = brk, hi = 0))
+  armn := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = Option.None, vs = nos, vl = nol, binds_head = Option.None, body_stmts = brk, hi = 0))
   bh := parser::bnode(na, Bind(ns = pys, nl = pyl, next = Option.None))
-  arms := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = armn, vs = sms, vl = sml, binds_head = Option.Some(bh), body_stmts = bindst, hi = 0))
-  mst := parser::snode(na, Stmt.Match(parser::newnode(na, Expr.Var(ops, opl)), arms, ast::stmt_null()))
+  arms := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = Option.Some(armn), vs = sms, vl = sml, binds_head = Option.Some(bh), body_stmts = bindst, hi = 0))
+  mst := parser::snode(na, Stmt.Match(parser::newnode(na, Expr.Var(ops, opl)), Option.Some(arms), ast::stmt_null()))
   ## `__foropt<N> := next(__forit<N>)`, then the match — both inside the loop
   nca := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(its, itl)), next = ast::arg_null()))
   ost := parser::snode(na, Stmt.Assign(ops, opl, parser::newnode(na, Expr.Call(nxs, nxl, 1, nca)), mst))
@@ -2639,12 +2659,17 @@ d_iterfor_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), ph : Option(pt
 }
 
 ## `d_iterfor_stmts` across a match arm list.
-d_iterfor_arms := fn(ah : ptr(mut Arm), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
-  mut arm := ah
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    d_iterfor_stmts(am.body_stmts, body, ph, decls, src, na)
-    arm = am.next
+d_iterfor_arms := fn(ah : Option(ptr(mut Arm)), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  mut arm : Option(ptr(mut Arm)) = ah
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        d_iterfor_stmts(am.body_stmts, body, ph, decls, src, na)
+        arm = am.next
+      }
+      None => { break }
+    }
   }
 }
 
@@ -3606,12 +3631,17 @@ d_manifest_rewrite_expr := fn(e : ptr(Expr), allow : bool, in out nstr : usize, 
     Expr::If(c, t, f) => { d_manifest_rewrite_expr(c, allow, nstr, src, na); d_manifest_rewrite_expr(t, allow, nstr, src, na); d_manifest_rewrite_expr(f, allow, nstr, src, na) }
     Expr::Match(c, ah) => {
       d_manifest_rewrite_expr(c, allow, nstr, src, na)
-      mut ar := ah
-      while ar != 0 {
-        am := deref(arm_p(ar))
-        d_manifest_rewrite_stmts(am.body_stmts, allow, nstr, src, na)
-        if unchecked bitcast(usize, am.body) != 0 { d_manifest_rewrite_expr(am.body, allow, nstr, src, na) }
-        ar = am.next
+      mut ar : Option(ptr(mut Arm)) = ah
+      loop {
+        match ar {
+          Some(arq) => {
+            am := deref(arm_p(arq))
+            d_manifest_rewrite_stmts(am.body_stmts, allow, nstr, src, na)
+            if unchecked bitcast(usize, am.body) != 0 { d_manifest_rewrite_expr(am.body, allow, nstr, src, na) }
+            ar = am.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Call(cs, cl, nn, ah) => {
@@ -3675,13 +3705,18 @@ d_manifest_rewrite_expr := fn(e : ptr(Expr), allow : bool, in out nstr : usize, 
   }
 }
 
-d_manifest_rewrite_arms := fn(ah : ptr(mut Arm), allow : bool, in out nstr : usize, src : ptr(u8), na : ptr(mut rt::Arena)) {
-  mut ar := ah
-  while ar != 0 {
-    am := deref(arm_p(ar))
-    d_manifest_rewrite_stmts(am.body_stmts, allow, nstr, src, na)
-    if unchecked bitcast(usize, am.body) != 0 { d_manifest_rewrite_expr(am.body, allow, nstr, src, na) }
-    ar = am.next
+d_manifest_rewrite_arms := fn(ah : Option(ptr(mut Arm)), allow : bool, in out nstr : usize, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  mut ar : Option(ptr(mut Arm)) = ah
+  loop {
+    match ar {
+      Some(arq) => {
+        am := deref(arm_p(arq))
+        d_manifest_rewrite_stmts(am.body_stmts, allow, nstr, src, na)
+        if unchecked bitcast(usize, am.body) != 0 { d_manifest_rewrite_expr(am.body, allow, nstr, src, na) }
+        ar = am.next
+      }
+      None => { break }
+    }
   }
 }
 

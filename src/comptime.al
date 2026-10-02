@@ -122,21 +122,29 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
     ## fresh arena-linked `Arm` list, and rebuild the `Match` node pointing at it.
     Expr::Match(scrut, head) => {
       fs := fold(scrut)
-      mut nhead := 0
-      mut ntail := 0
-      mut arm := head
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        fb := fold(am.body)
-        anew := newarm(a, Arm(wild = am.wild, lit = am.lit, body = fb, next = unchecked bitcast(ptr(mut Arm), 0), vs = am.vs, vl = am.vl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = am.hi))
-        if nhead == 0 { nhead = unchecked bitcast(usize, anew) } else {
-          ap := arm_p(ntail)
-          old := deref(ap)
-          upd := Arm(wild = old.wild, lit = old.lit, body = old.body, next = anew, vs = old.vs, vl = old.vl, binds_head = old.binds_head, body_stmts = old.body_stmts, hi = old.hi)
-          deref(ap) = upd
+      mut nhead : Option(ptr(mut Arm)) = Option.None
+      mut ntail : Option(ptr(mut Arm)) = Option.None
+      mut arm : Option(ptr(mut Arm)) = head
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            fb := fold(am.body)
+            anew := newarm(a, Arm(wild = am.wild, lit = am.lit, body = fb, next = Option.None, vs = am.vs, vl = am.vl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = am.hi))
+            match ntail {
+              Some(ntailq) => {
+                ap := arm_p(ntailq)
+                old := deref(ap)
+                upd := Arm(wild = old.wild, lit = old.lit, body = old.body, next = Option.Some(anew), vs = old.vs, vl = old.vl, binds_head = old.binds_head, body_stmts = old.body_stmts, hi = old.hi)
+                deref(ap) = upd
+              }
+              None => { nhead = Option.Some(anew) }
+            }
+            ntail = Option.Some(anew)
+            arm = am.next
+          }
+          None => { break }
         }
-        ntail = unchecked bitcast(usize, anew)
-        arm = am.next
       }
       newnode(Expr.Match(fs, nhead))
     }

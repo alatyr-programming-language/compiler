@@ -219,8 +219,8 @@ a64_match_scrut := fn(e : ptr(Expr)) -> ptr(Expr) {
   }
   r
 }
-a64_match_armh := fn(e : ptr(Expr)) -> ptr(mut Arm) {
-  mut r : ptr(mut Arm) = unchecked bitcast(ptr(mut Arm), 0)
+a64_match_armh := fn(e : ptr(Expr)) -> Option(ptr(mut Arm)) {
+  mut r : Option(ptr(mut Arm)) = Option.None
   match deref(e) {
     Expr::Match(sc, ah) => { r = ah }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
@@ -233,15 +233,20 @@ a64_match_armh := fn(e : ptr(Expr)) -> ptr(mut Arm) {
 ## True IFF every arm of a match-EXPRESSION is a SIMPLE variant/wildcard arm with an EXPRESSION body
 ## (no statement-body arm, no `comptime for` variant-template arm wild∈{2,3}) — the shapes the struct
 ## value-match path below can deliver. Anything else keeps the caller's fail-loud `brk`.
-a64_match_arms_simple := fn(head : ptr(mut Arm)) -> bool {
-  mut ar := head
+a64_match_arms_simple := fn(head : Option(ptr(mut Arm))) -> bool {
+  mut ar : Option(ptr(mut Arm)) = head
   mut ok := true
-  while ar != 0 {
-    am := deref(arm_p(ar))
-    if am.body_stmts != 0 { ok = false }
-    if am.wild == 2 { ok = false }
-    if am.wild == 3 { ok = false }
-    ar = am.next
+  loop {
+    match ar {
+      Some(arq) => {
+        am := deref(arm_p(arq))
+        if am.body_stmts != 0 { ok = false }
+        if am.wild == 2 { ok = false }
+        if am.wild == 3 { ok = false }
+        ar = am.next
+      }
+      None => { break }
+    }
   }
   ok
 }
@@ -317,7 +322,7 @@ a64_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
     Expr::Match(scrut, arms_head) => {
       if A64_SUB_ITL != 0 {
         kind := ct_type_kind(A64_SUB_ITS, A64_SUB_ITL, a64_decls(), src)
-        am := deref(arm_p(arms_head))
+        am := deref(arm_p(ast::arm_at(arms_head, "aarch64: comptime match has no arms")))
         if am.vl != 0 {
           want := ct_kind_of_name(src, am.vs, am.vl)
           if want >= 0 { if kind == want { r = 1 } else { r = 0 } }
@@ -2191,7 +2196,7 @@ a64_first_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u
       Stmt::Assign(ans, anl, v, nx) => { if streq(src, ans, anl, ns, nl) { res = unchecked bitcast(usize, s) } ; s = nx }
       Stmt::While(c, b, nx) => { res = a64_first_handle(b, ns, nl, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { res = a64_first_handle(th, ns, nl, src, a) ; if res == 0 { res = a64_first_handle(el, ns, nl, src, a) } ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 and res == 0 { am := deref(arm_p(arm)) ; res = a64_first_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { if not (res == 0) { break }; am := deref(arm_p(armq)) ; res = a64_first_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next }; None => { break } } } ; s = mnx }
       ## a `for i in lo..hi` DECLARES the loop var `i`: this For is its first handle; otherwise recurse the body.
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if streq(src, fns, fnl, ns, nl) { res = unchecked bitcast(usize, s) } else { res = a64_first_handle(fb, ns, nl, src, a) } ; s = nx }
       ## a `comptime for i in lo..hi` DECLARES the loop var `i` (like a range `for`): this CompForRange is
@@ -2277,11 +2282,17 @@ a64_local_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : usi
         }
       }
       Stmt::Match(msc, mah, mnx) => {
-        mut arm := mah
-        while arm != 0 and (not found) {
-          am := deref(arm_p(arm))
-          r := a64_local_scan(am.body_stmts, fn_head, target, b, src, a, decls)
-          if r < 0 { result = r ; found = true } else { b = r ; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = mah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not ((not found)) { break }
+              am := deref(arm_p(armq))
+              r := a64_local_scan(am.body_stmts, fn_head, target, b, src, a, decls)
+              if r < 0 { result = r ; found = true } else { b = r ; arm = am.next }
+            }
+            None => { break }
+          }
         }
         if not found { s = mnx }
       }
@@ -2397,7 +2408,7 @@ a64_slarg_count := fn(list : ptr(mut Stmt)) -> i64 {
       Stmt::IndexFieldAssign(_ifb, _ifi, _iffs, _iffl, ifv, ifnx) => { c = c + a64_slarg_count_e(ifv) ; s = ifnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { c = c + a64_slarg_count_e(iv) + a64_slarg_count_e(ii) ; s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { c = c + a64_slarg_count_e(fpv) ; s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; c = c + a64_slarg_count(am.body_stmts) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; c = c + a64_slarg_count(am.body_stmts) ; arm = am.next }; None => { break } } } ; s = mnx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { c = c + a64_slarg_count(fb) ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { c = c + a64_slarg_count(rb) ; s = nx }
       Stmt::CompFor(cvs, cvl, cisv, rb, nx) => { c = c + a64_slarg_count(rb) ; s = nx }
@@ -2465,7 +2476,7 @@ a64_aggval_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls
       Stmt::IndexFieldAssign(_ifb, _ifi, _iffs, _iffl, ifv, ifnx) => { c = c + a64_aggval_words_e(ifv, src, a, decls) ; s = ifnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { c = c + a64_aggval_words_e(iv, src, a, decls) + a64_aggval_words_e(ii, src, a, decls) ; s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { c = c + a64_aggval_words_e(fpv, src, a, decls) ; s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; c = c + a64_aggval_words(am.body_stmts, src, a, decls) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; c = c + a64_aggval_words(am.body_stmts, src, a, decls) ; arm = am.next }; None => { break } } } ; s = mnx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { c = c + a64_aggval_words(fb, src, a, decls) ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { c = c + a64_aggval_words(rb, src, a, decls) ; s = nx }
       Stmt::CompFor(cvs, cvl, cisv, rb, nx) => { c = c + a64_aggval_words(rb, src, a, decls) ; s = nx }
@@ -2529,8 +2540,8 @@ a64_match_tmp_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) ->
       Stmt::Match(msc, mah, mnx) => {
         w := a64_match_index_enum_words(msc, src, a)
         if w > mx { mx = w }
-        mut arm := mah
-        while arm != 0 { am := deref(arm_p(arm)) ; bw := a64_match_tmp_words(am.body_stmts, src, a) ; if bw > mx { mx = bw } ; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = mah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; bw := a64_match_tmp_words(am.body_stmts, src, a) ; if bw > mx { mx = bw } ; arm = am.next }; None => { break } } }
         s = mnx
       }
       Stmt::While(cc, b, nx) => { bw := a64_match_tmp_words(b, src, a) ; if bw > mx { mx = bw } ; s = nx }
@@ -4413,10 +4424,13 @@ a64_binding_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
   ## one value type, so the first fixes the binding's width/type; delivery visits every arm.
   if r.n == 0 and a64_is_match(v) {
     ah := a64_match_armh(v)
-    if unchecked bitcast(usize, ah) != 0 {
-      am := deref(arm_p(ah))
-      if expr_is_struct_lit(am.body) { r = CSpan(s = expr_struct_lit_ns(am.body), n = expr_struct_lit_nl(am.body)) }
-      if r.n == 0 { r = a64_call_ret_struct_span(am.body, decls, src, a) }
+    match ah {
+      Some(ahq) => {
+        am := deref(arm_p(ahq))
+        if expr_is_struct_lit(am.body) { r = CSpan(s = expr_struct_lit_ns(am.body), n = expr_struct_lit_nl(am.body)) }
+        if r.n == 0 { r = a64_call_ret_struct_span(am.body, decls, src, a) }
+      }
+      None => {}
     }
   }
   r
@@ -6160,24 +6174,29 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
 ## x0; compare it against each literal without clobbering x0, then emit the selected body. A wildcard
 ## always matches. Unsupported pattern kinds remain a loud brk. This is deliberately separate from the
 ## enum-discriminant chain below: scalar matches have no payload frame context and no variant lookup.
-emit_a64_scalar_match_arms := fn(arm : usize, endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
-  mut ar := arm
-  while ar != 0 {
-    am := deref(arm_p(ar))
-    aid := a64_next_label()
-    if am.wild == 0 {
-      push_str(sb, "  ldr x1, =") ; push_int(sb, am.lit) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
-    } else if am.wild != 1 {
-      push_str(sb, "  brk #0 // unsupported scalar match pattern on aarch64\n")
+emit_a64_scalar_match_arms := fn(arm : Option(ptr(mut Arm)), endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
+  mut ar : Option(ptr(mut Arm)) = arm
+  loop {
+    match ar {
+      Some(arq) => {
+        am := deref(arm_p(arq))
+        aid := a64_next_label()
+        if am.wild == 0 {
+          push_str(sb, "  ldr x1, =") ; push_int(sb, am.lit) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
+        } else if am.wild != 1 {
+          push_str(sb, "  brk #0 // unsupported scalar match pattern on aarch64\n")
+        }
+        hasexpr := am.body_stmts == 0
+        dostmt := (am.body_stmts != 0) and (frame >= 0)
+        if hasexpr { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, 0) }
+        if dostmt { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, 0) }
+        if (not hasexpr) and (not dostmt) { push_str(sb, "  brk #0 // scalar match statement body in value position deferred\n") }
+        push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
+        if am.wild == 0 { push_str(sb, ".Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
+        ar = am.next
+      }
+      None => { break }
     }
-    hasexpr := am.body_stmts == 0
-    dostmt := (am.body_stmts != 0) and (frame >= 0)
-    if hasexpr { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, 0) }
-    if dostmt { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, 0) }
-    if (not hasexpr) and (not dostmt) { push_str(sb, "  brk #0 // scalar match statement body in value position deferred\n") }
-    push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
-    if am.wild == 0 { push_str(sb, ".Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
-    ar = am.next
   }
   push_str(sb, "  brk #0 // no matching scalar arm\n")
 }
@@ -6188,97 +6207,102 @@ emit_a64_scalar_match_arms := fn(arm : usize, endid : i64, in out sb : rt::StrBu
 ## value in x0; a STATEMENT-body arm runs its statements via emit_a64_stmts (side effects; needs a real
 ## `frame` for a Return — a NEGATIVE `frame` marks value-position where a stmt body is deferred →
 ## fail-loud). A wildcard always matches. No match → trailing brk. Flat while loop.
-emit_a64_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
-  mut ar := arm
-  while ar != 0 {
-    am := deref(arm_p(ar))
-    ## RANGE pattern arm (`wild == 5`/`6`, Control Flow §5.4) — x86_64-only in v1. Fail LOUD here (a
-    ## `brk #0` trap dominates the dead compare that follows), never a silent miscompile: the a64
-    ## sweep requires a trap (exit >= 128) or an assemble-reject, not a valid binary with a wrong exit.
-    if am.wild == 5 or am.wild == 6 { push_str(sb, "  brk #0 // range-pattern match arm not supported on aarch64 (x86_64 only)\n") }
-    ## COMPTIME-VARIANT TEMPLATE arm (`wild == 2`, from `comptime for var in typeinfo(T).variants { T.(var)(p)
-    ## => body }`): UNROLL into one concrete variant arm per variant of the scrutinee's enum (mirrors x86
-    ## expand_variant_arms). Each generated arm dispatches on that variant's discriminant and reuses the
-    ## template's payload binding + body; the loop var name is erased (each arm carries the variant's own
-    ## name). Only meaningful in a mono instance where the scrutinee enum `ens/enl` is concrete.
-    if am.wild == 2 {
-      edi := enum_decl_of(decls, src, ens, enl)
-      if edi >= 0 {
-        edd := deref(decl_get(decls, usize(edi)))
-        mut vf := edd.fields_head
-        mut vc := 0
-        loop {
-          match vf {
-            Some(vfq) => {
-              vfm := deref(fld_p(vfq))
-              vvidx := variant_index(decls, src, ens, enl, vfm.ns, vfm.nl, a)
-              ## label id unique PER MATCH SITE (`endid`) + per variant (`vc`): a nested/sibling match over the
-              ## SAME enum would collide on a variant-keyed id (both iterate the same variant list). Compound
-              ## `.LarmskipV<endid>_<vc>` keeps the two dispatch chains disjoint.
-              push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, eoff) ; push_str(sb, "]\n")
-              push_str(sb, "  ldr x1, =") ; push_int(sb, vvidx) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, "\n")
-              hasexprV := am.body_stmts == 0
-              dostmtV := (am.body_stmts != 0) and (frame >= 0)
-              oensV := A64_ARM_ENS ; oenlV := A64_ARM_ENL ; ovsV := A64_ARM_VS ; ovlV := A64_ARM_VL
-              ocvs := A64_CFVAR_S ; ocvl := A64_CFVAR_L ; obV := A64_ARM_BINDS
-              A64_ARM_ENS = ens ; A64_ARM_ENL = enl ; A64_ARM_VS = vfm.ns ; A64_ARM_VL = vfm.nl
-              A64_CFVAR_S = vfm.ns ; A64_CFVAR_L = vfm.nl ; A64_ARM_BINDS = am.binds_head
-              a64_bind_push(am.binds_head, eoff)
-              if hasexprV { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
-              if dostmtV { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
-              if (not hasexprV) and (not dostmtV) { push_str(sb, "  brk #0 // statement-body match arm in value position deferred\n") }
-              a64_bind_pop(am.binds_head)
-              A64_ARM_ENS = oensV ; A64_ARM_ENL = oenlV ; A64_ARM_VS = ovsV ; A64_ARM_VL = ovlV
-              A64_CFVAR_S = ocvs ; A64_CFVAR_L = ocvl ; A64_ARM_BINDS = obV
-              push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
-              push_str(sb, ".LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, ":\n")
-              vc = vc + 1
-              vf = vfm.next
+emit_a64_match_arms := fn(arm : Option(ptr(mut Arm)), ens : usize, enl : usize, eoff : i64, endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
+  mut ar : Option(ptr(mut Arm)) = arm
+  loop {
+    match ar {
+      Some(arq) => {
+        am := deref(arm_p(arq))
+        ## RANGE pattern arm (`wild == 5`/`6`, Control Flow §5.4) — x86_64-only in v1. Fail LOUD here (a
+        ## `brk #0` trap dominates the dead compare that follows), never a silent miscompile: the a64
+        ## sweep requires a trap (exit >= 128) or an assemble-reject, not a valid binary with a wrong exit.
+        if am.wild == 5 or am.wild == 6 { push_str(sb, "  brk #0 // range-pattern match arm not supported on aarch64 (x86_64 only)\n") }
+        ## COMPTIME-VARIANT TEMPLATE arm (`wild == 2`, from `comptime for var in typeinfo(T).variants { T.(var)(p)
+        ## => body }`): UNROLL into one concrete variant arm per variant of the scrutinee's enum (mirrors x86
+        ## expand_variant_arms). Each generated arm dispatches on that variant's discriminant and reuses the
+        ## template's payload binding + body; the loop var name is erased (each arm carries the variant's own
+        ## name). Only meaningful in a mono instance where the scrutinee enum `ens/enl` is concrete.
+        if am.wild == 2 {
+          edi := enum_decl_of(decls, src, ens, enl)
+          if edi >= 0 {
+            edd := deref(decl_get(decls, usize(edi)))
+            mut vf := edd.fields_head
+            mut vc := 0
+            loop {
+              match vf {
+                Some(vfq) => {
+                  vfm := deref(fld_p(vfq))
+                  vvidx := variant_index(decls, src, ens, enl, vfm.ns, vfm.nl, a)
+                  ## label id unique PER MATCH SITE (`endid`) + per variant (`vc`): a nested/sibling match over the
+                  ## SAME enum would collide on a variant-keyed id (both iterate the same variant list). Compound
+                  ## `.LarmskipV<endid>_<vc>` keeps the two dispatch chains disjoint.
+                  push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, eoff) ; push_str(sb, "]\n")
+                  push_str(sb, "  ldr x1, =") ; push_int(sb, vvidx) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, "\n")
+                  hasexprV := am.body_stmts == 0
+                  dostmtV := (am.body_stmts != 0) and (frame >= 0)
+                  oensV := A64_ARM_ENS ; oenlV := A64_ARM_ENL ; ovsV := A64_ARM_VS ; ovlV := A64_ARM_VL
+                  ocvs := A64_CFVAR_S ; ocvl := A64_CFVAR_L ; obV := A64_ARM_BINDS
+                  A64_ARM_ENS = ens ; A64_ARM_ENL = enl ; A64_ARM_VS = vfm.ns ; A64_ARM_VL = vfm.nl
+                  A64_CFVAR_S = vfm.ns ; A64_CFVAR_L = vfm.nl ; A64_ARM_BINDS = am.binds_head
+                  a64_bind_push(am.binds_head, eoff)
+                  if hasexprV { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
+                  if dostmtV { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
+                  if (not hasexprV) and (not dostmtV) { push_str(sb, "  brk #0 // statement-body match arm in value position deferred\n") }
+                  a64_bind_pop(am.binds_head)
+                  A64_ARM_ENS = oensV ; A64_ARM_ENL = oenlV ; A64_ARM_VS = ovsV ; A64_ARM_VL = ovlV
+                  A64_CFVAR_S = ocvs ; A64_CFVAR_L = ocvl ; A64_ARM_BINDS = obV
+                  push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
+                  push_str(sb, ".LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, ":\n")
+                  vc = vc + 1
+                  vf = vfm.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
           }
         }
+        ## FLAT (no nesting): label id from the ARM handle (unique). A non-wild arm compares + skips.
+        hasexpr := am.body_stmts == 0
+        dostmt := (am.body_stmts != 0) and (frame >= 0)
+        aid := a64_next_label()
+        ## a `wild == 3` arm is a `T.(v)` comptime-variant PATTERN: its variant name is the enclosing unroll's
+        ## CURRENT variant (`A64_CFVAR_*`), not the arm's own `vs/vl` (which still hold the loop-var name `v`).
+        mut evs := am.vs
+        mut evl := am.vl
+        if am.wild == 3 { evs = A64_CFVAR_S ; evl = A64_CFVAR_L }
+        vidx := variant_index(decls, src, ens, enl, evs, evl, a)
+        if am.wild != 1 and am.wild != 2 {
+          push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, eoff) ; push_str(sb, "]\n")
+          push_str(sb, "  ldr x1, =") ; push_int(sb, vidx) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .Larmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
+        }
+        ## record THIS arm's enum context (§8 piece 3b) so an aggregate payload BINDING inside the body
+        ## (`pt.x`, nested `match i`) resolves its type + frame offset; save/restore around the body for nesting.
+        oens := A64_ARM_ENS
+        oenl := A64_ARM_ENL
+        ovs := A64_ARM_VS
+        ovl := A64_ARM_VL
+        obN := A64_ARM_BINDS
+        A64_ARM_ENS = ens
+        A64_ARM_ENL = enl
+        A64_ARM_VS = evs
+        A64_ARM_VL = evl
+        A64_ARM_BINDS = am.binds_head
+        a64_bind_push(am.binds_head, eoff)
+        if am.wild != 2 and hasexpr { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
+        if am.wild != 2 and dostmt { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
+        if am.wild != 2 and (not hasexpr) and (not dostmt) { push_str(sb, "  brk #0 // statement-body match arm in value position deferred\n") }
+        a64_bind_pop(am.binds_head)
+        A64_ARM_ENS = oens
+        A64_ARM_ENL = oenl
+        A64_ARM_VS = ovs
+        A64_ARM_VL = ovl
+        A64_ARM_BINDS = obN
+        if am.wild != 2 { push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n") }
+        if am.wild != 1 and am.wild != 2 { push_str(sb, ".Larmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
+        ar = am.next
       }
+      None => { break }
     }
-    ## FLAT (no nesting): label id from the ARM handle (unique). A non-wild arm compares + skips.
-    hasexpr := am.body_stmts == 0
-    dostmt := (am.body_stmts != 0) and (frame >= 0)
-    aid := a64_next_label()
-    ## a `wild == 3` arm is a `T.(v)` comptime-variant PATTERN: its variant name is the enclosing unroll's
-    ## CURRENT variant (`A64_CFVAR_*`), not the arm's own `vs/vl` (which still hold the loop-var name `v`).
-    mut evs := am.vs
-    mut evl := am.vl
-    if am.wild == 3 { evs = A64_CFVAR_S ; evl = A64_CFVAR_L }
-    vidx := variant_index(decls, src, ens, enl, evs, evl, a)
-    if am.wild != 1 and am.wild != 2 {
-      push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, eoff) ; push_str(sb, "]\n")
-      push_str(sb, "  ldr x1, =") ; push_int(sb, vidx) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .Larmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
-    }
-    ## record THIS arm's enum context (§8 piece 3b) so an aggregate payload BINDING inside the body
-    ## (`pt.x`, nested `match i`) resolves its type + frame offset; save/restore around the body for nesting.
-    oens := A64_ARM_ENS
-    oenl := A64_ARM_ENL
-    ovs := A64_ARM_VS
-    ovl := A64_ARM_VL
-    obN := A64_ARM_BINDS
-    A64_ARM_ENS = ens
-    A64_ARM_ENL = enl
-    A64_ARM_VS = evs
-    A64_ARM_VL = evl
-    A64_ARM_BINDS = am.binds_head
-    a64_bind_push(am.binds_head, eoff)
-    if am.wild != 2 and hasexpr { emit_a64_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
-    if am.wild != 2 and dostmt { emit_a64_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
-    if am.wild != 2 and (not hasexpr) and (not dostmt) { push_str(sb, "  brk #0 // statement-body match arm in value position deferred\n") }
-    a64_bind_pop(am.binds_head)
-    A64_ARM_ENS = oens
-    A64_ARM_ENL = oenl
-    A64_ARM_VS = ovs
-    A64_ARM_VL = ovl
-    A64_ARM_BINDS = obN
-    if am.wild != 2 { push_str(sb, "  b .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n") }
-    if am.wild != 1 and am.wild != 2 { push_str(sb, ".Larmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
-    ar = am.next
   }
   push_str(sb, "  brk #0 // no matching arm\n")
 }
@@ -6945,19 +6969,24 @@ emit_a64_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
     eeoff := a64_local_off(body_head, src, esns, esnl, pcount, a, decls)
     if esnl != 0 and eenl != 0 and eeoff >= 0 and a64_match_arms_simple(armhead) {
       endid := a64_next_label()
-      mut ar := armhead
-      while ar != 0 {
-        am := deref(arm_p(ar))
-        aid := a64_next_label()
-        vidx := variant_index(decls, src, eens, eenl, am.vs, am.vl, a)
-        if am.wild != 1 { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, eeoff) ; push_str(sb, "]\n  ldr x1, =") ; push_int(sb, vidx) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .Lsvarmskip") ; push_int(sb, aid) ; push_str(sb, "\n") }
-        oens := A64_ARM_ENS ; oenl := A64_ARM_ENL ; ovs := A64_ARM_VS ; ovl := A64_ARM_VL ; obN := A64_ARM_BINDS
-        A64_ARM_ENS = eens ; A64_ARM_ENL = eenl ; A64_ARM_VS = am.vs ; A64_ARM_VL = am.vl ; A64_ARM_BINDS = am.binds_head
-        emit_a64_struct_value(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eeoff)
-        A64_ARM_ENS = oens ; A64_ARM_ENL = oenl ; A64_ARM_VS = ovs ; A64_ARM_VL = ovl ; A64_ARM_BINDS = obN
-        push_str(sb, "  b .Lsvmend") ; push_int(sb, endid) ; push_str(sb, "\n")
-        if am.wild != 1 { push_str(sb, ".Lsvarmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
-        ar = am.next
+      mut ar : Option(ptr(mut Arm)) = armhead
+      loop {
+        match ar {
+          Some(arq) => {
+            am := deref(arm_p(arq))
+            aid := a64_next_label()
+            vidx := variant_index(decls, src, eens, eenl, am.vs, am.vl, a)
+            if am.wild != 1 { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, eeoff) ; push_str(sb, "]\n  ldr x1, =") ; push_int(sb, vidx) ; push_str(sb, "\n  cmp x0, x1\n  b.ne .Lsvarmskip") ; push_int(sb, aid) ; push_str(sb, "\n") }
+            oens := A64_ARM_ENS ; oenl := A64_ARM_ENL ; ovs := A64_ARM_VS ; ovl := A64_ARM_VL ; obN := A64_ARM_BINDS
+            A64_ARM_ENS = eens ; A64_ARM_ENL = eenl ; A64_ARM_VS = am.vs ; A64_ARM_VL = am.vl ; A64_ARM_BINDS = am.binds_head
+            emit_a64_struct_value(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eeoff)
+            A64_ARM_ENS = oens ; A64_ARM_ENL = oenl ; A64_ARM_VS = ovs ; A64_ARM_VL = ovl ; A64_ARM_BINDS = obN
+            push_str(sb, "  b .Lsvmend") ; push_int(sb, endid) ; push_str(sb, "\n")
+            if am.wild != 1 { push_str(sb, ".Lsvarmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
+            ar = am.next
+          }
+          None => { break }
+        }
       }
       push_str(sb, "  brk #0 // no matching arm\n")
       push_str(sb, ".Lsvmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
@@ -8318,11 +8347,16 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
         }
         mut scalar_shape := true
-        mut scalar_arm := arms
-        while scalar_arm != 0 {
-          sam := deref(arm_p(scalar_arm))
-          if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
-          scalar_arm = sam.next
+        mut scalar_arm : Option(ptr(mut Arm)) = arms
+        loop {
+          match scalar_arm {
+            Some(scalar_armq) => {
+              sam := deref(arm_p(scalar_armq))
+              if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
+              scalar_arm = sam.next
+            }
+            None => { break }
+          }
         }
         if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and scalar_shape {
           emit_a64_expr(scrut, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -8553,20 +8587,28 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         else {
           kind := ct_type_kind(A64_SUB_ITS, A64_SUB_ITL, decls, src)
           nkind := ct_scalar_num_kind(A64_SUB_ITS, A64_SUB_ITL, src)
-          mut chosen := 0
-          mut cwild := 0
-          mut carm := cmah
-          while carm != 0 {
-            cam := deref(arm_p(carm))
-            if cam.wild != 0 { cwild = carm }
-            else if ct_kind_of_name(src, cam.vs, cam.vl) == kind { chosen = carm }
-            else if ct_num_kind_of_name(src, cam.vs, cam.vl) == nkind { chosen = carm }
-            carm = cam.next
+          mut chosen : Option(ptr(mut Arm)) = Option.None
+          mut cwild : Option(ptr(mut Arm)) = Option.None
+          mut carm : Option(ptr(mut Arm)) = cmah
+          loop {
+            match carm {
+              Some(carmq) => {
+                cam := deref(arm_p(carmq))
+                if cam.wild != 0 { cwild = Option.Some(carmq) }
+                else if ct_kind_of_name(src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
+                else if ct_num_kind_of_name(src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
+                carm = cam.next
+              }
+              None => { break }
+            }
           }
-          if chosen == 0 { chosen = cwild }
-          if chosen != 0 {
-            cam2 := deref(arm_p(chosen))
-            emit_a64_stmts(cam2.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
+          chosen = ast::arm_or(chosen, cwild)
+          match chosen {
+            Some(chosenq) => {
+              cam2 := deref(arm_p(chosenq))
+              emit_a64_stmts(cam2.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
+            }
+            None => {}
           }
         }
         s = cmnx
@@ -9091,7 +9133,7 @@ emit_a64_str_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(
       Stmt::ExprStmt(e, nx) => { a64_str_data_if_print(e, sb, src, a) ; s = nx }
       Stmt::While(c, b, nx) => { emit_a64_str_data(b, sb, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { emit_a64_str_data(th, sb, src, a) ; emit_a64_str_data(el, sb, src, a) ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; if ast::arm_body_first_use(mah, arm) { emit_a64_str_data(am.body_stmts, sb, src, a) } ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if ast::arm_body_first_use(mah, armq) { emit_a64_str_data(am.body_stmts, sb, src, a) } ; arm = am.next }; None => { break } } } ; s = mnx }
       Stmt::Assign(ns, nl, v, nx) => { s = nx }
       Stmt::Return(rv, nx) => { s = nx }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
@@ -9145,7 +9187,7 @@ emit_a64_float_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : pt
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { emit_a64_float_data_expr(fv, sb, src, a) ; s = nx }
       Stmt::IndexFieldAssign(_ifb, _ifi, _iffs, _iffl, ifv, ifnx) => { emit_a64_float_data_expr(ifv, sb, src, a) ; s = ifnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { emit_a64_float_data_expr(iv, sb, src, a) ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; if ast::arm_body_first_use(mah, arm) { emit_a64_float_data(am.body_stmts, sb, src, a) } ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if ast::arm_body_first_use(mah, armq) { emit_a64_float_data(am.body_stmts, sb, src, a) } ; arm = am.next }; None => { break } } } ; s = mnx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { emit_a64_float_data_expr(flo, sb, src, a) ; if unchecked bitcast(usize, fhi) != 0 { emit_a64_float_data_expr(fhi, sb, src, a) } ; emit_a64_float_data(fb, sb, src, a) ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { emit_a64_float_data_expr(rlo, sb, src, a) ; if unchecked bitcast(usize, rhi) != 0 { emit_a64_float_data_expr(rhi, sb, src, a) } ; emit_a64_float_data(rb, sb, src, a) ; s = nx }
       Stmt::CompFor(cvs, cvl, cisv, rb, nx) => { emit_a64_float_data(rb, sb, src, a) ; s = nx }

@@ -2752,11 +2752,16 @@ pub local_ann_native_signed_deep := fn(head : ptr(mut Stmt), src : ptr(u8), ns :
       }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if local_ann_native_signed_deep(fb, src, ns, nl, dep + 1) { r = true } ; s = nx }
       Stmt::Match(c, ah, nx) => {
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          if local_ann_native_signed_deep(am.body_stmts, src, ns, nl, dep + 1) { r = true }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if local_ann_native_signed_deep(am.body_stmts, src, ns, nl, dep + 1) { r = true }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         s = nx
       }
@@ -2768,11 +2773,16 @@ pub local_ann_native_signed_deep := fn(head : ptr(mut Stmt), src : ptr(u8), ns :
       Stmt::CompFor(cvs, cvl, cisv, cb, nx) => { if local_ann_native_signed_deep(cb, src, ns, nl, dep + 1) { r = true } ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if local_ann_native_signed_deep(rb, src, ns, nl, dep + 1) { r = true } ; s = nx }
       Stmt::CompMatch(cm, ah, nx) => {
-        mut car : usize = ah
-        while car != 0 {
-          cam := deref(arm_p(car))
-          if local_ann_native_signed_deep(cam.body_stmts, src, ns, nl, dep + 1) { r = true }
-          car = cam.next
+        mut car : Option(ptr(mut Arm)) = ah
+        loop {
+          match car {
+            Some(carq) => {
+              cam := deref(arm_p(carq))
+              if local_ann_native_signed_deep(cam.body_stmts, src, ns, nl, dep + 1) { r = true }
+              car = cam.next
+            }
+            None => { break }
+          }
         }
         s = nx
       }

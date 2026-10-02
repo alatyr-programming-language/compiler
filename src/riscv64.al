@@ -209,7 +209,7 @@ rv_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
     Expr::Match(scrut, arms_head) => {
       if RV_SUB_ITL != 0 {
         kind := ct_type_kind(RV_SUB_ITS, RV_SUB_ITL, rv_decls(), src)
-        am := deref(arm_p(arms_head))
+        am := deref(arm_p(ast::arm_at(arms_head, "riscv64: comptime match has no arms")))
         if am.vl != 0 {
           want := ct_kind_of_name(src, am.vs, am.vl)
           if want >= 0 { if kind == want { r = 1 } else { r = 0 } }
@@ -1861,7 +1861,7 @@ rv_first_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : ptr(u8
       Stmt::Assign(ans, anl, v, nx) => { if streq(src, ans, anl, ns, nl) { res = unchecked bitcast(usize, s) } ; s = nx }
       Stmt::While(c, b, nx) => { res = rv_first_handle(b, ns, nl, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { res = rv_first_handle(th, ns, nl, src, a) ; if res == 0 { res = rv_first_handle(el, ns, nl, src, a) } ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 and res == 0 { am := deref(arm_p(arm)) ; res = rv_first_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { if not (res == 0) { break }; am := deref(arm_p(armq)) ; res = rv_first_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next }; None => { break } } } ; s = mnx }
       ## a `for i in lo..hi` DECLARES the loop var `i`: this For is its first handle; otherwise recurse the body.
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if streq(src, fns, fnl, ns, nl) { res = unchecked bitcast(usize, s) } else { res = rv_first_handle(fb, ns, nl, src, a) } ; s = nx }
       ## a `comptime for i in lo..hi` DECLARES the loop var `i` (like a range `for`): this CompForRange is
@@ -1940,11 +1940,17 @@ rv_local_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : usiz
         }
       }
       Stmt::Match(msc, mah, mnx) => {
-        mut arm := mah
-        while arm != 0 and (not found) {
-          am := deref(arm_p(arm))
-          r := rv_local_scan(am.body_stmts, fn_head, target, b, src, a, decls)
-          if r < 0 { result = r ; found = true } else { b = r ; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = mah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not ((not found)) { break }
+              am := deref(arm_p(armq))
+              r := rv_local_scan(am.body_stmts, fn_head, target, b, src, a, decls)
+              if r < 0 { result = r ; found = true } else { b = r ; arm = am.next }
+            }
+            None => { break }
+          }
         }
         if not found { s = mnx }
       }
@@ -2051,7 +2057,7 @@ rv_slarg_count := fn(list : ptr(mut Stmt)) -> i64 {
       Stmt::IndexFieldAssign(_ifb, _ifi, _iffs, _iffl, ifv, ifnx) => { c = c + rv_slarg_count_e(ifv) ; s = ifnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { c = c + rv_slarg_count_e(iv) + rv_slarg_count_e(ii) ; s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { c = c + rv_slarg_count_e(fpv) ; s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; c = c + rv_slarg_count(am.body_stmts) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; c = c + rv_slarg_count(am.body_stmts) ; arm = am.next }; None => { break } } } ; s = mnx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { c = c + rv_slarg_count(fb) ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { c = c + rv_slarg_count(rb) ; s = nx }
       Stmt::CompIf(cc, th, el, nx) => { c = c + rv_slarg_count(th) + rv_slarg_count(el) ; s = nx }
@@ -2104,7 +2110,7 @@ rv_aggval_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, decls 
       Stmt::IndexFieldAssign(_ifb, _ifi, _iffs, _iffl, ifv, ifnx) => { c = c + rv_aggval_words_e(ifv, src, a, decls) ; s = ifnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { c = c + rv_aggval_words_e(iv, src, a, decls) + rv_aggval_words_e(ii, src, a, decls) ; s = nx }
       Stmt::FieldPathAssign(fpp, fpv, fpnx) => { c = c + rv_aggval_words_e(fpv, src, a, decls) ; s = fpnx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; c = c + rv_aggval_words(am.body_stmts, src, a, decls) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; c = c + rv_aggval_words(am.body_stmts, src, a, decls) ; arm = am.next }; None => { break } } } ; s = mnx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { c = c + rv_aggval_words(fb, src, a, decls) ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { c = c + rv_aggval_words(rb, src, a, decls) ; s = nx }
       Stmt::CompIf(cc, th, el, nx) => { c = c + rv_aggval_words(th, src, a, decls) + rv_aggval_words(el, src, a, decls) ; s = nx }
@@ -2144,7 +2150,7 @@ rv_sret_discard_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena, 
       Stmt::ExprStmt(e, nx) => { c = c + rv_sret_discard_words_e(e, src, a, decls) ; s = nx }
       Stmt::While(cc, b, nx) => { c = c + rv_sret_discard_words(b, src, a, decls) ; s = nx }
       Stmt::If(cc, th, el, nx) => { c = c + rv_sret_discard_words(th, src, a, decls) + rv_sret_discard_words(el, src, a, decls) ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; c = c + rv_sret_discard_words(am.body_stmts, src, a, decls) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; c = c + rv_sret_discard_words(am.body_stmts, src, a, decls) ; arm = am.next }; None => { break } } } ; s = mnx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { c = c + rv_sret_discard_words(fb, src, a, decls) ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { c = c + rv_sret_discard_words(rb, src, a, decls) ; s = nx }
       Stmt::CompIf(cc, th, el, nx) => { c = c + rv_sret_discard_words(th, src, a, decls) + rv_sret_discard_words(el, src, a, decls) ; s = nx }
@@ -2209,8 +2215,8 @@ rv_match_tmp_words := fn(list : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> 
       Stmt::Match(msc, mah, mnx) => {
         w := rv_match_index_enum_words(msc, src, a)
         if w > mx { mx = w }
-        mut arm := mah
-        while arm != 0 { am := deref(arm_p(arm)) ; bw := rv_match_tmp_words(am.body_stmts, src, a) ; if bw > mx { mx = bw } ; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = mah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; bw := rv_match_tmp_words(am.body_stmts, src, a) ; if bw > mx { mx = bw } ; arm = am.next }; None => { break } } }
         s = mnx
       }
       Stmt::While(cc, b, nx) => { bw := rv_match_tmp_words(b, src, a) ; if bw > mx { mx = bw } ; s = nx }
@@ -5412,24 +5418,29 @@ emit_rv_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : p
 ## Emit a SCALAR statement-match arm chain (RV). The caller has already evaluated the integer scrutinee
 ## into a0; compare it against each literal without clobbering a0, then emit the selected body. A wildcard
 ## always matches. Unsupported pattern kinds remain a loud ebreak and never become a wrong value.
-emit_rv_scalar_match_arms := fn(arm : usize, endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
-  mut ar := arm
-  while ar != 0 {
-    am := deref(arm_p(ar))
-    aid := rv_next_label()
-    if am.wild == 0 {
-      push_str(sb, "  li a1, ") ; push_int(sb, am.lit) ; push_str(sb, "\n  bne a0, a1, .Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
-    } else if am.wild != 1 {
-      push_str(sb, "  ebreak # unsupported scalar match pattern on riscv64\n")
+emit_rv_scalar_match_arms := fn(arm : Option(ptr(mut Arm)), endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
+  mut ar : Option(ptr(mut Arm)) = arm
+  loop {
+    match ar {
+      Some(arq) => {
+        am := deref(arm_p(arq))
+        aid := rv_next_label()
+        if am.wild == 0 {
+          push_str(sb, "  li a1, ") ; push_int(sb, am.lit) ; push_str(sb, "\n  bne a0, a1, .Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
+        } else if am.wild != 1 {
+          push_str(sb, "  ebreak # unsupported scalar match pattern on riscv64\n")
+        }
+        hasexpr := am.body_stmts == 0
+        dostmt := (am.body_stmts != 0) and (frame >= 0)
+        if hasexpr { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, 0) }
+        if dostmt { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, 0) }
+        if (not hasexpr) and (not dostmt) { push_str(sb, "  ebreak # scalar match statement body in value position deferred\n") }
+        push_str(sb, "  j .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
+        if am.wild == 0 { push_str(sb, ".Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
+        ar = am.next
+      }
+      None => { break }
     }
-    hasexpr := am.body_stmts == 0
-    dostmt := (am.body_stmts != 0) and (frame >= 0)
-    if hasexpr { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, 0) }
-    if dostmt { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, 0) }
-    if (not hasexpr) and (not dostmt) { push_str(sb, "  ebreak # scalar match statement body in value position deferred\n") }
-    push_str(sb, "  j .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
-    if am.wild == 0 { push_str(sb, ".Lscalararmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
-    ar = am.next
   }
   push_str(sb, "  ebreak # no matching scalar arm\n")
 }
@@ -5439,97 +5450,102 @@ emit_rv_scalar_match_arms := fn(arm : usize, endid : i64, in out sb : rt::StrBuf
 ## `.Lmend<endid>`. An EXPRESSION-body arm leaves its value in a0; a STATEMENT-body arm runs via
 ## emit_rv_stmts (needs a real `frame`; NEGATIVE `frame` = value position → stmt body deferred). Wildcard
 ## always matches. FLAT: label id from the arm handle. No match → trailing ebreak.
-emit_rv_match_arms := fn(arm : usize, ens : usize, enl : usize, eoff : i64, endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
-  mut ar := arm
-  while ar != 0 {
-    am := deref(arm_p(ar))
-    ## RANGE pattern arm (`wild == 5`/`6`, Control Flow §5.4) — x86_64-only in v1. Fail LOUD here (an
-    ## `ebreak` trap dominates the dead compare that follows), never a silent miscompile: the rv64
-    ## sweep requires a trap or assemble-reject, not a valid binary with a wrong exit.
-    if am.wild == 5 or am.wild == 6 { push_str(sb, "  ebreak # range-pattern match arm not supported on riscv64 (x86_64 only)\n") }
-    ## COMPTIME-VARIANT TEMPLATE arm (`wild == 2`, from `comptime for var in typeinfo(T).variants { T.(var)(p)
-    ## => body }`): UNROLL into one concrete variant arm per variant of the scrutinee's enum (mirrors x86
-    ## expand_variant_arms). Each generated arm dispatches on that variant's discriminant and reuses the
-    ## template's payload binding + body; the loop var name is erased (each arm carries the variant's own
-    ## name). Only meaningful in a mono instance where the scrutinee enum `ens/enl` is concrete.
-    if am.wild == 2 {
-      edi := enum_decl_of(decls, src, ens, enl)
-      if edi >= 0 {
-        edd := deref(decl_get(decls, usize(edi)))
-        mut vf := edd.fields_head
-        mut vc := 0
-        loop {
-          match vf {
-            Some(vfq) => {
-              vfm := deref(fld_p(vfq))
-              vvidx := variant_index(decls, src, ens, enl, vfm.ns, vfm.nl, a)
-              ## label id unique PER MATCH SITE (`endid`) + per variant (`vc`): a nested/sibling match over the
-              ## SAME enum would collide on a variant-keyed id. Compound `.LarmskipV<endid>_<vc>` keeps them disjoint.
-              push_str(sb, "  ld a0, ") ; push_int(sb, eoff) ; push_str(sb, "(s0)\n")
-              push_str(sb, "  li a1, ") ; push_int(sb, vvidx) ; push_str(sb, "\n  bne a0, a1, .LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, "\n")
-              hasexprV := am.body_stmts == 0
-              dostmtV := (am.body_stmts != 0) and (frame >= 0)
-              oensV := RV_ARM_ENS ; oenlV := RV_ARM_ENL ; ovsV := RV_ARM_VS ; ovlV := RV_ARM_VL
-              ocvs := RV_CFVAR_S ; ocvl := RV_CFVAR_L ; obV := RV_ARM_BINDS
-              RV_ARM_ENS = ens ; RV_ARM_ENL = enl ; RV_ARM_VS = vfm.ns ; RV_ARM_VL = vfm.nl
-              RV_CFVAR_S = vfm.ns ; RV_CFVAR_L = vfm.nl ; RV_ARM_BINDS = am.binds_head
-              rv_bind_push(am.binds_head, eoff)
-              if hasexprV { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
-              if dostmtV { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
-              if (not hasexprV) and (not dostmtV) { push_str(sb, "  ebreak # statement-body match arm in value position deferred\n") }
-              rv_bind_pop(am.binds_head)
-              RV_ARM_ENS = oensV ; RV_ARM_ENL = oenlV ; RV_ARM_VS = ovsV ; RV_ARM_VL = ovlV
-              RV_CFVAR_S = ocvs ; RV_CFVAR_L = ocvl ; RV_ARM_BINDS = obV
-              push_str(sb, "  j .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
-              push_str(sb, ".LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, ":\n")
-              vc = vc + 1
-              vf = vfm.next
+emit_rv_match_arms := fn(arm : Option(ptr(mut Arm)), ens : usize, enl : usize, eoff : i64, endid : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), frame : i64) {
+  mut ar : Option(ptr(mut Arm)) = arm
+  loop {
+    match ar {
+      Some(arq) => {
+        am := deref(arm_p(arq))
+        ## RANGE pattern arm (`wild == 5`/`6`, Control Flow §5.4) — x86_64-only in v1. Fail LOUD here (an
+        ## `ebreak` trap dominates the dead compare that follows), never a silent miscompile: the rv64
+        ## sweep requires a trap or assemble-reject, not a valid binary with a wrong exit.
+        if am.wild == 5 or am.wild == 6 { push_str(sb, "  ebreak # range-pattern match arm not supported on riscv64 (x86_64 only)\n") }
+        ## COMPTIME-VARIANT TEMPLATE arm (`wild == 2`, from `comptime for var in typeinfo(T).variants { T.(var)(p)
+        ## => body }`): UNROLL into one concrete variant arm per variant of the scrutinee's enum (mirrors x86
+        ## expand_variant_arms). Each generated arm dispatches on that variant's discriminant and reuses the
+        ## template's payload binding + body; the loop var name is erased (each arm carries the variant's own
+        ## name). Only meaningful in a mono instance where the scrutinee enum `ens/enl` is concrete.
+        if am.wild == 2 {
+          edi := enum_decl_of(decls, src, ens, enl)
+          if edi >= 0 {
+            edd := deref(decl_get(decls, usize(edi)))
+            mut vf := edd.fields_head
+            mut vc := 0
+            loop {
+              match vf {
+                Some(vfq) => {
+                  vfm := deref(fld_p(vfq))
+                  vvidx := variant_index(decls, src, ens, enl, vfm.ns, vfm.nl, a)
+                  ## label id unique PER MATCH SITE (`endid`) + per variant (`vc`): a nested/sibling match over the
+                  ## SAME enum would collide on a variant-keyed id. Compound `.LarmskipV<endid>_<vc>` keeps them disjoint.
+                  push_str(sb, "  ld a0, ") ; push_int(sb, eoff) ; push_str(sb, "(s0)\n")
+                  push_str(sb, "  li a1, ") ; push_int(sb, vvidx) ; push_str(sb, "\n  bne a0, a1, .LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, "\n")
+                  hasexprV := am.body_stmts == 0
+                  dostmtV := (am.body_stmts != 0) and (frame >= 0)
+                  oensV := RV_ARM_ENS ; oenlV := RV_ARM_ENL ; ovsV := RV_ARM_VS ; ovlV := RV_ARM_VL
+                  ocvs := RV_CFVAR_S ; ocvl := RV_CFVAR_L ; obV := RV_ARM_BINDS
+                  RV_ARM_ENS = ens ; RV_ARM_ENL = enl ; RV_ARM_VS = vfm.ns ; RV_ARM_VL = vfm.nl
+                  RV_CFVAR_S = vfm.ns ; RV_CFVAR_L = vfm.nl ; RV_ARM_BINDS = am.binds_head
+                  rv_bind_push(am.binds_head, eoff)
+                  if hasexprV { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
+                  if dostmtV { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
+                  if (not hasexprV) and (not dostmtV) { push_str(sb, "  ebreak # statement-body match arm in value position deferred\n") }
+                  rv_bind_pop(am.binds_head)
+                  RV_ARM_ENS = oensV ; RV_ARM_ENL = oenlV ; RV_ARM_VS = ovsV ; RV_ARM_VL = ovlV
+                  RV_CFVAR_S = ocvs ; RV_CFVAR_L = ocvl ; RV_ARM_BINDS = obV
+                  push_str(sb, "  j .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n")
+                  push_str(sb, ".LarmskipV") ; push_int(sb, endid) ; push_str(sb, "_") ; push_int(sb, vc) ; push_str(sb, ":\n")
+                  vc = vc + 1
+                  vf = vfm.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
           }
         }
+        ## FLAT (no nesting): PER-EMISSION label id (rv_next_label — globally unique). A per-ARM-handle id
+        ## would COLLIDE when the same arm is emitted more than once (a nested match inside a wild==2 unroll
+        ## is re-emitted per variant). A non-wild arm compares + skips.
+        hasexpr := am.body_stmts == 0
+        dostmt := (am.body_stmts != 0) and (frame >= 0)
+        aid := rv_next_label()
+        ## a `wild == 3` arm is a `T.(v)` comptime-variant PATTERN: its variant name is the enclosing unroll's
+        ## CURRENT variant (`RV_CFVAR_*`), not the arm's own `vs/vl` (which still hold the loop-var name `v`).
+        mut evs := am.vs
+        mut evl := am.vl
+        if am.wild == 3 { evs = RV_CFVAR_S ; evl = RV_CFVAR_L }
+        vidx := variant_index(decls, src, ens, enl, evs, evl, a)
+        if am.wild != 1 and am.wild != 2 {
+          push_str(sb, "  ld a0, ") ; push_int(sb, eoff) ; push_str(sb, "(s0)\n")
+          push_str(sb, "  li a1, ") ; push_int(sb, vidx) ; push_str(sb, "\n  bne a0, a1, .Larmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
+        }
+        ## record THIS arm's enum context (§8 piece 3b) for aggregate payload-binding resolution; save/restore.
+        oens := RV_ARM_ENS
+        oenl := RV_ARM_ENL
+        ovs := RV_ARM_VS
+        ovl := RV_ARM_VL
+        obN := RV_ARM_BINDS
+        RV_ARM_ENS = ens
+        RV_ARM_ENL = enl
+        RV_ARM_VS = evs
+        RV_ARM_VL = evl
+        RV_ARM_BINDS = am.binds_head
+        rv_bind_push(am.binds_head, eoff)
+        if am.wild != 2 and hasexpr { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
+        if am.wild != 2 and dostmt { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
+        if am.wild != 2 and (not hasexpr) and (not dostmt) { push_str(sb, "  ebreak # statement-body match arm in value position deferred\n") }
+        rv_bind_pop(am.binds_head)
+        RV_ARM_ENS = oens
+        RV_ARM_ENL = oenl
+        RV_ARM_VS = ovs
+        RV_ARM_VL = ovl
+        RV_ARM_BINDS = obN
+        if am.wild != 2 { push_str(sb, "  j .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n") }
+        if am.wild != 1 and am.wild != 2 { push_str(sb, ".Larmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
+        ar = am.next
       }
+      None => { break }
     }
-    ## FLAT (no nesting): PER-EMISSION label id (rv_next_label — globally unique). A per-ARM-handle id
-    ## would COLLIDE when the same arm is emitted more than once (a nested match inside a wild==2 unroll
-    ## is re-emitted per variant). A non-wild arm compares + skips.
-    hasexpr := am.body_stmts == 0
-    dostmt := (am.body_stmts != 0) and (frame >= 0)
-    aid := rv_next_label()
-    ## a `wild == 3` arm is a `T.(v)` comptime-variant PATTERN: its variant name is the enclosing unroll's
-    ## CURRENT variant (`RV_CFVAR_*`), not the arm's own `vs/vl` (which still hold the loop-var name `v`).
-    mut evs := am.vs
-    mut evl := am.vl
-    if am.wild == 3 { evs = RV_CFVAR_S ; evl = RV_CFVAR_L }
-    vidx := variant_index(decls, src, ens, enl, evs, evl, a)
-    if am.wild != 1 and am.wild != 2 {
-      push_str(sb, "  ld a0, ") ; push_int(sb, eoff) ; push_str(sb, "(s0)\n")
-      push_str(sb, "  li a1, ") ; push_int(sb, vidx) ; push_str(sb, "\n  bne a0, a1, .Larmskip") ; push_int(sb, aid) ; push_str(sb, "\n")
-    }
-    ## record THIS arm's enum context (§8 piece 3b) for aggregate payload-binding resolution; save/restore.
-    oens := RV_ARM_ENS
-    oenl := RV_ARM_ENL
-    ovs := RV_ARM_VS
-    ovl := RV_ARM_VL
-    obN := RV_ARM_BINDS
-    RV_ARM_ENS = ens
-    RV_ARM_ENL = enl
-    RV_ARM_VS = evs
-    RV_ARM_VL = evl
-    RV_ARM_BINDS = am.binds_head
-    rv_bind_push(am.binds_head, eoff)
-    if am.wild != 2 and hasexpr { emit_rv_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, eoff) }
-    if am.wild != 2 and dostmt { emit_rv_stmts(am.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, am.binds_head, eoff) }
-    if am.wild != 2 and (not hasexpr) and (not dostmt) { push_str(sb, "  ebreak # statement-body match arm in value position deferred\n") }
-    rv_bind_pop(am.binds_head)
-    RV_ARM_ENS = oens
-    RV_ARM_ENL = oenl
-    RV_ARM_VS = ovs
-    RV_ARM_VL = ovl
-    RV_ARM_BINDS = obN
-    if am.wild != 2 { push_str(sb, "  j .Lmend") ; push_int(sb, endid) ; push_str(sb, "\n") }
-    if am.wild != 1 and am.wild != 2 { push_str(sb, ".Larmskip") ; push_int(sb, aid) ; push_str(sb, ":\n") }
-    ar = am.next
   }
   push_str(sb, "  ebreak # match: no arm taken\n")
 }
@@ -7351,11 +7367,16 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
           push_str(sb, ".Lmend") ; push_int(sb, endid) ; push_str(sb, ":\n")
         }
         mut scalar_shape := true
-        mut scalar_arm := arms
-        while scalar_arm != 0 {
-          sam := deref(arm_p(scalar_arm))
-          if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
-          scalar_arm = sam.next
+        mut scalar_arm : Option(ptr(mut Arm)) = arms
+        loop {
+          match scalar_arm {
+            Some(scalar_armq) => {
+              sam := deref(arm_p(scalar_armq))
+              if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
+              scalar_arm = sam.next
+            }
+            None => { break }
+          }
         }
         if (not ok) and (not idxmatch) and (not paramok) and (not bindok) and scalar_shape {
           emit_rv_expr(scrut, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
@@ -7588,20 +7609,28 @@ emit_rv_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, sr
         else {
           kind := ct_type_kind(RV_SUB_ITS, RV_SUB_ITL, decls, src)
           nkind := ct_scalar_num_kind(RV_SUB_ITS, RV_SUB_ITL, src)
-          mut chosen := 0
-          mut cwild := 0
-          mut carm := cmah
-          while carm != 0 {
-            cam := deref(arm_p(carm))
-            if cam.wild != 0 { cwild = carm }
-            else if ct_kind_of_name(src, cam.vs, cam.vl) == kind { chosen = carm }
-            else if ct_num_kind_of_name(src, cam.vs, cam.vl) == nkind { chosen = carm }
-            carm = cam.next
+          mut chosen : Option(ptr(mut Arm)) = Option.None
+          mut cwild : Option(ptr(mut Arm)) = Option.None
+          mut carm : Option(ptr(mut Arm)) = cmah
+          loop {
+            match carm {
+              Some(carmq) => {
+                cam := deref(arm_p(carmq))
+                if cam.wild != 0 { cwild = Option.Some(carmq) }
+                else if ct_kind_of_name(src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
+                else if ct_num_kind_of_name(src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
+                carm = cam.next
+              }
+              None => { break }
+            }
           }
-          if chosen == 0 { chosen = cwild }
-          if chosen != 0 {
-            cam2 := deref(arm_p(chosen))
-            emit_rv_stmts(cam2.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
+          chosen = ast::arm_or(chosen, cwild)
+          match chosen {
+            Some(chosenq) => {
+              cam2 := deref(arm_p(chosenq))
+              emit_rv_stmts(cam2.body_stmts, sb, a, src, params_head, pcount, body_head, decls, frame, bind_head, bind_base)
+            }
+            None => {}
           }
         }
         s = cmnx
@@ -8097,7 +8126,7 @@ emit_rv_str_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u
       Stmt::ExprStmt(e, nx) => { rv_str_data_if_print(e, sb, src, a) ; s = nx }
       Stmt::While(c, b, nx) => { emit_rv_str_data(b, sb, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { emit_rv_str_data(th, sb, src, a) ; emit_rv_str_data(el, sb, src, a) ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; if ast::arm_body_first_use(mah, arm) { emit_rv_str_data(am.body_stmts, sb, src, a) } ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if ast::arm_body_first_use(mah, armq) { emit_rv_str_data(am.body_stmts, sb, src, a) } ; arm = am.next }; None => { break } } } ; s = mnx }
       Stmt::Assign(ns, nl, v, nx) => { s = nx }
       Stmt::Return(rv, nx) => { s = nx }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
@@ -8150,7 +8179,7 @@ emit_rv_float_data := fn(list : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { emit_rv_float_data_expr(fv, sb, src, a) ; s = nx }
       Stmt::IndexFieldAssign(_ifb, _ifi, _iffs, _iffl, ifv, ifnx) => { emit_rv_float_data_expr(ifv, sb, src, a) ; s = ifnx }
       Stmt::IndexAssign(ib, ii, iv, nx) => { emit_rv_float_data_expr(iv, sb, src, a) ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 { am := deref(arm_p(arm)) ; if ast::arm_body_first_use(mah, arm) { emit_rv_float_data(am.body_stmts, sb, src, a) } ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if ast::arm_body_first_use(mah, armq) { emit_rv_float_data(am.body_stmts, sb, src, a) } ; arm = am.next }; None => { break } } } ; s = mnx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { emit_rv_float_data_expr(flo, sb, src, a) ; if unchecked bitcast(usize, fhi) != 0 { emit_rv_float_data_expr(fhi, sb, src, a) } ; emit_rv_float_data(fb, sb, src, a) ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { emit_rv_float_data_expr(rlo, sb, src, a) ; if unchecked bitcast(usize, rhi) != 0 { emit_rv_float_data_expr(rhi, sb, src, a) } ; emit_rv_float_data(rb, sb, src, a) ; s = nx }
       Stmt::CompIf(cc, th, el, nx) => { emit_rv_float_data(th, sb, src, a) ; emit_rv_float_data(el, sb, src, a) ; s = nx }

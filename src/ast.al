@@ -329,7 +329,7 @@ pub Expr := enum {
   Var(usize, usize),
   Bin(u8, ptr(Expr), ptr(Expr)),
   If(ptr(Expr), ptr(Expr), ptr(Expr)),
-  Match(ptr(Expr), ptr(mut Arm)),
+  Match(ptr(Expr), Option(ptr(mut Arm))),
   Call(usize, usize, usize, ptr(mut Arg)),
   StructLit(usize, usize, usize, ptr(mut Arg)),
   Field(ptr(Expr), usize, usize),
@@ -452,21 +452,27 @@ pub Expr := enum {
 ## arm body is a STATEMENT LIST whose head handle is `body_stmts` (0 = empty); `body` is unused
 ## (a dummy `Expr` pointer). The two forms never mix within one arm — the parser sets exactly one.
 pub Arm := struct {
-  wild : u8, lit : i64, body : ptr(Expr), next : ptr(mut Arm),
+  wild : u8, lit : i64, body : ptr(Expr), next : Option(ptr(mut Arm)),
   vs : usize, vl : usize, binds_head : Option(ptr(mut Bind)),
   body_stmts : ptr(mut Stmt),
   hi : i64,                     ## range-pattern upper bound (wild 5/6); `lit` is the lower bound
 }
 
 ## `Arm`-list plumbing (§6 ptr-typing). `Arm.next` and the arm-list HEADS in the `Expr::Match` /
-## `Stmt::Match` / `Stmt::CompMatch` enum payloads are `ptr(mut Arm)` (absolute pointers). `arm_p` is the
+## `Stmt::Match` / `Stmt::CompMatch` enum payloads are `Option(ptr(mut Arm))` (`None` = no arms; `arm_p` applies to a `Some` payload). `arm_p` is the
 ## typed IDENTITY accessor — an arm read is `deref(arm_p(h))` / `deref(arm_p(h)).field`, so the lean lower
 ## resolves the pointee STRUCT from `arm_p`'s return type (an `Arm` is read as a struct copy, NEVER matched,
 ## so the enum-scrutinee resolution gap that blocks `Stmt` does not apply here). The pass-plumbing params
-## that thread an arm-head (`head_in`/`ah`/`head`, several of which also name Arg/Stmt heads) stay `usize`
-## handles — they hold the pointer bits and resolve through `arm_p`; the checker is lenient on usize<->ptr.
+## that thread an arm-head are `Option(ptr(mut Arm))` too.
 pub arm_p := fn(p : ptr(mut Arm)) -> ptr(mut Arm) { p }
-pub arm_null := fn() -> ptr(mut Arm) { unchecked bitcast(ptr(mut Arm), 0) }
+pub arm_any := fn(h : Option(ptr(mut Arm))) -> bool { match h { Some(_q) => { true }; None => { false } } }
+## `h` if it is `Some`, else `d` (the chosen arm, else the `_` fallback).
+pub arm_or := fn(h : Option(ptr(mut Arm)), d : Option(ptr(mut Arm))) -> Option(ptr(mut Arm)) {
+  match h { Some(_q) => { h }; None => { d } }
+}
+pub arm_at := fn(h : Option(ptr(mut Arm)), msg : str) -> ptr(mut Arm) {
+  match h { Some(q) => { q }; None => { panic(msg) } }
+}
 
 ## True when `arm` is the FIRST arm in the list starting at `head` that carries its body node —
 ## i.e. no earlier arm in the same list points at the same body. The answer a DATA walk needs.
@@ -493,17 +499,23 @@ pub arm_null := fn() -> ptr(mut Arm) { unchecked bitcast(ptr(mut Arm), 0) }
 ## `body_stmts` and a per-alternative dummy `body`, an expression-position arm carries `body` and a
 ## zero `body_stmts`. Compare the one that is set, so both match forms are covered by one rule. A
 ## zero body is nothing to walk, so it is always reported first-use rather than deduplicated.
-pub arm_body_first_use := fn(head : ptr(mut Arm), arm : ptr(mut Arm)) -> bool {
+pub arm_body_first_use := fn(head : Option(ptr(mut Arm)), arm : ptr(mut Arm)) -> bool {
   am := deref(arm_p(arm))
   bs := unchecked bitcast(usize, am.body_stmts)
   be := unchecked bitcast(usize, am.body)
   if bs == 0 and be == 0 { return true }
-  mut p := head
-  while unchecked bitcast(usize, p) != 0 and unchecked bitcast(usize, p) != unchecked bitcast(usize, arm) {
-    pm := deref(arm_p(p))
-    if bs != 0 and unchecked bitcast(usize, pm.body_stmts) == bs { return false }
-    if bs == 0 and unchecked bitcast(usize, pm.body) == be { return false }
-    p = pm.next
+  mut p : Option(ptr(mut Arm)) = head
+  loop {
+    match p {
+      Some(pq) => {
+        if pq == arm { break }
+        pm := deref(arm_p(pq))
+        if bs != 0 and unchecked bitcast(usize, pm.body_stmts) == bs { return false }
+        if bs == 0 and unchecked bitcast(usize, pm.body) == be { return false }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   true
 }
@@ -745,7 +757,7 @@ pub Stmt := enum {
   FieldAssign(usize, usize, usize, usize, ptr(Expr), ptr(mut Stmt)),
   Return(ptr(Expr), ptr(mut Stmt)),
   If(ptr(Expr), ptr(mut Stmt), ptr(mut Stmt), ptr(mut Stmt)),
-  Match(ptr(Expr), ptr(mut Arm), ptr(mut Stmt)),
+  Match(ptr(Expr), Option(ptr(mut Arm)), ptr(mut Stmt)),
   For(usize, usize, ptr(Expr), ptr(Expr), ptr(mut Stmt), ptr(mut Stmt)),
   ## POINTER tier: a store through a pointer `deref(p) = <expr>` — the `ptr` expression,
   ## the value expression, and `next`. Lower lowers the value, lowers the pointer, and stores
@@ -809,7 +821,7 @@ pub Stmt := enum {
   ## (CompMatch: the scrutinee `typeinfo(T)`, the arm-list head, next). The lower EVALUATES T's KIND
   ## (struct/enum/array/scalar, in a mono instance) and emits ONLY the arm whose variant name matches
   ## (or the `_` arm). The sibling of `comptime if (match typeinfo(T) {…})`; derive's `eq`/`lt` use it.
-  CompMatch(ptr(Expr), ptr(mut Arm), ptr(mut Stmt)),
+  CompMatch(ptr(Expr), Option(ptr(mut Arm)), ptr(mut Stmt)),
   ## COMPTIME RANGE iteration `comptime for <var> in <lo> .. <hi> { body }` (CompForRange: the loop-var
   ## name span `[vs, vs+vl)`, the `lo`/`hi` bound exprs (compile-time integer constants), the
   ## body-statement-list head, next). The lower UNROLLS it at compile time: for each `k` in `lo..hi` it

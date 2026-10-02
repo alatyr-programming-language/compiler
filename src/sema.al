@@ -2197,11 +2197,16 @@ da_bad_expr := fn(e : ptr(Expr), da : ptr(DA), src : ptr(u8)) -> bool {
     Expr::If(c, t, f) => { da_bad_expr(c, da, src) or da_bad_expr(t, da, src) or da_bad_expr(f, da, src) }
     Expr::Match(sc, ah) => {
       mut bad := da_bad_expr(sc, da, src)
-      mut arm := ah
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        if da_bad_expr(am.body, da, src) { bad = true }
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            if da_bad_expr(am.body, da, src) { bad = true }
+            arm = am.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -4460,14 +4465,14 @@ expr_enum_parts := fn(e : ptr(Expr)) -> EnumParts {
 ## payload-heavy `Match` arm under the seed (scar #2, same as `Var`). This lets `check_expr` run the
 ## exhaustiveness check on a VALUE match before that (dead-for-this-arm) match. `is_match` false → not a
 ## match. (`head` = the arena-linked `Arm` list; `scrut` = the scrutinee expr.)
-MatchParts := struct { is_match : bool, scrut : ptr(Expr), head : ptr(mut Arm) }
+MatchParts := struct { is_match : bool, scrut : ptr(Expr), head : Option(ptr(mut Arm)) }
 expr_match_parts := fn(e : ptr(Expr)) -> MatchParts {
   match deref(e) {
     Expr::Match(scrut, head) => { MatchParts(is_match = true, scrut = scrut, head = head) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MatchParts(is_match = false, scrut = unchecked bitcast(ptr(Expr), 0), head = unchecked bitcast(ptr(mut Arm), 0)) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MatchParts(is_match = false, scrut = unchecked bitcast(ptr(Expr), 0), head = Option.None) }
   }
 }
 
@@ -4550,22 +4555,27 @@ scalar_key := fn(x : i64, dom : ScalarDom) -> i64 {
 ##     256 literal arms leave one uncovered (issue #788). A range there is not decided (fail-open).
 ## Fail-OPEN (false) for a `_` arm (exhaustive by §5.1) and for any variant / str / comptime arm — the
 ## same never-false-reject discipline as the enum check.
-scalar_coverage_gap := fn(head : ptr(mut Arm), tag : TyKind, tns : usize, tnl : usize, src : ptr(u8)) -> bool {
+scalar_coverage_gap := fn(head : Option(ptr(mut Arm)), tag : TyKind, tns : usize, tnl : usize, src : ptr(u8)) -> bool {
   mut has_range := false
   mut has_wild := false
   mut all_simple := true
   mut nlit : usize = 0
-  mut arm := head
+  mut arm : Option(ptr(mut Arm)) = head
   ## null-ok: Arm.next — a `match`'s arm list ends in a null link (ast.al "0 = end")
-  while unchecked bitcast(usize, arm) != 0 {
-    am := deref(arm_p(arm))
-    match scalar_pat(am.wild, am.vs, am.vl) {
-      PatWild => { has_wild = true }
-      PatHalfOpen | PatInclusive => { has_range = true }
-      PatLit => { nlit += 1 }
-      PatVariant | PatOther => { all_simple = false }
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        match scalar_pat(am.wild, am.vs, am.vl) {
+          PatWild => { has_wild = true }
+          PatHalfOpen | PatInclusive => { has_range = true }
+          PatLit => { nlit += 1 }
+          PatVariant | PatOther => { all_simple = false }
+        }
+        arm = am.next
+      }
+      None => { break }
     }
-    arm = am.next
   }
   if has_wild or not all_simple { return false }
   mut dom := ScalarDom(finite = false, lo = 0, hi = 0, unsigned64 = false)
@@ -4588,29 +4598,34 @@ scalar_coverage_gap := fn(head : ptr(mut Arm), tag : TyKind, tns : usize, tnl : 
   while not done {
     mut covered := false
     mut reach : i64 = v
-    mut a2 := head
+    mut a2 : Option(ptr(mut Arm)) = head
     ## null-ok: Arm.next — a `match`'s arm list ends in a null link (ast.al "0 = end")
-    while unchecked bitcast(usize, a2) != 0 {
-      m := deref(arm_p(a2))
-      klo := scalar_key(m.lit, dom)
-      khi := scalar_key(m.hi, dom)
-      match scalar_pat(m.wild, m.vs, m.vl) {
-        PatLit => { if klo == v { covered = true } }
-        PatHalfOpen => {
-          if klo <= v and v < khi {
-            covered = true
-            if khi - 1 > reach { reach = khi - 1 }
+    loop {
+      match a2 {
+        Some(a2q) => {
+          m := deref(arm_p(a2q))
+          klo := scalar_key(m.lit, dom)
+          khi := scalar_key(m.hi, dom)
+          match scalar_pat(m.wild, m.vs, m.vl) {
+            PatLit => { if klo == v { covered = true } }
+            PatHalfOpen => {
+              if klo <= v and v < khi {
+                covered = true
+                if khi - 1 > reach { reach = khi - 1 }
+              }
+            }
+            PatInclusive => {
+              if klo <= v and v <= khi {
+                covered = true
+                if khi > reach { reach = khi }
+              }
+            }
+            PatWild | PatVariant | PatOther => {}
           }
+          a2 = m.next
         }
-        PatInclusive => {
-          if klo <= v and v <= khi {
-            covered = true
-            if khi > reach { reach = khi }
-          }
-        }
-        PatWild | PatVariant | PatOther => {}
+        None => { break }
       }
-      a2 = m.next
     }
     if not covered { gap = true ; done = true }
     else if reach >= dom.hi { done = true }
@@ -5515,11 +5530,17 @@ sema_wrapper_payload_returns_err := fn(head : ptr(mut Stmt), rts : usize, rtl : 
       Stmt::AllocWith(ae, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
       Stmt::For(fns, fnl, lo, hi, b, nx) => { got = sema_wrapper_payload_returns_err(b, rts, rtl, decls, upto, src, locals, nloc, a) }
       Stmt::Match(sc, ah, nx) => {
-        mut arm := ah
-        while arm != 0 and got == 0 {
-          am := deref(arm_p(arm))
-          got = sema_wrapper_payload_returns_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (got == 0) { break }
+              am := deref(arm_p(armq))
+              got = sema_wrapper_payload_returns_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
+              arm = am.next
+            }
+            None => { break }
+          }
         }
       }
       Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
@@ -5790,12 +5811,18 @@ s3a_expr_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
     }
     Expr::Match(sc, ah) => {
       bad = s3a_expr_bad(sc, decls, upto, src, a, locals, nloc)
-      mut arm := ah
-      while arm != 0 and bad == 0 {
-        am := deref(arm_p(arm))
-        bad = s3a_expr_bad(am.body, decls, upto, src, a, locals, nloc)
-        if bad == 0 { bad = s3a_stmts_bad(am.body_stmts, decls, upto, src, a, locals, nloc) }
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop {
+        match arm {
+          Some(armq) => {
+            if not (bad == 0) { break }
+            am := deref(arm_p(armq))
+            bad = s3a_expr_bad(am.body, decls, upto, src, a, locals, nloc)
+            if bad == 0 { bad = s3a_stmts_bad(am.body_stmts, decls, upto, src, a, locals, nloc) }
+            arm = am.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Call(cs0, cl0, na0, ah0) => {
@@ -5881,12 +5908,18 @@ s3a_stmts_bad := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, sr
       }
       Stmt::Match(sc, ah, nx) => {
         bad = s3a_expr_bad(sc, decls, upto, src, a, locals, nloc)
-        mut arm := ah
-        while arm != 0 and bad == 0 {
-          am := deref(arm_p(arm))
-          bad = s3a_expr_bad(am.body, decls, upto, src, a, locals, nloc)
-          if bad == 0 { bad = s3a_stmts_bad(am.body_stmts, decls, upto, src, a, locals, nloc) }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (bad == 0) { break }
+              am := deref(arm_p(armq))
+              bad = s3a_expr_bad(am.body, decls, upto, src, a, locals, nloc)
+              if bad == 0 { bad = s3a_stmts_bad(am.body_stmts, decls, upto, src, a, locals, nloc) }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
       }
       Stmt::For(fns, fnl, lo, hi, b, nx) => {
@@ -5948,11 +5981,17 @@ s3a_return_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
       if bad == 0 { bad = s3a_return_bad(f, decls, upto, src, a, locals, nloc) }
     }
     Expr::Match(sc, ah) => {
-      mut arm := ah
-      while arm != 0 and bad == 0 {
-        am := deref(arm_p(arm))
-        bad = s3a_return_bad(am.body, decls, upto, src, a, locals, nloc)
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop {
+        match arm {
+          Some(armq) => {
+            if not (bad == 0) { break }
+            am := deref(arm_p(armq))
+            bad = s3a_return_bad(am.body, decls, upto, src, a, locals, nloc)
+            arm = am.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::Call | Expr::StructLit | Expr::Field
@@ -6669,12 +6708,17 @@ ret_sink_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls : ptr(r
       Stmt::AllocWith(ae, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
       Stmt::For(fns, fnl, lo, hi, b, nx) => { be := ret_sink_err(b, rts, rtl, decls, upto, src, locals, nloc, a); if be != 0 and res == 0 { res = be } }
       Stmt::Match(sc, ah, nx) => {
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          ae2 := ret_sink_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
-          if ae2 != 0 and res == 0 { res = ae2 }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              ae2 := ret_sink_err(am.body_stmts, rts, rtl, decls, upto, src, locals, nloc, a)
+              if ae2 != 0 and res == 0 { res = ae2 }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
       }
       Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
@@ -6707,11 +6751,17 @@ ct_return_guard_err := fn(head : ptr(mut Stmt), rts : usize, rtl : usize, decls 
       Stmt::AllocWith(ae, b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
       Stmt::For(fns, fnl, lo, hi, b, nx) => { got = ct_return_guard_err(b, rts, rtl, decls, upto, src, a) }
       Stmt::Match(sc, ah, nx) => {
-        mut arm := ah
-        while arm != 0 and got == 0 {
-          am := deref(arm_p(arm))
-          got = ct_return_guard_err(am.body_stmts, rts, rtl, decls, upto, src, a)
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (got == 0) { break }
+              am := deref(arm_p(armq))
+              got = ct_return_guard_err(am.body_stmts, rts, rtl, decls, upto, src, a)
+              arm = am.next
+            }
+            None => { break }
+          }
         }
       }
       Stmt::Assign | Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign
@@ -7059,7 +7109,7 @@ match_scrut_enum_ty := fn(sc : ptr(Expr), decls : ptr(rt::Vec), upto : usize, sr
 ## the caller). The enum declaration is looked up over the FULL `decls` length — see the note above.
 ## `false` when the enum declaration is not found at all: fail-open is still correct where the type
 ## genuinely does not resolve; it simply must not be the normal case.
-enum_coverage_gap := fn(head : ptr(mut Arm), decls : ptr(rt::Vec), src : ptr(u8), ens : usize, enl : usize) -> bool {
+enum_coverage_gap := fn(head : Option(ptr(mut Arm)), decls : ptr(rt::Vec), src : ptr(u8), ens : usize, enl : usize) -> bool {
   ncnt := rt::vec_len(deref(decls))
   mut edi : i64 = 0 - 1
   mut di := 0
@@ -7077,11 +7127,16 @@ enum_coverage_gap := fn(head : ptr(mut Arm), decls : ptr(rt::Vec), src : ptr(u8)
       Some(fvq) => {
         fdc := deref(fld_p(fvq))
         mut covered := false
-        mut a3 := head
-        while a3 != 0 {
-          am3 := deref(arm_p(a3))
-          if streq(src, am3.vs, am3.vl, fdc.ns, fdc.nl) { covered = true }
-          a3 = am3.next
+        mut a3 : Option(ptr(mut Arm)) = head
+        loop {
+          match a3 {
+            Some(a3q) => {
+              am3 := deref(arm_p(a3q))
+              if streq(src, am3.vs, am3.vl, fdc.ns, fdc.nl) { covered = true }
+              a3 = am3.next
+            }
+            None => { break }
+          }
         }
         if not covered { uncovered = true }
         fv = fdc.next
@@ -7118,13 +7173,18 @@ match_index_base_span := fn(sc : ptr(Expr), a : ptr(mut rt::Arena)) -> usize {
 
 ## Are ALL of a `match`'s arms plain variant patterns (no `_` wildcard / comptime / literal / range)?
 ## §5.1 makes a `_` default exhaustive by construction, so only an all-plain arm list is checked.
-arms_all_plain := fn(head : ptr(mut Arm)) -> bool {
+arms_all_plain := fn(head : Option(ptr(mut Arm))) -> bool {
   mut all_plain := true
-  mut a2 := head
-  while a2 != 0 {
-    am2 := deref(arm_p(a2))
-    if am2.wild != 0 { all_plain = false }
-    a2 = am2.next
+  mut a2 : Option(ptr(mut Arm)) = head
+  loop {
+    match a2 {
+      Some(a2q) => {
+        am2 := deref(arm_p(a2q))
+        if am2.wild != 0 { all_plain = false }
+        a2 = am2.next
+      }
+      None => { break }
+    }
   }
   all_plain
 }
@@ -8092,33 +8152,38 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
     Expr::If(c, t, f) => { expr_has_unbound(c, decls, upto, src, a, locals, nloc) or expr_has_unbound(t, decls, upto, src, a, locals, nloc) or expr_has_unbound(f, decls, upto, src, a, locals, nloc) }
     Expr::Match(scrut, head) => {
       mut bad := expr_has_unbound(scrut, decls, upto, src, a, locals, nloc)
-      mut arm := head
+      mut arm : Option(ptr(mut Arm)) = head
       mut nl2 := nloc
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        ## a variant arm binds its payload vars (`binds_head`) VISIBLE ONLY in that arm — push them
-        ## before recursing so `Some(w) => w` does not read `w` as unbound, then pop (`lvec_truncate`
-        ## + `nl2` restore) so they do not leak into a sibling arm.
-        base := nl2
-        mut bd := am.binds_head
-        loop {
-          match bd {
-            Some(bdq) => {
-              bnns := bnd_ns(bdq)
-              bnnl := bnd_nl(bdq)
-              if not local_in(locals, nl2, src, bnns, bnnl) {
-                lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                nl2 += 1
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            ## a variant arm binds its payload vars (`binds_head`) VISIBLE ONLY in that arm — push them
+            ## before recursing so `Some(w) => w` does not read `w` as unbound, then pop (`lvec_truncate`
+            ## + `nl2` restore) so they do not leak into a sibling arm.
+            base := nl2
+            mut bd := am.binds_head
+            loop {
+              match bd {
+                Some(bdq) => {
+                  bnns := bnd_ns(bdq)
+                  bnnl := bnd_nl(bdq)
+                  if not local_in(locals, nl2, src, bnns, bnnl) {
+                    lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                    nl2 += 1
+                  }
+                  bd = bnd_next(bdq)
+                }
+                None => { break }
               }
-              bd = bnd_next(bdq)
             }
-            None => { break }
+            if expr_has_unbound(am.body, decls, upto, src, a, locals, nl2) { bad = true }
+            lvec_truncate(deref(locals), base)
+            nl2 = base
+            arm = am.next
           }
+          None => { break }
         }
-        if expr_has_unbound(am.body, decls, upto, src, a, locals, nl2) { bad = true }
-        lvec_truncate(deref(locals), base)
-        nl2 = base
-        arm = am.next
       }
       bad
     }
@@ -8451,8 +8516,8 @@ sema_vty_breaks := fn(h : ptr(mut Stmt), depth : usize) -> ir::VTy {
       Stmt::Loop(b, nx) => { r = sema_vty_breaks(b, depth + 1); s = nx }
       Stmt::For(fns, fnl, lo, hi, b, nx) => { r = sema_vty_breaks(b, depth + 1); s = nx }
       Stmt::Match(sc, ah, nx) => {
-        mut arm := ah
-        while arm != 0 and not ir::vty_known(r) { am := deref(arm_p(arm)); r = sema_vty_breaks(am.body_stmts, depth); arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (not ir::vty_known(r)) { break }; am := deref(arm_p(armq)); r = sema_vty_breaks(am.body_stmts, depth); arm = am.next }; None => { break } } }
         s = nx
       }
       Stmt::Assign(ns, nl, v, nx) => { s = nx }
@@ -9073,40 +9138,45 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
         er := Result(Ty, CheckErr).Err(mismatch_err(match_scrut_span(scrut, a), 0))
         return er
       }
-      mut arm := head
+      mut arm : Option(ptr(mut Arm)) = head
       mut acc := Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)
       mut seen := false
       mut nl2 := nloc
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        ## bind the arm's PAYLOAD variables (poison-tolerant, instance-dependent types) VISIBLE ONLY
-        ## while checking THIS arm's body — mirrors the statement-match binding. `nl2` restores the
-        ## local count after the arm; `lvec_truncate` keeps the vec length in lockstep.
-        base := nl2
-        mut bd := am.binds_head
-        loop {
-          match bd {
-            Some(bdq) => {
-              bnns := bnd_ns(bdq)
-              bnnl := bnd_nl(bdq)
-              if not local_in(locals, nl2, src, bnns, bnnl) {
-                lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                nl2 += 1
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            ## bind the arm's PAYLOAD variables (poison-tolerant, instance-dependent types) VISIBLE ONLY
+            ## while checking THIS arm's body — mirrors the statement-match binding. `nl2` restores the
+            ## local count after the arm; `lvec_truncate` keeps the vec length in lockstep.
+            base := nl2
+            mut bd := am.binds_head
+            loop {
+              match bd {
+                Some(bdq) => {
+                  bnns := bnd_ns(bdq)
+                  bnnl := bnd_nl(bdq)
+                  if not local_in(locals, nl2, src, bnns, bnnl) {
+                    lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                    nl2 += 1
+                  }
+                  bd = bnd_next(bdq)
+                }
+                None => { break }
               }
-              bd = bnd_next(bdq)
             }
-            None => { break }
+            cb := check_expr(am.body, decls, upto, src, a, locals, nl2)?
+            lvec_truncate(deref(locals), base)
+            nl2 = base
+            if seen {
+              ptrint_probe_site("OP-MATCH", "matcharm", false, acc.kind, cb.kind, s_of(am.body, a), src)
+              if not ty_eq(acc, cb, src) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(am.body, a), 0)); return er }
+              acc = unify(acc, cb)
+            } else { acc = cb; seen = true }
+            arm = am.next
           }
+          None => { break }
         }
-        cb := check_expr(am.body, decls, upto, src, a, locals, nl2)?
-        lvec_truncate(deref(locals), base)
-        nl2 = base
-        if seen {
-          ptrint_probe_site("OP-MATCH", "matcharm", false, acc.kind, cb.kind, s_of(am.body, a), src)
-          if not ty_eq(acc, cb, src) { er := Result(Ty, CheckErr).Err(mismatch_err(s_of(am.body, a), 0)); return er }
-          acc = unify(acc, cb)
-        } else { acc = cb; seen = true }
-        arm = am.next
       }
       Result(Ty, CheckErr).Ok(acc)
     }
@@ -9838,12 +9908,18 @@ ctor_lit_expr_span := fn(e : ptr(Expr), chk : bool, decls : ptr(rt::Vec), upto :
     }
     Expr::Match(sc, mah) => {
       res = ctor_lit_expr_span(sc, chk, decls, upto, src, a)
-      mut arm := mah
-      while arm != 0 and res == 0 {
-        am := deref(arm_p(arm))
-        res = ctor_lit_expr_span(am.body, chk, decls, upto, src, a)
-        if res == 0 { res = ctor_lit_stmts_span(am.body_stmts, chk, decls, upto, src, a) }
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = mah
+      loop {
+        match arm {
+          Some(armq) => {
+            if not (res == 0) { break }
+            am := deref(arm_p(armq))
+            res = ctor_lit_expr_span(am.body, chk, decls, upto, src, a)
+            if res == 0 { res = ctor_lit_stmts_span(am.body_stmts, chk, decls, upto, src, a) }
+            arm = am.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Call(_cs, _cl, _na, cah) => { res = ctor_lit_args_span(cah, chk, decls, upto, src, a) }
@@ -9906,12 +9982,18 @@ ctor_lit_stmts_span := fn(head : ptr(mut Stmt), chk : bool, decls : ptr(rt::Vec)
       }
       Stmt::Match(msc, mah, _mnx) => {
         res = ctor_lit_expr_span(msc, chk, decls, upto, src, a)
-        mut arm := mah
-        while arm != 0 and res == 0 {
-          am := deref(arm_p(arm))
-          res = ctor_lit_expr_span(am.body, chk, decls, upto, src, a)
-          if res == 0 { res = ctor_lit_stmts_span(am.body_stmts, chk, decls, upto, src, a) }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = mah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (res == 0) { break }
+              am := deref(arm_p(armq))
+              res = ctor_lit_expr_span(am.body, chk, decls, upto, src, a)
+              if res == 0 { res = ctor_lit_stmts_span(am.body_stmts, chk, decls, upto, src, a) }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
       }
       Stmt::For(_fns, _fnl, flo, fhi, fb, _ffnx) => {
@@ -9949,11 +10031,17 @@ ctor_lit_stmts_span := fn(head : ptr(mut Stmt), chk : bool, decls : ptr(rt::Vec)
       Stmt::CompFor(_cvs, _cvl, _civ, cfb, _cfnx) => { res = ctor_lit_stmts_span(cfb, chk, decls, upto, src, a) }
       Stmt::CompMatch(cmsc, cmah, _cmnx) => {
         res = ctor_lit_expr_span(cmsc, chk, decls, upto, src, a)
-        mut carm := cmah
-        while carm != 0 and res == 0 {
-          cam := deref(arm_p(carm))
-          res = ctor_lit_stmts_span(cam.body_stmts, chk, decls, upto, src, a)
-          carm = cam.next
+        mut carm : Option(ptr(mut Arm)) = cmah
+        loop {
+          match carm {
+            Some(carmq) => {
+              if not (res == 0) { break }
+              cam := deref(arm_p(carmq))
+              res = ctor_lit_stmts_span(cam.body_stmts, chk, decls, upto, src, a)
+              carm = cam.next
+            }
+            None => { break }
+          }
         }
       }
       Stmt::CompForRange(_rvs, _rvl, rlo, rhi, rb, _rnx2) => {
@@ -10658,11 +10746,16 @@ lbv_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
     Expr::If(cc, t, f) => { lbv_expr(cc, decls, upto, src, a, locals, nloc) or lbv_expr(t, decls, upto, src, a, locals, nloc) or lbv_expr(f, decls, upto, src, a, locals, nloc) }
     Expr::Match(sc, ah) => {
       mut bad := lbv_expr(sc, decls, upto, src, a, locals, nloc)
-      mut arm := ah
-      while unchecked bitcast(usize, arm) != 0 {
-        am := deref(arm_p(arm))
-        if lbv_expr(am.body, decls, upto, src, a, locals, nloc) { bad = true }
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            if lbv_expr(am.body, decls, upto, src, a, locals, nloc) { bad = true }
+            arm = am.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -10766,11 +10859,16 @@ lbv_expr_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
     Expr::If(cc, t, f) => { a0 := lbv_expr_code(cc, decls, upto, src, a, locals, nloc) ; a1 := lbv_merge_code(a0, lbv_expr_code(t, decls, upto, src, a, locals, nloc)) ; lbv_merge_code(a1, lbv_expr_code(f, decls, upto, src, a, locals, nloc)) }
     Expr::Match(sc, ah) => {
       mut bad := lbv_expr_code(sc, decls, upto, src, a, locals, nloc)
-      mut arm := ah
-      while unchecked bitcast(usize, arm) != 0 {
-        am := deref(arm_p(arm))
-        bad = lbv_merge_code(bad, lbv_expr_code(am.body, decls, upto, src, a, locals, nloc))
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            bad = lbv_merge_code(bad, lbv_expr_code(am.body, decls, upto, src, a, locals, nloc))
+            arm = am.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -10892,11 +10990,16 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       Stmt::Match(sc, ah, nx) => {
         ec = lbv_expr_conflict(sc, decls, upto, src, a, locals, nloc)
         if lbv_code_is_conflict(ec) { acc = ec }
-        mut arm := ah
-        while unchecked bitcast(usize, arm) != 0 {
-          am := deref(arm_p(arm))
-            acc = lbv_merge_code(acc, lbv_stmts(am.body_stmts, c, decls, upto, src, a, locals, nloc))
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+                acc = lbv_merge_code(acc, lbv_stmts(am.body_stmts, c, decls, upto, src, a, locals, nloc))
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         st = nx
       }
@@ -10968,11 +11071,16 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
       Stmt::CompMatch(cmsc, cmah, nx) => {
         ec = lbv_expr_conflict(cmsc, decls, upto, src, a, locals, nloc)
         if lbv_code_is_conflict(ec) { acc = ec }
-        mut cam := cmah
-        while unchecked bitcast(usize, cam) != 0 {
-          cm := deref(arm_p(cam))
-            acc = lbv_merge_code(acc, lbv_stmts(cm.body_stmts, c, decls, upto, src, a, locals, nloc))
-          cam = cm.next
+        mut cam : Option(ptr(mut Arm)) = cmah
+        loop {
+          match cam {
+            Some(camq) => {
+              cm := deref(arm_p(camq))
+                acc = lbv_merge_code(acc, lbv_stmts(cm.body_stmts, c, decls, upto, src, a, locals, nloc))
+              cam = cm.next
+            }
+            None => { break }
+          }
         }
         st = nx
       }
@@ -11085,30 +11193,35 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
     ## an error or leaking it into the next arm.
     Expr::Match(scrut0, ah0) => {
       mut r1m := expr_unbound_span(scrut0, decls, upto, src, a, locals, nloc)
-      mut arm0 := ah0
+      mut arm0 : Option(ptr(mut Arm)) = ah0
       mut nl2m := nloc
-      while arm0 != 0 {
-        am0 := deref(arm_p(arm0))
-        base0 := nl2m
-        mut bd0 := am0.binds_head
-        loop {
-          match bd0 {
-            Some(bd0q) => {
-              bnns0 := bnd_ns(bd0q)
-              bnnl0 := bnd_nl(bd0q)
-              if not local_in(locals, nl2m, src, bnns0, bnnl0) {
-                lvec_push(deref(locals), Local(ns = bnns0, nl = bnnl0, tag = 0, prov = 0, tns = 0, tnl = 0))
-                nl2m += 1
+      loop {
+        match arm0 {
+          Some(arm0q) => {
+            am0 := deref(arm_p(arm0q))
+            base0 := nl2m
+            mut bd0 := am0.binds_head
+            loop {
+              match bd0 {
+                Some(bd0q) => {
+                  bnns0 := bnd_ns(bd0q)
+                  bnnl0 := bnd_nl(bd0q)
+                  if not local_in(locals, nl2m, src, bnns0, bnnl0) {
+                    lvec_push(deref(locals), Local(ns = bnns0, nl = bnnl0, tag = 0, prov = 0, tns = 0, tnl = 0))
+                    nl2m += 1
+                  }
+                  bd0 = bnd_next(bd0q)
+                }
+                None => { break }
               }
-              bd0 = bnd_next(bd0q)
             }
-            None => { break }
+            if r1m == 0 { r1m = expr_unbound_span(am0.body, decls, upto, src, a, locals, nl2m) }
+            lvec_truncate(deref(locals), base0)
+            nl2m = base0
+            arm0 = am0.next
           }
+          None => { break }
         }
-        if r1m == 0 { r1m = expr_unbound_span(am0.body, decls, upto, src, a, locals, nl2m) }
-        lvec_truncate(deref(locals), base0)
-        nl2m = base0
-        arm0 = am0.next
       }
       r1m
     }
@@ -11321,11 +11434,17 @@ sema_comptime_cond_runtime_local := fn(e : ptr(Expr), src : ptr(u8), locals : pt
     }
     Expr::Match(sc, ah) => {
       out = sema_comptime_cond_runtime_local(sc, src, locals, nloc)
-      mut arm := ah
-      while arm != 0 and out.n == 0 {
-        am := deref(arm_p(arm))
-        out = sema_comptime_cond_runtime_local(am.body, src, locals, nloc)
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop {
+        match arm {
+          Some(armq) => {
+            if not (out.n == 0) { break }
+            am := deref(arm_p(armq))
+            out = sema_comptime_cond_runtime_local(am.body, src, locals, nloc)
+            arm = am.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Call(cs, cl, na, ah) => {
@@ -11466,14 +11585,19 @@ stmts_mention_var := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : us
 }
 
 ## Walk a `Match`'s arm list — does any arm (value `body` or statement `body_stmts`) mention `[xs, xl)`?
-arms_mention_var := fn(head : ptr(mut Arm), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
-  mut arm := head
+arms_mention_var := fn(head : Option(ptr(mut Arm)), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut arm : Option(ptr(mut Arm)) = head
   mut res := false
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    if expr_mentions_var(am.body, src, xs, xl, a) { res = true }
-    if stmts_mention_var(am.body_stmts, src, xs, xl, a) { res = true }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if expr_mentions_var(am.body, src, xs, xl, a) { res = true }
+        if stmts_mention_var(am.body_stmts, src, xs, xl, a) { res = true }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -11577,13 +11701,19 @@ sema_comptime_branch_escape_stmts := fn(head : ptr(mut Stmt), cont : ptr(mut Stm
   out
 }
 
-sema_comptime_branch_escape_arms := fn(head : ptr(mut Arm), cont : ptr(mut Stmt), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
-  mut arm := head
+sema_comptime_branch_escape_arms := fn(head : Option(ptr(mut Arm)), cont : ptr(mut Stmt), src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> VSpan {
+  mut arm : Option(ptr(mut Arm)) = head
   mut out := VSpan(s = 0, n = 0)
-  while arm != 0 and out.n == 0 {
-    am := deref(arm_p(arm))
-    out = sema_comptime_branch_escape_stmts(am.body_stmts, cont, src, locals, nloc, a)
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        if not (out.n == 0) { break }
+        am := deref(arm_p(armq))
+        out = sema_comptime_branch_escape_stmts(am.body_stmts, cont, src, locals, nloc, a)
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   out
 }
@@ -11592,18 +11722,24 @@ sema_comptime_branch_escape_arms := fn(head : ptr(mut Arm), cont : ptr(mut Stmt)
 ## payloads shadow an enclosing local with the same spelling; a plain fn value is rejected only for a
 ## genuine free-variable use. Reassignments (`x = ...`) are deliberately not bindings, so they remain
 ## captures of the enclosing place.
-sema_lambda_binds_arms := fn(head : ptr(mut Arm), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
-  mut arm := head
+sema_lambda_binds_arms := fn(head : Option(ptr(mut Arm)), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut arm : Option(ptr(mut Arm)) = head
   mut hit := false
-  while arm != 0 and not hit {
-    am := deref(arm_p(arm))
-    mut bd := am.binds_head
-    while bd != 0 and not hit {
-      if streq(src, bnd_ns(bd), bnd_nl(bd), xs, xl) { hit = true }
-      bd = bnd_next(bd)
+  loop {
+    match arm {
+      Some(armq) => {
+        if not (not hit) { break }
+        am := deref(arm_p(armq))
+        mut bd := am.binds_head
+        while bd != 0 and not hit {
+          if streq(src, bnd_ns(bd), bnd_nl(bd), xs, xl) { hit = true }
+          bd = bnd_next(bd)
+        }
+        if not hit { hit = sema_lambda_binds_stmts(am.body_stmts, src, xs, xl, a) }
+        arm = am.next
+      }
+      None => { break }
     }
-    if not hit { hit = sema_lambda_binds_stmts(am.body_stmts, src, xs, xl, a) }
-    arm = am.next
   }
   hit
 }
@@ -12430,34 +12566,39 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
       }
       Stmt::Match(sc, ah, nx) => {
         cs := check_expr_da_allow_enum_array_root(sc, decls, upto, src, a, locals, cnt, da)?
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          ## a variant arm `Variant(p0, …) => …` binds its PAYLOAD variables (`binds_head`, a `Bind`
-          ## list) as locals VISIBLE ONLY IN THAT ARM. Their concrete types are instance-dependent
-          ## (the enum payload, possibly a generic type-param) — bind them poison-tolerant (tag 0) so
-          ## the arm body's references resolve. `base` restores the local count after the arm so the
-          ## bindings (and the arm's own locals) do not leak into sibling arms.
-          base := cnt
-          mut bd := am.binds_head
-          loop {
-            match bd {
-              Some(bdq) => {
-                bnns := bnd_ns(bdq)
-                bnnl := bnd_nl(bdq)
-                if not local_in(locals, cnt, src, bnns, bnnl) {
-                  lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                  cnt += 1
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              ## a variant arm `Variant(p0, …) => …` binds its PAYLOAD variables (`binds_head`, a `Bind`
+              ## list) as locals VISIBLE ONLY IN THAT ARM. Their concrete types are instance-dependent
+              ## (the enum payload, possibly a generic type-param) — bind them poison-tolerant (tag 0) so
+              ## the arm body's references resolve. `base` restores the local count after the arm so the
+              ## bindings (and the arm's own locals) do not leak into sibling arms.
+              base := cnt
+              mut bd := am.binds_head
+              loop {
+                match bd {
+                  Some(bdq) => {
+                    bnns := bnd_ns(bdq)
+                    bnnl := bnd_nl(bdq)
+                    if not local_in(locals, cnt, src, bnns, bnnl) {
+                      lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                      cnt += 1
+                    }
+                    bd = bnd_next(bdq)
+                  }
+                  None => { break }
                 }
-                bd = bnd_next(bdq)
               }
-              None => { break }
+              cnt = check_stmts(am.body_stmts, decls, upto, src, a, locals, cnt, da)?
+              lvec_truncate(deref(locals), base)
+              cnt = base
+              arm = am.next
             }
+            None => { break }
           }
-          cnt = check_stmts(am.body_stmts, decls, upto, src, a, locals, cnt, da)?
-          lvec_truncate(deref(locals), base)
-          cnt = base
-          arm = am.next
         }
         ## EXHAUSTIVENESS (§60/CF-1): a `match` on a KNOWN enum whose arms are ALL plain variant patterns
         ## (no `_` wildcard / comptime / lit arm — `wild != 0`) must cover EVERY variant; an uncovered
@@ -12743,30 +12884,36 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
       }
       Stmt::CompMatch(cmsc, cmah, nx) => {
         mut egcm := sema_enum_global_array_value_bad(cmsc, decls, upto, src, locals, cnt, a, true)
-        mut armc := cmah
-        while armc != 0 and egcm == 0 {
-          amc := deref(arm_p(armc))
-          basec := cnt
-          mut arm_cntc := cnt
-          mut bdc := amc.binds_head
-          loop {
-            match bdc {
-              Some(bdcq) => {
-                bnsc := bnd_ns(bdcq)
-                bnlc := bnd_nl(bdcq)
-                if not local_in(locals, arm_cntc, src, bnsc, bnlc) {
-                  lvec_push(deref(locals), Local(ns = bnsc, nl = bnlc, tag = 0, prov = 0, tns = 0, tnl = 0))
-                  arm_cntc += 1
+        mut armc : Option(ptr(mut Arm)) = cmah
+        loop {
+          match armc {
+            Some(armcq) => {
+              if not (egcm == 0) { break }
+              amc := deref(arm_p(armcq))
+              basec := cnt
+              mut arm_cntc := cnt
+              mut bdc := amc.binds_head
+              loop {
+                match bdc {
+                  Some(bdcq) => {
+                    bnsc := bnd_ns(bdcq)
+                    bnlc := bnd_nl(bdcq)
+                    if not local_in(locals, arm_cntc, src, bnsc, bnlc) {
+                      lvec_push(deref(locals), Local(ns = bnsc, nl = bnlc, tag = 0, prov = 0, tns = 0, tnl = 0))
+                      arm_cntc += 1
+                    }
+                    bdc = bnd_next(bdcq)
+                  }
+                  None => { break }
                 }
-                bdc = bnd_next(bdcq)
               }
-              None => { break }
+              egcm = sema_enum_global_array_value_bad(amc.body, decls, upto, src, locals, arm_cntc, a, false)
+              if egcm == 0 { egcm = sema_enum_global_array_value_bad_stmts(amc.body_stmts, decls, upto, src, locals, arm_cntc, a) }
+              lvec_truncate(deref(locals), basec)
+              armc = amc.next
             }
+            None => { break }
           }
-          egcm = sema_enum_global_array_value_bad(amc.body, decls, upto, src, locals, arm_cntc, a, false)
-          if egcm == 0 { egcm = sema_enum_global_array_value_bad_stmts(amc.body_stmts, decls, upto, src, locals, arm_cntc, a) }
-          lvec_truncate(deref(locals), basec)
-          armc = amc.next
         }
         if egcm != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcm)) }
         cur = nx
@@ -12847,11 +12994,16 @@ stmts_bad_loop_control := fn(head : ptr(mut Stmt), in_loop : bool, a : ptr(mut r
         cur = nx
       }
       Stmt::Match(sc, ah, nx) => {
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          if stmts_bad_loop_control(am.body_stmts, in_loop, a) { bad = true }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if stmts_bad_loop_control(am.body_stmts, in_loop, a) { bad = true }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         cur = nx
       }
@@ -12873,11 +13025,16 @@ stmts_bad_loop_control := fn(head : ptr(mut Stmt), in_loop : bool, a : ptr(mut r
         cur = nx
       }
       Stmt::CompMatch(sc, ah, nx) => {
-        mut arm2 := ah
-        while arm2 != 0 {
-          am2 := deref(arm_p(arm2))
-          if stmts_bad_loop_control(am2.body_stmts, in_loop, a) { bad = true }
-          arm2 = am2.next
+        mut arm2 : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm2 {
+            Some(arm2q) => {
+              am2 := deref(arm_p(arm2q))
+              if stmts_bad_loop_control(am2.body_stmts, in_loop, a) { bad = true }
+              arm2 = am2.next
+            }
+            None => { break }
+          }
         }
         cur = nx
       }
@@ -12964,11 +13121,16 @@ stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut r
         if bad == 0 { bad = stmts_same_scope_redecl(el, src, a) }
       }
       Stmt::Match(sc, ah, nx) => {
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          if bad == 0 { bad = stmts_same_scope_redecl(am.body_stmts, src, a) }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if bad == 0 { bad = stmts_same_scope_redecl(am.body_stmts, src, a) }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
       }
       Stmt::CompIf(c, th, el, nx) => {
@@ -12978,11 +13140,16 @@ stmts_same_scope_redecl := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut r
       Stmt::CompFor(vs, vl, iv, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
       Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if bad == 0 { bad = stmts_same_scope_redecl(b, src, a) } }
       Stmt::CompMatch(sc, ah, nx) => {
-        mut arm2 := ah
-        while arm2 != 0 {
-          am2 := deref(arm_p(arm2))
-          if bad == 0 { bad = stmts_same_scope_redecl(am2.body_stmts, src, a) }
-          arm2 = am2.next
+        mut arm2 : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm2 {
+            Some(arm2q) => {
+              am2 := deref(arm_p(arm2q))
+              if bad == 0 { bad = stmts_same_scope_redecl(am2.body_stmts, src, a) }
+              arm2 = am2.next
+            }
+            None => { break }
+          }
         }
       }
       Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
@@ -13061,8 +13228,8 @@ codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLa
       Stmt::Loop(b, nx) => { ls := stmt_label_span(cur); err = codepoint_label_add(labels, src, ls.s, ls.n, LabelTarget.Loop); if err == 0 { err = codepoint_collect_stmts(b, labels, src, a) } }
       Stmt::If(c, th, el, nx) => { err = codepoint_collect_stmts(th, labels, src, a); if err == 0 { err = codepoint_collect_stmts(el, labels, src, a) } }
       Stmt::Match(sc, ah, nx) => {
-        mut arm := ah
-        while arm != 0 and err == 0 { am := deref(arm_p(arm)); err = codepoint_collect_stmts(am.body_stmts, labels, src, a); arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (err == 0) { break }; am := deref(arm_p(armq)); err = codepoint_collect_stmts(am.body_stmts, labels, src, a); arm = am.next }; None => { break } } }
       }
       Stmt::Unchecked(b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
       Stmt::AllocWith(ae, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
@@ -13070,8 +13237,8 @@ codepoint_collect_stmts := fn(head : ptr(mut Stmt), labels : ptr(mut CodePointLa
       Stmt::CompFor(vs, vl, iv, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
       Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { err = codepoint_collect_stmts(b, labels, src, a) }
       Stmt::CompMatch(sc, ah, nx) => {
-        mut arm2 := ah
-        while arm2 != 0 and err == 0 { am2 := deref(arm_p(arm2)); err = codepoint_collect_stmts(am2.body_stmts, labels, src, a); arm2 = am2.next }
+        mut arm2 : Option(ptr(mut Arm)) = ah
+        loop { match arm2 { Some(arm2q) => { if not (err == 0) { break }; am2 := deref(arm_p(arm2q)); err = codepoint_collect_stmts(am2.body_stmts, labels, src, a); arm2 = am2.next }; None => { break } } }
       }
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
@@ -13100,8 +13267,8 @@ codepoint_check_stmts := fn(head : ptr(mut Stmt), labels : ptr(CodePointLabels),
       Stmt::Loop(b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
       Stmt::If(c, th, el, nx) => { err = codepoint_check_stmts(th, labels, src, a, unchecked_mode); if err == 0 { err = codepoint_check_stmts(el, labels, src, a, unchecked_mode) } }
       Stmt::Match(sc, ah, nx) => {
-        mut arm := ah
-        while arm != 0 and err == 0 { am := deref(arm_p(arm)); err = codepoint_check_stmts(am.body_stmts, labels, src, a, unchecked_mode); arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (err == 0) { break }; am := deref(arm_p(armq)); err = codepoint_check_stmts(am.body_stmts, labels, src, a, unchecked_mode); arm = am.next }; None => { break } } }
       }
       Stmt::Unchecked(b, nx) => { err = codepoint_check_stmts(b, labels, src, a, true) }
       Stmt::AllocWith(ae, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
@@ -13109,8 +13276,8 @@ codepoint_check_stmts := fn(head : ptr(mut Stmt), labels : ptr(CodePointLabels),
       Stmt::CompFor(vs, vl, iv, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
       Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { err = codepoint_check_stmts(b, labels, src, a, unchecked_mode) }
       Stmt::CompMatch(sc, ah, nx) => {
-        mut arm2 := ah
-        while arm2 != 0 and err == 0 { am2 := deref(arm_p(arm2)); err = codepoint_check_stmts(am2.body_stmts, labels, src, a, unchecked_mode); arm2 = am2.next }
+        mut arm2 : Option(ptr(mut Arm)) = ah
+        loop { match arm2 { Some(arm2q) => { if not (err == 0) { break }; am2 := deref(arm_p(arm2q)); err = codepoint_check_stmts(am2.body_stmts, labels, src, a, unchecked_mode); arm2 = am2.next }; None => { break } } }
       }
       Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
         | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
@@ -13139,11 +13306,16 @@ stmts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
       if ah == 0 { false }
       else {
         mut all := true
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          if not stmts_return(am.body_stmts, a) { all = false }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if not stmts_return(am.body_stmts, a) { all = false }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         all
       }
@@ -13155,11 +13327,16 @@ stmts_return := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
       if ah == 0 { false }
       else {
         mut all := true
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          if not stmts_return(am.body_stmts, a) { all = false }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if not stmts_return(am.body_stmts, a) { all = false }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         all
       }
@@ -13206,11 +13383,16 @@ stmts_tail_value := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool {
       if ah == 0 { false }
       else {
         mut all := true
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          if not stmts_tail_value(am.body_stmts, a) { all = false }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if not stmts_tail_value(am.body_stmts, a) { all = false }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         all
       }
@@ -13267,8 +13449,8 @@ sema_bad_typeinfo_field_expr := fn(e : ptr(Expr), src : ptr(u8), vs : usize, vl 
     Expr::If(c, t, f) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(t, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_expr(f, src, vs, vl, a) } }
     Expr::Match(sc, ah) => {
       bad = sema_bad_typeinfo_field_expr(sc, src, vs, vl, a)
-      mut arm := ah
-      while arm != 0 and bad == 0 { am := deref(arm_p(arm)); bad = sema_bad_typeinfo_field_expr(am.body, src, vs, vl, a); if bad == 0 and am.body_stmts != 0 { bad = sema_bad_typeinfo_field_stmts(am.body_stmts, src, vs, vl, a) } ; arm = am.next }
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop { match arm { Some(armq) => { if not (bad == 0) { break }; am := deref(arm_p(armq)); bad = sema_bad_typeinfo_field_expr(am.body, src, vs, vl, a); if bad == 0 and am.body_stmts != 0 { bad = sema_bad_typeinfo_field_stmts(am.body_stmts, src, vs, vl, a) } ; arm = am.next }; None => { break } } }
     }
     Expr::Call(cs, cl, na, ah) => {
       mut arg := ah
@@ -13323,8 +13505,8 @@ sema_bad_typeinfo_field_stmts := fn(head : ptr(mut Stmt), src : ptr(u8), vs : us
       Stmt::If(c, th, el, nx) => { bad = sema_bad_typeinfo_field_expr(c, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(th, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(el, src, vs, vl, a) } }
       Stmt::Match(sc, ah, nx) => {
         bad = sema_bad_typeinfo_field_expr(sc, src, vs, vl, a)
-        mut arm := ah
-        while arm != 0 and bad == 0 { am := deref(arm_p(arm)); bad = sema_bad_typeinfo_field_expr(am.body, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(am.body_stmts, src, vs, vl, a) } ; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (bad == 0) { break }; am := deref(arm_p(armq)); bad = sema_bad_typeinfo_field_expr(am.body, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_stmts(am.body_stmts, src, vs, vl, a) } ; arm = am.next }; None => { break } } }
       }
       Stmt::For(ns, nl, lo, hi, b, nx) => { bad = sema_bad_typeinfo_field_expr(lo, src, vs, vl, a); if bad == 0 and hi != 0 { bad = sema_bad_typeinfo_field_expr(hi, src, vs, vl, a) } ; if bad == 0 { bad = sema_bad_typeinfo_field_stmts(b, src, vs, vl, a) } }
       Stmt::DerefAssign(p, v, nx) => { bad = sema_bad_typeinfo_field_expr(p, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(v, src, vs, vl, a) } }
@@ -13459,14 +13641,19 @@ stmts_use_cons := fn(head : ptr(mut Stmt), src : ptr(u8), xs : usize, xl : usize
   res
 }
 
-arms_use_cons := fn(head : ptr(mut Arm), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
-  mut arm := head
+arms_use_cons := fn(head : Option(ptr(mut Arm)), src : ptr(u8), xs : usize, xl : usize, a : ptr(mut rt::Arena)) -> bool {
+  mut arm : Option(ptr(mut Arm)) = head
   mut res := false
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    if expr_uses_var_cons(am.body, src, xs, xl, a) { res = true }
-    if stmts_use_cons(am.body_stmts, src, xs, xl, a) { res = true }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if expr_uses_var_cons(am.body, src, xs, xl, a) { res = true }
+        if stmts_use_cons(am.body_stmts, src, xs, xl, a) { res = true }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -13702,13 +13889,18 @@ is_out_param := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), s : usiz
 }
 
 ## Walk a `Match`'s arms for a store-escape (below), recursing into each arm's statement body.
-arms_store_escape := fn(head : ptr(mut Arm), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : Option(ptr(mut Param))) -> bool {
-  mut arm := head
+arms_store_escape := fn(head : Option(ptr(mut Arm)), locals : ptr(LVec), nloc : usize, src : ptr(u8), a : ptr(mut rt::Arena), decls : ptr(rt::Vec), params_head : Option(ptr(mut Param))) -> bool {
+  mut arm : Option(ptr(mut Arm)) = head
   mut res := false
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    if stmts_store_escape(am.body_stmts, locals, nloc, src, a, decls, params_head) { res = true }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if stmts_store_escape(am.body_stmts, locals, nloc, src, a, decls, params_head) { res = true }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -14798,7 +14990,7 @@ sema_guard_pred_resolve := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
 ## positionally to the call args `ah`, each first resolved through the caller instance's `tp`), then recurse
 ## `sema_guard_fold_inst`. Byte-mirror of `lower::guard_pred_call_fold`; the `SGuardTP` is built as THIS fn's
 ## OWN top-level local (the lean-lower aggregate-local frame-home rule the lower's helper also observes).
-sema_guard_pred_call_fold := fn(be : ptr(Expr), ph : Option(ptr(mut Param)), ah : usize, tp : ptr(SGuardTP), decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> i64 {
+sema_guard_pred_call_fold := fn(be : ptr(Expr), ph : Option(ptr(mut Param)), ah : Option(ptr(mut Arm)), tp : ptr(SGuardTP), decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> i64 {
   mut i1s := 0
   mut i1l := 0
   mut t1s := 0
@@ -14897,7 +15089,7 @@ sema_guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt:
     Expr::Match(scrut, arms_head) => {
       k := sema_guard_typeinfo_kind(scrut, tp, decls, src, a)
       if k < 0 { return 0 - 1 }
-      am := deref(arm_p(arms_head))
+      am := deref(arm_p(ast::arm_at(arms_head, "sema: comptime match has no arms")))
       if am.vl != 0 {
         want := sema_comptime_kind_of_name(src, am.vs, am.vl)
         if want >= 0 {
@@ -15053,13 +15245,19 @@ stmts_have_comptime := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool 
 }
 
 ## Do any of the match arms' bodies contain a comptime construct? (Helper for `stmts_have_comptime`.)
-arms_have_comptime := fn(ah : ptr(mut Arm), a : ptr(mut rt::Arena)) -> bool {
-  mut arm := ah
+arms_have_comptime := fn(ah : Option(ptr(mut Arm)), a : ptr(mut rt::Arena)) -> bool {
+  mut arm : Option(ptr(mut Arm)) = ah
   mut result := false
-  while arm != 0 and result == false {
-    am := deref(arm_p(arm))
-    if stmts_have_comptime(am.body_stmts, a) { result = true }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        if not (result == false) { break }
+        am := deref(arm_p(armq))
+        if stmts_have_comptime(am.body_stmts, a) { result = true }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -15155,14 +15353,20 @@ stmts_have_alloc := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize, 
 
 ## Do any match arms contain a direct allocation capability? (Helper for `stmts_have_alloc`; checks both a
 ## statement-match arm's body statements and a value-match arm's body expression.)
-arms_have_alloc := fn(ah : ptr(mut Arm), decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
-  mut arm := ah
+arms_have_alloc := fn(ah : Option(ptr(mut Arm)), decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
+  mut arm : Option(ptr(mut Arm)) = ah
   mut result := false
-  while arm != 0 and result == false {
-    am := deref(arm_p(arm))
-    if stmts_have_alloc(am.body_stmts, decls, cnt, src, a) { result = true }
-    else if unchecked bitcast(usize, am.body) != 0 and expr_is_alloc_call(am.body, decls, cnt, src) { result = true }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        if not (result == false) { break }
+        am := deref(arm_p(armq))
+        if stmts_have_alloc(am.body_stmts, decls, cnt, src, a) { result = true }
+        else if unchecked bitcast(usize, am.body) != 0 and expr_is_alloc_call(am.body, decls, cnt, src) { result = true }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -15240,14 +15444,20 @@ stmts_call_syscall := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), cnt : usize
 }
 
 ## Do any match arms make a direct syscall? (Helper for `stmts_call_syscall`.)
-arms_call_syscall := fn(ah : ptr(mut Arm), decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
-  mut arm := ah
+arms_call_syscall := fn(ah : Option(ptr(mut Arm)), decls : ptr(rt::Vec), cnt : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
+  mut arm : Option(ptr(mut Arm)) = ah
   mut result := false
-  while arm != 0 and result == false {
-    am := deref(arm_p(arm))
-    if stmts_call_syscall(am.body_stmts, decls, cnt, src, a) { result = true }
-    else if unchecked bitcast(usize, am.body) != 0 and expr_calls_syscall(am.body, decls, cnt, src) { result = true }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        if not (result == false) { break }
+        am := deref(arm_p(armq))
+        if stmts_call_syscall(am.body_stmts, decls, cnt, src, a) { result = true }
+        else if unchecked bitcast(usize, am.body) != 0 and expr_calls_syscall(am.body, decls, cnt, src) { result = true }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -15304,11 +15514,17 @@ expr_has_unchecked := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> bool {
     Expr::If(c, t, f) => { expr_has_unchecked(c, a) or expr_has_unchecked(t, a) or expr_has_unchecked(f, a) }
     Expr::Match(scrut, head) => {
       mut bad := expr_has_unchecked(scrut, a)
-      mut arm := head
-      while arm != 0 and bad == false {
-        am := deref(arm_p(arm))
-        if unchecked bitcast(usize, am.body) != 0 and expr_has_unchecked(am.body, a) { bad = true }
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = head
+      loop {
+        match arm {
+          Some(armq) => {
+            if not (bad == false) { break }
+            am := deref(arm_p(armq))
+            if unchecked bitcast(usize, am.body) != 0 and expr_has_unchecked(am.body, a) { bad = true }
+            arm = am.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -15397,14 +15613,20 @@ stmts_have_unchecked := fn(head : ptr(mut Stmt), a : ptr(mut rt::Arena)) -> bool
 
 ## Do any match arms contain an `unchecked` scope? (Helper for `stmts_have_unchecked`; checks a
 ## statement-match arm's body statements and a value-match arm's body expression — mirrors `arms_have_alloc`.)
-arms_have_unchecked := fn(ah : ptr(mut Arm), a : ptr(mut rt::Arena)) -> bool {
-  mut arm := ah
+arms_have_unchecked := fn(ah : Option(ptr(mut Arm)), a : ptr(mut rt::Arena)) -> bool {
+  mut arm : Option(ptr(mut Arm)) = ah
   mut result := false
-  while arm != 0 and result == false {
-    am := deref(arm_p(arm))
-    if stmts_have_unchecked(am.body_stmts, a) { result = true }
-    else if unchecked bitcast(usize, am.body) != 0 and expr_has_unchecked(am.body, a) { result = true }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        if not (result == false) { break }
+        am := deref(arm_p(armq))
+        if stmts_have_unchecked(am.body_stmts, a) { result = true }
+        else if unchecked bitcast(usize, am.body) != 0 and expr_has_unchecked(am.body, a) { result = true }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -15502,14 +15724,20 @@ stmts_have_abstraction := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt
 
 ## Do any (comptime-)match arms use a construct forbidden under `no_abstractions`? (Helper for
 ## `stmts_have_abstraction` — a `CompMatch` arm's body statements.)
-arms_have_abstraction := fn(ah : ptr(mut Arm), src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
-  mut arm := ah
+arms_have_abstraction := fn(ah : Option(ptr(mut Arm)), src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
+  mut arm : Option(ptr(mut Arm)) = ah
   mut result := false
-  while arm != 0 and result == false {
-    am := deref(arm_p(arm))
-    if stmts_have_abstraction(am.body_stmts, src, a) { result = true }
-    else if unchecked bitcast(usize, am.body) != 0 and expr_has_abstraction(am.body, src, a) { result = true }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        if not (result == false) { break }
+        am := deref(arm_p(armq))
+        if stmts_have_abstraction(am.body_stmts, src, a) { result = true }
+        else if unchecked bitcast(usize, am.body) != 0 and expr_has_abstraction(am.body, src, a) { result = true }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   result
 }
@@ -17134,14 +17362,19 @@ sema_collect_expr := fn(e : ptr(Expr), locals : ptr(LVec), src : ptr(u8), a : pt
     Expr::If(c, t, f) => { sema_collect_expr(c, locals, src, a); sema_collect_expr(t, locals, src, a); sema_collect_expr(f, locals, src, a) }
     Expr::Match(sc, ah) => {
       sema_collect_expr(sc, locals, src, a)
-      mut arm := ah
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        mut bd := am.binds_head
-        loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }
-        sema_collect_expr(am.body, locals, src, a)
-        sema_collect_stmts(am.body_stmts, locals, src, a)
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            mut bd := am.binds_head
+            loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }
+            sema_collect_expr(am.body, locals, src, a)
+            sema_collect_stmts(am.body_stmts, locals, src, a)
+            arm = am.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Call(cs, cl, na, ah) => { mut g := ah; while g != 0 { ga := deref(arg_p(g)); sema_collect_expr(ga.e, locals, src, a); g = ga.next } }
@@ -17178,8 +17411,8 @@ sema_collect_stmts := fn(head : ptr(mut Stmt), locals : ptr(LVec), src : ptr(u8)
       Stmt::If(c, th, el, nx) => { sema_collect_expr(c, locals, src, a); sema_collect_stmts(th, locals, src, a); sema_collect_stmts(el, locals, src, a) }
       Stmt::Match(sc, ah, nx) => {
         sema_collect_expr(sc, locals, src, a)
-        mut arm := ah
-        while arm != 0 { am := deref(arm_p(arm)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }; None => { break } } }
       }
       Stmt::For(fns, fnl, lo, hi, b, nx) => { sema_collect_name(locals, src, fns, fnl); sema_collect_expr(lo, locals, src, a); sema_collect_expr(hi, locals, src, a); sema_collect_stmts(b, locals, src, a) }
       Stmt::DerefAssign(p, v, nx) => { sema_collect_expr(p, locals, src, a); sema_collect_expr(v, locals, src, a) }
@@ -17197,8 +17430,8 @@ sema_collect_stmts := fn(head : ptr(mut Stmt), locals : ptr(LVec), src : ptr(u8)
       Stmt::Continue(cd, nx) => {}
       Stmt::CompMatch(sc, ah, nx) => {
         sema_collect_expr(sc, locals, src, a)
-        mut arm := ah
-        while arm != 0 { am := deref(arm_p(arm)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)); mut bd := am.binds_head; loop { match bd { Some(bdq) => { sema_collect_name(locals, src, bnd_ns(bdq), bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }; sema_collect_stmts(am.body_stmts, locals, src, a); sema_collect_expr(am.body, locals, src, a); arm = am.next }; None => { break } } }
       }
     }
     cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))
@@ -17452,30 +17685,36 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
   emp := expr_match_parts(e)
   if emp.is_match {
     mut bad := sema_enum_global_array_value_bad(emp.scrut, decls, upto, src, locals, nloc, a, true)
-    mut arm := emp.head
-    while arm != 0 and bad == 0 {
-      am := deref(arm_p(arm))
-      arm_base := nloc
-      mut arm_cnt := nloc
-      mut bd := am.binds_head
-      loop {
-        match bd {
-          Some(bdq) => {
-            bnns := bnd_ns(bdq)
-            bnnl := bnd_nl(bdq)
-            if not local_in(locals, arm_cnt, src, bnns, bnnl) {
-              lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-              arm_cnt += 1
+    mut arm : Option(ptr(mut Arm)) = emp.head
+    loop {
+      match arm {
+        Some(armq) => {
+          if not (bad == 0) { break }
+          am := deref(arm_p(armq))
+          arm_base := nloc
+          mut arm_cnt := nloc
+          mut bd := am.binds_head
+          loop {
+            match bd {
+              Some(bdq) => {
+                bnns := bnd_ns(bdq)
+                bnnl := bnd_nl(bdq)
+                if not local_in(locals, arm_cnt, src, bnns, bnnl) {
+                  lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                  arm_cnt += 1
+                }
+                bd = bnd_next(bdq)
+              }
+              None => { break }
             }
-            bd = bnd_next(bdq)
           }
-          None => { break }
+          bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
+          if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
+          lvec_truncate(deref(locals), arm_base)
+          arm = am.next
         }
+        None => { break }
       }
-      bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
-      if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
-      lvec_truncate(deref(locals), arm_base)
-      arm = am.next
     }
     return bad
   }
@@ -17578,30 +17817,36 @@ sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(r
       Stmt::If(c, th, el, nx) => { bad = sema_enum_global_array_value_bad(c, decls, upto, src, locals, cnt, a, false); if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(th, decls, upto, src, locals, cnt, a) }; if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(el, decls, upto, src, locals, cnt, a) } }
       Stmt::Match(sc, ah, nx) => {
         bad = sema_enum_global_array_value_bad(sc, decls, upto, src, locals, cnt, a, true)
-        mut arm := ah
-        while arm != 0 and bad == 0 {
-          am := deref(arm_p(arm))
-          arm_base := cnt
-          mut arm_cnt := cnt
-          mut bd := am.binds_head
-          loop {
-            match bd {
-              Some(bdq) => {
-                bnns := bnd_ns(bdq)
-                bnnl := bnd_nl(bdq)
-                if not local_in(locals, arm_cnt, src, bnns, bnnl) {
-                  lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
-                  arm_cnt += 1
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (bad == 0) { break }
+              am := deref(arm_p(armq))
+              arm_base := cnt
+              mut arm_cnt := cnt
+              mut bd := am.binds_head
+              loop {
+                match bd {
+                  Some(bdq) => {
+                    bnns := bnd_ns(bdq)
+                    bnnl := bnd_nl(bdq)
+                    if not local_in(locals, arm_cnt, src, bnns, bnnl) {
+                      lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0))
+                      arm_cnt += 1
+                    }
+                    bd = bnd_next(bdq)
+                  }
+                  None => { break }
                 }
-                bd = bnd_next(bdq)
               }
-              None => { break }
+              bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
+              if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
+              lvec_truncate(deref(locals), arm_base)
+              arm = am.next
             }
+            None => { break }
           }
-          bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
-          if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
-          lvec_truncate(deref(locals), arm_base)
-          arm = am.next
         }
       }
       Stmt::For(fns, fnl, lo, hi, b, nx) => {
@@ -17649,27 +17894,33 @@ sema_enum_global_array_value_bad_stmts := fn(head : ptr(mut Stmt), decls : ptr(r
       }
       Stmt::CompMatch(sc, ah, nx) => {
         bad = sema_enum_global_array_value_bad(sc, decls, upto, src, locals, cnt, a, true)
-        mut arm := ah
-        while arm != 0 and bad == 0 {
-          am := deref(arm_p(arm))
-          base := cnt
-          mut arm_cnt := cnt
-          mut bd := am.binds_head
-          loop {
-            match bd {
-              Some(bdq) => {
-                bnns := bnd_ns(bdq)
-                bnnl := bnd_nl(bdq)
-                if not local_in(locals, arm_cnt, src, bnns, bnnl) { lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0)); arm_cnt += 1 }
-                bd = bnd_next(bdq)
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not (bad == 0) { break }
+              am := deref(arm_p(armq))
+              base := cnt
+              mut arm_cnt := cnt
+              mut bd := am.binds_head
+              loop {
+                match bd {
+                  Some(bdq) => {
+                    bnns := bnd_ns(bdq)
+                    bnnl := bnd_nl(bdq)
+                    if not local_in(locals, arm_cnt, src, bnns, bnnl) { lvec_push(deref(locals), Local(ns = bnns, nl = bnnl, tag = 0, prov = 0, tns = 0, tnl = 0)); arm_cnt += 1 }
+                    bd = bnd_next(bdq)
+                  }
+                  None => { break }
+                }
               }
-              None => { break }
+              bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
+              if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
+              lvec_truncate(deref(locals), base)
+              arm = am.next
             }
+            None => { break }
           }
-          bad = sema_enum_global_array_value_bad(am.body, decls, upto, src, locals, arm_cnt, a, false)
-          if bad == 0 { bad = sema_enum_global_array_value_bad_stmts(am.body_stmts, decls, upto, src, locals, arm_cnt, a) }
-          lvec_truncate(deref(locals), base)
-          arm = am.next
         }
       }
       Stmt::Continue => {}
@@ -17779,12 +18030,18 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
     }
     Expr::Match(sc, ah) => {
       mut r := sema_vis_expr(sc, decls, src, cs, cl, locals, nloc, a)
-      mut arm := ah
-      while arm != 0 and r == 0 {
-        am := deref(arm_p(arm))
-        r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a)
-        if r == 0 { r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a) }
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = ah
+      loop {
+        match arm {
+          Some(armq) => {
+            if not (r == 0) { break }
+            am := deref(arm_p(armq))
+            r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a)
+            if r == 0 { r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a) }
+            arm = am.next
+          }
+          None => { break }
+        }
       }
       r
     }
@@ -17846,8 +18103,8 @@ sema_vis_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), 
       Stmt::If(c, th, el, nx) => { r = sema_vis_expr(c, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_stmts(th, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(el, decls, src, cs, cl, locals, nloc, a) } }
       Stmt::Match(sc, ah, nx) => {
         r = sema_vis_expr(sc, decls, src, cs, cl, locals, nloc, a)
-        mut arm := ah
-        while arm != 0 and r == 0 { am := deref(arm_p(arm)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (r == 0) { break }; am := deref(arm_p(armq)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }; None => { break } } }
       }
       Stmt::For(fns, fnl, lo, hi, b, nx) => { r = sema_vis_expr(lo, decls, src, cs, cl, locals, nloc, a); if r == 0 and unchecked bitcast(usize, hi) != 0 { r = sema_vis_expr(hi, decls, src, cs, cl, locals, nloc, a) }; if r == 0 { r = sema_vis_stmts(b, decls, src, cs, cl, locals, nloc, a) } }
       Stmt::DerefAssign(p, v, nx) => { r = sema_vis_expr(p, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(v, decls, src, cs, cl, locals, nloc, a) } }
@@ -17865,8 +18122,8 @@ sema_vis_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), 
       Stmt::Continue(cd, nx) => {}
       Stmt::CompMatch(sc, ah, nx) => {
         r = sema_vis_expr(sc, decls, src, cs, cl, locals, nloc, a)
-        mut arm := ah
-        while arm != 0 and r == 0 { am := deref(arm_p(arm)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { if not (r == 0) { break }; am := deref(arm_p(armq)); r = sema_vis_stmts(am.body_stmts, decls, src, cs, cl, locals, nloc, a); if r == 0 { r = sema_vis_expr(am.body, decls, src, cs, cl, locals, nloc, a) }; arm = am.next }; None => { break } } }
       }
     }
     cur = unchecked bitcast(ptr(mut Stmt), stmt_next_at(unchecked bitcast(usize, cur), a))

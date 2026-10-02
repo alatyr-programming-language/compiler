@@ -155,20 +155,25 @@ emit_rodata_expr := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, src : ptr(u8),
     }
     Expr::Match(scrut, head) => {
       emit_rodata_expr(scrut, sb, src, a, seen)
-      mut arm := head
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        ## a STR-LITERAL pattern arm (`wild == 4`) carries its pattern StrLit's node handle in `lit`
-        ## — emit that literal's `.ascii` rodata (the dispatch byte-compares against it).
-        if am.wild == 4 { emit_rodata_expr(unchecked bitcast(ptr(Expr), usize(am.lit)), sb, src, a, seen) }
-        ## #673: an OR-pattern's alternatives SHARE one body node, so the data walk visits it once —
-        ## see `ast::arm_body_first_use`. The pattern literal above is per-alternative, not shared,
-        ## so it stays outside the guard.
-        if arm_body_first_use(head, arm) {
-          emit_rodata_expr(am.body, sb, src, a, seen)
-          emit_rodata_stmts(am.body_stmts, sb, src, a, seen)
+      mut arm : Option(ptr(mut Arm)) = head
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            ## a STR-LITERAL pattern arm (`wild == 4`) carries its pattern StrLit's node handle in `lit`
+            ## — emit that literal's `.ascii` rodata (the dispatch byte-compares against it).
+            if am.wild == 4 { emit_rodata_expr(unchecked bitcast(ptr(Expr), usize(am.lit)), sb, src, a, seen) }
+            ## #673: an OR-pattern's alternatives SHARE one body node, so the data walk visits it once —
+            ## see `ast::arm_body_first_use`. The pattern literal above is per-alternative, not shared,
+            ## so it stays outside the guard.
+            if arm_body_first_use(head, armq) {
+              emit_rodata_expr(am.body, sb, src, a, seen)
+              emit_rodata_stmts(am.body_stmts, sb, src, a, seen)
+            }
+            arm = am.next
+          }
+          None => { break }
         }
-        arm = am.next
       }
     }
     Expr::Call(cs, cl, nargs, args_head) => {
@@ -308,14 +313,19 @@ emit_rodata_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, src : 
       }
       Stmt::Match(sc, ah, nx) => {
         emit_rodata_expr(sc, sb, src, a, seen)
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          ## a STR-LITERAL pattern arm (`wild == 4`): emit the pattern StrLit's `.ascii` rodata.
-          if am.wild == 4 { emit_rodata_expr(unchecked bitcast(ptr(Expr), usize(am.lit)), sb, src, a, seen) }
-          ## #673: one shared body per OR-pattern arm group — walk it once (`ast::arm_body_first_use`).
-          if arm_body_first_use(ah, arm) { emit_rodata_stmts(am.body_stmts, sb, src, a, seen) }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              ## a STR-LITERAL pattern arm (`wild == 4`): emit the pattern StrLit's `.ascii` rodata.
+              if am.wild == 4 { emit_rodata_expr(unchecked bitcast(ptr(Expr), usize(am.lit)), sb, src, a, seen) }
+              ## #673: one shared body per OR-pattern arm group — walk it once (`ast::arm_body_first_use`).
+              if arm_body_first_use(ah, armq) { emit_rodata_stmts(am.body_stmts, sb, src, a, seen) }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         s = nx
       }
@@ -339,8 +349,8 @@ emit_rodata_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, src : 
         s = nx
       }
       Stmt::CompMatch(cmsc, cmah, nx) => {
-        mut car := cmah
-        while car != 0 { cam := deref(arm_p(car)); emit_rodata_stmts(cam.body_stmts, sb, src, a, seen); car = cam.next }
+        mut car : Option(ptr(mut Arm)) = cmah
+        loop { match car { Some(carq) => { cam := deref(arm_p(carq)); emit_rodata_stmts(cam.body_stmts, sb, src, a, seen); car = cam.next }; None => { break } } }
         s = nx
       }
       Stmt::DerefAssign(ptr, val, nx) => {
