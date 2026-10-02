@@ -10638,6 +10638,9 @@ run_x86 issue824_option_ptr_global_array 42
 # #828 — nested calls passing `Option(ptr(T))` values with no frame home (field reads, call results, an
 # element, a global): every staged folded word fits the measured agg-temp pool (#815).
 run_x86 issue828_option_ptr_nested_args 42
+# #829 — a loop nest deeper than 64 leaves each loop through its own label (the 65th loop frame was
+# dropped and every later break jumped to another loop).
+run_x86 issue829_deep_loop_nest 42
 # #852 — `Option(ptr(T))` as a payload component of another enum's variant: one folded payload word in the
 # local store and the return registers, and the match binding typed as the folded Option.
 run_x86 issue852_option_ptr_enum_payload 42

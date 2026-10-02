@@ -18349,7 +18349,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       cx.cont = i64(ltop)
       if cx.defer_active {
         defer_frame_push(cx)
-        cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+        loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
       }
       loop_push(cx, i64(ldone), i64(ltop), 1)   ## value-bearing frame
       emit_stmts(b, sb, cx, nl)
@@ -25057,15 +25057,34 @@ pub compfor_iter_arg := fn(src : ptr(u8), vs : usize, vl : usize) -> CSpan {
 ## indexes into now lives in `LCtx` (`cx.defer_*`) — see `lower_ctx.al`.
 ## The loop-target stack + each loop's defer-frame boundary now live in `LCtx` (`cx.loop_*`) — see
 ## `lower_ctx.al`. Push/pop one frame; the pairs are balanced at every call site.
+## #829: the frames are four words of `cx.loop_tab` (brk, cont, isexpr, dframe), grown before each write,
+## so every push is recorded whatever the nesting — the old `[_; 64]` push dropped the 65th frame.
 loop_push := fn(cx : ptr(LCtx), brk : i64, cont : i64, isexpr : usize) {
-  if cx.loop_sp < 64 {
-    cx.loop_brk[cx.loop_sp] = brk
-    cx.loop_cont[cx.loop_sp] = cont
-    cx.loop_isexpr[cx.loop_sp] = isexpr
-    cx.loop_sp = cx.loop_sp + 1
-  }
+  loop_reserve(cx, cx.loop_sp)
+  rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 0), usize(brk))
+  rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 1), usize(cont))
+  rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 2), isexpr)
+  cx.loop_sp = cx.loop_sp + 1
 }
 loop_pop := fn(cx : ptr(LCtx)) { if cx.loop_sp > 0 { cx.loop_sp = cx.loop_sp - 1 } }
+## Make frame `k` of the loop table writable.
+loop_reserve := fn(cx : ptr(LCtx), k : usize) {
+  mut lb := cx.loop_tab
+  mut lc := cx.loop_cap
+  rt::wtab_reserve(lb, lc, rt::wtab_words(cx.loop_sp, 4), rt::wtab_words(k + 1, 4))
+  cx.loop_tab = lb
+  cx.loop_cap = lc
+}
+## The defer-frame boundary of the loop about to be pushed (frame `loop_sp`), recorded before its push.
+loop_set_next_dframe := fn(cx : ptr(LCtx), v : usize) {
+  loop_reserve(cx, cx.loop_sp)
+  rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 3), v)
+}
+## Frame `k`'s break label, continue label, value-bearing flag and defer-frame boundary.
+loop_brk_at := fn(cx : ptr(LCtx), k : usize) -> i64 { i64(rt::wtab_get(cx.loop_tab, rt::wtab_at(k, 4, 0))) }
+loop_cont_at := fn(cx : ptr(LCtx), k : usize) -> i64 { i64(rt::wtab_get(cx.loop_tab, rt::wtab_at(k, 4, 1))) }
+loop_isexpr_at := fn(cx : ptr(LCtx), k : usize) -> usize { rt::wtab_get(cx.loop_tab, rt::wtab_at(k, 4, 2)) }
+loop_dframe_at := fn(cx : ptr(LCtx), k : usize) -> usize { rt::wtab_get(cx.loop_tab, rt::wtab_at(k, 4, 3)) }
 ## DEFER (§9.3): push/pop a per-block frame (a snapshot of `cx.defer_n`, the block's drain boundary)
 ## at a nested statement-block's entry/exit. Frame ops emit NO gas and are CALLED ONLY when `cx.defer_active`
 ## (a defer-free fn never touches the frame stack — the TOOL-1 fixpoint is byte-neutral for the tree).
@@ -25516,7 +25535,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             ## (for a `break`/`continue` drain), gated on `cx.defer_active` so a defer-free fn stays byte-identical.
             if cx.defer_active {
               defer_frame_push(cx)
-              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+              loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
             }
             loop_push(cx, i64(ldone), i64(lguard), 0)   ## depth-frame for labeled break/continue (byte-neutral)
             ## TAIL (see the `ExprStmt` arm): a LOOP body's last statement is NEVER the function's return
@@ -25556,7 +25575,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             cx.cont = i64(ltop)     ## `continue` re-enters the top (no guard)
             if cx.defer_active {
               defer_frame_push(cx)
-              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+              loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
             }
             loop_push(cx, i64(ldone), i64(ltop), 0)     ## depth-frame for labeled break/continue (byte-neutral)
             ## TAIL: a `loop` body's last statement is never the fn's return value (see the `While` arm).
@@ -25636,11 +25655,11 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             mut tisexpr : usize = 1
             if depth != 0 {
               if depth >= cx.loop_sp { panic("selfhost: break to a label beyond the enclosing loop nesting") }
-              btgt = cx.loop_brk[(cx.loop_sp - 1) - depth]
-              tisexpr = cx.loop_isexpr[(cx.loop_sp - 1) - depth]
+              btgt = loop_brk_at(cx, (cx.loop_sp - 1) - depth)
+              tisexpr = loop_isexpr_at(cx, (cx.loop_sp - 1) - depth)
             } else if cx.loop_sp > 0 {
-              btgt = cx.loop_brk[cx.loop_sp - 1]
-              tisexpr = cx.loop_isexpr[cx.loop_sp - 1]
+              btgt = loop_brk_at(cx, cx.loop_sp - 1)
+              tisexpr = loop_isexpr_at(cx, cx.loop_sp - 1)
             }
             if unchecked bitcast(usize, value) != 0 {
               if tisexpr == 0 { panic("selfhost: `break <expr>` targets a non-value loop (loop-expression value only from a loop consumed for a value, Control Flow §7.2)") }
@@ -25655,9 +25674,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             if cx.defer_sp > 0 {
               mut bdb := 0
               if depth != 0 {
-                bdb = cx.loop_dframe[(cx.loop_sp - 1) - depth]
+                bdb = loop_dframe_at(cx, (cx.loop_sp - 1) - depth)
               } else if cx.loop_sp > 0 {
-                bdb = cx.loop_dframe[cx.loop_sp - 1]
+                bdb = loop_dframe_at(cx, cx.loop_sp - 1)
               }
               sv := cx.defer_n
               emit_defer_chain(sb, cx, a, nl, bdb)
@@ -25675,7 +25694,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             mut ctgt := cx.cont
             if depth != 0 {
               if depth >= cx.loop_sp { panic("selfhost: continue to a label beyond the enclosing loop nesting") }
-              ctgt = cx.loop_cont[(cx.loop_sp - 1) - depth]
+              ctgt = loop_cont_at(cx, (cx.loop_sp - 1) - depth)
             }
             ## DEFER (§9.3): a `continue` re-enters the target loop's next iteration, so drain THIS iteration's
             ## defers (the target loop body-frame boundary) before jumping — SAVE & RESTORE the ledger (an
@@ -25683,9 +25702,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             if cx.defer_sp > 0 {
               mut cdb := 0
               if depth != 0 {
-                cdb = cx.loop_dframe[(cx.loop_sp - 1) - depth]
+                cdb = loop_dframe_at(cx, (cx.loop_sp - 1) - depth)
               } else if cx.loop_sp > 0 {
-                cdb = cx.loop_dframe[cx.loop_sp - 1]
+                cdb = loop_dframe_at(cx, cx.loop_sp - 1)
               }
               sv := cx.defer_n
               emit_defer_chain(sb, cx, a, nl, cdb)
@@ -26211,7 +26230,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             cx.cont = i64(lcont)
             if cx.defer_active {
               defer_frame_push(cx)
-              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+              loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
             }
             loop_push(cx, i64(ld), i64(lcont), 0)   ## depth-frame (a `for` is never value-bearing); byte-neutral
             ## TAIL: a `for` body's last statement is never the fn's return value (see the `While` arm).
@@ -26269,7 +26288,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             cx.cont = i64(lcont)
             if cx.defer_active {
               defer_frame_push(cx)
-              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+              loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
             }
             loop_push(cx, i64(ldone), i64(lcont), 0)   ## depth-frame (a `for` is never value-bearing); byte-neutral
             ## TAIL: a `for` body's last statement is never the fn's return value (see the `While` arm).
@@ -27134,7 +27153,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
       ir_inl_tmp = i64(ib) + i64(inl_reserve) - 1
     }
   }
-  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = Option.None, ind_fn_fmask = 0)
+  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
   cxv.fn_id = di
   cxv.ctslots = ptr(ir_cts)
   cx := ptr(cxv)
@@ -27310,6 +27329,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
     ri = ri + 1
   }
   push_str(sb, "  movq %rbp, %rsp\n  popq %rbp\n  ret\n")
+  rt::wtab_free(cxv.loop_tab, cxv.loop_cap)
   agg_pool_fit(cxv.agg_peak, ir_agg_next, ir_agg_words)
 }
 
@@ -27896,7 +27916,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## this branch never fires for the self-host build (byte-identical → the TOOL-1 fixpoint holds).
   if fn_is_naked(p.src, d.name_start, d.name_len) {
     push_str(sb, ":\n")
-    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = Option.None, ind_fn_fmask = 0)
+    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
     ncx.fn_id = di
     ncx.ctslots = ptr(ct_slots)
     emit_stmts(d.body_stmts, sb, ptr(ncx), nl)
@@ -27904,6 +27924,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
     ## naked fn that is the closing `ret()` / `syscall()`. Emit it as a raw instruction too (a non-raw
     ## trailing expr in a naked fn is undefined and emits nothing).
     if is_raw_instr_call(d.value, p.src, deref(p.mar)) { emit_raw_instr(d.value, sb, ptr(ncx), deref(p.mar)) }
+    rt::wtab_free(ncx.loop_tab, ncx.loop_cap)
     return AggPoolFit.Held
   }
   push_str(sb, ":\n  pushq %rbp\n  movq %rsp, %rbp\n  subq $")
@@ -28159,7 +28180,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## push/drain ops are skipped and the emitted tree gas stays byte-identical (the TOOL-1 fixpoint is
   ## neutral). `defer_sp` starts at 0: the fn body has NO frame, only nested blocks push.
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
-  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = Option.None, ind_fn_fmask = 0)
+  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
   cx.fn_id = di
   cx.ctslots = ptr(ct_slots)
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)
@@ -28243,6 +28264,8 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   emit_csreg_moves(sb, cs_save_base, false)
   push_str(sb, "  movq %rbp, %rsp\n  popq %rbp\n  ret\n")
   sf := 0
+  ## #829: the loop-target table is this function's own mapping (a loop-free function never made one).
+  rt::wtab_free(cx.loop_tab, cx.loop_cap)
   agg_pool_fit(cx.agg_peak, agg_tmp_base, aggpoolw)
 }
 
