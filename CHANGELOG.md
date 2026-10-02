@@ -122,6 +122,11 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **An annotated enum local takes its declared width (x86_64).** `h : Option(S) = Option.None` was
+  sized from the bare literal head, so it was a word short: a whole-value store through `ptr(h)`
+  overran the next local, and a re-assignment was refused (#899). The annotation now decides. The
+  compiler's own GAS is unchanged.
+
 ## 0.2.12 — 2026-10-02
 
 - **Seed promotion; the bootstrap traps an unrepresentable signedness change.** The frozen
