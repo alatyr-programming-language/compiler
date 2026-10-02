@@ -851,7 +851,7 @@ mut DCV_N : usize = 0
 ## there instead of guessing; `reject_callee_ambiguous` turns it into a located diagnostic at the one
 ## emit site that mangles a call, so the ambiguity cannot fail silently either way.
 callee_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize) -> i64 {
-  idx := callee_decl_ranked(decls, src, cs, cl, ms, ml, true)
+  idx := callee_decl_ranked(decls, src, cs, cl, ms, ml, true, ms, ml)
   if idx >= 0 { return idx }
   ## A named alias (`f := M::g`) has no function declaration under the spelling `f`, so the
   ## ordinary name scan necessarily returns -1. Resolve the binding before the emitter falls back to
@@ -888,7 +888,7 @@ callee_decl_idx_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl :
       }
     }
   }
-  idx := callee_decl_ranked(decls, src, cs, cl, hs, hl, false)
+  idx := callee_decl_ranked(decls, src, cs, cl, hs, hl, false, caller_s, caller_l)
   if idx >= 0 { return idx }
   ## The module path may name a comptime re-export rather than a function declaration. Resolve that
   ## alias to its defining declaration; this is the same binding path used by bare imported calls.
@@ -897,9 +897,15 @@ callee_decl_idx_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl :
 }
 ## The shared body. `bare` selects the §3 ancestor ranking (a bare call) over the historical
 ## head-preference-then-first-definition resolution (a qualified call).
-callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, bare : bool) -> i64 {
+## `caller_s`/`caller_l` is the calling module; for a qualified call (`bare` false) it is what a module
+## head `ms`/`ml` is resolved RELATIVE to (#871, `qual_head_pick`).
+callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, bare : bool, caller_s : usize, caller_l : usize) -> i64 {
   cnt := rt::vec_len(deref(decls))
   th := name_hash(src, cs, cl)
+  if bare == false {
+    qi := qual_head_pick(decls, src, cs, cl, cs, cl, ms, ml, caller_s, caller_l)
+    if qi >= 0 { return qi }
+  }
   mut found := -1
   mut hits := 0
   mut best := 0 - 1
@@ -911,7 +917,7 @@ callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
       d := deref(decl_get(decls, i))
       if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, cs, cl) {
-        if mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) { return i64(i) }
+        if bare and mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) { return i64(i) }
         hits += 1
         if found < 0 { found = i64(i) }
         if bare {
@@ -1019,9 +1025,43 @@ binding_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
   mut tl := nl
   if bh.n != 0 and bh.tn != 0 { ts = bh.ts; tl = bh.tn }
   if hl == 0 { return 0 - 1 }
-  ## the bound module names exactly one function of that name — resolve it there.
+  ## the bound module names exactly one function of that name — resolve it there, the head read
+  ## relative to the binding's own module (#871).
+  qual_head_pick(decls, src, ts, tl, ns, nl, hs, hl, cs, cl)
+}
+
+## #871 — how well the candidate module `[as_, al)` answers a module HEAD `[hs, hl)` written in module
+## `[cs, cl)`. Modules §1/§5: a file `a/x.al` puts `x` into `a`'s scope, and §3 lets a module name what
+## its ancestors' scopes hold, so `x` written in `a` (or in `a`'s descendants) is `a::x`. Ranks, best
+## first: the head is that child of an ancestor-or-self of the naming module (rank 2 + the ancestor's
+## path length, so the nearest scope wins); the head is the full path from the root (1); only the head's
+## LAST segment matches (0 — the historical lib-path leniency, `strbuf` reaching `alloc__strbuf`).
+## -1: the candidate is not the module the head can mean.
+mod_head_rank := fn(src : ptr(u8), as_ : usize, al : usize, hs : usize, hl : usize, cs : usize, cl : usize) -> i64 {
+  if al > hl + 2 {
+    pl := al - hl - 2
+    sep := str_at((src + as_ + pl), 2)
+    if (sep == "__" or sep == "::") and mod_seg_eq(src, as_ + pl + 2, hl, hs, hl) {
+      r := mod_anc_rank_from(src, as_, pl, cs, cl)
+      if r >= 0 { return r + 2 }
+    }
+  }
+  if mod_seg_eq(src, as_, al, hs, hl) { return 1 }
+  if mod_head_matches(src, as_, al, hs, hl) { return 0 }
+  -1
+}
+
+## #871 — the function or alias named `[ts, tl)` in the module a HEAD `[hs, hl)` written in module
+## `[cs, cl)` names, by `mod_head_rank`; -1 when no candidate's module answers the head. Two or more
+## candidates that answer it only by the last-segment leniency, from DIFFERENT modules, are refused
+## (located at the name `[ls, ll)`): the head names neither, and picking one is how `a/x.al` and
+## `b/x.al` collapsed — every `x` bound whichever came last.
+qual_head_pick := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, ls : usize, ll : usize, hs : usize, hl : usize, cs : usize, cl : usize) -> i64 {
+  cnt := rt::vec_len(deref(decls))
   th := name_hash(src, ts, tl)
   mut res := 0 - 1
+  mut best := 0 - 1
+  mut lenient_other := false
   mut j := dni_lo(cnt, th)
   je := dni_hi(cnt, th)
   while j < je {
@@ -1029,9 +1069,22 @@ binding_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
     j += 1
     if dnh_skip(cnt, k, th) == false {
       d := deref(decl_get(decls, k))
-      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ts, tl)
-         and mod_head_matches(src, d.mod_start, d.mod_len, hs, hl) { res = i64(k) }
+      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ts, tl) {
+        r := mod_head_rank(src, d.mod_start, d.mod_len, hs, hl, cs, cl)
+        if r > best {
+          best = r
+          res = i64(k)
+          lenient_other = false
+        } else if r == best and r == 0 and res >= 0 {
+          rd := deref(decl_get(decls, usize(res)))
+          if mod_seg_eq(src, rd.mod_start, rd.mod_len, d.mod_start, d.mod_len) == false { lenient_other = true }
+        }
+      }
     }
+  }
+  if lenient_other {
+    lower_show_src_line(src, ls)
+    panic("selfhost: this module path names two different modules that both end in its last segment (Modules §1/§5) — spell the full path from the package root, or the path from an enclosing module")
   }
   res
 }
