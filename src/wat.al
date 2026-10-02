@@ -1706,7 +1706,7 @@ first_assign_handle := fn(list : ptr(mut Stmt), ns : usize, nl : usize, src : pt
       Stmt::Assign(ans, anl, v, nx) => { if (not local_is_comptime(src, ans)) and streq(src, ans, anl, ns, nl) { res = unchecked bitcast(usize, s) } ; s = nx }
       Stmt::While(c, b, nx) => { res = first_assign_handle(b, ns, nl, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { res = first_assign_handle(th, ns, nl, src, a) ; if res == 0 { res = first_assign_handle(el, ns, nl, src, a) } ; s = nx }
-      Stmt::Match(msc, mah, mnx) => { mut arm := mah ; while arm != 0 and res == 0 { am := deref(arm_p(arm)) ; res = first_assign_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next } ; s = mnx }
+      Stmt::Match(msc, mah, mnx) => { mut arm : Option(ptr(mut Arm)) = mah ; loop { match arm { Some(armq) => { if not (res == 0) { break }; am := deref(arm_p(armq)) ; res = first_assign_handle(am.body_stmts, ns, nl, src, a) ; arm = am.next }; None => { break } } } ; s = mnx }
       ## a `for i in lo..hi` DECLARES the loop var `i`: this For is its first handle; otherwise recurse the body.
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if streq(src, fns, fnl, ns, nl) { res = unchecked bitcast(usize, s) } else { res = first_assign_handle(fb, ns, nl, src, a) } ; s = nx }
       ## a `comptime for i in lo..hi` DECLARES the loop var `i` (like a range `for`): this CompForRange is
@@ -1773,11 +1773,17 @@ local_slot_scan := fn(list : ptr(mut Stmt), fn_head : ptr(mut Stmt), target : us
         }
       }
       Stmt::Match(msc, mah, mnx) => {
-        mut arm := mah
-        while arm != 0 and (not found) {
-          am := deref(arm_p(arm))
-          r := local_slot_scan(am.body_stmts, fn_head, target, b, src, a, decls)
-          if r < 0 { result = r ; found = true } else { b = r ; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = mah
+        loop {
+          match arm {
+            Some(armq) => {
+              if not ((not found)) { break }
+              am := deref(arm_p(armq))
+              r := local_slot_scan(am.body_stmts, fn_head, target, b, src, a, decls)
+              if r < 0 { result = r ; found = true } else { b = r ; arm = am.next }
+            }
+            None => { break }
+          }
         }
         if (not found) { s = mnx }
       }
@@ -2068,7 +2074,7 @@ wat_comp_cond_fold := fn(cond : ptr(Expr), src : ptr(u8)) -> i64 {
     Expr::Match(scrut, arms_head) => {
       if WAT_SUB_ITL != 0 {
         kind := ct_type_kind(WAT_SUB_ITS, WAT_SUB_ITL, wat_decls(), src)
-        am := deref(arm_p(arms_head))
+        am := deref(arm_p(ast::arm_at(arms_head, "wat: comptime match has no arms")))
         if am.vl != 0 {
           want := ct_kind_of_name(src, am.vs, am.vl)
           if want >= 0 { if kind == want { r = 1 } else { r = 0 } }
@@ -2362,8 +2368,8 @@ wat_ct_collect := fn(head : ptr(mut Stmt), src : ptr(u8)) {
       Stmt::While(c, b, nx) => { wat_ct_collect(b, src) ; s = nx }
       Stmt::If(c, th, el, nx) => { wat_ct_collect(th, src) ; wat_ct_collect(el, src) ; s = nx }
       Stmt::Match(msc, mah, nx) => {
-        mut arm := mah
-        while arm != 0 { am := deref(arm_p(arm)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = mah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }; None => { break } } }
         s = nx
       }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { wat_ct_collect(fb, src) ; s = nx }
@@ -2371,8 +2377,8 @@ wat_ct_collect := fn(head : ptr(mut Stmt), src : ptr(u8)) {
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { wat_ct_collect(rb, src) ; s = nx }
       Stmt::CompIf(cc, th, el, nx) => { wat_ct_collect(th, src) ; wat_ct_collect(el, src) ; s = nx }
       Stmt::CompMatch(cmsc, cmah, nx) => {
-        mut arm := cmah
-        while arm != 0 { am := deref(arm_p(arm)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = cmah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; wat_ct_collect(am.body_stmts, src) ; arm = am.next }; None => { break } } }
         s = nx
       }
       Stmt::Loop(b, nx) => { wat_ct_collect(b, src) ; s = nx }
@@ -3969,12 +3975,17 @@ wat_loop_scalar_code := fn(head : ptr(mut Stmt), depth : usize, params_head : Op
         s = nx
       }
       Stmt::Match(_c, ah, nx) => {
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
-          if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
+              if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         s = nx
       }
@@ -3990,12 +4001,17 @@ wat_loop_scalar_code := fn(head : ptr(mut Stmt), depth : usize, params_head : Op
         s = nx
       }
       Stmt::CompMatch(_c, ah, nx) => {
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
-          if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              sub := wat_loop_scalar_code(am.body_stmts, depth, params_head, fn_head, src, a, decls)
+              if sub == 2 { code = 2 } else if sub == 1 and code == 0 { code = 1 }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         s = nx
       }
@@ -4549,39 +4565,42 @@ wat_std_store_tmp_u8_pair := fn(pe : ptr(Expr), in out sb : rt::StrBuf, a : rt::
 ## variant arm `E.V => body` tests `disc == variant_index(V)`. The active arm's payload bindings are
 ## pushed while its body is emitted, so a nested match can still see an outer scalar binding. An
 ## exhausted chain (no arm matched) traps.
-emit_wat_match_arms := fn(arm : usize, es : usize, en : usize, sidx : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec)) {
-  if arm == 0 {
-    push_str(sb, "(unreachable) (; no matching arm ;)\n")
-  } else {
-    am := deref(arm_p(arm))
-    if am.wild == 5 or am.wild == 6 {
-      ## RANGE pattern arm (Control Flow §5.4) — x86_64-only in v1. Fail LOUD (`(unreachable)`),
-      ## never a silent miscompile: the wasm sweep requires a trap or reject, not a wrong value.
-      push_str(sb, "(unreachable) (; range-pattern match arm not supported on wasm (x86_64 only) ;)")
-    } else if am.wild == 1 {
-      wat_bind_push(am.binds_head, sidx, false)
-      emit_wat_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, sidx)
-      wat_bind_pop(am.binds_head)
-    } else {
-      vidx := variant_index(decls, src, es, en, am.vs, am.vl, a)
-      if vidx < 0 {
-        ## FAIL-LOUD: an unresolved variant (a comptime-variant TEMPLATE arm whose placeholder name
-        ## didn't resolve, or an enum-span mismatch) — emit `(unreachable)`, NEVER a `-1` comparison
-        ## arm that can never match and lets control fall through to a wrong value (silent miscompile).
-        push_str(sb, "(unreachable) (; unknown enum variant ;)")
-      } else {
-        push_str(sb, "(if (result i64) (i64.eq (i64.load ")
-        emit_wat_addr(sb, sidx, 0)
-        push_str(sb, ") (i64.const ")
-        push_int(sb, vidx)
-        push_str(sb, ")) (then ")
-        wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, am.vs, am.vl, src, a, decls))
+emit_wat_match_arms := fn(arm : Option(ptr(mut Arm)), es : usize, en : usize, sidx : i64, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec)) {
+  match arm {
+    None => {
+      push_str(sb, "(unreachable) (; no matching arm ;)\n")
+    }
+    Some(armq) => {
+      am := deref(arm_p(armq))
+      if am.wild == 5 or am.wild == 6 {
+        ## RANGE pattern arm (Control Flow §5.4) — x86_64-only in v1. Fail LOUD (`(unreachable)`),
+        ## never a silent miscompile: the wasm sweep requires a trap or reject, not a wrong value.
+        push_str(sb, "(unreachable) (; range-pattern match arm not supported on wasm (x86_64 only) ;)")
+      } else if am.wild == 1 {
+        wat_bind_push(am.binds_head, sidx, false)
         emit_wat_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, sidx)
         wat_bind_pop(am.binds_head)
-        push_str(sb, ") (else ")
-        emit_wat_match_arms(am.next, es, en, sidx, sb, a, src, params_head, pcount, body_head, decls)
-        push_str(sb, "))")
-      }
+      } else {
+        vidx := variant_index(decls, src, es, en, am.vs, am.vl, a)
+        if vidx < 0 {
+          ## FAIL-LOUD: an unresolved variant (a comptime-variant TEMPLATE arm whose placeholder name
+          ## didn't resolve, or an enum-span mismatch) — emit `(unreachable)`, NEVER a `-1` comparison
+          ## arm that can never match and lets control fall through to a wrong value (silent miscompile).
+          push_str(sb, "(unreachable) (; unknown enum variant ;)")
+        } else {
+          push_str(sb, "(if (result i64) (i64.eq (i64.load ")
+          emit_wat_addr(sb, sidx, 0)
+          push_str(sb, ") (i64.const ")
+          push_int(sb, vidx)
+          push_str(sb, ")) (then ")
+          wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, am.vs, am.vl, src, a, decls))
+          emit_wat_expr(am.body, sb, a, src, params_head, pcount, body_head, decls, am.binds_head, sidx)
+          wat_bind_pop(am.binds_head)
+          push_str(sb, ") (else ")
+          emit_wat_match_arms(am.next, es, en, sidx, sb, a, src, params_head, pcount, body_head, decls)
+          push_str(sb, "))")
+        }
+    }
     }
   }
 }
@@ -6615,77 +6634,81 @@ emit_wat_arm_body := fn(bs : usize, vyield : bool, fn_head : ptr(mut Stmt), in o
 ## Statement-position match dispatch: a nested value-less WASM `if` chain on the scrutinee's
 ## discriminant (word 0 at local `sidx`). `vyield` = the match is in fn-value position (each arm
 ## returns its tail expr). Mutually recursive with emit_wat_stmts.
-emit_wat_stmt_match := fn(arm : usize, es : usize, en : usize, sidx : i64, fn_head : ptr(mut Stmt), vyield : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
-  if arm != 0 {
-    am := deref(arm_p(arm))
-    if am.wild == 5 or am.wild == 6 {
-      ## RANGE pattern arm (Control Flow §5.4) — x86_64-only in v1. Fail LOUD (`(unreachable)`),
-      ## never a silent miscompile: the wasm sweep requires a trap or reject, not a wrong exit.
-      push_str(sb, "    (unreachable) (; range-pattern match arm not supported on wasm (x86_64 only) ;)\n")
-    } else if am.wild == 1 {
-      wat_bind_push(am.binds_head, sidx, false)
-      emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
-      wat_bind_pop(am.binds_head)
-    } else if am.wild == 2 {
-      ## COMPTIME-VARIANT TEMPLATE (`comptime for var in typeinfo(T).variants { T.(var)(p) => body }`):
-      ## UNROLL into one dispatch per variant of the scrutinee enum `es/en` (concrete in a mono instance).
-      ## Each generated arm binds the payload `p` (bind_base = sidx, word 1) + sets the WAT_ARM_*/WAT_CFVAR
-      ## context so an IMPLICIT `hash(p)` in the body infers its type-arg from the variant's payload type.
-      ## FLAT ifs — the derive bodies `return`, so no else-nesting is needed. A non-concrete-enum scrutinee
-      ## is a fail-loud `(unreachable)` (never the `-1` never-matching arm that sank the reverted attempt).
-      edi := enum_decl_of(decls, src, es, en)
-      if edi < 0 {
-        push_str(sb, "    (unreachable) (; comptime-variant unroll: scrutinee enum not concrete ;)\n")
-      } else {
-        edd := deref(decl_get(decls, usize(edi)))
-        mut vf := edd.fields_head
-        loop {
-          match vf {
-            Some(vfq) => {
-              vfm := deref(fld_p(vfq))
-              vvidx := variant_index(decls, src, es, en, vfm.ns, vfm.nl, a)
-              push_str(sb, "    (if (i64.eq (i64.load ")
-              emit_wat_addr(sb, sidx, 0)
-              push_str(sb, ") (i64.const ")
-              push_int(sb, vvidx)
-              push_str(sb, ")) (then\n")
-              oens := WAT_ARM_ENS ; oenl := WAT_ARM_ENL ; ovs := WAT_ARM_VS ; ovl := WAT_ARM_VL
-              obinds := WAT_ARM_BINDS ; ocvs := WAT_CFVAR_S ; ocvl := WAT_CFVAR_L
-              WAT_ARM_ENS = es ; WAT_ARM_ENL = en ; WAT_ARM_VS = vfm.ns ; WAT_ARM_VL = vfm.nl
-              WAT_ARM_BINDS = am.binds_head ; WAT_CFVAR_S = vfm.ns ; WAT_CFVAR_L = vfm.nl
-              wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, vfm.ns, vfm.nl, src, a, decls))
-              emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
-              wat_bind_pop(am.binds_head)
-              WAT_ARM_ENS = oens ; WAT_ARM_ENL = oenl ; WAT_ARM_VS = ovs ; WAT_ARM_VL = ovl
-              WAT_ARM_BINDS = obinds ; WAT_CFVAR_S = ocvs ; WAT_CFVAR_L = ocvl
-              push_str(sb, "    ))\n")
-              vf = vfm.next
-            }
-            None => { break }
-          }
-        }
-        emit_wat_stmt_match(am.next, es, en, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
-      }
-    } else {
-      vidx := variant_index(decls, src, es, en, am.vs, am.vl, a)
-      if vidx < 0 {
-        ## FAIL-LOUD: an unresolved variant (comptime-variant TEMPLATE arm whose placeholder didn't
-        ## resolve, or an enum-span mismatch) — trap, NEVER a `-1` arm that never matches and falls
-        ## through to the source tail `return` (a silent miscompile — the reverted-attempt bug).
-        push_str(sb, "    (unreachable) (; unknown enum variant ;)\n")
-      } else {
-        push_str(sb, "    (if (i64.eq (i64.load ")
-        emit_wat_addr(sb, sidx, 0)
-        push_str(sb, ") (i64.const ")
-        push_int(sb, vidx)
-        push_str(sb, ")) (then\n")
-        wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, am.vs, am.vl, src, a, decls))
+emit_wat_stmt_match := fn(arm : Option(ptr(mut Arm)), es : usize, en : usize, sidx : i64, fn_head : ptr(mut Stmt), vyield : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
+  match arm {
+    None => {
+    }
+    Some(armq) => {
+      am := deref(arm_p(armq))
+      if am.wild == 5 or am.wild == 6 {
+        ## RANGE pattern arm (Control Flow §5.4) — x86_64-only in v1. Fail LOUD (`(unreachable)`),
+        ## never a silent miscompile: the wasm sweep requires a trap or reject, not a wrong exit.
+        push_str(sb, "    (unreachable) (; range-pattern match arm not supported on wasm (x86_64 only) ;)\n")
+      } else if am.wild == 1 {
+        wat_bind_push(am.binds_head, sidx, false)
         emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
         wat_bind_pop(am.binds_head)
-        push_str(sb, "    ) (else\n")
-        emit_wat_stmt_match(am.next, es, en, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
-        push_str(sb, "    ))\n")
-      }
+      } else if am.wild == 2 {
+        ## COMPTIME-VARIANT TEMPLATE (`comptime for var in typeinfo(T).variants { T.(var)(p) => body }`):
+        ## UNROLL into one dispatch per variant of the scrutinee enum `es/en` (concrete in a mono instance).
+        ## Each generated arm binds the payload `p` (bind_base = sidx, word 1) + sets the WAT_ARM_*/WAT_CFVAR
+        ## context so an IMPLICIT `hash(p)` in the body infers its type-arg from the variant's payload type.
+        ## FLAT ifs — the derive bodies `return`, so no else-nesting is needed. A non-concrete-enum scrutinee
+        ## is a fail-loud `(unreachable)` (never the `-1` never-matching arm that sank the reverted attempt).
+        edi := enum_decl_of(decls, src, es, en)
+        if edi < 0 {
+          push_str(sb, "    (unreachable) (; comptime-variant unroll: scrutinee enum not concrete ;)\n")
+        } else {
+          edd := deref(decl_get(decls, usize(edi)))
+          mut vf := edd.fields_head
+          loop {
+            match vf {
+              Some(vfq) => {
+                vfm := deref(fld_p(vfq))
+                vvidx := variant_index(decls, src, es, en, vfm.ns, vfm.nl, a)
+                push_str(sb, "    (if (i64.eq (i64.load ")
+                emit_wat_addr(sb, sidx, 0)
+                push_str(sb, ") (i64.const ")
+                push_int(sb, vvidx)
+                push_str(sb, ")) (then\n")
+                oens := WAT_ARM_ENS ; oenl := WAT_ARM_ENL ; ovs := WAT_ARM_VS ; ovl := WAT_ARM_VL
+                obinds := WAT_ARM_BINDS ; ocvs := WAT_CFVAR_S ; ocvl := WAT_CFVAR_L
+                WAT_ARM_ENS = es ; WAT_ARM_ENL = en ; WAT_ARM_VS = vfm.ns ; WAT_ARM_VL = vfm.nl
+                WAT_ARM_BINDS = am.binds_head ; WAT_CFVAR_S = vfm.ns ; WAT_CFVAR_L = vfm.nl
+                wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, vfm.ns, vfm.nl, src, a, decls))
+                emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
+                wat_bind_pop(am.binds_head)
+                WAT_ARM_ENS = oens ; WAT_ARM_ENL = oenl ; WAT_ARM_VS = ovs ; WAT_ARM_VL = ovl
+                WAT_ARM_BINDS = obinds ; WAT_CFVAR_S = ocvs ; WAT_CFVAR_L = ocvl
+                push_str(sb, "    ))\n")
+                vf = vfm.next
+              }
+              None => { break }
+            }
+          }
+          emit_wat_stmt_match(am.next, es, en, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
+        }
+      } else {
+        vidx := variant_index(decls, src, es, en, am.vs, am.vl, a)
+        if vidx < 0 {
+          ## FAIL-LOUD: an unresolved variant (comptime-variant TEMPLATE arm whose placeholder didn't
+          ## resolve, or an enum-span mismatch) — trap, NEVER a `-1` arm that never matches and falls
+          ## through to the source tail `return` (a silent miscompile — the reverted-attempt bug).
+          push_str(sb, "    (unreachable) (; unknown enum variant ;)\n")
+        } else {
+          push_str(sb, "    (if (i64.eq (i64.load ")
+          emit_wat_addr(sb, sidx, 0)
+          push_str(sb, ") (i64.const ")
+          push_int(sb, vidx)
+          push_str(sb, ")) (then\n")
+          wat_bind_push(am.binds_head, sidx, wat_match_bind_unsupported(am.binds_head, es, en, am.vs, am.vl, src, a, decls))
+          emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, sidx)
+          wat_bind_pop(am.binds_head)
+          push_str(sb, "    ) (else\n")
+          emit_wat_stmt_match(am.next, es, en, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
+          push_str(sb, "    ))\n")
+        }
+    }
     }
   }
 }
@@ -6694,23 +6717,26 @@ emit_wat_stmt_match := fn(arm : usize, es : usize, en : usize, sidx : i64, fn_he
 ## in the supplied scratch local; literal arms compare that local and wildcard arms run unconditionally.
 ## This is separate from emit_wat_stmt_match because enum arms load a discriminant from linear memory,
 ## while scalar matches have no aggregate address or payload-binding context.
-emit_wat_scalar_stmt_match := fn(arm : usize, sidx : i64, fn_head : ptr(mut Stmt), vyield : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
-  if arm == 0 {
-    push_str(sb, "    (unreachable) (; no matching scalar arm ;)\n")
-  } else {
-    am := deref(arm_p(arm))
-    if am.wild == 5 or am.wild == 6 {
-      push_str(sb, "    (unreachable) (; range-pattern match arm not supported on wasm (x86_64 only) ;)\n")
-    } else if am.wild != 0 and am.wild != 1 {
-      push_str(sb, "    (unreachable) (; unsupported scalar match pattern on wasm ;)\n")
-    } else if am.wild == 1 {
-      emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, 0)
-    } else {
-      push_str(sb, "    (if (i64.eq (local.get ") ; push_int(sb, sidx) ; push_str(sb, ") (i64.const ") ; push_int(sb, am.lit) ; push_str(sb, ")) (then\n")
-      emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, 0)
-      push_str(sb, "    ) (else\n")
-      emit_wat_scalar_stmt_match(am.next, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
-      push_str(sb, "    ))\n")
+emit_wat_scalar_stmt_match := fn(arm : Option(ptr(mut Arm)), sidx : i64, fn_head : ptr(mut Stmt), vyield : bool, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, decls : ptr(rt::Vec)) {
+  match arm {
+    None => {
+      push_str(sb, "    (unreachable) (; no matching scalar arm ;)\n")
+    }
+    Some(armq) => {
+      am := deref(arm_p(armq))
+      if am.wild == 5 or am.wild == 6 {
+        push_str(sb, "    (unreachable) (; range-pattern match arm not supported on wasm (x86_64 only) ;)\n")
+      } else if am.wild != 0 and am.wild != 1 {
+        push_str(sb, "    (unreachable) (; unsupported scalar match pattern on wasm ;)\n")
+      } else if am.wild == 1 {
+        emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, 0)
+      } else {
+        push_str(sb, "    (if (i64.eq (local.get ") ; push_int(sb, sidx) ; push_str(sb, ") (i64.const ") ; push_int(sb, am.lit) ; push_str(sb, ")) (then\n")
+        emit_wat_arm_body(am.body_stmts, vyield, fn_head, sb, a, src, params_head, pcount, decls, am.binds_head, 0)
+        push_str(sb, "    ) (else\n")
+        emit_wat_scalar_stmt_match(am.next, sidx, fn_head, vyield, sb, a, src, params_head, pcount, decls)
+        push_str(sb, "    ))\n")
+    }
     }
   }
 }
@@ -7520,11 +7546,16 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
           emit_wat_stmt_match(arms_head, etype.s, etype.n, sidx, fn_head, vy, sb, a, src, params_head, pcount, decls)
         } else if not idxmatch {
           mut scalar_shape := true
-          mut scalar_arm := arms_head
-          while scalar_arm != 0 {
-            sam := deref(arm_p(scalar_arm))
-            if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
-            scalar_arm = sam.next
+          mut scalar_arm : Option(ptr(mut Arm)) = arms_head
+          loop {
+            match scalar_arm {
+              Some(scalar_armq) => {
+                sam := deref(arm_p(scalar_armq))
+                if sam.wild != 1 and (sam.wild != 0 or sam.vs != 0 or sam.vl != 0) { scalar_shape = false }
+                scalar_arm = sam.next
+              }
+              None => { break }
+            }
           }
           if scalar_shape {
             ## Scalar statement match: park the value in the first per-function scratch local so arm
@@ -7864,20 +7895,28 @@ emit_wat_stmts := fn(list_head : usize, fn_head : ptr(mut Stmt), nested : bool, 
         else {
           kind := ct_type_kind(WAT_SUB_ITS, WAT_SUB_ITL, decls, src)
           nkind := ct_scalar_num_kind(WAT_SUB_ITS, WAT_SUB_ITL, src)
-          mut chosen := 0
-          mut cwild := 0
-          mut carm := cmah
-          while carm != 0 {
-            cam := deref(arm_p(carm))
-            if cam.wild != 0 { cwild = carm }
-            else if ct_kind_of_name(src, cam.vs, cam.vl) == kind { chosen = carm }
-            else if ct_num_kind_of_name(src, cam.vs, cam.vl) == nkind { chosen = carm }
-            carm = cam.next
+          mut chosen : Option(ptr(mut Arm)) = Option.None
+          mut cwild : Option(ptr(mut Arm)) = Option.None
+          mut carm : Option(ptr(mut Arm)) = cmah
+          loop {
+            match carm {
+              Some(carmq) => {
+                cam := deref(arm_p(carmq))
+                if cam.wild != 0 { cwild = Option.Some(carmq) }
+                else if ct_kind_of_name(src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
+                else if ct_num_kind_of_name(src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
+                carm = cam.next
+              }
+              None => { break }
+            }
           }
-          if chosen == 0 { chosen = cwild }
-          if chosen != 0 {
-            cam2 := deref(arm_p(chosen))
-            emit_wat_stmts(cam2.body_stmts, fn_head, nested, tail_value and cmnx == 0, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+          chosen = ast::arm_or(chosen, cwild)
+          match chosen {
+            Some(chosenq) => {
+              cam2 := deref(arm_p(chosenq))
+              emit_wat_stmts(cam2.body_stmts, fn_head, nested, tail_value and cmnx == 0, sb, a, src, params_head, pcount, decls, bind_head, bind_base)
+            }
+            None => {}
           }
         }
         s = cmnx
@@ -8137,7 +8176,7 @@ emit_wat_str_data_stmts := fn(head : ptr(mut Stmt), in out sb : rt::StrBuf, src 
       Stmt::ExprStmt(e, nx) => { pi := print_call_info(e, src, a) ; if pi.ok { emit_str_data_seg(sb, src, pi.ss, pi.sl, pi.lbl, pi.nl, a) } ; s = nx }
       Stmt::While(c, b, nx) => { emit_wat_str_data_stmts(b, sb, src, a) ; s = nx }
       Stmt::If(c, th, el, nx) => { emit_wat_str_data_stmts(th, sb, src, a) ; emit_wat_str_data_stmts(el, sb, src, a) ; s = nx }
-      Stmt::Match(sc, ah, nx) => { mut arm := ah ; while arm != 0 { am := deref(arm_p(arm)) ; if ast::arm_body_first_use(ah, arm) { emit_wat_str_data_stmts(am.body_stmts, sb, src, a) } ; arm = am.next } ; s = nx }
+      Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if ast::arm_body_first_use(ah, armq) { emit_wat_str_data_stmts(am.body_stmts, sb, src, a) } ; arm = am.next }; None => { break } } } ; s = nx }
       Stmt::Assign(ns, nl, v, nx) => { s = nx }
       Stmt::Return(rv, nx) => { s = nx }
       Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }

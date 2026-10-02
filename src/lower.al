@@ -7936,12 +7936,17 @@ match_depth_expr := fn(e : ptr(Expr), a : rt::Arena, decls : ptr(rt::Vec), src :
     Expr::Match(scrut, head) => {
       cw = imax(cw, match_call_scrut_words(scrut, decls, src, a))
       mut inner := match_depth_expr(scrut, a, decls, src, cw)
-      mut arm := head
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        inner = imax(inner, match_depth_expr(am.body, a, decls, src, cw))
-        inner = imax(inner, match_depth_stmts(am.body_stmts, a, decls, src, cw))
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = head
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            inner = imax(inner, match_depth_expr(am.body, a, decls, src, cw))
+            inner = imax(inner, match_depth_stmts(am.body_stmts, a, decls, src, cw))
+            arm = am.next
+          }
+          None => { break }
+        }
       }
       m = 1 + inner
     }
@@ -7986,12 +7991,17 @@ match_depth_stmts := fn(head : ptr(mut Stmt), a : rt::Arena, decls : ptr(rt::Vec
       Stmt::Match(sc, ah, nx) => {
         cw = imax(cw, match_call_scrut_words(sc, decls, src, a))
         mut inner := match_depth_expr(sc, a, decls, src, cw)
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          inner = imax(inner, match_depth_expr(am.body, a, decls, src, cw))
-          inner = imax(inner, match_depth_stmts(am.body_stmts, a, decls, src, cw))
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              inner = imax(inner, match_depth_expr(am.body, a, decls, src, cw))
+              inner = imax(inner, match_depth_stmts(am.body_stmts, a, decls, src, cw))
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         m = imax(m, 1 + inner)
         s = nx
@@ -8000,7 +8010,7 @@ match_depth_stmts := fn(head : ptr(mut Stmt), a : rt::Arena, decls : ptr(rt::Vec
       Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(match_depth_stmts(cthen, a, decls, src, cw), match_depth_stmts(celse, a, decls, src, cw))); s = nx }
       Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, match_depth_stmts(cb, a, decls, src, cw)); s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, match_depth_stmts(rb, a, decls, src, cw)); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : usize = cmah; while car != 0 { cam := deref(arm_p(car)); m = imax(m, match_depth_stmts(cam.body_stmts, a, decls, src, cw)); car = cam.next } ; s = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, match_depth_stmts(cam.body_stmts, a, decls, src, cw)); car = cam.next }; None => { break } } } ; s = nx }
     }
   }
   m
@@ -8365,8 +8375,8 @@ inline_frame_need_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
     Expr::If(c, t, f) => { m = imax(inline_frame_need_expr(c, decls, src, ms, ml, slots, a, mar), imax(inline_frame_need_expr(t, decls, src, ms, ml, slots, a, mar), inline_frame_need_expr(f, decls, src, ms, ml, slots, a, mar))) }
     Expr::Match(scrut, head) => {
       m = inline_frame_need_expr(scrut, decls, src, ms, ml, slots, a, mar)
-      mut arm := head
-      while arm != 0 { am := deref(arm_p(arm)); m = imax(m, inline_frame_need_expr(am.body, decls, src, ms, ml, slots, a, mar)); m = imax(m, inline_frame_need_stmts(am.body_stmts, decls, src, ms, ml, slots, a, mar)); arm = am.next }
+      mut arm : Option(ptr(mut Arm)) = head
+      loop { match arm { Some(armq) => { am := deref(arm_p(armq)); m = imax(m, inline_frame_need_expr(am.body, decls, src, ms, ml, slots, a, mar)); m = imax(m, inline_frame_need_stmts(am.body_stmts, decls, src, ms, ml, slots, a, mar)); arm = am.next }; None => { break } } }
     }
     Expr::StructLit(cs, cl, nf, fhead) => { mut g : usize = fhead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next } }
     Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g : usize = phead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next } }
@@ -8405,8 +8415,8 @@ inline_frame_need_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : 
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(inline_frame_need_expr(flo, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(fb, decls, src, ms, ml, slots, a, mar))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, inline_frame_need_expr(fhi, decls, src, ms, ml, slots, a, mar)) } ; s = nx }
       Stmt::Match(sc, ah, nx) => {
         m = imax(m, inline_frame_need_expr(sc, decls, src, ms, ml, slots, a, mar))
-        mut arm := ah
-        while arm != 0 { am := deref(arm_p(arm)); m = imax(m, inline_frame_need_expr(am.body, decls, src, ms, ml, slots, a, mar)); m = imax(m, inline_frame_need_stmts(am.body_stmts, decls, src, ms, ml, slots, a, mar)); arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)); m = imax(m, inline_frame_need_expr(am.body, decls, src, ms, ml, slots, a, mar)); m = imax(m, inline_frame_need_stmts(am.body_stmts, decls, src, ms, ml, slots, a, mar)); arm = am.next }; None => { break } } }
         s = nx
       }
       Stmt::Break(_bv, _bd, nx) => { s = nx }
@@ -8414,7 +8424,7 @@ inline_frame_need_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : 
       Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(inline_frame_need_stmts(cthen, decls, src, ms, ml, slots, a, mar), inline_frame_need_stmts(celse, decls, src, ms, ml, slots, a, mar))); s = nx }
       Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, inline_frame_need_stmts(cb, decls, src, ms, ml, slots, a, mar)); s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, inline_frame_need_stmts(rb, decls, src, ms, ml, slots, a, mar)); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : usize = cmah; while car != 0 { cam := deref(arm_p(car)); m = imax(m, inline_frame_need_stmts(cam.body_stmts, decls, src, ms, ml, slots, a, mar)); car = cam.next } ; s = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, inline_frame_need_stmts(cam.body_stmts, decls, src, ms, ml, slots, a, mar)); car = cam.next }; None => { break } } } ; s = nx }
     }
   }
   m
@@ -18345,37 +18355,42 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       nl += arm_count(head, a)
       ## First pass over the arms: emit the dispatch (compare + conditional jump to each
       ## arm's body label). A wildcard arm is an unconditional jump (the default).
-      mut arm := head
+      mut arm : Option(ptr(mut Arm)) = head
       mut hadwild := false
       mut ai := 0
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        lbody := bodybase + ai
-        ai += 1
-        if is_str and am.wild == 4 {
-          ## a STR-LITERAL arm: byte-compare the str scrutinee against the pattern (StrLit at `am.lit`)
-          pat := unchecked bitcast(ptr(Expr), usize(am.lit))
-          emit_str_eq_core(scrut, pat, sb, cx, a, nl)
-          push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  jne ")
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
-        } else if am.wild == 5 or am.wild == 6 {
-          ## a RANGE arm (Control Flow §5.4): `lo..hi` (wild 5, half-open) / `lo..=hi` (wild 6,
-          ## inclusive), compared with the scrutinee's signedness (`emit_range_arm`, #806).
-          emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
-        } else if am.wild != 0 {
-          push_str(sb, "  jmp ")
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
-          hadwild = true
-        } else {
-          push_str(sb, "  movq $")
-          push_int(sb, int_arm_value(am, cx.src))
-          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            lbody := bodybase + ai
+            ai += 1
+            if is_str and am.wild == 4 {
+              ## a STR-LITERAL arm: byte-compare the str scrutinee against the pattern (StrLit at `am.lit`)
+              pat := unchecked bitcast(ptr(Expr), usize(am.lit))
+              emit_str_eq_core(scrut, pat, sb, cx, a, nl)
+              push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  jne ")
+              emit_label(sb, lbody)
+              push_str(sb, "\n")
+            } else if am.wild == 5 or am.wild == 6 {
+              ## a RANGE arm (Control Flow §5.4): `lo..hi` (wild 5, half-open) / `lo..=hi` (wild 6,
+              ## inclusive), compared with the scrutinee's signedness (`emit_range_arm`, #806).
+              emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
+            } else if am.wild != 0 {
+              push_str(sb, "  jmp ")
+              emit_label(sb, lbody)
+              push_str(sb, "\n")
+              hadwild = true
+            } else {
+              push_str(sb, "  movq $")
+              push_int(sb, int_arm_value(am, cx.src))
+              push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
+              emit_label(sb, lbody)
+              push_str(sb, "\n")
+            }
+            arm = am.next
+          }
+          None => { break }
         }
-        arm = am.next
       }
       ## If no wildcard arm exists, fall through with a default 0 on the stack.
       if hadwild == false {
@@ -18385,20 +18400,25 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       }
       ## Second pass: emit each arm's body under the label reserved for it (the body
       ## labels were allocated lend+1, lend+2, … in order; re-walk to recover them).
-      mut arm2 := head
+      mut arm2 : Option(ptr(mut Arm)) = head
       mut lbody2 := lend + 1
-      while arm2 != 0 {
-        am2 := deref(arm_p(arm2))
-        emit_label(sb, lbody2)
-        push_str(sb, ":\n")
-        cx.mdepth = cx.mdepth + 1                        ## a nested match uses a higher scratch level
-        emit_gas(am2.body, sb, cx, a, nl)   ## body — leaves its value on the stack
-        cx.mdepth = cx.mdepth - 1
-        push_str(sb, "  jmp ")
-        emit_label(sb, lend)
-        push_str(sb, "\n")
-        lbody2 += 1
-        arm2 = am2.next
+      loop {
+        match arm2 {
+          Some(arm2q) => {
+            am2 := deref(arm_p(arm2q))
+            emit_label(sb, lbody2)
+            push_str(sb, ":\n")
+            cx.mdepth = cx.mdepth + 1                        ## a nested match uses a higher scratch level
+            emit_gas(am2.body, sb, cx, a, nl)   ## body — leaves its value on the stack
+            cx.mdepth = cx.mdepth - 1
+            push_str(sb, "  jmp ")
+            emit_label(sb, lend)
+            push_str(sb, "\n")
+            lbody2 += 1
+            arm2 = am2.next
+          }
+          None => { break }
+        }
       }
       emit_label(sb, lend)
       push_str(sb, ":\n")
@@ -20298,21 +20318,26 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ## converges the selected word. Was unhandled → the `field_slot` default `pushq $0` — a
         ## §Priority-1 silent 0 for `return (match …).v`. The If-EXPRESSION dual is just above.
         bmi := match_info(base)
-        mut mnh := 0
-        mut mnt := 0
-        mut marm := bmi.head
-        while marm != 0 {
-          mam := deref(arm_p(marm))
-          ## a value-match EXPRESSION carries each arm's value in `body`; a null `body` is a STATEMENT-list
-          ## arm (`body_stmts`), which has no bare-expression field home → fail loud (never a silent 0).
-          if unchecked bitcast(usize, mam.body) == 0 { panic("selfhost: field read off a match-EXPRESSION whose arm has a STATEMENT-list body (not a single value expression) is not lowered — bind the match to a local first, then read the field") }
-          mfb := node_ptr(Expr, deref(cx.mar), mk_expr(deref(cx.mar), Expr.Field(mam.body, fs, fl)))
-          mai := mk_arm(deref(cx.mar), Arm(wild = mam.wild, lit = mam.lit, body = mfb, next = unchecked bitcast(ptr(mut Arm), 0), vs = mam.vs, vl = mam.vl, binds_head = mam.binds_head, body_stmts = mam.body_stmts, hi = mam.hi))
-          if mnh == 0 { mnh = unchecked bitcast(usize, mai) } else { set_arm_next(cx.mar, mnt, mai) }
-          mnt = unchecked bitcast(usize, mai)
-          marm = mam.next
+        mut mnh : Option(ptr(mut Arm)) = Option.None
+        mut mnt : Option(ptr(mut Arm)) = Option.None
+        mut marm : Option(ptr(mut Arm)) = bmi.head
+        loop {
+          match marm {
+            Some(marmq) => {
+              mam := deref(arm_p(marmq))
+              ## a value-match EXPRESSION carries each arm's value in `body`; a null `body` is a STATEMENT-list
+              ## arm (`body_stmts`), which has no bare-expression field home → fail loud (never a silent 0).
+              if unchecked bitcast(usize, mam.body) == 0 { panic("selfhost: field read off a match-EXPRESSION whose arm has a STATEMENT-list body (not a single value expression) is not lowered — bind the match to a local first, then read the field") }
+              mfb := node_ptr(Expr, deref(cx.mar), mk_expr(deref(cx.mar), Expr.Field(mam.body, fs, fl)))
+              mai := mk_arm(deref(cx.mar), Arm(wild = mam.wild, lit = mam.lit, body = mfb, next = Option.None, vs = mam.vs, vl = mam.vl, binds_head = mam.binds_head, body_stmts = mam.body_stmts, hi = mam.hi))
+              match mnt { Some(mntq) => { set_arm_next(cx.mar, mntq, mai) }; None => { mnh = Option.Some(mai) } }
+              mnt = Option.Some(mai)
+              marm = mam.next
+            }
+            None => { break }
+          }
         }
-        bnm := node_ptr(Expr, deref(cx.mar), mk_expr(deref(cx.mar), Expr.Match(bmi.scrut, unchecked bitcast(ptr(mut Arm), mnh))))
+        bnm := node_ptr(Expr, deref(cx.mar), mk_expr(deref(cx.mar), Expr.Match(bmi.scrut, mnh)))
         emit_gas(bnm, sb, cx, a, nl)
       } else if resolve_nested_ptr_field(base, fs, fl, cx).found {
         ## `<ptr-root>.f1…leaf` (depth>=2) — a nested SCALAR field read THROUGH a pointer: a BY-REF struct
@@ -21288,12 +21313,12 @@ tuple_layout_collect := fn(head : ptr(mut Stmt), slots : ptr(SVec), in out tcomp
       Stmt::IndexAssign(ib, ii, iv, nx) => { s = nx }
       Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { s = nx }
       Stmt::If(c, th, el, nx) => { tuple_layout_collect(th, slots, tcomps, src, decls, a, mar); tuple_layout_collect(el, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::Match(sc, ah, nx) => { mut arm := ah; while arm != 0 { am := deref(arm_p(arm)); tuple_layout_collect(am.body_stmts, slots, tcomps, src, decls, a, mar); arm = am.next } ; s = nx }
+      Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah; loop { match arm { Some(armq) => { am := deref(arm_p(armq)); tuple_layout_collect(am.body_stmts, slots, tcomps, src, decls, a, mar); arm = am.next }; None => { break } } } ; s = nx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { tuple_layout_collect(fb, slots, tcomps, src, decls, a, mar); s = nx }
       Stmt::CompIf(cc, ct, ce, nx) => { tuple_layout_collect(ct, slots, tcomps, src, decls, a, mar); tuple_layout_collect(ce, slots, tcomps, src, decls, a, mar); s = nx }
       Stmt::CompFor(cvs, cvl, civ, cb, nx) => { tuple_layout_collect(cb, slots, tcomps, src, decls, a, mar); s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { tuple_layout_collect(rb, slots, tcomps, src, decls, a, mar); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : usize = cmah; while car != 0 { cam := deref(arm_p(car)); tuple_layout_collect(cam.body_stmts, slots, tcomps, src, decls, a, mar); car = cam.next } ; s = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); tuple_layout_collect(cam.body_stmts, slots, tcomps, src, decls, a, mar); car = cam.next }; None => { break } } } ; s = nx }
     }
   }
 }
@@ -22916,14 +22941,14 @@ expr_is_no_tail := fn(e : ptr(Expr)) -> bool {
 ## A `Match`-detection result: whether the expression is a `match`, and (if so) its scrutinee
 ## pointer + arm-list head. Carried out of `match_info` so the deref-`match` stays a function-body
 ## match over a pointer PARAM (the lowerable shape, like `struct_lit_info`).
-MInfo := struct { is_m : bool, scrut : ptr(Expr), head : ptr(mut Arm) }
+MInfo := struct { is_m : bool, scrut : ptr(Expr), head : Option(ptr(mut Arm)) }
 match_info := fn(e : ptr(Expr)) -> MInfo {
   match deref(e) {
     Expr::Match(scrut, head) => { MInfo(is_m = true, scrut = scrut, head = head) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Call | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MInfo(is_m = false, scrut = e, head = unchecked bitcast(ptr(mut Arm), 0)) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { MInfo(is_m = false, scrut = e, head = Option.None) }
   }
 }
 
@@ -22947,13 +22972,18 @@ if_info := fn(e : ptr(Expr)) -> IfInfo {
 ## (`emit_str_eq_core` against the str scrutinee), not an integer value compare (§5.4). `src/`'s
 ## matches are all integer/enum (keyword classification uses `contains(str, table, w)`), so this is
 ## `false` for the self-host build → the str dispatch is never emitted → fixpoint-neutral.
-match_is_str := fn(head : ptr(mut Arm), a : rt::Arena) -> bool {
-  mut arm := head
+match_is_str := fn(head : Option(ptr(mut Arm)), a : rt::Arena) -> bool {
+  mut arm : Option(ptr(mut Arm)) = head
   mut res := false
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    if am.wild == 4 { res = true }
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if am.wild == 4 { res = true }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -22964,13 +22994,18 @@ match_is_str := fn(head : ptr(mut Arm), a : rt::Arena) -> bool {
 ## labels. Reserving up front (`base = nl; nl += arm_count`) keeps body labels `base..base+n` disjoint
 ## from any dispatch-emitted label, and is byte-identical for the integer/enum path (the body labels
 ## land at the same values the old `lbody := nl; nl += 1` interleave produced).
-arm_count := fn(head : ptr(mut Arm), a : rt::Arena) -> usize {
-  mut arm := head
+arm_count := fn(head : Option(ptr(mut Arm)), a : rt::Arena) -> usize {
+  mut arm : Option(ptr(mut Arm)) = head
   mut n := 0
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    n += 1
-    arm = am.next
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        n += 1
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   n
 }
@@ -23085,37 +23120,42 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
       ## byte-identical for the integer path.
       base := nl
       nl += arm_count(mi.head, a)
-      mut arm := mi.head
+      mut arm : Option(ptr(mut Arm)) = mi.head
       mut hadwild := false
       mut ai := 0
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        lbody := base + ai
-        ai += 1
-        if is_str and am.wild == 4 {
-          ## byte-compare the str scrutinee against the arm's pattern literal (StrLit at `am.lit`)
-          pat := unchecked bitcast(ptr(Expr), usize(am.lit))
-          emit_str_eq_core(mi.scrut, pat, sb, cx, a, nl)
-          push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  jne ")
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
-        } else if am.wild == 5 or am.wild == 6 {
-          ## a RANGE arm (Control Flow §5.4): `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6), compared
-          ## with the scrutinee's signedness (`emit_range_arm`, #806).
-          emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(mi.scrut, cx), lbody, sb, nl)
-        } else if am.wild != 0 {
-          push_str(sb, "  jmp ")
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
-          hadwild = true
-        } else {
-          push_str(sb, "  movq $")
-          push_int(sb, int_arm_value(am, cx.src))
-          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            lbody := base + ai
+            ai += 1
+            if is_str and am.wild == 4 {
+              ## byte-compare the str scrutinee against the arm's pattern literal (StrLit at `am.lit`)
+              pat := unchecked bitcast(ptr(Expr), usize(am.lit))
+              emit_str_eq_core(mi.scrut, pat, sb, cx, a, nl)
+              push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  jne ")
+              emit_label(sb, lbody)
+              push_str(sb, "\n")
+            } else if am.wild == 5 or am.wild == 6 {
+              ## a RANGE arm (Control Flow §5.4): `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6), compared
+              ## with the scrutinee's signedness (`emit_range_arm`, #806).
+              emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(mi.scrut, cx), lbody, sb, nl)
+            } else if am.wild != 0 {
+              push_str(sb, "  jmp ")
+              emit_label(sb, lbody)
+              push_str(sb, "\n")
+              hadwild = true
+            } else {
+              push_str(sb, "  movq $")
+              push_int(sb, int_arm_value(am, cx.src))
+              push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
+              emit_label(sb, lbody)
+              push_str(sb, "\n")
+            }
+            arm = am.next
+          }
+          None => { break }
         }
-        arm = am.next
       }
       ## no wildcard ⇒ no arm matched: deliver 0 and jump the epilogue (a non-exhaustive value-match
       ## is a logic error; this keeps it from falling through into an arm body).
@@ -23124,15 +23164,20 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
         emit_label(sb, cx.epi)
         push_str(sb, "\n")
       }
-      mut arm2 := mi.head
+      mut arm2 : Option(ptr(mut Arm)) = mi.head
       mut lbody2 := base
-      while arm2 != 0 {
-        am2 := deref(arm_p(arm2))
-        emit_label(sb, lbody2)
-        push_str(sb, ":\n")
-        emit_return_value(am2.body, sb, cx, a, nl)   ## delivers the arm value + jmp epilogue
-        lbody2 += 1
-        arm2 = am2.next
+      loop {
+        match arm2 {
+          Some(arm2q) => {
+            am2 := deref(arm_p(arm2q))
+            emit_label(sb, lbody2)
+            push_str(sb, ":\n")
+            emit_return_value(am2.body, sb, cx, a, nl)   ## delivers the arm value + jmp epilogue
+            lbody2 += 1
+            arm2 = am2.next
+          }
+          None => { break }
+        }
       }
       return
     } else {
@@ -23217,135 +23262,145 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
       ## disc load at the `@repr(T)` tag WIDTH (spec §8) if pinned, else word-sized (byte-identical).
       mrsp := enum_repr_ty(cx.decls, cx.src, ses, sel)
       emit_repr_tag_load(sb, sbase, repr_tag_code(cx.src, mrsp.s, mrsp.n))
-      mut arm := head
+      mut arm : Option(ptr(mut Arm)) = head
       mut hadwild := false
       mut ai := 0
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        lbody := base + ai
-        ai += 1
-        if am.wild != 0 {
-          push_str(sb, "  jmp ")
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
-          hadwild = true
-        } else if folded {
-          fnb := bind_count(am.binds_head)
-          if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }
-          else { push_str(sb, "  cmpq $0, %r12\n  jne ") }
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
-        } else {
-          disc := variant_index(cx.decls, cx.src, ses, sel, am.vs, am.vl, deref(cx.mar))
-          push_str(sb, "  movq $")
-          push_int(sb, disc)
-          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
-          emit_label(sb, lbody)
-          push_str(sb, "\n")
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            lbody := base + ai
+            ai += 1
+            if am.wild != 0 {
+              push_str(sb, "  jmp ")
+              emit_label(sb, lbody)
+              push_str(sb, "\n")
+              hadwild = true
+            } else if folded {
+              fnb := bind_count(am.binds_head)
+              if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }
+              else { push_str(sb, "  cmpq $0, %r12\n  jne ") }
+              emit_label(sb, lbody)
+              push_str(sb, "\n")
+            } else {
+              disc := variant_index(cx.decls, cx.src, ses, sel, am.vs, am.vl, deref(cx.mar))
+              push_str(sb, "  movq $")
+              push_int(sb, disc)
+              push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
+              emit_label(sb, lbody)
+              push_str(sb, "\n")
+            }
+            arm = am.next
+          }
+          None => { break }
         }
-        arm = am.next
       }
       if hadwild == false {
         push_str(sb, "  movq $0, %rax\n  jmp ")
         emit_label(sb, cx.epi)
         push_str(sb, "\n")
       }
-      mut arm2e := head
+      mut arm2e : Option(ptr(mut Arm)) = head
       mut lbody2e := base
-      while arm2e != 0 {
-        am2 := deref(arm_p(arm2e))
-        emit_label(sb, lbody2e)
-        push_str(sb, ":\n")
-        saved := svec_len(cx.slots)
-        nbind := bind_count(am2.binds_head)
-        pty := variant_payload_type(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, deref(cx.mar))
-        mut agg_ek : u8 = 0
-        mut array_ess := 0
-        mut array_esl := 0
-        mut array_estride := 1
-        mut array_nel := 0
-        if nbind == 1 and pty.n != 0 {
-          ## Resolve the payload decl through the payload's BASE name — the third and last copy of
-          ## this three-way payload classification (the statement-match copy below and the one in
-          ## `lower::enum_match` already strip). A GENERIC-INSTANCE payload (`Some(v)` where `v` is a
-          ## `Pair(u64, u64)` / `Entry(K, V)`) streqs no decl by its full text, so this TAIL-match copy
-          ## bound it as a bare scalar: `emit_struct_value`'s Var arm then read `struct_words` of an
-          ## empty span, delivered ZERO return words, and the caller staged stale registers (#473).
-          ## The FULL span is still what lands in the slot, so every width read substitutes through it.
-          ptybn := base_type_name(cx.src, pty.s, pty.n)
-          if struct_decl_of(cx.decls, cx.src, ptybn.s, ptybn.n) >= 0 { agg_ek = 2 }
-          else if enum_decl_of(cx.decls, cx.src, ptybn.s, ptybn.n) >= 0 { agg_ek = 3 }
-          else if str_at((cx.src + pty.s), pty.n) == "str" { agg_ek = 4 }   ## a str payload → 2-word {ptr, len} binding
-          else {
-            pae := array_elem_span(cx.src, pty.s, pty.n)
-            if pae.n != 0 {
-              pbn := base_type_name(cx.src, pae.s, pae.n)
-              if struct_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 {
-                panic("selfhost: a value-match binding rooted at an array payload currently requires a plain-struct element (`xs[i].a.arr[j]`); aggregate array leaves remain a fail-loud frontier")
-              }
-              agg_ek = 5
-              array_ess = pae.s
-              array_esl = pae.n
-              array_estride = struct_words(cx.decls, cx.src, pbn.s, pbn.n, deref(cx.mar))
-              array_nel = parse_arr_len(cx.src, pty.s, pty.n)
-              if array_nel == 0 or array_estride == 0 { panic("selfhost: a value-match array payload has no resolvable fixed length/element stride") }
-            }
-          }
-        }
-        mut bnd := am2.binds_head
-        mut bi := 0
-        loop {
-          match bnd {
-            Some(bndq) => {
-              bmns := bnd_ns(bndq)
-              bmnl := bnd_nl(bndq)
-              if agg_ek == 5 {
-                for fi in 0..(array_nel * array_estride) {
-                  svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+      loop {
+        match arm2e {
+          Some(arm2eq) => {
+            am2 := deref(arm_p(arm2eq))
+            emit_label(sb, lbody2e)
+            push_str(sb, ":\n")
+            saved := svec_len(cx.slots)
+            nbind := bind_count(am2.binds_head)
+            pty := variant_payload_type(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, deref(cx.mar))
+            mut agg_ek : u8 = 0
+            mut array_ess := 0
+            mut array_esl := 0
+            mut array_estride := 1
+            mut array_nel := 0
+            if nbind == 1 and pty.n != 0 {
+              ## Resolve the payload decl through the payload's BASE name — the third and last copy of
+              ## this three-way payload classification (the statement-match copy below and the one in
+              ## `lower::enum_match` already strip). A GENERIC-INSTANCE payload (`Some(v)` where `v` is a
+              ## `Pair(u64, u64)` / `Entry(K, V)`) streqs no decl by its full text, so this TAIL-match copy
+              ## bound it as a bare scalar: `emit_struct_value`'s Var arm then read `struct_words` of an
+              ## empty span, delivered ZERO return words, and the caller staged stale registers (#473).
+              ## The FULL span is still what lands in the slot, so every width read substitutes through it.
+              ptybn := base_type_name(cx.src, pty.s, pty.n)
+              if struct_decl_of(cx.decls, cx.src, ptybn.s, ptybn.n) >= 0 { agg_ek = 2 }
+              else if enum_decl_of(cx.decls, cx.src, ptybn.s, ptybn.n) >= 0 { agg_ek = 3 }
+              else if str_at((cx.src + pty.s), pty.n) == "str" { agg_ek = 4 }   ## a str payload → 2-word {ptr, len} binding
+              else {
+                pae := array_elem_span(cx.src, pty.s, pty.n)
+                if pae.n != 0 {
+                  pbn := base_type_name(cx.src, pae.s, pae.n)
+                  if struct_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 {
+                    panic("selfhost: a value-match binding rooted at an array payload currently requires a plain-struct element (`xs[i].a.arr[j]`); aggregate array leaves remain a fail-loud frontier")
+                  }
+                  agg_ek = 5
+                  array_ess = pae.s
+                  array_esl = pae.n
+                  array_estride = struct_words(cx.decls, cx.src, pbn.s, pbn.n, deref(cx.mar))
+                  array_nel = parse_arr_len(cx.src, pty.s, pty.n)
+                  if array_nel == 0 or array_estride == 0 { panic("selfhost: a value-match array payload has no resolvable fixed length/element stride") }
                 }
-                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = array_ess, snl = array_esl, ek = 5, estride = array_estride, eek = 2, is_ref = false))
-              } else if agg_ek != 0 {
-                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = tail_enum_owner_s, tmod_l = tail_enum_owner_l))
-              } else if folded {
-                ## The folded `Some` payload is the staged pointer word itself, not the ordinary
-                ## payload slot at `sbase-1`. #768 — over `ptr(S)` / `ptr(E)` it carries the pointee kind.
-                rpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
-                rpk := pointee_agg_kind(cx.decls, cx.src, rpt.s, rpt.n)
-                mut rps := 0
-                mut rpl := 0
-                if rpk != 0 { rps = rpt.s; rpl = rpt.n }
-                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = rps, snl = rpl, ek = rpk, estride = 1, eek = 0, is_ref = false))
-              } else {
-                ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
-                ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
-                bpf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
-                tbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
-                mut tbk : u8 = 0
-                mut tbs := 0
-                mut tbl := 0
-                if bpf.n != 0 { tbk = 3; tbs = bpf.s; tbl = bpf.n }
-                else {
-                  tbk = pointee_agg_kind(cx.decls, cx.src, tbpt.s, tbpt.n)
-                  if tbk != 0 { tbs = tbpt.s; tbl = tbpt.n }
-                }
-                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = tbs, snl = tbl, ek = tbk, estride = 1, eek = 0, is_ref = false))
               }
-              bi += 1
-              bnd = bnd_next(bndq)
             }
-            None => { break }
+            mut bnd := am2.binds_head
+            mut bi := 0
+            loop {
+              match bnd {
+                Some(bndq) => {
+                  bmns := bnd_ns(bndq)
+                  bmnl := bnd_nl(bndq)
+                  if agg_ek == 5 {
+                    for fi in 0..(array_nel * array_estride) {
+                      svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+                    }
+                    svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = array_ess, snl = array_esl, ek = 5, estride = array_estride, eek = 2, is_ref = false))
+                  } else if agg_ek != 0 {
+                    svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = tail_enum_owner_s, tmod_l = tail_enum_owner_l))
+                  } else if folded {
+                    ## The folded `Some` payload is the staged pointer word itself, not the ordinary
+                    ## payload slot at `sbase-1`. #768 — over `ptr(S)` / `ptr(E)` it carries the pointee kind.
+                    rpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+                    rpk := pointee_agg_kind(cx.decls, cx.src, rpt.s, rpt.n)
+                    mut rps := 0
+                    mut rpl := 0
+                    if rpk != 0 { rps = rpt.s; rpl = rpt.n }
+                    svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = rps, snl = rpl, ek = rpk, estride = 1, eek = 0, is_ref = false))
+                  } else {
+                    ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
+                    ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
+                    bpf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
+                    tbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+                    mut tbk : u8 = 0
+                    mut tbs := 0
+                    mut tbl := 0
+                    if bpf.n != 0 { tbk = 3; tbs = bpf.s; tbl = bpf.n }
+                    else {
+                      tbk = pointee_agg_kind(cx.decls, cx.src, tbpt.s, tbpt.n)
+                      if tbk != 0 { tbs = tbpt.s; tbl = tbpt.n }
+                    }
+                    svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = tbs, snl = tbl, ek = tbk, estride = 1, eek = 0, is_ref = false))
+                  }
+                  bi += 1
+                  bnd = bnd_next(bndq)
+                }
+                None => { break }
+              }
+            }
+            cx.mdepth = cx.mdepth + 1                          ## a nested match in the body uses a deeper scratch level
+            if tail_enum_owner_ctx {
+              if tail_enum_owner_old_on { lower_layout::set_type_ref_module(tail_enum_owner_old_s, tail_enum_owner_old_l, ROOT_MOD_S, ROOT_MOD_L) } else { lower_layout::clear_type_ref_module() }
+            }
+            emit_return_value(am2.body, sb, cx, a, nl)         ## delivers the arm's value + jmp epilogue
+            if tail_enum_owner_ctx { lower_layout::set_type_ref_module(tail_enum_owner_s, tail_enum_owner_l, ROOT_MOD_S, ROOT_MOD_L) }
+            cx.mdepth = cx.mdepth - 1
+            svec_truncate(deref(cx.slots), saved)
+            lbody2e += 1
+            arm2e = am2.next
           }
+          None => { break }
         }
-        cx.mdepth = cx.mdepth + 1                          ## a nested match in the body uses a deeper scratch level
-        if tail_enum_owner_ctx {
-          if tail_enum_owner_old_on { lower_layout::set_type_ref_module(tail_enum_owner_old_s, tail_enum_owner_old_l, ROOT_MOD_S, ROOT_MOD_L) } else { lower_layout::clear_type_ref_module() }
-        }
-        emit_return_value(am2.body, sb, cx, a, nl)         ## delivers the arm's value + jmp epilogue
-        if tail_enum_owner_ctx { lower_layout::set_type_ref_module(tail_enum_owner_s, tail_enum_owner_l, ROOT_MOD_S, ROOT_MOD_L) }
-        cx.mdepth = cx.mdepth - 1
-        svec_truncate(deref(cx.slots), saved)
-        lbody2e += 1
-        arm2e = am2.next
       }
       if tail_enum_owner_ctx {
         if tail_enum_owner_old_on { lower_layout::set_type_ref_module(tail_enum_owner_old_s, tail_enum_owner_old_l, ROOT_MOD_S, ROOT_MOD_L) } else { lower_layout::clear_type_ref_module() }
@@ -23416,13 +23471,18 @@ match_if_first_body := fn(v : ptr(Expr), a : rt::Arena) -> ptr(Expr) {
   z := unchecked bitcast(ptr(Expr), 0)
   mi := match_info(v)
   if mi.is_m {
-    mut arm := mi.head
-    while arm != 0 {
-      am := deref(arm_p(arm))
-      if am.wild == 0 or am.wild == 4 { return am.body }
-      arm = am.next
+    mut arm : Option(ptr(mut Arm)) = mi.head
+    loop {
+      match arm {
+        Some(armq) => {
+          am := deref(arm_p(armq))
+          if am.wild == 0 or am.wild == 4 { return am.body }
+          arm = am.next
+        }
+        None => { break }
+      }
     }
-    if mi.head != 0 { return deref(arm_p(mi.head)).body }
+    match mi.head { Some(mhq) => { return deref(arm_p(mhq)).body }; None => {} }
     return z
   }
   ii := if_info(v)
@@ -23526,7 +23586,7 @@ emit_arm_val_store := fn(body : ptr(Expr), base : i64, in out sb : strbuf::StrBu
 ## value into the local via `emit_arm_val_store` (struct/enum/array assign, or a str {ptr,len} pop) —
 ## the local-binding dual of `emit_return_value`'s aggregate/str routing (aggregates + strs do not
 ## materialize on the stack in bare expr position, so the generic scalar store cannot deliver them).
-emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_val_match_to_local := fn(scrut : ptr(Expr), head : Option(ptr(mut Arm)), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## An ENUM scrutinee (`p := match e { V(x) => <agg> }`): dispatch on the discriminant with variant
   ## indices + payload binding (the integer path below uses `am.lit`, which is 0 for enum patterns, so
   ## it never matched — the aggregate stayed unwritten). Materialize a global / struct-field / array-
@@ -23560,60 +23620,70 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64
     emit_repr_tag_load(sb, sbase, repr_tag_code(cx.src, ersp.s, ersp.n))
     ebodybase := nl
     nl += arm_count(ehead, a)
-    mut earm := ehead
+    mut earm : Option(ptr(mut Arm)) = ehead
     mut ehadwild := false
     mut eai := 0
-    while earm != 0 {
-      eam := deref(arm_p(earm))
-      elbody := ebodybase + eai
-      eai += 1
-      if eam.wild != 0 {
-        push_str(sb, "  jmp ")
-        emit_label(sb, elbody)
-        push_str(sb, "\n")
-        ehadwild = true
-      } else {
-        edisc := variant_index(cx.decls, cx.src, ses, sel, eam.vs, eam.vl, deref(cx.mar))
-        push_str(sb, "  movq $")
-        push_int(sb, edisc)
-        push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
-        emit_label(sb, elbody)
-        push_str(sb, "\n")
+    loop {
+      match earm {
+        Some(earmq) => {
+          eam := deref(arm_p(earmq))
+          elbody := ebodybase + eai
+          eai += 1
+          if eam.wild != 0 {
+            push_str(sb, "  jmp ")
+            emit_label(sb, elbody)
+            push_str(sb, "\n")
+            ehadwild = true
+          } else {
+            edisc := variant_index(cx.decls, cx.src, ses, sel, eam.vs, eam.vl, deref(cx.mar))
+            push_str(sb, "  movq $")
+            push_int(sb, edisc)
+            push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
+            emit_label(sb, elbody)
+            push_str(sb, "\n")
+          }
+          earm = eam.next
+        }
+        None => { break }
       }
-      earm = eam.next
     }
     if ehadwild == false { push_str(sb, "  jmp "); emit_label(sb, elend); push_str(sb, "\n") }
-    mut earm2 := ehead
+    mut earm2 : Option(ptr(mut Arm)) = ehead
     mut elbody2 := ebodybase
-    while earm2 != 0 {
-      eam2 := deref(arm_p(earm2))
-      emit_label(sb, elbody2)
-      push_str(sb, ":\n")
-      ## alias each payload binding to its scrutinee payload slot (`sbase+1+i`), mirroring
-      ## `emit_enum_match`, so a bound payload (`Some(x) => P(x, …)`) resolves in the arm body.
-      esaved := svec_len(cx.slots)
-      mut ebnd := eam2.binds_head
-      mut ebi := 0
-      loop {
-        match ebnd {
-          Some(ebndq) => {
-            epf := payload_folded_ty(cx.decls, cx.src, ses, sel, eam2.vs, eam2.vl, usize(ebi), deref(cx.mar))
-            mut epfk : u8 = 0
-            if epf.n != 0 { epfk = 3 }
-            svec_push(deref(cx.slots), SlotEntry(ns = bnd_ns(ebndq), nl = bnd_nl(ebndq), off = sbase - 1 - ebi, sns = epf.s, snl = epf.n, ek = epfk, estride = 1, eek = 0, is_ref = false))
-            ebi += 1
-            ebnd = bnd_next(ebndq)
+    loop {
+      match earm2 {
+        Some(earm2q) => {
+          eam2 := deref(arm_p(earm2q))
+          emit_label(sb, elbody2)
+          push_str(sb, ":\n")
+          ## alias each payload binding to its scrutinee payload slot (`sbase+1+i`), mirroring
+          ## `emit_enum_match`, so a bound payload (`Some(x) => P(x, …)`) resolves in the arm body.
+          esaved := svec_len(cx.slots)
+          mut ebnd := eam2.binds_head
+          mut ebi := 0
+          loop {
+            match ebnd {
+              Some(ebndq) => {
+                epf := payload_folded_ty(cx.decls, cx.src, ses, sel, eam2.vs, eam2.vl, usize(ebi), deref(cx.mar))
+                mut epfk : u8 = 0
+                if epf.n != 0 { epfk = 3 }
+                svec_push(deref(cx.slots), SlotEntry(ns = bnd_ns(ebndq), nl = bnd_nl(ebndq), off = sbase - 1 - ebi, sns = epf.s, snl = epf.n, ek = epfk, estride = 1, eek = 0, is_ref = false))
+                ebi += 1
+                ebnd = bnd_next(ebndq)
+              }
+              None => { break }
+            }
           }
-          None => { break }
+          emit_arm_val_store(eam2.body, base, sb, cx, a, nl)
+          svec_truncate(deref(cx.slots), esaved)
+          push_str(sb, "  jmp ")
+          emit_label(sb, elend)
+          push_str(sb, "\n")
+          elbody2 += 1
+          earm2 = eam2.next
         }
+        None => { break }
       }
-      emit_arm_val_store(eam2.body, base, sb, cx, a, nl)
-      svec_truncate(deref(cx.slots), esaved)
-      push_str(sb, "  jmp ")
-      emit_label(sb, elend)
-      push_str(sb, "\n")
-      elbody2 += 1
-      earm2 = eam2.next
     }
     emit_label(sb, elend)
     push_str(sb, ":\n")
@@ -23628,50 +23698,60 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : ptr(mut Arm), base : i64
   }
   bodybase := nl
   nl += arm_count(head, a)
-  mut arm := head
+  mut arm : Option(ptr(mut Arm)) = head
   mut hadwild := false
   mut ai := 0
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    lbody := bodybase + ai
-    ai += 1
-    if is_str and am.wild == 4 {
-      pat := unchecked bitcast(ptr(Expr), usize(am.lit))
-      emit_str_eq_core(scrut, pat, sb, cx, a, nl)
-      push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  jne ")
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
-    } else if am.wild == 5 or am.wild == 6 {
-      ## a RANGE arm (Control Flow §5.4): `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6), compared with
-      ## the scrutinee's signedness (`emit_range_arm`, #806).
-      emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
-    } else if am.wild != 0 {
-      push_str(sb, "  jmp ")
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
-      hadwild = true
-    } else {
-      push_str(sb, "  movq $")
-      push_int(sb, int_arm_value(am, cx.src))
-      push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        lbody := bodybase + ai
+        ai += 1
+        if is_str and am.wild == 4 {
+          pat := unchecked bitcast(ptr(Expr), usize(am.lit))
+          emit_str_eq_core(scrut, pat, sb, cx, a, nl)
+          push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  jne ")
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+        } else if am.wild == 5 or am.wild == 6 {
+          ## a RANGE arm (Control Flow §5.4): `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6), compared with
+          ## the scrutinee's signedness (`emit_range_arm`, #806).
+          emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
+        } else if am.wild != 0 {
+          push_str(sb, "  jmp ")
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+          hadwild = true
+        } else {
+          push_str(sb, "  movq $")
+          push_int(sb, int_arm_value(am, cx.src))
+          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+        }
+        arm = am.next
+      }
+      None => { break }
     }
-    arm = am.next
   }
   if hadwild == false { push_str(sb, "  jmp "); emit_label(sb, lend); push_str(sb, "\n") }
-  mut arm2 := head
+  mut arm2 : Option(ptr(mut Arm)) = head
   mut lbody2 := bodybase
-  while arm2 != 0 {
-    am2 := deref(arm_p(arm2))
-    emit_label(sb, lbody2)
-    push_str(sb, ":\n")
-    emit_arm_val_store(am2.body, base, sb, cx, a, nl)
-    push_str(sb, "  jmp ")
-    emit_label(sb, lend)
-    push_str(sb, "\n")
-    lbody2 += 1
-    arm2 = am2.next
+  loop {
+    match arm2 {
+      Some(arm2q) => {
+        am2 := deref(arm_p(arm2q))
+        emit_label(sb, lbody2)
+        push_str(sb, ":\n")
+        emit_arm_val_store(am2.body, base, sb, cx, a, nl)
+        push_str(sb, "  jmp ")
+        emit_label(sb, lend)
+        push_str(sb, "\n")
+        lbody2 += 1
+        arm2 = am2.next
+      }
+      None => { break }
+    }
   }
   emit_label(sb, lend)
   push_str(sb, ":\n")
@@ -23753,7 +23833,7 @@ emit_local_field_agg_store := fn(v : ptr(Expr), fslot : i64, fts : usize, ftn : 
 ## `mut si : ScrutInfo = si0` struct copy — the seed lower copies a struct-VAR binding by ONE word
 ## only (it has no `name := <struct-var>` case), which left `es`/`el` garbage; reading the fields
 ## of `si0` into scalars (and re-assigning the scalars on the by-ref path) needs no struct copy.
-emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
+emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
   a := arena_of(cx)
   mut enum_owner_ctx := false
   mut enum_owner_old_on := false
@@ -23808,11 +23888,16 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
   ## read in the arm body resolves (`display`'s enum arm). Restored at the end. 0/0 for an ordinary
   ## match → byte-identical.
   ov_vls := cx.cf_vloop_s; ov_vll := cx.cf_vloop_l
-  mut tpl := head_in
-  while tpl != 0 {
-    tm := deref(arm_p(tpl))
-    if tm.wild == 2 { cx.cf_vloop_s = tm.vs; cx.cf_vloop_l = tm.vl }
-    tpl = tm.next
+  mut tpl : Option(ptr(mut Arm)) = head_in
+  loop {
+    match tpl {
+      Some(tplq) => {
+        tm := deref(arm_p(tplq))
+        if tm.wild == 2 { cx.cf_vloop_s = tm.vs; cx.cf_vloop_l = tm.vl }
+        tpl = tm.next
+      }
+      None => { break }
+    }
   }
   ## expand any `comptime for var in typeinfo(T).variants` template arm into one real arm per variant.
   head := expand_variant_arms(head_in, si0.es, si0.el, cx, a)
@@ -23908,54 +23993,59 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
   bodybase := nl
   nl += arm_count(head, a)
   ## dispatch pass
-  mut arm := head
+  mut arm : Option(ptr(mut Arm)) = head
   mut hadwild := false
   mut ai := 0
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    lbody := bodybase + ai
-    ai += 1
-    if is_str and am.wild == 4 {
-      ## a STR-LITERAL arm: byte-compare the str scrutinee against the pattern (StrLit at `am.lit`)
-      pat := unchecked bitcast(ptr(Expr), usize(am.lit))
-      emit_str_eq_core(scrut, pat, sb, cx, a, nl)
-      push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  jne ")
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
-    } else if (sise == false) and (am.wild == 5 or am.wild == 6) {
-      ## a RANGE arm (Control Flow §5.4) over a SCALAR scrutinee (%r12): bounds-check against
-      ## `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6); jump to the body iff in range, else fall
-      ## through. Ranges are scalar-only, so this never fires for an enum (`sise`) scrutinee. The
-      ## comparison takes the scrutinee's signedness (`emit_range_arm`, #806).
-      emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
-    } else if am.wild != 0 {
-      push_str(sb, "  jmp ")
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
-      hadwild = true
-    } else if folded {
-      ## §8 `@niche` folded `Option(ptr)`: dispatch on the null niche — nullary `None` ⟺ `word == 0`,
-      ## payload `Some` ⟺ `word != 0` (a non-null pointer). No discriminant compare. Nullary-vs-payload
-      ## is read from the arm's BINDING COUNT (`Some(p)` binds one, `None` binds none) — robust without
-      ## resolving the parenthesized `Option(ptr(T))` span through `enum_decl_of`.
-      fnb := bind_count(am.binds_head)
-      if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }
-      else { push_str(sb, "  cmpq $0, %r12\n  jne ") }
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
-    } else {
-      ## an enum scrutinee compares to the variant's discriminant index; an integer
-      ## scrutinee compares to the arm's literal.
-      mut cmpv : i64 = 0
-      if sise { cmpv = variant_index(cx.decls, cx.src, ses, sel, am.vs, am.vl, deref(cx.mar)) }
-      else { cmpv = int_arm_value(am, cx.src) }
-      push_str(sb, "  movq $")
-      push_int(sb, cmpv)
-      push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        lbody := bodybase + ai
+        ai += 1
+        if is_str and am.wild == 4 {
+          ## a STR-LITERAL arm: byte-compare the str scrutinee against the pattern (StrLit at `am.lit`)
+          pat := unchecked bitcast(ptr(Expr), usize(am.lit))
+          emit_str_eq_core(scrut, pat, sb, cx, a, nl)
+          push_str(sb, "  popq %rax\n  cmpq $0, %rax\n  jne ")
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+        } else if (sise == false) and (am.wild == 5 or am.wild == 6) {
+          ## a RANGE arm (Control Flow §5.4) over a SCALAR scrutinee (%r12): bounds-check against
+          ## `[lo, hi)` (wild 5) / `[lo, hi]` (wild 6); jump to the body iff in range, else fall
+          ## through. Ranges are scalar-only, so this never fires for an enum (`sise`) scrutinee. The
+          ## comparison takes the scrutinee's signedness (`emit_range_arm`, #806).
+          emit_range_arm(am.lit, am.hi, am.wild == 6, is_unsigned_expr(scrut, cx), lbody, sb, nl)
+        } else if am.wild != 0 {
+          push_str(sb, "  jmp ")
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+          hadwild = true
+        } else if folded {
+          ## §8 `@niche` folded `Option(ptr)`: dispatch on the null niche — nullary `None` ⟺ `word == 0`,
+          ## payload `Some` ⟺ `word != 0` (a non-null pointer). No discriminant compare. Nullary-vs-payload
+          ## is read from the arm's BINDING COUNT (`Some(p)` binds one, `None` binds none) — robust without
+          ## resolving the parenthesized `Option(ptr(T))` span through `enum_decl_of`.
+          fnb := bind_count(am.binds_head)
+          if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }
+          else { push_str(sb, "  cmpq $0, %r12\n  jne ") }
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+        } else {
+          ## an enum scrutinee compares to the variant's discriminant index; an integer
+          ## scrutinee compares to the arm's literal.
+          mut cmpv : i64 = 0
+          if sise { cmpv = variant_index(cx.decls, cx.src, ses, sel, am.vs, am.vl, deref(cx.mar)) }
+          else { cmpv = int_arm_value(am, cx.src) }
+          push_str(sb, "  movq $")
+          push_int(sb, cmpv)
+          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+        }
+        arm = am.next
+      }
+      None => { break }
     }
-    arm = am.next
   }
   if hadwild == false {
     push_str(sb, "  jmp ")
@@ -23963,168 +24053,173 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : usize, in out sb : strbuf::St
     push_str(sb, "\n")
   }
   ## body pass — bind enum payloads (if any), emit the arm's statement list, then jmp end.
-  mut arm2 := head
+  mut arm2 : Option(ptr(mut Arm)) = head
   mut lbody2 := lend + 1
-  while arm2 != 0 {
-    am2 := deref(arm_p(arm2))
-    emit_label(sb, lbody2)
-    push_str(sb, ":\n")
-    saved := svec_len(cx.slots)
-    ## type-aware payload binding (mirrors the expression-match arm): a SINGLE payload whose
-    ## (substituted) type is a struct/enum binds as an AGGREGATE (ek 2/3, passed by-ref), fixing the
-    ## `check`/sema crash where `Ok(bt : Ty)` bound as a 1-word scalar was passed by-value to a
-    ## by-ref `Ty` param. A multi-binding / scalar payload keeps one-word-per-binding scalars.
-    nbind2 := bind_count(am2.binds_head)
-    mut agg_ek2 : u8 = 0
-    mut ptys2 := 0
-    mut ptyn2 := 0
-    mut ptup2 := 0                       ## component count when the payload is a TUPLE (0 = not)
-    mut array_ess2 := 0
-    mut array_esl2 := 0
-    mut array_estride2 := 1
-    mut array_nel2 := 0
-    if nbind2 == 1 and sise {
-      pt2 := variant_payload_span(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, deref(cx.mar))
-      ptys2 = pt2.s
-      ptyn2 = pt2.n
-      if ptyn2 != 0 {
-        if str_at((cx.src + ptys2), 1) == "(" {
-          ## MULTI-component payload `V(T0, …, TN)` bound to ONE name `p` — a TUPLE (ek 5, N words at
-          ## sbase+1). `display(p)`/`hash(p)` then route via `cf_pay_ty` = the `(…)` span to the tuple
-          ## instance, and `p` is passed by reference (like any aggregate arg). Count the components.
-          agg_ek2 = 5
-          mut cj := 0
-          mut cg := true
-          while cg { ca := typearg_at(cx.src, ptys2, 0, cj); if ca.n == 0 { cg = false } else { ptup2 = ptup2 + 1; cj = cj + 1 } }
-        }
-        else if struct_decl_of(cx.decls, cx.src, base_type_name(cx.src, ptys2, ptyn2).s, base_type_name(cx.src, ptys2, ptyn2).n) >= 0 { agg_ek2 = 2 }
-        else if enum_decl_of(cx.decls, cx.src, base_type_name(cx.src, ptys2, ptyn2).s, base_type_name(cx.src, ptys2, ptyn2).n) >= 0 { agg_ek2 = 3 }   ## a nested generic-instance payload (`Option(u64)`) resolves via its BASE name; the FULL span stays in the slot for the inner match's dispatch
-        else if str_at((cx.src + ptys2), ptyn2) == "str" { agg_ek2 = 4 }   ## a str payload → 2-word {ptr, len} binding
-        else {
-          ## A single fixed-array payload is an indexable aggregate binding. Keep `ptys2/ptyn2`
-          ## as the full payload type for comptime consumers, but record the element type/stride
-          ## separately for the array alias SlotEntry used by `xs[i].a.arr[j]`.
-          pae2 := array_elem_span(cx.src, ptys2, ptyn2)
-          if pae2.n != 0 {
-            pbn2 := base_type_name(cx.src, pae2.s, pae2.n)
-            if struct_decl_of(cx.decls, cx.src, pbn2.s, pbn2.n) < 0 {
-              panic("selfhost: a match binding rooted at an array payload currently requires a plain-struct element (`xs[i].a.arr[j]`); aggregate array leaves remain a fail-loud frontier")
+  loop {
+    match arm2 {
+      Some(arm2q) => {
+        am2 := deref(arm_p(arm2q))
+        emit_label(sb, lbody2)
+        push_str(sb, ":\n")
+        saved := svec_len(cx.slots)
+        ## type-aware payload binding (mirrors the expression-match arm): a SINGLE payload whose
+        ## (substituted) type is a struct/enum binds as an AGGREGATE (ek 2/3, passed by-ref), fixing the
+        ## `check`/sema crash where `Ok(bt : Ty)` bound as a 1-word scalar was passed by-value to a
+        ## by-ref `Ty` param. A multi-binding / scalar payload keeps one-word-per-binding scalars.
+        nbind2 := bind_count(am2.binds_head)
+        mut agg_ek2 : u8 = 0
+        mut ptys2 := 0
+        mut ptyn2 := 0
+        mut ptup2 := 0                       ## component count when the payload is a TUPLE (0 = not)
+        mut array_ess2 := 0
+        mut array_esl2 := 0
+        mut array_estride2 := 1
+        mut array_nel2 := 0
+        if nbind2 == 1 and sise {
+          pt2 := variant_payload_span(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, deref(cx.mar))
+          ptys2 = pt2.s
+          ptyn2 = pt2.n
+          if ptyn2 != 0 {
+            if str_at((cx.src + ptys2), 1) == "(" {
+              ## MULTI-component payload `V(T0, …, TN)` bound to ONE name `p` — a TUPLE (ek 5, N words at
+              ## sbase+1). `display(p)`/`hash(p)` then route via `cf_pay_ty` = the `(…)` span to the tuple
+              ## instance, and `p` is passed by reference (like any aggregate arg). Count the components.
+              agg_ek2 = 5
+              mut cj := 0
+              mut cg := true
+              while cg { ca := typearg_at(cx.src, ptys2, 0, cj); if ca.n == 0 { cg = false } else { ptup2 = ptup2 + 1; cj = cj + 1 } }
             }
-            agg_ek2 = 5
-            array_ess2 = pae2.s
-            array_esl2 = pae2.n
-            array_estride2 = struct_words(cx.decls, cx.src, pbn2.s, pbn2.n, a)
-            array_nel2 = parse_arr_len(cx.src, ptys2, ptyn2)
-            if array_nel2 == 0 or array_estride2 == 0 {
-              panic("selfhost: a match binding array payload has no resolvable fixed length/element stride")
+            else if struct_decl_of(cx.decls, cx.src, base_type_name(cx.src, ptys2, ptyn2).s, base_type_name(cx.src, ptys2, ptyn2).n) >= 0 { agg_ek2 = 2 }
+            else if enum_decl_of(cx.decls, cx.src, base_type_name(cx.src, ptys2, ptyn2).s, base_type_name(cx.src, ptys2, ptyn2).n) >= 0 { agg_ek2 = 3 }   ## a nested generic-instance payload (`Option(u64)`) resolves via its BASE name; the FULL span stays in the slot for the inner match's dispatch
+            else if str_at((cx.src + ptys2), ptyn2) == "str" { agg_ek2 = 4 }   ## a str payload → 2-word {ptr, len} binding
+            else {
+              ## A single fixed-array payload is an indexable aggregate binding. Keep `ptys2/ptyn2`
+              ## as the full payload type for comptime consumers, but record the element type/stride
+              ## separately for the array alias SlotEntry used by `xs[i].a.arr[j]`.
+              pae2 := array_elem_span(cx.src, ptys2, ptyn2)
+              if pae2.n != 0 {
+                pbn2 := base_type_name(cx.src, pae2.s, pae2.n)
+                if struct_decl_of(cx.decls, cx.src, pbn2.s, pbn2.n) < 0 {
+                  panic("selfhost: a match binding rooted at an array payload currently requires a plain-struct element (`xs[i].a.arr[j]`); aggregate array leaves remain a fail-loud frontier")
+                }
+                agg_ek2 = 5
+                array_ess2 = pae2.s
+                array_esl2 = pae2.n
+                array_estride2 = struct_words(cx.decls, cx.src, pbn2.s, pbn2.n, a)
+                array_nel2 = parse_arr_len(cx.src, ptys2, ptyn2)
+                if array_nel2 == 0 or array_estride2 == 0 {
+                  panic("selfhost: a match binding array payload has no resolvable fixed length/element stride")
+                }
+              }
             }
           }
         }
-      }
-    }
-    ## §4 UP-GROWING: only bind enum payloads for a RECOGNISED enum scrutinee (`sise`). When `sise` is
-    ## false the scrutinee wasn't resolved to an enum, so `sbase` is the not-found literal 0 and
-    ## `sbase - 1 - bi` would underflow (a huge usize → a downstream checked `off+1` traps). The old
-    ## down-growing `sbase + 1 + bi` produced a garbage-but-non-trapping offset for that dead path.
-    if sise {
-      mut bnd := am2.binds_head
-      mut bi := 0
-      loop {
-        match bnd {
-          Some(bndq) => {
-            bmns := bnd_ns(bndq)
-            bmnl := bnd_nl(bndq)
-            if agg_ek2 == 5 and array_nel2 != 0 {
-              ## The enum already owns the payload block. Add only the filler metadata needed by the
-              ## existing checked aggregate-array bounds path; these entries do not allocate frame words.
-              for fi2 in 0..(array_nel2 * array_estride2) {
-                svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+        ## §4 UP-GROWING: only bind enum payloads for a RECOGNISED enum scrutinee (`sise`). When `sise` is
+        ## false the scrutinee wasn't resolved to an enum, so `sbase` is the not-found literal 0 and
+        ## `sbase - 1 - bi` would underflow (a huge usize → a downstream checked `off+1` traps). The old
+        ## down-growing `sbase + 1 + bi` produced a garbage-but-non-trapping offset for that dead path.
+        if sise {
+          mut bnd := am2.binds_head
+          mut bi := 0
+          loop {
+            match bnd {
+              Some(bndq) => {
+                bmns := bnd_ns(bndq)
+                bmnl := bnd_nl(bndq)
+                if agg_ek2 == 5 and array_nel2 != 0 {
+                  ## The enum already owns the payload block. Add only the filler metadata needed by the
+                  ## existing checked aggregate-array bounds path; these entries do not allocate frame words.
+                  for fi2 in 0..(array_nel2 * array_estride2) {
+                    svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+                  }
+                  svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = array_ess2, snl = array_esl2, ek = 5, estride = array_estride2, eek = 2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+                } else if agg_ek2 == 5 {
+                  svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = ptup2, ek = 5, estride = 1, eek = 0, is_ref = false))
+                } else if agg_ek2 != 0 {
+                  svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = ptys2, snl = ptyn2, ek = agg_ek2, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+                } else if folded {
+                  ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`sbase`) — bind `p` there as a scalar
+                  ## (ek 0) pointer, not the `sbase-1` payload word an ordinary `[disc, payload]` enum uses.
+                  ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
+                  ## still lowers as the two-word str view; eek 13 records this niche provenance.
+                  pview2 := niche_str_ptr_span(cx.src, ptys2, ptyn2)
+                  mut pview_s2 := 0
+                  mut pview_l2 := 0
+                  mut pview_eek2 : u8 = 0
+                  if pview2.n != 0 {
+                    pview_s2 = pview2.s
+                    pview_l2 = pview2.n
+                    pview_eek2 = 13
+                  }
+                  ## #768 — the pointer-to-struct / pointer-to-enum kind, as in `emit_enum_match`'s twin.
+                  mut pkind2 : u8 = 0
+                  if pview2.n == 0 {
+                    ppt2 := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
+                    pkind2 = pointee_agg_kind(cx.decls, cx.src, ppt2.s, ppt2.n)
+                    if pkind2 != 0 { pview_s2 = ppt2.s; pview_l2 = ppt2.n }
+                  }
+                  svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = pview_s2, snl = pview_l2, ek = pkind2, estride = 1, eek = pview_eek2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+                } else {
+                  ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
+                  ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
+                  spf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
+                  sbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
+                  mut sbk : u8 = 0
+                  mut sbs := 0
+                  mut sbl := 0
+                  if spf.n != 0 { sbk = 3; sbs = spf.s; sbl = spf.n }
+                  else {
+                    sbk = pointee_agg_kind(cx.decls, cx.src, sbpt.s, sbpt.n)
+                    if sbk != 0 { sbs = sbpt.s; sbl = sbpt.n }
+                  }
+                  svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = sbs, snl = sbl, ek = sbk, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+                }
+                bi += 1
+                bnd = bnd_next(bndq)
               }
-              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = array_ess2, snl = array_esl2, ek = 5, estride = array_estride2, eek = 2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
-            } else if agg_ek2 == 5 {
-              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = 0, snl = ptup2, ek = 5, estride = 1, eek = 0, is_ref = false))
-            } else if agg_ek2 != 0 {
-              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = ptys2, snl = ptyn2, ek = agg_ek2, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
-            } else if folded {
-              ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`sbase`) — bind `p` there as a scalar
-              ## (ek 0) pointer, not the `sbase-1` payload word an ordinary `[disc, payload]` enum uses.
-              ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
-              ## still lowers as the two-word str view; eek 13 records this niche provenance.
-              pview2 := niche_str_ptr_span(cx.src, ptys2, ptyn2)
-              mut pview_s2 := 0
-              mut pview_l2 := 0
-              mut pview_eek2 : u8 = 0
-              if pview2.n != 0 {
-                pview_s2 = pview2.s
-                pview_l2 = pview2.n
-                pview_eek2 = 13
-              }
-              ## #768 — the pointer-to-struct / pointer-to-enum kind, as in `emit_enum_match`'s twin.
-              mut pkind2 : u8 = 0
-              if pview2.n == 0 {
-                ppt2 := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
-                pkind2 = pointee_agg_kind(cx.decls, cx.src, ppt2.s, ppt2.n)
-                if pkind2 != 0 { pview_s2 = ppt2.s; pview_l2 = ppt2.n }
-              }
-              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase, sns = pview_s2, snl = pview_l2, ek = pkind2, estride = 1, eek = pview_eek2, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
-            } else {
-              ## #852 — a folded `Option(ptr(T))` component binds as that one-word Option (ek 3). #858 — a
-              ## `ptr(S)` / `ptr(E)` component carries its pointee, as in `emit_enum_match`.
-              spf := payload_folded_ty(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, usize(bi), deref(cx.mar))
-              sbpt := variant_bind_pointee(cx.decls, cx.src, ses, sel, am2.vs, am2.vl, nbind2, bi, deref(cx.mar))
-              mut sbk : u8 = 0
-              mut sbs := 0
-              mut sbl := 0
-              if spf.n != 0 { sbk = 3; sbs = spf.s; sbl = spf.n }
-              else {
-                sbk = pointee_agg_kind(cx.decls, cx.src, sbpt.s, sbpt.n)
-                if sbk != 0 { sbs = sbpt.s; sbl = sbpt.n }
-              }
-              svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = sbase - 1 - bi, sns = sbs, snl = sbl, ek = sbk, estride = 1, eek = 0, is_ref = false, tmod_s = enum_owner_s, tmod_l = enum_owner_l))
+              None => { break }
             }
-            bi += 1
-            bnd = bnd_next(bndq)
           }
-          None => { break }
         }
+        ## COMPTIME enum-hash `hash(p)` support: for a single-payload arm, bind the payload name + its
+        ## TYPE so a generic call `hash(p)` inside the body routes to `hash__<paytype>` (implicit type-arg).
+        ov_ps := cx.cf_pay_s; ov_pl := cx.cf_pay_l; ov_pts := cx.cf_pay_ty_s; ov_ptl := cx.cf_pay_ty_l
+        ov_cvs := cx.cf_curvar_s; ov_cvl := cx.cf_curvar_l
+        if nbind2 == 1 and ptyn2 != 0 {
+          match am2.binds_head { Some(pb2) => { cx.cf_pay_s = bnd_ns(pb2); cx.cf_pay_l = bnd_nl(pb2) }; None => {} }
+          cx.cf_pay_ty_s = ptys2
+          cx.cf_pay_ty_l = ptyn2
+        }
+        ## current variant (for a nested `T.(v)` comptime-variant pattern in this arm's body)
+        if am2.wild == 0 { cx.cf_curvar_s = am2.vs; cx.cf_curvar_l = am2.vl }
+        cx.mdepth = cx.mdepth + 1                            ## a nested match uses a higher scratch level
+          ## DEFER (§9.3): each arm body is a statement-list BLOCK — push a per-arm defer frame before
+          ## emitting it and drain its fall-through defers after (gated on `cx.defer_active` for fixpoint-neutrality).
+          ## The returned enum's module is needed for the payload metadata above, but the arm body is
+          ## lexically in the caller's module. Restore the caller context around body emission so a bare
+          ## type/global in the arm cannot accidentally resolve to the callee's same-named declaration.
+          if enum_owner_ctx {
+            if enum_owner_old_on { lower_layout::set_type_ref_module(enum_owner_old_s, enum_owner_old_l, ROOT_MOD_S, ROOT_MOD_L) } else { lower_layout::clear_type_ref_module() }
+          }
+          if cx.defer_active { defer_frame_push(cx) }
+          emit_stmts(am2.body_stmts, sb, cx, nl)   ## arm body statement list (no value)
+          if cx.defer_active {
+            emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
+            defer_frame_pop(cx)
+          }
+          if enum_owner_ctx { lower_layout::set_type_ref_module(enum_owner_s, enum_owner_l, ROOT_MOD_S, ROOT_MOD_L) }
+          cx.mdepth = cx.mdepth - 1
+        cx.cf_pay_s = ov_ps; cx.cf_pay_l = ov_pl; cx.cf_pay_ty_s = ov_pts; cx.cf_pay_ty_l = ov_ptl
+        cx.cf_curvar_s = ov_cvs; cx.cf_curvar_l = ov_cvl
+        svec_truncate(deref(cx.slots), saved)
+        push_str(sb, "  jmp ")
+        emit_label(sb, lend)
+        push_str(sb, "\n")
+        lbody2 += 1
+        arm2 = am2.next
       }
+      None => { break }
     }
-    ## COMPTIME enum-hash `hash(p)` support: for a single-payload arm, bind the payload name + its
-    ## TYPE so a generic call `hash(p)` inside the body routes to `hash__<paytype>` (implicit type-arg).
-    ov_ps := cx.cf_pay_s; ov_pl := cx.cf_pay_l; ov_pts := cx.cf_pay_ty_s; ov_ptl := cx.cf_pay_ty_l
-    ov_cvs := cx.cf_curvar_s; ov_cvl := cx.cf_curvar_l
-    if nbind2 == 1 and ptyn2 != 0 {
-      match am2.binds_head { Some(pb2) => { cx.cf_pay_s = bnd_ns(pb2); cx.cf_pay_l = bnd_nl(pb2) }; None => {} }
-      cx.cf_pay_ty_s = ptys2
-      cx.cf_pay_ty_l = ptyn2
-    }
-    ## current variant (for a nested `T.(v)` comptime-variant pattern in this arm's body)
-    if am2.wild == 0 { cx.cf_curvar_s = am2.vs; cx.cf_curvar_l = am2.vl }
-    cx.mdepth = cx.mdepth + 1                            ## a nested match uses a higher scratch level
-      ## DEFER (§9.3): each arm body is a statement-list BLOCK — push a per-arm defer frame before
-      ## emitting it and drain its fall-through defers after (gated on `cx.defer_active` for fixpoint-neutrality).
-      ## The returned enum's module is needed for the payload metadata above, but the arm body is
-      ## lexically in the caller's module. Restore the caller context around body emission so a bare
-      ## type/global in the arm cannot accidentally resolve to the callee's same-named declaration.
-      if enum_owner_ctx {
-        if enum_owner_old_on { lower_layout::set_type_ref_module(enum_owner_old_s, enum_owner_old_l, ROOT_MOD_S, ROOT_MOD_L) } else { lower_layout::clear_type_ref_module() }
-      }
-      if cx.defer_active { defer_frame_push(cx) }
-      emit_stmts(am2.body_stmts, sb, cx, nl)   ## arm body statement list (no value)
-      if cx.defer_active {
-        emit_defer_chain(sb, cx, a, nl, cx.defer_frame[cx.defer_sp - 1])
-        defer_frame_pop(cx)
-      }
-      if enum_owner_ctx { lower_layout::set_type_ref_module(enum_owner_s, enum_owner_l, ROOT_MOD_S, ROOT_MOD_L) }
-      cx.mdepth = cx.mdepth - 1
-    cx.cf_pay_s = ov_ps; cx.cf_pay_l = ov_pl; cx.cf_pay_ty_s = ov_pts; cx.cf_pay_ty_l = ov_ptl
-    cx.cf_curvar_s = ov_cvs; cx.cf_curvar_l = ov_cvl
-    svec_truncate(deref(cx.slots), saved)
-    push_str(sb, "  jmp ")
-    emit_label(sb, lend)
-    push_str(sb, "\n")
-    lbody2 += 1
-    arm2 = am2.next
   }
   emit_label(sb, lend)
   push_str(sb, ":\n")
@@ -24634,7 +24729,7 @@ guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::Vec),
     Expr::Match(scrut, arms_head) => {
       k := guard_typeinfo_kind(scrut, tp, decls, src, a)
       if k < 0 { return -1 }
-      am := deref(arm_p(arms_head))
+      am := deref(arm_p(ast::arm_at(arms_head, "lower: comptime match has no arms")))
       if am.vl != 0 {
         want := comptime_kind_of_name(src, am.vs, am.vl)
         if want >= 0 {
@@ -24764,14 +24859,14 @@ defer_frame_push := fn(cx : ptr(LCtx)) {
 defer_frame_pop := fn(cx : ptr(LCtx)) { if cx.defer_sp > 0 { cx.defer_sp = cx.defer_sp - 1 } }
 ## The `Stmt::Match` arm of `emit_stmts`, moved out verbatim (Step 4.1). Statement-position dispatch;
 ## the caller keeps `s = nx`. Touches no module global.
-emit_st_match := fn(sc : ptr(Expr), ah : ptr(mut Arm), nx : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
+emit_st_match := fn(sc : ptr(Expr), ah : Option(ptr(mut Arm)), nx : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
   ## TAIL: an arm body's last statement is the fn's return value only for a DIRECTLY-tail `match`
   ## (`cx.tail` already true AND nothing follows it) — the braced value-`match` path documented at
   ## `emit_fn`. A `match` with statements after it must not let an arm's trailing call `jmp` the
   ## epilogue.
   mov_tail := cx.tail
   cx.tail = mov_tail and nx == 0
-  emit_match_stmt(sc, unchecked bitcast(usize, ah), sb, cx, nl)
+  emit_match_stmt(sc, ah, sb, cx, nl)
   cx.tail = mov_tail
 }
 
@@ -26016,21 +26111,26 @@ emit_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx
         if is_cf_payload_ref(cmsc, cx) {
           pty := variant_payload_type(cx.decls, cx.src, cx.it_s, cx.it_l, cx.cf_curvar_s, cx.cf_curvar_l, deref(cx.mar))
           has_pay := pty.n != 0
-          mut pchosen := 0
-          mut pwild := 0
-          mut pcarm := cmah
-          while pcarm != 0 {
-            pcam := deref(arm_p(pcarm))
-            if pcam.wild != 0 { pwild = pcarm }
-            else {
-              pnm := str_at((cx.src + pcam.vs), pcam.vl)
-              if has_pay and pnm == "Some" { pchosen = pcarm }
-              if (has_pay == false) and pnm == "None" { pchosen = pcarm }
+          mut pchosen : Option(ptr(mut Arm)) = Option.None
+          mut pwild : Option(ptr(mut Arm)) = Option.None
+          mut pcarm : Option(ptr(mut Arm)) = cmah
+          loop {
+            match pcarm {
+              Some(pcarmq) => {
+                pcam := deref(arm_p(pcarmq))
+                if pcam.wild != 0 { pwild = Option.Some(pcarmq) }
+                else {
+                  pnm := str_at((cx.src + pcam.vs), pcam.vl)
+                  if has_pay and pnm == "Some" { pchosen = Option.Some(pcarmq) }
+                  if (has_pay == false) and pnm == "None" { pchosen = Option.Some(pcarmq) }
+                }
+                pcarm = pcam.next
+              }
+              None => { break }
             }
-            pcarm = pcam.next
           }
-          if pchosen == 0 { pchosen = pwild }
-          if pchosen != 0 { emit_stmts(deref(arm_p(pchosen)).body_stmts, sb, cx, nl) }
+          pchosen = ast::arm_or(pchosen, pwild)
+          match pchosen { Some(pchosenq) => { emit_stmts(deref(arm_p(pchosenq)).body_stmts, sb, cx, nl) }; None => {} }
           s = nx
         } else {
         ## `comptime match typeinfo(p)` (p = the payload binding) folds on the PAYLOAD's type
@@ -26047,36 +26147,44 @@ emit_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx
         ## `typeinfo(T)` arm names (`Struct`/`Scalar`/…), so this second dispatch is inert for the
         ## type-kind matches `src/` uses (`comptime_num_kind_of_name` → -1 there) → fixpoint-neutral.
         nkind := comptime_scalar_num_kind(cx.it_s, cx.it_l, cx.src)
-        mut chosen := 0
-        mut cwild := 0
-        mut carm := cmah
-        while carm != 0 {
-          cam := deref(arm_p(carm))
-          if cam.wild != 0 { cwild = carm }
-          else if comptime_kind_of_name(cx.src, cam.vs, cam.vl) == kind { chosen = carm }
-          else if comptime_num_kind_of_name(cx.src, cam.vs, cam.vl) == nkind { chosen = carm }
-          carm = cam.next
-        }
-        if chosen == 0 { chosen = cwild }
-        if chosen != 0 {
-          ## For the `Brand(under, _)` arm (kind 6): the arm body dispatches on the UNDERLYING type
-          ## (`comptime match typeinfo(under)` + `i64(v)`/`u64(v)`/`f64(v)` peels), but the folder
-          ## keys every nested `comptime match` off `cx.it` (the scrutinee expr is not read). Rebind
-          ## `cx.it` to the brand's underlying `U` for the arm body so the nested Scalar/kind dispatch
-          ## folds on `U`, then restore it. (A brand over an unsigned/bits/signed underlying renders
-          ## correctly; a FLOAT-underlying brand still needs the value's slot marked float — deferred.)
-          if kind == 6 {
-            bu := brand_underlying(cx.decls, cx.src, cx.it_s, cx.it_l)
-            sav_s := cx.it_s
-            sav_l := cx.it_l
-            cx.it_s = bu.s
-            cx.it_l = bu.n
-            emit_stmts(deref(arm_p(chosen)).body_stmts, sb, cx, nl)
-            cx.it_s = sav_s
-            cx.it_l = sav_l
-          } else {
-            emit_stmts(deref(arm_p(chosen)).body_stmts, sb, cx, nl)
+        mut chosen : Option(ptr(mut Arm)) = Option.None
+        mut cwild : Option(ptr(mut Arm)) = Option.None
+        mut carm : Option(ptr(mut Arm)) = cmah
+        loop {
+          match carm {
+            Some(carmq) => {
+              cam := deref(arm_p(carmq))
+              if cam.wild != 0 { cwild = Option.Some(carmq) }
+              else if comptime_kind_of_name(cx.src, cam.vs, cam.vl) == kind { chosen = Option.Some(carmq) }
+              else if comptime_num_kind_of_name(cx.src, cam.vs, cam.vl) == nkind { chosen = Option.Some(carmq) }
+              carm = cam.next
+            }
+            None => { break }
           }
+        }
+        chosen = ast::arm_or(chosen, cwild)
+        match chosen {
+          Some(chosenq) => {
+            ## For the `Brand(under, _)` arm (kind 6): the arm body dispatches on the UNDERLYING type
+            ## (`comptime match typeinfo(under)` + `i64(v)`/`u64(v)`/`f64(v)` peels), but the folder
+            ## keys every nested `comptime match` off `cx.it` (the scrutinee expr is not read). Rebind
+            ## `cx.it` to the brand's underlying `U` for the arm body so the nested Scalar/kind dispatch
+            ## folds on `U`, then restore it. (A brand over an unsigned/bits/signed underlying renders
+            ## correctly; a FLOAT-underlying brand still needs the value's slot marked float — deferred.)
+            if kind == 6 {
+              bu := brand_underlying(cx.decls, cx.src, cx.it_s, cx.it_l)
+              sav_s := cx.it_s
+              sav_l := cx.it_l
+              cx.it_s = bu.s
+              cx.it_l = bu.n
+              emit_stmts(deref(arm_p(chosenq)).body_stmts, sb, cx, nl)
+              cx.it_s = sav_s
+              cx.it_l = sav_l
+            } else {
+              emit_stmts(deref(arm_p(chosenq)).body_stmts, sb, cx, nl)
+            }
+          }
+          None => {}
         }
         cx.it_s = sav_pit_s
         cx.it_l = sav_pit_l
@@ -28380,7 +28488,7 @@ expr_have_defer := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> bool {
     Expr::Loop(b) => { res = stmts_have_defer(b, src, a) }
     Expr::Bin(op, l, r) => { if expr_have_defer(l, src, a) or expr_have_defer(r, src, a) { res = true } }
     Expr::If(c, t, el) => { if expr_have_defer(c, src, a) or expr_have_defer(t, src, a) or expr_have_defer(el, src, a) { res = true } }
-    Expr::Match(sc, ah) => { mut arm := ah ; while arm != 0 { am := deref(arm_p(arm)) ; if expr_have_defer(am.body, src, a) { res = true } ; arm = am.next } }
+    Expr::Match(sc, ah) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if expr_have_defer(am.body, src, a) { res = true } ; arm = am.next }; None => { break } } } }
     Expr::Field(b, fs, fl) => { res = expr_have_defer(b, src, a) }
     Expr::Index(b, i) => { if expr_have_defer(b, src, a) or expr_have_defer(i, src, a) { res = true } }
     Expr::Deref(p) => { res = expr_have_defer(p, src, a) }
@@ -28417,7 +28525,7 @@ stmts_have_defer := fn(head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bo
       match st {
         Stmt::While(c, b, nx) => { if expr_have_defer(c, src, a) { found = true } ; if stmts_have_defer(b, src, a) { found = true } ; s = nx }
         Stmt::If(c, th, el, nx) => { if expr_have_defer(c, src, a) { found = true } ; if stmts_have_defer(th, src, a) { found = true } ; if stmts_have_defer(el, src, a) { found = true } ; s = nx }
-        Stmt::Match(sc, ah, nx) => { if expr_have_defer(sc, src, a) { found = true } ; mut arm := ah ; while arm != 0 { am := deref(arm_p(arm)) ; if stmts_have_defer(am.body_stmts, src, a) { found = true } ; arm = am.next } ; s = nx }
+        Stmt::Match(sc, ah, nx) => { if expr_have_defer(sc, src, a) { found = true } ; mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if stmts_have_defer(am.body_stmts, src, a) { found = true } ; arm = am.next }; None => { break } } } ; s = nx }
         Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if flo != 0 and expr_have_defer(flo, src, a) { found = true } ; if fhi != 0 and expr_have_defer(fhi, src, a) { found = true } ; if stmts_have_defer(fb, src, a) { found = true } ; s = nx }
         Stmt::Loop(b, nx) => { if stmts_have_defer(b, src, a) { found = true } ; s = nx }
         Stmt::Unchecked(b, nx) => { if stmts_have_defer(b, src, a) { found = true } ; s = nx }
@@ -28425,7 +28533,7 @@ stmts_have_defer := fn(head : ptr(mut Stmt), src : ptr(u8), a : rt::Arena) -> bo
         Stmt::CompIf(c, th, el, nx) => { if expr_have_defer(c, src, a) { found = true } ; if stmts_have_defer(th, src, a) { found = true } ; if stmts_have_defer(el, src, a) { found = true } ; s = nx }
         Stmt::CompFor(vs, vl, iv, b, nx) => { if stmts_have_defer(b, src, a) { found = true } ; s = nx }
         Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if lo != 0 and expr_have_defer(lo, src, a) { found = true } ; if hi != 0 and expr_have_defer(hi, src, a) { found = true } ; if stmts_have_defer(b, src, a) { found = true } ; s = nx }
-        Stmt::CompMatch(sc, ah, nx) => { if expr_have_defer(sc, src, a) { found = true } ; mut car := ah ; while car != 0 { cam := deref(arm_p(car)) ; if stmts_have_defer(cam.body_stmts, src, a) { found = true } ; car = cam.next } ; s = nx }
+        Stmt::CompMatch(sc, ah, nx) => { if expr_have_defer(sc, src, a) { found = true } ; mut car : Option(ptr(mut Arm)) = ah ; loop { match car { Some(carq) => { cam := deref(arm_p(carq)) ; if stmts_have_defer(cam.body_stmts, src, a) { found = true } ; car = cam.next }; None => { break } } } ; s = nx }
         Stmt::Assign(ans, anl, v, nx) => { if expr_have_defer(v, src, a) { found = true } ; s = nx }
         Stmt::Return(rv, nx) => { if rv != 0 and expr_have_defer(rv, src, a) { found = true } ; s = nx }
         Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { if expr_have_defer(fv, src, a) { found = true } ; s = nx }
@@ -28754,12 +28862,17 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
     }
     Expr::Match(scrut, head) => {
       mark_calls_expr(scrut, rb, decls, src, a)
-      mut arm := head
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        mark_calls_expr(am.body, rb, decls, src, a)
-        mark_calls_stmts(am.body_stmts, rb, decls, src, a)
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = head
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            mark_calls_expr(am.body, rb, decls, src, a)
+            mark_calls_stmts(am.body_stmts, rb, decls, src, a)
+            arm = am.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Call(cs, cl, nargs, args_head) => {
@@ -28913,11 +29026,16 @@ mark_calls_stmts := fn(head : ptr(mut Stmt), rb : usize, decls : ptr(rt::Vec), s
       }
       Stmt::Match(sc, ah, nx) => {
         mark_calls_expr(sc, rb, decls, src, a)
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          mark_calls_stmts(am.body_stmts, rb, decls, src, a)
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              mark_calls_stmts(am.body_stmts, rb, decls, src, a)
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         s = nx
       }
@@ -28941,8 +29059,8 @@ mark_calls_stmts := fn(head : ptr(mut Stmt), rb : usize, decls : ptr(rt::Vec), s
         s = nx
       }
       Stmt::CompMatch(cmsc, cmah, nx) => {
-        mut car := cmah
-        while car != 0 { cam := deref(arm_p(car)); mark_calls_stmts(cam.body_stmts, rb, decls, src, a); car = cam.next }
+        mut car : Option(ptr(mut Arm)) = cmah
+        loop { match car { Some(carq) => { cam := deref(arm_p(carq)); mark_calls_stmts(cam.body_stmts, rb, decls, src, a); car = cam.next }; None => { break } } }
         s = nx
       }
       Stmt::DerefAssign(ptr, val, nx) => {
@@ -29079,12 +29197,17 @@ fill_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
     Expr::If(c, t, f) => { fill_expr(c, decls, src, ms, ml, mar); fill_expr(t, decls, src, ms, ml, mar); fill_expr(f, decls, src, ms, ml, mar) }
     Expr::Match(scrut, head) => {
       fill_expr(scrut, decls, src, ms, ml, mar)
-      mut arm := head
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        if unchecked bitcast(usize, am.body) != 0 { fill_expr(am.body, decls, src, ms, ml, mar) }
-        fill_stmts(am.body_stmts, decls, src, ms, ml, mar)
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = head
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            if unchecked bitcast(usize, am.body) != 0 { fill_expr(am.body, decls, src, ms, ml, mar) }
+            fill_stmts(am.body_stmts, decls, src, ms, ml, mar)
+            arm = am.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Call(cs, cl, nargs, args_head) => {
@@ -29144,15 +29267,15 @@ fill_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), ms :
       Stmt::If(c, th, el, nx) => { fill_expr(c, decls, src, ms, ml, mar); fill_stmts(th, decls, src, ms, ml, mar); fill_stmts(el, decls, src, ms, ml, mar); s = nx }
       Stmt::Match(sc, ah, nx) => {
         fill_expr(sc, decls, src, ms, ml, mar)
-        mut arm := ah
-        while arm != 0 { am := deref(arm_p(arm)); fill_stmts(am.body_stmts, decls, src, ms, ml, mar); arm = am.next }
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop { match arm { Some(armq) => { am := deref(arm_p(armq)); fill_stmts(am.body_stmts, decls, src, ms, ml, mar); arm = am.next }; None => { break } } }
         s = nx
       }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { fill_expr(flo, decls, src, ms, ml, mar); if unchecked bitcast(usize, fhi) != 0 { fill_expr(fhi, decls, src, ms, ml, mar) }; fill_stmts(fb, decls, src, ms, ml, mar); s = nx }
       Stmt::CompIf(ccond, cthen, celse, nx) => { fill_stmts(cthen, decls, src, ms, ml, mar); fill_stmts(celse, decls, src, ms, ml, mar); s = nx }
       Stmt::CompFor(cvs, cvl, civ, cb, nx) => { fill_stmts(cb, decls, src, ms, ml, mar); s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { fill_stmts(rb, decls, src, ms, ml, mar); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : usize = cmah; while car != 0 { cam := deref(arm_p(car)); fill_stmts(cam.body_stmts, decls, src, ms, ml, mar); car = cam.next }; s = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); fill_stmts(cam.body_stmts, decls, src, ms, ml, mar); car = cam.next }; None => { break } } }; s = nx }
     }
   }
 }
