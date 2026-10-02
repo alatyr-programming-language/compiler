@@ -452,6 +452,46 @@ removes the question instead:
    generically while the emitter sees a clone: a type function's methods (`base::u128`'s `uint(N)`),
    `comptime if`/`comptime for` branches, and generic instances (`allocate(…, T, …)`, `Option.get`) —
    prerequisite (b).
+7. **Code the checker does not check is recorded too.** Measured, prerequisite (b)'s "clones" are not
+   clones: the emitter re-walks the one tree — once for the selected `comptime if` branch, once per
+   unrolled `comptime for` iteration, once per generic instance — and the nodes it reached without a
+   record were the ones `check_stmts` never walks: the condition and branches of a `comptime if` /
+   `comptime match` and the body of a `comptime for` (Comptime §8, §9.2; the checker's own gap is
+   #889), and a generic call's argument written where an implicit type parameter sits — the receiver
+   of `r.expect(m)`, which the UFCS desugar writes `expect(r, m)` and the checker skipped as the type
+   argument `T` (#887; every `allocate(…).expect(…)` of `lib/`). Whenever records are wanted, sema
+   walks that code for its records only (`sema_ct_record`), in the scope it appears in, with the same
+   `check_stmts`/`check_expr`:
+
+   - a `comptime if` whose condition `guard_fold` (the `when` evaluator) decides walks the selected
+     branch; an undecided one — its condition depends on an instance — walks both (a record on a node
+     no instance emits is never read); a `comptime match` walks every arm, its bindings in scope;
+   - a `comptime for` walks its body once: over a range the variable is bound as a range `for` binds
+     it, over a pack or a type's members it is untyped. A node whose type varies per iteration or per
+     instance (a pack element, `v.(f)`, a `T` value) gets the one reading the body has, `VcUnknown`
+     where no single type holds — a gap for prerequisite (c), never a guess. The table stays keyed by
+     node, and each node gets the one record its single reading has;
+   - the walk is a transaction, as a capability query is: its locals, sticky diagnostics,
+     definite-assignment state and census instruments are put back, and a `compiles`/`resolves` query
+     inside it is answered but not folded into the tree (lower answers it per iteration). The verdict
+     does not move; what the walk refuses is reported:
+
+   ```
+   #semact refused |<the line of the walked condition, loop variable or argument>
+   ```
+
+   Measured over the corpus when this landed (2270 sources), the probe's distinct untyped operand lines
+   went 161 → 10 (`lib/` 46 → 2, both the corpus programs' own `i = i + 1` / `k = k + 1`; `src/` 0 → 0).
+   The 10 are not this class: 8 are in the body of a value-bearing `loop`, which `check_expr` never
+   walks (#888), and 2 are the place `deref(deref(pp)).v` of a nested field store, whose place the
+   checker does not type (prerequisite (c)). Seven `#semact refused` rows:
+
+   | row | cause |
+   |---|---|
+   | `test/fmt_comptime.al`, `test/fmt_comptime_for.al` | an immutable local reassigned in a `comptime for` body — accepted today (#889) |
+   | `test/query_unselected_branch.al` | the unselected `else` (`no_such_name()`), walked because sema cannot fold `compiles(1)` |
+   | `test/comptime_resolves_args.al` ×3 | the checker refuses `resolves(f, args…)` (#890) |
+   | `test/single_hash_comment.al` | `target.arch != Arch.i386`: sema knows no variant `i386` |
 
 **What slice 1 closes structurally.** Slice 1 (scalar core) consumes the recorded type, so on the three
 twins it closes the scalar shapes of the family: **#764** (all dividend shapes are scalar), **#766**'s

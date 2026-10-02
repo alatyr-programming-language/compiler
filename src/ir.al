@@ -2692,6 +2692,20 @@ pub sign_lib_row := fn(what : LibFinding, ms : usize, ml : usize, ns : usize, nl
   w := rt::sb_flush(sb, sign_fd())
   if w != isize(rowlen) { SIGN_LOST = SIGN_LOST + 1 }
 }
+## docs/ir.md §3.8.7 — code whose records-only walk (`sema::sema_ct_record`: a `comptime if`/`match`/
+## `for` condition or body, or a generic call's argument written where an implicit type parameter
+## sits) the checker refused. The verdict does not move (the checker does not check that code yet), so
+## this row is where the finding surfaces:
+##   #semact refused |<the line of the walked condition, loop variable or argument>
+pub sign_ct_row := fn(at : Option(u64), src : ptr(u8)) {
+  if not sign_open() { return }
+  mut sb := sign_buf()
+  put(sb, "#semact refused")
+  put_line_at(sb, at, src)
+  rowlen : usize = sb.len
+  w := rt::sb_flush(sb, sign_fd())
+  if w != isize(rowlen) { SIGN_LOST = SIGN_LOST + 1 }
+}
 
 ## Sema's answer for a site: the signedness of the first operand whose recorded type is an integer.
 sema_answer := fn(l : ptr(Expr), r : ptr(Expr)) -> str {

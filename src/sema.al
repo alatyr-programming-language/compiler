@@ -3793,6 +3793,36 @@ callee_param_is_type := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s 
   r
 }
 
+## docs/ir.md §3.8 item 7 — does the call of generic `[s, s+n)` with `nargs` written arguments leave
+## every type parameter implicit (Functions §5: its arguments are the value parameters alone, as the
+## UFCS desugar `r.expect(m)` → `expect(r, m)` writes them)? Then no written argument sits at a
+## `type` position, though `callee_param_is_type` counts from the first parameter.
+callee_type_args_implicit := fn(decls : ptr(rt::Vec), upto : usize, src : ptr(u8), s : usize, n : usize, nargs : usize) -> bool {
+  mut r := false
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.is_fn and d.is_generic and name_matches(src, d.name_start, d.name_len, s, n) {
+      mut ntype : usize = 0
+      mut pp := d.params_head
+      loop {
+        match pp {
+          Some(ppq) => {
+            pm := deref(param_p(ppq))
+            if str_at((src + pm.ts), pm.tl) == "type" { ntype += 1 }
+            pp = pm.next
+          }
+          None => { break }
+        }
+      }
+      if ntype != 0 and nargs + ntype == d.arity { r = true }
+    }
+    i += 1
+  }
+  r
+}
+
 ## Find the struct/enum `Decl` whose name is [s, s+n) among the first `upto` bindings; returns
 ## its index + 1 (0 = not found, so a `usize` doubles as found?). Used to resolve a struct
 ## literal's type and to look up a field's declared type.
@@ -8874,7 +8904,10 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       deref(deref(locals).failed) = old_failed0
       deref(deref(locals).fspan) = old_fspan0
     }
-    if qok0 { deref(unchecked bitcast(ptr(mut Expr), e)) = Expr.BoolLit(true) }
+    ## docs/ir.md §3.8 item 7 — a records walk of comptime-shaped code answers the query but leaves
+    ## the tree as lower will see it: lower answers it per iteration and per instance.
+    if SEMA_CT_RECORDING { }
+    else if qok0 { deref(unchecked bitcast(ptr(mut Expr), e)) = Expr.BoolLit(true) }
     else { deref(unchecked bitcast(ptr(mut Expr), e)) = Expr.BoolLit(false) }
     return Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyBool, ns = 0, nl = 0))
   }
@@ -9345,6 +9378,12 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
           Some(gq) => {
             ga := deref(arg_p(gq))
             ## a generic call's type-argument positions (params `T : type`) are type names, not values
+            ## docs/ir.md §3.8 item 7 — a value written where the callee's type arguments are all
+            ## implicit is not a type argument: it is walked for its records (verdict-free; checking
+            ## it is the checker's own question, #887).
+            if qgen and ir::sty_on() and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a) and callee_type_args_implicit(decls, upto, src, qcs, qcl, qnargs) {
+              sema_ct_record(CtWalk.WkValue(ga.e), CtVar.CvNone, 0, 0, ir::expr_span(ga.e), decls, upto, src, a, locals, nloc)
+            }
             if not (qgen and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a)) {
               ## #726 — the argument's KIND only. Its pointee name would make this compare discriminate
               ## `ptr(X)` from `ptr(Y)`, and the parser erases a word-sized `unchecked bitcast(ptr(X), p)`
@@ -12146,6 +12185,89 @@ check_forget_uses := fn(head : ptr(mut Stmt), src : ptr(u8), a : ptr(mut rt::Are
   }
 }
 
+## ── docs/ir.md §3.8 item 7: records for comptime-shaped code ──────────────────────────────────────────
+##
+## The checker does not walk the body of a `comptime if` / `comptime match` / `comptime for`: lower
+## selects the branch and unrolls the body later, per target and per instance (Comptime §8, §9.2). So
+## none of their nodes had a record, while the emitter emits exactly those nodes — the selected
+## branch, each unrolled iteration, each instance of the generic around them (it re-walks the one tree;
+## nothing is cloned). When a consumer asked for records (`ir::sty_on()`), each such body is checked
+## for its RECORDS only, in the scope it appears in, by the same `check_stmts`:
+## - a `comptime if` whose condition sema folds (`guard_fold`, the `when` evaluator) walks the selected
+##   branch only (Phase B, §9.2); an undecided one — its condition depends on an instance — walks both,
+##   and a record on a node no instance emits is never read;
+## - a `comptime match` walks every arm, its pattern bindings in scope;
+## - a `comptime for` walks its body once, the loop variable bound: over a range, as a range `for` binds
+##   it (its bounds' joined type); over a pack or a type's members, untyped. A node whose type varies
+##   per iteration or per instance (a pack element, `v.(f)`, a `T` value) gets what the body's one
+##   reading says, which is `VcUnknown` where no single type holds — never a guess (§3.8.4).
+## The walk is a transaction, like a capability query's: the locals it binds, its sticky diagnostics,
+## the definite-assignment state and the census instruments are put back, and it rewrites nothing — a
+## `compiles`/`resolves` query inside it is answered but not folded into the tree, since lower answers
+## it per iteration. The verdict is unchanged; a body the walk refuses is a `#semact refused` row.
+mut SEMA_CT_RECORDING : bool = false
+## How a `comptime for` binds its loop variable for the walk.
+CtVar := enum { CvNone, CvRange(ptr(Expr), ptr(Expr)), CvUntyped }
+## What one walk checks: a statement list (with the definite-assignment state it threads) or one value.
+CtWalk := enum { WkBody(ptr(mut Stmt), ptr(DA)), WkValue(ptr(Expr)) }
+## Walk `w` for its records, the loop variable `[vs, vs+vl)` bound as `vk` says (a range carries its
+## bounds); `at` locates the `#semact` row of a refused walk.
+sema_ct_record := fn(w : CtWalk, vk : CtVar, vs : usize, vl : usize, at : Option(u64), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), cnt : usize) {
+  if not ir::sty_on() { return }
+  kept := sema_instruments_take()
+  was_lib := SEMA_LIB_RECORDING
+  was_ct := SEMA_CT_RECORDING
+  SEMA_LIB_RECORDING = true
+  SEMA_CT_RECORDING = true
+  old_len := deref(locals).len
+  old_pcnt := deref(locals).pcnt
+  old_failed := deref(deref(locals).failed)
+  old_fspan := deref(deref(locals).fspan)
+  mut refused := false
+  mut n := cnt
+  match vk {
+    CvNone => {}
+    CvRange(lo, hi) => {
+      if sema_ct_value_refused(lo, decls, upto, src, a, locals, n) { refused = true }
+      if sema_ct_value_refused(hi, decls, upto, src, a, locals, n) { refused = true }
+      rj : ir::VTy = sema_vty_join(lo, hi)
+      ir::sty_bind_put(vs, rj)
+      lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = tag_of_kind(TyKind.TyInt), prov = 0, tns = 0, tnl = 0))
+      n += 1
+    }
+    CvUntyped => {
+      lvec_push(deref(locals), Local(ns = vs, nl = vl, tag = tag_of_kind(TyKind.TyUnknown), prov = 0, tns = 0, tnl = 0))
+      n += 1
+    }
+  }
+  match w {
+    WkBody(body, da) => { if sema_ct_body_refused(body, da, decls, upto, src, a, locals, n) { refused = true } }
+    WkValue(v) => { if sema_ct_value_refused(v, decls, upto, src, a, locals, n) { refused = true } }
+  }
+  if deref(deref(locals).failed) != old_failed { refused = true }
+  if refused { ir::sign_ct_row(at, src) }
+  deref(locals).len = old_len
+  deref(locals).pcnt = old_pcnt
+  deref(deref(locals).failed) = old_failed
+  deref(deref(locals).fspan) = old_fspan
+  SEMA_CT_RECORDING = was_ct
+  SEMA_LIB_RECORDING = was_lib
+  sema_instruments_put(kept)
+}
+## One statement-list walk of `sema_ct_record`; the definite-assignment state is put back. Answers
+## whether `check_stmts` refused the list.
+sema_ct_body_refused := fn(body : ptr(mut Stmt), da : ptr(DA), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), n : usize) -> bool {
+  old_da := da_copy(da)
+  r := check_stmts(body, decls, upto, src, a, locals, n, da)
+  da_assign(deref(da), old_da)
+  match r { Result::Ok(c) => { false }; Result::Err(e) => { true } }
+}
+## One value walk of `sema_ct_record`. Answers whether `check_expr` refused the value.
+sema_ct_value_refused := fn(v : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena), locals : ptr(LVec), n : usize) -> bool {
+  r := check_expr(v, decls, upto, src, a, locals, n)
+  match r { Result::Ok(t) => { false }; Result::Err(e) => { true } }
+}
+
 ## Check a fn body's arena-linked statement list (`head`, 0 = none) and grow the in-scope
 ## `locals` as bindings are introduced: an `Assign`'s value expression is checked, then its
 ## name is recorded with the value's synthesized type (so later statements see its type); a
@@ -13133,6 +13255,12 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if egct != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egct)) }
         egce := sema_enum_global_array_value_bad_stmts(celse, decls, upto, src, locals, cnt, a)
         if egce != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egce)) }
+        ## docs/ir.md §3.8 item 7 — the condition's records (a comptime `bool` expression, checked in
+        ## every case: Phase A, §9.1), then the branch sema can select, both when it cannot.
+        sema_ct_record(CtWalk.WkValue(cc), CtVar.CvNone, 0, 0, ir::expr_span(cc), decls, upto, src, a, locals, cnt)
+        ctsel := guard_fold(cc, src)
+        if ctsel != 0 { sema_ct_record(CtWalk.WkBody(cthen, da), CtVar.CvNone, 0, 0, ir::expr_span(cc), decls, upto, src, a, locals, cnt) }
+        if ctsel != 1 { sema_ct_record(CtWalk.WkBody(celse, da), CtVar.CvNone, 0, 0, ir::expr_span(cc), decls, upto, src, a, locals, cnt) }
         cur = nx
       }
       Stmt::CompFor(cvs, cvl, civ, cb, nx) => {
@@ -13142,6 +13270,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         }
         egcf := sema_enum_global_array_value_bad_stmts(cb, decls, upto, src, locals, cnt, a)
         if egcf != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcf)) }
+        ## docs/ir.md §3.8 item 7 — one walk of the body, the member variable untyped.
+        sema_ct_record(CtWalk.WkBody(cb, da), CtVar.CvUntyped, cvs, cvl, Option(u64).Some(u64(cvs)), decls, upto, src, a, locals, cnt)
         cur = nx
       }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => {
@@ -13155,6 +13285,11 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         if egcr == 0 { egcr = sema_enum_global_array_value_bad(rhi, decls, upto, src, locals, cnt, a, false) }
         if egcr == 0 { egcr = sema_enum_global_array_value_bad_stmts(rb, decls, upto, src, locals, cnt, a) }
         if egcr != 0 { return Result(usize, CheckErr).Err(enum_global_array_err(egcr)) }
+        ## docs/ir.md §3.8 item 7 — one walk of the body: a range binds its variable as a range `for`
+        ## does; a pack (`comptime for v in rest`, a null `hi`) leaves the element untyped.
+        ## null-ok: Stmt::CompForRange — the pack form carries a null `hi` (ast.al; not an Option).
+        if unchecked bitcast(usize, rhi) != 0 { sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvRange(rlo, rhi), rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt) }
+        else { sema_ct_record(CtWalk.WkBody(rb, da), CtVar.CvUntyped, rvs, rvl, Option(u64).Some(u64(rvs)), decls, upto, src, a, locals, cnt) }
         cur = nx
       }
       Stmt::CompMatch(cmsc, cmah, nx) => {
@@ -13184,6 +13319,10 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
               }
               egcm = sema_enum_global_array_value_bad(amc.body, decls, upto, src, locals, arm_cntc, a, false)
               if egcm == 0 { egcm = sema_enum_global_array_value_bad_stmts(amc.body_stmts, decls, upto, src, locals, arm_cntc, a) }
+              ## docs/ir.md §3.8 item 7 — every arm's records, its pattern bindings in scope.
+              sema_ct_record(CtWalk.WkBody(amc.body_stmts, da), CtVar.CvNone, 0, 0, ir::expr_span(cmsc), decls, upto, src, a, locals, arm_cntc)
+              ## null-ok: Arm.body — an arm with a statement body carries a null value (ast.al; not an Option).
+              if unchecked bitcast(usize, amc.body) != 0 { sema_ct_record(CtWalk.WkValue(amc.body), CtVar.CvNone, 0, 0, ir::expr_span(cmsc), decls, upto, src, a, locals, arm_cntc) }
               lvec_truncate(deref(locals), basec)
               armc = amc.next
             }
