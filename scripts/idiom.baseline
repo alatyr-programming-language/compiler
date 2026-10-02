@@ -61,7 +61,7 @@ SCAN	src/aarch64.al	a64_ann_span	src/riscv64.al	rv_ann_span	4	ptr(u8),usize,usiz
 SCAN	src/aarch64.al	a64_ann_span	src/wat.al	wat_ann_span	4	ptr(u8),usize,usize	2654:2377
 SCAN	src/aarch64.al	a64_comp_range_bound	src/riscv64.al	rv_comp_range_bound	4	ptr(Expr),ptr(rt::Vec),ptr(u8)	2259:1919
 SCAN	src/aarch64.al	a64_comp_range_bound	src/wat.al	wat_comp_range_bound	4	ptr(Expr),ptr(rt::Vec),ptr(u8)	2259:768
-SCAN	src/aarch64.al	emit_a64_expr	src/wat.al	emit_wat_expr	5	ptr(Expr),rt::StrBuf,rt::Arena,ptr(u8),ptr(mutParam),i64,ptr(mutStmt),ptr(rt::Vec),Option(ptr(mutBind)),i64	4774:5067
+SCAN	src/aarch64.al	emit_a64_expr	src/wat.al	emit_wat_expr	5	ptr(Expr),rt::StrBuf,rt::Arena,ptr(u8),Option(ptr(mutParam)),i64,ptr(mutStmt),ptr(rt::Vec),Option(ptr(mutBind)),i64	4872:5163
 SCAN	src/aarch64.al	emit_a64_fn	src/riscv64.al	emit_rv_fn	6	Decl,rt::StrBuf,rt::Arena,ptr(u8),ptr(rt::Vec)	6550:6016
 SCAN	src/aarch64.al	emit_a64_fn	src/wat.al	emit_wat_fn	5	Decl,rt::StrBuf,rt::Arena,ptr(u8),ptr(rt::Vec)	6550:5839
 SCAN	src/ast.al	local_is_uninit	src/ast.al	local_type_span	4	ptr(u8),usize,usize	76:32
@@ -71,7 +71,7 @@ SCAN	src/ast.al	local_type_span	src/riscv64.al	rv_ann_span	4	ptr(u8),usize,usize
 SCAN	src/ast.al	local_type_span	src/wat.al	wat_ann_span	4	ptr(u8),usize,usize	32:2377
 SCAN	src/fmt.al	fmt_op	src/wat.al	wat_cmp_glyph	4	u8	149:451
 SCAN	src/lower/fnval.al	fnty_name_end	src/sema.al	sema_fnty_name_end	5	ptr(u8),usize,usize	81:3364
-SCAN	src/riscv64.al	emit_rv_expr	src/wat.al	emit_wat_expr	5	ptr(Expr),rt::StrBuf,rt::Arena,ptr(u8),ptr(mutParam),i64,ptr(mutStmt),ptr(rt::Vec),Option(ptr(mutBind)),i64	4057:5067
+SCAN	src/riscv64.al	emit_rv_expr	src/wat.al	emit_wat_expr	5	ptr(Expr),rt::StrBuf,rt::Arena,ptr(u8),Option(ptr(mutParam)),i64,ptr(mutStmt),ptr(rt::Vec),Option(ptr(mutBind)),i64	4141:5163
 SCAN	src/riscv64.al	emit_rv_fn	src/wat.al	emit_wat_fn	5	Decl,rt::StrBuf,rt::Arena,ptr(u8),ptr(rt::Vec)	6016:5839
 SCAN	src/riscv64.al	rv_ann_span	src/wat.al	wat_ann_span	4	ptr(u8),usize,usize	2277:2377
 SCAN	src/riscv64.al	rv_comp_range_bound	src/wat.al	wat_comp_range_bound	4	ptr(Expr),ptr(rt::Vec),ptr(u8)	1919:768

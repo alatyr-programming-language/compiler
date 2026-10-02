@@ -15,6 +15,7 @@ arm_p := ast::arm_p
 (int_lit_err, dec_val) := lexrt
 fld_p := ast::fld_p
 param_p := ast::param_p
+param_any := ast::param_any
 arg_p := ast::arg_p
 
 ## Do two source spans denote the same name (content equality), mirroring nameres/sema.
@@ -2662,20 +2663,23 @@ pub shift_width_bits := fn(nw : str) -> i64 {
 ## it) declared as a named STRUCT or ENUM — i.e. passed BY REFERENCE? An `xs[i]` argument to such a
 ## parameter must hand over the ELEMENT's address, not its first word (#683: aarch64 and riscv64 passed
 ## word 0 of `ps[0]` as the pointer and the callee dereferenced 1 — SIGSEGV).
-pub callee_param_is_aggregate := fn(decls : ptr(rt::Vec), src : ptr(u8), params : usize, idx : i64) -> bool {
-  ## unchecked-ok: the emit twins carry a callee's `params_head` as a usize word; it was a ptr(mut Param)
-  mut p := unchecked bitcast(ptr(mut Param), params)
+pub callee_param_is_aggregate := fn(decls : ptr(rt::Vec), src : ptr(u8), params : Option(ptr(mut Param)), idx : i64) -> bool {
+  mut p := params
   mut i := 0
-  ## null-ok: Param.next — a parameter list ends in a null link (ast.al)
-  while unchecked bitcast(usize, p) != 0 {
-    pm := deref(param_p(p))
-    if i == idx {
-      bn := base_type_name(src, pm.ts, pm.tl)
-      if bn.n == 0 { return false }
-      return struct_decl_of(decls, src, bn.s, bn.n) >= 0 or enum_decl_of(decls, src, bn.s, bn.n) >= 0
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if i == idx {
+          bn := base_type_name(src, pm.ts, pm.tl)
+          if bn.n == 0 { return false }
+          return struct_decl_of(decls, src, bn.s, bn.n) >= 0 or enum_decl_of(decls, src, bn.s, bn.n) >= 0
+        }
+        i += 1
+        p = pm.next
+      }
+      None => { break }
     }
-    i += 1
-    p = pm.next
   }
   false
 }
@@ -2799,37 +2803,52 @@ pub local_ann_native_signed_deep := fn(head : ptr(mut Stmt), src : ptr(u8), ns :
 ## a first-match lookup would answer differently for a shadowed name.
 
 ## Is the parameter named `[ns, ns+nl)` declared with a SIGNED integer type?
-pub param_ann_signed := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+pub param_ann_signed := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   mut p := params_head
   mut r := false
-  while p != 0 {
-    pm := deref(param_p(p))
-    if streq(src, pm.ns, pm.nl, ns, nl) { if scalar_name_is_signed(src, pm.ts, pm.tl) { r = true } }
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, ns, nl) { if scalar_name_is_signed(src, pm.ts, pm.tl) { r = true } }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   r
 }
 
 ## Is the parameter named `[ns, ns+nl)` declared with an UNSIGNED integer type?
-pub param_ann_unsigned := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+pub param_ann_unsigned := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   mut p := params_head
   mut r := false
-  while p != 0 {
-    pm := deref(param_p(p))
-    if streq(src, pm.ns, pm.nl, ns, nl) { if scalar_name_is_unsigned(src, pm.ts, pm.tl) { r = true } }
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, ns, nl) { if scalar_name_is_unsigned(src, pm.ts, pm.tl) { r = true } }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   r
 }
 
 ## Is the parameter named `[ns, ns+nl)` declared with a FLOAT type?
-pub named_param_is_float := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
+pub named_param_is_float := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   mut p := params_head
   mut r := false
-  while p != 0 {
-    pm := deref(param_p(p))
-    if streq(src, pm.ns, pm.nl, ns, nl) { if scalar_name_is_float(src, pm.ts, pm.tl) { r = true } }
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, ns, nl) { if scalar_name_is_float(src, pm.ts, pm.tl) { r = true } }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   r
 }
@@ -3083,7 +3102,7 @@ pub struct_plain := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
   di := struct_decl_of(decls, src, s, n)
   if di < 0 { return false }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
-  unchecked bitcast(usize, d.params_head) == 0
+  not param_any(d.params_head)
 }
 
 ## The bounded native-ABI shape admitted by #169: a plain standard-byte struct with exactly two direct
@@ -3123,7 +3142,7 @@ pub ty_is_scalar := fn(ts : usize, tl : usize, decls : ptr(rt::Vec), src : ptr(u
 pub decl_tparam_count := fn(d : Decl, src : ptr(u8)) -> i64 {
   mut p := d.params_head
   mut n := 0
-  while p != 0 { pm := deref(param_p(p)) ; if str_at((src + pm.ts), pm.tl) == "type" { n = n + 1 } ; p = pm.next }
+  loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; if str_at((src + pm.ts), pm.tl) == "type" { n = n + 1 } ; p = pm.next }; None => { break } } }
   i64(n)
 }
 
@@ -3132,7 +3151,7 @@ pub decl_tparam_pos := fn(d : Decl, src : ptr(u8)) -> i64 {
   mut p := d.params_head
   mut idx := 0
   mut r := 0 - 1
-  while p != 0 { pm := deref(param_p(p)) ; if r < 0 and str_at((src + pm.ts), pm.tl) == "type" { r = i64(idx) } ; idx = idx + 1 ; p = pm.next }
+  loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; if r < 0 and str_at((src + pm.ts), pm.tl) == "type" { r = i64(idx) } ; idx = idx + 1 ; p = pm.next }; None => { break } } }
   r
 }
 
@@ -3143,10 +3162,16 @@ pub decl_leading_tparam_run := fn(d : Decl, src : ptr(u8)) -> i64 {
   mut p := d.params_head
   mut n := 0
   mut go := true
-  while p != 0 and go {
-    pm := deref(param_p(p))
-    if str_at((src + pm.ts), pm.tl) == "type" { n = n + 1 } else { go = false }
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        if not (go) { break }
+        pm := deref(param_p(pq))
+        if str_at((src + pm.ts), pm.tl) == "type" { n = n + 1 } else { go = false }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   i64(n)
 }
@@ -3243,32 +3268,37 @@ pub param_tuple_open_at := fn(src : ptr(u8), ns : usize, nl : usize) -> i64 {
 
 ## How many elements the tuple type of the parameter named `[ns, ns+nl)` has, PROVIDED every element
 ## is a scalar; 0 otherwise (no such parameter, not a tuple, or any struct/enum element).
-pub param_tuple_allscalar_n := fn(params_head : ptr(mut Param), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec), a : rt::Arena) -> i64 {
+pub param_tuple_allscalar_n := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns : usize, nl : usize, decls : ptr(rt::Vec), a : rt::Arena) -> i64 {
   ## Match the param by name and scan from its DECLARATION span (`pm.ns/pm.nl`) — the usage-site
   ## `ns/nl` is followed by `.N`, not by the `: (…)` type text.
   mut p := params_head
   mut res := 0
-  while p != 0 {
-    pm := deref(param_p(p))
-    if streq(src, pm.ns, pm.nl, ns, nl) {
-      open := param_tuple_open_at(src, pm.ns, pm.nl)
-      if open >= 0 {
-        mut k := 0
-        mut allscalar := true
-        mut go := true
-        while go {
-          cs := typearg_at(src, usize(open), 0, usize(k))
-          if cs.n == 0 { go = false } else {
-            bn := base_type_name(src, cs.s, cs.n)
-            if struct_decl_of(decls, src, bn.s, bn.n) >= 0 { allscalar = false }
-            if enum_decl_of(decls, src, bn.s, bn.n) >= 0 { allscalar = false }
-            k = k + 1
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, ns, nl) {
+          open := param_tuple_open_at(src, pm.ns, pm.nl)
+          if open >= 0 {
+            mut k := 0
+            mut allscalar := true
+            mut go := true
+            while go {
+              cs := typearg_at(src, usize(open), 0, usize(k))
+              if cs.n == 0 { go = false } else {
+                bn := base_type_name(src, cs.s, cs.n)
+                if struct_decl_of(decls, src, bn.s, bn.n) >= 0 { allscalar = false }
+                if enum_decl_of(decls, src, bn.s, bn.n) >= 0 { allscalar = false }
+                k = k + 1
+              }
+            }
+            if allscalar { res = k }
           }
         }
-        if allscalar { res = k }
+        p = pm.next
       }
+      None => { break }
     }
-    p = pm.next
   }
   res
 }
@@ -3567,7 +3597,7 @@ pub apply_when_guards := fn(decls : ptr(rt::Vec), src : ptr(u8), arch : str) {
         gh := rt::vec_get(deref(decls), i)
         gdp : ptr(mut Decl) = unchecked bitcast(ptr(mut Decl), gh)
         deref(gdp) = Decl(name_start = dg.name_start, name_len = 0, value = dg.value,
-          is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0),
+          is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
           body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
           mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       }
@@ -4732,11 +4762,16 @@ pub param_pos := fn(decls : ptr(rt::Vec), di : usize, src : ptr(u8), ts : usize,
   mut p := d.params_head
   mut i := 0
   mut res := -1
-  while p != 0 {
-    pm := deref(param_p(p))
-    if streq(src, pm.ns, pm.nl, ts, tl) { res = i }
-    i += 1
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, ts, tl) { res = i }
+        i += 1
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   res
 }

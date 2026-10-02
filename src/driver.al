@@ -32,6 +32,8 @@ io := std::io
 (bnd_ns, bnd_nl, bnd_next, bind_count, bind_same) := ast
 fld_p := ast::fld_p
 param_p := ast::param_p
+param_any := ast::param_any
+param_same := ast::param_same
 arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
@@ -481,10 +483,10 @@ d_nptr := fn(T : type, a : rt::Arena, h : usize) -> ptr(mut T) {
 }
 
 ## The param count of a Param list.
-d_lam_arity := fn(ph : ptr(mut Param), na : ptr(mut rt::Arena)) -> usize {
+d_lam_arity := fn(ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena)) -> usize {
   mut c := 0
   mut p := ph
-  while p != 0 { pm := deref(param_p(p)); c = c + 1; p = pm.next }
+  loop { match p { Some(pq) => { pm := deref(param_p(pq)); c = c + 1; p = pm.next }; None => { break } } }
   c
 }
 ## Allocate + store a `Param`. CRUCIAL: the store must use an INLINE `deref(bitcast(ptr(mut Param),
@@ -614,13 +616,18 @@ d_cap_has := fn(caps : ptr(rt::Vec), s : usize, n : usize, src : ptr(u8)) -> boo
   }
   r
 }
-d_is_param := fn(s : usize, n : usize, ph : ptr(mut Param), na : ptr(mut rt::Arena), src : ptr(u8)) -> bool {
+d_is_param := fn(s : usize, n : usize, ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), src : ptr(u8)) -> bool {
   mut p := ph
   mut r := false
-  while p != 0 {
-    pm := deref(param_p(p))
-    if str_at((src + pm.ns), pm.nl) == str_at((src + s), n) { r = true }
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if str_at((src + pm.ns), pm.nl) == str_at((src + s), n) { r = true }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   r
 }
@@ -697,15 +704,20 @@ d_call_ret_type_span := fn(v : ptr(Expr), decls : rt::Vec, src : ptr(u8)) -> CSp
 ## (the address is treated as the struct value). Resolving the param's declared type here makes
 ## `d_append_cap_params` give the capture a TYPED by-ref param (as a literal-bound local already gets),
 ## closing that silent miscompile. Returns the param's type span IF it names a struct/enum decl, else 0/0.
-d_param_type_span := fn(eph : ptr(mut Param), cs : usize, cl : usize, decls : rt::Vec, src : ptr(u8)) -> CSpan {
+d_param_type_span := fn(eph : Option(ptr(mut Param)), cs : usize, cl : usize, decls : rt::Vec, src : ptr(u8)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
   mut p := eph
-  while p != 0 {
-    pm := deref(param_p(p))
-    if pm.tl != 0 and streq(src, pm.ns, pm.nl, cs, cl) {
-      if d_is_agg_type_name(decls, src, pm.ts, pm.tl) { r = CSpan(s = pm.ts, n = pm.tl) }
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if pm.tl != 0 and streq(src, pm.ns, pm.nl, cs, cl) {
+          if d_is_agg_type_name(decls, src, pm.ts, pm.tl) { r = CSpan(s = pm.ts, n = pm.tl) }
+        }
+        p = pm.next
+      }
+      None => { break }
     }
-    p = pm.next
   }
   r
 }
@@ -750,7 +762,7 @@ d_local_type_span := fn(head : ptr(mut Stmt), cs : usize, cl : usize, decls : rt
 ## Is `[s,n)` a CAPTURE name (a free var: not a lambda param, not a body local, not a top-level decl,
 ## and not a PRELUDE namespace identifier `target`/`Arch`/`verify`/`Ordering` — those are comptime
 ## built-ins reached via `.` (`target.arch`, `Arch.x86_64`), NOT captured enclosing values).
-d_is_cap_name := fn(s : usize, n : usize, ph : ptr(mut Param), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec)) -> bool {
+d_is_cap_name := fn(s : usize, n : usize, ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec)) -> bool {
   mut r := true
   if d_is_param(s, n, ph, na, src) { r = false }
   if d_cap_has(locals, s, n, src) { r = false }
@@ -766,7 +778,7 @@ d_is_cap_name := fn(s : usize, n : usize, ph : ptr(mut Param), na : ptr(mut rt::
 ## its type resolves (`cap := StructLit/EnumLit` in the enclosing body) it will be given a TYPED by-ref
 ## capture param — fine. If it does NOT resolve, an untyped-word capture param would be field-accessed
 ## → a silent miscompile, so set `hardreject` (the caller then rejects fail-loud).
-d_flag_nonscalar_base := fn(b : ptr(Expr), ph : ptr(mut Param), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
+d_flag_nonscalar_base := fn(b : ptr(Expr), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
   match deref(b) {
     Expr::Var(vs, vn) => {
       if d_is_cap_name(vs, vn, ph, na, decls, src, locals) {
@@ -780,7 +792,7 @@ d_flag_nonscalar_base := fn(b : ptr(Expr), ph : ptr(mut Param), na : ptr(mut rt:
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_cap_free := fn(e : ptr(Expr), ph : ptr(mut Param), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), caps : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
+d_cap_free := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), caps : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
   match deref(e) {
     Expr::Var(s, n) => {
       mut skip := false
@@ -847,7 +859,7 @@ d_cap_locals := fn(head : ptr(mut Stmt), na : ptr(mut rt::Arena), locals : ptr(r
   }
 }
 ## Collect the free vars over a lambda body's STATEMENTS (calls `d_cap_free` on each stmt's exprs).
-d_cap_free_stmts := fn(head : ptr(mut Stmt), ph : ptr(mut Param), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), caps : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
+d_cap_free_stmts := fn(head : ptr(mut Stmt), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), caps : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
   mut st := head
   while st != 0 {
     x := deref(stmt_p(Stmt, st))
@@ -1376,7 +1388,7 @@ d_stmts_rw_hof_site := fn(head : ptr(mut Stmt), hs : usize, hl : usize, fs : usi
 ## GENERIC clone keeps `is_generic` + its leading `T : type` params, so the lowerer still MONOMORPHIZES
 ## it over the concrete type-args (the appended captures are ordinary trailing VALUE params after the
 ## value params; the type-args stay positional at the widened call site, arities aligned).
-d_hof_specialize := fn(nf : usize, nt : usize, hs : usize, hl : usize, ap : usize, fs : usize, fl : usize, fnpos : usize, body : ptr(mut Stmt), fn_val : ptr(Expr), caps : ptr(rt::Vec), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : ptr(mut Param), src : ptr(u8)) -> bool {
+d_hof_specialize := fn(nf : usize, nt : usize, hs : usize, hl : usize, ap : usize, fs : usize, fl : usize, fnpos : usize, body : ptr(mut Stmt), fn_val : ptr(Expr), caps : ptr(rt::Vec), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : Option(ptr(mut Param)), src : ptr(u8)) -> bool {
   mut ok := true
   if nf != 1 { ok = false }        ## exactly one HOF call carries f
   if nt != 1 { ok = false }        ## f is used ONLY as that one argument
@@ -1435,20 +1447,23 @@ d_hof_specialize := fn(nf : usize, nt : usize, hs : usize, hl : usize, ap : usiz
 ## threading the value through a fn parameter copies it correctly, exactly as `set_stmt_next` does.
 ## Delegates to `parser::set_param_next` — the store is done in the PARSER module (it mis-lowers in the
 ## driver module: a cross-module codegen quirk that writes a pointer instead of copying the struct).
-d_set_param_next := fn(na : ptr(mut rt::Arena), h : ptr(mut Param), nx : ptr(mut Param)) {
+d_set_param_next := fn(na : ptr(mut rt::Arena), h : ptr(mut Param), nx : Option(ptr(mut Param))) {
   parser::set_param_next(na, h, nx)
 }
 ## Append the captured vars as trailing PARAMS (untyped word) to the lambda's param chain. Each cap
 ## Param is CREATED with `next = 0` (a LITERAL — the working form), then linked by `d_set_param_next`
 ## (the next handle threaded as a PARAMETER) — so no ctor ever sets `.next` from a local var.
-d_append_cap_params := fn(ph : ptr(mut Param), caps : ptr(rt::Vec), decls : rt::Vec, na : ptr(mut rt::Arena), body : ptr(mut Stmt), eph : ptr(mut Param), src : ptr(u8)) -> ptr(mut Param) {
+d_append_cap_params := fn(ph : Option(ptr(mut Param)), caps : ptr(rt::Vec), decls : rt::Vec, na : ptr(mut rt::Arena), body : ptr(mut Stmt), eph : Option(ptr(mut Param)), src : ptr(u8)) -> Option(ptr(mut Param)) {
   ncaps := rt::vec_len(deref(caps))
   if ncaps == 0 { return ph }
   mut head := ph
-  mut tail := param_null()
-  if unchecked bitcast(usize, ph) != 0 {
-    tail = ph
-    while unchecked bitcast(usize, deref(param_p(tail)).next) != 0 { tail = deref(param_p(tail)).next }
+  mut tail : Option(ptr(mut Param)) = Option.None
+  mut tcur := ph
+  loop {
+    match tcur {
+      Some(tcq) => { tail = tcur; tcur = deref(param_p(tcq)).next }
+      None => { break }
+    }
   }
   ## `pmode` is a `u8`; construct it from a u8-typed zero (NOT the int literal `0`), matching the parser's
   ## `mut p_pmode : u8 = 0` — an int literal in the u8 field gave the stored Param a byte layout a
@@ -1465,9 +1480,9 @@ d_append_cap_params := fn(ph : ptr(mut Param), caps : ptr(rt::Vec), decls : rt::
     ## body `:=` binding, so the body scan returns 0/0 → an untyped word → silent miscompile; see
     ## d_param_type_span). A resolved aggregate type gives the capture a TYPED by-ref param.
     if ct.n == 0 { ct = d_param_type_span(eph, pk / 1024, pk % 1024, decls, src) }
-    nph := d_mk_param(na, Param(ns = pk / 1024, nl = pk % 1024, next = unchecked bitcast(ptr(mut Param), 0), ts = ct.s, tl = ct.n, pmode = pm8, pps = 0, ppl = 0))
-    if head == 0 { head = nph } else { d_set_param_next(na, tail, nph) }
-    tail = nph
+    nph := d_mk_param(na, Param(ns = pk / 1024, nl = pk % 1024, next = Option.None, ts = ct.s, tl = ct.n, pmode = pm8, pps = 0, ppl = 0))
+    match tail { Some(tq) => { d_set_param_next(na, tq, Option.Some(nph)) }; None => { head = Option.Some(nph) } }
+    tail = Option.Some(nph)
     k = k + 1
   }
   head
@@ -1540,7 +1555,7 @@ d_uses_dyn_over_stmts := fn(head : ptr(mut Stmt), fs : usize, fl : usize, na : p
     st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
-d_try_capture := fn(fs : usize, fl : usize, v : ptr(Expr), body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : ptr(mut Param), src : ptr(u8)) {
+d_try_capture := fn(fs : usize, fl : usize, v : ptr(Expr), body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : Option(ptr(mut Param)), src : ptr(u8)) {
   match deref(v) {
     Expr::Lambda(fnpos, lph, rts, rtl, bh, lval) => {
       ## Collect the lambda body's inner LOCALS (so they aren't mistaken for captures), then its FREE
@@ -1593,7 +1608,7 @@ d_try_capture := fn(fs : usize, fl : usize, v : ptr(Expr), body : ptr(mut Stmt),
             if d_hof_specialize(hnf, hnt, hhs, hhl, hap, fs, fl, fnpos, body, fn_val, ptr(caps), decls, na, eph, src) == false { panic("selfhost: FN-6 — a capturing lambda used as a VALUE (escaping its defining scope) is unsupported; call it directly") }
           }
           newph := d_append_cap_params(lph, ptr(caps), decls, na, body, eph, src)
-          if newph != lph {
+          if not param_same(newph, lph) {
             nlam := Expr.Lambda(fnpos, newph, rts, rtl, bh, lval)
             deref(unchecked bitcast(ptr(mut Expr), v)) = nlam
           }
@@ -1633,36 +1648,43 @@ d_var_span := fn(e : ptr(Expr)) -> CSpan {
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CSpan(s = 0, n = 0) }
   }
 }
-pm_next := fn(p : ptr(mut Param), na : ptr(mut rt::Arena)) -> ptr(mut Param) { deref(param_p(p)).next }
+pm_next := fn(p : ptr(mut Param), na : ptr(mut rt::Arena)) -> Option(ptr(mut Param)) { deref(param_p(p)).next }
 ## Arity of a forwarding HOF `d` (body a single `return <param0>(<param1>, …)` — callee IS param0, args
 ## ARE the rest of the params in order), else -1.
 d_fwd_hof_arity := fn(d : Decl, na : ptr(mut rt::Arena), src : ptr(u8)) -> i64 {
   mut r : i64 = 0 - 1
   if d.is_fn {
-    if d.params_head != 0 {
+    match d.params_head {
+    Some(p0q) => {
       re := d_single_return(unchecked bitcast(usize, d.body_stmts), na)
       if unchecked bitcast(usize, re) != 0 {
         ci := expr_call_info(re)
         if ci.is_call {
-          p0 := deref(param_p(d.params_head))
+          p0 := deref(param_p(p0q))
           mut ok := true
           if str_at((src + p0.ns), p0.nl) != str_at((src + ci.cs), ci.cl) { ok = false }
           mut pp := p0.next
           mut g := ci.ah
-          while pp != 0 {
-            if g == 0 { ok = false; pp = 0 } else {
-              pm := deref(param_p(pp))
-              ga := deref(arg_p(g))
-              av := d_var_span(ga.e)
-              if av.n == 0 { ok = false } else { if str_at((src + av.s), av.n) != str_at((src + pm.ns), pm.nl) { ok = false } }
-              g = ga.next
-              pp = pm.next
+          loop {
+            match pp {
+              Some(ppq) => {
+                if g == 0 { ok = false; break }
+                pm := deref(param_p(ppq))
+                ga := deref(arg_p(g))
+                av := d_var_span(ga.e)
+                if av.n == 0 { ok = false } else { if str_at((src + av.s), av.n) != str_at((src + pm.ns), pm.nl) { ok = false } }
+                g = ga.next
+                pp = pm.next
+              }
+              None => { break }
             }
           }
           if g != 0 { ok = false }
           if ok { r = i64(d.arity) }
         }
       }
+    }
+    None => {}
     }
   }
   r
@@ -1757,11 +1779,16 @@ d_param_name_at := fn(decls : rt::Vec, di : usize, p : usize, na : ptr(mut rt::A
   mut ph := d.params_head
   mut k := 0
   mut r := CSpan(s = 0, n = 0)
-  while ph != 0 {
-    pm := deref(param_p(ph))
-    if k == p { r = CSpan(s = pm.ns, n = pm.nl) }
-    k = k + 1
-    ph = pm.next
+  loop {
+    match ph {
+      Some(phq) => {
+        pm := deref(param_p(phq))
+        if k == p { r = CSpan(s = pm.ns, n = pm.nl) }
+        k = k + 1
+        ph = pm.next
+      }
+      None => { break }
+    }
   }
   r
 }
@@ -1957,7 +1984,7 @@ d_stmts_dyn_escape := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), na : ptr(mu
   }
 }
 
-d_capture_pass := fn(body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : ptr(mut Param), src : ptr(u8)) {
+d_capture_pass := fn(body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : Option(ptr(mut Param)), src : ptr(u8)) {
   d_rewrite_fwd_stmts(body, decls, na, src)
   d_rewrite_fwd_expr(fn_val, decls, na, src)
   ## FN-11 (Memory §5.3.1): reject a `dyn` local that escapes its defining scope (borrows its env store).
@@ -2001,12 +2028,17 @@ d_arena_param_idx := fn(decls : rt::Vec, di : usize, na : ptr(mut rt::Arena), sr
   mut ph := d.params_head
   mut k := 0
   mut r := 0 - 1
-  while ph != 0 {
-    pm := deref(param_p(ph))
-    if pm.tl != 0 { if str_at((src + pm.ts), pm.tl) == "ptr" {
-      if pm.ppl != 0 { if str_at((src + pm.pps), pm.ppl) == "Arena" { r = i64(k) } } } }
-    k = k + 1
-    ph = pm.next
+  loop {
+    match ph {
+      Some(phq) => {
+        pm := deref(param_p(phq))
+        if pm.tl != 0 { if str_at((src + pm.ts), pm.tl) == "ptr" {
+          if pm.ppl != 0 { if str_at((src + pm.pps), pm.ppl) == "Arena" { r = i64(k) } } } }
+        k = k + 1
+        ph = pm.next
+      }
+      None => { break }
+    }
   }
   r
 }
@@ -2014,7 +2046,7 @@ d_param_count := fn(decls : rt::Vec, di : usize, na : ptr(mut rt::Arena)) -> usi
   d := deref(decl_at(Decl, rt::vec_get(decls, di)))
   mut ph := d.params_head
   mut k := 0
-  while ph != 0 { pm := deref(param_p(ph)); k = k + 1; ph = pm.next }
+  loop { match ph { Some(phq) => { pm := deref(param_p(phq)); k = k + 1; ph = pm.next }; None => { break } } }
   k
 }
 ## di+1 of a fn decl whose name (tail-matched) has a `ptr(mut Arena)` param, else 0.
@@ -2111,7 +2143,7 @@ d_desugar_convert := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), src : p
     i = i + 1
   }
 }
-d_convert_expr := fn(e : ptr(Expr), ph : ptr(mut Param), bh : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_convert_expr := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), bh : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
   match deref(e) {
     Expr::Bin(op, l, r) => { d_convert_expr(l, ph, bh, decls, na, src); d_convert_expr(r, ph, bh, decls, na, src) }
     Expr::Unchecked(inner) => { d_convert_expr(inner, ph, bh, decls, na, src) }
@@ -2139,7 +2171,7 @@ d_convert_expr := fn(e : ptr(Expr), ph : ptr(mut Param), bh : ptr(mut Stmt), dec
       | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_convert_stmts := fn(head : ptr(mut Stmt), ph : ptr(mut Param), bh : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_convert_stmts := fn(head : ptr(mut Stmt), ph : Option(ptr(mut Param)), bh : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
   mut st := head
   ## null-ok: Stmt.next — the AST's statement lists end in a null link (ast.al "0 = end")
   while unchecked bitcast(usize, st) != 0 {
@@ -2273,11 +2305,16 @@ d_type_arg0_span := fn(src : ptr(u8), s : usize, n : usize) -> DSpan {
 ## (and then refused below, because the desugared call site carries no type arguments).
 d_self_param_base := fn(src : ptr(u8), d : Decl) -> DSpan {
   mut p := d.params_head
-  while unchecked bitcast(usize, p) != 0 {
-    pm := deref(param_p(p))
-    pb := d_type_base_span(src, pm.ts, pm.tl)
-    if pb.n != 0 and str_at((src + pb.s), pb.n) != "type" { return pb }
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        pb := d_type_base_span(src, pm.ts, pm.tl)
+        if pb.n != 0 and str_at((src + pb.s), pb.n) != "type" { return pb }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   DSpan(s = 0, n = 0)
 }
@@ -2358,12 +2395,17 @@ d_local_binding_arms := fn(ah : ptr(mut Arm), src : ptr(u8), vs : usize, vl : us
 
 ## The declared type of PARAMETER `[vs, vs+vl)` of this function, or `{0, 0}`. A `for` over an
 ## iterator handed in as a parameter (`fn walk(in out it : CharIter)`) resolves here.
-d_param_type_base := fn(src : ptr(u8), ph : ptr(mut Param), vs : usize, vl : usize) -> DSpan {
+d_param_type_base := fn(src : ptr(u8), ph : Option(ptr(mut Param)), vs : usize, vl : usize) -> DSpan {
   mut p := ph
-  while unchecked bitcast(usize, p) != 0 {
-    pm := deref(param_p(p))
-    if streq(src, pm.ns, pm.nl, vs, vl) { return d_type_base_span(src, pm.ts, pm.tl) }
-    p = pm.next
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if streq(src, pm.ns, pm.nl, vs, vl) { return d_type_base_span(src, pm.ts, pm.tl) }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   DSpan(s = 0, n = 0)
 }
@@ -2389,7 +2431,7 @@ d_callee_name_matches := fn(src : ptr(u8), d : Decl, cs : usize, cl : usize) -> 
 ## which is what tells the appendix's `iter(CharIter)` and `iter(SplitIter)` apart at `for c in
 ## iter(cur)`. A callee naming no function is tried as a constructor `T(…)`, whose result type is `T`.
 ## `{0, 0}` means "not resolvable here", and every caller then leaves the statement alone.
-d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : ptr(mut Arg), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : ptr(mut Param), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
+d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : ptr(mut Arg), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
   mut cnt := 0
   mut hit := 0
   mut i := 0
@@ -2438,7 +2480,7 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : ptr(mut Arg), 
 ## parameter, a local (its annotation, else its initializer), a constructor literal, and a call — and
 ## anything else answers `{0, 0}`, which keeps the existing counted loop. The depth cap bounds the
 ## local-initializer chain.
-d_expr_type_base := fn(e : ptr(Expr), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : ptr(mut Param), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
+d_expr_type_base := fn(e : ptr(Expr), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
   if depth > 4 { return DSpan(s = 0, n = 0) }
   if unchecked bitcast(usize, e) == 0 { return DSpan(s = 0, n = 0) }
   mut r := DSpan(s = 0, n = 0)
@@ -2544,7 +2586,7 @@ d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(E
 ## loop untouched — that is every range, array, slice, str view, array global and `Vec` in the tree.
 ## A type that DOES provide `next` but in a shape this desugar cannot call is refused fail-loud: the
 ## counted loop is a measured wrong value for exactly those types, and a trap beats a wrong value.
-d_iterfor_try := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut Stmt), nx : ptr(mut Stmt), body : ptr(mut Stmt), ph : ptr(mut Param), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+d_iterfor_try := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut Stmt), nx : ptr(mut Stmt), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
   tb := d_expr_type_base(flo, decls, src, body, ph, na, 0)
   if tb.n == 0 { return }
   ni := d_iter_next_decl(decls, src, tb.s, tb.n)
@@ -2569,7 +2611,7 @@ d_iterfor_try := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr)
 ## `head` descends. The next link is captured BEFORE the rewrite, so the walk continues past the
 ## statement the `for` became instead of re-entering the loop it just built. A nested `for` is
 ## desugared first (bottom-up), so an outer rewrite splices an already-final body.
-d_iterfor_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), ph : ptr(mut Param), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+d_iterfor_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
   mut s := head
   while s != 0 {
     nxt := d_next_stmt(unchecked bitcast(usize, s), na)
@@ -2597,7 +2639,7 @@ d_iterfor_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), ph : ptr(mut P
 }
 
 ## `d_iterfor_stmts` across a match arm list.
-d_iterfor_arms := fn(ah : ptr(mut Arm), body : ptr(mut Stmt), ph : ptr(mut Param), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+d_iterfor_arms := fn(ah : ptr(mut Arm), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
   mut arm := ah
   while arm != 0 {
     am := deref(arm_p(arm))
@@ -3495,14 +3537,14 @@ d_manifest_module_decls := fn(pv : rt::Vec, name_start : rt::Vec, name_len : rt:
       ## copy as the canonical text used by the source-AST rewrite probe.
       fns := MANIFEST_FIELD_S + k * MANIFEST_FIELD_STRIDE
       fd := d_manifest_field_node(na, FieldDecl(ns = fns, nl = MANIFEST_FIELD_N, arity = 0, next = Option.None, ts = MANIFEST_FIELD_TS, tl = MANIFEST_FIELD_TL, wsize = 1))
-      td := Decl(name_start = MANIFEST_TYPE_S, name_len = MANIFEST_TYPE_N, value = unchecked bitcast(ptr(Expr), 0), is_fn = false, kind = 2, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0), body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.Some(fd), ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
+      td := Decl(name_start = MANIFEST_TYPE_S, name_len = MANIFEST_TYPE_N, value = unchecked bitcast(ptr(Expr), 0), is_fn = false, kind = 2, arity = 0, is_generic = false, params_head = Option.None, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.Some(fd), ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       th := d_manifest_decl_node(tar, td)
       rt::vec_push(decls, th)
       lit := parser::newnode(ptr(na), Expr.StrLit(MANIFEST_VERSION_S, MANIFEST_VERSION_N, nstr, 0, 0))
       nstr += 1
       ah := parser::gnode(ptr(na), Arg(e = lit, next = unchecked bitcast(ptr(mut Arg), 0)))
       value := parser::newnode(ptr(na), Expr.StructLit(MANIFEST_TYPE_S, MANIFEST_TYPE_N, 1, ah))
-      ad := Decl(name_start = MANIFEST_BIND_S, name_len = MANIFEST_BIND_N, value = value, is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = unchecked bitcast(ptr(mut Param), 0), body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
+      ad := Decl(name_start = MANIFEST_BIND_S, name_len = MANIFEST_BIND_N, value = value, is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       ahd := d_manifest_decl_node(tar, ad)
       rt::vec_push(decls, ahd)
     }
@@ -5423,7 +5465,7 @@ d_one_reexport_module := fn(src : ptr(u8), hs : usize, hl : usize, decls : rt::V
 ## an uninferable one. Exactly one matching candidate wins — zero or several leave the pre-existing
 ## last-wins pick untouched. So a callee with ONE declaration (every callee in `src/` and `lib/` outside
 ## these families) resolves to the same decl as before and emission stays byte-identical.
-mut D_QUAL_PH : usize = 0        ## enclosing fn's `params_head`, while its body is walked
+mut D_QUAL_PH : Option(ptr(mut Param)) = Option.None        ## enclosing fn's `params_head`, while its body is walked
 mut D_QUAL_BODY : usize = 0      ## enclosing fn's `body_stmts`, for the annotated-local lookup
 mut D_QUAL_NA : usize = 0        ## the node arena those statements live in
 mut D_QUAL_ARGS : usize = 0      ## the `Arg` list of the call currently being resolved
@@ -5477,11 +5519,16 @@ d_ovl_arg_type := fn(e : ptr(Expr), na : ptr(mut rt::Arena), src : ptr(u8)) -> C
   vs := d_var_span(e)
   if vs.n == 0 { return CSpan(s = 0, n = 0) }
   mut r := CSpan(s = 0, n = 0)
-  mut p := unchecked bitcast(ptr(mut Param), D_QUAL_PH)
-  while p != 0 {
-    pm := deref(param_p(p))
-    if pm.tl != 0 and streq(src, pm.ns, pm.nl, vs.s, vs.n) { r = CSpan(s = pm.ts, n = pm.tl) }
-    p = pm.next
+  mut p := D_QUAL_PH
+  loop {
+    match p {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        if pm.tl != 0 and streq(src, pm.ns, pm.nl, vs.s, vs.n) { r = CSpan(s = pm.ts, n = pm.tl) }
+        p = pm.next
+      }
+      None => { break }
+    }
   }
   if r.n != 0 { return r }
   d_ovl_local_type(D_QUAL_BODY, vs.s, vs.n, na, src)
@@ -5525,20 +5572,26 @@ d_ovl_pick := fn(decls : rt::Vec, src : ptr(u8), di : usize) -> usize {
     if d_ovl_same_set(d, cd, src) {
       mut np := 0
       mut p := d.params_head
-      while p != 0 { pm := deref(param_p(p)) ; np = np + 1 ; p = pm.next }
+      loop { match p { Some(pq) => { pm := deref(param_p(pq)) ; np = np + 1 ; p = pm.next }; None => { break } } }
       mut ok := np == nargs
       if ok {
         mut pp := d.params_head
         mut gg := unchecked bitcast(ptr(mut Arg), D_QUAL_ARGS)
-        while pp != 0 and gg != 0 {
-          pm2 := deref(param_p(pp))
-          ga2 := deref(arg_p(gg))
-          at := d_ovl_arg_type(ga2.e, na, src)
-          if at.n != 0 and pm2.tl != 0 {
-            if d_ovl_norm_type(src, at.s, at.n) != d_ovl_norm_type(src, pm2.ts, pm2.tl) { ok = false }
+        loop {
+          match pp {
+            Some(ppq) => {
+              if not (gg != 0) { break }
+              pm2 := deref(param_p(ppq))
+              ga2 := deref(arg_p(gg))
+              at := d_ovl_arg_type(ga2.e, na, src)
+              if at.n != 0 and pm2.tl != 0 {
+                if d_ovl_norm_type(src, at.s, at.n) != d_ovl_norm_type(src, pm2.ts, pm2.tl) { ok = false }
+              }
+              pp = pm2.next
+              gg = ga2.next
+            }
+            None => { break }
           }
-          pp = pm2.next
-          gg = ga2.next
         }
       }
       if ok { nhit = nhit + 1 ; hit = i + 1 }
@@ -5568,14 +5621,26 @@ d_ovl_sig_eq := fn(da : Decl, db : Decl, src : ptr(u8)) -> bool {
   mut pa := da.params_head
   mut pb := db.params_head
   mut ok := true
-  while pa != 0 and pb != 0 {
-    ma := deref(param_p(pa))
-    mb := deref(param_p(pb))
-    if d_ovl_norm_type(src, ma.ts, ma.tl) != d_ovl_norm_type(src, mb.ts, mb.tl) { ok = false }
-    pa = ma.next
-    pb = mb.next
+  loop {
+    match pa {
+      Some(paq) => {
+        match pb {
+          Some(pbq) => {
+            ma := deref(param_p(paq))
+            mb := deref(param_p(pbq))
+            if d_ovl_norm_type(src, ma.ts, ma.tl) != d_ovl_norm_type(src, mb.ts, mb.tl) { ok = false }
+            pa = ma.next
+            pb = mb.next
+          }
+          None => { ok = false; break }
+        }
+      }
+      None => {
+        if param_any(pb) { ok = false }
+        break
+      }
+    }
   }
-  if pa != 0 or pb != 0 { ok = false }
   ok
 }
 
@@ -5823,12 +5888,12 @@ d_qual_sweep := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8), keep
         D_GENERIC_WALK = 0
         if d.is_generic { D_GENERIC_WALK = 1 }
         ## the enclosing signature + body an argument's type is recovered from (`d_ovl_arg_type`)
-        D_QUAL_PH = unchecked bitcast(usize, d.params_head)
+        D_QUAL_PH = d.params_head
         D_QUAL_BODY = unchecked bitcast(usize, d.body_stmts)
         D_QUAL_NA = unchecked bitcast(usize, na)
         d_qual_stmts(d.body_stmts, d.mod_start, d.mod_len, decls, na, src)
         if unchecked bitcast(usize, d.value) != 0 { d_qual_expr(d.value, d.mod_start, d.mod_len, decls, na, src) }
-        D_QUAL_PH = 0
+        D_QUAL_PH = Option.None
         D_QUAL_BODY = 0
         D_GENERIC_WALK = prev_generic_walk
       }
