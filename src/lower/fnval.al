@@ -26,6 +26,9 @@ strbuf := rt
 param_p := ast::param_p
 param_same := ast::param_same
 stmt_p := ast::stmt_p
+stmt_same := ast::stmt_same
+stmt_any := ast::stmt_any
+stmt_next := ast::stmt_next
 local_type_span := ast::local_type_span
 (Arg, Expr, Param, Stmt) := ast
 (push_str, push_int) := strbuf
@@ -109,25 +112,30 @@ pub fnty_ret_span := fn(src : ptr(u8), p0 : usize) -> CSpan {
 ## statement list `head`. Mirrors `block_decl_type`'s FLAT walk (`lower_stmt_nx` steps past every
 ## non-`Assign` statement). `nl == 0` when the name is not bound there.
 BindInfo := struct { rhs : ptr(Expr), ns : usize, nl : usize }
-body_binding := fn(head : ptr(mut Stmt), ns2 : usize, nl2 : usize, src : ptr(u8), a : rt::Arena) -> BindInfo {
+body_binding := fn(head : Option(ptr(mut Stmt)), ns2 : usize, nl2 : usize, src : ptr(u8), a : rt::Arena) -> BindInfo {
   z := unchecked bitcast(ptr(Expr), 0)
   mut r := BindInfo(rhs = z, ns = 0, nl = 0)
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    mut isas := false
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        isas = true
-        if streq(src, ans, anl, ns2, nl2) { r = BindInfo(rhs = v, ns = ans, nl = anl) }
-        s = nx
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        mut isas := false
+        match st {
+          Stmt::Assign(ans, anl, v, nx) => {
+            isas = true
+            if streq(src, ans, anl, ns2, nl2) { r = BindInfo(rhs = v, ns = ans, nl = anl) }
+            s = nx
+          }
+          Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+            | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+            | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+            | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+        }
+        if isas == false { s = stmt_next(sq) }
       }
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      None => { break }
     }
-    if isas == false { s = unchecked bitcast(ptr(mut Stmt), lower_stmt_nx(unchecked bitcast(usize, s), a)) }
   }
   r
 }
@@ -164,7 +172,7 @@ pub fnval_ty_pos := fn(cs : usize, cl : usize, src : ptr(u8), a : rt::Arena) -> 
     }
   }
   if pr != 0 { return pr }
-  if EMIT_BODY == 0 { return 0 }
+  if not stmt_any(EMIT_BODY) { return 0 }
   bi := body_binding(EMIT_BODY, cs, cl, src, a)
   if bi.nl == 0 { return 0 }
   lt := local_type_span(src, bi.ns, bi.nl)
@@ -182,7 +190,7 @@ pub fnval_ty_pos := fn(cs : usize, cl : usize, src : ptr(u8), a : rt::Arena) -> 
 ## -> f64 { … }` (a lifted lambda, an `Expr::FnRef` RHS) — or -1 when there is no such direct binding
 ## (a parameter, a re-assigned value, a fn value read out of a container).
 fnval_target_decl := fn(cs : usize, cl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
-  if EMIT_BODY == 0 { return 0 - 1 }
+  if not stmt_any(EMIT_BODY) { return 0 - 1 }
   bi := body_binding(EMIT_BODY, cs, cl, src, a)
   if bi.nl == 0 { return 0 - 1 }
   fr := fnref_info(bi.rhs)
@@ -217,7 +225,7 @@ fnval_ret_ty := fn(cs : usize, cl : usize, decls : ptr(rt::Vec), src : ptr(u8), 
 ## the only other inputs) is an EXACT key — the memo changes no answer, only the cost. Without it the
 ## self-build paid the walk ~6× per builtin/intrinsic call (`u64(x)`, `panic(m)`, `byte_at(…)` — the
 ## bulk of the calls whose name resolves to no fn decl).
-mut FNVR_BODY : usize = 0
+mut FNVR_BODY : Option(ptr(mut Stmt)) = Option.None
 mut FNVR_PARAMS : Option(ptr(mut Param)) = Option.None
 mut FNVR_CS : usize = 0
 mut FNVR_CL : usize = 0
@@ -229,7 +237,7 @@ pub ind_call_ret_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), 
   mut res := CSpan(s = 0, n = 0)
   match deref(e) {
     Expr::Call(cs, cl, nargs, args_head) => {
-      if FNVR_OK and FNVR_BODY == EMIT_BODY and param_same(FNVR_PARAMS, EMIT_PARAMS) and FNVR_CS == cs and FNVR_CL == cl {
+      if FNVR_OK and stmt_same(FNVR_BODY, EMIT_BODY) and param_same(FNVR_PARAMS, EMIT_PARAMS) and FNVR_CS == cs and FNVR_CL == cl {
         return CSpan(s = FNVR_S, n = FNVR_N)
       }
       if ret_call_target(decls, src, cs, cl, nargs, args_head, a) < 0 {
@@ -496,7 +504,7 @@ ecallee_localty := fn(ns : usize, nl : usize, src : ptr(u8), a : rt::Arena) -> C
     lt := local_type_span(src, ps, pn)
     return CSpan(s = lt.s, n = lt.n)
   }
-  if EMIT_BODY == 0 { return CSpan(s = 0, n = 0) }
+  if not stmt_any(EMIT_BODY) { return CSpan(s = 0, n = 0) }
   bi := body_binding(EMIT_BODY, ns, nl, src, a)
   if bi.nl == 0 { return CSpan(s = 0, n = 0) }
   lt2 := local_type_span(src, bi.ns, bi.nl)

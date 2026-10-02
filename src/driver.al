@@ -39,6 +39,8 @@ arg_p := ast::arg_p
 arg_at := ast::arg_at
 arg_any := ast::arg_any
 stmt_p := ast::stmt_p
+stmt_any := ast::stmt_any
+stmt_next := ast::stmt_next
 ## Local aliases for the cross-module state types — a struct constructed through a
 ## fully-`::` qualified path does not lower in construction position (the documented
 ## codegen gap), so alias them and construct via the bare name. The lexer is now `lexrt`
@@ -499,33 +501,6 @@ d_mk_param := fn(na : ptr(mut rt::Arena), val : Param) -> ptr(mut Param) {
   parser::pnode(na, val)
 }
 
-## The `next` handle of any statement (all-variant; mirrors sema's stmt_next_at).
-d_next_stmt := fn(h : usize, na : ptr(mut rt::Arena)) -> usize {
-  st := deref(stmt_p(Stmt, h))
-  match st {
-    Stmt::Assign(ns, nl, v, nx) => { nx }
-    Stmt::While(c, b, nx) => { nx }
-    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { nx }
-    Stmt::FieldPathAssign(pl, fpv, nx) => { nx }
-    Stmt::Return(rv, nx) => { nx }
-    Stmt::If(c, th, el, nx) => { nx }
-    Stmt::Match(sc, ah, nx) => { nx }
-    Stmt::For(ns, nl, lo, hi, b, nx) => { nx }
-    Stmt::DerefAssign(p, v, nx) => { nx }
-    Stmt::IndexAssign(b, i, v, nx) => { nx }
-    Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { nx }
-    Stmt::Loop(b, nx) => { nx }
-    Stmt::Unchecked(b, nx) => { nx }
-    Stmt::AllocWith(ae, b, nx) => { nx }
-    Stmt::Break(_bv, _bd, nx) => { nx }
-    Stmt::Continue(_cd, nx) => { nx }
-    Stmt::ExprStmt(e, nx) => { nx }
-    Stmt::CompIf(c, th, el, nx) => { nx }
-    Stmt::CompFor(vs, vl, iv, b, nx) => { nx }
-    Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { nx }
-    Stmt::CompMatch(sc, ah, nx) => { nx }
-  }
-}
 
 d_lift_expr := fn(e : ptr(Expr), ms : usize, ml : usize, in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(mut rt::Arena)) {
   match deref(e) {
@@ -571,33 +546,38 @@ d_lift_arms := fn(ah : Option(ptr(mut Arm)), ms : usize, ml : usize, in out decl
   }
 }
 
-d_lift_stmts := fn(head : ptr(mut Stmt), ms : usize, ml : usize, in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(mut rt::Arena)) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { d_lift_expr(v, ms, ml, decls, na, tar) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_lift_expr(rv, ms, ml, decls, na, tar) } }
-      Stmt::ExprStmt(e, nx) => { d_lift_expr(e, ms, ml, decls, na, tar) }
-      Stmt::If(c, th, el, nx) => { d_lift_expr(c, ms, ml, decls, na, tar); d_lift_stmts(th, ms, ml, decls, na, tar); d_lift_stmts(el, ms, ml, decls, na, tar) }
-      Stmt::While(c, b, nx) => { d_lift_expr(c, ms, ml, decls, na, tar); d_lift_stmts(b, ms, ml, decls, na, tar) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_lift_expr(lo, ms, ml, decls, na, tar) }; if unchecked bitcast(usize, hi) != 0 { d_lift_expr(hi, ms, ml, decls, na, tar) }; d_lift_stmts(b, ms, ml, decls, na, tar) }
-      Stmt::Loop(b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
-      Stmt::Unchecked(b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
-      Stmt::AllocWith(ae, b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
-      Stmt::DerefAssign(p, v, nx) => { d_lift_expr(v, ms, ml, decls, na, tar) }
-      Stmt::IndexAssign(b, i, v, nx) => { d_lift_expr(v, ms, ml, decls, na, tar) }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_lift_expr(fv, ms, ml, decls, na, tar) }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { d_lift_expr(fpv, ms, ml, decls, na, tar) }
-      Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { d_lift_expr(v, ms, ml, decls, na, tar) }
-      Stmt::Match(sc, ah, nx) => { d_lift_expr(sc, ms, ml, decls, na, tar); d_lift_arms(ah, ms, ml, decls, na, tar) }
-      Stmt::CompIf(c, th, el, nx) => { d_lift_stmts(th, ms, ml, decls, na, tar); d_lift_stmts(el, ms, ml, decls, na, tar) }
-      Stmt::CompFor(vs, vl, iv, b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
-      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
-      Stmt::CompMatch(sc, ah, nx) => { d_lift_arms(ah, ms, ml, decls, na, tar) }
-      Stmt::Break | Stmt::Continue => {}
+d_lift_stmts := fn(head : Option(ptr(mut Stmt)), ms : usize, ml : usize, in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(mut rt::Arena)) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { d_lift_expr(v, ms, ml, decls, na, tar) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_lift_expr(rv, ms, ml, decls, na, tar) } }
+          Stmt::ExprStmt(e, nx) => { d_lift_expr(e, ms, ml, decls, na, tar) }
+          Stmt::If(c, th, el, nx) => { d_lift_expr(c, ms, ml, decls, na, tar); d_lift_stmts(th, ms, ml, decls, na, tar); d_lift_stmts(el, ms, ml, decls, na, tar) }
+          Stmt::While(c, b, nx) => { d_lift_expr(c, ms, ml, decls, na, tar); d_lift_stmts(b, ms, ml, decls, na, tar) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_lift_expr(lo, ms, ml, decls, na, tar) }; if unchecked bitcast(usize, hi) != 0 { d_lift_expr(hi, ms, ml, decls, na, tar) }; d_lift_stmts(b, ms, ml, decls, na, tar) }
+          Stmt::Loop(b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
+          Stmt::Unchecked(b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
+          Stmt::AllocWith(ae, b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
+          Stmt::DerefAssign(p, v, nx) => { d_lift_expr(v, ms, ml, decls, na, tar) }
+          Stmt::IndexAssign(b, i, v, nx) => { d_lift_expr(v, ms, ml, decls, na, tar) }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_lift_expr(fv, ms, ml, decls, na, tar) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_lift_expr(fpv, ms, ml, decls, na, tar) }
+          Stmt::IndexFieldAssign(b, i, fs, fl, v, nx) => { d_lift_expr(v, ms, ml, decls, na, tar) }
+          Stmt::Match(sc, ah, nx) => { d_lift_expr(sc, ms, ml, decls, na, tar); d_lift_arms(ah, ms, ml, decls, na, tar) }
+          Stmt::CompIf(c, th, el, nx) => { d_lift_stmts(th, ms, ml, decls, na, tar); d_lift_stmts(el, ms, ml, decls, na, tar) }
+          Stmt::CompFor(vs, vl, iv, b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
+          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { d_lift_stmts(b, ms, ml, decls, na, tar) }
+          Stmt::CompMatch(sc, ah, nx) => { d_lift_arms(ah, ms, ml, decls, na, tar) }
+          Stmt::Break | Stmt::Continue => {}
+        }
+        s = stmt_next(sq)
+      }
+      None => { break }
     }
-    s = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, s), na))
   }
 }
 
@@ -728,41 +708,46 @@ d_param_type_span := fn(eph : Option(ptr(mut Param)), cs : usize, cl : usize, de
   }
   r
 }
-d_local_type_span := fn(head : ptr(mut Stmt), cs : usize, cl : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> CSpan {
+d_local_type_span := fn(head : Option(ptr(mut Stmt)), cs : usize, cl : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => {
-        if str_at((src + ns), nl) == str_at((src + cs), cl) {
-          lt := d_lit_type_span(v, src)
-          if lt.n != 0 { r = lt }
-          else {
-            ct := d_call_ret_type_span(v, decls, src)
-            if ct.n != 0 { r = ct }
-            else {
-              ## The RHS is not a directly-bound struct/enum LITERAL or aggregate-returning call — fall
-              ## back to the local's EXPLICIT `: T` annotation (an array `arr : [u64;3]`, or any typed local).
-              ## Lets `d_capture_pass` type + inject a by-ref capture of an annotated non-scalar local instead
-              ## of the fail-loud. `local_type_span` reads the `: T` span in source after the name.
-              at := local_type_span(src, ns, nl)
-              if at.n != 0 { r = CSpan(s = at.s, n = at.n) }
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => {
+            if str_at((src + ns), nl) == str_at((src + cs), cl) {
+              lt := d_lit_type_span(v, src)
+              if lt.n != 0 { r = lt }
+              else {
+                ct := d_call_ret_type_span(v, decls, src)
+                if ct.n != 0 { r = ct }
+                else {
+                  ## The RHS is not a directly-bound struct/enum LITERAL or aggregate-returning call — fall
+                  ## back to the local's EXPLICIT `: T` annotation (an array `arr : [u64;3]`, or any typed local).
+                  ## Lets `d_capture_pass` type + inject a by-ref capture of an annotated non-scalar local instead
+                  ## of the fail-loud. `local_type_span` reads the `: T` span in source after the name.
+                  at := local_type_span(src, ns, nl)
+                  if at.n != 0 { r = CSpan(s = at.s, n = at.n) }
+                }
+              }
             }
           }
+          Stmt::If(c, th, el, nx) => { rt := d_local_type_span(th, cs, cl, decls, na, src); if rt.n != 0 { r = rt } else { re := d_local_type_span(el, cs, cl, decls, na, src); if re.n != 0 { r = re } } }
+          Stmt::While(c, b, nx) => { rw := d_local_type_span(b, cs, cl, decls, na, src); if rw.n != 0 { r = rw } }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { rf := d_local_type_span(b, cs, cl, decls, na, src); if rf.n != 0 { r = rf } }
+          Stmt::Loop(b, nx) => { rl := d_local_type_span(b, cs, cl, decls, na, src); if rl.n != 0 { r = rl } }
+          Stmt::Unchecked(b, nx) => { rl := d_local_type_span(b, cs, cl, decls, na, src); if rl.n != 0 { r = rl } }
+          Stmt::AllocWith(ae, b, nx) => { rl := d_local_type_span(b, cs, cl, decls, na, src); if rl.n != 0 { r = rl } }
+          Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+            | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
         }
+        st = stmt_next(stq)
       }
-      Stmt::If(c, th, el, nx) => { rt := d_local_type_span(th, cs, cl, decls, na, src); if rt.n != 0 { r = rt } else { re := d_local_type_span(el, cs, cl, decls, na, src); if re.n != 0 { r = re } } }
-      Stmt::While(c, b, nx) => { rw := d_local_type_span(b, cs, cl, decls, na, src); if rw.n != 0 { r = rw } }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { rf := d_local_type_span(b, cs, cl, decls, na, src); if rf.n != 0 { r = rf } }
-      Stmt::Loop(b, nx) => { rl := d_local_type_span(b, cs, cl, decls, na, src); if rl.n != 0 { r = rl } }
-      Stmt::Unchecked(b, nx) => { rl := d_local_type_span(b, cs, cl, decls, na, src); if rl.n != 0 { r = rl } }
-      Stmt::AllocWith(ae, b, nx) => { rl := d_local_type_span(b, cs, cl, decls, na, src); if rl.n != 0 { r = rl } }
-      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
-        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
   r
 }
@@ -785,7 +770,7 @@ d_is_cap_name := fn(s : usize, n : usize, ph : Option(ptr(mut Param)), na : ptr(
 ## its type resolves (`cap := StructLit/EnumLit` in the enclosing body) it will be given a TYPED by-ref
 ## capture param — fine. If it does NOT resolve, an untyped-word capture param would be field-accessed
 ## → a silent miscompile, so set `hardreject` (the caller then rejects fail-loud).
-d_flag_nonscalar_base := fn(b : ptr(Expr), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
+d_flag_nonscalar_base := fn(b : ptr(Expr), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), body : Option(ptr(mut Stmt)), hardreject : ptr(mut bool)) {
   match deref(b) {
     Expr::Var(vs, vn) => {
       if d_is_cap_name(vs, vn, ph, na, decls, src, locals) {
@@ -799,7 +784,7 @@ d_flag_nonscalar_base := fn(b : ptr(Expr), ph : Option(ptr(mut Param)), na : ptr
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_cap_free := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), caps : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
+d_cap_free := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), caps : ptr(rt::Vec), body : Option(ptr(mut Stmt)), hardreject : ptr(mut bool)) {
   match deref(e) {
     Expr::Var(s, n) => {
       mut skip := false
@@ -837,88 +822,98 @@ d_cap_free := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), na : ptr(mut rt::Ar
 ## `d_cap_free` does not mistake them for captures. Sets `unhandled` on a binding construct this first
 ## slice does not fully analyze (a `match` arm's payload binds) — the caller then declines capture
 ## handling for that lambda (it falls back to the normal lift → sema rejects if it truly captures).
-d_cap_locals := fn(head : ptr(mut Stmt), na : ptr(mut rt::Arena), locals : ptr(rt::Vec), unhandled : ptr(mut bool)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { rt::vec_push(deref(locals), ns * 1024 + nl) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { rt::vec_push(deref(locals), fns * 1024 + fnl); d_cap_locals(b, na, locals, unhandled) }
-      Stmt::If(c, th, el, nx) => { d_cap_locals(th, na, locals, unhandled); d_cap_locals(el, na, locals, unhandled) }
-      Stmt::While(c, b, nx) => { d_cap_locals(b, na, locals, unhandled) }
-      Stmt::Loop(b, nx) => { d_cap_locals(b, na, locals, unhandled) }
-      Stmt::Unchecked(b, nx) => { d_cap_locals(b, na, locals, unhandled) }
-      Stmt::AllocWith(ae, b, nx) => { d_cap_locals(b, na, locals, unhandled) }
-      Stmt::Match(sc, ah, nx) => {
-        ## each arm's payload binds (`E::A(x)` → x) are arm-scoped LOCALS; collect them + recurse arm bodies.
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              mut bd := am.binds_head
-              loop { match bd { Some(bdq) => { rt::vec_push(deref(locals), bnd_ns(bdq) * 1024 + bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }
-              d_cap_locals(am.body_stmts, na, locals, unhandled)
-              arm = am.next
+d_cap_locals := fn(head : Option(ptr(mut Stmt)), na : ptr(mut rt::Arena), locals : ptr(rt::Vec), unhandled : ptr(mut bool)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { rt::vec_push(deref(locals), ns * 1024 + nl) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { rt::vec_push(deref(locals), fns * 1024 + fnl); d_cap_locals(b, na, locals, unhandled) }
+          Stmt::If(c, th, el, nx) => { d_cap_locals(th, na, locals, unhandled); d_cap_locals(el, na, locals, unhandled) }
+          Stmt::While(c, b, nx) => { d_cap_locals(b, na, locals, unhandled) }
+          Stmt::Loop(b, nx) => { d_cap_locals(b, na, locals, unhandled) }
+          Stmt::Unchecked(b, nx) => { d_cap_locals(b, na, locals, unhandled) }
+          Stmt::AllocWith(ae, b, nx) => { d_cap_locals(b, na, locals, unhandled) }
+          Stmt::Match(sc, ah, nx) => {
+            ## each arm's payload binds (`E::A(x)` → x) are arm-scoped LOCALS; collect them + recurse arm bodies.
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  mut bd := am.binds_head
+                  loop { match bd { Some(bdq) => { rt::vec_push(deref(locals), bnd_ns(bdq) * 1024 + bnd_nl(bdq)); bd = bnd_next(bdq) }; None => { break } } }
+                  d_cap_locals(am.body_stmts, na, locals, unhandled)
+                  arm = am.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
           }
+          Stmt::CompIf(c, th, el, nx) => { d_cap_locals(th, na, locals, unhandled); d_cap_locals(el, na, locals, unhandled) }
+          Stmt::CompMatch(sc, ah, nx) => { deref(unhandled) = true }
+          Stmt::CompFor(vs, vl, iv, b, nx) => { deref(unhandled) = true }
+          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { deref(unhandled) = true }
+          Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
         }
+        st = stmt_next(stq)
       }
-      Stmt::CompIf(c, th, el, nx) => { d_cap_locals(th, na, locals, unhandled); d_cap_locals(el, na, locals, unhandled) }
-      Stmt::CompMatch(sc, ah, nx) => { deref(unhandled) = true }
-      Stmt::CompFor(vs, vl, iv, b, nx) => { deref(unhandled) = true }
-      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { deref(unhandled) = true }
-      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Collect the free vars over a lambda body's STATEMENTS (calls `d_cap_free` on each stmt's exprs).
-d_cap_free_stmts := fn(head : ptr(mut Stmt), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), caps : ptr(rt::Vec), body : ptr(mut Stmt), hardreject : ptr(mut bool)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_cap_free(v, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_cap_free(rv, ph, na, decls, src, locals, caps, body, hardreject) } }
-      Stmt::ExprStmt(e, nx) => { d_cap_free(e, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::If(c, th, el, nx) => { d_cap_free(c, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(th, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(el, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::While(c, b, nx) => { d_cap_free(c, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_cap_free(lo, ph, na, decls, src, locals, caps, body, hardreject) }; if unchecked bitcast(usize, hi) != 0 { d_cap_free(hi, ph, na, decls, src, locals, caps, body, hardreject) }; d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::Loop(b, nx) => { d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::Unchecked(b, nx) => { d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::AllocWith(ae, b, nx) => { d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::DerefAssign(p, v, nx) => { d_cap_free(p, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free(v, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::IndexAssign(b, ix, v, nx) => { d_cap_free(b, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free(ix, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free(v, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_cap_free(fv, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::Match(sc, ah, nx) => {
-        d_cap_free(sc, ph, na, decls, src, locals, caps, body, hardreject)
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              d_cap_free_stmts(am.body_stmts, ph, na, decls, src, locals, caps, body, hardreject)
-              if unchecked bitcast(usize, am.body) != 0 { d_cap_free(am.body, ph, na, decls, src, locals, caps, body, hardreject) }
-              arm = am.next
+d_cap_free_stmts := fn(head : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), decls : rt::Vec, src : ptr(u8), locals : ptr(rt::Vec), caps : ptr(rt::Vec), body : Option(ptr(mut Stmt)), hardreject : ptr(mut bool)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_cap_free(v, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_cap_free(rv, ph, na, decls, src, locals, caps, body, hardreject) } }
+          Stmt::ExprStmt(e, nx) => { d_cap_free(e, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::If(c, th, el, nx) => { d_cap_free(c, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(th, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(el, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::While(c, b, nx) => { d_cap_free(c, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_cap_free(lo, ph, na, decls, src, locals, caps, body, hardreject) }; if unchecked bitcast(usize, hi) != 0 { d_cap_free(hi, ph, na, decls, src, locals, caps, body, hardreject) }; d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::Loop(b, nx) => { d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::Unchecked(b, nx) => { d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::AllocWith(ae, b, nx) => { d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::DerefAssign(p, v, nx) => { d_cap_free(p, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free(v, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::IndexAssign(b, ix, v, nx) => { d_cap_free(b, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free(ix, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free(v, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_cap_free(fv, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::Match(sc, ah, nx) => {
+            d_cap_free(sc, ph, na, decls, src, locals, caps, body, hardreject)
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  d_cap_free_stmts(am.body_stmts, ph, na, decls, src, locals, caps, body, hardreject)
+                  if unchecked bitcast(usize, am.body) != 0 { d_cap_free(am.body, ph, na, decls, src, locals, caps, body, hardreject) }
+                  arm = am.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
           }
+          ## comptime constructs: CompIf is FOLDED (handled like `if` — a capture in the kept branch resolves
+          ## against its injected param). CompFor/CompForRange/CompMatch stay `unhandled` (set in d_cap_locals)
+          ## but their free vars are still collected here, so a CAPTURING one has caps > 0 → d_try_capture
+          ## rejects it fail-loud (never a silent miscompile from an un-injected capture in a comptime body).
+          Stmt::CompIf(c, th, el, nx) => { d_cap_free(c, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(th, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(el, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_cap_free(lo, ph, na, decls, src, locals, caps, body, hardreject) }; if unchecked bitcast(usize, hi) != 0 { d_cap_free(hi, ph, na, decls, src, locals, caps, body, hardreject) }; d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::CompFor(vs, vl, iv, b, nx) => { d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::CompMatch(sc, ah, nx) => { d_cap_free(sc, ph, na, decls, src, locals, caps, body, hardreject) }
+          Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
         }
+        st = stmt_next(stq)
       }
-      ## comptime constructs: CompIf is FOLDED (handled like `if` — a capture in the kept branch resolves
-      ## against its injected param). CompFor/CompForRange/CompMatch stay `unhandled` (set in d_cap_locals)
-      ## but their free vars are still collected here, so a CAPTURING one has caps > 0 → d_try_capture
-      ## rejects it fail-loud (never a silent miscompile from an un-injected capture in a comptime body).
-      Stmt::CompIf(c, th, el, nx) => { d_cap_free(c, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(th, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free_stmts(el, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_cap_free(lo, ph, na, decls, src, locals, caps, body, hardreject) }; if unchecked bitcast(usize, hi) != 0 { d_cap_free(hi, ph, na, decls, src, locals, caps, body, hardreject) }; d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::CompFor(vs, vl, iv, b, nx) => { d_cap_free_stmts(b, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::CompMatch(sc, ah, nx) => { d_cap_free(sc, ph, na, decls, src, locals, caps, body, hardreject) }
-      Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue => {}
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## ESCAPE: does name `[s,n)` appear as an `Expr::Var` in `e`? (Call callee is a name span, not a Var.)
@@ -952,30 +947,35 @@ d_expr_uses_var := fn(e : ptr(Expr), s : usize, n : usize, na : ptr(mut rt::Aren
       | Expr::Loop => {}
   }
 }
-d_stmts_use_var := fn(head : ptr(mut Stmt), s : usize, n : usize, na : ptr(mut rt::Arena), src : ptr(u8), found : ptr(mut bool)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_expr_uses_var(v, s, n, na, src, found) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_expr_uses_var(rv, s, n, na, src, found) } }
-      Stmt::ExprStmt(e, nx) => { d_expr_uses_var(e, s, n, na, src, found) }
-      Stmt::If(c, th, el, nx) => { d_expr_uses_var(c, s, n, na, src, found); d_stmts_use_var(th, s, n, na, src, found); d_stmts_use_var(el, s, n, na, src, found) }
-      Stmt::While(c, b, nx) => { d_expr_uses_var(c, s, n, na, src, found); d_stmts_use_var(b, s, n, na, src, found) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_expr_uses_var(lo, s, n, na, src, found) }; if unchecked bitcast(usize, hi) != 0 { d_expr_uses_var(hi, s, n, na, src, found) }; d_stmts_use_var(b, s, n, na, src, found) }
-      Stmt::Loop(b, nx) => { d_stmts_use_var(b, s, n, na, src, found) }
-      Stmt::Unchecked(b, nx) => { d_stmts_use_var(b, s, n, na, src, found) }
-      Stmt::AllocWith(ae, b, nx) => { d_stmts_use_var(b, s, n, na, src, found) }
-      Stmt::DerefAssign(p, v, nx) => { d_expr_uses_var(p, s, n, na, src, found); d_expr_uses_var(v, s, n, na, src, found) }
-      Stmt::IndexAssign(b, ix, v, nx) => { d_expr_uses_var(b, s, n, na, src, found); d_expr_uses_var(ix, s, n, na, src, found); d_expr_uses_var(v, s, n, na, src, found) }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_expr_uses_var(fv, s, n, na, src, found) }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_uses_var(fpv, s, n, na, src, found) }
-      Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { d_expr_uses_var(v, s, n, na, src, found) }
-      Stmt::Match(sc, ah, nx) => { d_expr_uses_var(sc, s, n, na, src, found) }
-      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
-        | Stmt::CompForRange => {}
+d_stmts_use_var := fn(head : Option(ptr(mut Stmt)), s : usize, n : usize, na : ptr(mut rt::Arena), src : ptr(u8), found : ptr(mut bool)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_expr_uses_var(v, s, n, na, src, found) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_expr_uses_var(rv, s, n, na, src, found) } }
+          Stmt::ExprStmt(e, nx) => { d_expr_uses_var(e, s, n, na, src, found) }
+          Stmt::If(c, th, el, nx) => { d_expr_uses_var(c, s, n, na, src, found); d_stmts_use_var(th, s, n, na, src, found); d_stmts_use_var(el, s, n, na, src, found) }
+          Stmt::While(c, b, nx) => { d_expr_uses_var(c, s, n, na, src, found); d_stmts_use_var(b, s, n, na, src, found) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_expr_uses_var(lo, s, n, na, src, found) }; if unchecked bitcast(usize, hi) != 0 { d_expr_uses_var(hi, s, n, na, src, found) }; d_stmts_use_var(b, s, n, na, src, found) }
+          Stmt::Loop(b, nx) => { d_stmts_use_var(b, s, n, na, src, found) }
+          Stmt::Unchecked(b, nx) => { d_stmts_use_var(b, s, n, na, src, found) }
+          Stmt::AllocWith(ae, b, nx) => { d_stmts_use_var(b, s, n, na, src, found) }
+          Stmt::DerefAssign(p, v, nx) => { d_expr_uses_var(p, s, n, na, src, found); d_expr_uses_var(v, s, n, na, src, found) }
+          Stmt::IndexAssign(b, ix, v, nx) => { d_expr_uses_var(b, s, n, na, src, found); d_expr_uses_var(ix, s, n, na, src, found); d_expr_uses_var(v, s, n, na, src, found) }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_expr_uses_var(fv, s, n, na, src, found) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_uses_var(fpv, s, n, na, src, found) }
+          Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { d_expr_uses_var(v, s, n, na, src, found) }
+          Stmt::Match(sc, ah, nx) => { d_expr_uses_var(sc, s, n, na, src, found) }
+          Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+            | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## CALL REWRITE — append a trailing `Var(cap)` Arg per capture to every direct call `f(...)` in `e`.
@@ -1036,30 +1036,35 @@ d_expr_rw_calls := fn(e : ptr(Expr), fs : usize, fl : usize, caps : ptr(rt::Vec)
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_stmts_rw_calls := fn(head : ptr(mut Stmt), fs : usize, fl : usize, caps : ptr(rt::Vec), na : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_expr_rw_calls(v, fs, fl, caps, na, src) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_expr_rw_calls(rv, fs, fl, caps, na, src) } }
-      Stmt::ExprStmt(e, nx) => { d_expr_rw_calls(e, fs, fl, caps, na, src) }
-      Stmt::If(c, th, el, nx) => { d_expr_rw_calls(c, fs, fl, caps, na, src); d_stmts_rw_calls(th, fs, fl, caps, na, src); d_stmts_rw_calls(el, fs, fl, caps, na, src) }
-      Stmt::While(c, b, nx) => { d_expr_rw_calls(c, fs, fl, caps, na, src); d_stmts_rw_calls(b, fs, fl, caps, na, src) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_expr_rw_calls(lo, fs, fl, caps, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_expr_rw_calls(hi, fs, fl, caps, na, src) }; d_stmts_rw_calls(b, fs, fl, caps, na, src) }
-      Stmt::Loop(b, nx) => { d_stmts_rw_calls(b, fs, fl, caps, na, src) }
-      Stmt::Unchecked(b, nx) => { d_stmts_rw_calls(b, fs, fl, caps, na, src) }
-      Stmt::AllocWith(ae, b, nx) => { d_stmts_rw_calls(b, fs, fl, caps, na, src) }
-      Stmt::DerefAssign(p, v, nx) => { d_expr_rw_calls(p, fs, fl, caps, na, src); d_expr_rw_calls(v, fs, fl, caps, na, src) }
-      Stmt::IndexAssign(b, ix, v, nx) => { d_expr_rw_calls(b, fs, fl, caps, na, src); d_expr_rw_calls(ix, fs, fl, caps, na, src); d_expr_rw_calls(v, fs, fl, caps, na, src) }
-      Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_expr_rw_calls(fv, fs, fl, caps, na, src) }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_rw_calls(fpv, fs, fl, caps, na, src) }
-      Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_expr_rw_calls(v, fs, fl, caps, na, src) }
-      Stmt::Match(sc, ah, nx) => { d_expr_rw_calls(sc, fs, fl, caps, na, src) }
-      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
-        | Stmt::CompForRange => {}
+d_stmts_rw_calls := fn(head : Option(ptr(mut Stmt)), fs : usize, fl : usize, caps : ptr(rt::Vec), na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_expr_rw_calls(v, fs, fl, caps, na, src) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_expr_rw_calls(rv, fs, fl, caps, na, src) } }
+          Stmt::ExprStmt(e, nx) => { d_expr_rw_calls(e, fs, fl, caps, na, src) }
+          Stmt::If(c, th, el, nx) => { d_expr_rw_calls(c, fs, fl, caps, na, src); d_stmts_rw_calls(th, fs, fl, caps, na, src); d_stmts_rw_calls(el, fs, fl, caps, na, src) }
+          Stmt::While(c, b, nx) => { d_expr_rw_calls(c, fs, fl, caps, na, src); d_stmts_rw_calls(b, fs, fl, caps, na, src) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_expr_rw_calls(lo, fs, fl, caps, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_expr_rw_calls(hi, fs, fl, caps, na, src) }; d_stmts_rw_calls(b, fs, fl, caps, na, src) }
+          Stmt::Loop(b, nx) => { d_stmts_rw_calls(b, fs, fl, caps, na, src) }
+          Stmt::Unchecked(b, nx) => { d_stmts_rw_calls(b, fs, fl, caps, na, src) }
+          Stmt::AllocWith(ae, b, nx) => { d_stmts_rw_calls(b, fs, fl, caps, na, src) }
+          Stmt::DerefAssign(p, v, nx) => { d_expr_rw_calls(p, fs, fl, caps, na, src); d_expr_rw_calls(v, fs, fl, caps, na, src) }
+          Stmt::IndexAssign(b, ix, v, nx) => { d_expr_rw_calls(b, fs, fl, caps, na, src); d_expr_rw_calls(ix, fs, fl, caps, na, src); d_expr_rw_calls(v, fs, fl, caps, na, src) }
+          Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_expr_rw_calls(fv, fs, fl, caps, na, src) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_rw_calls(fpv, fs, fl, caps, na, src) }
+          Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_expr_rw_calls(v, fs, fl, caps, na, src) }
+          Stmt::Match(sc, ah, nx) => { d_expr_rw_calls(sc, fs, fl, caps, na, src) }
+          Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+            | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## ---- FN-6 §6.2 — capturing closure through a LOOP / NON-FORWARDING higher-order fn (HOF) ----
@@ -1129,30 +1134,35 @@ d_scan_hof_expr := fn(e : ptr(Expr), fs : usize, fl : usize, na : ptr(mut rt::Ar
       | Expr::Loop => {}
   }
 }
-d_scan_hof_stmts := fn(head : ptr(mut Stmt), fs : usize, fl : usize, na : ptr(mut rt::Arena), src : ptr(u8), nt : ptr(mut usize), nf : ptr(mut usize), hs : ptr(mut usize), hl : ptr(mut usize), ap : ptr(mut usize)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_scan_hof_expr(v, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_scan_hof_expr(rv, fs, fl, na, src, nt, nf, hs, hl, ap) } }
-      Stmt::ExprStmt(e, nx) => { d_scan_hof_expr(e, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::If(c, th, el, nx) => { d_scan_hof_expr(c, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_stmts(th, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_stmts(el, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::While(c, b, nx) => { d_scan_hof_expr(c, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_scan_hof_expr(lo, fs, fl, na, src, nt, nf, hs, hl, ap) }; if unchecked bitcast(usize, hi) != 0 { d_scan_hof_expr(hi, fs, fl, na, src, nt, nf, hs, hl, ap) }; d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::Loop(b, nx) => { d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::Unchecked(b, nx) => { d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::AllocWith(ae, b, nx) => { d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::DerefAssign(p, v, nx) => { d_scan_hof_expr(p, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(v, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::IndexAssign(b, ix, v, nx) => { d_scan_hof_expr(b, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(ix, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(v, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_scan_hof_expr(fv, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { d_scan_hof_expr(fpv, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_scan_hof_expr(v, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::Match(sc, ah, nx) => { d_scan_hof_expr(sc, fs, fl, na, src, nt, nf, hs, hl, ap) }
-      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
-        | Stmt::CompForRange => {}
+d_scan_hof_stmts := fn(head : Option(ptr(mut Stmt)), fs : usize, fl : usize, na : ptr(mut rt::Arena), src : ptr(u8), nt : ptr(mut usize), nf : ptr(mut usize), hs : ptr(mut usize), hl : ptr(mut usize), ap : ptr(mut usize)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_scan_hof_expr(v, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_scan_hof_expr(rv, fs, fl, na, src, nt, nf, hs, hl, ap) } }
+          Stmt::ExprStmt(e, nx) => { d_scan_hof_expr(e, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::If(c, th, el, nx) => { d_scan_hof_expr(c, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_stmts(th, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_stmts(el, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::While(c, b, nx) => { d_scan_hof_expr(c, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_scan_hof_expr(lo, fs, fl, na, src, nt, nf, hs, hl, ap) }; if unchecked bitcast(usize, hi) != 0 { d_scan_hof_expr(hi, fs, fl, na, src, nt, nf, hs, hl, ap) }; d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::Loop(b, nx) => { d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::Unchecked(b, nx) => { d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::AllocWith(ae, b, nx) => { d_scan_hof_stmts(b, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::DerefAssign(p, v, nx) => { d_scan_hof_expr(p, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(v, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::IndexAssign(b, ix, v, nx) => { d_scan_hof_expr(b, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(ix, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(v, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_scan_hof_expr(fv, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_scan_hof_expr(fpv, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_scan_hof_expr(v, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::Match(sc, ah, nx) => { d_scan_hof_expr(sc, fs, fl, na, src, nt, nf, hs, hl, ap) }
+          Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+            | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Count `Call` occurrences whose callee is `[cs,cl)` in expr `e` (guards the single-call-site rewrite).
@@ -1186,30 +1196,35 @@ d_count_calls_expr := fn(e : ptr(Expr), cs : usize, cl : usize, na : ptr(mut rt:
       | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_count_calls_stmts := fn(head : ptr(mut Stmt), cs : usize, cl : usize, na : ptr(mut rt::Arena), src : ptr(u8), cnt : ptr(mut usize)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_count_calls_expr(v, cs, cl, na, src, cnt) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_count_calls_expr(rv, cs, cl, na, src, cnt) } }
-      Stmt::ExprStmt(e, nx) => { d_count_calls_expr(e, cs, cl, na, src, cnt) }
-      Stmt::If(c, th, el, nx) => { d_count_calls_expr(c, cs, cl, na, src, cnt); d_count_calls_stmts(th, cs, cl, na, src, cnt); d_count_calls_stmts(el, cs, cl, na, src, cnt) }
-      Stmt::While(c, b, nx) => { d_count_calls_expr(c, cs, cl, na, src, cnt); d_count_calls_stmts(b, cs, cl, na, src, cnt) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_count_calls_expr(lo, cs, cl, na, src, cnt) }; if unchecked bitcast(usize, hi) != 0 { d_count_calls_expr(hi, cs, cl, na, src, cnt) }; d_count_calls_stmts(b, cs, cl, na, src, cnt) }
-      Stmt::Loop(b, nx) => { d_count_calls_stmts(b, cs, cl, na, src, cnt) }
-      Stmt::Unchecked(b, nx) => { d_count_calls_stmts(b, cs, cl, na, src, cnt) }
-      Stmt::AllocWith(ae, b, nx) => { d_count_calls_stmts(b, cs, cl, na, src, cnt) }
-      Stmt::DerefAssign(p, v, nx) => { d_count_calls_expr(p, cs, cl, na, src, cnt); d_count_calls_expr(v, cs, cl, na, src, cnt) }
-      Stmt::IndexAssign(b, ix, v, nx) => { d_count_calls_expr(b, cs, cl, na, src, cnt); d_count_calls_expr(ix, cs, cl, na, src, cnt); d_count_calls_expr(v, cs, cl, na, src, cnt) }
-      Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_count_calls_expr(fv, cs, cl, na, src, cnt) }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { d_count_calls_expr(fpv, cs, cl, na, src, cnt) }
-      Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_count_calls_expr(v, cs, cl, na, src, cnt) }
-      Stmt::Match(sc, ah, nx) => { d_count_calls_expr(sc, cs, cl, na, src, cnt) }
-      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
-        | Stmt::CompForRange => {}
+d_count_calls_stmts := fn(head : Option(ptr(mut Stmt)), cs : usize, cl : usize, na : ptr(mut rt::Arena), src : ptr(u8), cnt : ptr(mut usize)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_count_calls_expr(v, cs, cl, na, src, cnt) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_count_calls_expr(rv, cs, cl, na, src, cnt) } }
+          Stmt::ExprStmt(e, nx) => { d_count_calls_expr(e, cs, cl, na, src, cnt) }
+          Stmt::If(c, th, el, nx) => { d_count_calls_expr(c, cs, cl, na, src, cnt); d_count_calls_stmts(th, cs, cl, na, src, cnt); d_count_calls_stmts(el, cs, cl, na, src, cnt) }
+          Stmt::While(c, b, nx) => { d_count_calls_expr(c, cs, cl, na, src, cnt); d_count_calls_stmts(b, cs, cl, na, src, cnt) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_count_calls_expr(lo, cs, cl, na, src, cnt) }; if unchecked bitcast(usize, hi) != 0 { d_count_calls_expr(hi, cs, cl, na, src, cnt) }; d_count_calls_stmts(b, cs, cl, na, src, cnt) }
+          Stmt::Loop(b, nx) => { d_count_calls_stmts(b, cs, cl, na, src, cnt) }
+          Stmt::Unchecked(b, nx) => { d_count_calls_stmts(b, cs, cl, na, src, cnt) }
+          Stmt::AllocWith(ae, b, nx) => { d_count_calls_stmts(b, cs, cl, na, src, cnt) }
+          Stmt::DerefAssign(p, v, nx) => { d_count_calls_expr(p, cs, cl, na, src, cnt); d_count_calls_expr(v, cs, cl, na, src, cnt) }
+          Stmt::IndexAssign(b, ix, v, nx) => { d_count_calls_expr(b, cs, cl, na, src, cnt); d_count_calls_expr(ix, cs, cl, na, src, cnt); d_count_calls_expr(v, cs, cl, na, src, cnt) }
+          Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_count_calls_expr(fv, cs, cl, na, src, cnt) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_count_calls_expr(fpv, cs, cl, na, src, cnt) }
+          Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_count_calls_expr(v, cs, cl, na, src, cnt) }
+          Stmt::Match(sc, ah, nx) => { d_count_calls_expr(sc, cs, cl, na, src, cnt) }
+          Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+            | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 d_count_prog_calls := fn(cs : usize, cl : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
@@ -1404,30 +1419,35 @@ d_args_append := fn(na : ptr(mut rt::Arena), ah : ptr(mut Arg), chain : Option(p
   }
   parser::set_arg_next(na, cur, chain)
 }
-d_stmts_rw_hof_site := fn(head : ptr(mut Stmt), hs : usize, hl : usize, fs : usize, fl : usize, ns : usize, nl : usize, caps : ptr(rt::Vec), na : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(vns, vnl, v, nx) => { d_expr_rw_hof_site(v, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_expr_rw_hof_site(rv, hs, hl, fs, fl, ns, nl, caps, na, src) } }
-      Stmt::ExprStmt(e, nx) => { d_expr_rw_hof_site(e, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::If(c, th, el, nx) => { d_expr_rw_hof_site(c, hs, hl, fs, fl, ns, nl, caps, na, src); d_stmts_rw_hof_site(th, hs, hl, fs, fl, ns, nl, caps, na, src); d_stmts_rw_hof_site(el, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::While(c, b, nx) => { d_expr_rw_hof_site(c, hs, hl, fs, fl, ns, nl, caps, na, src); d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_expr_rw_hof_site(lo, hs, hl, fs, fl, ns, nl, caps, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_expr_rw_hof_site(hi, hs, hl, fs, fl, ns, nl, caps, na, src) }; d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::Loop(b, nx) => { d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::Unchecked(b, nx) => { d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::AllocWith(ae, b, nx) => { d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::DerefAssign(p, v, nx) => { d_expr_rw_hof_site(p, hs, hl, fs, fl, ns, nl, caps, na, src); d_expr_rw_hof_site(v, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::IndexAssign(b, ix, v, nx) => { d_expr_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src); d_expr_rw_hof_site(ix, hs, hl, fs, fl, ns, nl, caps, na, src); d_expr_rw_hof_site(v, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_expr_rw_hof_site(fv, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_rw_hof_site(fpv, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_expr_rw_hof_site(v, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::Match(sc, ah, nx) => { d_expr_rw_hof_site(sc, hs, hl, fs, fl, ns, nl, caps, na, src) }
-      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
-        | Stmt::CompForRange => {}
+d_stmts_rw_hof_site := fn(head : Option(ptr(mut Stmt)), hs : usize, hl : usize, fs : usize, fl : usize, ns : usize, nl : usize, caps : ptr(rt::Vec), na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(vns, vnl, v, nx) => { d_expr_rw_hof_site(v, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_expr_rw_hof_site(rv, hs, hl, fs, fl, ns, nl, caps, na, src) } }
+          Stmt::ExprStmt(e, nx) => { d_expr_rw_hof_site(e, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::If(c, th, el, nx) => { d_expr_rw_hof_site(c, hs, hl, fs, fl, ns, nl, caps, na, src); d_stmts_rw_hof_site(th, hs, hl, fs, fl, ns, nl, caps, na, src); d_stmts_rw_hof_site(el, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::While(c, b, nx) => { d_expr_rw_hof_site(c, hs, hl, fs, fl, ns, nl, caps, na, src); d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_expr_rw_hof_site(lo, hs, hl, fs, fl, ns, nl, caps, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_expr_rw_hof_site(hi, hs, hl, fs, fl, ns, nl, caps, na, src) }; d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::Loop(b, nx) => { d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::Unchecked(b, nx) => { d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::AllocWith(ae, b, nx) => { d_stmts_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::DerefAssign(p, v, nx) => { d_expr_rw_hof_site(p, hs, hl, fs, fl, ns, nl, caps, na, src); d_expr_rw_hof_site(v, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::IndexAssign(b, ix, v, nx) => { d_expr_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src); d_expr_rw_hof_site(ix, hs, hl, fs, fl, ns, nl, caps, na, src); d_expr_rw_hof_site(v, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_expr_rw_hof_site(fv, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_rw_hof_site(fpv, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_expr_rw_hof_site(v, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::Match(sc, ah, nx) => { d_expr_rw_hof_site(sc, hs, hl, fs, fl, ns, nl, caps, na, src) }
+          Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+            | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Attempt §6.2 HOF specialization for a capturing closure `[fs,fl)` (fnpos = its `fn` src offset =
@@ -1446,7 +1466,7 @@ d_stmts_rw_hof_site := fn(head : ptr(mut Stmt), hs : usize, hl : usize, fs : usi
 ## GENERIC clone keeps `is_generic` + its leading `T : type` params, so the lowerer still MONOMORPHIZES
 ## it over the concrete type-args (the appended captures are ordinary trailing VALUE params after the
 ## value params; the type-args stay positional at the widened call site, arities aligned).
-d_hof_specialize := fn(nf : usize, nt : usize, hs : usize, hl : usize, ap : usize, fs : usize, fl : usize, fnpos : usize, body : ptr(mut Stmt), fn_val : ptr(Expr), caps : ptr(rt::Vec), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : Option(ptr(mut Param)), src : ptr(u8)) -> bool {
+d_hof_specialize := fn(nf : usize, nt : usize, hs : usize, hl : usize, ap : usize, fs : usize, fl : usize, fnpos : usize, body : Option(ptr(mut Stmt)), fn_val : ptr(Expr), caps : ptr(rt::Vec), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : Option(ptr(mut Param)), src : ptr(u8)) -> bool {
   mut ok := true
   if nf != 1 { ok = false }        ## exactly one HOF call carries f
   if nt != 1 { ok = false }        ## f is used ONLY as that one argument
@@ -1511,7 +1531,7 @@ d_set_param_next := fn(na : ptr(mut rt::Arena), h : ptr(mut Param), nx : Option(
 ## Append the captured vars as trailing PARAMS (untyped word) to the lambda's param chain. Each cap
 ## Param is CREATED with `next = 0` (a LITERAL — the working form), then linked by `d_set_param_next`
 ## (the next handle threaded as a PARAMETER) — so no ctor ever sets `.next` from a local var.
-d_append_cap_params := fn(ph : Option(ptr(mut Param)), caps : ptr(rt::Vec), decls : rt::Vec, na : ptr(mut rt::Arena), body : ptr(mut Stmt), eph : Option(ptr(mut Param)), src : ptr(u8)) -> Option(ptr(mut Param)) {
+d_append_cap_params := fn(ph : Option(ptr(mut Param)), caps : ptr(rt::Vec), decls : rt::Vec, na : ptr(mut rt::Arena), body : Option(ptr(mut Stmt)), eph : Option(ptr(mut Param)), src : ptr(u8)) -> Option(ptr(mut Param)) {
   ncaps := rt::vec_len(deref(caps))
   if ncaps == 0 { return ph }
   mut head := ph
@@ -1545,17 +1565,20 @@ d_append_cap_params := fn(ph : Option(ptr(mut Param)), caps : ptr(rt::Vec), decl
   }
   head
 }
-d_single_return := fn(bh : usize, na : ptr(mut rt::Arena)) -> ptr(Expr) {
+d_single_return := fn(bh : Option(ptr(mut Stmt)), na : ptr(mut rt::Arena)) -> ptr(Expr) {
   mut r := unchecked bitcast(ptr(Expr), 0)
-  if bh != 0 {
-    st := deref(stmt_p(Stmt, bh))
-    match st {
-      Stmt::Return(rv, nx) => { if nx == 0 { r = rv } }
-      Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  match bh {
+    Some(bq) => {
+      st := deref(stmt_p(Stmt, bq))
+      match st {
+        Stmt::Return(rv, nx) => { if not stmt_any(nx) { r = rv } }
+        Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
     }
+    None => {}
   }
   r
 }
@@ -1596,27 +1619,32 @@ d_uses_dyn_over_expr := fn(e : ptr(Expr), fs : usize, fl : usize, na : ptr(mut r
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_uses_dyn_over_stmts := fn(head : ptr(mut Stmt), fs : usize, fl : usize, na : ptr(mut rt::Arena), src : ptr(u8), res : ptr(mut usize)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_uses_dyn_over_expr(v, fs, fl, na, src, res) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_uses_dyn_over_expr(rv, fs, fl, na, src, res) } }
-      Stmt::ExprStmt(e, nx) => { d_uses_dyn_over_expr(e, fs, fl, na, src, res) }
-      Stmt::If(c, th, el, nx) => { d_uses_dyn_over_expr(c, fs, fl, na, src, res); d_uses_dyn_over_stmts(th, fs, fl, na, src, res); d_uses_dyn_over_stmts(el, fs, fl, na, src, res) }
-      Stmt::While(c, b, nx) => { d_uses_dyn_over_expr(c, fs, fl, na, src, res); d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
-      Stmt::Loop(b, nx) => { d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
-      Stmt::Unchecked(b, nx) => { d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
-      Stmt::AllocWith(ae, b, nx) => { d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
-      Stmt::FieldAssign | Stmt::Match | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+d_uses_dyn_over_stmts := fn(head : Option(ptr(mut Stmt)), fs : usize, fl : usize, na : ptr(mut rt::Arena), src : ptr(u8), res : ptr(mut usize)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_uses_dyn_over_expr(v, fs, fl, na, src, res) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_uses_dyn_over_expr(rv, fs, fl, na, src, res) } }
+          Stmt::ExprStmt(e, nx) => { d_uses_dyn_over_expr(e, fs, fl, na, src, res) }
+          Stmt::If(c, th, el, nx) => { d_uses_dyn_over_expr(c, fs, fl, na, src, res); d_uses_dyn_over_stmts(th, fs, fl, na, src, res); d_uses_dyn_over_stmts(el, fs, fl, na, src, res) }
+          Stmt::While(c, b, nx) => { d_uses_dyn_over_expr(c, fs, fl, na, src, res); d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
+          Stmt::Loop(b, nx) => { d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
+          Stmt::Unchecked(b, nx) => { d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
+          Stmt::AllocWith(ae, b, nx) => { d_uses_dyn_over_stmts(b, fs, fl, na, src, res) }
+          Stmt::FieldAssign | Stmt::Match | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+            | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
-d_try_capture := fn(fs : usize, fl : usize, v : ptr(Expr), body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : Option(ptr(mut Param)), src : ptr(u8)) {
+d_try_capture := fn(fs : usize, fl : usize, v : ptr(Expr), body : Option(ptr(mut Stmt)), fn_val : ptr(Expr), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : Option(ptr(mut Param)), src : ptr(u8)) {
   match deref(v) {
     Expr::Lambda(fnpos, lph, rts, rtl, bh, lval) => {
       ## Collect the lambda body's inner LOCALS (so they aren't mistaken for captures), then its FREE
@@ -1717,7 +1745,7 @@ d_fwd_hof_arity := fn(d : Decl, na : ptr(mut rt::Arena), src : ptr(u8)) -> i64 {
   if d.is_fn {
     match d.params_head {
     Some(p0q) => {
-      re := d_single_return(unchecked bitcast(usize, d.body_stmts), na)
+      re := d_single_return(d.body_stmts, na)
       if unchecked bitcast(usize, re) != 0 {
         ci := expr_call_info(re)
         if ci.is_call {
@@ -1947,24 +1975,29 @@ d_rewrite_fwd_expr := fn(e : ptr(Expr), decls : rt::Vec, na : ptr(mut rt::Arena)
       | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_rewrite_fwd_stmts := fn(head : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_rewrite_fwd_expr(v, decls, na, src) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_rewrite_fwd_expr(rv, decls, na, src) } }
-      Stmt::ExprStmt(e, nx) => { d_rewrite_fwd_expr(e, decls, na, src) }
-      Stmt::If(c, th, el, nx) => { d_rewrite_fwd_expr(c, decls, na, src); d_rewrite_fwd_stmts(th, decls, na, src); d_rewrite_fwd_stmts(el, decls, na, src) }
-      Stmt::While(c, b, nx) => { d_rewrite_fwd_expr(c, decls, na, src); d_rewrite_fwd_stmts(b, decls, na, src) }
-      Stmt::Loop(b, nx) => { d_rewrite_fwd_stmts(b, decls, na, src) }
-      Stmt::Unchecked(b, nx) => { d_rewrite_fwd_stmts(b, decls, na, src) }
-      Stmt::AllocWith(ae, b, nx) => { d_rewrite_fwd_stmts(b, decls, na, src) }
-      Stmt::FieldAssign | Stmt::Match | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+d_rewrite_fwd_stmts := fn(head : Option(ptr(mut Stmt)), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_rewrite_fwd_expr(v, decls, na, src) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_rewrite_fwd_expr(rv, decls, na, src) } }
+          Stmt::ExprStmt(e, nx) => { d_rewrite_fwd_expr(e, decls, na, src) }
+          Stmt::If(c, th, el, nx) => { d_rewrite_fwd_expr(c, decls, na, src); d_rewrite_fwd_stmts(th, decls, na, src); d_rewrite_fwd_stmts(el, decls, na, src) }
+          Stmt::While(c, b, nx) => { d_rewrite_fwd_expr(c, decls, na, src); d_rewrite_fwd_stmts(b, decls, na, src) }
+          Stmt::Loop(b, nx) => { d_rewrite_fwd_stmts(b, decls, na, src) }
+          Stmt::Unchecked(b, nx) => { d_rewrite_fwd_stmts(b, decls, na, src) }
+          Stmt::AllocWith(ae, b, nx) => { d_rewrite_fwd_stmts(b, decls, na, src) }
+          Stmt::FieldAssign | Stmt::Match | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+            | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## FN-11 escape check (Memory §5.3.1). A `dyn` value is a two-word `{code, env}` fat pair whose `env`
@@ -1981,33 +2014,38 @@ d_is_dyn_annotation := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 }
 ## Is name `[s,n)` bound in `head` (or a nested block) with a `dyn …` type annotation? Recurses into
 ## block-bearing statements so a nested-scope dyn local is still recognized.
-d_name_is_dyn_local := fn(head : ptr(mut Stmt), na : ptr(mut rt::Arena), src : ptr(u8), s : usize, n : usize, res : ptr(mut bool)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => {
-        if str_at((src + ns), nl) == str_at((src + s), n) {
-          lt := local_type_span(src, ns, nl)
-          if lt.n != 0 and d_is_dyn_annotation(src, lt.s, lt.n) { deref(res) = true }
+d_name_is_dyn_local := fn(head : Option(ptr(mut Stmt)), na : ptr(mut rt::Arena), src : ptr(u8), s : usize, n : usize, res : ptr(mut bool)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => {
+            if str_at((src + ns), nl) == str_at((src + s), n) {
+              lt := local_type_span(src, ns, nl)
+              if lt.n != 0 and d_is_dyn_annotation(src, lt.s, lt.n) { deref(res) = true }
+            }
+          }
+          Stmt::If(c, th, el, nx) => { d_name_is_dyn_local(th, na, src, s, n, res); d_name_is_dyn_local(el, na, src, s, n, res) }
+          Stmt::While(c, b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
+          Stmt::Loop(b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
+          Stmt::Unchecked(b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
+          Stmt::AllocWith(ae, b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
+          Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+            | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
         }
+        st = stmt_next(stq)
       }
-      Stmt::If(c, th, el, nx) => { d_name_is_dyn_local(th, na, src, s, n, res); d_name_is_dyn_local(el, na, src, s, n, res) }
-      Stmt::While(c, b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
-      Stmt::Loop(b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
-      Stmt::Unchecked(b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
-      Stmt::AllocWith(ae, b, nx) => { d_name_is_dyn_local(b, na, src, s, n, res) }
-      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
-        | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Does expr `e` reference a `dyn` local (of `body`) as an `Expr::Var` value? A `Call` walks only its
 ## ARGS — its callee is a name span, so `d(args)` (the sole legal dyn use) does not flag `d`.
-d_expr_has_dynvar := fn(e : ptr(Expr), body : ptr(mut Stmt), na : ptr(mut rt::Arena), src : ptr(u8), res : ptr(mut bool)) {
+d_expr_has_dynvar := fn(e : ptr(Expr), body : Option(ptr(mut Stmt)), na : ptr(mut rt::Arena), src : ptr(u8), res : ptr(mut bool)) {
   match deref(e) {
     Expr::Var(vs, vn) => { d_name_is_dyn_local(body, na, src, vs, vn, res) }
     Expr::Bin(op, l, r) => { d_expr_has_dynvar(l, body, na, src, res); d_expr_has_dynvar(r, body, na, src, res) }
@@ -2030,34 +2068,39 @@ d_expr_has_dynvar := fn(e : ptr(Expr), body : ptr(mut Stmt), na : ptr(mut rt::Ar
 }
 ## Scan `head`'s statements for an escaping use of a `dyn` local (a `dyn`-named `Expr::Var` in any value
 ## position). Recurses into nested blocks.
-d_stmts_dyn_escape := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), na : ptr(mut rt::Arena), src : ptr(u8), res : ptr(mut bool)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_expr_has_dynvar(v, body, na, src, res) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_expr_has_dynvar(rv, body, na, src, res) } }
-      Stmt::ExprStmt(e, nx) => { d_expr_has_dynvar(e, body, na, src, res) }
-      Stmt::If(c, th, el, nx) => { d_expr_has_dynvar(c, body, na, src, res); d_stmts_dyn_escape(th, body, na, src, res); d_stmts_dyn_escape(el, body, na, src, res) }
-      Stmt::While(c, b, nx) => { d_expr_has_dynvar(c, body, na, src, res); d_stmts_dyn_escape(b, body, na, src, res) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_expr_has_dynvar(lo, body, na, src, res) }; if unchecked bitcast(usize, hi) != 0 { d_expr_has_dynvar(hi, body, na, src, res) }; d_stmts_dyn_escape(b, body, na, src, res) }
-      Stmt::Loop(b, nx) => { d_stmts_dyn_escape(b, body, na, src, res) }
-      Stmt::Unchecked(b, nx) => { d_stmts_dyn_escape(b, body, na, src, res) }
-      Stmt::AllocWith(ae, b, nx) => { d_stmts_dyn_escape(b, body, na, src, res) }
-      Stmt::DerefAssign(p, v, nx) => { d_expr_has_dynvar(p, body, na, src, res); d_expr_has_dynvar(v, body, na, src, res) }
-      Stmt::IndexAssign(b, ix, v, nx) => { d_expr_has_dynvar(b, body, na, src, res); d_expr_has_dynvar(ix, body, na, src, res); d_expr_has_dynvar(v, body, na, src, res) }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_expr_has_dynvar(fv, body, na, src, res) }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_has_dynvar(fpv, body, na, src, res) }
-      Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { d_expr_has_dynvar(v, body, na, src, res) }
-      Stmt::Match(sc, ah, nx) => { d_expr_has_dynvar(sc, body, na, src, res) }
-      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
-        | Stmt::CompForRange => {}
+d_stmts_dyn_escape := fn(head : Option(ptr(mut Stmt)), body : Option(ptr(mut Stmt)), na : ptr(mut rt::Arena), src : ptr(u8), res : ptr(mut bool)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_expr_has_dynvar(v, body, na, src, res) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_expr_has_dynvar(rv, body, na, src, res) } }
+          Stmt::ExprStmt(e, nx) => { d_expr_has_dynvar(e, body, na, src, res) }
+          Stmt::If(c, th, el, nx) => { d_expr_has_dynvar(c, body, na, src, res); d_stmts_dyn_escape(th, body, na, src, res); d_stmts_dyn_escape(el, body, na, src, res) }
+          Stmt::While(c, b, nx) => { d_expr_has_dynvar(c, body, na, src, res); d_stmts_dyn_escape(b, body, na, src, res) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_expr_has_dynvar(lo, body, na, src, res) }; if unchecked bitcast(usize, hi) != 0 { d_expr_has_dynvar(hi, body, na, src, res) }; d_stmts_dyn_escape(b, body, na, src, res) }
+          Stmt::Loop(b, nx) => { d_stmts_dyn_escape(b, body, na, src, res) }
+          Stmt::Unchecked(b, nx) => { d_stmts_dyn_escape(b, body, na, src, res) }
+          Stmt::AllocWith(ae, b, nx) => { d_stmts_dyn_escape(b, body, na, src, res) }
+          Stmt::DerefAssign(p, v, nx) => { d_expr_has_dynvar(p, body, na, src, res); d_expr_has_dynvar(v, body, na, src, res) }
+          Stmt::IndexAssign(b, ix, v, nx) => { d_expr_has_dynvar(b, body, na, src, res); d_expr_has_dynvar(ix, body, na, src, res); d_expr_has_dynvar(v, body, na, src, res) }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_expr_has_dynvar(fv, body, na, src, res) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_expr_has_dynvar(fpv, body, na, src, res) }
+          Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { d_expr_has_dynvar(v, body, na, src, res) }
+          Stmt::Match(sc, ah, nx) => { d_expr_has_dynvar(sc, body, na, src, res) }
+          Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+            | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 
-d_capture_pass := fn(body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : Option(ptr(mut Param)), src : ptr(u8)) {
+d_capture_pass := fn(body : Option(ptr(mut Stmt)), fn_val : ptr(Expr), in out decls : rt::Vec, na : ptr(mut rt::Arena), eph : Option(ptr(mut Param)), src : ptr(u8)) {
   d_rewrite_fwd_stmts(body, decls, na, src)
   d_rewrite_fwd_expr(fn_val, decls, na, src)
   ## FN-11 (Memory §5.3.1): reject a `dyn` local that escapes its defining scope (borrows its env store).
@@ -2065,17 +2108,22 @@ d_capture_pass := fn(body : ptr(mut Stmt), fn_val : ptr(Expr), in out decls : rt
   d_stmts_dyn_escape(body, body, na, src, ptr(dynesc))
   if unchecked bitcast(usize, fn_val) != 0 { d_expr_has_dynvar(fn_val, body, na, src, ptr(dynesc)) }
   if dynesc { panic("selfhost: FN-11 — a `dyn` closure borrows its env storage (Memory §5.3.1) and must not escape its defining scope; it may only be called (`d(args)`), not returned, assigned, passed, or stored") }
-  mut st := body
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(fs, fl, v, nx) => { d_try_capture(fs, fl, v, body, fn_val, decls, na, eph, src) }
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  mut st : Option(ptr(mut Stmt)) = body
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(fs, fl, v, nx) => { d_try_capture(fs, fl, v, body, fn_val, decls, na, eph, src) }
+          Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+            | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+            | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+            | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 
@@ -2191,25 +2239,30 @@ d_elide_alloc_expr := fn(e : ptr(Expr), amb : usize, decls : rt::Vec, na : ptr(m
       | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_elide_alloc_stmts := fn(head : ptr(mut Stmt), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_elide_alloc_expr(v, amb, decls, na, src) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_elide_alloc_expr(rv, amb, decls, na, src) } }
-      Stmt::ExprStmt(e, nx) => { d_elide_alloc_expr(e, amb, decls, na, src) }
-      Stmt::If(c, th, el, nx) => { d_elide_alloc_expr(c, amb, decls, na, src); d_elide_alloc_stmts(th, amb, decls, na, src); d_elide_alloc_stmts(el, amb, decls, na, src) }
-      Stmt::While(c, b, nx) => { d_elide_alloc_expr(c, amb, decls, na, src); d_elide_alloc_stmts(b, amb, decls, na, src) }
-      Stmt::Loop(b, nx) => { d_elide_alloc_stmts(b, amb, decls, na, src) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_elide_alloc_expr(lo, amb, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_elide_alloc_expr(hi, amb, decls, na, src) }; d_elide_alloc_stmts(b, amb, decls, na, src) }
-      Stmt::Unchecked(b, nx) => { d_elide_alloc_stmts(b, amb, decls, na, src) }
-      Stmt::AllocWith(ae, b, nx) => { d_elide_alloc_stmts(b, unchecked bitcast(usize, ae), decls, na, src) }
-      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+d_elide_alloc_stmts := fn(head : Option(ptr(mut Stmt)), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_elide_alloc_expr(v, amb, decls, na, src) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_elide_alloc_expr(rv, amb, decls, na, src) } }
+          Stmt::ExprStmt(e, nx) => { d_elide_alloc_expr(e, amb, decls, na, src) }
+          Stmt::If(c, th, el, nx) => { d_elide_alloc_expr(c, amb, decls, na, src); d_elide_alloc_stmts(th, amb, decls, na, src); d_elide_alloc_stmts(el, amb, decls, na, src) }
+          Stmt::While(c, b, nx) => { d_elide_alloc_expr(c, amb, decls, na, src); d_elide_alloc_stmts(b, amb, decls, na, src) }
+          Stmt::Loop(b, nx) => { d_elide_alloc_stmts(b, amb, decls, na, src) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_elide_alloc_expr(lo, amb, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_elide_alloc_expr(hi, amb, decls, na, src) }; d_elide_alloc_stmts(b, amb, decls, na, src) }
+          Stmt::Unchecked(b, nx) => { d_elide_alloc_stmts(b, amb, decls, na, src) }
+          Stmt::AllocWith(ae, b, nx) => { d_elide_alloc_stmts(b, unchecked bitcast(usize, ae), decls, na, src) }
+          Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+            | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 
@@ -2227,7 +2280,7 @@ d_desugar_convert := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), src : p
     i = i + 1
   }
 }
-d_convert_expr := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), bh : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_convert_expr := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
   match deref(e) {
     Expr::Bin(op, l, r) => { d_convert_expr(l, ph, bh, decls, na, src); d_convert_expr(r, ph, bh, decls, na, src) }
     Expr::Unchecked(inner) => { d_convert_expr(inner, ph, bh, decls, na, src) }
@@ -2255,29 +2308,32 @@ d_convert_expr := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), bh : ptr(mut St
       | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_convert_stmts := fn(head : ptr(mut Stmt), ph : Option(ptr(mut Param)), bh : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut st := head
-  ## null-ok: Stmt.next — the AST's statement lists end in a null link (ast.al "0 = end")
-  while unchecked bitcast(usize, st) != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_convert_expr(v, ph, bh, decls, na, src) }
-      ## null-ok: a bare `return` carries a null value expression (ast.al)
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_convert_expr(rv, ph, bh, decls, na, src) } }
-      Stmt::ExprStmt(e, nx) => { d_convert_expr(e, ph, bh, decls, na, src) }
-      Stmt::If(c, th, el, nx) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_stmts(th, ph, bh, decls, na, src); d_convert_stmts(el, ph, bh, decls, na, src) }
-      Stmt::While(c, b, nx) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_stmts(b, ph, bh, decls, na, src) }
-      Stmt::Loop(b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
-      ## null-ok: an absent `For` bound is a null Expr link; every Stmt walker in this file guards lo/hi so
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_convert_expr(lo, ph, bh, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_convert_expr(hi, ph, bh, decls, na, src) }; d_convert_stmts(b, ph, bh, decls, na, src) }
-      Stmt::Unchecked(b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
-      Stmt::AllocWith(ae, b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
-      Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+d_convert_stmts := fn(head : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), bh : Option(ptr(mut Stmt)), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_convert_expr(v, ph, bh, decls, na, src) }
+          ## null-ok: a bare `return` carries a null value expression (ast.al)
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_convert_expr(rv, ph, bh, decls, na, src) } }
+          Stmt::ExprStmt(e, nx) => { d_convert_expr(e, ph, bh, decls, na, src) }
+          Stmt::If(c, th, el, nx) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_stmts(th, ph, bh, decls, na, src); d_convert_stmts(el, ph, bh, decls, na, src) }
+          Stmt::While(c, b, nx) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_stmts(b, ph, bh, decls, na, src) }
+          Stmt::Loop(b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
+          ## null-ok: an absent `For` bound is a null Expr link; every Stmt walker in this file guards lo/hi so
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_convert_expr(lo, ph, bh, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_convert_expr(hi, ph, bh, decls, na, src) }; d_convert_stmts(b, ph, bh, decls, na, src) }
+          Stmt::Unchecked(b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
+          Stmt::AllocWith(ae, b, nx) => { d_convert_stmts(b, ph, bh, decls, na, src) }
+          Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf
+            | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    ## unchecked-ok: d_next_stmt answers the next Stmt link as a usize word; it was a ptr(mut Stmt).
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 
@@ -2432,35 +2488,40 @@ DLocal := struct { ns : usize, nl : usize, init : ptr(Expr) }
 ## REASSIGNMENT (`cur = …`) is skipped — only a binding introduces the type — and the FIRST binding
 ## found wins. `{0, 0, null}` means the function declares no such local, which leaves the caller
 ## resolving nothing and the `for` on its existing counted path.
-d_local_binding := fn(head : ptr(mut Stmt), src : ptr(u8), vs : usize, vl : usize, na : ptr(mut rt::Arena)) -> DLocal {
-  mut s := head
+d_local_binding := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), vs : usize, vl : usize, na : ptr(mut rt::Arena)) -> DLocal {
+  mut s : Option(ptr(mut Stmt)) = head
   mut r := DLocal(ns = 0, nl = 0, init = unchecked bitcast(ptr(Expr), 0))
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => {
-        if r.nl == 0 and streq(src, ns, nl, vs, vl) and ast::assign_is_reassign(src, ns, nl) == false { r = DLocal(ns = ns, nl = nl, init = v) }
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => {
+            if r.nl == 0 and streq(src, ns, nl, vs, vl) and ast::assign_is_reassign(src, ns, nl) == false { r = DLocal(ns = ns, nl = nl, init = v) }
+          }
+          Stmt::If(c, th, el, nx) => {
+            if r.nl == 0 { r0 := d_local_binding(th, src, vs, vl, na); if r0.nl != 0 { r = r0 } }
+            if r.nl == 0 { r1 := d_local_binding(el, src, vs, vl, na); if r1.nl != 0 { r = r1 } }
+          }
+          Stmt::While(c, b, nx) => { if r.nl == 0 { r2 := d_local_binding(b, src, vs, vl, na); if r2.nl != 0 { r = r2 } } }
+          Stmt::Loop(b, nx) => { if r.nl == 0 { r3 := d_local_binding(b, src, vs, vl, na); if r3.nl != 0 { r = r3 } } }
+          Stmt::Unchecked(b, nx) => { if r.nl == 0 { r4 := d_local_binding(b, src, vs, vl, na); if r4.nl != 0 { r = r4 } } }
+          Stmt::AllocWith(ae, b, nx) => { if r.nl == 0 { r5 := d_local_binding(b, src, vs, vl, na); if r5.nl != 0 { r = r5 } } }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if r.nl == 0 { r6 := d_local_binding(fb, src, vs, vl, na); if r6.nl != 0 { r = r6 } } }
+          Stmt::Match(sc, ah, nx) => { if r.nl == 0 { r7 := d_local_binding_arms(ah, src, vs, vl, na); if r7.nl != 0 { r = r7 } } }
+          Stmt::CompIf(c, th, el, nx) => {
+            if r.nl == 0 { r8 := d_local_binding(th, src, vs, vl, na); if r8.nl != 0 { r = r8 } }
+            if r.nl == 0 { r9 := d_local_binding(el, src, vs, vl, na); if r9.nl != 0 { r = r9 } }
+          }
+          Stmt::CompMatch(sc, ah, nx) => { if r.nl == 0 { ra := d_local_binding_arms(ah, src, vs, vl, na); if ra.nl != 0 { r = ra } } }
+          Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+            | Stmt::CompFor | Stmt::CompForRange => {}
+        }
+        s = stmt_next(sq)
       }
-      Stmt::If(c, th, el, nx) => {
-        if r.nl == 0 { r0 := d_local_binding(th, src, vs, vl, na); if r0.nl != 0 { r = r0 } }
-        if r.nl == 0 { r1 := d_local_binding(el, src, vs, vl, na); if r1.nl != 0 { r = r1 } }
-      }
-      Stmt::While(c, b, nx) => { if r.nl == 0 { r2 := d_local_binding(b, src, vs, vl, na); if r2.nl != 0 { r = r2 } } }
-      Stmt::Loop(b, nx) => { if r.nl == 0 { r3 := d_local_binding(b, src, vs, vl, na); if r3.nl != 0 { r = r3 } } }
-      Stmt::Unchecked(b, nx) => { if r.nl == 0 { r4 := d_local_binding(b, src, vs, vl, na); if r4.nl != 0 { r = r4 } } }
-      Stmt::AllocWith(ae, b, nx) => { if r.nl == 0 { r5 := d_local_binding(b, src, vs, vl, na); if r5.nl != 0 { r = r5 } } }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if r.nl == 0 { r6 := d_local_binding(fb, src, vs, vl, na); if r6.nl != 0 { r = r6 } } }
-      Stmt::Match(sc, ah, nx) => { if r.nl == 0 { r7 := d_local_binding_arms(ah, src, vs, vl, na); if r7.nl != 0 { r = r7 } } }
-      Stmt::CompIf(c, th, el, nx) => {
-        if r.nl == 0 { r8 := d_local_binding(th, src, vs, vl, na); if r8.nl != 0 { r = r8 } }
-        if r.nl == 0 { r9 := d_local_binding(el, src, vs, vl, na); if r9.nl != 0 { r = r9 } }
-      }
-      Stmt::CompMatch(sc, ah, nx) => { if r.nl == 0 { ra := d_local_binding_arms(ah, src, vs, vl, na); if ra.nl != 0 { r = ra } } }
-      Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
-        | Stmt::CompFor | Stmt::CompForRange => {}
+      None => { break }
     }
-    s = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, s), na))
   }
   r
 }
@@ -2520,7 +2581,7 @@ d_callee_name_matches := fn(src : ptr(u8), d : Decl, cs : usize, cl : usize) -> 
 ## which is what tells the appendix's `iter(CharIter)` and `iter(SplitIter)` apart at `for c in
 ## iter(cur)`. A callee naming no function is tried as a constructor `T(…)`, whose result type is `T`.
 ## `{0, 0}` means "not resolvable here", and every caller then leaves the statement alone.
-d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
+d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), decls : rt::Vec, src : ptr(u8), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
   mut cnt := 0
   mut hit := 0
   mut i := 0
@@ -2569,7 +2630,7 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut
 ## parameter, a local (its annotation, else its initializer), a constructor literal, and a call — and
 ## anything else answers `{0, 0}`, which keeps the existing counted loop. The depth cap bounds the
 ## local-initializer chain.
-d_expr_type_base := fn(e : ptr(Expr), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
+d_expr_type_base := fn(e : ptr(Expr), decls : rt::Vec, src : ptr(u8), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
   if depth > 4 { return DSpan(s = 0, n = 0) }
   if unchecked bitcast(usize, e) == 0 { return DSpan(s = 0, n = 0) }
   mut r := DSpan(s = 0, n = 0)
@@ -2630,7 +2691,7 @@ d_iterfor_lit := fn(a : ptr(mut rt::Arena), src_int : usize, name : str, lenout 
 ## comment). The `for` node itself is OVERWRITTEN with the temp binding so the list predecessor's
 ## `next` link stays valid without a second pass; the loop, the `next` call, the match and the
 ## loop-var binding hang off it, and the original body is spliced in behind the binding.
-d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut Stmt), nx : ptr(mut Stmt), pays : usize, payl : usize, src : ptr(u8), na : ptr(mut rt::Arena)) {
+d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr), fb : Option(ptr(mut Stmt)), nx : Option(ptr(mut Stmt)), pays : usize, payl : usize, src : ptr(u8), na : ptr(mut rt::Arena)) {
   src_int := unchecked bitcast(usize, src)
   n := D_ITERFOR_N
   D_ITERFOR_N = D_ITERFOR_N + 1
@@ -2654,20 +2715,24 @@ d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(E
   bindst := parser::snode(na, Stmt.Assign(fns, fnl, parser::newnode(na, Expr.Call(uws, uwl, 2, Option.Some(uwa0))), fb))
   ## §2.3 — `Some` is present (yield and continue), `None` is absent (leave the loop)
   dummy := parser::newnode(na, Expr.Num(0, 0, 0))
-  brk := parser::snode(na, Stmt.Break(unchecked bitcast(ptr(Expr), 0), 0, ast::stmt_null()))
-  armn := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = Option.None, vs = nos, vl = nol, binds_head = Option.None, body_stmts = brk, hi = 0))
+  brk := parser::snode(na, Stmt.Break(unchecked bitcast(ptr(Expr), 0), 0, Option.None))
+  armn := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = Option.None, vs = nos, vl = nol, binds_head = Option.None, body_stmts = Option.Some(brk), hi = 0))
   bh := parser::bnode(na, Bind(ns = pys, nl = pyl, next = Option.None))
-  arms := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = Option.Some(armn), vs = sms, vl = sml, binds_head = Option.Some(bh), body_stmts = bindst, hi = 0))
-  mst := parser::snode(na, Stmt.Match(parser::newnode(na, Expr.Var(ops, opl)), Option.Some(arms), ast::stmt_null()))
+  arms := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = Option.Some(armn), vs = sms, vl = sml, binds_head = Option.Some(bh), body_stmts = Option.Some(bindst), hi = 0))
+  mst := parser::snode(na, Stmt.Match(parser::newnode(na, Expr.Var(ops, opl)), Option.Some(arms), Option.None))
   ## `__foropt<N> := next(__forit<N>)`, then the match — both inside the loop
   nca := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(its, itl)), next = Option.None))
-  ost := parser::snode(na, Stmt.Assign(ops, opl, parser::newnode(na, Expr.Call(nxs, nxl, 1, Option.Some(nca))), mst))
-  lst := parser::snode(na, Stmt.Loop(ost, nx))
+  ost := parser::snode(na, Stmt.Assign(ops, opl, parser::newnode(na, Expr.Call(nxs, nxl, 1, Option.Some(nca))), Option.Some(mst)))
+  lst := parser::snode(na, Stmt.Loop(Option.Some(ost), nx))
   ## `@label(name) for …` labels the LOOP; move the mark off the node that becomes the binding so a
   ## labeled `break name` still resolves and the binding does not inherit a control label.
   ls := ast::stmt_label_span(s)
   if ls.n != 0 { ast::stmt_label_mark(lst, ls.s, ls.n); ast::stmt_label_mark(s, 0, 0) }
-  deref(stmt_p(Stmt, s)) = Stmt.Assign(its, itl, flo, lst)
+  ## #892: a bare `Option.Some(x)` payload inside a variant constructor stored through `deref(p) = V(…)`
+  ## writes `None` (a folded literal pushed as a scalar, the #807/#846 family for enum variants), so the
+  ## link is bound to a typed local first. Drop the local when #892 is fixed.
+  lnk : Option(ptr(mut Stmt)) = Option.Some(lst)
+  deref(stmt_p(Stmt, s)) = Stmt.Assign(its, itl, flo, lnk)
 }
 
 ## Decide the FORM of one iterable-form `for` (Stdlib appendix §2.4) and desugar it when the iterable
@@ -2675,7 +2740,7 @@ d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(E
 ## loop untouched — that is every range, array, slice, str view, array global and `Vec` in the tree.
 ## A type that DOES provide `next` but in a shape this desugar cannot call is refused fail-loud: the
 ## counted loop is a measured wrong value for exactly those types, and a trap beats a wrong value.
-d_iterfor_try := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr), fb : ptr(mut Stmt), nx : ptr(mut Stmt), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+d_iterfor_try := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr), fb : Option(ptr(mut Stmt)), nx : Option(ptr(mut Stmt)), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
   tb := d_expr_type_base(flo, decls, src, body, ph, na, 0)
   if tb.n == 0 { return }
   ni := d_iter_next_decl(decls, src, tb.s, tb.n)
@@ -2700,35 +2765,40 @@ d_iterfor_try := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(Expr)
 ## `head` descends. The next link is captured BEFORE the rewrite, so the walk continues past the
 ## statement the `for` became instead of re-entering the loop it just built. A nested `for` is
 ## desugared first (bottom-up), so an outer rewrite splices an already-final body.
-d_iterfor_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
-  mut s := head
-  while s != 0 {
-    nxt := d_next_stmt(unchecked bitcast(usize, s), na)
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::For(fns, fnl, flo, fhi, fb, fnx) => {
-        d_iterfor_stmts(fb, body, ph, decls, src, na)
-        if unchecked bitcast(usize, fhi) == 0 { d_iterfor_try(s, fns, fnl, flo, fb, fnx, body, ph, decls, src, na) }
+d_iterfor_stmts := fn(head : Option(ptr(mut Stmt)), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        nxt := stmt_next(sq)
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::For(fns, fnl, flo, fhi, fb, fnx) => {
+            d_iterfor_stmts(fb, body, ph, decls, src, na)
+            if unchecked bitcast(usize, fhi) == 0 { d_iterfor_try(sq, fns, fnl, flo, fb, fnx, body, ph, decls, src, na) }
+          }
+          Stmt::If(c, th, el, inx) => { d_iterfor_stmts(th, body, ph, decls, src, na); d_iterfor_stmts(el, body, ph, decls, src, na) }
+          Stmt::While(c, wb, wnx) => { d_iterfor_stmts(wb, body, ph, decls, src, na) }
+          Stmt::Loop(lb, lnx) => { d_iterfor_stmts(lb, body, ph, decls, src, na) }
+          Stmt::Unchecked(ub, unx) => { d_iterfor_stmts(ub, body, ph, decls, src, na) }
+          Stmt::AllocWith(ae, ab, anx) => { d_iterfor_stmts(ab, body, ph, decls, src, na) }
+          Stmt::Match(sc, mah, mnx) => { d_iterfor_arms(mah, body, ph, decls, src, na) }
+          Stmt::CompIf(cc, cth, cel, cnx) => { d_iterfor_stmts(cth, body, ph, decls, src, na); d_iterfor_stmts(cel, body, ph, decls, src, na) }
+          Stmt::CompFor(cvs, cvl, civ, cfb, cfnx) => { d_iterfor_stmts(cfb, body, ph, decls, src, na) }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb2, rnx) => { d_iterfor_stmts(rb2, body, ph, decls, src, na) }
+          Stmt::CompMatch(csc, cah, cmnx) => { d_iterfor_arms(cah, body, ph, decls, src, na) }
+          Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
+        }
+        s = nxt
       }
-      Stmt::If(c, th, el, inx) => { d_iterfor_stmts(th, body, ph, decls, src, na); d_iterfor_stmts(el, body, ph, decls, src, na) }
-      Stmt::While(c, wb, wnx) => { d_iterfor_stmts(wb, body, ph, decls, src, na) }
-      Stmt::Loop(lb, lnx) => { d_iterfor_stmts(lb, body, ph, decls, src, na) }
-      Stmt::Unchecked(ub, unx) => { d_iterfor_stmts(ub, body, ph, decls, src, na) }
-      Stmt::AllocWith(ae, ab, anx) => { d_iterfor_stmts(ab, body, ph, decls, src, na) }
-      Stmt::Match(sc, mah, mnx) => { d_iterfor_arms(mah, body, ph, decls, src, na) }
-      Stmt::CompIf(cc, cth, cel, cnx) => { d_iterfor_stmts(cth, body, ph, decls, src, na); d_iterfor_stmts(cel, body, ph, decls, src, na) }
-      Stmt::CompFor(cvs, cvl, civ, cfb, cfnx) => { d_iterfor_stmts(cfb, body, ph, decls, src, na) }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb2, rnx) => { d_iterfor_stmts(rb2, body, ph, decls, src, na) }
-      Stmt::CompMatch(csc, cah, cmnx) => { d_iterfor_arms(cah, body, ph, decls, src, na) }
-      Stmt::Assign | Stmt::FieldAssign | Stmt::Return | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt => {}
+      None => { break }
     }
-    s = unchecked bitcast(ptr(mut Stmt), nxt)
   }
 }
 
 ## `d_iterfor_stmts` across a match arm list.
-d_iterfor_arms := fn(ah : Option(ptr(mut Arm)), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
+d_iterfor_arms := fn(ah : Option(ptr(mut Arm)), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), decls : rt::Vec, src : ptr(u8), na : ptr(mut rt::Arena)) {
   mut arm : Option(ptr(mut Arm)) = ah
   loop {
     match arm {
@@ -3631,14 +3701,14 @@ d_manifest_module_decls := fn(pv : rt::Vec, name_start : rt::Vec, name_len : rt:
       ## copy as the canonical text used by the source-AST rewrite probe.
       fns := MANIFEST_FIELD_S + k * MANIFEST_FIELD_STRIDE
       fd := d_manifest_field_node(na, FieldDecl(ns = fns, nl = MANIFEST_FIELD_N, arity = 0, next = Option.None, ts = MANIFEST_FIELD_TS, tl = MANIFEST_FIELD_TL, wsize = 1))
-      td := Decl(name_start = MANIFEST_TYPE_S, name_len = MANIFEST_TYPE_N, value = unchecked bitcast(ptr(Expr), 0), is_fn = false, kind = 2, arity = 0, is_generic = false, params_head = Option.None, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.Some(fd), ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
+      td := Decl(name_start = MANIFEST_TYPE_S, name_len = MANIFEST_TYPE_N, value = unchecked bitcast(ptr(Expr), 0), is_fn = false, kind = 2, arity = 0, is_generic = false, params_head = Option.None, body_stmts = Option.None, fields_head = Option.Some(fd), ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       th := d_manifest_decl_node(tar, td)
       rt::vec_push(decls, th)
       lit := parser::newnode(ptr(na), Expr.StrLit(MANIFEST_VERSION_S, MANIFEST_VERSION_N, nstr, 0, 0))
       nstr += 1
       ah := parser::gnode(ptr(na), Arg(e = lit, next = Option.None))
       value := parser::newnode(ptr(na), Expr.StructLit(MANIFEST_TYPE_S, MANIFEST_TYPE_N, 1, Option.Some(ah)))
-      ad := Decl(name_start = MANIFEST_BIND_S, name_len = MANIFEST_BIND_N, value = value, is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
+      ad := Decl(name_start = MANIFEST_BIND_S, name_len = MANIFEST_BIND_N, value = value, is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None, body_stmts = Option.None, fields_head = Option.None, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       ahd := d_manifest_decl_node(tar, ad)
       rt::vec_push(decls, ahd)
     }
@@ -3809,34 +3879,39 @@ d_manifest_rewrite_arms := fn(ah : Option(ptr(mut Arm)), allow : bool, in out ns
   }
 }
 
-d_manifest_rewrite_stmts := fn(head : ptr(mut Stmt), allow : bool, in out nstr : usize, src : ptr(u8), na : ptr(mut rt::Arena)) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { d_manifest_rewrite_expr(v, allow, nstr, src, na) }
-      Stmt::Return(rv, nx) => { d_manifest_rewrite_expr(rv, allow, nstr, src, na) }
-      Stmt::ExprStmt(e, nx) => { d_manifest_rewrite_expr(e, allow, nstr, src, na) }
-      Stmt::If(c, th, el, nx) => { d_manifest_rewrite_expr(c, allow, nstr, src, na); d_manifest_rewrite_stmts(th, allow, nstr, src, na); d_manifest_rewrite_stmts(el, allow, nstr, src, na) }
-      Stmt::While(c, b, nx) => { d_manifest_rewrite_expr(c, allow, nstr, src, na); d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
-      Stmt::For(ns, nl, lo, hi, b, nx) => { d_manifest_rewrite_expr(lo, allow, nstr, src, na); d_manifest_rewrite_expr(hi, allow, nstr, src, na); d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
-      Stmt::Loop(b, nx) => { d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
-      Stmt::Unchecked(b, nx) => { d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
-      Stmt::AllocWith(ae, b, nx) => { d_manifest_rewrite_expr(ae, allow, nstr, src, na); d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
-      Stmt::Break(bv, bd, nx) => { d_manifest_rewrite_expr(bv, allow, nstr, src, na) }
-      Stmt::DerefAssign(p, v, nx) => { d_manifest_rewrite_expr(p, allow, nstr, src, na); d_manifest_rewrite_expr(v, allow, nstr, src, na) }
-      Stmt::IndexAssign(b, ix, v, nx) => { d_manifest_rewrite_expr(b, allow, nstr, src, na); d_manifest_rewrite_expr(ix, allow, nstr, src, na); d_manifest_rewrite_expr(v, allow, nstr, src, na) }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_manifest_rewrite_expr(fv, allow, nstr, src, na) }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { d_manifest_rewrite_expr(pl, allow, nstr, src, na); d_manifest_rewrite_expr(fpv, allow, nstr, src, na) }
-      Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { d_manifest_rewrite_expr(b, allow, nstr, src, na); d_manifest_rewrite_expr(ix, allow, nstr, src, na); d_manifest_rewrite_expr(v, allow, nstr, src, na) }
-      Stmt::Match(sc, ah, nx) => { d_manifest_rewrite_expr(sc, allow, nstr, src, na); d_manifest_rewrite_arms(ah, allow, nstr, src, na) }
-      Stmt::CompIf(c, th, el, nx) => { d_manifest_rewrite_expr(c, allow, nstr, src, na); d_manifest_rewrite_stmts(th, allow, nstr, src, na); d_manifest_rewrite_stmts(el, allow, nstr, src, na) }
-      Stmt::CompFor(ns, nl, iv, b, nx) => { d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
-      Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { d_manifest_rewrite_expr(lo, allow, nstr, src, na); d_manifest_rewrite_expr(hi, allow, nstr, src, na); d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
-      Stmt::CompMatch(sc, ah, nx) => { d_manifest_rewrite_expr(sc, allow, nstr, src, na); d_manifest_rewrite_arms(ah, allow, nstr, src, na) }
-      Stmt::Continue => {}
+d_manifest_rewrite_stmts := fn(head : Option(ptr(mut Stmt)), allow : bool, in out nstr : usize, src : ptr(u8), na : ptr(mut rt::Arena)) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { d_manifest_rewrite_expr(v, allow, nstr, src, na) }
+          Stmt::Return(rv, nx) => { d_manifest_rewrite_expr(rv, allow, nstr, src, na) }
+          Stmt::ExprStmt(e, nx) => { d_manifest_rewrite_expr(e, allow, nstr, src, na) }
+          Stmt::If(c, th, el, nx) => { d_manifest_rewrite_expr(c, allow, nstr, src, na); d_manifest_rewrite_stmts(th, allow, nstr, src, na); d_manifest_rewrite_stmts(el, allow, nstr, src, na) }
+          Stmt::While(c, b, nx) => { d_manifest_rewrite_expr(c, allow, nstr, src, na); d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
+          Stmt::For(ns, nl, lo, hi, b, nx) => { d_manifest_rewrite_expr(lo, allow, nstr, src, na); d_manifest_rewrite_expr(hi, allow, nstr, src, na); d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
+          Stmt::Loop(b, nx) => { d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
+          Stmt::Unchecked(b, nx) => { d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
+          Stmt::AllocWith(ae, b, nx) => { d_manifest_rewrite_expr(ae, allow, nstr, src, na); d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
+          Stmt::Break(bv, bd, nx) => { d_manifest_rewrite_expr(bv, allow, nstr, src, na) }
+          Stmt::DerefAssign(p, v, nx) => { d_manifest_rewrite_expr(p, allow, nstr, src, na); d_manifest_rewrite_expr(v, allow, nstr, src, na) }
+          Stmt::IndexAssign(b, ix, v, nx) => { d_manifest_rewrite_expr(b, allow, nstr, src, na); d_manifest_rewrite_expr(ix, allow, nstr, src, na); d_manifest_rewrite_expr(v, allow, nstr, src, na) }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { d_manifest_rewrite_expr(fv, allow, nstr, src, na) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_manifest_rewrite_expr(pl, allow, nstr, src, na); d_manifest_rewrite_expr(fpv, allow, nstr, src, na) }
+          Stmt::IndexFieldAssign(b, ix, fs, fl, v, nx) => { d_manifest_rewrite_expr(b, allow, nstr, src, na); d_manifest_rewrite_expr(ix, allow, nstr, src, na); d_manifest_rewrite_expr(v, allow, nstr, src, na) }
+          Stmt::Match(sc, ah, nx) => { d_manifest_rewrite_expr(sc, allow, nstr, src, na); d_manifest_rewrite_arms(ah, allow, nstr, src, na) }
+          Stmt::CompIf(c, th, el, nx) => { d_manifest_rewrite_expr(c, allow, nstr, src, na); d_manifest_rewrite_stmts(th, allow, nstr, src, na); d_manifest_rewrite_stmts(el, allow, nstr, src, na) }
+          Stmt::CompFor(ns, nl, iv, b, nx) => { d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
+          Stmt::CompForRange(ns, nl, lo, hi, b, nx) => { d_manifest_rewrite_expr(lo, allow, nstr, src, na); d_manifest_rewrite_expr(hi, allow, nstr, src, na); d_manifest_rewrite_stmts(b, allow, nstr, src, na) }
+          Stmt::CompMatch(sc, ah, nx) => { d_manifest_rewrite_expr(sc, allow, nstr, src, na); d_manifest_rewrite_arms(ah, allow, nstr, src, na) }
+          Stmt::Continue => {}
+        }
+        s = stmt_next(sq)
+      }
+      None => { break }
     }
-    s = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, s), na))
   }
 }
 
@@ -5596,7 +5671,7 @@ d_one_reexport_module := fn(src : ptr(u8), hs : usize, hl : usize, decls : rt::V
 ## last-wins pick untouched. So a callee with ONE declaration (every callee in `src/` and `lib/` outside
 ## these families) resolves to the same decl as before and emission stays byte-identical.
 mut D_QUAL_PH : Option(ptr(mut Param)) = Option.None        ## enclosing fn's `params_head`, while its body is walked
-mut D_QUAL_BODY : usize = 0      ## enclosing fn's `body_stmts`, for the annotated-local lookup
+mut D_QUAL_BODY : Option(ptr(mut Stmt)) = Option.None      ## enclosing fn's `body_stmts`, for the annotated-local lookup
 mut D_QUAL_NA : usize = 0        ## the node arena those statements live in
 mut D_QUAL_ARGS : Option(ptr(mut Arg)) = Option.None      ## the `Arg` list of the call currently being resolved
 
@@ -5615,30 +5690,35 @@ d_ovl_norm_type := fn(src : ptr(u8), s : usize, n : usize) -> str {
 
 ## The declared-type span of an annotated local `name : T = …` bound anywhere in `head` (recursing
 ## into block bodies). 0/0 when the name is not bound there or carries no annotation.
-d_ovl_local_type := fn(head : usize, vs : usize, vl : usize, na : ptr(mut rt::Arena), src : ptr(u8)) -> CSpan {
+d_ovl_local_type := fn(head : Option(ptr(mut Stmt)), vs : usize, vl : usize, na : ptr(mut rt::Arena), src : ptr(u8)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => {
-        if nl == vl and streq(src, ns, nl, vs, vl) {
-          at := local_type_span(src, ns, nl)
-          if at.n != 0 { r = CSpan(s = at.s, n = at.n) }
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => {
+            if nl == vl and streq(src, ns, nl, vs, vl) {
+              at := local_type_span(src, ns, nl)
+              if at.n != 0 { r = CSpan(s = at.s, n = at.n) }
+            }
+          }
+          Stmt::If(c, th, el, nx) => { ri := d_ovl_local_type(th, vs, vl, na, src) ; if ri.n != 0 { r = ri } else { re := d_ovl_local_type(el, vs, vl, na, src) ; if re.n != 0 { r = re } } }
+          Stmt::While(c, b, nx) => { rw := d_ovl_local_type(b, vs, vl, na, src) ; if rw.n != 0 { r = rw } }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { rf := d_ovl_local_type(b, vs, vl, na, src) ; if rf.n != 0 { r = rf } }
+          Stmt::Loop(b, nx) => { rl := d_ovl_local_type(b, vs, vl, na, src) ; if rl.n != 0 { r = rl } }
+          Stmt::Unchecked(b, nx) => { ru := d_ovl_local_type(b, vs, vl, na, src) ; if ru.n != 0 { r = ru } }
+          Stmt::AllocWith(ae, b, nx) => { ra := d_ovl_local_type(b, vs, vl, na, src) ; if ra.n != 0 { r = ra } }
+          Stmt::CompIf(c, th, el, nx) => { rc := d_ovl_local_type(th, vs, vl, na, src) ; if rc.n != 0 { r = rc } else { rd := d_ovl_local_type(el, vs, vl, na, src) ; if rd.n != 0 { r = rd } } }
+          Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
+            | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
+            | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
         }
+        st = stmt_next(stq)
       }
-      Stmt::If(c, th, el, nx) => { ri := d_ovl_local_type(th, vs, vl, na, src) ; if ri.n != 0 { r = ri } else { re := d_ovl_local_type(el, vs, vl, na, src) ; if re.n != 0 { r = re } } }
-      Stmt::While(c, b, nx) => { rw := d_ovl_local_type(b, vs, vl, na, src) ; if rw.n != 0 { r = rw } }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { rf := d_ovl_local_type(b, vs, vl, na, src) ; if rf.n != 0 { r = rf } }
-      Stmt::Loop(b, nx) => { rl := d_ovl_local_type(b, vs, vl, na, src) ; if rl.n != 0 { r = rl } }
-      Stmt::Unchecked(b, nx) => { ru := d_ovl_local_type(b, vs, vl, na, src) ; if ru.n != 0 { r = ru } }
-      Stmt::AllocWith(ae, b, nx) => { ra := d_ovl_local_type(b, vs, vl, na, src) ; if ra.n != 0 { r = ra } }
-      Stmt::CompIf(c, th, el, nx) => { rc := d_ovl_local_type(th, vs, vl, na, src) ; if rc.n != 0 { r = rc } else { rd := d_ovl_local_type(el, vs, vl, na, src) ; if rd.n != 0 { r = rd } } }
-      Stmt::FieldAssign | Stmt::Return | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign
-        | Stmt::IndexFieldAssign | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
-        | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange => {}
+      None => { break }
     }
-    st = d_next_stmt(st, na)
   }
   r
 }
@@ -5986,30 +6066,35 @@ d_qual_expr := fn(e : ptr(Expr), ms : usize, ml : usize, decls : rt::Vec, na : p
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_qual_stmts := fn(head : ptr(mut Stmt), ms : usize, ml : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_qual_expr(v, ms, ml, decls, na, src) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_qual_expr(rv, ms, ml, decls, na, src) } }
-      Stmt::ExprStmt(e, nx) => { d_qual_expr(e, ms, ml, decls, na, src) }
-      Stmt::If(c, th, el, nx) => { d_qual_expr(c, ms, ml, decls, na, src); d_qual_stmts(th, ms, ml, decls, na, src); d_qual_stmts(el, ms, ml, decls, na, src) }
-      Stmt::While(c, b, nx) => { d_qual_expr(c, ms, ml, decls, na, src); d_qual_stmts(b, ms, ml, decls, na, src) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_qual_expr(lo, ms, ml, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_qual_expr(hi, ms, ml, decls, na, src) }; d_qual_stmts(b, ms, ml, decls, na, src) }
-      Stmt::Loop(b, nx) => { d_qual_stmts(b, ms, ml, decls, na, src) }
-      Stmt::Unchecked(b, nx) => { d_qual_stmts(b, ms, ml, decls, na, src) }
-      Stmt::AllocWith(ae, b, nx) => { d_qual_stmts(b, ms, ml, decls, na, src) }
-      Stmt::DerefAssign(p, v, nx) => { d_qual_expr(p, ms, ml, decls, na, src); d_qual_expr(v, ms, ml, decls, na, src) }
-      Stmt::IndexAssign(b, ix, v, nx) => { d_qual_expr(b, ms, ml, decls, na, src); d_qual_expr(ix, ms, ml, decls, na, src); d_qual_expr(v, ms, ml, decls, na, src) }
-      Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_qual_expr(fv, ms, ml, decls, na, src) }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { d_qual_expr(fpv, ms, ml, decls, na, src) }
-      Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_qual_expr(v, ms, ml, decls, na, src) }
-      Stmt::Match(sc, ah, nx) => { d_qual_expr(sc, ms, ml, decls, na, src) }
-      Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
-        | Stmt::CompForRange => {}
+d_qual_stmts := fn(head : Option(ptr(mut Stmt)), ms : usize, ml : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_qual_expr(v, ms, ml, decls, na, src) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_qual_expr(rv, ms, ml, decls, na, src) } }
+          Stmt::ExprStmt(e, nx) => { d_qual_expr(e, ms, ml, decls, na, src) }
+          Stmt::If(c, th, el, nx) => { d_qual_expr(c, ms, ml, decls, na, src); d_qual_stmts(th, ms, ml, decls, na, src); d_qual_stmts(el, ms, ml, decls, na, src) }
+          Stmt::While(c, b, nx) => { d_qual_expr(c, ms, ml, decls, na, src); d_qual_stmts(b, ms, ml, decls, na, src) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { if unchecked bitcast(usize, lo) != 0 { d_qual_expr(lo, ms, ml, decls, na, src) }; if unchecked bitcast(usize, hi) != 0 { d_qual_expr(hi, ms, ml, decls, na, src) }; d_qual_stmts(b, ms, ml, decls, na, src) }
+          Stmt::Loop(b, nx) => { d_qual_stmts(b, ms, ml, decls, na, src) }
+          Stmt::Unchecked(b, nx) => { d_qual_stmts(b, ms, ml, decls, na, src) }
+          Stmt::AllocWith(ae, b, nx) => { d_qual_stmts(b, ms, ml, decls, na, src) }
+          Stmt::DerefAssign(p, v, nx) => { d_qual_expr(p, ms, ml, decls, na, src); d_qual_expr(v, ms, ml, decls, na, src) }
+          Stmt::IndexAssign(b, ix, v, nx) => { d_qual_expr(b, ms, ml, decls, na, src); d_qual_expr(ix, ms, ml, decls, na, src); d_qual_expr(v, ms, ml, decls, na, src) }
+          Stmt::FieldAssign(bns, bnl, ffs, ffl, fv, nx) => { d_qual_expr(fv, ms, ml, decls, na, src) }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { d_qual_expr(fpv, ms, ml, decls, na, src) }
+          Stmt::IndexFieldAssign(b, ix, ffs, ffl, v, nx) => { d_qual_expr(v, ms, ml, decls, na, src) }
+          Stmt::Match(sc, ah, nx) => { d_qual_expr(sc, ms, ml, decls, na, src) }
+          Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch
+            | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## Walk every fn body (+ trailing return expr) of the decls currently flagged in `keep` — or of ALL
@@ -6028,12 +6113,12 @@ d_qual_sweep := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8), keep
         if d.is_generic { D_GENERIC_WALK = 1 }
         ## the enclosing signature + body an argument's type is recovered from (`d_ovl_arg_type`)
         D_QUAL_PH = d.params_head
-        D_QUAL_BODY = unchecked bitcast(usize, d.body_stmts)
+        D_QUAL_BODY = d.body_stmts
         D_QUAL_NA = unchecked bitcast(usize, na)
         d_qual_stmts(d.body_stmts, d.mod_start, d.mod_len, decls, na, src)
         if unchecked bitcast(usize, d.value) != 0 { d_qual_expr(d.value, d.mod_start, d.mod_len, decls, na, src) }
         D_QUAL_PH = Option.None
-        D_QUAL_BODY = 0
+        D_QUAL_BODY = Option.None
         D_GENERIC_WALK = prev_generic_walk
       }
     }
@@ -6163,14 +6248,14 @@ d_resolve_and_prune := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8
 ## `wat.al` either compares aggregate contents or fails loud on the attempt.
 mut D_AGGCMP : usize = 0
 ## Is `[cs,cl)` a local whose binding RHS gives it a struct/enum type, in the body `body`?
-d_var_is_agg := fn(cs : usize, cl : usize, body : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> bool {
+d_var_is_agg := fn(cs : usize, cl : usize, body : Option(ptr(mut Stmt)), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> bool {
   if cl == 0 { return false }
   lt := d_local_type_span(body, cs, cl, decls, na, src)
   if lt.n == 0 { return false }
   return d_is_agg_type_name(decls, src, lt.s, lt.n)
 }
 ## Does expression `e` denote an aggregate VALUE (a struct/enum literal, or a local bound to one)?
-d_expr_is_agg := fn(e : ptr(Expr), body : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> bool {
+d_expr_is_agg := fn(e : ptr(Expr), body : Option(ptr(mut Stmt)), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> bool {
   lt := d_lit_type_span(e, src)
   if lt.n != 0 { return true }
   vs := d_var_span(e)
@@ -6178,7 +6263,7 @@ d_expr_is_agg := fn(e : ptr(Expr), body : ptr(mut Stmt), decls : rt::Vec, na : p
   return false
 }
 ## Raise `D_AGGCMP` when `e` contains an `==` (op 20) / `!=` (op 28) over an aggregate operand.
-d_aggcmp_expr := fn(e : ptr(Expr), body : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_aggcmp_expr := fn(e : ptr(Expr), body : Option(ptr(mut Stmt)), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
   match deref(e) {
     Expr::Bin(op, l, r) => {
       if op == 20 or op == 28 {
@@ -6203,26 +6288,31 @@ d_aggcmp_expr := fn(e : ptr(Expr), body : ptr(mut Stmt), decls : rt::Vec, na : p
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
 }
-d_aggcmp_stmts := fn(head : ptr(mut Stmt), body : ptr(mut Stmt), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut st := head
-  while st != 0 {
-    x := deref(stmt_p(Stmt, st))
-    match x {
-      Stmt::Assign(ns, nl, v, nx) => { d_aggcmp_expr(v, body, decls, na, src) }
-      Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_aggcmp_expr(rv, body, decls, na, src) } }
-      Stmt::ExprStmt(e, nx) => { d_aggcmp_expr(e, body, decls, na, src) }
-      Stmt::If(c, th, el, nx) => { d_aggcmp_expr(c, body, decls, na, src); d_aggcmp_stmts(th, body, decls, na, src); d_aggcmp_stmts(el, body, decls, na, src) }
-      Stmt::While(c, b, nx) => { d_aggcmp_expr(c, body, decls, na, src); d_aggcmp_stmts(b, body, decls, na, src) }
-      Stmt::For(fns, fnl, lo, hi, b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
-      Stmt::Loop(b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
-      Stmt::Unchecked(b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
-      Stmt::AllocWith(ae, b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
-      Stmt::Match(sc, ah, nx) => { d_aggcmp_expr(sc, body, decls, na, src) }
-      Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
-        | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange => {}
+d_aggcmp_stmts := fn(head : Option(ptr(mut Stmt)), body : Option(ptr(mut Stmt)), decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+  mut st : Option(ptr(mut Stmt)) = head
+  loop {
+    match st {
+      Some(stq) => {
+        x := deref(stmt_p(Stmt, stq))
+        match x {
+          Stmt::Assign(ns, nl, v, nx) => { d_aggcmp_expr(v, body, decls, na, src) }
+          Stmt::Return(rv, nx) => { if unchecked bitcast(usize, rv) != 0 { d_aggcmp_expr(rv, body, decls, na, src) } }
+          Stmt::ExprStmt(e, nx) => { d_aggcmp_expr(e, body, decls, na, src) }
+          Stmt::If(c, th, el, nx) => { d_aggcmp_expr(c, body, decls, na, src); d_aggcmp_stmts(th, body, decls, na, src); d_aggcmp_stmts(el, body, decls, na, src) }
+          Stmt::While(c, b, nx) => { d_aggcmp_expr(c, body, decls, na, src); d_aggcmp_stmts(b, body, decls, na, src) }
+          Stmt::For(fns, fnl, lo, hi, b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
+          Stmt::Loop(b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
+          Stmt::Unchecked(b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
+          Stmt::AllocWith(ae, b, nx) => { d_aggcmp_stmts(b, body, decls, na, src) }
+          Stmt::Match(sc, ah, nx) => { d_aggcmp_expr(sc, body, decls, na, src) }
+          Stmt::FieldAssign | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+            | Stmt::FieldPathAssign | Stmt::Break | Stmt::Continue | Stmt::CompIf | Stmt::CompFor
+            | Stmt::CompMatch | Stmt::CompForRange => {}
+        }
+        st = stmt_next(stq)
+      }
+      None => { break }
     }
-    st = unchecked bitcast(ptr(mut Stmt), d_next_stmt(unchecked bitcast(usize, st), na))
   }
 }
 ## 1 iff any fn of the ENTRY module `[ems,eml)` compares aggregates with `==` / `!=`.

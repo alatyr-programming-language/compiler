@@ -127,47 +127,52 @@ pub scan_str_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
 }
 
 ## The max str-literal-argument count of any single call within a statement list `head`.
-pub scan_str_arg_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), a : rt::Arena) -> usize {
-  mut s := head
+pub scan_str_arg_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Stmt)), a : rt::Arena) -> usize {
+  mut s : Option(ptr(mut Stmt)) = head
   mut m := 0
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { m = imax(m, scan_str_arg_expr(src, decls, v, a)); s = nx }
-      Stmt::While(c, b, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, c, a), scan_str_arg_stmts(src, decls, b, a))); s = nx }
-      Stmt::Loop(b, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, b, a)); s = nx }
-      Stmt::Unchecked(b, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, b, a)); s = nx }
-      Stmt::AllocWith(ae, b, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, b, a)); s = nx }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { m = imax(m, scan_str_arg_expr(src, decls, e, a)); s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, scan_str_arg_expr(src, decls, fv, a)); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, scan_str_arg_expr(src, decls, fpv, a)); s = nx }
-      Stmt::Return(rv, nx) => { m = imax(m, scan_str_arg_expr(src, decls, rv, a)); s = nx }
-      Stmt::DerefAssign(ptr, val, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, ptr, a), scan_str_arg_expr(src, decls, val, a))); s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, ib, a), imax(scan_str_arg_expr(src, decls, ii, a), scan_str_arg_expr(src, decls, iv, a)))); s = nx }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, fia, a), imax(scan_str_arg_expr(src, decls, fii, a), scan_str_arg_expr(src, decls, fiv, a)))); s = nx }
-      Stmt::If(c, th, el, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, c, a), imax(scan_str_arg_stmts(src, decls, th, a), scan_str_arg_stmts(src, decls, el, a)))); s = nx }
-      Stmt::Match(sc, ah, nx) => {
-        m = imax(m, scan_str_arg_expr(src, decls, sc, a))
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              m = imax(m, scan_str_arg_stmts(src, decls, am.body_stmts, a))
-              arm = am.next
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { m = imax(m, scan_str_arg_expr(src, decls, v, a)); s = nx }
+          Stmt::While(c, b, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, c, a), scan_str_arg_stmts(src, decls, b, a))); s = nx }
+          Stmt::Loop(b, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, b, a)); s = nx }
+          Stmt::Unchecked(b, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, b, a)); s = nx }
+          Stmt::AllocWith(ae, b, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, b, a)); s = nx }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { m = imax(m, scan_str_arg_expr(src, decls, e, a)); s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, scan_str_arg_expr(src, decls, fv, a)); s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, scan_str_arg_expr(src, decls, fpv, a)); s = nx }
+          Stmt::Return(rv, nx) => { m = imax(m, scan_str_arg_expr(src, decls, rv, a)); s = nx }
+          Stmt::DerefAssign(ptr, val, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, ptr, a), scan_str_arg_expr(src, decls, val, a))); s = nx }
+          Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, ib, a), imax(scan_str_arg_expr(src, decls, ii, a), scan_str_arg_expr(src, decls, iv, a)))); s = nx }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, fia, a), imax(scan_str_arg_expr(src, decls, fii, a), scan_str_arg_expr(src, decls, fiv, a)))); s = nx }
+          Stmt::If(c, th, el, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, c, a), imax(scan_str_arg_stmts(src, decls, th, a), scan_str_arg_stmts(src, decls, el, a)))); s = nx }
+          Stmt::Match(sc, ah, nx) => {
+            m = imax(m, scan_str_arg_expr(src, decls, sc, a))
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  m = imax(m, scan_str_arg_stmts(src, decls, am.body_stmts, a))
+                  arm = am.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
+            s = nx
           }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, flo, a), scan_str_arg_stmts(src, decls, fb, a))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, scan_str_arg_expr(src, decls, fhi, a)) } ; s = nx }
+          Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(scan_str_arg_stmts(src, decls, cthen, a), scan_str_arg_stmts(src, decls, celse, a))); s = nx }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, cb, a)); s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, rb, a)); s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, scan_str_arg_stmts(src, decls, cam.body_stmts, a)); car = cam.next }; None => { break } } } ; s = nx }
         }
-        s = nx
       }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(scan_str_arg_expr(src, decls, flo, a), scan_str_arg_stmts(src, decls, fb, a))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, scan_str_arg_expr(src, decls, fhi, a)) } ; s = nx }
-      Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(scan_str_arg_stmts(src, decls, cthen, a), scan_str_arg_stmts(src, decls, celse, a))); s = nx }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, cb, a)); s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, scan_str_arg_stmts(src, decls, rb, a)); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, scan_str_arg_stmts(src, decls, cam.body_stmts, a)); car = cam.next }; None => { break } } } ; s = nx }
+      None => { break }
     }
   }
   m
@@ -319,33 +324,38 @@ pub scan_agg_width_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
   m
 }
 
-pub scan_agg_width_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
-  mut s := head
+pub scan_agg_width_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+  mut s : Option(ptr(mut Stmt)) = head
   mut m := 0
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { m = imax(m, scan_agg_width_expr(v, decls, src, a)); s = nx }
-      Stmt::While(c, b, nx) => { m = imax(m, imax(scan_agg_width_expr(c, decls, src, a), scan_agg_width_stmts(b, decls, src, a))); s = nx }
-      Stmt::Loop(b, nx) => { m = imax(m, scan_agg_width_stmts(b, decls, src, a)); s = nx }
-      Stmt::Unchecked(b, nx) => { m = imax(m, scan_agg_width_stmts(b, decls, src, a)); s = nx }
-      Stmt::AllocWith(ae, b, nx) => { m = imax(m, imax(scan_agg_width_expr(ae, decls, src, a), scan_agg_width_stmts(b, decls, src, a))); s = nx }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { m = imax(m, scan_agg_width_expr(e, decls, src, a)); s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, scan_agg_width_expr(fv, decls, src, a)); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, scan_agg_width_expr(fpv, decls, src, a)); s = nx }
-      Stmt::Return(rv, nx) => { m = imax(m, scan_agg_width_expr(rv, decls, src, a)); s = nx }
-      Stmt::DerefAssign(ptr, val, nx) => { m = imax(m, imax(scan_agg_width_expr(ptr, decls, src, a), scan_agg_width_expr(val, decls, src, a))); s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(scan_agg_width_expr(ib, decls, src, a), imax(scan_agg_width_expr(ii, decls, src, a), scan_agg_width_expr(iv, decls, src, a)))); s = nx }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(scan_agg_width_expr(fia, decls, src, a), imax(scan_agg_width_expr(fii, decls, src, a), scan_agg_width_expr(fiv, decls, src, a)))); s = nx }
-      Stmt::If(c, th, el, nx) => { m = imax(m, imax(scan_agg_width_expr(c, decls, src, a), imax(scan_agg_width_stmts(th, decls, src, a), scan_agg_width_stmts(el, decls, src, a)))); s = nx }
-      Stmt::Match(sc, ah, nx) => { m = imax(m, scan_agg_width_expr(sc, decls, src, a)); mut arm : Option(ptr(mut Arm)) = ah; loop { match arm { Some(armq) => { am := deref(arm_p(armq)); m = imax(m, scan_agg_width_stmts(am.body_stmts, decls, src, a)); arm = am.next }; None => { break } } }; s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(scan_agg_width_expr(flo, decls, src, a), scan_agg_width_stmts(fb, decls, src, a))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, scan_agg_width_expr(fhi, decls, src, a)) }; s = nx }
-      Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(scan_agg_width_stmts(cthen, decls, src, a), scan_agg_width_stmts(celse, decls, src, a))); s = nx }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, scan_agg_width_stmts(cb, decls, src, a)); s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, scan_agg_width_stmts(rb, decls, src, a)); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, scan_agg_width_stmts(cam.body_stmts, decls, src, a)); car = cam.next }; None => { break } } }; s = nx }
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { m = imax(m, scan_agg_width_expr(v, decls, src, a)); s = nx }
+          Stmt::While(c, b, nx) => { m = imax(m, imax(scan_agg_width_expr(c, decls, src, a), scan_agg_width_stmts(b, decls, src, a))); s = nx }
+          Stmt::Loop(b, nx) => { m = imax(m, scan_agg_width_stmts(b, decls, src, a)); s = nx }
+          Stmt::Unchecked(b, nx) => { m = imax(m, scan_agg_width_stmts(b, decls, src, a)); s = nx }
+          Stmt::AllocWith(ae, b, nx) => { m = imax(m, imax(scan_agg_width_expr(ae, decls, src, a), scan_agg_width_stmts(b, decls, src, a))); s = nx }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { m = imax(m, scan_agg_width_expr(e, decls, src, a)); s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, scan_agg_width_expr(fv, decls, src, a)); s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, scan_agg_width_expr(fpv, decls, src, a)); s = nx }
+          Stmt::Return(rv, nx) => { m = imax(m, scan_agg_width_expr(rv, decls, src, a)); s = nx }
+          Stmt::DerefAssign(ptr, val, nx) => { m = imax(m, imax(scan_agg_width_expr(ptr, decls, src, a), scan_agg_width_expr(val, decls, src, a))); s = nx }
+          Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(scan_agg_width_expr(ib, decls, src, a), imax(scan_agg_width_expr(ii, decls, src, a), scan_agg_width_expr(iv, decls, src, a)))); s = nx }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(scan_agg_width_expr(fia, decls, src, a), imax(scan_agg_width_expr(fii, decls, src, a), scan_agg_width_expr(fiv, decls, src, a)))); s = nx }
+          Stmt::If(c, th, el, nx) => { m = imax(m, imax(scan_agg_width_expr(c, decls, src, a), imax(scan_agg_width_stmts(th, decls, src, a), scan_agg_width_stmts(el, decls, src, a)))); s = nx }
+          Stmt::Match(sc, ah, nx) => { m = imax(m, scan_agg_width_expr(sc, decls, src, a)); mut arm : Option(ptr(mut Arm)) = ah; loop { match arm { Some(armq) => { am := deref(arm_p(armq)); m = imax(m, scan_agg_width_stmts(am.body_stmts, decls, src, a)); arm = am.next }; None => { break } } }; s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(scan_agg_width_expr(flo, decls, src, a), scan_agg_width_stmts(fb, decls, src, a))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, scan_agg_width_expr(fhi, decls, src, a)) }; s = nx }
+          Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(scan_agg_width_stmts(cthen, decls, src, a), scan_agg_width_stmts(celse, decls, src, a))); s = nx }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, scan_agg_width_stmts(cb, decls, src, a)); s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, scan_agg_width_stmts(rb, decls, src, a)); s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, scan_agg_width_stmts(cam.body_stmts, decls, src, a)); car = cam.next }; None => { break } } }; s = nx }
+        }
+      }
+      None => { break }
     }
   }
   m
@@ -476,47 +486,52 @@ pub agg_unbound_sret_block := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Ex
   0
 }
 ## The max aggregate-value-argument count of any single call within a statement list `head`.
-pub scan_agg_arg_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Stmt), a : rt::Arena) -> usize {
-  mut s := head
+pub scan_agg_arg_stmts := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Stmt)), a : rt::Arena) -> usize {
+  mut s : Option(ptr(mut Stmt)) = head
   mut m := 0
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, v, a)); s = nx }
-      Stmt::While(c, b, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, c, a), scan_agg_arg_stmts(src, decls, b, a))); s = nx }
-      Stmt::Loop(b, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, b, a)); s = nx }
-      Stmt::Unchecked(b, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, b, a)); s = nx }
-      Stmt::AllocWith(ae, b, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, b, a)); s = nx }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, e, a) + agg_unbound_sret_block(src, decls, e, a)); s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, fv, a)); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, fpv, a)); s = nx }
-      Stmt::Return(rv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, rv, a) + agg_unbound_sret_block(src, decls, rv, a)); s = nx }
-      Stmt::DerefAssign(ptr, val, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, ptr, a), scan_agg_arg_expr(src, decls, val, a))); s = nx }
-      Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, ib, a), imax(scan_agg_arg_expr(src, decls, ii, a), scan_agg_arg_expr(src, decls, iv, a)))); s = nx }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, fia, a), imax(scan_agg_arg_expr(src, decls, fii, a), scan_agg_arg_expr(src, decls, fiv, a)))); s = nx }
-      Stmt::If(c, th, el, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, c, a), imax(scan_agg_arg_stmts(src, decls, th, a), scan_agg_arg_stmts(src, decls, el, a)))); s = nx }
-      Stmt::Match(sc, ah, nx) => {
-        m = imax(m, scan_agg_arg_expr(src, decls, sc, a))
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              m = imax(m, scan_agg_arg_stmts(src, decls, am.body_stmts, a))
-              arm = am.next
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, v, a)); s = nx }
+          Stmt::While(c, b, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, c, a), scan_agg_arg_stmts(src, decls, b, a))); s = nx }
+          Stmt::Loop(b, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, b, a)); s = nx }
+          Stmt::Unchecked(b, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, b, a)); s = nx }
+          Stmt::AllocWith(ae, b, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, b, a)); s = nx }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, e, a) + agg_unbound_sret_block(src, decls, e, a)); s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, fv, a)); s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, fpv, a)); s = nx }
+          Stmt::Return(rv, nx) => { m = imax(m, scan_agg_arg_expr(src, decls, rv, a) + agg_unbound_sret_block(src, decls, rv, a)); s = nx }
+          Stmt::DerefAssign(ptr, val, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, ptr, a), scan_agg_arg_expr(src, decls, val, a))); s = nx }
+          Stmt::IndexAssign(ib, ii, iv, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, ib, a), imax(scan_agg_arg_expr(src, decls, ii, a), scan_agg_arg_expr(src, decls, iv, a)))); s = nx }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, fia, a), imax(scan_agg_arg_expr(src, decls, fii, a), scan_agg_arg_expr(src, decls, fiv, a)))); s = nx }
+          Stmt::If(c, th, el, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, c, a), imax(scan_agg_arg_stmts(src, decls, th, a), scan_agg_arg_stmts(src, decls, el, a)))); s = nx }
+          Stmt::Match(sc, ah, nx) => {
+            m = imax(m, scan_agg_arg_expr(src, decls, sc, a))
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  m = imax(m, scan_agg_arg_stmts(src, decls, am.body_stmts, a))
+                  arm = am.next
+                }
+                None => { break }
+              }
             }
-            None => { break }
+            s = nx
           }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, flo, a), scan_agg_arg_stmts(src, decls, fb, a))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, scan_agg_arg_expr(src, decls, fhi, a)) } ; s = nx }
+          Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(scan_agg_arg_stmts(src, decls, cthen, a), scan_agg_arg_stmts(src, decls, celse, a))); s = nx }
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, cb, a)); s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, rb, a)); s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, scan_agg_arg_stmts(src, decls, cam.body_stmts, a)); car = cam.next }; None => { break } } } ; s = nx }
         }
-        s = nx
       }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { m = imax(m, imax(scan_agg_arg_expr(src, decls, flo, a), scan_agg_arg_stmts(src, decls, fb, a))); if unchecked bitcast(usize, fhi) != 0 { m = imax(m, scan_agg_arg_expr(src, decls, fhi, a)) } ; s = nx }
-      Stmt::CompIf(ccond, cthen, celse, nx) => { m = imax(m, imax(scan_agg_arg_stmts(src, decls, cthen, a), scan_agg_arg_stmts(src, decls, celse, a))); s = nx }
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, cb, a)); s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { m = imax(m, scan_agg_arg_stmts(src, decls, rb, a)); s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); m = imax(m, scan_agg_arg_stmts(src, decls, cam.body_stmts, a)); car = cam.next }; None => { break } } } ; s = nx }
+      None => { break }
     }
   }
   m

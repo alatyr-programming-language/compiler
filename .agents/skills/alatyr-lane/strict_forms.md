@@ -110,12 +110,12 @@ typed form cannot be written in these shapes yet:
 - #792: an enum-typed or `Option(u64)` field read through a pointer (`deref(p).f`) is a wrong value
   or a SIGSEGV. Bind the record first (`rv : Rec = deref(p) ; rv.f`).
 
-Where neither workaround reaches (the AST's own lists still end in a raw null `next`, and converting
-them is §9 step 2), spell the null explicitly (§6). The marker's reason must name the **blocking
-issue**, not only the structure:
+Where neither workaround reaches (every AST list is now `Option(ptr(mut T))`, so this is for a
+shape the typed form still cannot express), spell the null explicitly (§6). The marker's reason
+must name the **blocking issue**, not only the structure:
 
 ```alatyr
-## null-ok: #809 — Stmt.next ends in a null link; the AST's lists are not Option(ptr(Stmt)) yet (§9)
+## null-ok: #809 — <the field> is read through a mutable global and cannot be matched in place
 while unchecked bitcast(usize, s) != 0 { ... }
 ```
 

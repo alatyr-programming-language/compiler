@@ -23,6 +23,8 @@ arg_p := ast::arg_p
 arg_at := ast::arg_at
 arm_p := ast::arm_p
 stmt_p := ast::stmt_p
+stmt_any := ast::stmt_any
+stmt_next := ast::stmt_next
 local_type_span := ast::local_type_span
 (Arg, Decl, Expr, Param, Stmt) := ast
 param_any := ast::param_any
@@ -76,71 +78,76 @@ call_rhs_concrete_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
 ## doesn't fire — a concrete-return callee still resolves by arity), breaking the cycle. Neutral: at HEAD
 ## `block_decl_type` never reached `ret_call_target`, so this path is entirely new.
 mut _bdt_active : bool = false
-pub block_decl_type := fn(head : ptr(mut Stmt), ns2 : usize, nl2 : usize, src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena) -> LocalTypeSpan {
+pub block_decl_type := fn(head : Option(ptr(mut Stmt)), ns2 : usize, nl2 : usize, src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena) -> LocalTypeSpan {
   if _bdt_active { return LocalTypeSpan(s = 0, n = 0) }
   _bdt_active = true
-  mut s := head
+  mut s : Option(ptr(mut Stmt)) = head
   mut rs := 0
   mut rn := 0
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    mut isas := false
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        isas = true
-        if streq(src, ans, anl, ns2, nl2) {
-          lt := local_type_span(src, ans, anl)
-          if lt.n != 0 { rs = lt.s; rn = lt.n }
-          else {
-            ## an INFERRED struct local (`p := Pt(…)`, no `: T`) — resolve its type from the RHS
-            ## `StructLit`'s name span, the SAME span `expr_type_span` (the emit side) reads, so the
-            ## collected `print_one__Pt` instance and the call site agree. Enables `print("{}", p)` on
-            ## an inferred struct var (else the call referenced an uncollected `print_one__Pt`).
-            sli := struct_lit_info(v)
-            eli := enum_lit_info(v)
-            crc := call_rhs_concrete_enum_span(v, decls, src, a)
-            if sli.is_s { rs = sli.ss; rn = sli.sl }
-            else if crc.n != 0 {
-              ## an INFERRED enum local bound from a CONCRETE-return CALL (`m := parse(s)`, `parse ->
-              ## Result(Config, Err)`): type `m` as the callee's return enum, so `m.unwrap()` / `m.ok()`
-              ## (implicit-UFCS receiver-keyed) recover their type-args from `m`. NEUTRAL for src/: at HEAD
-              ## a call-RHS receiver was untracked, so a `m := call(); m.<multi-tparam-method>()` shape
-              ## fail-loud'd (never built) — enabling it is purely additive.
-              rs = crc.s; rn = crc.n
-            }
-            else if eli.is_e and enum_decl_of(decls, src, eli.es, eli.el) >= 0 {
-              ## an INFERRED enum local (`a := E.A(5)`, no `: T`) — resolve its type from the RHS
-              ## `EnumLit`'s type-name span (`enum_decl_of >= 0` confirms a genuine enum ctor, not a
-              ## UFCS `recv.method(…)` which also parses as `EnumLit`). Without this a bare comparison
-              ## `a == b` over payload-carrying enum LOCALS registered NO `base::derive::eq__<E>` instance
-              ## in the mono pre-pass (the struct-literal branch alone matched), so the emit side's
-              ## synthesized `eq` call linked to an UNDEFINED `base__derive__eq__<E>`. The enum dual of the
-              ## struct-literal inference above.
-              rs = eli.es; rn = eli.el
-            }
-            else {
-              ## a SNAPSHOT copy `p := S` of a struct GLOBAL — `p` is a proper down-growing local, so
-              ## resolve its type from the global's struct name (no layout issue, unlike passing the
-              ## global itself by-ref). The supported way to `print` a global struct: copy it first.
-              rvn := var_name_span(v)
-              if rvn.n != 0 {
-                gmv := mut_global_value(decls, src, rvn.s, rvn.n)
-                if unchecked bitcast(usize, gmv) != 0 {
-                  gsli := struct_lit_info(gmv)
-                  if gsli.is_s { rs = gsli.ss; rn = gsli.sl }
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        mut isas := false
+        match st {
+          Stmt::Assign(ans, anl, v, nx) => {
+            isas = true
+            if streq(src, ans, anl, ns2, nl2) {
+              lt := local_type_span(src, ans, anl)
+              if lt.n != 0 { rs = lt.s; rn = lt.n }
+              else {
+                ## an INFERRED struct local (`p := Pt(…)`, no `: T`) — resolve its type from the RHS
+                ## `StructLit`'s name span, the SAME span `expr_type_span` (the emit side) reads, so the
+                ## collected `print_one__Pt` instance and the call site agree. Enables `print("{}", p)` on
+                ## an inferred struct var (else the call referenced an uncollected `print_one__Pt`).
+                sli := struct_lit_info(v)
+                eli := enum_lit_info(v)
+                crc := call_rhs_concrete_enum_span(v, decls, src, a)
+                if sli.is_s { rs = sli.ss; rn = sli.sl }
+                else if crc.n != 0 {
+                  ## an INFERRED enum local bound from a CONCRETE-return CALL (`m := parse(s)`, `parse ->
+                  ## Result(Config, Err)`): type `m` as the callee's return enum, so `m.unwrap()` / `m.ok()`
+                  ## (implicit-UFCS receiver-keyed) recover their type-args from `m`. NEUTRAL for src/: at HEAD
+                  ## a call-RHS receiver was untracked, so a `m := call(); m.<multi-tparam-method>()` shape
+                  ## fail-loud'd (never built) — enabling it is purely additive.
+                  rs = crc.s; rn = crc.n
+                }
+                else if eli.is_e and enum_decl_of(decls, src, eli.es, eli.el) >= 0 {
+                  ## an INFERRED enum local (`a := E.A(5)`, no `: T`) — resolve its type from the RHS
+                  ## `EnumLit`'s type-name span (`enum_decl_of >= 0` confirms a genuine enum ctor, not a
+                  ## UFCS `recv.method(…)` which also parses as `EnumLit`). Without this a bare comparison
+                  ## `a == b` over payload-carrying enum LOCALS registered NO `base::derive::eq__<E>` instance
+                  ## in the mono pre-pass (the struct-literal branch alone matched), so the emit side's
+                  ## synthesized `eq` call linked to an UNDEFINED `base__derive__eq__<E>`. The enum dual of the
+                  ## struct-literal inference above.
+                  rs = eli.es; rn = eli.el
+                }
+                else {
+                  ## a SNAPSHOT copy `p := S` of a struct GLOBAL — `p` is a proper down-growing local, so
+                  ## resolve its type from the global's struct name (no layout issue, unlike passing the
+                  ## global itself by-ref). The supported way to `print` a global struct: copy it first.
+                  rvn := var_name_span(v)
+                  if rvn.n != 0 {
+                    gmv := mut_global_value(decls, src, rvn.s, rvn.n)
+                    if unchecked bitcast(usize, gmv) != 0 {
+                      gsli := struct_lit_info(gmv)
+                      if gsli.is_s { rs = gsli.ss; rn = gsli.sl }
+                    }
+                  }
                 }
               }
             }
+            s = nx
           }
+          Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+            | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+            | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+            | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
         }
-        s = nx
+        if isas == false { s = stmt_next(sq) }
       }
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      None => { break }
     }
-    if isas == false { s = unchecked bitcast(ptr(mut Stmt), lower_stmt_nx(unchecked bitcast(usize, s), a)) }
   }
   ## not a block-local — a module GLOBAL `{}`-hole (`print("{}", S)`, S a mut STRUCT global): resolve
   ## its type from the global's `StructLit` name. Safe now that `emit_arg` MATERIALIZES a global struct
@@ -161,7 +168,7 @@ pub block_decl_type := fn(head : ptr(mut Stmt), ns2 : usize, nl2 : usize, src : 
 ## indexed fixed-array reads use the declared element type, and calls use their declared return type.
 ## Keeping this and the emit-side fallback on one helper prevents an emitted `print_one__T` label from
 ## outrunning the mono pre-pass (the original failure for `xs[i]` and `f(xs[i])`).
-collect_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : ptr(mut Stmt), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
+collect_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : Option(ptr(mut Stmt)), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
   poi := decl_by_lit_name(decls, src, "print_one")
   if poi < 0 { return }
   fmt := arg_expr_at(args_head, 0, a)
@@ -240,7 +247,7 @@ collect_agg_lit_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a
 collect_operand_type_unknown := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) -> bool {
   vn := var_name_span(e)
   if vn.n == 0 { return false }
-  if COLLECT_BODY != 0 {
+  if stmt_any(COLLECT_BODY) {
     ltp := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { return false }
   }
@@ -256,7 +263,7 @@ collect_agg_operand_type := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
   mut ts := 0
   mut tl := 0
-  if COLLECT_BODY != 0 {
+  if stmt_any(COLLECT_BODY) {
     ltp := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
   }
@@ -304,7 +311,7 @@ pub recv_full_pre := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), penv
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
   mut ts := 0
   mut tl := 0
-  if COLLECT_BODY != 0 {
+  if stmt_any(COLLECT_BODY) {
     ltp := block_decl_type(COLLECT_BODY, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
   }
@@ -323,7 +330,7 @@ pub recv_full_emit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a :
   if vn.n == 0 { return CSpan(s = 0, n = 0) }
   mut ts := 0
   mut tl := 0
-  if EMIT_BODY != 0 {
+  if stmt_any(EMIT_BODY) {
     ltp := block_decl_type(EMIT_BODY, vn.s, vn.n, src, decls, a)
     if ltp.n != 0 { ts = ltp.s; tl = ltp.n }
   }
@@ -570,116 +577,121 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
 
 ## Walk a body statement list, recording every generic-fn call's instantiation (recursing
 ## into nested branch/arm/loop statement lists). Mirrors `emit_rodata_stmts`.
-pub collect_insts_stmts := fn(head : ptr(mut Stmt), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) {
-  mut s := head
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ns, nl, v, nx) => { collect_insts_expr(v, insts, decls, src, a, penv); s = nx }
-      Stmt::While(c, b, nx) => {
-        collect_insts_expr(c, insts, decls, src, a, penv)
-        collect_insts_stmts(b, insts, decls, src, a, penv)
-        s = nx
-      }
-      Stmt::Loop(b, nx) => {
-        collect_insts_stmts(b, insts, decls, src, a, penv)
-        s = nx
-      }
-      Stmt::Unchecked(b, nx) => {
-        collect_insts_stmts(b, insts, decls, src, a, penv)
-        s = nx
-      }
-      Stmt::AllocWith(ae, b, nx) => {
-        ## Descend into the `alloc::with(A) { … }` body with COLLECT_BODY pointing at THAT body, so an
-        ## implicit generic call inside it (`v.push(i)`, `v`/`i` declared as flat siblings of the enclosing
-        ## unchecked/while) can resolve its type argument from those locals via `block_decl_type` (which is a
-        ## FLAT scan of COLLECT_BODY). The fn-level COLLECT_BODY doesn't see them (they're nested). Restore
-        ## after so siblings of the AllocWith keep the fn scope. src has no `alloc::with` → dormant → neutral.
-        saved_cb := COLLECT_BODY
-        COLLECT_BODY = unchecked bitcast(usize, b)
-        collect_insts_stmts(b, insts, decls, src, a, penv)
-        COLLECT_BODY = saved_cb
-        s = nx
-      }
-      Stmt::Break(_bv, _bd, nx) => { s = nx }
-      Stmt::Continue(_cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => {
-        ## a `{}`-template variadic `print` → collect a `print_one(<argtype>)` per hole (the arg's
-        ## type resolved from its declaration in THIS block `head`).
-        ecp := call_parts(e)
-        if ecp.is_call and variadic_print_target(decls, src, ecp.cs, ecp.cl, ecp.na, 0, 0, a) >= 0 {
-          collect_variadic_print(ecp.ah, head, insts, decls, src, a)
-        }
-        collect_insts_expr(e, insts, decls, src, a, penv)
-        s = nx
-      }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { collect_insts_expr(fv, insts, decls, src, a, penv); s = nx }
-      Stmt::FieldPathAssign(pl, fpv, nx) => { collect_insts_expr(fpv, insts, decls, src, a, penv); s = nx }
-      Stmt::Return(rv, nx) => { collect_insts_expr(rv, insts, decls, src, a, penv); s = nx }
-      Stmt::If(c, th, el, nx) => {
-        collect_insts_expr(c, insts, decls, src, a, penv)
-        collect_insts_stmts(th, insts, decls, src, a, penv)
-        collect_insts_stmts(el, insts, decls, src, a, penv)
-        s = nx
-      }
-      Stmt::Match(sc, ah, nx) => {
-        collect_insts_expr(sc, insts, decls, src, a, penv)
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              collect_insts_stmts(am.body_stmts, insts, decls, src, a, penv)
-              arm = am.next
+pub collect_insts_stmts := fn(head : Option(ptr(mut Stmt)), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, penv : Option(ptr(mut Param))) {
+  mut s : Option(ptr(mut Stmt)) = head
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ns, nl, v, nx) => { collect_insts_expr(v, insts, decls, src, a, penv); s = nx }
+          Stmt::While(c, b, nx) => {
+            collect_insts_expr(c, insts, decls, src, a, penv)
+            collect_insts_stmts(b, insts, decls, src, a, penv)
+            s = nx
+          }
+          Stmt::Loop(b, nx) => {
+            collect_insts_stmts(b, insts, decls, src, a, penv)
+            s = nx
+          }
+          Stmt::Unchecked(b, nx) => {
+            collect_insts_stmts(b, insts, decls, src, a, penv)
+            s = nx
+          }
+          Stmt::AllocWith(ae, b, nx) => {
+            ## Descend into the `alloc::with(A) { … }` body with COLLECT_BODY pointing at THAT body, so an
+            ## implicit generic call inside it (`v.push(i)`, `v`/`i` declared as flat siblings of the enclosing
+            ## unchecked/while) can resolve its type argument from those locals via `block_decl_type` (which is a
+            ## FLAT scan of COLLECT_BODY). The fn-level COLLECT_BODY doesn't see them (they're nested). Restore
+            ## after so siblings of the AllocWith keep the fn scope. src has no `alloc::with` → dormant → neutral.
+            saved_cb := COLLECT_BODY
+            COLLECT_BODY = b
+            collect_insts_stmts(b, insts, decls, src, a, penv)
+            COLLECT_BODY = saved_cb
+            s = nx
+          }
+          Stmt::Break(_bv, _bd, nx) => { s = nx }
+          Stmt::Continue(_cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => {
+            ## a `{}`-template variadic `print` → collect a `print_one(<argtype>)` per hole (the arg's
+            ## type resolved from its declaration in THIS block `head`).
+            ecp := call_parts(e)
+            if ecp.is_call and variadic_print_target(decls, src, ecp.cs, ecp.cl, ecp.na, 0, 0, a) >= 0 {
+              collect_variadic_print(ecp.ah, head, insts, decls, src, a)
             }
-            None => { break }
+            collect_insts_expr(e, insts, decls, src, a, penv)
+            s = nx
+          }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { collect_insts_expr(fv, insts, decls, src, a, penv); s = nx }
+          Stmt::FieldPathAssign(pl, fpv, nx) => { collect_insts_expr(fpv, insts, decls, src, a, penv); s = nx }
+          Stmt::Return(rv, nx) => { collect_insts_expr(rv, insts, decls, src, a, penv); s = nx }
+          Stmt::If(c, th, el, nx) => {
+            collect_insts_expr(c, insts, decls, src, a, penv)
+            collect_insts_stmts(th, insts, decls, src, a, penv)
+            collect_insts_stmts(el, insts, decls, src, a, penv)
+            s = nx
+          }
+          Stmt::Match(sc, ah, nx) => {
+            collect_insts_expr(sc, insts, decls, src, a, penv)
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  collect_insts_stmts(am.body_stmts, insts, decls, src, a, penv)
+                  arm = am.next
+                }
+                None => { break }
+              }
+            }
+            s = nx
+          }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
+            collect_insts_expr(flo, insts, decls, src, a, penv)
+            if unchecked bitcast(usize, fhi) != 0 { collect_insts_expr(fhi, insts, decls, src, a, penv) }   ## fhi==0 = for-over-iterable
+            collect_insts_stmts(fb, insts, decls, src, a, penv)
+            s = nx
+          }
+          Stmt::CompIf(ccond, cthen, celse, nx) => {
+            collect_insts_stmts(cthen, insts, decls, src, a, penv)
+            collect_insts_stmts(celse, insts, decls, src, a, penv)
+            s = nx
+          }
+          ## SKIP the comptime-for body here — collecting it with `f.type` UNRESOLVED would seed a bogus
+          ## tagless `<gi>__` instance. The mono worklist instantiates the per-field-type instances instead
+          ## (with the concrete field type), so the emit-side unroll finds them defined.
+          Stmt::CompFor(cvs, cvl, civ, cb, nx) => { s = nx }
+          ## SKIP the range body here too (like CompFor): a `comptime for i in 0 .. typeinfo(T).n` body
+          ## (derive's tuple/array fold) references the loop var + `v.(i)` with `i` UNRESOLVED, so collecting
+          ## it would seed bogus tagless instances → a mono-worklist explosion. The emit-side unroll (with
+          ## `i` a concrete constant) collects the real per-iteration instances; a range body with literal
+          ## bounds + generic calls is rare and its instances are reached transitively.
+          Stmt::CompForRange(crvs, crvl, crlo, crhi, crb, nx) => { s = nx }
+          Stmt::CompMatch(cmsc, cmah, nx) => {
+            mut car : Option(ptr(mut Arm)) = cmah
+            loop { match car { Some(carq) => { cam := deref(arm_p(carq)); collect_insts_stmts(cam.body_stmts, insts, decls, src, a, penv); car = cam.next }; None => { break } } }
+            s = nx
+          }
+          Stmt::DerefAssign(ptr, val, nx) => {
+            collect_insts_expr(ptr, insts, decls, src, a, penv)
+            collect_insts_expr(val, insts, decls, src, a, penv)
+            s = nx
+          }
+          Stmt::IndexAssign(ib, ii, iv, nx) => {
+            collect_insts_expr(ib, insts, decls, src, a, penv)
+            collect_insts_expr(ii, insts, decls, src, a, penv)
+            collect_insts_expr(iv, insts, decls, src, a, penv)
+            s = nx
+          }
+          Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
+            collect_insts_expr(fia, insts, decls, src, a, penv)
+            collect_insts_expr(fii, insts, decls, src, a, penv)
+            collect_insts_expr(fiv, insts, decls, src, a, penv)
+            s = nx
           }
         }
-        s = nx
       }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => {
-        collect_insts_expr(flo, insts, decls, src, a, penv)
-        if unchecked bitcast(usize, fhi) != 0 { collect_insts_expr(fhi, insts, decls, src, a, penv) }   ## fhi==0 = for-over-iterable
-        collect_insts_stmts(fb, insts, decls, src, a, penv)
-        s = nx
-      }
-      Stmt::CompIf(ccond, cthen, celse, nx) => {
-        collect_insts_stmts(cthen, insts, decls, src, a, penv)
-        collect_insts_stmts(celse, insts, decls, src, a, penv)
-        s = nx
-      }
-      ## SKIP the comptime-for body here — collecting it with `f.type` UNRESOLVED would seed a bogus
-      ## tagless `<gi>__` instance. The mono worklist instantiates the per-field-type instances instead
-      ## (with the concrete field type), so the emit-side unroll finds them defined.
-      Stmt::CompFor(cvs, cvl, civ, cb, nx) => { s = nx }
-      ## SKIP the range body here too (like CompFor): a `comptime for i in 0 .. typeinfo(T).n` body
-      ## (derive's tuple/array fold) references the loop var + `v.(i)` with `i` UNRESOLVED, so collecting
-      ## it would seed bogus tagless instances → a mono-worklist explosion. The emit-side unroll (with
-      ## `i` a concrete constant) collects the real per-iteration instances; a range body with literal
-      ## bounds + generic calls is rare and its instances are reached transitively.
-      Stmt::CompForRange(crvs, crvl, crlo, crhi, crb, nx) => { s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => {
-        mut car : Option(ptr(mut Arm)) = cmah
-        loop { match car { Some(carq) => { cam := deref(arm_p(carq)); collect_insts_stmts(cam.body_stmts, insts, decls, src, a, penv); car = cam.next }; None => { break } } }
-        s = nx
-      }
-      Stmt::DerefAssign(ptr, val, nx) => {
-        collect_insts_expr(ptr, insts, decls, src, a, penv)
-        collect_insts_expr(val, insts, decls, src, a, penv)
-        s = nx
-      }
-      Stmt::IndexAssign(ib, ii, iv, nx) => {
-        collect_insts_expr(ib, insts, decls, src, a, penv)
-        collect_insts_expr(ii, insts, decls, src, a, penv)
-        collect_insts_expr(iv, insts, decls, src, a, penv)
-        s = nx
-      }
-      Stmt::IndexFieldAssign(fia, fii, ifs, ifl, fiv, nx) => {
-        collect_insts_expr(fia, insts, decls, src, a, penv)
-        collect_insts_expr(fii, insts, decls, src, a, penv)
-        collect_insts_expr(fiv, insts, decls, src, a, penv)
-        s = nx
-      }
+      None => { break }
     }
   }
 }

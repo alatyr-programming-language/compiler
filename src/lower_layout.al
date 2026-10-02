@@ -43,37 +43,43 @@ streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -
 ## callers that need nested-scope discovery use their own recursive slot/handle walkers. Keeping
 ## this one `Stmt` dispatch here prevents backend-local type recovery from growing five subtly
 ## different variant lists (notably, `IndexAssign` must not hide a declaration that follows it).
-pub local_decl_assign := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize) -> ptr(mut Stmt) {
-  mut s := head
-  mut r := unchecked bitcast(ptr(mut Stmt), 0)
+pub local_decl_assign := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize) -> Option(ptr(mut Stmt)) {
+  mut s : Option(ptr(mut Stmt)) = head
+  mut r : Option(ptr(mut Stmt)) = Option.None
   mut done := false
-  while s != 0 and (not done) {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) { r = s ; done = true }
-        s = nx
+  loop {
+    match s {
+      Some(sq) => {
+        if not ((not done)) { break }
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ans, anl, v, nx) => {
+            if streq(src, ans, anl, ns, nl) { r = Option.Some(sq) ; done = true }
+            s = nx
+          }
+          Stmt::While(c, b, nx) => { s = nx }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::If(c, th, el, nx) => { s = nx }
+          Stmt::Match(c, ah, nx) => { s = nx }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
+          Stmt::DerefAssign(dpe, dval, nx) => { s = nx }
+          Stmt::IndexAssign(iab, iai, iav, nx) => { s = nx }
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, nx) => { s = nx }
+          Stmt::Loop(lb, nx) => { s = nx }
+          Stmt::Break(bv, bd, nx) => { s = nx }
+          Stmt::Continue(cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
+          Stmt::CompIf(cc, th, el, nx) => { s = nx }
+          Stmt::CompFor(cvs, cvl, cisv, cb, nx) => { s = nx }
+          Stmt::CompMatch(cm, ah, nx) => { s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
+          Stmt::Unchecked(ub, nx) => { s = nx }
+          Stmt::AllocWith(aa, ab, nx) => { s = nx }
+        }
       }
-      Stmt::While(c, b, nx) => { s = nx }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::If(c, th, el, nx) => { s = nx }
-      Stmt::Match(c, ah, nx) => { s = nx }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { s = nx }
-      Stmt::DerefAssign(dpe, dval, nx) => { s = nx }
-      Stmt::IndexAssign(iab, iai, iav, nx) => { s = nx }
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, nx) => { s = nx }
-      Stmt::Loop(lb, nx) => { s = nx }
-      Stmt::Break(bv, bd, nx) => { s = nx }
-      Stmt::Continue(cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
-      Stmt::CompIf(cc, th, el, nx) => { s = nx }
-      Stmt::CompFor(cvs, cvl, cisv, cb, nx) => { s = nx }
-      Stmt::CompMatch(cm, ah, nx) => { s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { s = nx }
-      Stmt::Unchecked(ub, nx) => { s = nx }
-      Stmt::AllocWith(aa, ab, nx) => { s = nx }
+      None => { break }
     }
   }
   r
@@ -2441,18 +2447,21 @@ pub bitcast_target_is_pointer := fn(src : ptr(u8), ts : usize, tl : usize) -> bo
 
 ## The `:=` RHS value of the local named `[ns, nl)` among `head`'s TOP-LEVEL statements, or null. A
 ## local declared inside a nested block is not found, which answers "unknown" and keeps the word move.
-local_assign_value := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize) -> ptr(Expr) {
-  d := local_decl_assign(head, src, ns, nl)
+local_assign_value := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize) -> ptr(Expr) {
+  d : Option(ptr(mut Stmt)) = local_decl_assign(head, src, ns, nl)
   mut r := unchecked bitcast(ptr(Expr), 0)
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => { r = v }
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => { r = v }
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
+      }
     }
+    None => {}
   }
   r
 }
@@ -2478,7 +2487,7 @@ bitcast_ptr_target_here := fn(p : ptr(Expr), src : ptr(u8)) -> LSpan {
 ## The same span, also seeing through a LOCAL bound from such a bitcast (`p8 := bitcast(ptr(bits8), a)`
 ## then `deref(p8)`). The local's RHS is resolved by `bitcast_ptr_target_here`, NOT by this function,
 ## so a `q := p` chain terminates after one hop instead of walking bindings recursively.
-bitcast_ptr_target_of := fn(p : ptr(Expr), head : ptr(mut Stmt), src : ptr(u8)) -> LSpan {
+bitcast_ptr_target_of := fn(p : ptr(Expr), head : Option(ptr(mut Stmt)), src : ptr(u8)) -> LSpan {
   direct := bitcast_ptr_target_here(p, src)
   if direct.n != 0 { return direct }
   mut vs : usize = 0
@@ -2498,7 +2507,7 @@ bitcast_ptr_target_of := fn(p : ptr(Expr), head : ptr(mut Stmt), src : ptr(u8)) 
 
 ## The pointee BYTE WIDTH (1 / 2 / 4 / 8) a `deref` LOAD/STORE through pointer expression `p` must
 ## move. 8 whenever the pointee is word-sized, an aggregate, or unrecoverable — the unchanged word move.
-pub deref_bitcast_pointee_bytes := fn(p : ptr(Expr), head : ptr(mut Stmt), src : ptr(u8)) -> usize {
+pub deref_bitcast_pointee_bytes := fn(p : ptr(Expr), head : Option(ptr(mut Stmt)), src : ptr(u8)) -> usize {
   t := bitcast_ptr_target_of(p, head, src)
   if t.n == 0 { return 8 }
   ps := ptr_target_pointee_s(src, t.s, t.n)
@@ -2509,7 +2518,7 @@ pub deref_bitcast_pointee_bytes := fn(p : ptr(Expr), head : ptr(mut Stmt), src :
 
 ## Does that pointee present a SIGNED integer? Only the `iN` family; every other narrow pointee
 ## (`uN`, `bitsN`, `bool`, `char`, `f32`) is a raw low-N-byte pattern whose word is the zero-extension.
-pub deref_bitcast_pointee_signed := fn(p : ptr(Expr), head : ptr(mut Stmt), src : ptr(u8)) -> bool {
+pub deref_bitcast_pointee_signed := fn(p : ptr(Expr), head : Option(ptr(mut Stmt)), src : ptr(u8)) -> bool {
   t := bitcast_ptr_target_of(p, head, src)
   if t.n == 0 { return false }
   ps := ptr_target_pointee_s(src, t.s, t.n)
@@ -2606,49 +2615,55 @@ pub ann_scan_narrow := fn(src : ptr(u8), pos : usize) -> str {
 ## The SUB-WORD integer ELEMENT name of a read `xs[i]` whose base is a flat local annotated with a
 ## fixed array `[uN; K]` / `[iN; K]`, or "". Any other base (a param, a global, a field, an
 ## unannotated array literal) answers "" — the native default the twins already had.
-pub index_read_narrow := fn(e : ptr(Expr), head : ptr(mut Stmt), src : ptr(u8)) -> str {
+pub index_read_narrow := fn(e : ptr(Expr), head : Option(ptr(mut Stmt)), src : ptr(u8)) -> str {
   if not ex_is_index(e) { return "" }
   b := ex_index_base(e)
   bn := ex_var_nl(b)
   if bn == 0 { return "" }
-  d := local_decl_assign(head, src, ex_var_ns(b), bn)
+  d : Option(ptr(mut Stmt)) = local_decl_assign(head, src, ex_var_ns(b), bn)
   mut r := ""
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        sp := ann_scan_span(src, ans + anl)
-        if sp.n != 0 {
-          es := arr_field_elem_span(src, sp.s, sp.n)
-          if es.n != 0 { r = scalar_name_narrow(src, es.s, es.n) }
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => {
+          sp := ann_scan_span(src, ans + anl)
+          if sp.n != 0 {
+            es := arr_field_elem_span(src, sp.s, sp.n)
+            if es.n != 0 { r = scalar_name_narrow(src, es.s, es.n) }
+          }
         }
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
       }
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
+    None => {}
   }
   r
 }
 
 ## The SUB-WORD integer name of the flat local `[ns, nl)`: its annotation's (`x : u8 = …`), else —
 ## for an UNANNOTATED binding of an index read, `x := xs[i]` — the element's. "" otherwise.
-pub local_narrow := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize) -> str {
-  d := local_decl_assign(head, src, ns, nl)
+pub local_narrow := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize) -> str {
+  d : Option(ptr(mut Stmt)) = local_decl_assign(head, src, ns, nl)
   mut r := ""
-  if unchecked bitcast(usize, d) != 0 {
-    st := deref(stmt_p(Stmt, d))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        r = ann_scan_narrow(src, ans + anl)
-        if r == "" and ann_scan_span(src, ans + anl).n == 0 { r = index_read_narrow(v, head, src) }
+  match d {
+    Some(dq) => {
+      st := deref(stmt_p(Stmt, dq))
+      match st {
+        Stmt::Assign(ans, anl, v, nx) => {
+          r = ann_scan_narrow(src, ans + anl)
+          if r == "" and ann_scan_span(src, ans + anl).n == 0 { r = index_read_narrow(v, head, src) }
+        }
+        Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
+          | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
+          | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
+          | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
       }
-      Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match | Stmt::For
-        | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign | Stmt::FieldPathAssign
-        | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt | Stmt::CompIf | Stmt::CompFor
-        | Stmt::CompMatch | Stmt::CompForRange | Stmt::Unchecked | Stmt::AllocWith => {}
     }
+    None => {}
   }
   r
 }
@@ -2732,71 +2747,76 @@ pub ann_scan_native_signed := fn(src : ptr(u8), pos : usize) -> bool {
 
 ## Does ANY declaration of the local `[ns, nl)` in the statement TREE rooted at `head` — nested
 ## blocks included — annotate it `i64`/`isize`? Sticky-true; false means "not proven", never "no".
-pub local_ann_native_signed_deep := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : usize, dep : i64) -> bool {
+pub local_ann_native_signed_deep := fn(head : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, nl : usize, dep : i64) -> bool {
   if dep > 64 { return false }
-  mut s := head
+  mut s : Option(ptr(mut Stmt)) = head
   mut r := false
-  while s != 0 {
-    st := deref(stmt_p(Stmt, s))
-    match st {
-      Stmt::Assign(ans, anl, v, nx) => {
-        if streq(src, ans, anl, ns, nl) { if ann_scan_native_signed(src, ans + anl) { r = true } }
-        s = nx
-      }
-      Stmt::While(c, b, nx) => { if local_ann_native_signed_deep(b, src, ns, nl, dep + 1) { r = true } ; s = nx }
-      Stmt::Loop(lb, nx) => { if local_ann_native_signed_deep(lb, src, ns, nl, dep + 1) { r = true } ; s = nx }
-      Stmt::Unchecked(ub, nx) => { if local_ann_native_signed_deep(ub, src, ns, nl, dep + 1) { r = true } ; s = nx }
-      Stmt::AllocWith(aa, ab, nx) => { if local_ann_native_signed_deep(ab, src, ns, nl, dep + 1) { r = true } ; s = nx }
-      Stmt::If(c, th, el, nx) => {
-        if local_ann_native_signed_deep(th, src, ns, nl, dep + 1) { r = true }
-        if local_ann_native_signed_deep(el, src, ns, nl, dep + 1) { r = true }
-        s = nx
-      }
-      Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if local_ann_native_signed_deep(fb, src, ns, nl, dep + 1) { r = true } ; s = nx }
-      Stmt::Match(c, ah, nx) => {
-        mut arm : Option(ptr(mut Arm)) = ah
-        loop {
-          match arm {
-            Some(armq) => {
-              am := deref(arm_p(armq))
-              if local_ann_native_signed_deep(am.body_stmts, src, ns, nl, dep + 1) { r = true }
-              arm = am.next
-            }
-            None => { break }
+  loop {
+    match s {
+      Some(sq) => {
+        st := deref(stmt_p(Stmt, sq))
+        match st {
+          Stmt::Assign(ans, anl, v, nx) => {
+            if streq(src, ans, anl, ns, nl) { if ann_scan_native_signed(src, ans + anl) { r = true } }
+            s = nx
           }
-        }
-        s = nx
-      }
-      Stmt::CompIf(cc, ct, ce, nx) => {
-        if local_ann_native_signed_deep(ct, src, ns, nl, dep + 1) { r = true }
-        if local_ann_native_signed_deep(ce, src, ns, nl, dep + 1) { r = true }
-        s = nx
-      }
-      Stmt::CompFor(cvs, cvl, cisv, cb, nx) => { if local_ann_native_signed_deep(cb, src, ns, nl, dep + 1) { r = true } ; s = nx }
-      Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if local_ann_native_signed_deep(rb, src, ns, nl, dep + 1) { r = true } ; s = nx }
-      Stmt::CompMatch(cm, ah, nx) => {
-        mut car : Option(ptr(mut Arm)) = ah
-        loop {
-          match car {
-            Some(carq) => {
-              cam := deref(arm_p(carq))
-              if local_ann_native_signed_deep(cam.body_stmts, src, ns, nl, dep + 1) { r = true }
-              car = cam.next
-            }
-            None => { break }
+          Stmt::While(c, b, nx) => { if local_ann_native_signed_deep(b, src, ns, nl, dep + 1) { r = true } ; s = nx }
+          Stmt::Loop(lb, nx) => { if local_ann_native_signed_deep(lb, src, ns, nl, dep + 1) { r = true } ; s = nx }
+          Stmt::Unchecked(ub, nx) => { if local_ann_native_signed_deep(ub, src, ns, nl, dep + 1) { r = true } ; s = nx }
+          Stmt::AllocWith(aa, ab, nx) => { if local_ann_native_signed_deep(ab, src, ns, nl, dep + 1) { r = true } ; s = nx }
+          Stmt::If(c, th, el, nx) => {
+            if local_ann_native_signed_deep(th, src, ns, nl, dep + 1) { r = true }
+            if local_ann_native_signed_deep(el, src, ns, nl, dep + 1) { r = true }
+            s = nx
           }
+          Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if local_ann_native_signed_deep(fb, src, ns, nl, dep + 1) { r = true } ; s = nx }
+          Stmt::Match(c, ah, nx) => {
+            mut arm : Option(ptr(mut Arm)) = ah
+            loop {
+              match arm {
+                Some(armq) => {
+                  am := deref(arm_p(armq))
+                  if local_ann_native_signed_deep(am.body_stmts, src, ns, nl, dep + 1) { r = true }
+                  arm = am.next
+                }
+                None => { break }
+              }
+            }
+            s = nx
+          }
+          Stmt::CompIf(cc, ct, ce, nx) => {
+            if local_ann_native_signed_deep(ct, src, ns, nl, dep + 1) { r = true }
+            if local_ann_native_signed_deep(ce, src, ns, nl, dep + 1) { r = true }
+            s = nx
+          }
+          Stmt::CompFor(cvs, cvl, cisv, cb, nx) => { if local_ann_native_signed_deep(cb, src, ns, nl, dep + 1) { r = true } ; s = nx }
+          Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if local_ann_native_signed_deep(rb, src, ns, nl, dep + 1) { r = true } ; s = nx }
+          Stmt::CompMatch(cm, ah, nx) => {
+            mut car : Option(ptr(mut Arm)) = ah
+            loop {
+              match car {
+                Some(carq) => {
+                  cam := deref(arm_p(carq))
+                  if local_ann_native_signed_deep(cam.body_stmts, src, ns, nl, dep + 1) { r = true }
+                  car = cam.next
+                }
+                None => { break }
+              }
+            }
+            s = nx
+          }
+          Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
+          Stmt::Return(rv, nx) => { s = nx }
+          Stmt::DerefAssign(dpe, dval, nx) => { s = nx }
+          Stmt::IndexAssign(iab, iai, iav, nx) => { s = nx }
+          Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, nx) => { s = nx }
+          Stmt::FieldPathAssign(fpp, fpv, nx) => { s = nx }
+          Stmt::Break(bv, bd, nx) => { s = nx }
+          Stmt::Continue(cd, nx) => { s = nx }
+          Stmt::ExprStmt(e, nx) => { s = nx }
         }
-        s = nx
       }
-      Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { s = nx }
-      Stmt::Return(rv, nx) => { s = nx }
-      Stmt::DerefAssign(dpe, dval, nx) => { s = nx }
-      Stmt::IndexAssign(iab, iai, iav, nx) => { s = nx }
-      Stmt::IndexFieldAssign(ifb, ifi, iffs, iffl, ifv, nx) => { s = nx }
-      Stmt::FieldPathAssign(fpp, fpv, nx) => { s = nx }
-      Stmt::Break(bv, bd, nx) => { s = nx }
-      Stmt::Continue(cd, nx) => { s = nx }
-      Stmt::ExprStmt(e, nx) => { s = nx }
+      None => { break }
     }
   }
   r
@@ -3622,7 +3642,7 @@ pub apply_when_guards := fn(decls : ptr(rt::Vec), src : ptr(u8), arch : str) {
         gdp : ptr(mut Decl) = unchecked bitcast(ptr(mut Decl), gh)
         deref(gdp) = Decl(name_start = dg.name_start, name_len = 0, value = dg.value,
           is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None,
-          body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0,
+          body_stmts = Option.None, fields_head = Option.None, ret_ts = 0, ret_tl = 0,
           mod_start = dg.mod_start, mod_len = dg.mod_len, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       }
     }
