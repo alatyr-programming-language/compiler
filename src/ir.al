@@ -2618,8 +2618,11 @@ pair_span := fn(l : ptr(Expr), r : ptr(Expr)) -> Option(u64) {
 }
 ## The source line holding the pair (` |`, the line, a newline).
 put_line := fn(in out sb : rt::StrBuf, l : ptr(Expr), r : ptr(Expr), src : ptr(u8)) {
+  put_line_at(sb, pair_span(l, r), src)
+}
+## The source line holding offset `sp` (` |`, the line, a newline); just ` |` and the newline without one.
+put_line_at := fn(in out sb : rt::StrBuf, sp : Option(u64), src : ptr(u8)) {
   put(sb, " |")
-  sp : Option(u64) = pair_span(l, r)
   match sp {
     Some(s) => {
       su := usize(s)
@@ -2669,6 +2672,25 @@ mut SIGN_LOST : usize = 0
 pub sign_row := fn(who : str, op : u8, l : ptr(Expr), r : ptr(Expr), src : ptr(u8), signed : bool) {
   if not sign_open() { return }
   if signed { sign_emit(who, op, l, r, src, "s") } else { sign_emit(who, op, l, r, src, "u") }
+}
+
+## docs/ir.md §3.8.6 — what sema's RECORD pass over a library declaration found that a check of the
+## same body as user code would refuse. The verdict stays TRUST (a library body never refuses the
+## program), so this row is the only place the finding surfaces; it is never dropped.
+##   #semalib refused <module>::<decl> |<the declaration's line>   check_decl refused the body
+##   #semalib head <module>::<decl> |<the line of the head>        a `::` head in it resolves to nothing (#580)
+pub LibFinding := enum { LfRefused, LfHead }
+pub sign_lib_row := fn(what : LibFinding, ms : usize, ml : usize, ns : usize, nl : usize, at : usize, src : ptr(u8)) {
+  if not sign_open() { return }
+  mut sb := sign_buf()
+  match what { LfRefused => { put(sb, "#semalib refused ") }; LfHead => { put(sb, "#semalib head ") } }
+  put(sb, str_at((src + ms), ml))
+  put(sb, "::")
+  put(sb, str_at((src + ns), nl))
+  put_line_at(sb, Option(u64).Some(u64(at)), src)
+  rowlen : usize = sb.len
+  w := rt::sb_flush(sb, sign_fd())
+  if w != isize(rowlen) { SIGN_LOST = SIGN_LOST + 1 }
 }
 
 ## Sema's answer for a site: the signedness of the first operand whose recorded type is an integer.
