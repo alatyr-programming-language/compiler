@@ -122,6 +122,14 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.12 — 2026-10-02
+
+- **Seed promotion; the bootstrap traps an unrepresentable signedness change.** The frozen
+  `seed/alatyr` advances from 0.2.11 to 0.2.12 so it carries #881's fix. Seed to Stage1 adds exactly
+  1333 sign guards (5332 lines) in the compiler's own functions, one per checked conversion of
+  a runtime value that changes signedness; none fires in the gate. Stage1, Stage2 and Stage3 emit
+  identical GAS (1 527 489 lines) and Stage2 == Stage3 in the binary, all answering `alatyr 0.2.12`;
+  `seed/VERSION` records the hashes.
 ## 0.2.11 — 2026-10-02
 
 - **Seed promotion; the bootstrap traps an out-of-range checked narrowing.** The frozen `seed/alatyr`
