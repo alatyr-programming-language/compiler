@@ -154,21 +154,29 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
     ## `nargs`. (Distinct binding names — `gh`/`gt`/… — would collide with sibling-arm locals
     ## under the match's one name scope, so the `Arg`-list rebuild names are unique here.)
     Expr::Call(cs, cl, nargs, args_head) => {
-      mut ghead := 0
-      mut gtail := 0
-      mut garm := args_head
-      while garm != 0 {
-        gold := deref(arg_p(garm))
-        gfe := fold(gold.e)
-        gnew := newgarg(a, Arg(e = gfe, next = unchecked bitcast(ptr(mut Arg), 0)))
-        if ghead == 0 { ghead = unchecked bitcast(usize, gnew) } else {
-          gp := arg_p(gtail)
-          gprev := deref(gp)
-          gupd := Arg(e = gprev.e, next = gnew)
-          deref(gp) = gupd
+      mut ghead : Option(ptr(mut Arg)) = Option.None
+      mut gtail : Option(ptr(mut Arg)) = Option.None
+      mut garm : Option(ptr(mut Arg)) = args_head
+      loop {
+        match garm {
+          Some(garmq) => {
+            gold := deref(arg_p(garmq))
+            gfe := fold(gold.e)
+            gnew := newgarg(a, Arg(e = gfe, next = Option.None))
+            match gtail {
+              Some(gtail0) => {
+                gp := arg_p(gtail0)
+                gprev := deref(gp)
+                gupd := Arg(e = gprev.e, next = Option.Some(gnew))
+                deref(gp) = gupd
+              }
+              None => { ghead = Option.Some(gnew) }
+            }
+            gtail = Option.Some(gnew)
+            garm = gold.next
+          }
+          None => { break }
         }
-        gtail = unchecked bitcast(usize, gnew)
-        garm = gold.next
       }
       newnode(Expr.Call(cs, cl, nargs, ghead))
     }
@@ -178,21 +186,29 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
     ## — avoid colliding with locals in sibling arms; match arms share one name scope for the
     ## definite-assignment check.)
     Expr::StructLit(scs, scl, snf, sfhead) => {
-      mut sfh := 0
-      mut sft := 0
-      mut sfa := sfhead
-      while sfa != 0 {
-        sfold := deref(arg_p(sfa))
-        sffe := fold(sfold.e)
-        sfnew := newgarg(a, Arg(e = sffe, next = unchecked bitcast(ptr(mut Arg), 0)))
-        if sfh == 0 { sfh = unchecked bitcast(usize, sfnew) } else {
-          sfp := arg_p(sft)
-          sfprev := deref(sfp)
-          sfupd := Arg(e = sfprev.e, next = sfnew)
-          deref(sfp) = sfupd
+      mut sfh : Option(ptr(mut Arg)) = Option.None
+      mut sft : Option(ptr(mut Arg)) = Option.None
+      mut sfa : Option(ptr(mut Arg)) = sfhead
+      loop {
+        match sfa {
+          Some(sfaq) => {
+            sfold := deref(arg_p(sfaq))
+            sffe := fold(sfold.e)
+            sfnew := newgarg(a, Arg(e = sffe, next = Option.None))
+            match sft {
+              Some(sft0) => {
+                sfp := arg_p(sft0)
+                sfprev := deref(sfp)
+                sfupd := Arg(e = sfprev.e, next = Option.Some(sfnew))
+                deref(sfp) = sfupd
+              }
+              None => { sfh = Option.Some(sfnew) }
+            }
+            sft = Option.Some(sfnew)
+            sfa = sfold.next
+          }
+          None => { break }
         }
-        sft = unchecked bitcast(usize, sfnew)
-        sfa = sfold.next
       }
       newnode(Expr.StructLit(scs, scl, snf, sfh))
     }
@@ -205,21 +221,29 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
     ## payload-arg expressions into a fresh arena-linked `Arg` list, preserving the
     ## enum/variant name spans + arg count. (Distinct binding names avoid sibling-arm collision.)
     Expr::EnumLit(ees, eel, evs, evl, enp, ephead) => {
-      mut eph := 0
-      mut ept := 0
-      mut epa := ephead
-      while epa != 0 {
-        epold := deref(arg_p(epa))
-        epfe := fold(epold.e)
-        epnew := newgarg(a, Arg(e = epfe, next = unchecked bitcast(ptr(mut Arg), 0)))
-        if eph == 0 { eph = unchecked bitcast(usize, epnew) } else {
-          epp := arg_p(ept)
-          epprev := deref(epp)
-          epupd := Arg(e = epprev.e, next = epnew)
-          deref(epp) = epupd
+      mut eph : Option(ptr(mut Arg)) = Option.None
+      mut ept : Option(ptr(mut Arg)) = Option.None
+      mut epa : Option(ptr(mut Arg)) = ephead
+      loop {
+        match epa {
+          Some(epaq) => {
+            epold := deref(arg_p(epaq))
+            epfe := fold(epold.e)
+            epnew := newgarg(a, Arg(e = epfe, next = Option.None))
+            match ept {
+              Some(ept0) => {
+                epp := arg_p(ept0)
+                epprev := deref(epp)
+                epupd := Arg(e = epprev.e, next = Option.Some(epnew))
+                deref(epp) = epupd
+              }
+              None => { eph = Option.Some(epnew) }
+            }
+            ept = Option.Some(epnew)
+            epa = epold.next
+          }
+          None => { break }
         }
-        ept = unchecked bitcast(usize, epnew)
-        epa = epold.next
       }
       newnode(Expr.EnumLit(ees, eel, evs, evl, enp, eph))
     }
@@ -240,21 +264,29 @@ pub fold := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> ptr(mut Expr) {
     ## `[e0, …, eN]` — an array literal: structural rebuild over the folded element
     ## expressions into a fresh arena-linked `Arg` list, preserving the element count.
     Expr::ArrayLit(anel, aehead) => {
-      mut aeh := 0
-      mut aet := 0
-      mut aea := aehead
-      while aea != 0 {
-        aeold := deref(arg_p(aea))
-        aefe := fold(aeold.e)
-        aenew := newgarg(a, Arg(e = aefe, next = unchecked bitcast(ptr(mut Arg), 0)))
-        if aeh == 0 { aeh = unchecked bitcast(usize, aenew) } else {
-          aep := arg_p(aet)
-          aeprev := deref(aep)
-          aeupd := Arg(e = aeprev.e, next = aenew)
-          deref(aep) = aeupd
+      mut aeh : Option(ptr(mut Arg)) = Option.None
+      mut aet : Option(ptr(mut Arg)) = Option.None
+      mut aea : Option(ptr(mut Arg)) = aehead
+      loop {
+        match aea {
+          Some(aeaq) => {
+            aeold := deref(arg_p(aeaq))
+            aefe := fold(aeold.e)
+            aenew := newgarg(a, Arg(e = aefe, next = Option.None))
+            match aet {
+              Some(aet0) => {
+                aep := arg_p(aet0)
+                aeprev := deref(aep)
+                aeupd := Arg(e = aeprev.e, next = Option.Some(aenew))
+                deref(aep) = aeupd
+              }
+              None => { aeh = Option.Some(aenew) }
+            }
+            aet = Option.Some(aenew)
+            aea = aeold.next
+          }
+          None => { break }
         }
-        aet = unchecked bitcast(usize, aenew)
-        aea = aeold.next
       }
       newnode(Expr.ArrayLit(anel, aeh))
     }

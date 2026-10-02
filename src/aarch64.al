@@ -34,6 +34,8 @@ param_any := ast::param_any
 param_at := ast::param_at
 arm_p := ast::arm_p
 arg_p := ast::arg_p
+arg_at := ast::arg_at
+arg_any := ast::arg_any
 stmt_p := ast::stmt_p
 (push_str, push_int) := rt
 ## The shared-IR instruction selector, a child module (`src/aarch64/isel.al`).
@@ -1353,14 +1355,19 @@ a64_std_store_value := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usize, wsi
     mut bytearr := false
     if scalar_byte_size(src, es.s, es.n) == 1 { bytearr = true }
     if bytearr and ex_is_array_lit(pe) {
-      mut g := ex_array_lit_ehead(pe)
+      mut g : Option(ptr(mut Arg)) = ex_array_lit_ehead(pe)
       mut k := i64(0)
-      while g != 0 {
-        ga := deref(arg_p(g))
-        emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-        push_str(sb, "  strb w0, [x29, #") ; push_int(sb, off + k) ; push_str(sb, "]\n")
-        k = k + 1
-        g = ga.next
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+            push_str(sb, "  strb w0, [x29, #") ; push_int(sb, off + k) ; push_str(sb, "]\n")
+            k = k + 1
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       return k
     }
@@ -1395,19 +1402,23 @@ a64_std_store_struct := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBuf, a 
   if di < 0 { push_str(sb, "  brk #0 // unknown standard struct literal\n") ; return 0 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut g := ex_struct_lit_args(pe)
+  mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(pe)
   loop {
     match f {
       Some(fq) => {
-        if not (g != 0) { break }
-        fd := deref(fld_p(fq))
-        ga := deref(arg_p(g))
-        bo := standard_field_byte_offset(decls, src, sns, snl, fd.ns, fd.nl, a)
-        ft := field_type_span(decls, src, sns, snl, fd.ns, fd.nl, a)
-        if bo >= 0 and ft.n != 0 { _sw := a64_std_store_value(ga.e, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-        if bo < 0 or ft.n == 0 { push_str(sb, "  brk #0 // unresolved standard struct field\n") }
-        f = fd.next
-        g = ga.next
+        match g {
+          None => { break }
+          Some(gq) => {
+            fd := deref(fld_p(fq))
+            ga := deref(arg_p(gq))
+            bo := standard_field_byte_offset(decls, src, sns, snl, fd.ns, fd.nl, a)
+            ft := field_type_span(decls, src, sns, snl, fd.ns, fd.nl, a)
+            if bo >= 0 and ft.n != 0 { _sw := a64_std_store_value(ga.e, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+            if bo < 0 or ft.n == 0 { push_str(sb, "  brk #0 // unresolved standard struct field\n") }
+            f = fd.next
+            g = ga.next
+          }
+        }
       }
       None => { break }
     }
@@ -1423,14 +1434,19 @@ a64_std_store_value_atptr := fn(pe : ptr(Expr), off : i64, ts : usize, tl : usiz
   es := a64_arrty_elem(src, ts, tl)
   if es.n != 0 {
     if scalar_byte_size(src, es.s, es.n) == 1 and ex_is_array_lit(pe) {
-      mut g := ex_array_lit_ehead(pe)
+      mut g : Option(ptr(mut Arg)) = ex_array_lit_ehead(pe)
       mut k := i64(0)
-      while g != 0 {
-        ga := deref(arg_p(g))
-        emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-        push_str(sb, "  ldr x1, [sp]\n  strb w0, [x1, #") ; push_int(sb, off + k) ; push_str(sb, "]\n")
-        k = k + 1
-        g = ga.next
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+            push_str(sb, "  ldr x1, [sp]\n  strb w0, [x1, #") ; push_int(sb, off + k) ; push_str(sb, "]\n")
+            k = k + 1
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       return k
     }
@@ -1461,19 +1477,23 @@ a64_std_store_struct_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrB
   if di < 0 { push_str(sb, "  brk #0 // unknown byte-tier struct literal at pointer\n") ; return 0 }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut g := ex_struct_lit_args(pe)
+  mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(pe)
   loop {
     match f {
       Some(fq) => {
-        if not (g != 0) { break }
-        fd := deref(fld_p(fq))
-        ga := deref(arg_p(g))
-        bo := standard_field_byte_offset(decls, src, sns, snl, fd.ns, fd.nl, a)
-        ft := field_type_span(decls, src, sns, snl, fd.ns, fd.nl, a)
-        if bo >= 0 and ft.n != 0 { _sw := a64_std_store_value_atptr(ga.e, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-        if bo < 0 or ft.n == 0 { push_str(sb, "  brk #0 // unresolved byte-tier field at pointer\n") }
-        f = fd.next
-        g = ga.next
+        match g {
+          None => { break }
+          Some(gq) => {
+            fd := deref(fld_p(fq))
+            ga := deref(arg_p(gq))
+            bo := standard_field_byte_offset(decls, src, sns, snl, fd.ns, fd.nl, a)
+            ft := field_type_span(decls, src, sns, snl, fd.ns, fd.nl, a)
+            if bo >= 0 and ft.n != 0 { _sw := a64_std_store_value_atptr(ga.e, off + bo, ft.s, ft.n, fd.wsize, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+            if bo < 0 or ft.n == 0 { push_str(sb, "  brk #0 // unresolved byte-tier field at pointer\n") }
+            f = fd.next
+            g = ga.next
+          }
+        }
       }
       None => { break }
     }
@@ -1619,12 +1639,17 @@ a64_param_enum_nl := fn(params_head : Option(ptr(mut Param)), src : ptr(u8), ns 
 ## by-reference enum-value materialization (piece 3) to the scalar-payload case; a nested/str payload stays
 ## a LOUD trap.
 a64_elit_payload_scalar := fn(v : ptr(Expr)) -> bool {
-  mut g := ex_enum_lit_args(v)
+  mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(v)
   mut ok := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if expr_is_struct_lit(ga.e) or expr_is_enum_lit(ga.e) or expr_is_str_lit(ga.e) { ok = false }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if expr_is_struct_lit(ga.e) or expr_is_enum_lit(ga.e) or expr_is_str_lit(ga.e) { ok = false }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   ok
 }
@@ -1673,14 +1698,17 @@ a64_is_array_local := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, nl : u
 a64_alit_stride := fn(v : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> i64 {
   mut w := 1
   eh := ex_array_lit_ehead(v)
-  if eh != 0 {
-    a0 := deref(arg_p(eh))
-    e0 := a0.e
-    if expr_is_struct_lit(e0) {
-      if std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) { w = i64(array_elem_word_reservation(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a)) }
-      if not std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) { require_no_byte_layout_array_elem(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) ; w = i64(struct_words(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a)) }
+  match eh {
+    Some(ehq) => {
+      a0 := deref(arg_p(ehq))
+      e0 := a0.e
+      if expr_is_struct_lit(e0) {
+        if std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) { w = i64(array_elem_word_reservation(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a)) }
+        if not std_array_elem_byte_tier(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) { require_no_byte_layout_array_elem(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a) ; w = i64(struct_words(decls, src, expr_struct_lit_ns(e0), expr_struct_lit_nl(e0), a)) }
+      }
+      if expr_is_enum_lit(e0) { w = 1 + i64(enum_max_arity(decls, src, expr_enum_lit_ns(e0), expr_enum_lit_nl(e0), a)) }
     }
-    if expr_is_enum_lit(e0) { w = 1 + i64(enum_max_arity(decls, src, expr_enum_lit_ns(e0), expr_enum_lit_nl(e0), a)) }
+    None => {}
   }
   w
 }
@@ -1698,7 +1726,7 @@ a64_arr_elem_struct_span := fn(head : ptr(mut Stmt), src : ptr(u8), ns : usize, 
         if streq(src, ans, anl, ns, nl) {
           if ex_is_array_lit(v) {
             eh := ex_array_lit_ehead(v)
-            if eh != 0 { a0 := deref(arg_p(eh)) ; e0 := a0.e ; if expr_is_struct_lit(e0) { r = CSpan(s = expr_struct_lit_ns(e0), n = expr_struct_lit_nl(e0)) } }
+            match eh { Some(ehq) => { a0 := deref(arg_p(ehq)) ; e0 := a0.e ; if expr_is_struct_lit(e0) { r = CSpan(s = expr_struct_lit_ns(e0), n = expr_struct_lit_nl(e0)) } }; None => {} }
             done = true
           }
           ## a range-slice VIEW `s := base[lo..hi]` inherits its element struct from the base ARRAY.
@@ -2082,29 +2110,32 @@ emit_a64_print_run := fn(in out sb : rt::StrBuf, lbl : usize, off : i64, len : i
 ## and `bl __print_i64`/`bl __print_u64` by the hole's static signedness (`a64_hole_signed`). A trailing
 ## newline (println) is a final 1-byte write of
 ## `.Lprnl`. Mirrors wat.al's emit_print_template.
-emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), ss : usize, sl : usize, lbl : usize, nl : bool, ah : ptr(mut Arg), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
+emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), ss : usize, sl : usize, lbl : usize, nl : bool, ah : Option(ptr(mut Arg)), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   raw := str_at((src + ss), sl * 4 + 16)
-  firstarg := deref(arg_p(ah))
-  mut argp := firstarg.next
+  firstarg := deref(arg_at(ah, "argument list ended early"))
+  mut argp : Option(ptr(mut Arg)) = firstarg.next
   mut k := 0
   mut dpos := 0
   mut runstart := 0
   while dpos < sl {
     if bytes(raw)[k] == 123 and bytes(raw)[k + 1] == 125 {
       if dpos > runstart { emit_a64_print_run(sb, lbl, i64(runstart), i64(dpos - runstart)) }
-      if argp != 0 {
-        ga := deref(arg_p(argp))
-        emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-        ## The hole's STATIC TYPE picks the renderer (Functions §7.1 -> Stdlib appendix §2: base-10 with
-        ## "a leading `-` for a negative two's-complement value"). Every hole used to reach the unsigned
-        ## renderer, so `a : i64 = 0 - 128` printed 2^64-128 here while x86_64 printed -128 — a clean
-        ## compile, exit 42, wrong TEXT (#443). `a64_hole_signed` asks `a64_operand_signed` — the SAME
-        ## oracle `/`, `%` and `shr` route on, so the renderer and the arithmetic agree about what the
-        ## operand is — and then, ONLY for rendering, the three shapes that oracle cannot prove and must
-        ## not be taught (#457: an `[i64; N]` element, a declared `i64` return, literal arithmetic).
-        ## Anything neither layer proves signed keeps the unsigned renderer and its exact previous bytes.
-        if a64_hole_signed(ga.e, params_head, body_head, decls, src, a) { A64_PRINT_I64 = true ; push_str(sb, "  bl __print_i64\n") } else { push_str(sb, "  bl __print_u64\n") }
-        argp = ga.next
+      match argp {
+        Some(argpq) => {
+          ga := deref(arg_p(argpq))
+          emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          ## The hole's STATIC TYPE picks the renderer (Functions §7.1 -> Stdlib appendix §2: base-10 with
+          ## "a leading `-` for a negative two's-complement value"). Every hole used to reach the unsigned
+          ## renderer, so `a : i64 = 0 - 128` printed 2^64-128 here while x86_64 printed -128 — a clean
+          ## compile, exit 42, wrong TEXT (#443). `a64_hole_signed` asks `a64_operand_signed` — the SAME
+          ## oracle `/`, `%` and `shr` route on, so the renderer and the arithmetic agree about what the
+          ## operand is — and then, ONLY for rendering, the three shapes that oracle cannot prove and must
+          ## not be taught (#457: an `[i64; N]` element, a declared `i64` return, literal arithmetic).
+          ## Anything neither layer proves signed keeps the unsigned renderer and its exact previous bytes.
+          if a64_hole_signed(ga.e, params_head, body_head, decls, src, a) { A64_PRINT_I64 = true ; push_str(sb, "  bl __print_i64\n") } else { push_str(sb, "  bl __print_u64\n") }
+          argp = ga.next
+        }
+        None => {}
       }
       k += 2
       dpos += 2
@@ -2380,13 +2411,13 @@ a64_slarg_count_e := fn(e : ptr(Expr)) -> i64 {
   match deref(e) {
     Expr::Bin(op, l, r) => { c = a64_slarg_count_e(l) + a64_slarg_count_e(r) }
     Expr::If(cc, t, f) => { c = a64_slarg_count_e(cc) + a64_slarg_count_e(t) + a64_slarg_count_e(f) }
-    Expr::Call(cs, cl, n, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if ex_is_slice(ga.e) { c = c + 1 } ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next } }
+    Expr::Call(cs, cl, n, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if ex_is_slice(ga.e) { c = c + 1 } ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next }; None => { break } } } }
     Expr::Field(base, fs, fl) => { c = a64_slarg_count_e(base) }
     Expr::Index(base, idx) => { c = a64_slarg_count_e(base) + a64_slarg_count_e(idx) }
     Expr::Unchecked(inner) => { c = a64_slarg_count_e(inner) }
-    Expr::StructLit(ss, sl, nf, fh) => { mut g := fh ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next } }
-    Expr::ArrayLit(nel, eh) => { mut g := eh ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next } }
-    Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g := ph ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next } }
+    Expr::StructLit(ss, sl, nf, fh) => { mut g : Option(ptr(mut Arg)) = fh ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next }; None => { break } } } }
+    Expr::ArrayLit(nel, eh) => { mut g : Option(ptr(mut Arg)) = eh ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next }; None => { break } } } }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g : Option(ptr(mut Arg)) = ph ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; c = c + a64_slarg_count_e(ga.e) ; g = ga.next }; None => { break } } } }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
       | Expr::Bitcast | Expr::Loop => {}
@@ -2438,13 +2469,13 @@ a64_aggval_words_e := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena, decls : pt
   match deref(e) {
     Expr::Bin(op, l, r) => { c = a64_aggval_words_e(l, src, a, decls) + a64_aggval_words_e(r, src, a, decls) }
     Expr::If(cc, t, f) => { c = a64_aggval_words_e(cc, src, a, decls) + a64_aggval_words_e(t, src, a, decls) + a64_aggval_words_e(f, src, a, decls) }
-    Expr::Call(cs, cl, n, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_is_struct_lit(ga.e) { c = c + i64(struct_words(decls, src, expr_struct_lit_ns(ga.e), expr_struct_lit_nl(ga.e), a)) } ; if expr_is_enum_lit(ga.e) { c = c + 1 + i64(enum_max_arity(decls, src, expr_enum_lit_ns(ga.e), expr_enum_lit_nl(ga.e), a)) } ; crc := a64_call_ret_struct_span(ga.e, decls, src, a) ; if crc.n != 0 { c = c + i64(struct_words(decls, src, crc.s, crc.n, a)) } ; cre := a64_call_ret_enum_span(ga.e, decls, src, a) ; if cre.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a)) } ; srr := a64_call_ret_sret_span(ga.e, decls, src, a) ; if srr.n != 0 { c = c + i64(struct_words(decls, src, srr.s, srr.n, a)) } ; ers := a64_call_ret_enum_sret_span(ga.e, decls, src, a) ; if ers.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, ers.s, ers.n, a)) } ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
+    Expr::Call(cs, cl, n, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_is_struct_lit(ga.e) { c = c + i64(struct_words(decls, src, expr_struct_lit_ns(ga.e), expr_struct_lit_nl(ga.e), a)) } ; if expr_is_enum_lit(ga.e) { c = c + 1 + i64(enum_max_arity(decls, src, expr_enum_lit_ns(ga.e), expr_enum_lit_nl(ga.e), a)) } ; crc := a64_call_ret_struct_span(ga.e, decls, src, a) ; if crc.n != 0 { c = c + i64(struct_words(decls, src, crc.s, crc.n, a)) } ; cre := a64_call_ret_enum_span(ga.e, decls, src, a) ; if cre.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, cre.s, cre.n, a)) } ; srr := a64_call_ret_sret_span(ga.e, decls, src, a) ; if srr.n != 0 { c = c + i64(struct_words(decls, src, srr.s, srr.n, a)) } ; ers := a64_call_ret_enum_sret_span(ga.e, decls, src, a) ; if ers.n != 0 { c = c + 1 + i64(enum_max_arity(decls, src, ers.s, ers.n, a)) } ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next }; None => { break } } } }
     Expr::Field(base, fs, fl) => { c = a64_aggval_words_e(base, src, a, decls) }
     Expr::Index(base, idx) => { c = a64_aggval_words_e(base, src, a, decls) + a64_aggval_words_e(idx, src, a, decls) }
     Expr::Unchecked(inner) => { c = a64_aggval_words_e(inner, src, a, decls) }
-    Expr::StructLit(ss, sl, nf, fh) => { mut g := fh ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
-    Expr::ArrayLit(nel, eh) => { mut g := eh ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
-    Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g := ph ; while g != 0 { ga := deref(arg_p(g)) ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next } }
+    Expr::StructLit(ss, sl, nf, fh) => { mut g : Option(ptr(mut Arg)) = fh ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next }; None => { break } } } }
+    Expr::ArrayLit(nel, eh) => { mut g : Option(ptr(mut Arg)) = eh ; loop {match g { Some(gq) => { ga := deref(arg_p(gq)) ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next }; None => { break } } } }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g : Option(ptr(mut Arg)) = ph ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; c = c + a64_aggval_words_e(ga.e, src, a, decls) ; g = ga.next }; None => { break } } } }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
       | Expr::Bitcast | Expr::Loop => {}
@@ -2650,7 +2681,7 @@ a64_tparam_name := fn(d : Decl, src : ptr(u8)) -> CSpan {
 ## enclosing fn's params_head). Then the ENCLOSING instance's own type-param is substituted (a nested
 ## generic call inside an instance). Writes globals (no multi-word return — the recursive-collection
 ## seed-truncation landmine).
-a64_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_head : ptr(mut Arg), penv : Option(ptr(mut Param)), a : rt::Arena) {
+a64_resolve_typearg := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut Param)), a : rt::Arena) {
   gd := deref(decl_get(decls, usize(gi)))
   argc := arg_list_count(args_head, a)
   mut ts := 0
@@ -2905,11 +2936,11 @@ a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
 
 ## The i-th argument expression of an arg list (0-based), or a null Expr ptr if absent — for `asm(…)`
 ## `{i}` positional-operand substitution.
-a64_arg_at := fn(head : ptr(mut Arg), i : usize, a : rt::Arena) -> ptr(Expr) {
-  mut g := head
+a64_arg_at := fn(head : Option(ptr(mut Arg)), i : usize, a : rt::Arena) -> ptr(Expr) {
+  mut g : Option(ptr(mut Arg)) = head
   mut k := 0
   mut res : usize = 0
-  while g != 0 { ga := deref(arg_p(g)) ; if k == i { res = unchecked bitcast(usize, ga.e) } ; k = k + 1 ; g = ga.next }
+  loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if k == i { res = unchecked bitcast(usize, ga.e) } ; k = k + 1 ; g = ga.next }; None => { break } } }
   unchecked bitcast(ptr(Expr), res)
 }
 
@@ -2968,16 +2999,16 @@ a64_global_agg_enum_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, 
 ## enum-lit `[disc, payload…, pad]` to `1+enum_inst_words`; a float `.double`; anything else `.quad` of its int.
 emit_a64_global_cells := fn(e : ptr(Expr), in out sb : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
   if expr_is_struct_lit(e) {
-    mut g := ex_struct_lit_args(e)
-    while g != 0 { ga := deref(arg_p(g)) ; emit_a64_global_cells(ga.e, sb, decls, src, a) ; g = ga.next }
+    mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(e)
+    loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_a64_global_cells(ga.e, sb, decls, src, a) ; g = ga.next }; None => { break } } }
   } else if ex_is_array_lit(e) {
-    mut ag := ex_array_lit_ehead(e)
-    while ag != 0 { aga := deref(arg_p(ag)) ; emit_a64_global_cells(aga.e, sb, decls, src, a) ; ag = aga.next }
+    mut ag : Option(ptr(mut Arg)) = ex_array_lit_ehead(e)
+    loop { match ag { Some(agq) => { aga := deref(arg_p(agq)) ; emit_a64_global_cells(aga.e, sb, decls, src, a) ; ag = aga.next }; None => { break } } }
   } else if expr_is_enum_lit(e) {
     push_str(sb, "  .quad ") ; push_int(sb, variant_index(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)) ; push_str(sb, "\n")
     mut np := 0
-    mut eg := ex_enum_lit_args(e)
-    while eg != 0 { ega := deref(arg_p(eg)) ; push_str(sb, "  .quad ") ; push_int(sb, ex_value_init(ega.e)) ; push_str(sb, "\n") ; np += 1 ; eg = ega.next }
+    mut eg : Option(ptr(mut Arg)) = ex_enum_lit_args(e)
+    loop { match eg { Some(egq) => { ega := deref(arg_p(egq)) ; push_str(sb, "  .quad ") ; push_int(sb, ex_value_init(ega.e)) ; push_str(sb, "\n") ; np += 1 ; eg = ega.next }; None => { break } } }
     emxw := i64(enum_inst_words(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), a))
     mut padk := np
     while padk < emxw { push_str(sb, "  .quad 0\n") ; padk += 1 }
@@ -3119,10 +3150,13 @@ a64_garr_elem_struct_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize,
   if unchecked bitcast(usize, gv) == 0 { return r }
   if not ex_is_array_lit(gv) { return r }
   eh := ex_array_lit_ehead(gv)
-  if eh != 0 {
-    ga0 := deref(arg_p(eh))
-    ge0 := ga0.e
-    if expr_is_struct_lit(ge0) { r = CSpan(s = expr_struct_lit_ns(ge0), n = expr_struct_lit_nl(ge0)) }
+  match eh {
+    Some(ehq) => {
+      ga0 := deref(arg_p(ehq))
+      ge0 := ga0.e
+      if expr_is_struct_lit(ge0) { r = CSpan(s = expr_struct_lit_ns(ge0), n = expr_struct_lit_nl(ge0)) }
+    }
+    None => {}
   }
   r
 }
@@ -3136,21 +3170,26 @@ a64_alit_homog_slit := fn(v : ptr(Expr), src : ptr(u8)) -> bool {
   if unchecked bitcast(usize, v) == 0 { return false }
   if not ex_is_array_lit(v) { return false }
   eh := ex_array_lit_ehead(v)
-  if eh == 0 { return false }
-  h0 := deref(arg_p(eh))
+  if not arg_any(eh) { return false }
+  h0 := deref(arg_at(eh, "argument list ended early"))
   e0 := h0.e
   if not expr_is_struct_lit(e0) { return false }
   hs := expr_struct_lit_ns(e0)
   hn := expr_struct_lit_nl(e0)
-  mut g := eh
+  mut g : Option(ptr(mut Arg)) = eh
   mut ok := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if not expr_is_struct_lit(ga.e) { ok = false }
-    if expr_is_struct_lit(ga.e) {
-      if not streq(src, expr_struct_lit_ns(ga.e), expr_struct_lit_nl(ga.e), hs, hn) { ok = false }
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if not expr_is_struct_lit(ga.e) { ok = false }
+        if expr_is_struct_lit(ga.e) {
+          if not streq(src, expr_struct_lit_ns(ga.e), expr_struct_lit_nl(ga.e), hs, hn) { ok = false }
+        }
+        g = ga.next
+      }
+      None => { break }
     }
-    g = ga.next
   }
   ok
 }
@@ -4568,7 +4607,7 @@ a64_array_is_float := fn(body_head : ptr(mut Stmt), src : ptr(u8), ns : usize, n
       Stmt::Assign(ans, anl, v, nx) => {
         if streq(src, ans, anl, ns, nl) and ex_is_array_lit(v) {
           eh := ex_array_lit_ehead(v)
-          if eh != 0 { fe := arg_p(eh) ; if a64_is_float_expr(deref(fe).e, body_head, src, a, params_head, decls, 0) { r = true } }
+          match eh { Some(ehq) => { fe := arg_p(ehq) ; if a64_is_float_expr(deref(fe).e, body_head, src, a, params_head, decls, 0) { r = true } }; None => {} }
           done = true
         }
         ## a slice-VIEW binding (`fv := base[lo..hi]`) inherits its backing array's element float-ness —
@@ -5341,19 +5380,19 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
       ## a template with no `{}` holes). Literal runs → write(1,…) syscalls; `{}` holes → the arg via
       ## `__print_u64`; println → a trailing newline write. Anything else falls through (trap).
       mut sarg := unchecked bitcast(ptr(Expr), 0)
-      if args_head != 0 { ga0 := deref(arg_p(args_head)) ; sarg = ga0.e }
+      match args_head { Some(args_headq) => { ga0 := deref(arg_p(args_headq)) ; sarg = ga0.e }; None => {} }
       ispln := nm == "println"
-      isprint := (nm == "print" or ispln) and args_head != 0 and expr_is_str_lit(sarg)
+      isprint := (nm == "print" or ispln) and arg_any(args_head) and expr_is_str_lit(sarg)
       isconv := scalar_name_is_int_conv(nm)
       mut isfconv := false
       if nm == "f64" { isfconv = true }
       if nm == "f32" { isfconv = true }
       if isprint {
         emit_a64_print_template(sb, a, src, expr_str_lit_ns(sarg), expr_str_lit_nl(sarg), expr_str_lit_label(sarg), ispln, args_head, params_head, pcount, body_head, decls, bind_head, bind_base)
-      } else if (isconv or isfconv) and args_head != 0 {
+      } else if (isconv or isfconv) and arg_any(args_head) {
         ## CONVERSION `uN(x)`/`iN(x)`/`fN(x)` — value bits in x0; FP conversions round-trip via a d-register.
         ## int→float `scvtf`; float→int `fcvtzu`/`fcvtzs` (truncating) + narrow; int→int the plain narrow.
-        gc0 := deref(arg_p(args_head))
+        gc0 := deref(arg_at(args_head, "argument list ended early"))
         argisf := a64_is_float_expr(gc0.e, body_head, src, a, params_head, decls, 0)
         emit_a64_expr(gc0.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
         if isfconv {
@@ -5367,7 +5406,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
             a64_emit_narrow(nm, sb)
           }
         }
-      } else if nm == "asm" and args_head != 0 and expr_is_str_lit(sarg) {
+      } else if nm == "asm" and arg_any(args_head) and expr_is_str_lit(sarg) {
         ## `asm("<GAS>", op…)` raw escape (spec ch.80 §4/§11): emit the AArch64-GAS template, with the
         ## positional-`{i}` scheme — each `{i}` → the bare decimal value of operand `i` (a comptime
         ## IMMEDIATE; the template supplies any `#`, so `mov x0, #{0}` with `42` → `mov x0, #42`). A register
@@ -5420,7 +5459,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         if nm == "shl" or nm == "shr" { a64_emit_narrow(snw, sb) }
         if nm == "rotr" { push_str(sb, "  ror x0, x0, x1\n") }
         if nm == "rotl" { push_str(sb, "  mov x2, #64\n  sub x1, x2, x1\n  ror x0, x0, x1\n") }
-      } else if nm == "len" and args_head != 0 and a64_len_recv_slice(sarg, params_head, src, body_head, decls, a) {
+      } else if nm == "len" and arg_any(args_head) and a64_len_recv_slice(sarg, params_head, src, body_head, decls, a) {
         ## `s.len()` (UFCS-desugared to `Call("len", [s])`) on a slice receiver — the runtime length. A
         ## slice PARAM (`sarg` a Var whose param is `Slice(E)`, scalar E) holds a POINTER to the caller's
         ## `{ptr,len}` block, so len = word1 of the block = `[[x29,pslot]+8]` (a DOUBLE deref). A local slice
@@ -5449,11 +5488,16 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## silent wrong value in the preflight consumer seam. Direct indexing and return-forwarding are
         ## handled separately; a direct byte-array return used as an argument remains fail-loud.
         mut bytearg := false
-        mut barg := args_head
-        while barg != 0 {
-          bga := deref(arg_p(barg))
-          if fixed_array_byte_return_len(bga.e, decls, src, a) >= 1 { bytearg = true }
-          barg = bga.next
+        mut barg : Option(ptr(mut Arg)) = args_head
+        loop {
+          match barg {
+            Some(bargq) => {
+              bga := deref(arg_p(bargq))
+              if fixed_array_byte_return_len(bga.e, decls, src, a) >= 1 { bytearg = true }
+              barg = bga.next
+            }
+            None => { break }
+          }
         }
         ## The enabled injected slice is deliberately scalar-u64 only. An aggregate Slice(T) needs
         ## element-width/aggregate ABI support that this bounded fix does not provide; reject it
@@ -5489,37 +5533,42 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           ## Scalar args ride x0 directly. (Float aggregate elements + >8 args are a later slice.) FLAT
           ## separate ifs inside the guard (mirrors the >8-arg loop; an if/else-if chain here miscompiles).
           mut nv := i64(0)
-          mut g := args_head
+          mut g : Option(ptr(mut Arg)) = args_head
           mut gidx := 0
-          while g != 0 {
-            ga := deref(arg_p(g))
-            keeparg := gidx >= erase_lead and gidx != erase_one
-            if keeparg {
-              gavns := ex_var_ns(ga.e)
-              gavnl := ex_var_nl(ga.e)
-              gisarr := gavnl != 0 and a64_is_array_local(body_head, src, gavns, gavnl, a)
-              gisstruct := (not gisarr) and gavnl != 0 and a64_local_struct_nl(body_head, src, gavns, gavnl, a) != 0
-              ## A local range-slice is an inline `{ptr,len}` frame value. Generic Slice(T) parameters
-              ## receive its ADDRESS, just like struct/array/enum aggregate parameters; passing the
-              ## loaded data pointer makes the instance read arr[1] as its length (a silent wrong result).
-              gisslice := (not gisarr) and (not gisstruct) and gavnl != 0 and is_slice_local(body_head, src, gavns, gavnl, a)
-              ## an ENUM LOCAL is by-reference too (the callee's enum param slot holds a POINTER to the
-              ## {disc, payload…} block) — without this its word 0, the DISCRIMINANT, was passed AS the
-              ## pointer and the instance dereferenced it: a raw SIGSEGV, not a clean `brk`.
-              gisenum := (not gisarr) and (not gisstruct) and (not gisslice) and gavnl != 0 and a64_local_enum_nl(body_head, src, gavns, gavnl, a) != 0
-              isslit := expr_is_struct_lit(ga.e)
-              iselit := (not isslit) and expr_is_enum_lit(ga.e)
-              isaggref := (not isslit) and (not iselit) and (gisarr or gisstruct or gisenum or gisslice)
-              isplain := (not isslit) and (not iselit) and (not isaggref)
-              if isslit { emit_a64_aggval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-              if iselit { emit_a64_enumval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-              if isaggref { gaoff := a64_local_off(body_head, src, gavns, gavnl, pcount, a, decls) ; push_str(sb, "  add x0, x29, #") ; push_int(sb, gaoff) ; push_str(sb, "\n") }
-              if isplain { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-              push_str(sb, "  str x0, [sp, #-16]!\n")
-              nv = nv + 1
+          loop {
+            match g {
+              Some(gq) => {
+                ga := deref(arg_p(gq))
+                keeparg := gidx >= erase_lead and gidx != erase_one
+                if keeparg {
+                  gavns := ex_var_ns(ga.e)
+                  gavnl := ex_var_nl(ga.e)
+                  gisarr := gavnl != 0 and a64_is_array_local(body_head, src, gavns, gavnl, a)
+                  gisstruct := (not gisarr) and gavnl != 0 and a64_local_struct_nl(body_head, src, gavns, gavnl, a) != 0
+                  ## A local range-slice is an inline `{ptr,len}` frame value. Generic Slice(T) parameters
+                  ## receive its ADDRESS, just like struct/array/enum aggregate parameters; passing the
+                  ## loaded data pointer makes the instance read arr[1] as its length (a silent wrong result).
+                  gisslice := (not gisarr) and (not gisstruct) and gavnl != 0 and is_slice_local(body_head, src, gavns, gavnl, a)
+                  ## an ENUM LOCAL is by-reference too (the callee's enum param slot holds a POINTER to the
+                  ## {disc, payload…} block) — without this its word 0, the DISCRIMINANT, was passed AS the
+                  ## pointer and the instance dereferenced it: a raw SIGSEGV, not a clean `brk`.
+                  gisenum := (not gisarr) and (not gisstruct) and (not gisslice) and gavnl != 0 and a64_local_enum_nl(body_head, src, gavns, gavnl, a) != 0
+                  isslit := expr_is_struct_lit(ga.e)
+                  iselit := (not isslit) and expr_is_enum_lit(ga.e)
+                  isaggref := (not isslit) and (not iselit) and (gisarr or gisstruct or gisenum or gisslice)
+                  isplain := (not isslit) and (not iselit) and (not isaggref)
+                  if isslit { emit_a64_aggval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                  if iselit { emit_a64_enumval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                  if isaggref { gaoff := a64_local_off(body_head, src, gavns, gavnl, pcount, a, decls) ; push_str(sb, "  add x0, x29, #") ; push_int(sb, gaoff) ; push_str(sb, "\n") }
+                  if isplain { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                  push_str(sb, "  str x0, [sp, #-16]!\n")
+                  nv = nv + 1
+                }
+                gidx = gidx + 1
+                g = ga.next
+              }
+              None => { break }
             }
-            gidx = gidx + 1
-            g = ga.next
           }
           mut ai := nv - 1
           while ai >= 0 { push_str(sb, "  ldr x") ; push_int(sb, ai) ; push_str(sb, ", [sp], #16\n") ; ai = ai - 1 }
@@ -5614,13 +5663,13 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
             None => { break }
           }
         }
-        mut fg := args_head
-        while fg != 0 { fa := deref(arg_p(fg)) ; if a64_is_float_expr(fa.e, body_head, src, a, params_head, decls, 0) { bad = true } ; fg = fa.next }
+        mut fg : Option(ptr(mut Arg)) = args_head
+        loop { match fg { Some(fgq) => { fa := deref(arg_p(fgq)) ; if a64_is_float_expr(fa.e, body_head, src, a, params_head, decls, 0) { bad = true } ; fg = fa.next }; None => { break } } }
         if bad {
           push_str(sb, "  brk #0 // local lambda direct call supports <=8 integer scalar args/return\n")
         } else {
-          mut g := args_head
-          while g != 0 { ga := deref(arg_p(g)) ; emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) ; push_str(sb, "  str x0, [sp, #-16]!\n") ; g = ga.next }
+          mut g : Option(ptr(mut Arg)) = args_head
+          loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) ; push_str(sb, "  str x0, [sp, #-16]!\n") ; g = ga.next }; None => { break } } }
           mut n := arg_list_count(args_head, a)
           while n > 0 { n -= 1 ; push_str(sb, "  ldr x") ; push_int(sb, n) ; push_str(sb, ", [sp], #16\n") }
           push_str(sb, "  bl ") ; a64_emit_lambda_label(sb, src, td.mod_start, td.mod_len, td.name_start) ; push_str(sb, "\n")
@@ -5638,8 +5687,8 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ## which the >8-arg overflow path does NOT perform (it would pass a struct-return's first word as a
         ## scalar = silent miscompile). Trap FIRST (loud, never silent); the corpus has no such call.
         mut aggarg := false
-        mut gsc := args_head
-        while gsc != 0 { gsa := deref(arg_p(gsc)) ; if expr_is_struct_lit(gsa.e) or expr_is_enum_lit(gsa.e) or (a64_call_ret_struct_span(gsa.e, decls, src, a).n != 0) or (a64_call_ret_enum_span(gsa.e, decls, src, a).n != 0) or (a64_call_ret_sret_span(gsa.e, decls, src, a).n != 0) or (a64_call_ret_enum_sret_span(gsa.e, decls, src, a).n != 0) { aggarg = true } ; gsc = gsa.next }
+        mut gsc : Option(ptr(mut Arg)) = args_head
+        loop { match gsc { Some(gscq) => { gsa := deref(arg_p(gscq)) ; if expr_is_struct_lit(gsa.e) or expr_is_enum_lit(gsa.e) or (a64_call_ret_struct_span(gsa.e, decls, src, a).n != 0) or (a64_call_ret_enum_span(gsa.e, decls, src, a).n != 0) or (a64_call_ret_sret_span(gsa.e, decls, src, a).n != 0) or (a64_call_ret_enum_sret_span(gsa.e, decls, src, a).n != 0) { aggarg = true } ; gsc = gsa.next }; None => { break } } }
         if aggarg { push_str(sb, "  brk #0 // >8-arg call with aggregate-value/struct-return arg (unsupported)\n") }
         mut nstk := 0
         mut ci := 0
@@ -5652,55 +5701,65 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         }
         stacksz := ((nstk * 8 + 15) / 16) * 16
         if stacksz > 0 { push_str(sb, "  sub sp, sp, #") ; push_int(sb, stacksz) ; push_str(sb, "\n") }
-        mut gs := args_head
+        mut gs : Option(ptr(mut Arg)) = args_head
         mut gi := 0
         mut k := 0
-        while gs != 0 {
-          ga := deref(arg_p(gs))
-          fbs := a64_float_params_before(cparams, src, gi, a)
-          mut clss := gi - fbs
-          if a64_param_is_float(cparams, src, gi, a) { clss = fbs }
-          if clss >= 8 {
-            isoutS := a64_callee_out_scalar(decls, src, cs, cl, gi)
-            if isoutS { a64_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-            if not isoutS {
-              ansS := ex_var_ns(ga.e)
-              anlS := ex_var_nl(ga.e)
-              ## an ENUM LOCAL is by-reference too (see the isagg gate on the ordinary-call path) — passing
-              ## its word 0 (the discriminant) AS the pointer is a raw SIGSEGV in the callee.
-              isaggS := anlS != 0 and ((a64_local_struct_nl(body_head, src, ansS, anlS, a) != 0) or (a64_local_enum_nl(body_head, src, ansS, anlS, a) != 0) or a64_is_array_local(body_head, src, ansS, anlS, a))
-              aoffS := a64_local_off(body_head, src, ansS, anlS, pcount, a, decls)
-              if isaggS and aoffS >= 0 { push_str(sb, "  add x0, x29, #") ; push_int(sb, aoffS) ; push_str(sb, "\n") }
-              if not (isaggS and aoffS >= 0) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        loop {
+          match gs {
+            Some(gsq) => {
+              ga := deref(arg_p(gsq))
+              fbs := a64_float_params_before(cparams, src, gi, a)
+              mut clss := gi - fbs
+              if a64_param_is_float(cparams, src, gi, a) { clss = fbs }
+              if clss >= 8 {
+                isoutS := a64_callee_out_scalar(decls, src, cs, cl, gi)
+                if isoutS { a64_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                if not isoutS {
+                  ansS := ex_var_ns(ga.e)
+                  anlS := ex_var_nl(ga.e)
+                  ## an ENUM LOCAL is by-reference too (see the isagg gate on the ordinary-call path) — passing
+                  ## its word 0 (the discriminant) AS the pointer is a raw SIGSEGV in the callee.
+                  isaggS := anlS != 0 and ((a64_local_struct_nl(body_head, src, ansS, anlS, a) != 0) or (a64_local_enum_nl(body_head, src, ansS, anlS, a) != 0) or a64_is_array_local(body_head, src, ansS, anlS, a))
+                  aoffS := a64_local_off(body_head, src, ansS, anlS, pcount, a, decls)
+                  if isaggS and aoffS >= 0 { push_str(sb, "  add x0, x29, #") ; push_int(sb, aoffS) ; push_str(sb, "\n") }
+                  if not (isaggS and aoffS >= 0) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                }
+                push_str(sb, "  str x0, [sp, #") ; push_int(sb, k * 8) ; push_str(sb, "]\n")
+                k = k + 1
+              }
+              gi = gi + 1
+              gs = ga.next
             }
-            push_str(sb, "  str x0, [sp, #") ; push_int(sb, k * 8) ; push_str(sb, "]\n")
-            k = k + 1
+            None => { break }
           }
-          gi = gi + 1
-          gs = ga.next
         }
-        mut gr := args_head
+        mut gr : Option(ptr(mut Arg)) = args_head
         mut gj := 0
-        while gr != 0 {
-          ga := deref(arg_p(gr))
-          fbr := a64_float_params_before(cparams, src, gj, a)
-          mut clsr := gj - fbr
-          if a64_param_is_float(cparams, src, gj, a) { clsr = fbr }
-          if clsr < 8 {
-            isoutR := a64_callee_out_scalar(decls, src, cs, cl, gj)
-            if isoutR { a64_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-            if not isoutR {
-              ansR := ex_var_ns(ga.e)
-              anlR := ex_var_nl(ga.e)
-              isaggR := anlR != 0 and ((a64_local_struct_nl(body_head, src, ansR, anlR, a) != 0) or (a64_local_enum_nl(body_head, src, ansR, anlR, a) != 0) or a64_is_array_local(body_head, src, ansR, anlR, a))
-              aoffR := a64_local_off(body_head, src, ansR, anlR, pcount, a, decls)
-              if isaggR and aoffR >= 0 { push_str(sb, "  add x0, x29, #") ; push_int(sb, aoffR) ; push_str(sb, "\n") }
-              if not (isaggR and aoffR >= 0) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+        loop {
+          match gr {
+            Some(grq) => {
+              ga := deref(arg_p(grq))
+              fbr := a64_float_params_before(cparams, src, gj, a)
+              mut clsr := gj - fbr
+              if a64_param_is_float(cparams, src, gj, a) { clsr = fbr }
+              if clsr < 8 {
+                isoutR := a64_callee_out_scalar(decls, src, cs, cl, gj)
+                if isoutR { a64_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                if not isoutR {
+                  ansR := ex_var_ns(ga.e)
+                  anlR := ex_var_nl(ga.e)
+                  isaggR := anlR != 0 and ((a64_local_struct_nl(body_head, src, ansR, anlR, a) != 0) or (a64_local_enum_nl(body_head, src, ansR, anlR, a) != 0) or a64_is_array_local(body_head, src, ansR, anlR, a))
+                  aoffR := a64_local_off(body_head, src, ansR, anlR, pcount, a, decls)
+                  if isaggR and aoffR >= 0 { push_str(sb, "  add x0, x29, #") ; push_int(sb, aoffR) ; push_str(sb, "\n") }
+                  if not (isaggR and aoffR >= 0) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                }
+                push_str(sb, "  str x0, [sp, #-16]!\n")
+              }
+              gj = gj + 1
+              gr = ga.next
             }
-            push_str(sb, "  str x0, [sp, #-16]!\n")
+            None => { break }
           }
-          gj = gj + 1
-          gr = ga.next
         }
         mut ii := n - 1
         while ii >= 0 {
@@ -5726,70 +5785,75 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         if stacksz > 0 { push_str(sb, "  add sp, sp, #") ; push_int(sb, stacksz) ; push_str(sb, "\n") }
         if callee_ret_is_float(decls, src, cs, cl) { push_str(sb, "  fmov x0, d0\n") }
       } else {
-        mut g := args_head
+        mut g : Option(ptr(mut Arg)) = args_head
         mut gidx := 0
-        while g != 0 {
-          ga := deref(arg_p(g))
-          ## a struct/array LOCAL argument is passed BY REFERENCE — its base address (x29 + slot), not
-          ## a scalar value (a bare aggregate Var otherwise traps). Read-only in the callee (a field
-          ## write through a struct param is trapped there). A SLICE argument `xs[lo..hi]` is materialized
-          ## into a reserved `{ptr,len}` agg block and its ADDRESS passed (§8 slice-param caller).
-          ans := ex_var_ns(ga.e)
-          anl := ex_var_nl(ga.e)
-          isslicearg := ex_is_slice(ga.e)
-          isbytearg := fixed_array_byte_return_len(ga.e, decls, src, a) >= 1
-          ## an anonymous STRUCT-LITERAL VALUE arg (`f(S(…))`) — materialized into an A64_AGG block and
-          ## passed BY REFERENCE (§8 anonymous-aggregate materialization, piece 1).
-          isaggval := expr_is_struct_lit(ga.e)
-          ## an anonymous ENUM-LITERAL VALUE arg (`f(E.V(…))`) — materialized into an A64_AGG block and
-          ## passed BY REFERENCE (§8 piece 3).
-          isenumval := expr_is_enum_lit(ga.e)
-          ## a struct-RETURNING CALL arg (`f(mk(…))`) — its register-returned words are materialized into an
-          ## A64_AGG block and passed BY REFERENCE (§8 piece 2).
-          iscallretarg := (not isaggval) and (not isenumval) and a64_call_ret_struct_span(ga.e, decls, src, a).n != 0
-          ## an enum-RETURNING CALL arg — register-returned {disc,payload} words materialized by-ref (§8 piece 3).
-          isenumretarg := (not isaggval) and (not isenumval) and (not iscallretarg) and a64_call_ret_enum_span(ga.e, decls, src, a).n != 0
-          ## a WIDE (SRET) struct-returning CALL arg (`f(mk(…))`, > 8 words) — disjoint from iscallretarg (the
-          ## ≤8-word register gate). The callee delivers through the x8 indirect result, and in ARGUMENT
-          ## position there is no destination local for it, so a block is reserved, handed down as x8, and
-          ## then passed by reference. Without this the call fell through to the scalar path = RAW SIGSEGV.
-          issretarg := (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and a64_call_ret_sret_span(ga.e, decls, src, a).n != 0
-          ## the wide-ENUM (> 8 words, x8 SRET) analogue — same shape, same latent raw fault.
-          isesretarg := (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and a64_call_ret_enum_sret_span(ga.e, decls, src, a).n != 0
-          ## a struct/array/slice-VIEW LOCAL arg is passed BY REFERENCE (its frame base address). A slice
-          ## VIEW local is already a `{ptr,len}` block, so its address IS the by-ref `Slice(E)` argument.
-          ## …and an ENUM LOCAL too (`v := E.V(…)` / `v := mk()` then `f(v)`): a callee's enum param slot
-          ## holds a POINTER to the caller's {disc, payload…} block (a64_param_enum_ns / the `match <enum
-          ## param>` materialization), exactly like a struct param. Without this the local fell to the
-          ## scalar path and its word 0 — the DISCRIMINANT — was passed AS the pointer, so the callee
-          ## dereferenced e.g. 0: a RAW SIGSEGV (both narrow and wide enums), not a clean `brk`.
-          isenumlocal := anl != 0 and a64_local_enum_nl(body_head, src, ans, anl, a) != 0
-          isagg := (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and anl != 0 and ((a64_local_struct_nl(body_head, src, ans, anl, a) != 0) or isenumlocal or a64_is_array_local(body_head, src, ans, anl, a) or is_slice_local(body_head, src, ans, anl, a))
-          aoff := a64_local_off(body_head, src, ans, anl, pcount, a, decls)
-          if isbytearg { push_str(sb, "  brk #0 // bounded byte-array return argument ABI is unsupported\n") }
-          if isslicearg { emit_a64_slice_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-          if isaggval { emit_a64_aggval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-          if isenumval { emit_a64_enumval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-          if iscallretarg { emit_a64_callret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-          if isenumretarg { emit_a64_enumret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-          if issretarg { emit_a64_sretcall_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-          if isesretarg { emit_a64_enumsret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-          isout := a64_callee_out_scalar(decls, src, cs, cl, gidx)
-          if isout { a64_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-          if isagg and aoff >= 0 { push_str(sb, "  add x0, x29, #") ; push_int(sb, aoff) ; push_str(sb, "\n") }
-          ## an AGGREGATE ARRAY ELEMENT `ps[i]` to a by-reference struct/enum parameter: pass the element's
-          ## ADDRESS (#683). It fell to the scalar path, which loads word 0 of the element (at a one-word
-          ## stride), and the callee dereferenced that value — SIGSEGV. A base the place resolver cannot
-          ## address stays a located trap.
-          isaggelem := (not isout) and ex_is_index(ga.e) and lower_layout::callee_param_is_aggregate(decls, src, a64_callee_params(decls, src, cs, cl), gidx)
-          if isaggelem {
-            if a64_place_ok(ga.e, body_head, src, params_head, pcount, a, decls) { emit_a64_place_addr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-            else { push_str(sb, "  brk #0 // aggregate array-element argument: element address not resolvable\n") }
+        loop {
+          match g {
+            Some(gq) => {
+              ga := deref(arg_p(gq))
+              ## a struct/array LOCAL argument is passed BY REFERENCE — its base address (x29 + slot), not
+              ## a scalar value (a bare aggregate Var otherwise traps). Read-only in the callee (a field
+              ## write through a struct param is trapped there). A SLICE argument `xs[lo..hi]` is materialized
+              ## into a reserved `{ptr,len}` agg block and its ADDRESS passed (§8 slice-param caller).
+              ans := ex_var_ns(ga.e)
+              anl := ex_var_nl(ga.e)
+              isslicearg := ex_is_slice(ga.e)
+              isbytearg := fixed_array_byte_return_len(ga.e, decls, src, a) >= 1
+              ## an anonymous STRUCT-LITERAL VALUE arg (`f(S(…))`) — materialized into an A64_AGG block and
+              ## passed BY REFERENCE (§8 anonymous-aggregate materialization, piece 1).
+              isaggval := expr_is_struct_lit(ga.e)
+              ## an anonymous ENUM-LITERAL VALUE arg (`f(E.V(…))`) — materialized into an A64_AGG block and
+              ## passed BY REFERENCE (§8 piece 3).
+              isenumval := expr_is_enum_lit(ga.e)
+              ## a struct-RETURNING CALL arg (`f(mk(…))`) — its register-returned words are materialized into an
+              ## A64_AGG block and passed BY REFERENCE (§8 piece 2).
+              iscallretarg := (not isaggval) and (not isenumval) and a64_call_ret_struct_span(ga.e, decls, src, a).n != 0
+              ## an enum-RETURNING CALL arg — register-returned {disc,payload} words materialized by-ref (§8 piece 3).
+              isenumretarg := (not isaggval) and (not isenumval) and (not iscallretarg) and a64_call_ret_enum_span(ga.e, decls, src, a).n != 0
+              ## a WIDE (SRET) struct-returning CALL arg (`f(mk(…))`, > 8 words) — disjoint from iscallretarg (the
+              ## ≤8-word register gate). The callee delivers through the x8 indirect result, and in ARGUMENT
+              ## position there is no destination local for it, so a block is reserved, handed down as x8, and
+              ## then passed by reference. Without this the call fell through to the scalar path = RAW SIGSEGV.
+              issretarg := (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and a64_call_ret_sret_span(ga.e, decls, src, a).n != 0
+              ## the wide-ENUM (> 8 words, x8 SRET) analogue — same shape, same latent raw fault.
+              isesretarg := (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and a64_call_ret_enum_sret_span(ga.e, decls, src, a).n != 0
+              ## a struct/array/slice-VIEW LOCAL arg is passed BY REFERENCE (its frame base address). A slice
+              ## VIEW local is already a `{ptr,len}` block, so its address IS the by-ref `Slice(E)` argument.
+              ## …and an ENUM LOCAL too (`v := E.V(…)` / `v := mk()` then `f(v)`): a callee's enum param slot
+              ## holds a POINTER to the caller's {disc, payload…} block (a64_param_enum_ns / the `match <enum
+              ## param>` materialization), exactly like a struct param. Without this the local fell to the
+              ## scalar path and its word 0 — the DISCRIMINANT — was passed AS the pointer, so the callee
+              ## dereferenced e.g. 0: a RAW SIGSEGV (both narrow and wide enums), not a clean `brk`.
+              isenumlocal := anl != 0 and a64_local_enum_nl(body_head, src, ans, anl, a) != 0
+              isagg := (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and anl != 0 and ((a64_local_struct_nl(body_head, src, ans, anl, a) != 0) or isenumlocal or a64_is_array_local(body_head, src, ans, anl, a) or is_slice_local(body_head, src, ans, anl, a))
+              aoff := a64_local_off(body_head, src, ans, anl, pcount, a, decls)
+              if isbytearg { push_str(sb, "  brk #0 // bounded byte-array return argument ABI is unsupported\n") }
+              if isslicearg { emit_a64_slice_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if isaggval { emit_a64_aggval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if isenumval { emit_a64_enumval_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if iscallretarg { emit_a64_callret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if isenumretarg { emit_a64_enumret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if issretarg { emit_a64_sretcall_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if isesretarg { emit_a64_enumsret_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              isout := a64_callee_out_scalar(decls, src, cs, cl, gidx)
+              if isout { a64_emit_out_scalar_arg(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              if isagg and aoff >= 0 { push_str(sb, "  add x0, x29, #") ; push_int(sb, aoff) ; push_str(sb, "\n") }
+              ## an AGGREGATE ARRAY ELEMENT `ps[i]` to a by-reference struct/enum parameter: pass the element's
+              ## ADDRESS (#683). It fell to the scalar path, which loads word 0 of the element (at a one-word
+              ## stride), and the callee dereferenced that value — SIGSEGV. A base the place resolver cannot
+              ## address stays a located trap.
+              isaggelem := (not isout) and ex_is_index(ga.e) and lower_layout::callee_param_is_aggregate(decls, src, a64_callee_params(decls, src, cs, cl), gidx)
+              if isaggelem {
+                if a64_place_ok(ga.e, body_head, src, params_head, pcount, a, decls) { emit_a64_place_addr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                else { push_str(sb, "  brk #0 // aggregate array-element argument: element address not resolvable\n") }
+              }
+              if (not isaggelem) and (not isbytearg) and (not isout) and (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and (not (isagg and aoff >= 0)) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+              push_str(sb, "  str x0, [sp, #-16]!\n")
+              gidx += 1
+              g = ga.next
+            }
+            None => { break }
           }
-          if (not isaggelem) and (not isbytearg) and (not isout) and (not isslicearg) and (not isaggval) and (not isenumval) and (not iscallretarg) and (not isenumretarg) and (not issretarg) and (not isesretarg) and (not (isagg and aoff >= 0)) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-          push_str(sb, "  str x0, [sp, #-16]!\n")
-          gidx += 1
-          g = ga.next
         }
         ## FLOAT ABI: pop args (reverse — top of stack is the last arg) routing each to its class register
         ## per the CALLEE's param types — a float param i → d<float-idx>, an int param i → x<int-idx>
@@ -6354,20 +6418,25 @@ emit_a64_slice_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, s
 emit_a64_u8_pair_return := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8), params_head : Option(ptr(mut Param)), pcount : i64, body_head : ptr(mut Stmt), decls : ptr(rt::Vec), bind_head : Option(ptr(mut Bind)), bind_base : i64) {
   ## AAPCS64 carries this two-byte aggregate in the low two bytes of x0. Stage the first field because
   ## evaluating the second may clobber every scratch register, then combine the two narrow values.
-  mut g := ex_struct_lit_args(e)
+  mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(e)
   mut k := 0
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if k == 0 {
-      emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      push_str(sb, "  and x0, x0, #255\n  str x0, [sp, #-16]!\n")
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if k == 0 {
+          emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, "  and x0, x0, #255\n  str x0, [sp, #-16]!\n")
+        }
+        if k == 1 {
+          emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, "  and x0, x0, #255\n  lsl x0, x0, #8\n  ldr x1, [sp], #16\n  orr x0, x0, x1\n")
+        }
+        k += 1
+        g = ga.next
+      }
+      None => { break }
     }
-    if k == 1 {
-      emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      push_str(sb, "  and x0, x0, #255\n  lsl x0, x0, #8\n  ldr x1, [sp], #16\n  orr x0, x0, x1\n")
-    }
-    k += 1
-    g = ga.next
   }
   if k != 2 { push_str(sb, "  brk #0 // malformed native u8-pair return\n") }
 }
@@ -6389,12 +6458,17 @@ emit_a64_aggval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
     }
     if not std_struct_is_native_u8_pair(decls, src, ns, nl, a) {
       mut off := blk
-      mut g := ex_struct_lit_args(e)
-      while g != 0 {
-        ga := deref(arg_p(g))
-        w := emit_a64_store_payload_at(ga.e, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-        off = off + w * 8
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(e)
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            w := emit_a64_store_payload_at(ga.e, off, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+            off = off + w * 8
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     push_str(sb, "  add x0, x29, #") ; push_int(sb, blk) ; push_str(sb, "\n")
@@ -6653,13 +6727,18 @@ emit_a64_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
     ## a NESTED struct literal (`C(b = B(a = A(v=…),…),…)`) materialize at ANY depth.
     sns := expr_struct_lit_ns(pe)
     snl := expr_struct_lit_nl(pe)
-    mut g := ex_struct_lit_args(pe)
+    mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(pe)
     mut o2 := off
-    while g != 0 {
-      ga := deref(arg_p(g))
-      w := emit_a64_store_payload_at(ga.e, o2, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      o2 = o2 + w * 8
-      g = ga.next
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          w := emit_a64_store_payload_at(ga.e, o2, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          o2 = o2 + w * 8
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     return i64(struct_words(decls, src, sns, snl, a))
   }
@@ -6683,7 +6762,7 @@ emit_a64_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
         push_str(sb, "  brk #0 // a payload-free raw-union member has no field layout\n")
         return ulw
       }
-      uga := deref(arg_p(ug))
+      uga := deref(arg_at(ug, "argument list ended early"))
       if uga.next != 0 {
         push_str(sb, "  brk #0 // a multi-payload raw-union member has no field layout\n")
         return ulw
@@ -6693,13 +6772,18 @@ emit_a64_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
     }
     pvidx := variant_index(decls, src, pens, penl, expr_enum_variant_ns(pe), expr_enum_variant_nl(pe), a)
     push_str(sb, "  ldr x0, =") ; push_int(sb, pvidx) ; push_str(sb, "\n  str x0, [x29, #") ; push_int(sb, off) ; push_str(sb, "]\n")
-    mut g := ex_enum_lit_args(pe)
+    mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(pe)
     mut wo := 1
-    while g != 0 {
-      ga := deref(arg_p(g))
-      cw := emit_a64_store_payload_at(ga.e, off + wo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      wo = wo + cw
-      g = ga.next
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          cw := emit_a64_store_payload_at(ga.e, off + wo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          wo = wo + cw
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     return 1 + i64(enum_max_arity(decls, src, pens, penl, a))
   }
@@ -6723,28 +6807,38 @@ emit_a64_store_payload_at := fn(pe : ptr(Expr), off : i64, in out sb : rt::StrBu
     if abe.n != 0 {
       bstride := a64_arr_elem_stride_bytes(src, abe.s, abe.n, a, decls)
       bwords := i64(array_elem_word_reservation(decls, src, abe.s, abe.n, a))
-      mut bg := ex_array_lit_ehead(pe)
+      mut bg : Option(ptr(mut Arg)) = ex_array_lit_ehead(pe)
       mut bo := off
       mut btot := 0
-      while bg != 0 {
-        bga := deref(arg_p(bg))
-        if expr_is_struct_lit(bga.e) { _bw := a64_std_store_struct(bga.e, bo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-        if not expr_is_struct_lit(bga.e) { push_str(sb, "  brk #0 // mixed byte-tier array literal\n") }
-        bo = bo + bstride
-        btot = btot + bwords
-        bg = bga.next
+      loop {
+        match bg {
+          Some(bgq) => {
+            bga := deref(arg_p(bgq))
+            if expr_is_struct_lit(bga.e) { _bw := a64_std_store_struct(bga.e, bo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+            if not expr_is_struct_lit(bga.e) { push_str(sb, "  brk #0 // mixed byte-tier array literal\n") }
+            bo = bo + bstride
+            btot = btot + bwords
+            bg = bga.next
+          }
+          None => { break }
+        }
       }
       return btot
     }
-    mut ag := ex_array_lit_ehead(pe)
+    mut ag : Option(ptr(mut Arg)) = ex_array_lit_ehead(pe)
     mut ao := off
     mut atot := 0
-    while ag != 0 {
-      aga := deref(arg_p(ag))
-      aw := emit_a64_store_payload_at(aga.e, ao, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      ao = ao + aw * 8
-      atot = atot + aw
-      ag = aga.next
+    loop {
+      match ag {
+        Some(agq) => {
+          aga := deref(arg_p(agq))
+          aw := emit_a64_store_payload_at(aga.e, ao, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          ao = ao + aw * 8
+          atot = atot + aw
+          ag = aga.next
+        }
+        None => { break }
+      }
     }
     return atot
   }
@@ -6777,13 +6871,18 @@ emit_a64_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::St
   if expr_is_struct_lit(pe) {
     sns := expr_struct_lit_ns(pe)
     snl := expr_struct_lit_nl(pe)
-    mut g := ex_struct_lit_args(pe)
+    mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(pe)
     mut o2 := off
-    while g != 0 {
-      ga := deref(arg_p(g))
-      w := emit_a64_store_payload_atptr(ga.e, o2, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      o2 = o2 + w * 8
-      g = ga.next
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          w := emit_a64_store_payload_atptr(ga.e, o2, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          o2 = o2 + w * 8
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     return i64(struct_words(decls, src, sns, snl, a))
   }
@@ -6800,7 +6899,7 @@ emit_a64_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::St
         push_str(sb, "  brk #0 // a payload-free raw-union member has no field layout\n")
         return ulw
       }
-      uga := deref(arg_p(ug))
+      uga := deref(arg_at(ug, "argument list ended early"))
       if uga.next != 0 {
         push_str(sb, "  brk #0 // a multi-payload raw-union member has no field layout\n")
         return ulw
@@ -6810,26 +6909,36 @@ emit_a64_store_payload_atptr := fn(pe : ptr(Expr), off : i64, in out sb : rt::St
     }
     pvidx := variant_index(decls, src, pens, penl, expr_enum_variant_ns(pe), expr_enum_variant_nl(pe), a)
     push_str(sb, "  ldr x0, =") ; push_int(sb, pvidx) ; push_str(sb, "\n  ldr x1, [sp]\n  str x0, [x1, #") ; push_int(sb, off) ; push_str(sb, "]\n")
-    mut g := ex_enum_lit_args(pe)
+    mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(pe)
     mut wo := 1
-    while g != 0 {
-      ga := deref(arg_p(g))
-      cw := emit_a64_store_payload_atptr(ga.e, off + wo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      wo = wo + cw
-      g = ga.next
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          cw := emit_a64_store_payload_atptr(ga.e, off + wo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          wo = wo + cw
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     return 1 + i64(enum_max_arity(decls, src, pens, penl, a))
   }
   if ex_is_array_lit(pe) {
-    mut ag := ex_array_lit_ehead(pe)
+    mut ag : Option(ptr(mut Arg)) = ex_array_lit_ehead(pe)
     mut ao := off
     mut atot := 0
-    while ag != 0 {
-      aga := deref(arg_p(ag))
-      aw := emit_a64_store_payload_atptr(aga.e, ao, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      ao = ao + aw * 8
-      atot = atot + aw
-      ag = aga.next
+    loop {
+      match ag {
+        Some(agq) => {
+          aga := deref(arg_p(agq))
+          aw := emit_a64_store_payload_atptr(aga.e, ao, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          ao = ao + aw * 8
+          atot = atot + aw
+          ag = aga.next
+        }
+        None => { break }
+      }
     }
     return atot
   }
@@ -6860,13 +6969,18 @@ emit_a64_enumval_arg := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena,
     push_str(sb, "  ldr x0, =") ; push_int(sb, vidx) ; push_str(sb, "\n  str x0, [x29, #") ; push_int(sb, blk) ; push_str(sb, "]\n")
     ## payload args (scalar / struct / nested-enum / str) written past the disc at word 1.. by the shared
     ## multi-word writer, so an aggregate or nested-enum payload lands in full (§8 piece 3b).
-    mut g := ex_enum_lit_args(e)
+    mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(e)
     mut wo := 1
-    while g != 0 {
-      ga := deref(arg_p(g))
-      cw := emit_a64_store_payload_at(ga.e, blk + wo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      wo = wo + cw
-      g = ga.next
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          cw := emit_a64_store_payload_at(ga.e, blk + wo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          wo = wo + cw
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     push_str(sb, "  add x0, x29, #") ; push_int(sb, blk) ; push_str(sb, "\n")
   }
@@ -6885,14 +6999,19 @@ emit_a64_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
   if ex_is_array_lit(e) {
     nel := a64_alit_nel(e)
     if nel >= 1 and nel <= 7 {
-      mut g := ex_array_lit_ehead(e)
+      mut g : Option(ptr(mut Arg)) = ex_array_lit_ehead(e)
       mut k := 0
-      while g != 0 {
-        ga := deref(arg_p(g))
-        emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-        push_str(sb, "  str x0, [sp, #-16]!\n")
-        k = k + 1
-        g = ga.next
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+            push_str(sb, "  str x0, [sp, #-16]!\n")
+            k = k + 1
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       mut j := k
       while j > 0 {
@@ -6912,16 +7031,21 @@ emit_a64_struct_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena
     }
     ## an ALL-SCALAR struct literal: push each 1-word field, pop in REVERSE so word k → x_k (unchanged).
     if a64_struct_all_scalar(decls, src, slns, slnl, a) {
-      mut g := ex_struct_lit_args(e)
+      mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(e)
       mut k := 0
-      while g != 0 {
-        ga := deref(arg_p(g))
-        ## ISSUE #448: an enum PARAM's slot holds the by-reference BLOCK POINTER, so its DISCRIMINANT
-        ## has to be read through it before this one-word field store.
-        if not a64_emit_enum_param_disc(ga.e, sb, a, src, params_head, body_head, decls) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-        push_str(sb, "  str x0, [sp, #-16]!\n")
-        k += 1
-        g = ga.next
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            ## ISSUE #448: an enum PARAM's slot holds the by-reference BLOCK POINTER, so its DISCRIMINANT
+            ## has to be read through it before this one-word field store.
+            if not a64_emit_enum_param_disc(ga.e, sb, a, src, params_head, body_head, decls) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+            push_str(sb, "  str x0, [sp, #-16]!\n")
+            k += 1
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       mut j := k
       while j > 0 {
@@ -7060,13 +7184,18 @@ emit_a64_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
       blk := A64_ENUM_SRET_BLK
       vidx := variant_index(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)
       push_str(sb, "  ldr x0, =") ; push_int(sb, vidx) ; push_str(sb, "\n  str x0, [x29, #") ; push_int(sb, blk) ; push_str(sb, "]\n")
-      mut g := ex_enum_lit_args(e)
+      mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(e)
       mut wo := i64(1)
-      while g != 0 {
-        ga := deref(arg_p(g))
-        cw := emit_a64_store_payload_at(ga.e, blk + wo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-        wo = wo + cw
-        g = ga.next
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            cw := emit_a64_store_payload_at(ga.e, blk + wo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+            wo = wo + cw
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       push_str(sb, "  ldr x9, [x29, #") ; push_int(sb, A64_SRET_SLOT) ; push_str(sb, "]\n")
       mut ek := 0
@@ -7116,16 +7245,21 @@ emit_a64_sret_store := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
     slnl := expr_struct_lit_nl(e)
     if a64_struct_all_scalar(decls, src, slns, slnl, a) {
       push_str(sb, "  ldr x9, [x29, #") ; push_int(sb, A64_SRET_SLOT) ; push_str(sb, "]\n  str x9, [sp, #-16]!\n")
-      mut g := ex_struct_lit_args(e)
+      mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(e)
       mut k := 0
-      while g != 0 {
-        ga := deref(arg_p(g))
-        ## ISSUE #448: an enum PARAM's slot holds the by-reference BLOCK POINTER, so its DISCRIMINANT
-        ## has to be read through it before this one-word field store.
-        if not a64_emit_enum_param_disc(ga.e, sb, a, src, params_head, body_head, decls) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-        push_str(sb, "  ldr x9, [sp]\n  str x0, [x9, #") ; push_int(sb, k * 8) ; push_str(sb, "]\n")
-        k = k + 1
-        g = ga.next
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            ## ISSUE #448: an enum PARAM's slot holds the by-reference BLOCK POINTER, so its DISCRIMINANT
+            ## has to be read through it before this one-word field store.
+            if not a64_emit_enum_param_disc(ga.e, sb, a, src, params_head, body_head, decls) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+            push_str(sb, "  ldr x9, [sp]\n  str x0, [x9, #") ; push_int(sb, k * 8) ; push_str(sb, "]\n")
+            k = k + 1
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       push_str(sb, "  add sp, sp, #16\n")
       done = true
@@ -7163,14 +7297,19 @@ emit_a64_enum_value := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
   if expr_is_enum_lit(e) {
     vidx := variant_index(decls, src, expr_enum_lit_ns(e), expr_enum_lit_nl(e), expr_enum_variant_ns(e), expr_enum_variant_nl(e), a)
     push_str(sb, "  ldr x0, =") ; push_int(sb, vidx) ; push_str(sb, "\n  str x0, [sp, #-16]!\n")
-    mut g := ex_enum_lit_args(e)
+    mut g : Option(ptr(mut Arg)) = ex_enum_lit_args(e)
     mut k := 1
-    while g != 0 {
-      ga := deref(arg_p(g))
-      emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-      push_str(sb, "  str x0, [sp, #-16]!\n")
-      k = k + 1
-      g = ga.next
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+          push_str(sb, "  str x0, [sp, #-16]!\n")
+          k = k + 1
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     mut j := k
     while j > 0 {
@@ -7664,16 +7803,21 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         if slitstd { _stdw := a64_std_store_struct(v, poff, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
         slitok := isslit and (not slitstd) and slitframe and a64_struct_all_scalar(decls, src, stys, styn, a)
         if slitok {
-          mut g := ex_struct_lit_args(v)
+          mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(v)
           mut k := 0
-          while g != 0 {
-            ga := deref(arg_p(g))
-            ## ISSUE #448: an enum PARAM's slot holds the by-reference BLOCK POINTER, so its DISCRIMINANT
-            ## has to be read through it before this one-word field store.
-            if not a64_emit_enum_param_disc(ga.e, sb, a, src, params_head, body_head, decls) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-            push_str(sb, "  str x0, [x29, #") ; push_int(sb, poff + k * 8) ; push_str(sb, "]\n")
-            k += 1
-            g = ga.next
+          loop {
+            match g {
+              Some(gq) => {
+                ga := deref(arg_p(gq))
+                ## ISSUE #448: an enum PARAM's slot holds the by-reference BLOCK POINTER, so its DISCRIMINANT
+                ## has to be read through it before this one-word field store.
+                if not a64_emit_enum_param_disc(ga.e, sb, a, src, params_head, body_head, decls) { emit_a64_expr(ga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                push_str(sb, "  str x0, [x29, #") ; push_int(sb, poff + k * 8) ; push_str(sb, "]\n")
+                k += 1
+                g = ga.next
+              }
+              None => { break }
+            }
           }
         }
         ## a NESTED struct literal (a field is itself a struct/enum — not all-scalar): materialize the full
@@ -7682,13 +7826,18 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         ## aligned). Disjoint from slitok (that gate requires all-scalar). Only fires for a real struct decl.
         slitnest := isslit and (not slitstd) and (not slitok) and slitframe and struct_decl_of(decls, src, stys, styn) >= 0
         if slitnest {
-          mut sg := ex_struct_lit_args(v)
+          mut sg : Option(ptr(mut Arg)) = ex_struct_lit_args(v)
           mut soff := poff
-          while sg != 0 {
-            sga := deref(arg_p(sg))
-            sw := emit_a64_store_payload_at(sga.e, soff, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-            soff = soff + sw * 8
-            sg = sga.next
+          loop {
+            match sg {
+              Some(sgq) => {
+                sga := deref(arg_p(sgq))
+                sw := emit_a64_store_payload_at(sga.e, soff, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+                soff = soff + sw * 8
+                sg = sga.next
+              }
+              None => { break }
+            }
           }
         }
         ## The same all-scalar store, addressed at the global's `.data` label instead of the frame.
@@ -7697,15 +7846,20 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         ## also emits its `adrp`/`add` pair after the value rather than before.
         slitglob := isslit and slitaggglob and a64_struct_all_scalar(decls, src, stys, styn, a)
         if slitglob {
-          mut gg := ex_struct_lit_args(v)
+          mut gg : Option(ptr(mut Arg)) = ex_struct_lit_args(v)
           mut gk := 0
-          while gg != 0 {
-            gga := deref(arg_p(gg))
-            if not a64_emit_enum_param_disc(gga.e, sb, a, src, params_head, body_head, decls) { emit_a64_expr(gga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-            push_str(sb, "  adrp x9, ") ; push_str(sb, gname) ; push_str(sb, "\n  add x9, x9, :lo12:") ; push_str(sb, gname)
-            push_str(sb, "\n  str x0, [x9, #") ; push_int(sb, gk * 8) ; push_str(sb, "]\n")
-            gk += 1
-            gg = gga.next
+          loop {
+            match gg {
+              Some(ggq) => {
+                gga := deref(arg_p(ggq))
+                if not a64_emit_enum_param_disc(gga.e, sb, a, src, params_head, body_head, decls) { emit_a64_expr(gga.e, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                push_str(sb, "  adrp x9, ") ; push_str(sb, gname) ; push_str(sb, "\n  add x9, x9, :lo12:") ; push_str(sb, gname)
+                push_str(sb, "\n  str x0, [x9, #") ; push_int(sb, gk * 8) ; push_str(sb, "]\n")
+                gk += 1
+                gg = gga.next
+              }
+              None => { break }
+            }
           }
         }
         ## Still fail-loud for what is left — a NESTED struct literal into a global has no writer yet.
@@ -7718,13 +7872,18 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
         elitok := iselit and poff >= 0 and vidx >= 0
         if elitok {
           push_str(sb, "  ldr x0, =") ; push_int(sb, vidx) ; push_str(sb, "\n  str x0, [x29, #") ; push_int(sb, poff) ; push_str(sb, "]\n")
-          mut eg := ex_enum_lit_args(v)
+          mut eg : Option(ptr(mut Arg)) = ex_enum_lit_args(v)
           mut ewo := 1
-          while eg != 0 {
-            ega := deref(arg_p(eg))
-            ecw := emit_a64_store_payload_at(ega.e, poff + ewo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-            ewo = ewo + ecw
-            eg = ega.next
+          loop {
+            match eg {
+              Some(egq) => {
+                ega := deref(arg_p(egq))
+                ecw := emit_a64_store_payload_at(ega.e, poff + ewo * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+                ewo = ewo + ecw
+                eg = ega.next
+              }
+              None => { break }
+            }
           }
         }
         if iselit and (not elitok) { push_str(sb, "  brk #0 // unsupported enum construct\n") }
@@ -7741,30 +7900,40 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             if albe.n != 0 {
               alitbyte = true
               astrideB := i64(layout_elem_stride_bytes(decls, src, albe.s, albe.n, a))
-              mut abg := ag0
+              mut abg : Option(ptr(mut Arg)) = ag0
               mut abo := poff
-              while abg != 0 {
-                abga := deref(arg_p(abg))
-                if expr_is_struct_lit(abga.e) { _abs := a64_std_store_struct(abga.e, abo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
-                if not expr_is_struct_lit(abga.e) { push_str(sb, "  brk #0 // mixed byte-tier array literal\n") }
-                abo = abo + astrideB
-                abg = abga.next
+              loop {
+                match abg {
+                  Some(abgq) => {
+                    abga := deref(arg_p(abgq))
+                    if expr_is_struct_lit(abga.e) { _abs := a64_std_store_struct(abga.e, abo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base) }
+                    if not expr_is_struct_lit(abga.e) { push_str(sb, "  brk #0 // mixed byte-tier array literal\n") }
+                    abo = abo + astrideB
+                    abg = abga.next
+                  }
+                  None => { break }
+                }
               }
             }
           }
         }
         if alitok and (not alitbyte) {
           estrideA := a64_alit_stride(v, src, a, decls)
-          mut ag := ex_array_lit_ehead(v)
+          mut ag : Option(ptr(mut Arg)) = ex_array_lit_ehead(v)
           mut ak := 0
-          while ag != 0 {
-            aga := deref(arg_p(ag))
-            ## Use the same recursive payload writer for each word-tier element. Besides scalar fields it
-            ## materializes nested array/struct fields (the `Row.arr` setup in the bounded deep-place
-            ## fixture) at their full running offsets; the byte-tier branch above remains separate.
-            _alitw := emit_a64_store_payload_at(aga.e, poff + ak * estrideA * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-            ak += 1
-            ag = aga.next
+          loop {
+            match ag {
+              Some(agq) => {
+                aga := deref(arg_p(agq))
+                ## Use the same recursive payload writer for each word-tier element. Besides scalar fields it
+                ## materializes nested array/struct fields (the `Row.arr` setup in the bounded deep-place
+                ## fixture) at their full running offsets; the byte-tier branch above remains separate.
+                _alitw := emit_a64_store_payload_at(aga.e, poff + ak * estrideA * 8, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+                ak += 1
+                ag = aga.next
+              }
+              None => { break }
+            }
           }
         }
         if isalit and (not alitok) { push_str(sb, "  brk #0 // unsupported array construct\n") }
@@ -7915,13 +8084,18 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
             ## each field at its RUNNING byte offset through the pointer-relative multi-word writer, so a
             ## NESTED struct / `[T; N]` field of the element literal lands in FULL and the fields after it
             ## stay aligned. Byte-identical to the old one-word-per-argument store for an all-scalar element.
-            mut efg := ex_struct_lit_args(ival)
+            mut efg : Option(ptr(mut Arg)) = ex_struct_lit_args(ival)
             mut efo := i64(0)
-            while efg != 0 {
-              efa := deref(arg_p(efg))
-              efw := emit_a64_store_payload_atptr(efa.e, efo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-              efo = efo + efw * 8
-              efg = efa.next
+            loop {
+              match efg {
+                Some(efgq) => {
+                  efa := deref(arg_p(efgq))
+                  efw := emit_a64_store_payload_atptr(efa.e, efo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+                  efo = efo + efw * 8
+                  efg = efa.next
+                }
+                None => { break }
+              }
             }
           }
           if (not eaislit) and eabyte {
@@ -7995,13 +8169,18 @@ emit_a64_stmts := fn(list_head : usize, in out sb : rt::StrBuf, a : rt::Arena, s
           if deepagglit {
             emit_a64_place_idx_addr(ibase, iidx, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
             push_str(sb, "  str x0, [sp, #-16]!\n")
-            mut efg := ex_struct_lit_args(ival)
+            mut efg : Option(ptr(mut Arg)) = ex_struct_lit_args(ival)
             mut efo := i64(0)
-            while efg != 0 {
-              efa := deref(arg_p(efg))
-              efw := emit_a64_store_payload_atptr(efa.e, efo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
-              efo = efo + efw * 8
-              efg = efa.next
+            loop {
+              match efg {
+                Some(efgq) => {
+                  efa := deref(arg_p(efgq))
+                  efw := emit_a64_store_payload_atptr(efa.e, efo, sb, a, src, params_head, pcount, body_head, decls, bind_head, bind_base)
+                  efo = efo + efw * 8
+                  efg = efa.next
+                }
+                None => { break }
+              }
             }
             push_str(sb, "  add sp, sp, #16\n")
           }
@@ -9110,9 +9289,9 @@ a64_str_data_if_print := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8)
     Expr::Call(cs, cl, nargs, args_head) => {
       nm := str_at((src + cs), cl)
       ispln := nm == "println"
-      isp := (nm == "print" or ispln) and args_head != 0
+      isp := (nm == "print" or ispln) and arg_any(args_head)
       mut sarg := unchecked bitcast(ptr(Expr), 0)
-      if args_head != 0 { ga := deref(arg_p(args_head)) ; sarg = ga.e }
+      match args_head { Some(args_headq) => { ga := deref(arg_p(args_headq)) ; sarg = ga.e }; None => {} }
       ok := isp and expr_is_str_lit(sarg)
       if ok { emit_a64_str_bytes(sb, src, expr_str_lit_ns(sarg), expr_str_lit_nl(sarg), expr_str_lit_label(sarg)) }
     }
@@ -9161,14 +9340,14 @@ emit_a64_float_data_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, src : ptr(
     Expr::FloatLit(fs, fl) => { if a64_flt_first(fs) { push_str(sb, ".align 3\n.Lflt") ; push_int(sb, i64(fs)) ; push_str(sb, ":\n  .double ") ; push_str(sb, str_at((src + fs), fl)) ; push_str(sb, "\n") } }
     Expr::Bin(op, l, r) => { emit_a64_float_data_expr(l, sb, src, a) ; emit_a64_float_data_expr(r, sb, src, a) }
     Expr::If(c, t, f) => { emit_a64_float_data_expr(c, sb, src, a) ; emit_a64_float_data_expr(t, sb, src, a) ; emit_a64_float_data_expr(f, sb, src, a) }
-    Expr::Call(cs, cl, n, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next } }
+    Expr::Call(cs, cl, n, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next }; None => { break } } } }
     Expr::Field(base, fs, fl) => { emit_a64_float_data_expr(base, sb, src, a) }
     Expr::Index(base, idx) => { emit_a64_float_data_expr(base, sb, src, a) ; emit_a64_float_data_expr(idx, sb, src, a) }
     Expr::Unchecked(inner) => { emit_a64_float_data_expr(inner, sb, src, a) }
     ## FloatLits inside a struct / array / enum LITERAL — recurse so their `.Lflt` cells emit.
-    Expr::StructLit(ss, sl, nf, fh) => { mut g := fh ; while g != 0 { ga := deref(arg_p(g)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next } }
-    Expr::ArrayLit(nel, eh) => { mut g := eh ; while g != 0 { ga := deref(arg_p(g)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next } }
-    Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g := ph ; while g != 0 { ga := deref(arg_p(g)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next } }
+    Expr::StructLit(ss, sl, nf, fh) => { mut g : Option(ptr(mut Arg)) = fh ; loop {match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next }; None => { break } } } }
+    Expr::ArrayLit(nel, eh) => { mut g : Option(ptr(mut Arg)) = eh ; loop {match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next }; None => { break } } } }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g : Option(ptr(mut Arg)) = ph ; loop {match g { Some(gq) => { ga := deref(arg_p(gq)) ; emit_a64_float_data_expr(ga.e, sb, src, a) ; g = ga.next }; None => { break } } } }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::Try | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
       | Expr::Loop => {}

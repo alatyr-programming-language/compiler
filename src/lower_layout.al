@@ -17,6 +17,8 @@ fld_p := ast::fld_p
 param_p := ast::param_p
 param_any := ast::param_any
 arg_p := ast::arg_p
+arg_at := ast::arg_at
+arg_any := ast::arg_any
 
 ## Do two source spans denote the same name (content equality), mirroring nameres/sema.
 ## (Duplicated from `lower.al` — a 4-line leaf so the module is self-contained; cross-module
@@ -1502,8 +1504,8 @@ pub array_lit_byte_elem := fn(decls : ptr(rt::Vec), src : ptr(u8), v : ptr(Expr)
   mut r := LSpan(s = 0, n = 0)
   if not ex_is_array_lit(v) { return r }
   eh := ex_array_lit_ehead(v)
-  if eh == 0 { return r }
-  a0 := deref(arg_p(eh))
+  if not arg_any(eh) { return r }
+  a0 := deref(arg_at(eh, "argument list ended early"))
   ens := ex_struct_lit_ns(a0.e)
   enl := ex_struct_lit_nl(a0.e)
   if enl == 0 { return r }
@@ -1716,8 +1718,8 @@ pub tuple_typearg_span := fn(e : ptr(Expr), src : ptr(u8)) -> LSpan {
   if unchecked bitcast(usize, e) == 0 { return LSpan(s = 0, n = 0) }
   match deref(e) {
     Expr::ArrayLit(nel, ehead) => {
-      if nel == 0 or unchecked bitcast(usize, ehead) == 0 { return LSpan(s = 0, n = 0) }
-      e0 := deref(arg_p(ehead)).e
+      if nel == 0 or not arg_any(ehead) { return LSpan(s = 0, n = 0) }
+      e0 := deref(arg_at(ehead, "argument list ended early")).e
       s0 := layout_tuple_first_start(e0)
       if s0 == 0 { return LSpan(s = 0, n = 0) }
       mut op := s0
@@ -3333,10 +3335,10 @@ pub arrty_semi := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
 }
 
 ## How many arguments a call's argument list holds.
-pub arg_list_count := fn(args_head : ptr(mut Arg), a : rt::Arena) -> i64 {
-  mut g := args_head
+pub arg_list_count := fn(args_head : Option(ptr(mut Arg)), a : rt::Arena) -> i64 {
+  mut g : Option(ptr(mut Arg)) = args_head
   mut n := 0
-  while g != 0 { ga := deref(arg_p(g)) ; n = n + 1 ; g = ga.next }
+  loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; n = n + 1 ; g = ga.next }; None => { break } } }
   n
 }
 
@@ -3394,9 +3396,9 @@ pub ex_var_nl := fn(e : ptr(Expr)) -> usize {
   match deref(e) { Expr::Var(vs, vn) => { r = vn } Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
-pub ex_call_argh := fn(e : ptr(Expr)) -> ptr(mut Arg) { mut r := unchecked bitcast(ptr(mut Arg), 0) ; match deref(e) { Expr::Call(cs, cl, n, ah) => { r = ah } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} } ; r }
-pub ex_struct_lit_args := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+pub ex_call_argh := fn(e : ptr(Expr)) -> Option(ptr(mut Arg)) { mut r : Option(ptr(mut Arg)) = Option.None ; match deref(e) { Expr::Call(cs, cl, n, ah) => { r = ah } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} } ; r }
+pub ex_struct_lit_args := fn(v : ptr(Expr)) -> Option(ptr(mut Arg)) {
+  mut r : Option(ptr(mut Arg)) = Option.None
   match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = ah } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
@@ -3413,8 +3415,8 @@ pub ex_struct_lit_nl := fn(v : ptr(Expr)) -> usize {
   match deref(v) { Expr::StructLit(ss, sn, nf, ah) => { r = sn } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
-pub ex_enum_lit_args := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+pub ex_enum_lit_args := fn(v : ptr(Expr)) -> Option(ptr(mut Arg)) {
+  mut r : Option(ptr(mut Arg)) = Option.None
   match deref(v) { Expr::EnumLit(es, en, vs, vn, nf, ah) => { r = ah } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
@@ -3423,8 +3425,8 @@ pub ex_is_array_lit := fn(v : ptr(Expr)) -> bool {
   match deref(v) { Expr::ArrayLit(al_n, al_e) => { r = true } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
-pub ex_array_lit_ehead := fn(v : ptr(Expr)) -> usize {
-  mut r := 0
+pub ex_array_lit_ehead := fn(v : ptr(Expr)) -> Option(ptr(mut Arg)) {
+  mut r : Option(ptr(mut Arg)) = Option.None
   match deref(v) { Expr::ArrayLit(al_n, al_e) => { r = al_e } Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {} }
   r
 }
@@ -3737,18 +3739,23 @@ pub array_type_lit := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), in 
       if nel == 0 {
         r = 0
       } else {
-        first := deref(arg_p(ah))
+        first := deref(arg_at(ah, "argument list ended early"))
         ev := at_var_span(first.e)
         if ev.n != 0 and type_name_known(decls, src, ev.s, ev.n) {
           mut cnt : i64 = 0
           mut same := true
-          mut g := ah
-          while unchecked bitcast(usize, g) != 0 {
-            ga := deref(arg_p(g))
-            gv := at_var_span(ga.e)
-            if gv.n != ev.n or not streq(src, gv.s, gv.n, ev.s, ev.n) { same = false }
-            cnt += 1
-            g = ga.next
+          mut g : Option(ptr(mut Arg)) = ah
+          loop {
+            match g {
+              Some(gq) => {
+                ga := deref(arg_p(gq))
+                gv := at_var_span(ga.e)
+                if gv.n != ev.n or not streq(src, gv.s, gv.n, ev.s, ev.n) { same = false }
+                cnt += 1
+                g = ga.next
+              }
+              None => { break }
+            }
           }
           if same { r = cnt; es = ev.s; en = ev.n }
         }
@@ -5535,17 +5542,21 @@ const_struct_field_value := fn(base : ptr(Expr), fs : usize, fl : usize, decls :
   if di < 0 { return z }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   mut f := d.fields_head
-  mut g := ex_struct_lit_args(cv)
+  mut g : Option(ptr(mut Arg)) = ex_struct_lit_args(cv)
   mut res : ptr(Expr) = z
   loop {
     match f {
       Some(fq) => {
-        if not (g != 0) { break }
-        fd := deref(fld_p(fq))
-        ga := deref(arg_p(g))
-        if streq(src, fd.ns, fd.nl, fs, fl) { res = ga.e }
-        f = fd.next
-        g = ga.next
+        match g {
+          None => { break }
+          Some(gq) => {
+            fd := deref(fld_p(fq))
+            ga := deref(arg_p(gq))
+            if streq(src, fd.ns, fd.nl, fs, fl) { res = ga.e }
+            f = fd.next
+            g = ga.next
+          }
+        }
       }
       None => { break }
     }

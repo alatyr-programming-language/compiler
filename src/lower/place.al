@@ -768,7 +768,8 @@ pub emit_elem_copy_in := fn(arr : ptr(Expr), idx : ptr(Expr), dst : i64, in out 
   ## `e := GE[i]` off a non-`mut` enum array reads its `.data` too (a const array has storage).
   gmv := global_arr_value(cx.slots, cx.decls, cx.src, gvn.s, gvn.n)
   if unchecked bitcast(usize, gmv) != 0 and array_lit_info(gmv).is_a {
-    ge := struct_lit_info(arg_expr_at(array_lit_info(gmv).ehead, 0, a))
+    gmvehi := array_lit_info(gmv)
+    ge := struct_lit_info(arg_expr_at(gmvehi.ehead, 0, a))
     ## an ENUM-element array global's stride is `1 + enum_inst_words` (disc + widest payload), NOT the
     ## scalar `1` — with `1` the copy read one word at `LABEL + i*8`, i.e. the middle of an element.
     gaen := global_arr_enum(cx.decls, cx.src, gvn.s, gvn.n, gmv, a)

@@ -29,6 +29,7 @@
 ## The golden builds `ir --self-test` runs (`src/ir/golden.al`).
 (golden_run) := golden
 arg_p := ast::arg_p
+arg_at := ast::arg_at
 stmt_p := ast::stmt_p
 
 ## ───────────────────────────── kinds ─────────────────────────────
@@ -2711,8 +2712,8 @@ sign_sema_row := fn(e : ptr(Expr), src : ptr(u8)) {
     Expr::Bin(op, l, r) => { ans := sema_answer(l, r); sign_emit("sema", op, l, r, src, ans) }
     Expr::Call(cs, cl, na, ah) => {
       if na == 2 {
-        a0 := deref(arg_p(ah))
-        a1 := deref(arg_p(a0.next))
+        a0 := deref(arg_at(ah, "argument list ended early"))
+        a1 := deref(arg_at(a0.next, "argument list ended early"))
         ans2 := sema_answer(a0.e, a1.e)
         sign_emit("sema", 0, a0.e, a1.e, src, ans2)
       }

@@ -599,7 +599,7 @@ ecallee_fmask := fn(p0 : usize, cx : ptr(LCtx)) -> usize {
 ##      fn-value STRUCT FIELD path erases its receiver);
 ##   3. read the code pointer back from over the argument block into %rax and `call *%rax`;
 ##   4. reclaim the stack args, then the pad + callee word, and push the result.
-pub emit_ecallee_call := fn(nargs : usize, args_head : ptr(mut Arg), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+pub emit_ecallee_call := fn(nargs : usize, args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ce := arg_expr_at(args_head, 0, a)
   if unchecked bitcast(usize, ce) == 0 { panic("selfhost: FN-6 - expression-callee call has no callee") }
   tp := ecallee_fnty_pos(ce, cx, a)

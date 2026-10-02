@@ -177,38 +177,58 @@ emit_rodata_expr := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, src : ptr(u8),
       }
     }
     Expr::Call(cs, cl, nargs, args_head) => {
-      mut g := args_head
-      while g != 0 {
-        ga := deref(arg_p(g))
-        emit_rodata_expr(ga.e, sb, src, a, seen)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = args_head
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            emit_rodata_expr(ga.e, sb, src, a, seen)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::StructLit(cs, cl, nf, fhead) => {
-      mut g := fhead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        emit_rodata_expr(ga.e, sb, src, a, seen)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = fhead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            emit_rodata_expr(ga.e, sb, src, a, seen)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Field(base, fs, fl) => { emit_rodata_expr(base, sb, src, a, seen) }
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
-      mut g := phead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        emit_rodata_expr(ga.e, sb, src, a, seen)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = phead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            emit_rodata_expr(ga.e, sb, src, a, seen)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::AddrOf(p) => { emit_rodata_expr(p, sb, src, a, seen) }
     Expr::Deref(p) => { emit_rodata_expr(p, sb, src, a, seen) }
     Expr::ArrayLit(nel, ehead) => {
-      mut g := ehead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        emit_rodata_expr(ga.e, sb, src, a, seen)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ehead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            emit_rodata_expr(ga.e, sb, src, a, seen)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Index(base, idx) => {

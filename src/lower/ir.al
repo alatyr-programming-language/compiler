@@ -28,6 +28,7 @@
 ## parse error in the self-host parser unless a QUALIFIED alias (`x := m::y`) separates them.
 strbuf := rt
 arg_p := ast::arg_p
+arg_at := ast::arg_at
 fld_p := ast::fld_p
 param_p := ast::param_p
 stmt_p := ast::stmt_p
@@ -141,7 +142,7 @@ ir_usize_identity_arg := fn(src : ptr(u8), e : ptr(Expr)) -> bool {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => {
       if str_at((src + cs), cl) == "u64" and na == 1 {
-        return ir_u64_identity_arg(deref(arg_p(ah)).e)
+        return ir_u64_identity_arg(deref(arg_at(ah, "argument list ended early")).e)
       }
       false
     }
@@ -175,7 +176,7 @@ ir_lower_barrier := fn(e : ptr(Expr), cx : ptr(LCtx)) -> IROperand {
 ## of %rax into a fresh vreg IMMEDIATELY (nothing the rewriter inserts between the call and this mov
 ## touches %rax — a spill store is a `movq` to a frame slot). The callee symbol is recorded in the call
 ## side-table and rendered via `emit_mangled_call`.
-ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), cx : ptr(LCtx), unch : bool) -> IROperand {
+ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), cx : ptr(LCtx), unch : bool) -> IROperand {
   ## BIT SHIFT `shl`/`shr(v, n)` (OP-6): an operation-FN, not a real call (no `call` inst). The count `n`
   ## must sit in %cl (the sole variable-count shift register), so lower v→a fresh vreg `t`, lower n, move
   ## n into %rcx (a pre-colored write — the shift op marks %rcx BUSY so no live value parks there), then
@@ -185,8 +186,8 @@ ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), cx : 
   ## text path emits (emit_shift_width_guard), so a register-allocated shift never drops the I11 guard.
   cnm := str_at((cx.src + cs), cl)
   if cnm == "shl" or cnm == "shr" {
-    a0 := deref(arg_p(ah)).e                        ## the value v
-    a1 := deref(arg_p(deref(arg_p(ah)).next)).e     ## the count n
+    a0 := deref(arg_at(ah, "argument list ended early")).e                        ## the value v
+    a1 := deref(arg_at(deref(arg_at(ah, "argument list ended early")).next, "argument list ended early")).e     ## the count n
     vo := ir_lower_expr(a0, cx, unch)
     co := ir_lower_expr(a1, cx, unch)
     t := ir_fresh_vreg()
@@ -213,28 +214,33 @@ ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), cx : 
   ## loop to TEXT. Narrow conversions remain excluded: they need the width-specific instruction/guard path.
   if cnm == "u64" {
     if na != 1 { panic("selfhost: regalloc emit — u64 conversion arity mismatch") }
-    if not ir_u64_identity_arg(deref(arg_p(ah)).e) { panic("selfhost: regalloc emit — u64 conversion requires a scalar leaf") }
-    return ir_lower_expr(deref(arg_p(ah)).e, cx, unch)
+    if not ir_u64_identity_arg(deref(arg_at(ah, "argument list ended early")).e) { panic("selfhost: regalloc emit — u64 conversion requires a scalar leaf") }
+    return ir_lower_expr(deref(arg_at(ah, "argument list ended early")).e, cx, unch)
   }
   ## TARGET-NATIVE ALIAS CONVERSION `usize(u64(x))` (P3-RA-AGG next seam): on x86_64 `usize` and `u64`
   ## occupy the same unsigned native word. The inner u64 identity has already proved that the operand is a
   ## scalar leaf; lowering the outer alias as the same operand cannot change bits, traps, or calls.
   if cnm == "usize" {
     if na != 1 { panic("selfhost: regalloc emit — usize conversion arity mismatch") }
-    if not ir_usize_identity_arg(cx.src, deref(arg_p(ah)).e) { panic("selfhost: regalloc emit — usize conversion requires u64(scalar leaf)") }
-    return ir_lower_expr(deref(arg_p(ah)).e, cx, unch)
+    if not ir_usize_identity_arg(cx.src, deref(arg_at(ah, "argument list ended early")).e) { panic("selfhost: regalloc emit — usize conversion requires u64(scalar leaf)") }
+    return ir_lower_expr(deref(arg_at(ah, "argument list ended early")).e, cx, unch)
   }
   base := IRCA_TOP
   ## 1) lower every arg to an operand onto the stack (nested calls complete + pop here).
-  mut g := ah
-  while g != 0 {
-    ga := deref(arg_p(g))
-    o := ir_lower_expr(ga.e, cx, unch)
-    if IRCA_TOP >= 32 { panic("selfhost: regalloc emit — call-arg stack overflow (predicate too permissive)") }
-    IRCA_K[IRCA_TOP] = o.k
-    IRCA_V[IRCA_TOP] = o.v
-    IRCA_TOP = IRCA_TOP + 1
-    g = ga.next
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        o := ir_lower_expr(ga.e, cx, unch)
+        if IRCA_TOP >= 32 { panic("selfhost: regalloc emit — call-arg stack overflow (predicate too permissive)") }
+        IRCA_K[IRCA_TOP] = o.k
+        IRCA_V[IRCA_TOP] = o.v
+        IRCA_TOP = IRCA_TOP + 1
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   ## 2) move each arg into its SysV integer argument register (pre-colored Phys, in order).
   mut j := 0
@@ -742,8 +748,8 @@ ir_rd_expr := fn(src : ptr(u8), e : ptr(Expr)) {
     Expr::Try(p) => { ir_rd_expr(src, p) }
     Expr::Index(b, ix) => { ir_rd_expr(src, b); ir_rd_expr(src, ix) }
     Expr::If(c, t, f) => { ir_rd_expr(src, c); ir_rd_expr(src, t); ir_rd_expr(src, f) }
-    Expr::Call(cs, cl, na, ah) => { mut g := ah; while g != 0 { ga := deref(arg_p(g)); ir_rd_expr(src, ga.e); g = ga.next } }
-    Expr::StructLit(ns, nl, nf, fh) => { mut g := fh; while g != 0 { ga := deref(arg_p(g)); ir_rd_expr(src, ga.e); g = ga.next } }
+    Expr::Call(cs, cl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); ir_rd_expr(src, ga.e); g = ga.next }; None => { break } } } }
+    Expr::StructLit(ns, nl, nf, fh) => { mut g : Option(ptr(mut Arg)) = fh; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); ir_rd_expr(src, ga.e); g = ga.next }; None => { break } } } }
     Expr::Match | Expr::EnumLit | Expr::ArrayLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef | Expr::Loop => { IRRD_OK = false }
   }
@@ -1207,16 +1213,21 @@ ir_fr_idx := fn(src : ptr(u8), s : usize, n : usize) -> i64 {
 ## Are ALL elements of an ArrayLit compile-time scalar CONSTANTS (Num / BoolLit)? The array-literal init is
 ## spliced through the TEXT emitter at render, where a non-constant element (a Var / call) would read the
 ## register-resident local's (unwritten) FRAME slot — garbage. Constants keep the barrier emit self-contained.
-ir_arraylit_all_const := fn(ehead : ptr(mut Arg)) -> bool {
-  mut g := ehead
+ir_arraylit_all_const := fn(ehead : Option(ptr(mut Arg))) -> bool {
+  mut g : Option(ptr(mut Arg)) = ehead
   mut ok := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    ## #716 — `expr_is_numlit` answers exactly `Num` or `BoolLit`, over a pointer PARAMETER. The
-    ## inline `match deref(ga.e)` it replaces was lowered against tag 0, so a `BoolLit` element
-    ## compared equal to nothing and was taken for a non-constant.
-    if not expr_is_numlit(ga.e) { ok = false }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        ## #716 — `expr_is_numlit` answers exactly `Num` or `BoolLit`, over a pointer PARAMETER. The
+        ## inline `match deref(ga.e)` it replaces was lowered against tag 0, so a `BoolLit` element
+        ## compared equal to nothing and was taken for a non-constant.
+        if not expr_is_numlit(ga.e) { ok = false }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   ok
 }
@@ -1405,12 +1416,12 @@ ir_check_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), unch : b
       ## globals, aggregate values, calls, fields, and other unsupported shapes remain rejected normally.
       if str_at((src + cs), cl) == "u64" {
         if na != 1 { IRP_OK = false }
-        else if ir_u64_identity_arg(deref(arg_p(ah)).e) { ir_check_expr(src, decls, deref(arg_p(ah)).e, unch) }
+        else if ir_u64_identity_arg(deref(arg_at(ah, "argument list ended early")).e) { ir_check_expr(src, decls, deref(arg_at(ah, "argument list ended early")).e, unch) }
         else { IRP_OK = false }
       } else if str_at((src + cs), cl) == "usize" {
         ## Only the exact native-alias wrapper over the already-admitted u64 leaf is identity-safe here.
         if na != 1 { IRP_OK = false }
-        else if ir_usize_identity_arg(src, deref(arg_p(ah)).e) { ir_check_expr(src, decls, deref(arg_p(ah)).e, unch) }
+        else if ir_usize_identity_arg(src, deref(arg_at(ah, "argument list ended early")).e) { ir_check_expr(src, decls, deref(arg_at(ah, "argument list ended early")).e, unch) }
         else { IRP_OK = false }
       } else { ir_check_call(src, decls, cs, cl, na, ah, unch) }
     }
@@ -1430,7 +1441,7 @@ ir_check_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), unch : b
 ## == nargs, nargs ≤ 6 — and NOT a scalar conversion `T(x)` (which emits no `call`). Anything else falls to
 ## the text path. Args are checked as value exprs. Sets IRP_OK = false on any mismatch (defence in depth:
 ## `emit_fn_ir` also fails loud, never silently miscompiles).
-ir_check_call := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), unch : bool) {
+ir_check_call := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), unch : bool) {
   ## BIT SHIFT `shl`/`shr(v, n)` (OP-6): MODELLED by `ir_lower_call` as opcodes 19/20/21 (no real `call`),
   ## so admit it here BEFORE the callee-resolution reject below (a shift resolves to no decl → would be
   ## rejected as an intrinsic). Requires exactly 2 args, both admissible value exprs (a non-scalar / global
@@ -1443,8 +1454,8 @@ ir_check_call := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize,
     if na != 2 { IRP_OK = false }
     IRP_NBIN = IRP_NBIN + 1
     if not unch { IRP_NCHK = IRP_NCHK + 1 }
-    mut gs := ah
-    while gs != 0 { gas := deref(arg_p(gs)); ir_check_expr(src, decls, gas.e, unch); gs = gas.next }
+    mut gs : Option(ptr(mut Arg)) = ah
+    loop { match gs { Some(gsq) => { gas := deref(arg_p(gsq)); ir_check_expr(src, decls, gas.e, unch); gs = gas.next }; None => { break } } }
     return
   }
   ## a scalar conversion `T(x)` (int/float) is NOT a function call (no `call` inst) → reject.
@@ -1478,11 +1489,16 @@ ir_check_call := fn(src : ptr(u8), decls : ptr(rt::Vec), cs : usize, cl : usize,
     IRP_NCALLARG = IRP_NCALLARG + na
   }
   ## check every arg as a value expr (safe to walk even if the callee mismatched).
-  mut g := ah
-  while g != 0 {
-    ga := deref(arg_p(g))
-    ir_check_expr(src, decls, ga.e, unch)
-    g = ga.next
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        ir_check_expr(src, decls, ga.e, unch)
+        g = ga.next
+      }
+      None => { break }
+    }
   }
 }
 ## Verify a CONDITION expression (a top-level comparison, or a plain scalar/bool value).

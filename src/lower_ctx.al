@@ -593,15 +593,20 @@ pub num_lit_value := fn(e : ptr(Expr)) -> i64 {
   nl := num_lit(e)
   nl.v
 }
-pub arg_expr_at := fn(head : ptr(mut Arg), i : usize, a : rt::Arena) -> ptr(Expr) {
-  mut g := head
+pub arg_expr_at := fn(head : Option(ptr(mut Arg)), i : usize, a : rt::Arena) -> ptr(Expr) {
+  mut g : Option(ptr(mut Arg)) = head
   mut k := 0
   mut res := 0
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if k == i { res = unchecked bitcast(usize, ga.e) }
-    k += 1
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if k == i { res = unchecked bitcast(usize, ga.e) }
+        k += 1
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   unchecked bitcast(ptr(Expr), res)
 }
@@ -712,7 +717,7 @@ pub LCtx := struct {
   ## Arg-list handle of the first TRAILING (pack) argument (0 = empty pack / not in a variadic body). The
   ## body's `comptime for v in p` is a `CompForRange` with a NULL hi (pack mode); its unroll walks
   ## `pack_args`, binding `v` to each pack argument in turn.
-  pack_args : usize,
+  pack_args : Option(ptr(mut Arg)),
   ## AGGREGATE-VALUE call-arg temp pool (Functions §4 ABI) — a bump allocator. `agg_next` is the next
   ## free slot (starts at the pool base = `agg_tmp`); each aggregate-value arg materialized by `emit_arg`
   ## takes a distinct `agg_w`-word slice and advances `agg_next`, so N such args in one call get N

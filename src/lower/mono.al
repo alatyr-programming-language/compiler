@@ -20,6 +20,7 @@
 ##
 ## The five externally-called entry points are re-imported into `lower.al` by BARE NAME.
 arg_p := ast::arg_p
+arg_at := ast::arg_at
 arm_p := ast::arm_p
 stmt_p := ast::stmt_p
 local_type_span := ast::local_type_span
@@ -160,7 +161,7 @@ pub block_decl_type := fn(head : ptr(mut Stmt), ns2 : usize, nl2 : usize, src : 
 ## indexed fixed-array reads use the declared element type, and calls use their declared return type.
 ## Keeping this and the emit-side fallback on one helper prevents an emitted `print_one__T` label from
 ## outrunning the mono pre-pass (the original failure for `xs[i]` and `f(xs[i])`).
-collect_variadic_print := fn(args_head : ptr(mut Arg), block_head : ptr(mut Stmt), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
+collect_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : ptr(mut Stmt), in out insts : IVec, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) {
   poi := decl_by_lit_name(decls, src, "print_one")
   if poi < 0 { return }
   fmt := arg_expr_at(args_head, 0, a)
@@ -485,38 +486,58 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
         }
         add_inst(insts, src, usize(gi), ta.s, ta.n, ta2.s, ta2.n, ta3.s, ta3.n)
       }
-      mut g := args_head
-      while g != 0 {
-        ga := deref(arg_p(g))
-        collect_insts_expr(ga.e, insts, decls, src, a, penv)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = args_head
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            collect_insts_expr(ga.e, insts, decls, src, a, penv)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::StructLit(cs, cl, nf, fhead) => {
-      mut g := fhead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        collect_insts_expr(ga.e, insts, decls, src, a, penv)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = fhead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            collect_insts_expr(ga.e, insts, decls, src, a, penv)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Field(base, fs, fl) => { collect_insts_expr(base, insts, decls, src, a, penv) }
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
-      mut g := phead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        collect_insts_expr(ga.e, insts, decls, src, a, penv)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = phead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            collect_insts_expr(ga.e, insts, decls, src, a, penv)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::AddrOf(p) => { collect_insts_expr(p, insts, decls, src, a, penv) }
     Expr::Deref(p) => { collect_insts_expr(p, insts, decls, src, a, penv) }
     Expr::ArrayLit(nel, ehead) => {
-      mut g := ehead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        collect_insts_expr(ga.e, insts, decls, src, a, penv)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ehead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            collect_insts_expr(ga.e, insts, decls, src, a, penv)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Index(base, idx) => {

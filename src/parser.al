@@ -21,6 +21,7 @@ stmt_null := ast::stmt_null
 arm_p := ast::arm_p
 bind_count := ast::bind_count
 arg_p := ast::arg_p
+arg_at := ast::arg_at
 stmt_p := ast::stmt_p
 stmt_label_mark := ast::stmt_label_mark
 stmt_label_span := ast::stmt_label_span
@@ -578,7 +579,7 @@ synth_ident_span := fn(in out pc : PC, nm : str) -> usize {
 
 ## Overwrite arg `h`'s `.next`. `pub` for the driver's FN-6 capture call-rewrite (the store must run in
 ## the parser module — it mis-lowers in the driver module, writing a pointer instead of copying).
-pub set_arg_next := fn(a : ptr(mut rt::Arena), h : ptr(mut Arg), nx : ptr(mut Arg)) {
+pub set_arg_next := fn(a : ptr(mut rt::Arena), h : ptr(mut Arg), nx : Option(ptr(mut Arg))) {
   am := deref(arg_p(h))
   upd := Arg(e = am.e, next = nx)
   deref(arg_p(h)) = upd
@@ -593,7 +594,6 @@ pub set_arg_next := fn(a : ptr(mut rt::Arena), h : ptr(mut Arg), nx : ptr(mut Ar
 ## reset true) on any variant not handled — the caller then DECLINES the specialization fail-loud
 ## (never a partial / stale-pointer clone that would be a silent miscompile).
 expr_null := fn() -> ptr(Expr) { unchecked bitcast(ptr(Expr), 0) }
-arg_null := fn() -> ptr(mut Arg) { unchecked bitcast(ptr(mut Arg), 0) }
 
 ## ---- Structured-label resolution (Control Flow §2.1/§7.1) ---------------------------------------
 ## Labels are FUNCTION-scoped names attached with `@label(name)` to a loop (§2.1). Rather than store a
@@ -661,17 +661,22 @@ lbl_pop := fn() { if P_LOOP_SP > 0 { P_LOOP_SP = P_LOOP_SP - 1 } }
 ## SILENTLY, rc 0, on a compiler built from this tree. Writing those two arms out would buy the
 ## appearance of enforcement and none of the substance, because nothing would hold the list
 ## current — so they are measured, named, and left exactly as they are.
-pub clone_args := fn(a : ptr(mut rt::Arena), ah : ptr(mut Arg), ok : ptr(mut bool)) -> ptr(mut Arg) {
-  mut head := arg_null()
-  mut tail := arg_null()
-  mut g := ah
-  while unchecked bitcast(usize, g) != 0 {
-    am := deref(arg_p(g))
-    ce := clone_expr(a, am.e, ok)
-    ng := gnode(a, Arg(e = ce, next = unchecked bitcast(ptr(mut Arg), 0)))
-    if unchecked bitcast(usize, head) == 0 { head = ng } else { set_arg_next(a, tail, ng) }
-    tail = ng
-    g = am.next
+pub clone_args := fn(a : ptr(mut rt::Arena), ah : Option(ptr(mut Arg)), ok : ptr(mut bool)) -> Option(ptr(mut Arg)) {
+  mut head : Option(ptr(mut Arg)) = Option.None
+  mut tail : Option(ptr(mut Arg)) = Option.None
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => {
+        am := deref(arg_p(gq))
+        ce := clone_expr(a, am.e, ok)
+        ng := gnode(a, Arg(e = ce, next = Option.None))
+        match tail { Some(tl0) => { set_arg_next(a, tl0, Option.Some(ng)) }; None => { head = Option.Some(ng) } }
+        tail = Option.Some(ng)
+        g = am.next
+      }
+      None => { break }
+    }
   }
   head
 }
@@ -806,12 +811,17 @@ pub renum_str_expr := fn(a : ptr(mut rt::Arena), e : ptr(Expr), base : usize) {
       | Expr::Lambda | Expr::FnRef => {}
   }
 }
-renum_str_args := fn(a : ptr(mut rt::Arena), ah : ptr(mut Arg), base : usize) {
-  mut g := ah
-  while unchecked bitcast(usize, g) != 0 {
-    am := deref(arg_p(g))
-    renum_str_expr(a, am.e, base)
-    g = am.next
+renum_str_args := fn(a : ptr(mut rt::Arena), ah : Option(ptr(mut Arg)), base : usize) {
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => {
+        am := deref(arg_p(gq))
+        renum_str_expr(a, am.e, base)
+        g = am.next
+      }
+      None => { break }
+    }
   }
 }
 ## RENUMBER string-literal labels across a cloned STATEMENT list (mirrors `clone_one_stmt`'s variants).
@@ -1787,18 +1797,21 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
     if cur(pc).kind == 14 {
       pc.idx = pc.idx + 1                 ## '['
       mut nel := 0
-      mut ehead := 0
-      mut etail := 0
+      mut ehead : Option(ptr(mut Arg)) = Option.None
+      mut etail : Option(ptr(mut Arg)) = Option.None
       while cur(pc).kind != 15 and cur(pc).kind != 0 {
         ee := p_or(pc)
-        enew := gnode(pc.arena, Arg(e = ee, next = unchecked bitcast(ptr(mut Arg), 0)))
-        if ehead == 0 { ehead = unchecked bitcast(usize, enew) } else {
-          ep := arg_p(etail)
-          eold := deref(ep)
-          eupd := Arg(e = eold.e, next = enew)
-          deref(ep) = eupd
+        enew := gnode(pc.arena, Arg(e = ee, next = Option.None))
+        match etail {
+          Some(etail0) => {
+            ep := arg_p(etail0)
+            eold := deref(ep)
+            eupd := Arg(e = eold.e, next = Option.Some(enew))
+            deref(ep) = eupd
+          }
+          None => { ehead = Option.Some(enew) }
         }
-        etail = unchecked bitcast(usize, enew)
+        etail = Option.Some(enew)
         nel += 1
         if cur(pc).kind == 9 {
           pc.idx = pc.idx + 1                           ## ',' between elements
@@ -1817,17 +1830,22 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
             ## already pushed above, so drop it to make the literal truly empty (size 0). Without this
             ## `[e; 0]` silently parsed as a ONE-element array (a wrong layout for `[T; 0]`).
             nel = 0
-            ehead = 0
-            etail = 0
+            ehead = Option.None
+            etail = Option.None
           } else {
             mut fi := 1
             while fi < filln {
-              fnew := gnode(pc.arena, Arg(e = ee, next = unchecked bitcast(ptr(mut Arg), 0)))
-              ep := arg_p(etail)
-              eold := deref(ep)
-              eupd := Arg(e = eold.e, next = fnew)
-              deref(ep) = eupd
-              etail = unchecked bitcast(usize, fnew)
+              fnew := gnode(pc.arena, Arg(e = ee, next = Option.None))
+              match etail {
+                Some(etf) => {
+                  epf := arg_p(etf)
+                  eoldf := deref(epf)
+                  eupdf := Arg(e = eoldf.e, next = Option.Some(fnew))
+                  deref(epf) = eupdf
+                }
+                None => { panic("array fill: the first element is missing") }
+              }
+              etail = Option.Some(fnew)
               nel += 1
               fi += 1
             }
@@ -2072,20 +2090,23 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         is_qstruct := cur(pc).kind == 1 and tok_at(pc, pc.idx + 1).kind == 21
         if is_qstruct {
           mut qfnf := 0
-          mut qfhead := 0
-          mut qftail := 0
+          mut qfhead : Option(ptr(mut Arg)) = Option.None
+          mut qftail : Option(ptr(mut Arg)) = Option.None
           while cur(pc).kind != 11 and cur(pc).kind != 0 {
             pc.idx = pc.idx + 1           ## field name
             pc.idx = pc.idx + 1           ## '='
             qfe := p_or(pc)
-            qfnew := gnode(pc.arena, Arg(e = qfe, next = unchecked bitcast(ptr(mut Arg), 0)))
-            if qfhead == 0 { qfhead = unchecked bitcast(usize, qfnew) } else {
-              qfp := arg_p(qftail)
-              qfold := deref(qfp)
-              qfupd := Arg(e = qfold.e, next = qfnew)
-              deref(qfp) = qfupd
+            qfnew := gnode(pc.arena, Arg(e = qfe, next = Option.None))
+            match qftail {
+              Some(qftail0) => {
+                qfp := arg_p(qftail0)
+                qfold := deref(qfp)
+                qfupd := Arg(e = qfold.e, next = Option.Some(qfnew))
+                deref(qfp) = qfupd
+              }
+              None => { qfhead = Option.Some(qfnew) }
             }
-            qftail = unchecked bitcast(usize, qfnew)
+            qftail = Option.Some(qfnew)
             qfnf += 1
             if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between fields
           }
@@ -2093,18 +2114,21 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           return newnode(pc.arena, Expr.StructLit(tseg_start, tseg_len, qfnf, qfhead))
         }
         mut qn := 0
-        mut qhead := 0
-        mut qtail := 0
+        mut qhead : Option(ptr(mut Arg)) = Option.None
+        mut qtail : Option(ptr(mut Arg)) = Option.None
         while cur(pc).kind != 11 and cur(pc).kind != 0 {
           qe := p_or(pc)
-          qnew := gnode(pc.arena, Arg(e = qe, next = unchecked bitcast(ptr(mut Arg), 0)))
-          if qhead == 0 { qhead = unchecked bitcast(usize, qnew) } else {
-            qp := arg_p(qtail)
-            qold := deref(qp)
-            qupd := Arg(e = qold.e, next = qnew)
-            deref(qp) = qupd
+          qnew := gnode(pc.arena, Arg(e = qe, next = Option.None))
+          match qtail {
+            Some(qtail0) => {
+              qp := arg_p(qtail0)
+              qold := deref(qp)
+              qupd := Arg(e = qold.e, next = Option.Some(qnew))
+              deref(qp) = qupd
+            }
+            None => { qhead = Option.Some(qnew) }
           }
-          qtail = unchecked bitcast(usize, qnew)
+          qtail = Option.Some(qnew)
           qn += 1
           if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between args
         }
@@ -2189,8 +2213,8 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           ## Build the value `Arg` list in DECLARATION order. `fhead`/`ftail` are the emitted list; the
           ## inline link store mirrors the historical struct-ctor idiom exactly.
           mut fnf := 0
-          mut fhead := 0
-          mut ftail := 0
+          mut fhead : Option(ptr(mut Arg)) = Option.None
+          mut ftail : Option(ptr(mut Arg)) = Option.None
           rec := struct_rec_of(pc, t.start, t.len)
           if rec < 0 {
             ## Struct type not in the field-order table (forward-ref / generic-inst head / single-pass
@@ -2200,9 +2224,9 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
             loop {
               match fig {
                 Some(gq) => {
-                  fnew := gnode(pc.arena, Arg(e = finit_expr(gq), next = unchecked bitcast(ptr(mut Arg), 0)))
-                  if fhead == 0 { fhead = unchecked bitcast(usize, fnew) } else { fp := arg_p(ftail); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = fnew) }
-                  ftail = unchecked bitcast(usize, fnew)
+                  fnew := gnode(pc.arena, Arg(e = finit_expr(gq), next = Option.None))
+                  match ftail { Some(ftail0) => { fp := arg_p(ftail0); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = Option.Some(fnew)) }; None => { fhead = Option.Some(fnew) } }
+                  ftail = Option.Some(fnew)
                   fnf += 1
                   fig = finit_next(gq)
                 }
@@ -2262,28 +2286,31 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
                 if df.dl > 0 { fval = relex_default(pc, df.ds, df.dl) }
                 else { sfail("selfhost: struct construction leaves a non-trailing field unwritten (a gap before a later written or defaulted field) - provide the field, give it a default, or reorder") }
               }
-              fnew := gnode(pc.arena, Arg(e = fval, next = unchecked bitcast(ptr(mut Arg), 0)))
-              if fhead == 0 { fhead = unchecked bitcast(usize, fnew) } else { fp := arg_p(ftail); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = fnew) }
-              ftail = unchecked bitcast(usize, fnew)
+              fnew := gnode(pc.arena, Arg(e = fval, next = Option.None))
+              match ftail { Some(ftail0) => { fp := arg_p(ftail0); fo := deref(fp); deref(fp) = Arg(e = fo.e, next = Option.Some(fnew)) }; None => { fhead = Option.Some(fnew) } }
+              ftail = Option.Some(fnew)
               fnf += 1
               k += 1
             }
           }
-          return newnode(pc.arena, Expr.StructLit(t.start, t.len, fnf, unchecked bitcast(ptr(mut Arg), fhead)))
+          return newnode(pc.arena, Expr.StructLit(t.start, t.len, fnf, fhead))
         }
         mut nargs := 0
-        mut ahead := 0
-        mut atail := 0
+        mut ahead : Option(ptr(mut Arg)) = Option.None
+        mut atail : Option(ptr(mut Arg)) = Option.None
         while cur(pc).kind != 11 and cur(pc).kind != 0 {
           ae := p_or(pc)
-          anew := gnode(pc.arena, Arg(e = ae, next = unchecked bitcast(ptr(mut Arg), 0)))
-          if ahead == 0 { ahead = unchecked bitcast(usize, anew) } else {
-            gp := arg_p(atail)
-            gold := deref(gp)
-            gupd := Arg(e = gold.e, next = anew)
-            deref(gp) = gupd
+          anew := gnode(pc.arena, Arg(e = ae, next = Option.None))
+          match atail {
+            Some(atail0) => {
+              gp := arg_p(atail0)
+              gold := deref(gp)
+              gupd := Arg(e = gold.e, next = Option.Some(anew))
+              deref(gp) = gupd
+            }
+            None => { ahead = Option.Some(anew) }
           }
-          atail = unchecked bitcast(usize, anew)
+          atail = Option.Some(anew)
           nargs += 1
           if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between args
         }
@@ -2303,20 +2330,23 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
       ## TUPLE literal — collect `e` plus the comma-separated rest into an `Arg` list + ArrayLit,
       ## mirroring the `[a, b]` array-literal loop EXACTLY (the first element flows through the same
       ## append path, ehead starts 0).
-      mut ehead := 0
-      mut etail := 0
+      mut ehead : Option(ptr(mut Arg)) = Option.None
+      mut etail : Option(ptr(mut Arg)) = Option.None
       mut nel := 0
       mut cure : ptr(Expr) = e
       mut going := true
       while going {
-        enew := gnode(pc.arena, Arg(e = cure, next = unchecked bitcast(ptr(mut Arg), 0)))
-        if ehead == 0 { ehead = unchecked bitcast(usize, enew) } else {
-          ep := arg_p(etail)
-          eold := deref(ep)
-          eupd := Arg(e = eold.e, next = enew)
-          deref(ep) = eupd
+        enew := gnode(pc.arena, Arg(e = cure, next = Option.None))
+        match etail {
+          Some(etail0) => {
+            ep := arg_p(etail0)
+            eold := deref(ep)
+            eupd := Arg(e = eold.e, next = Option.Some(enew))
+            deref(ep) = eupd
+          }
+          None => { ehead = Option.Some(enew) }
         }
-        etail = unchecked bitcast(usize, enew)
+        etail = Option.Some(enew)
         nel += 1
         if cur(pc).kind == 9 {
           pc.idx = pc.idx + 1                              ## ','
@@ -2454,18 +2484,21 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
         pc.idx = pc.idx + 1               ## '('
         ## N comma-separated payload args into an arena-linked `Arg` list (general arity).
         mut pnp := 0
-        mut phead := 0
-        mut ptail := 0
+        mut phead : Option(ptr(mut Arg)) = Option.None
+        mut ptail : Option(ptr(mut Arg)) = Option.None
         while cur(pc).kind != 11 and cur(pc).kind != 0 {
           pe := p_or(pc)
-          pnew := gnode(pc.arena, Arg(e = pe, next = unchecked bitcast(ptr(mut Arg), 0)))
-          if phead == 0 { phead = unchecked bitcast(usize, pnew) } else {
-            pp := arg_p(ptail)
-            pold := deref(pp)
-            pupd := Arg(e = pold.e, next = pnew)
-            deref(pp) = pupd
+          pnew := gnode(pc.arena, Arg(e = pe, next = Option.None))
+          match ptail {
+            Some(ptail0) => {
+              pp := arg_p(ptail0)
+              pold := deref(pp)
+              pupd := Arg(e = pold.e, next = Option.Some(pnew))
+              deref(pp) = pupd
+            }
+            None => { phead = Option.Some(pnew) }
           }
-          ptail = unchecked bitcast(usize, pnew)
+          ptail = Option.Some(pnew)
           pnp += 1
           if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }   ## ',' between payload args
         }
@@ -2503,7 +2536,7 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
           base = newnode(pc.arena, Expr.EnumLit(en.s, en.n, fld.start, fld.len, pnp, phead))
         } else {
           ba := gnode(pc.arena, Arg(e = base, next = phead))
-          base = newnode(pc.arena, Expr.Call(fld.start, fld.len, pnp + 1, ba))
+          base = newnode(pc.arena, Expr.Call(fld.start, fld.len, pnp + 1, Option.Some(ba)))
         }
       } else {
         ## `E.V` with NO `(` — a NULLARY enum-variant construction (`Box.Empty`, `Opt.None`) when the
@@ -2518,7 +2551,7 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
         mut is_nullary_ctor := false
         if ennv.n != 0 and enums_known(pc) and is_enum_name(pc, ennv.s, ennv.n) { is_nullary_ctor = true }
         if is_nullary_ctor {
-          base = newnode(pc.arena, Expr.EnumLit(ennv.s, ennv.n, fld.start, fld.len, 0, 0))
+          base = newnode(pc.arena, Expr.EnumLit(ennv.s, ennv.n, fld.start, fld.len, 0, Option.None))
         } else {
           base = newnode(pc.arena, Expr.Field(base, fld.start, fld.len))
         }
@@ -2602,18 +2635,21 @@ p_field := fn(in out pc : PC) -> ptr(mut Expr) {
 p_pcall := fn(in out pc : PC, nm : NSpan) -> ptr(mut Expr) {
   pc.idx = pc.idx + 1                                    ## '('
   mut nargs := 0
-  mut ahead := 0
-  mut atail := 0
+  mut ahead : Option(ptr(mut Arg)) = Option.None
+  mut atail : Option(ptr(mut Arg)) = Option.None
   while cur(pc).kind != 11 and cur(pc).kind != 0 {
     ae := p_or(pc)
-    anew := gnode(pc.arena, Arg(e = ae, next = unchecked bitcast(ptr(mut Arg), 0)))
-    if ahead == 0 { ahead = unchecked bitcast(usize, anew) } else {
-      gp := arg_p(atail)
-      gold := deref(gp)
-      gupd := Arg(e = gold.e, next = anew)
-      deref(gp) = gupd
+    anew := gnode(pc.arena, Arg(e = ae, next = Option.None))
+    match atail {
+      Some(atail0) => {
+        gp := arg_p(atail0)
+        gold := deref(gp)
+        gupd := Arg(e = gold.e, next = Option.Some(anew))
+        deref(gp) = gupd
+      }
+      None => { ahead = Option.Some(anew) }
     }
-    atail = unchecked bitcast(usize, anew)
+    atail = Option.Some(anew)
     nargs += 1
     if cur(pc).kind == 9 { pc.idx = pc.idx + 1 }         ## ',' between args
   }
@@ -2635,14 +2671,14 @@ p_pcall := fn(in out pc : PC, nm : NSpan) -> ptr(mut Expr) {
 p_ecallee := fn(in out pc : PC, callee : ptr(mut Expr), rn : NSpan) -> ptr(mut Expr) {
   pc.idx = pc.idx + 1                                    ## '('
   mut nargs := 0
-  chead := gnode(pc.arena, Arg(e = callee, next = unchecked bitcast(ptr(mut Arg), 0)))
+  chead := gnode(pc.arena, Arg(e = callee, next = Option.None))
   mut atail := chead
   while cur(pc).kind != 11 and cur(pc).kind != 0 {
     ae := p_or(pc)
-    anew := gnode(pc.arena, Arg(e = ae, next = unchecked bitcast(ptr(mut Arg), 0)))
+    anew := gnode(pc.arena, Arg(e = ae, next = Option.None))
     gp := arg_p(atail)
     gold := deref(gp)
-    gupd := Arg(e = gold.e, next = anew)
+    gupd := Arg(e = gold.e, next = Option.Some(anew))
     deref(gp) = gupd
     atail = anew
     nargs += 1
@@ -2650,7 +2686,7 @@ p_ecallee := fn(in out pc : PC, callee : ptr(mut Expr), rn : NSpan) -> ptr(mut E
   }
   pc.idx = pc.idx + 1                                    ## ')'
   ecallee_mark(rn.s)
-  newnode(pc.arena, Expr.Call(rn.s, rn.n, nargs + 1, chead))
+  newnode(pc.arena, Expr.Call(rn.s, rn.n, nargs + 1, Option.Some(chead)))
 }
 
 ## #544 stage 1 — THE SINGLE-ARM PROBE BAND (`field_base_expr` through `idx_field_parts`).
@@ -3384,10 +3420,10 @@ defer_expr_try := fn(e : ptr(Expr)) -> bool {
     Expr::Unchecked(x) => { res = defer_expr_try(x) }
     Expr::Bitcast(x, ts, tl) => { res = defer_expr_try(x) }
     Expr::Slice(b, lo, hi) => { if defer_expr_try(b) or defer_expr_try(lo) or defer_expr_try(hi) { res = true } }
-    Expr::Call(cs, cl, na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if defer_expr_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next } }
-    Expr::StructLit(cs, cl, na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if defer_expr_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next } }
-    Expr::EnumLit(es, el, vs, vl, na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if defer_expr_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next } }
-    Expr::ArrayLit(na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if defer_expr_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next } }
+    Expr::Call(cs, cl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if defer_expr_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next }; None => { break } } } }
+    Expr::StructLit(cs, cl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if defer_expr_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next }; None => { break } } } }
+    Expr::EnumLit(es, el, vs, vl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if defer_expr_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next }; None => { break } } } }
+    Expr::ArrayLit(na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop {match g { Some(gq) => { ga := deref(arg_p(gq)) ; if defer_expr_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next }; None => { break } } } }
     Expr::CompField(b, i) => { if defer_expr_try(b) or defer_expr_try(i) { res = true } }
     Expr::Loop(b) => { res = defer_stmts_clean(b) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Lambda
@@ -3537,8 +3573,8 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## ':=' / '='
     init_e := p_or(pc)
     ai_s := synth_ident_span(pc, "alloc_into")
-    init_arg := gnode(pc.arena, Arg(e = init_e, next = unchecked bitcast(ptr(mut Arg), 0)))
-    arena_arg := gnode(pc.arena, Arg(e = arena_e, next = init_arg))
+    init_arg := gnode(pc.arena, Arg(e = init_e, next = Option.None))
+    arena_arg := gnode(pc.arena, Arg(e = arena_e, next = Option.Some(init_arg)))
     ## A bare integer-literal init has no inferable type (spec §3.4: a literal with no context takes the
     ## target's native SIGNED integer, `isize`). `alloc_into`'s `T` is inferred from `init` for a
     ## struct/enum literal or a typed var, but NOT for a bare `Num` — so for that case pass an EXPLICIT
@@ -3551,11 +3587,11 @@ p_stmt := fn(in out pc : PC) -> usize {
     if is_num {
       ts := synth_ident_span(pc, "isize")
       ty_e := newnode(pc.arena, Expr.Var(ts, 5))
-      ty_arg := gnode(pc.arena, Arg(e = ty_e, next = arena_arg))
-      calln := newnode(pc.arena, Expr.Call(ai_s, 10, 3, ty_arg))
+      ty_arg := gnode(pc.arena, Arg(e = ty_e, next = Option.Some(arena_arg)))
+      calln := newnode(pc.arena, Expr.Call(ai_s, 10, 3, Option.Some(ty_arg)))
       return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, calln, 0)))
     }
-    callq := newnode(pc.arena, Expr.Call(ai_s, 10, 2, arena_arg))
+    callq := newnode(pc.arena, Expr.Call(ai_s, 10, 2, Option.Some(arena_arg)))
     return unchecked bitcast(usize, snode(pc.arena, Stmt.Assign(nm.start, nm.len, callq, 0)))
   }
   ## `unchecked { <stmts> }` — the STATEMENT verification-mode block (Grammar §130: `unchecked (expr |
@@ -3843,10 +3879,10 @@ p_stmt := fn(in out pc : PC) -> usize {
       ## marker (the chain HEAD); the parent statement-list builder links to the chain TAIL (via stmt_last),
       ## so the block statements stay inline in the chain and every scan pass sees them.
       bs := synth_ident_span(pc, "__deferblk")
-      bcall := newnode(pc.arena, Expr.Call(bs, 10, 0, 0))
+      bcall := newnode(pc.arena, Expr.Call(bs, 10, 0, Option.None))
       bstart := snode(pc.arena, Stmt.ExprStmt(bcall, 0))
       be := synth_ident_span(pc, "__deferblkend")
-      bcall2 := newnode(pc.arena, Expr.Call(be, 13, 0, 0))
+      bcall2 := newnode(pc.arena, Expr.Call(be, 13, 0, Option.None))
       bend := snode(pc.arena, Stmt.ExprStmt(bcall2, 0))
       if unchecked bitcast(usize, dblk) == 0 {
         set_stmt_next(pc.arena, bstart, bend)
@@ -3857,9 +3893,9 @@ p_stmt := fn(in out pc : PC) -> usize {
       return unchecked bitcast(usize, bstart)
     }
     dact := p_or(pc)                    ## the cleanup expression (a call, overwhelmingly)
-    darg := gnode(pc.arena, Arg(e = dact, next = unchecked bitcast(ptr(mut Arg), 0)))
+    darg := gnode(pc.arena, Arg(e = dact, next = Option.None))
     dcs := synth_ident_span(pc, "__defer")
-    dcall := newnode(pc.arena, Expr.Call(dcs, 7, 1, darg))
+    dcall := newnode(pc.arena, Expr.Call(dcs, 7, 1, Option.Some(darg)))
     return unchecked bitcast(usize, snode(pc.arena, Stmt.ExprStmt(dcall, 0)))
   }
   ## `@label(name) <loop>` (Control Flow §2.1/§6, CF-4): the structured-label attribute precedes a

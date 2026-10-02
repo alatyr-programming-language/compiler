@@ -33,6 +33,8 @@ param_any := ast::param_any
 param_at := ast::param_at
 arm_p := ast::arm_p
 arg_p := ast::arg_p
+arg_at := ast::arg_at
+arg_any := ast::arg_any
 stmt_p := ast::stmt_p
 stmt_label_span := ast::stmt_label_span
 ## Decl-layout primitives (shared with `lower`) for the generic when-GUARD located reject: sema folds a
@@ -2216,31 +2218,46 @@ da_bad_expr := fn(e : ptr(Expr), da : ptr(DA), src : ptr(u8)) -> bool {
       qnm := str_at((src + cs), cl)
       if qnm == "resolves" or qnm == "compiles" { return false }
       mut bad := false
-      mut g := gh
-      while g != 0 {
-        ga := deref(arg_p(g))
-        if da_bad_expr(ga.e, da, src) { bad = true }
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = gh
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if da_bad_expr(ga.e, da, src) { bad = true }
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
     Expr::StructLit(cs, cl, nf, gh) => {
       mut bad := false
-      mut g := gh
-      while g != 0 {
-        ga := deref(arg_p(g))
-        if da_bad_expr(ga.e, da, src) { bad = true }
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = gh
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if da_bad_expr(ga.e, da, src) { bad = true }
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
     Expr::EnumLit(es, el, vs, vl, np, gh) => {
       mut bad := false
-      mut g := gh
-      while g != 0 {
-        ga := deref(arg_p(g))
-        if da_bad_expr(ga.e, da, src) { bad = true }
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = gh
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if da_bad_expr(ga.e, da, src) { bad = true }
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -2290,11 +2307,16 @@ da_bad_expr := fn(e : ptr(Expr), da : ptr(DA), src : ptr(u8)) -> bool {
     Expr::Deref(p) => { da_bad_expr(p, da, src) }
     Expr::ArrayLit(ne, gh) => {
       mut bad := false
-      mut g := gh
-      while g != 0 {
-        ga := deref(arg_p(g))
-        if da_bad_expr(ga.e, da, src) { bad = true }
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = gh
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if da_bad_expr(ga.e, da, src) { bad = true }
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -3146,13 +3168,13 @@ sema_brand_array_elems := fn(census : bool, dst : Ty, v : ptr(Expr), off : usize
   if sp.n == 0 { return 0 }
   et := resolve_ty(src, sp.s, sp.n, decls, upto)
   if not kind_is_brand(et.kind) and not kind_is_int(et.kind) { return 0 }
-  mut g := expr_array_lit_head(v)
+  mut g : Option(ptr(mut Arg)) = expr_array_lit_head(v)
   mut err : CheckErr = 0
   ## Issue #698 — a WHOLE array value, not a literal: a local recorded as a fixed array
   ## (`bs : [B; 2]`) has its element type in its annotation, so its elements are judged by TYPE
   ## against the sink's element type. Before this `ys : [A; 2] = bs` and `take(bs)` for
   ## `take := fn(xs : [A; 2])` let every element of a sibling brand through.
-  if g == 0 {
+  if not arg_any(g) {
     vv := expr_var_span(v)
     if vv.n != 0 and nloc != 0 and local_in(locals, nloc, src, vv.s, vv.n) {
       vlk := local_lookup(locals, nloc, src, vv.s, vv.n)
@@ -3168,16 +3190,21 @@ sema_brand_array_elems := fn(census : bool, dst : Ty, v : ptr(Expr), off : usize
     }
     return err
   }
-  while g != 0 {
-    ea := deref(arg_p(g))
-    eoff := sema_brand_span(s_of(ea.e, a), off)
-    if census {
-      brand_probe_value_sink(et, ea.e, eoff, decls, upto, src, locals, nloc, a)
-    } else {
-      ee := sema_brand_value_sink_err(et, ea.e, eoff, decls, upto, src, locals, nloc, a)
-      if ee != 0 and err == 0 { err = ee }
+  loop {
+    match g {
+      Some(gq) => {
+        ea := deref(arg_p(gq))
+        eoff := sema_brand_span(s_of(ea.e, a), off)
+        if census {
+          brand_probe_value_sink(et, ea.e, eoff, decls, upto, src, locals, nloc, a)
+        } else {
+          ee := sema_brand_value_sink_err(et, ea.e, eoff, decls, upto, src, locals, nloc, a)
+          if ee != 0 and err == 0 { err = ee }
+        }
+        g = ea.next
+      }
+      None => { break }
     }
-    g = ea.next
   }
   err
 }
@@ -3275,9 +3302,9 @@ sema_expr_left_off := fn(e : ptr(Expr), src : ptr(u8)) -> usize {
 ## #726 — was this `ArrayLit` provably written as an ARRAY `[e0, …]`? The parser builds a TUPLE
 ## `(a, b)` as the same node and keeps no delimiter, so it is recovered from the source byte before
 ## the first element. A tuple, or a literal whose delimiter cannot be recovered, answers false.
-sema_arraylit_is_array := fn(head : ptr(mut Arg), src : ptr(u8)) -> bool {
-  if unchecked bitcast(usize, head) == 0 { return false }
-  h0 := deref(arg_p(head))
+sema_arraylit_is_array := fn(head : Option(ptr(mut Arg)), src : ptr(u8)) -> bool {
+  if not arg_any(head) { return false }
+  h0 := deref(arg_at(head, "argument list ended early"))
   mut p := sema_expr_left_off(h0.e, src)
   if p == 0 { return false }
   while p > 0 and _sws1(src, p - 1) { p -= 1 }
@@ -3325,8 +3352,8 @@ sema_brand_ctor_arg_err := fn(e : ptr(Expr), off : usize, decls : ptr(rt::Vec), 
   if sema_brand_is_prelude(src, cs.s, cs.n) { return 0 }
   if sema_brand_underlying(decls, upto, src, cs.s, cs.n).n == 0 { return 0 }
   ah := expr_call_args_head(e)
-  if ah == 0 { return 0 }
-  arg := deref(arg_p(ah))
+  if not arg_any(ah) { return 0 }
+  arg := deref(arg_at(ah, "argument list ended early"))
   at := sema_brand_value_ty(arg.e, decls, upto, src, locals, nloc, a)
   if not kind_is_brand(at.kind) { return 0 }
   dst := Ty(kind = TyKind.TyBrand, ns = cs.s, nl = cs.n)
@@ -3381,27 +3408,32 @@ sema_brand_struct_fields := fn(census : bool, e : ptr(Expr), decls : ptr(rt::Vec
   di := type_decl_index(decls, upto, src, al.s, al.n)
   if di == 0 { return 0 }
   mut fld := (deref(decl_at(Decl, rt::vec_get(deref(decls), di - 1)))).fields_head
-  mut g := expr_struct_lit_head(e)
+  mut g : Option(ptr(mut Arg)) = expr_struct_lit_head(e)
   mut err : CheckErr = 0
-  while g != 0 {
-    sa := deref(arg_p(g))
-    match fld {
-      Some(fldq) => {
-        fd := deref(fld_p(fldq))
-        ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
-        if census {
-          brand_probe_sink(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
-        } else {
-          fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
-          if fe != 0 and err == 0 { err = fe }
+  loop {
+    match g {
+      Some(gq) => {
+        sa := deref(arg_p(gq))
+        match fld {
+          Some(fldq) => {
+            fd := deref(fld_p(fldq))
+            ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
+            if census {
+              brand_probe_sink(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+            } else {
+              fe := sema_brand_sink_err(ft, sa.e, s_of(sa.e, a), decls, upto, src, locals, nloc, a)
+              if fe != 0 and err == 0 { err = fe }
+            }
+            ne := sema_brand_struct_fields(census, sa.e, decls, upto, src, a, locals, nloc)
+            if ne != 0 and err == 0 { err = ne }
+            fld = fd.next
+          }
+          None => {}
         }
-        ne := sema_brand_struct_fields(census, sa.e, decls, upto, src, a, locals, nloc)
-        if ne != 0 and err == 0 { err = ne }
-        fld = fd.next
+        g = sa.next
       }
-      None => {}
+      None => { break }
     }
-    g = sa.next
   }
   err
 }
@@ -4339,16 +4371,16 @@ expr_call_callee_span := fn(e : ptr(Expr)) -> VSpan {
   }
 }
 
-## The args-list head (arena handle) of a direct `Call`, else 0 — a SMALL inline accessor. Scar #2: the
+## The args-list head (arena handle) of a direct `Call`, else `None` — a SMALL inline accessor. Scar #2: the
 ## big-match `Call` arm is not dispatched under the seed, so the pre-match ptr-target arg check walks the
 ## args through this rather than that (dead-for-this-arm) match. Pairs with `expr_call_callee_span`.
-expr_call_args_head := fn(e : ptr(Expr)) -> usize {
+expr_call_args_head := fn(e : ptr(Expr)) -> Option(ptr(mut Arg)) {
   match deref(e) {
     Expr::Call(cs, cl, na, ah) => { ah }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Option.None }
   }
 }
 
@@ -4434,8 +4466,8 @@ sema_size_bool_niche_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   if cs.n == 0 or str_at((src + cs.s), cs.n) != "size" { return false }
   if expr_call_arity(e) != 1 { return false }
   ah := expr_call_args_head(e)
-  if ah == 0 { return false }
-  aa := deref(arg_p(ah))
+  if not arg_any(ah) { return false }
+  aa := deref(arg_at(ah, "argument list ended early"))
   ts := sema_generic_inst_type_span(aa.e, src)
   if ts.n == 0 { return false }
   is_bool_niche_pending(src, ts.s, ts.n)
@@ -4777,13 +4809,13 @@ expr_agg_lit := fn(e : ptr(Expr)) -> AggLit {
 ## conformance never runs and anything that must judge a field sink has to recover the list here. Kept
 ## separate from `expr_agg_lit` because that accessor also answers for an `EnumLit`, whose payload types
 ## the parser does not record per component (a distinct, deferred sink).
-expr_struct_lit_head := fn(e : ptr(Expr)) -> usize {
+expr_struct_lit_head := fn(e : ptr(Expr)) -> Option(ptr(mut Arg)) {
   match deref(e) {
     Expr::StructLit(scs, scl, snf, sfh) => { sfh }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Option.None }
   }
 }
 expr_struct_lit_name := fn(e : ptr(Expr)) -> VSpan {
@@ -4801,13 +4833,13 @@ expr_struct_lit_name := fn(e : ptr(Expr)) -> VSpan {
 ## the list through a small single-focus accessor. `expr_enum_parts` deliberately does not carry it —
 ## the variant NAME and ARITY rules need no payload value — so the head is recovered here instead of
 ## widening that struct for every caller.
-expr_enum_lit_head := fn(e : ptr(Expr)) -> usize {
+expr_enum_lit_head := fn(e : ptr(Expr)) -> Option(ptr(mut Arg)) {
   match deref(e) {
     Expr::EnumLit(ets, etl, evs, evl, enp, eph) => { eph }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Option.None }
   }
 }
 ## True only for the parser's generic-construction shape `Name(type-args)(field = value, …)`.
@@ -4936,13 +4968,13 @@ expr_field_base_var := fn(e : ptr(Expr)) -> VSpan {
 ## bootstrap seed, so anything that has to walk the elements recovers the list here. The parser shares
 ## `ArrayLit` between arrays, tuples and the `[e; n]` fill form; the caller discriminates by the
 ## DECLARED type it is judging against, never by this handle.
-expr_array_lit_head := fn(e : ptr(Expr)) -> usize {
+expr_array_lit_head := fn(e : ptr(Expr)) -> Option(ptr(mut Arg)) {
   match deref(e) {
     Expr::ArrayLit(nel, eh) => { eh }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Option.None }
   }
 }
 ## The FIRST element expr of an `ArrayLit` (null if not an array / empty) — a scalar-element array is
@@ -4950,7 +4982,7 @@ expr_array_lit_head := fn(e : ptr(Expr)) -> usize {
 expr_array_first := fn(e : ptr(Expr)) -> ptr(Expr) {
   match deref(e) {
     Expr::ArrayLit(nel, eh) => {
-      if unchecked bitcast(usize, eh) != 0 { (deref(arg_p(eh))).e } else { unchecked bitcast(ptr(Expr), 0) }
+      if arg_any(eh) { (deref(arg_at(eh, "argument list ended early"))).e } else { unchecked bitcast(ptr(Expr), 0) }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
@@ -5087,10 +5119,10 @@ sema_num_literal_start := fn(e : ptr(Expr)) -> usize {
 sema_two_word_tuple_literal := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   match deref(e) {
     Expr::ArrayLit(nel, eh) => {
-      if nel != 2 or eh == 0 { return false }
-      e0 := deref(arg_p(eh))
+      if nel != 2 or not arg_any(eh) { return false }
+      e0 := deref(arg_at(eh, "argument list ended early"))
       if e0.next == 0 { return false }
-      e1 := deref(arg_p(e0.next))
+      e1 := deref(arg_at(e0.next, "argument list ended early"))
       if e1.next != 0 { return false }
       s0 := sema_num_literal_start(e0.e)
       s1 := sema_num_literal_start(e1.e)
@@ -5600,7 +5632,7 @@ sema_literal_class := fn(e : ptr(Expr)) -> u8 {
       | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
-literal_overload_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, args_head : ptr(mut Arg), mod_s : usize, mod_l : usize) -> bool {
+literal_overload_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, args_head : Option(ptr(mut Arg)), mod_s : usize, mod_l : usize) -> bool {
   ## This slice is intentionally unqualified. The owning-module span makes an unqualified lookup exact;
   ## qualified source paths require the lower's module-path normalization and remain unchanged.
   mut qi := 0
@@ -5621,26 +5653,30 @@ literal_overload_ambiguous := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize
     unguarded := unchecked bitcast(usize, d.when_cond) == 0
     if (d.kind == 1 or d.kind == 4) and d.is_generic == false and unguarded and d.arity == nargs and same_name and same_mod {
       mut pp := d.params_head
-      mut gg := args_head
+      mut gg : Option(ptr(mut Arg)) = args_head
       mut matches := true
       loop {
         match pp {
           Some(ppq) => {
-            if not (gg != 0) { break }
-            pm := deref(param_p(ppq))
-            ga := deref(arg_p(gg))
-            lc := sema_literal_class(ga.e)
-            bn := base_type_name(src, pm.ts, pm.tl)
-            if lc == 1 and not sema_int_overload_param(src, bn.s, bn.n) { matches = false }
-            else if lc == 2 and not sema_float_overload_param(src, bn.s, bn.n) { matches = false }
-            else if lc == 0 { matches = false }
-            pp = pm.next
-            gg = ga.next
+            match gg {
+              None => { break }
+              Some(ggq) => {
+                pm := deref(param_p(ppq))
+                ga := deref(arg_p(ggq))
+                lc := sema_literal_class(ga.e)
+                bn := base_type_name(src, pm.ts, pm.tl)
+                if lc == 1 and not sema_int_overload_param(src, bn.s, bn.n) { matches = false }
+                else if lc == 2 and not sema_float_overload_param(src, bn.s, bn.n) { matches = false }
+                else if lc == 0 { matches = false }
+                pp = pm.next
+                gg = ga.next
+              }
+            }
           }
           None => { break }
         }
       }
-      if matches and not param_any(pp) and gg == 0 { nfound += 1 }
+      if matches and not param_any(pp) and not arg_any(gg) { nfound += 1 }
     }
     }
     i += 1
@@ -5781,12 +5817,18 @@ s3a_addr_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
 ## the same field shape must be rejected for an overload or a forward call as well.
 s3a_call_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8), locals : ptr(LVec), nloc : usize, a : ptr(mut rt::Arena)) -> usize {
   ah := expr_call_args_head(e)
-  mut g := ah
+  mut g : Option(ptr(mut Arg)) = ah
   mut bad := 0
-  while g != 0 and bad == 0 {
-    ga := deref(arg_p(g))
-    bad = s3a_field_by_value_bad(ga.e, decls, upto, src, locals, nloc, a)
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        if not (bad == 0) { break }
+        ga := deref(arg_p(gq))
+        bad = s3a_field_by_value_bad(ga.e, decls, upto, src, locals, nloc, a)
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   bad
 }
@@ -5826,38 +5868,62 @@ s3a_expr_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(
       }
     }
     Expr::Call(cs0, cl0, na0, ah0) => {
-      mut g := ah0
-      while g != 0 and bad == 0 {
-        ga := deref(arg_p(g))
-        bad = s3a_expr_bad(ga.e, decls, upto, src, a, locals, nloc)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah0
+      loop {
+        match g {
+          Some(gq) => {
+            if not (bad == 0) { break }
+            ga := deref(arg_p(gq))
+            bad = s3a_expr_bad(ga.e, decls, upto, src, a, locals, nloc)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::StructLit(ss, sl, nf, fh) => {
-      mut g := fh
-      while g != 0 and bad == 0 {
-        ga := deref(arg_p(g))
-        bad = s3a_expr_bad(ga.e, decls, upto, src, a, locals, nloc)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = fh
+      loop {
+        match g {
+          Some(gq) => {
+            if not (bad == 0) { break }
+            ga := deref(arg_p(gq))
+            bad = s3a_expr_bad(ga.e, decls, upto, src, a, locals, nloc)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
-      mut g := ph
-      while g != 0 and bad == 0 {
-        ga := deref(arg_p(g))
-        bad = s3a_expr_bad(ga.e, decls, upto, src, a, locals, nloc)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ph
+      loop {
+        match g {
+          Some(gq) => {
+            if not (bad == 0) { break }
+            ga := deref(arg_p(gq))
+            bad = s3a_expr_bad(ga.e, decls, upto, src, a, locals, nloc)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Field(base, fs, fl) => { bad = s3a_expr_bad(base, decls, upto, src, a, locals, nloc) }
     Expr::AddrOf(p) => { bad = s3a_expr_bad(p, decls, upto, src, a, locals, nloc) }
     Expr::Deref(p) => { bad = s3a_expr_bad(p, decls, upto, src, a, locals, nloc) }
     Expr::ArrayLit(ne, eh) => {
-      mut g := eh
-      while g != 0 and bad == 0 {
-        ga := deref(arg_p(g))
-        bad = s3a_expr_bad(ga.e, decls, upto, src, a, locals, nloc)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = eh
+      loop {
+        match g {
+          Some(gq) => {
+            if not (bad == 0) { break }
+            ga := deref(arg_p(gq))
+            bad = s3a_expr_bad(ga.e, decls, upto, src, a, locals, nloc)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Index(base, idx) => {
@@ -6126,13 +6192,18 @@ sema_array_literal_elem_tag := fn(v : ptr(Expr)) -> TyKind {
   mut r := TyKind.TyUnknown
   match deref(v) {
     Expr::ArrayLit(_nel, eh) => {
-      mut g := eh
-      while g != 0 {
-        a := deref(arg_p(g))
-        tag := lbv_lit_tag(a.e)
-        if (not kind_is_int(tag) and not kind_is_bool(tag)) or (not kind_is_unknown(r) and not ty_kind_eq(r, tag)) { return TyKind.TyUnknown }
-        r = tag
-        g = a.next
+      mut g : Option(ptr(mut Arg)) = eh
+      loop {
+        match g {
+          Some(gq) => {
+            a := deref(arg_p(gq))
+            tag := lbv_lit_tag(a.e)
+            if (not kind_is_int(tag) and not kind_is_bool(tag)) or (not kind_is_unknown(r) and not ty_kind_eq(r, tag)) { return TyKind.TyUnknown }
+            r = tag
+            g = a.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -6875,8 +6946,8 @@ sema_builtin_str_integer_cast_bad := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
   if cs.n == 0 or expr_call_arity(e) != 1 { return false }
   if not sema_builtin_integer_cast_name(str_at((src + cs.s), cs.n)) { return false }
   ah := expr_call_args_head(e)
-  if ah == 0 { return false }
-  ga := deref(arg_p(ah))
+  if not arg_any(ah) { return false }
+  ga := deref(arg_at(ah, "argument list ended early"))
   ## Use the existing exhaustive literal classifier: a payload-heavy direct match on StrLit is not
   ## reliable in the frozen bootstrap lowering, while lbv_lit_tag is already the proven literal path.
   kind_is_str(lbv_lit_tag(ga.e))
@@ -6941,15 +7012,21 @@ sema_generic_result_arg := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
     }
   }
   if not found { return z }
-  mut g := expr_call_args_head(e)
+  mut g : Option(ptr(mut Arg)) = expr_call_args_head(e)
   mut j := 0
-  while g != 0 and j < k {
-    ga := deref(arg_p(g))
-    g = ga.next
-    j += 1
+  loop {
+    match g {
+      Some(gq) => {
+        if not (j < k) { break }
+        ga := deref(arg_p(gq))
+        g = ga.next
+        j += 1
+      }
+      None => { break }
+    }
   }
-  if g == 0 { return z }
-  av := expr_var_span(deref(arg_p(g)).e)
+  if not arg_any(g) { return z }
+  av := expr_var_span(deref(arg_at(g, "argument list ended early")).e)
   if av.n == 0 { return z }
   SemaGenRes(s = av.s, n = av.n, is_ptr = is_ptr)
 }
@@ -7759,11 +7836,16 @@ sema_type_arg_ok := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bo
       if nel == 0 { ok = true }
       else {
         ok = true
-        mut g := ah
-        while g != 0 {
-          ga := deref(arg_p(g))
-          if not sema_type_arg_ok(ga.e, decls, src) { ok = false }
-          g = ga.next
+        mut g : Option(ptr(mut Arg)) = ah
+        loop {
+          match g {
+            Some(gq) => {
+              ga := deref(arg_p(gq))
+              if not sema_type_arg_ok(ga.e, decls, src) { ok = false }
+              g = ga.next
+            }
+            None => { break }
+          }
         }
       }
     }
@@ -7773,11 +7855,16 @@ sema_type_arg_ok := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> bo
       head_ok := type_name_known(decls, src, cs, cl) or str_at((src + cs), cl) == "ptr"
       if head_ok {
         ok = true
-        mut g := ah
-        while g != 0 {
-          ga := deref(arg_p(g))
-          if not sema_type_arg_ok(ga.e, decls, src) { ok = false }
-          g = ga.next
+        mut g : Option(ptr(mut Arg)) = ah
+        loop {
+          match g {
+            Some(gq) => {
+              ga := deref(arg_p(gq))
+              if not sema_type_arg_ok(ga.e, decls, src) { ok = false }
+              g = ga.next
+            }
+            None => { break }
+          }
         }
       }
     }
@@ -7865,10 +7952,13 @@ sema_direct_jmp_target := fn(e : ptr(Expr), src : ptr(u8)) -> VSpan {
   mut r := VSpan(s = 0, n = 0)
   if sema_is_direct_jmp(e, src) and expr_call_arity(e) == 1 {
     ah := expr_call_args_head(e)
-    if ah != 0 {
-      a0 := deref(arg_p(ah))
-      av := expr_var_span(a0.e)
-      if av.n != 0 and not is_register_name(src, av.s, av.n) { r = av }
+    match ah {
+      Some(ahq) => {
+        a0 := deref(arg_p(ahq))
+        av := expr_var_span(a0.e)
+        if av.n != 0 and not is_register_name(src, av.s, av.n) { r = av }
+      }
+      None => {}
     }
   }
   r
@@ -7888,14 +7978,19 @@ field_variant_name := fn(e : ptr(Expr), src : ptr(u8)) -> str {
   }
 }
 ## The `Ordering.<variant>` name of the arg at index `i` of a call's arg list, else "".
-ordering_arg_name := fn(ah : ptr(mut Arg), i : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> str {
-  mut g := ah
+ordering_arg_name := fn(ah : Option(ptr(mut Arg)), i : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> str {
+  mut g : Option(ptr(mut Arg)) = ah
   mut k := 0
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if k == i { return field_variant_name(ga.e, src) }
-    k += 1
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if k == i { return field_variant_name(ga.e, src) }
+        k += 1
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   ""
 }
@@ -7913,7 +8008,7 @@ ordering_rank := fn(o : str) -> i64 {
 ## {relaxed,release,seq_cst}; `fence` ∈ {acquire,release,acq_rel,seq_cst} (relaxed illegal); a CAS
 ## FAILURE ordering ∈ {relaxed,acquire,seq_cst} and MUST NOT be stronger than success; RMW = any. An
 ## unrecognized / non-literal ordering is left unchecked — only clear violations are rejected.
-atomic_ordering_bad := fn(cs : usize, cl : usize, ah : ptr(mut Arg), src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
+atomic_ordering_bad := fn(cs : usize, cl : usize, ah : Option(ptr(mut Arg)), src : ptr(u8), a : ptr(mut rt::Arena)) -> bool {
   nm := str_at((src + cs), cl)
   if nm == "atomic::load" {
     o := ordering_arg_name(ah, 1, src, a)
@@ -8060,14 +8155,19 @@ expr_statement_has_unbound_m := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
       tb := callee_is_type_builtin(src, cs, cl)
       gen := callee_is_generic(decls, upto, src, cs, cl)
       mut ai := 0
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        if not tb and not (gen and callee_param_is_type(decls, upto, src, cs, cl, ai, a)) {
-          if expr_statement_has_unbound_m(ga.e, decls, upto, src, a, locals, nloc, fldck) { bad = true }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if not tb and not (gen and callee_param_is_type(decls, upto, src, cs, cl, ai, a)) {
+              if expr_statement_has_unbound_m(ga.e, decls, upto, src, a, locals, nloc, fldck) { bad = true }
+            }
+            ai += 1
+            g = ga.next
+          }
+          None => { break }
         }
-        ai += 1
-        g = ga.next
       }
       bad
     }
@@ -8194,7 +8294,7 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       qnm := str_at((src + cs), cl)
       if qnm == "resolves" or qnm == "compiles" { return false }
       mut bad := false
-      mut g := ah
+      mut g : Option(ptr(mut Arg)) = ah
       gen := callee_is_generic(decls, upto, src, cs, cl)
       if not gen and call_arity_match(decls, upto, src, cs, cl, na, a) == 0 { bad = true }
       ## an UNDEFINED function call is a name resolving to no declared fn/type AND not
@@ -8229,46 +8329,51 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
       ## unbound Var (next-up #2; Types §6.4).
       tb := callee_is_type_builtin(src, cs, cl)
       mut ai := 0
-      while g != 0 {
-        ga := deref(arg_p(g))
-        if not (gen and callee_param_is_type(decls, upto, src, cs, cl, ai, a)) {
-          if tb and sema_type_arg_ok(ga.e, decls, src) { }
-          else if expr_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
-          if not gen and not ovset {
-            at := check_expr(ga.e, decls, upto, src, a, locals, nloc)
-            match at {
-              Result::Ok(av) => {
-                pt := callee_arg_param_ty(decls, upto, src, cs, cl, ai, a)
-                ptrint_probe_site("ARG", "unbound", true, av.kind, pt.kind, s_of(ga.e, a), src)
-                ## A conformance failure, not an unbound name: poison the check with a located MISMATCH
-                ## at the argument, and leave `bad` to the unbound walk it reports (#716 — a revived
-                ## literal arm gives this compare a known tag it never had). `s_of` has no span for a
-                ## literal argument, so it is located at the call, where the unbound report put it.
-                if not kind_compat(av.kind, pt.kind) and not sema_arg_place_ptr_seam(av, pt) {
-                  mut asp := s_of(ga.e, a)
-                  if asp == 0 and not ast::span_is_synthetic(cs) { asp = cs }
-                  mark_failed(locals, mismatch_err(asp, 0))
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if not (gen and callee_param_is_type(decls, upto, src, cs, cl, ai, a)) {
+              if tb and sema_type_arg_ok(ga.e, decls, src) { }
+              else if expr_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
+              if not gen and not ovset {
+                at := check_expr(ga.e, decls, upto, src, a, locals, nloc)
+                match at {
+                  Result::Ok(av) => {
+                    pt := callee_arg_param_ty(decls, upto, src, cs, cl, ai, a)
+                    ptrint_probe_site("ARG", "unbound", true, av.kind, pt.kind, s_of(ga.e, a), src)
+                    ## A conformance failure, not an unbound name: poison the check with a located MISMATCH
+                    ## at the argument, and leave `bad` to the unbound walk it reports (#716 — a revived
+                    ## literal arm gives this compare a known tag it never had). `s_of` has no span for a
+                    ## literal argument, so it is located at the call, where the unbound report put it.
+                    if not kind_compat(av.kind, pt.kind) and not sema_arg_place_ptr_seam(av, pt) {
+                      mut asp := s_of(ga.e, a)
+                      if asp == 0 and not ast::span_is_synthetic(cs) { asp = cs }
+                      mark_failed(locals, mismatch_err(asp, 0))
+                    }
+                  }
+                  Result::Err(e0) => { bad = true }
                 }
               }
-              Result::Err(e0) => { bad = true }
             }
+            ai += 1
+            g = ga.next
           }
+          None => { break }
         }
-        ai += 1
-        g = ga.next
       }
       bad
     }
     Expr::StructLit(ss, sl, nf, fh) => {
       mut bad := false
-      mut g := fh
-      while g != 0 { ga := deref(arg_p(g)); if expr_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = fh
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if expr_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }; g = ga.next }; None => { break } } }
       bad
     }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
       mut bad := false
-      mut g := ph
-      while g != 0 { ga := deref(arg_p(g)); if expr_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ph
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if expr_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }; g = ga.next }; None => { break } } }
       bad
     }
     Expr::Field(base, fs, fl) => {
@@ -8285,8 +8390,8 @@ expr_has_unbound := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : 
     Expr::Deref(p) => { expr_has_unbound(p, decls, upto, src, a, locals, nloc) }
     Expr::ArrayLit(nel, eh) => {
       mut bad := false
-      mut g := eh
-      while g != 0 { ga := deref(arg_p(g)); if expr_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = eh
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); if expr_has_unbound(ga.e, decls, upto, src, a, locals, nloc) { bad = true }; g = ga.next }; None => { break } } }
       bad
     }
     Expr::Index(base, idx) => { expr_has_unbound(base, decls, upto, src, a, locals, nloc) or expr_has_unbound(idx, decls, upto, src, a, locals, nloc) }
@@ -8408,13 +8513,13 @@ sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)
 ## docs/ir-slice-1.md §2 — each parameter's declared type is the context of a literal argument
 ## (Types §2.3). Only for a callee sema resolves to ONE function (it models no overload resolution); the
 ## arguments were typed before the call is recorded, so their literal records are rewritten here.
-sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), decls : ptr(rt::Vec), src : ptr(u8)) {
+sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) {
   ## OP-6: a shift or rotation's count is a `usize` (`op(in v : T, in n : usize) -> T`, Stdlib appendix
   ## §4), so a literal count takes that type. `na == 2` is the parser's count of the two links.
   cnm := str_at((src + cs), cl)
   if na == 2 and (cnm == "shl" or cnm == "shr" or cnm == "rotl" or cnm == "rotr") {
-    sa0 := deref(arg_p(ah))
-    sa1 := deref(arg_p(sa0.next))
+    sa0 := deref(arg_at(ah, "argument list ended early"))
+    sa1 := deref(arg_at(sa0.next, "argument list ended early"))
     sema_vty_push(sa1.e, ir::vty_u(8))
     return
   }
@@ -8425,19 +8530,24 @@ sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), 
     d := deref(decl_get(decls, i))
     if d.is_fn and name_matches(src, d.name_start, d.name_len, cs, cl) {
       mut pp := d.params_head
-      mut g := ah
+      mut g : Option(ptr(mut Arg)) = ah
       ## null-ok: Arg.next — an argument list ends in a null link (ast.al "0 = end").
-      while unchecked bitcast(usize, g) != 0 {
-        ga := deref(arg_p(g))
-        match pp {
-          Some(pq) => {
-            pm := deref(param_p(pq))
-            sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
-            pp = pm.next
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            match pp {
+              Some(pq) => {
+                pm := deref(param_p(pq))
+                sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
+                pp = pm.next
+              }
+              None => { return }
+            }
+            g = ga.next
           }
-          None => { return }
+          None => { break }
         }
-        g = ga.next
       }
       return
     }
@@ -8588,10 +8698,10 @@ sema_vty_join := fn(th : ptr(Expr), el : ptr(Expr)) -> ir::VTy {
   ir::vty_unknown()
 }
 ## A call: its declared result; the shift/rotate builtins take their first operand's type.
-sema_vty_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
+sema_vty_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
   nm := str_at((src + cs), cl)
   if na == 2 and (nm == "shr" or nm == "shl" or nm == "rotl" or nm == "rotr") {
-    a0 := deref(arg_p(ah))
+    a0 := deref(arg_at(ah, "argument list ended early"))
     return sema_vty_child(a0.e)
   }
   ct := expr_call_result_ty(e, decls, rt::vec_len(deref(decls)), src)
@@ -8724,7 +8834,7 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       return Result(Ty, CheckErr).Err(mismatch_err(qcs0.s, 0))
     }
     qah0 := expr_call_args_head(e)
-    qarg0 := deref(arg_p(qah0))
+    qarg0 := deref(arg_at(qah0, "argument list ended early"))
     ## A query attempt is a semantic transaction: NONE of the operand walk's temporary locals,
     ## remembered bindings, or sticky diagnostics may escape into the enclosing check. Snapshot BEFORE
     ## `expr_has_unbound`, not only around the later `compiles` type synthesis: that resolver recursively
@@ -8813,13 +8923,18 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   ## a direct qualified call cannot fall through to the tail-name-based tolerant path. The helper is
   ## intentionally limited to one direct argument shape and records the argument's own location.
   if ecs.n != 0 and not ecallee_is(ecs.s) and sema_direct_named_call(src, ecs.s, ecs.n) {
-    mut warg := expr_call_args_head(e)
+    mut warg : Option(ptr(mut Arg)) = expr_call_args_head(e)
     mut wpidx := 0
-    while warg != 0 {
-      wa := deref(arg_p(warg))
-      if sema_wrapper_payload_arg_bad(wa.e, decls, upto, src, locals, nloc, ecs.s, ecs.n, expr_call_arity(e), wpidx) { mark_failed(locals, mismatch_err(s_of(wa.e, a), 0)) }
-      wpidx += 1
-      warg = wa.next
+    loop {
+      match warg {
+        Some(wargq) => {
+          wa := deref(arg_p(wargq))
+          if sema_wrapper_payload_arg_bad(wa.e, decls, upto, src, locals, nloc, ecs.s, ecs.n, expr_call_arity(e), wpidx) { mark_failed(locals, mismatch_err(s_of(wa.e, a), 0)) }
+          wpidx += 1
+          warg = wa.next
+        }
+        None => { break }
+      }
     }
   }
   ## CT-12 / Comptime §2.6 — a fully comptime-known checked guard in a direct scalar call argument
@@ -8827,14 +8942,19 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   ## here because `Expr::Call` is also the representation for UFCS, qualified and expression-callee
   ## calls; those forms have no unambiguous direct parameter context in this bounded slice.
   if ecs.n != 0 and not cgen and sema_direct_call_name(src, ecs.s, ecs.n) and not ecallee_is(ecs.s) {
-    mut ctg := expr_call_args_head(e)
+    mut ctg : Option(ptr(mut Arg)) = expr_call_args_head(e)
     mut ctp := 0
-    while ctg != 0 {
-      cta := deref(arg_p(ctg))
-      cte := call_arg_ct_guard_err(decls, upto, src, ecs.s, ecs.n, ctp, cta.e)
-      if cte != 0 { mark_failed(locals, cte) }
-      ctp += 1
-      ctg = cta.next
+    loop {
+      match ctg {
+        Some(ctgq) => {
+          cta := deref(arg_p(ctgq))
+          cte := call_arg_ct_guard_err(decls, upto, src, ecs.s, ecs.n, ctp, cta.e)
+          if cte != 0 { mark_failed(locals, cte) }
+          ctp += 1
+          ctg = cta.next
+        }
+        None => { break }
+      }
     }
   }
   ## Types §4.6 — reject the scalar/brand constructor shape before any consumer can read arg 0.
@@ -8891,21 +9011,26 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       ## declares a brand of its own.
       ## Every COMPONENT of the payload, not only an arity-1 variant's one (#299's last listed sink):
       ## component `k` is judged against the declaration's `k`-th type, read by `sema_enum_payload_ty`.
-      mut eph0 := expr_enum_lit_head(e)
+      mut eph0 : Option(ptr(mut Arg)) = expr_enum_lit_head(e)
       mut epk0 : usize = 0
-      while eph0 != 0 {
-        epa0 := deref(arg_p(eph0))
-        epty0 := sema_enum_payload_ty(eva0, epk0, decls, upto, src)
-        if not kind_is_unknown(epty0.kind) {
-          brand_probe_sink(epty0, epa0.e, s_of(epa0.e, a), decls, upto, src, locals, nloc, a)
-          ## …and the REFUSAL at the same sink. Poisons rather than returning, so the arity verdict
-          ## above and the ordinary walk below still run. Located at the offending payload VALUE's own
-          ## span, falling back to the variant name — the span this arm's other diagnostics point at.
-          epe0 := sema_brand_sink_err(epty0, epa0.e, sema_brand_span(s_of(epa0.e, a), eparts0.vs), decls, upto, src, locals, nloc, a)
-          if epe0 != 0 { mark_failed(locals, epe0) }
+      loop {
+        match eph0 {
+          Some(eph0q) => {
+            epa0 := deref(arg_p(eph0q))
+            epty0 := sema_enum_payload_ty(eva0, epk0, decls, upto, src)
+            if not kind_is_unknown(epty0.kind) {
+              brand_probe_sink(epty0, epa0.e, s_of(epa0.e, a), decls, upto, src, locals, nloc, a)
+              ## …and the REFUSAL at the same sink. Poisons rather than returning, so the arity verdict
+              ## above and the ordinary walk below still run. Located at the offending payload VALUE's own
+              ## span, falling back to the variant name — the span this arm's other diagnostics point at.
+              epe0 := sema_brand_sink_err(epty0, epa0.e, sema_brand_span(s_of(epa0.e, a), eparts0.vs), decls, upto, src, locals, nloc, a)
+              if epe0 != 0 { mark_failed(locals, epe0) }
+            }
+            epk0 += 1
+            eph0 = epa0.next
+          }
+          None => { break }
         }
-        epk0 += 1
-        eph0 = epa0.next
       }
     }
   }
@@ -8915,7 +9040,7 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   ## distinct located code to both public renderers.
   if ecs.n != 0 and not cgen {
     lvmod0 := deref(locals)
-    if literal_overload_ambiguous(decls, src, ecs.s, ecs.n, expr_call_arity(e), unchecked bitcast(ptr(mut Arg), expr_call_args_head(e)), lvmod0.mod_s, lvmod0.mod_l) {
+    if literal_overload_ambiguous(decls, src, ecs.s, ecs.n, expr_call_arity(e), expr_call_args_head(e), lvmod0.mod_s, lvmod0.mod_l) {
       mark_failed(locals, ambiguous_err(ecs.s))
     }
   }
@@ -8930,19 +9055,24 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     if gwspan != 0 { mark_failed(locals, located_err(gwspan)) }
   }
   if ecs.n != 0 and nloc != 0 and (not cgen) {
-    mut gg := expr_call_args_head(e)
+    mut gg : Option(ptr(mut Arg)) = expr_call_args_head(e)
     mut apidx := 0
-    while gg != 0 {
-      ga := deref(arg_p(gg))
-      avs := expr_var_span(ga.e)
-      argloc := avs.n != 0 and local_in(locals, nloc, src, avs.s, avs.n)
-      at := local_lookup(locals, nloc, src, avs.s, avs.n)
-      atag : TyKind = at.ty.kind
-      pt := callee_param_ty(decls, upto, src, ecs.s, ecs.n, apidx, a)
-      known := argloc and kind_is_ptr(atag) and kind_is_ptr(pt.kind) and at.ty.nl != 0 and pt.nl != 0
-      if known { if not streq(src, at.ty.ns, at.ty.nl, pt.ns, pt.nl) { mark_failed(locals, mismatch_err(avs.s, 0)) } }
-      apidx += 1
-      gg = ga.next
+    loop {
+      match gg {
+        Some(ggq) => {
+          ga := deref(arg_p(ggq))
+          avs := expr_var_span(ga.e)
+          argloc := avs.n != 0 and local_in(locals, nloc, src, avs.s, avs.n)
+          at := local_lookup(locals, nloc, src, avs.s, avs.n)
+          atag : TyKind = at.ty.kind
+          pt := callee_param_ty(decls, upto, src, ecs.s, ecs.n, apidx, a)
+          known := argloc and kind_is_ptr(atag) and kind_is_ptr(pt.kind) and at.ty.nl != 0 and pt.nl != 0
+          if known { if not streq(src, at.ty.ns, at.ty.nl, pt.ns, pt.nl) { mark_failed(locals, mismatch_err(avs.s, 0)) } }
+          apidx += 1
+          gg = ga.next
+        }
+        None => { break }
+      }
     }
   }
   ## CALL-ARG aggregate↔scalar conformance (TYP-6) — the retired `check_agg_arg_scalar_param` emit
@@ -8951,55 +9081,60 @@ check_expr_core := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
   ## resolution, so an overloaded name is left tolerant (post-resolution — the fix that keeps
   ## `overload_three` building). Not gated on `nloc` (the reverse `f(42)` sits in a body with no locals).
   if ecs.n != 0 and (not cgen) and callee_fn_name_count(decls, upto, src, ecs.s, ecs.n) == 1 {
-    mut ag := expr_call_args_head(e)
+    mut ag : Option(ptr(mut Arg)) = expr_call_args_head(e)
     mut apix := 0
-    while ag != 0 {
-      ca := deref(arg_p(ag))
-      psp := callee_param_type_span(decls, upto, src, ecs.s, ecs.n, apix, a)
-      if agg_scalar_bad(psp.s, psp.n, ca.e, decls, upto, src, locals, nloc) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
-      ## …and the LITERAL-argument conformance mirror of the annotated-binding rule (see
-      ## `call_arg_lit_incompatible`): the literal forms `check_expr`'s reordered arm list reports as
-      ## UNKNOWN, judged against the parameter's declared type by the shared whitelist.
-      if call_arg_lit_incompatible(decls, upto, src, ecs.s, ecs.n, apix, ca.e) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
-      ## A nested direct/UFCS call has a known declared result even when the outer call's large match
-      ## returns an UNKNOWN tag under the seed. Compare that result against the outer parameter here so
-      ## `take(make_struct())` cannot pass a multi-word aggregate into a `str` (or scalar) slot.
-      crt0 := expr_call_result_ty(ca.e, decls, upto, src)
-      ## `in out` aggregate parameters use the pointer ABI: a pointer-valued helper such as
-      ## `da_fvec_value(da)` is the place representation for an aggregate `FVec` parameter and is
-      ## intentionally accepted by the existing checker/lower seam. The conformance gap this lane
-      ## closes is a value-result mismatch (`S`/`str`/scalar), not pointer-to-aggregate ABI plumbing.
-      pty0 := callee_param_ty(decls, upto, src, ecs.s, ecs.n, apix, a)
-      ## Issue #698 — an ARRAY parameter (`xs : [A; 2]`) records only its ELEMENT type span, so
-      ## `pty0` is the element's type and the brand judge compared `A` against the whole argument —
-      ## an array literal, whose identity it cannot name — and let `[b, c]` of a sibling `B` through.
-      ## The brand sink is handed the whole `[A; N]` annotation instead, which `sema_brand_sink_err`
-      ## already walks element by element for an annotated array binding.
-      bpty0 := sema_array_param_brand_ty(pty0, src, psp.s, psp.n)
-      ## Issue #804 — an unannotated `a := [1, 7]` has no context, so its literals take the documented
-      ## default, the native signed integer (Types §9.1, Declarations §3.2/§3.4): `a` is an `[i64; N]`.
-      ## Passed to an array parameter of any other scalar element it is a type mismatch; only
-      ## widening is implicit (Types §4.3), and the literals' context was the binding, not the call.
-      if sema_default_int_array_arg_bad(bpty0, ca.e, src, locals, nloc) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
-      ## Issue #803 — an array LITERAL argument's elements take the array parameter's element type, and
-      ## each one's §9.1 range is judged there, as `f(300)` is for a scalar `u8` parameter.
-      if kind_is_array(bpty0.kind) and bpty0.nl != 0 {
-        alae := array_lit_range_err(src, bpty0.ns, bpty0.nl, ca.e)
-        if alae != 0 { mark_failed(locals, alae) }
+    loop {
+      match ag {
+        Some(agq) => {
+          ca := deref(arg_p(agq))
+          psp := callee_param_type_span(decls, upto, src, ecs.s, ecs.n, apix, a)
+          if agg_scalar_bad(psp.s, psp.n, ca.e, decls, upto, src, locals, nloc) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
+          ## …and the LITERAL-argument conformance mirror of the annotated-binding rule (see
+          ## `call_arg_lit_incompatible`): the literal forms `check_expr`'s reordered arm list reports as
+          ## UNKNOWN, judged against the parameter's declared type by the shared whitelist.
+          if call_arg_lit_incompatible(decls, upto, src, ecs.s, ecs.n, apix, ca.e) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
+          ## A nested direct/UFCS call has a known declared result even when the outer call's large match
+          ## returns an UNKNOWN tag under the seed. Compare that result against the outer parameter here so
+          ## `take(make_struct())` cannot pass a multi-word aggregate into a `str` (or scalar) slot.
+          crt0 := expr_call_result_ty(ca.e, decls, upto, src)
+          ## `in out` aggregate parameters use the pointer ABI: a pointer-valued helper such as
+          ## `da_fvec_value(da)` is the place representation for an aggregate `FVec` parameter and is
+          ## intentionally accepted by the existing checker/lower seam. The conformance gap this lane
+          ## closes is a value-result mismatch (`S`/`str`/scalar), not pointer-to-aggregate ABI plumbing.
+          pty0 := callee_param_ty(decls, upto, src, ecs.s, ecs.n, apix, a)
+          ## Issue #698 — an ARRAY parameter (`xs : [A; 2]`) records only its ELEMENT type span, so
+          ## `pty0` is the element's type and the brand judge compared `A` against the whole argument —
+          ## an array literal, whose identity it cannot name — and let `[b, c]` of a sibling `B` through.
+          ## The brand sink is handed the whole `[A; N]` annotation instead, which `sema_brand_sink_err`
+          ## already walks element by element for an annotated array binding.
+          bpty0 := sema_array_param_brand_ty(pty0, src, psp.s, psp.n)
+          ## Issue #804 — an unannotated `a := [1, 7]` has no context, so its literals take the documented
+          ## default, the native signed integer (Types §9.1, Declarations §3.2/§3.4): `a` is an `[i64; N]`.
+          ## Passed to an array parameter of any other scalar element it is a type mismatch; only
+          ## widening is implicit (Types §4.3), and the literals' context was the binding, not the call.
+          if sema_default_int_array_arg_bad(bpty0, ca.e, src, locals, nloc) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
+          ## Issue #803 — an array LITERAL argument's elements take the array parameter's element type, and
+          ## each one's §9.1 range is judged there, as `f(300)` is for a scalar `u8` parameter.
+          if kind_is_array(bpty0.kind) and bpty0.nl != 0 {
+            alae := array_lit_range_err(src, bpty0.ns, bpty0.nl, ca.e)
+            if alae != 0 { mark_failed(locals, alae) }
+          }
+          ## #299 census hook (no refusal): this argument's declared parameter type against the value's
+          ## recovered brand identity. Inert unless the program declares a brand of its own.
+          brand_probe_sink(bpty0, ca.e, s_of(ca.e, a), decls, upto, src, locals, nloc, a)
+          ## …and the refusal at the same sink (Issue #299). Poisons rather than returning: the argument
+          ## walk must finish so every offending argument of the call is counted by the census beside it.
+          cbe := sema_brand_sink_err(bpty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc, a)
+          if cbe != 0 { mark_failed(locals, cbe) }
+          if not kind_is_unknown(crt0.kind) and not sema_arg_place_ptr_seam(crt0, pty0) {
+            if not kind_is_unknown(pty0.kind) { ptrint_probe_site("ARG", "premat", true, crt0.kind, pty0.kind, s_of(ca.e, a), src) }
+            if not kind_is_unknown(pty0.kind) and not ty_compat(crt0, pty0, src) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
+          }
+          apix += 1
+          ag = ca.next
+        }
+        None => { break }
       }
-      ## #299 census hook (no refusal): this argument's declared parameter type against the value's
-      ## recovered brand identity. Inert unless the program declares a brand of its own.
-      brand_probe_sink(bpty0, ca.e, s_of(ca.e, a), decls, upto, src, locals, nloc, a)
-      ## …and the refusal at the same sink (Issue #299). Poisons rather than returning: the argument
-      ## walk must finish so every offending argument of the call is counted by the census beside it.
-      cbe := sema_brand_sink_err(bpty0, ca.e, sema_brand_span(s_of(ca.e, a), ecs.s), decls, upto, src, locals, nloc, a)
-      if cbe != 0 { mark_failed(locals, cbe) }
-      if not kind_is_unknown(crt0.kind) and not sema_arg_place_ptr_seam(crt0, pty0) {
-        if not kind_is_unknown(pty0.kind) { ptrint_probe_site("ARG", "premat", true, crt0.kind, pty0.kind, s_of(ca.e, a), src) }
-        if not kind_is_unknown(pty0.kind) and not ty_compat(crt0, pty0, src) { mark_failed(locals, mismatch_err(s_of(ca.e, a), 0)) }
-      }
-      apix += 1
-      ag = ca.next
     }
   }
   ## EXHAUSTIVENESS for a VALUE match (§60/CF-1) — the dual of the `check_stmts` statement-match check.
@@ -9198,42 +9333,47 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
       ## arguments past its parameter.
       qov := callee_fn_name_count(decls, upto, src, qcs, qcl) > 1
       qel := callee_elided_alloc_idx(decls, upto, src, qcs, qcl, qnargs)
-      mut g := qargs_head
+      mut g : Option(ptr(mut Arg)) = qargs_head
       mut pidx := 0
       mut bad := false
       mut bad_span := 0
       ## atomic/fence ordering-legality (spec ch.110 §2/§3) — covers a STATEMENT-position call
       ## (`atomic::store(…)` as a bare statement) that only reaches `check_expr`, not `expr_has_unbound`.
       if atomic_ordering_bad(qcs, qcl, qargs_head, src, a) { bad = true }
-      while g != 0 {
-        ga := deref(arg_p(g))
-        ## a generic call's type-argument positions (params `T : type`) are type names, not values
-        if not (qgen and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a)) {
-          ## #726 — the argument's KIND only. Its pointee name would make this compare discriminate
-          ## `ptr(X)` from `ptr(Y)`, and the parser erases a word-sized `unchecked bitcast(ptr(X), p)`
-          ## to `p` itself, so a written reinterpretation reached this compare as the un-cast pointer
-          ## (`hdr_len(unchecked bitcast(ptr(FVec), da_pvec(da)))` was refused). Pointer identity at
-          ## an argument stays with the pre-match fence, which judges a named local only.
-          ta0 := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
-          ta := Ty(kind = ta0.kind, ns = 0, nl = 0)
-          if not qgen and not qov {
-            mut ppi := pidx
-            if qel >= 0 and i64(pidx) >= qel { ppi = pidx + 1 }
-            pt := callee_arg_param_ty(decls, upto, src, qcs, qcl, ppi, a)
-            ptrint_probe_site("ARG", "callarm", true, ta.kind, pt.kind, s_of(ga.e, a), src)
-            if not ty_compat(ta, pt, src) and not sema_arg_place_ptr_seam(ta, pt) {
-              ## located at the call when the argument has no span (a literal), as the compare in
-              ## `expr_has_unbound` locates it
-              if not bad {
-                bad = true
-                bad_span = s_of(ga.e, a)
-                if bad_span == 0 and not ast::span_is_synthetic(qcs) { bad_span = qcs }
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            ## a generic call's type-argument positions (params `T : type`) are type names, not values
+            if not (qgen and callee_param_is_type(decls, upto, src, qcs, qcl, pidx, a)) {
+              ## #726 — the argument's KIND only. Its pointee name would make this compare discriminate
+              ## `ptr(X)` from `ptr(Y)`, and the parser erases a word-sized `unchecked bitcast(ptr(X), p)`
+              ## to `p` itself, so a written reinterpretation reached this compare as the un-cast pointer
+              ## (`hdr_len(unchecked bitcast(ptr(FVec), da_pvec(da)))` was refused). Pointer identity at
+              ## an argument stays with the pre-match fence, which judges a named local only.
+              ta0 := check_expr(ga.e, decls, upto, src, a, locals, nloc)?
+              ta := Ty(kind = ta0.kind, ns = 0, nl = 0)
+              if not qgen and not qov {
+                mut ppi := pidx
+                if qel >= 0 and i64(pidx) >= qel { ppi = pidx + 1 }
+                pt := callee_arg_param_ty(decls, upto, src, qcs, qcl, ppi, a)
+                ptrint_probe_site("ARG", "callarm", true, ta.kind, pt.kind, s_of(ga.e, a), src)
+                if not ty_compat(ta, pt, src) and not sema_arg_place_ptr_seam(ta, pt) {
+                  ## located at the call when the argument has no span (a literal), as the compare in
+                  ## `expr_has_unbound` locates it
+                  if not bad {
+                    bad = true
+                    bad_span = s_of(ga.e, a)
+                    if bad_span == 0 and not ast::span_is_synthetic(qcs) { bad_span = qcs }
+                  }
+                }
               }
             }
+            pidx += 1
+            g = ga.next
           }
+          None => { break }
         }
-        pidx += 1
-        g = ga.next
       }
       if bad { er := Result(Ty, CheckErr).Err(mismatch_err(bad_span, 0)); return er }
       if qov { Result(Ty, CheckErr).Ok(Ty(kind = TyKind.TyUnknown, ns = 0, nl = 0)) }
@@ -9243,27 +9383,32 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     ## is checked against the struct field's declared type; the literal's type is the struct.
     Expr::StructLit(scs, scl, snf, sfhead) => {
       di := type_decl_index(decls, upto, src, scs, scl)
-      mut sg := sfhead
+      mut sg : Option(ptr(mut Arg)) = sfhead
       mut fld : Option(ptr(mut FieldDecl)) = Option.None
       if di != 0 { fld = (deref(decl_at(Decl, rt::vec_get(deref(decls), di - 1)))).fields_head }
-      while sg != 0 {
-        sa := deref(arg_p(sg))
-        tv := check_expr(sa.e, decls, upto, src, a, locals, nloc)?
-        match fld {
-          Some(fldq) => {
-            fd := deref(fld_p(fldq))
-            ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
-            ptrint_probe_site("FIELD-LIT", "structlit", true, tv.kind, ft.kind, s_of(sa.e, a), src)
-            ## #726 — `s_of` has no span for a literal field value; locate it at the struct literal's
-            ## head then, as the call-argument compare locates a literal argument at its call.
-            mut fvs := s_of(sa.e, a)
-            if fvs == 0 and not ast::span_is_synthetic(scs) { fvs = scs }
-            if not ty_compat(tv, ft, src) { er := Result(Ty, CheckErr).Err(mismatch_err(fvs, 0)); return er }
-            fld = fd.next
+      loop {
+        match sg {
+          Some(sgq) => {
+            sa := deref(arg_p(sgq))
+            tv := check_expr(sa.e, decls, upto, src, a, locals, nloc)?
+            match fld {
+              Some(fldq) => {
+                fd := deref(fld_p(fldq))
+                ft := resolve_ty(src, fd.ts, fd.tl, decls, upto)
+                ptrint_probe_site("FIELD-LIT", "structlit", true, tv.kind, ft.kind, s_of(sa.e, a), src)
+                ## #726 — `s_of` has no span for a literal field value; locate it at the struct literal's
+                ## head then, as the call-argument compare locates a literal argument at its call.
+                mut fvs := s_of(sa.e, a)
+                if fvs == 0 and not ast::span_is_synthetic(scs) { fvs = scs }
+                if not ty_compat(tv, ft, src) { er := Result(Ty, CheckErr).Err(mismatch_err(fvs, 0)); return er }
+                fld = fd.next
+              }
+              None => {}
+            }
+            sg = sa.next
           }
-          None => {}
+          None => { break }
         }
-        sg = sa.next
       }
       st := resolve_ty(src, scs, scl, decls, upto)
       if kind_is_struct(st.kind) { return Result(Ty, CheckErr).Ok(st) }
@@ -9305,11 +9450,16 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     ## (their type against the variant's payload type is DEFERRED — only the first payload type
     ## span is captured); the value's type is the enum.
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
-      mut eg := phead
-      while eg != 0 {
-        ea := deref(arg_p(eg))
-        ce0 := check_expr(ea.e, decls, upto, src, a, locals, nloc)?
-        eg = ea.next
+      mut eg : Option(ptr(mut Arg)) = phead
+      loop {
+        match eg {
+          Some(egq) => {
+            ea := deref(arg_p(egq))
+            ce0 := check_expr(ea.e, decls, upto, src, a, locals, nloc)?
+            eg = ea.next
+          }
+          None => { break }
+        }
       }
       et := resolve_ty(src, es, el, decls, upto)
       if kind_is_enum(et.kind) { return Result(Ty, CheckErr).Ok(et) }
@@ -9341,11 +9491,16 @@ check_expr_arms := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : p
     ## is array (tag 7). Per-element type agreement is DEFERRED (the toy arrays hold word-sized
     ## ints; element-type tracking is not load-bearing for the supported grammar).
     Expr::ArrayLit(anel, aehead) => {
-      mut ag := aehead
-      while ag != 0 {
-        aa := deref(arg_p(ag))
-        te := check_expr(aa.e, decls, upto, src, a, locals, nloc)?
-        ag = aa.next
+      mut ag : Option(ptr(mut Arg)) = aehead
+      loop {
+        match ag {
+          Some(agq) => {
+            aa := deref(arg_p(agq))
+            te := check_expr(aa.e, decls, upto, src, a, locals, nloc)?
+            ag = aa.next
+          }
+          None => { break }
+        }
       }
       ## #726 — a TUPLE literal `(5, 2.0)` is the same node; it is not an array, and a tuple's type is
       ## not modelled here, so it answers UNKNOWN (as every `ArrayLit` did before this arm ran). So does
@@ -9860,8 +10015,8 @@ ctor_lit_range_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
   cs := expr_call_callee_span(e)
   if cs.n == 0 { return false }
   ah := expr_call_args_head(e)
-  if ah == 0 { return false }
-  arg := deref(arg_p(ah))
+  if not arg_any(ah) { return false }
+  arg := deref(arg_at(ah, "argument list ended early"))
   if expr_is_num_lit(arg.e) == false { return false }
   if sema_direct_call_name(src, cs.s, cs.n) == false { return false }
   w := ctor_int_target_name(decls, upto, src, cs.s, cs.n)
@@ -9871,13 +10026,19 @@ ctor_lit_range_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src 
 }
 
 ## The argument/field/element list companion of the walk below.
-ctor_lit_args_span := fn(h : usize, chk : bool, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
-  mut g := h
+ctor_lit_args_span := fn(h : Option(ptr(mut Arg)), chk : bool, decls : ptr(rt::Vec), upto : usize, src : ptr(u8), a : ptr(mut rt::Arena)) -> usize {
+  mut g : Option(ptr(mut Arg)) = h
   mut res : usize = 0
-  while g != 0 and res == 0 {
-    ga := deref(arg_p(g))
-    res = ctor_lit_expr_span(ga.e, chk, decls, upto, src, a)
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        if not (res == 0) { break }
+        ga := deref(arg_p(gq))
+        res = ctor_lit_expr_span(ga.e, chk, decls, upto, src, a)
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -10318,15 +10479,20 @@ ct_span := fn(e : ptr(Expr)) -> usize {
   res
 }
 ## The `k`-th argument expression of an arena-linked call-argument list, else the null pointer.
-ct_arg_at := fn(h : ptr(mut Arg), k : usize) -> ptr(Expr) {
+ct_arg_at := fn(h : Option(ptr(mut Arg)), k : usize) -> ptr(Expr) {
   mut res := unchecked bitcast(ptr(Expr), 0)
-  mut g := h
+  mut g : Option(ptr(mut Arg)) = h
   mut i := 0
-  while unchecked bitcast(usize, g) != 0 {
-    ga := deref(arg_p(g))
-    if i == k { res = ga.e }
-    g = ga.next
-    i += 1
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if i == k { res = ga.e }
+        g = ga.next
+        i += 1
+      }
+      None => { break }
+    }
   }
   res
 }
@@ -10409,12 +10575,17 @@ ct_array_guard_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr), d
   if esp.n == 0 or not kind_is_int(resolve_kind(src, esp.s, esp.n, decls, upto)) { return 0 }
   match deref(e) {
     Expr::ArrayLit(nel, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        got := ct_guard_err(src, esp.s, esp.n, ga.e, 0, decls, upto)
-        if got != 0 { return got }
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            got := ct_guard_err(src, esp.s, esp.n, ga.e, 0, decls, upto)
+            if got != 0 { return got }
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -10441,13 +10612,18 @@ array_lit_range_err := fn(src : ptr(u8), ts : usize, tl : usize, e : ptr(Expr)) 
       | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
   }
 }
-array_lit_elems_range_err := fn(src : ptr(u8), esp : VSpan, ah : ptr(mut Arg)) -> CheckErr {
-  mut g := ah
+array_lit_elems_range_err := fn(src : ptr(u8), esp : VSpan, ah : Option(ptr(mut Arg))) -> CheckErr {
+  mut g : Option(ptr(mut Arg)) = ah
   ## null-ok: Arg.next — an array literal's element list ends in a null link (ast.al "0 = end")
-  while unchecked bitcast(usize, g) != 0 {
-    ga := deref(arg_p(g))
-    if ann_lit_range_bad(src, esp.s, esp.n, ga.e) { return mismatch_err(expr_num_lit_start(ga.e), 0) }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if ann_lit_range_bad(src, esp.s, esp.n, ga.e) { return mismatch_err(expr_num_lit_start(ga.e), 0) }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   0
 }
@@ -10761,32 +10937,47 @@ lbv_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
     }
     Expr::Call(_cs, _cl, _na, ah) => {
       mut bad := false
-      mut g := ah
-      while unchecked bitcast(usize, g) != 0 {
-        ga := deref(arg_p(g))
-        if lbv_expr(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if lbv_expr(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
     Expr::StructLit(_ss, _sl, _nf, fh) => {
       mut bad := false
-      mut g := fh
-      while unchecked bitcast(usize, g) != 0 {
-        ga := deref(arg_p(g))
-        if lbv_expr(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = fh
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if lbv_expr(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
     Expr::Field(base, _fs, _fl) => { lbv_expr(base, decls, upto, src, a, locals, nloc) }
     Expr::EnumLit(_es, _el, _vs, _vl, _np, ph) => {
       mut bad := false
-      mut g := ph
-      while unchecked bitcast(usize, g) != 0 {
-        ga := deref(arg_p(g))
-        if lbv_expr(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ph
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if lbv_expr(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -10795,11 +10986,16 @@ lbv_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr(u8),
     Expr::StrLit(_s, _n, _lbl, _ps, _pn) => { false }
     Expr::ArrayLit(_anel, aehead) => {
       mut bad := false
-      mut g := aehead
-      while unchecked bitcast(usize, g) != 0 {
-        ga := deref(arg_p(g))
-        if lbv_expr(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = aehead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if lbv_expr(ga.e, decls, upto, src, a, locals, nloc) { bad = true }
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -10874,32 +11070,47 @@ lbv_expr_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
     }
     Expr::Call(_cs, _cl, _na, ah) => {
       mut bad : usize = 0
-      mut g := ah
-      while unchecked bitcast(usize, g) != 0 {
-        ga := deref(arg_p(g))
-        bad = lbv_merge_code(bad, lbv_expr_code(ga.e, decls, upto, src, a, locals, nloc))
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            bad = lbv_merge_code(bad, lbv_expr_code(ga.e, decls, upto, src, a, locals, nloc))
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
     Expr::StructLit(_ss, _sl, _nf, fh) => {
       mut bad : usize = 0
-      mut g := fh
-      while unchecked bitcast(usize, g) != 0 {
-        ga := deref(arg_p(g))
-        bad = lbv_merge_code(bad, lbv_expr_code(ga.e, decls, upto, src, a, locals, nloc))
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = fh
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            bad = lbv_merge_code(bad, lbv_expr_code(ga.e, decls, upto, src, a, locals, nloc))
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
     Expr::Field(base, _fs, _fl) => { lbv_expr_code(base, decls, upto, src, a, locals, nloc) }
     Expr::EnumLit(_es, _el, _vs, _vl, _np, ph) => {
       mut bad : usize = 0
-      mut g := ph
-      while unchecked bitcast(usize, g) != 0 {
-        ga := deref(arg_p(g))
-        bad = lbv_merge_code(bad, lbv_expr_code(ga.e, decls, upto, src, a, locals, nloc))
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ph
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            bad = lbv_merge_code(bad, lbv_expr_code(ga.e, decls, upto, src, a, locals, nloc))
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -10908,11 +11119,16 @@ lbv_expr_code := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
     Expr::StrLit(_s, _n, _lbl, _ps, _pn) => { 0 }
     Expr::ArrayLit(_anel, aehead) => {
       mut bad : usize = 0
-      mut g := aehead
-      while unchecked bitcast(usize, g) != 0 {
-        ga := deref(arg_p(g))
-        bad = lbv_merge_code(bad, lbv_expr_code(ga.e, decls, upto, src, a, locals, nloc))
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = aehead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            bad = lbv_merge_code(bad, lbv_expr_code(ga.e, decls, upto, src, a, locals, nloc))
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       bad
     }
@@ -11127,13 +11343,19 @@ lbv_stmts := fn(head : ptr(mut Stmt), c : usize, decls : ptr(rt::Vec), upto : us
 ## `__deferblkend()`, and the `isize` type argument of the explicit-`T` `@alloc` form) has no surface
 ## expression to borrow, and answers 0 — the channel's "no location", which `diag_span` would produce
 ## anyway. No new AST field, and a real span answers exactly as before.
-s_of_arg := fn(ah : ptr(mut Arg), a : ptr(mut rt::Arena)) -> usize {
-  mut g := ah
+s_of_arg := fn(ah : Option(ptr(mut Arg)), a : ptr(mut rt::Arena)) -> usize {
+  mut g : Option(ptr(mut Arg)) = ah
   mut r := 0
-  while g != 0 and r == 0 {
-    ga := deref(arg_p(g))
-    if unchecked bitcast(usize, ga.e) != 0 { r = s_of(ga.e, a) }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        if not (r == 0) { break }
+        ga := deref(arg_p(gq))
+        if unchecked bitcast(usize, ga.e) != 0 { r = s_of(ga.e, a) }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   r
 }
@@ -11244,38 +11466,55 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
       if not gen0 and not synth0 and call_arity_match(decls, upto, src, cs0, cl0, na0, a) == 0 { return cs0 }
       tb0 := callee_is_type_builtin(src, cs0, cl0)
       mut ai0 := 0
-      mut g0 := ah1
-      while g0 != 0 {
-        ga0 := deref(arg_p(g0))
-        if not (gen0 and callee_param_is_type(decls, upto, src, cs0, cl0, ai0, a)) {
-          if tb0 and sema_type_arg_ok(ga0.e, decls, src) { }
-          else {
-            r2 := expr_unbound_span(ga0.e, decls, upto, src, a, locals, nloc)
-            if r2 != 0 { return r2 }
+      mut g0 : Option(ptr(mut Arg)) = ah1
+      loop {
+        match g0 {
+          Some(g0q) => {
+            ga0 := deref(arg_p(g0q))
+            if not (gen0 and callee_param_is_type(decls, upto, src, cs0, cl0, ai0, a)) {
+              if tb0 and sema_type_arg_ok(ga0.e, decls, src) { }
+              else {
+                r2 := expr_unbound_span(ga0.e, decls, upto, src, a, locals, nloc)
+                if r2 != 0 { return r2 }
+              }
+            }
+            ai0 += 1
+            g0 = ga0.next
           }
+          None => { break }
         }
-        ai0 += 1
-        g0 = ga0.next
       }
       0
     }
     Expr::StructLit(ss1, sl1, nf1, fh1) => {
       mut r3 := 0
-      mut g1 := fh1
-      while g1 != 0 and r3 == 0 {
-        ga1 := deref(arg_p(g1))
-        r3 = expr_unbound_span(ga1.e, decls, upto, src, a, locals, nloc)
-        g1 = ga1.next
+      mut g1 : Option(ptr(mut Arg)) = fh1
+      loop {
+        match g1 {
+          Some(g1q) => {
+            if not (r3 == 0) { break }
+            ga1 := deref(arg_p(g1q))
+            r3 = expr_unbound_span(ga1.e, decls, upto, src, a, locals, nloc)
+            g1 = ga1.next
+          }
+          None => { break }
+        }
       }
       r3
     }
     Expr::EnumLit(es1, el1, vs1, vl1, np1, ph1) => {
       mut r4 := 0
-      mut g2 := ph1
-      while g2 != 0 and r4 == 0 {
-        ga2 := deref(arg_p(g2))
-        r4 = expr_unbound_span(ga2.e, decls, upto, src, a, locals, nloc)
-        g2 = ga2.next
+      mut g2 : Option(ptr(mut Arg)) = ph1
+      loop {
+        match g2 {
+          Some(g2q) => {
+            if not (r4 == 0) { break }
+            ga2 := deref(arg_p(g2q))
+            r4 = expr_unbound_span(ga2.e, decls, upto, src, a, locals, nloc)
+            g2 = ga2.next
+          }
+          None => { break }
+        }
       }
       r4
     }
@@ -11286,11 +11525,17 @@ expr_unbound_span := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src :
     Expr::Deref(p1) => { expr_unbound_span(p1, decls, upto, src, a, locals, nloc) }
     Expr::ArrayLit(ne1, eh1) => {
       mut r5 := 0
-      mut g3 := eh1
-      while g3 != 0 and r5 == 0 {
-        ga3 := deref(arg_p(g3))
-        r5 = expr_unbound_span(ga3.e, decls, upto, src, a, locals, nloc)
-        g3 = ga3.next
+      mut g3 : Option(ptr(mut Arg)) = eh1
+      loop {
+        match g3 {
+          Some(g3q) => {
+            if not (r5 == 0) { break }
+            ga3 := deref(arg_p(g3q))
+            r5 = expr_unbound_span(ga3.e, decls, upto, src, a, locals, nloc)
+            g3 = ga3.next
+          }
+          None => { break }
+        }
       }
       r5
     }
@@ -11389,14 +11634,14 @@ expr_mentions_var := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a 
     Expr::Index(b, i) => { expr_mentions_var(b, src, xs, xl, a) or expr_mentions_var(i, src, xs, xl, a) }
     Expr::Call(cs, cl, na, ah) => {
       mut r := false
-      mut g := ah
-      while g != 0 { ga := deref(arg_p(g)) ; if expr_mentions_var(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_mentions_var(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }; None => { break } } }
       r
     }
     Expr::StructLit(ns, nl, nf, fh) => {
       mut r := false
-      mut g := fh
-      while g != 0 { ga := deref(arg_p(g)) ; if expr_mentions_var(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = fh
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_mentions_var(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }; None => { break } } }
       r
     }
     Expr::Num | Expr::BoolLit | Expr::Match | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit
@@ -11448,38 +11693,62 @@ sema_comptime_cond_runtime_local := fn(e : ptr(Expr), src : ptr(u8), locals : pt
       }
     }
     Expr::Call(cs, cl, na, ah) => {
-      mut g := ah
-      while g != 0 and out.n == 0 {
-        ga := deref(arg_p(g))
-        out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            if not (out.n == 0) { break }
+            ga := deref(arg_p(gq))
+            out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::StructLit(ss, sl, nf, fh) => {
-      mut g := fh
-      while g != 0 and out.n == 0 {
-        ga := deref(arg_p(g))
-        out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = fh
+      loop {
+        match g {
+          Some(gq) => {
+            if not (out.n == 0) { break }
+            ga := deref(arg_p(gq))
+            out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Field(b, fs, fl) => { out = sema_comptime_cond_runtime_local(b, src, locals, nloc) }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
-      mut g := ph
-      while g != 0 and out.n == 0 {
-        ga := deref(arg_p(g))
-        out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ph
+      loop {
+        match g {
+          Some(gq) => {
+            if not (out.n == 0) { break }
+            ga := deref(arg_p(gq))
+            out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::AddrOf(p) => { out = sema_comptime_cond_runtime_local(p, src, locals, nloc) }
     Expr::Deref(p) => { out = sema_comptime_cond_runtime_local(p, src, locals, nloc) }
     Expr::ArrayLit(ne, eh) => {
-      mut g := eh
-      while g != 0 and out.n == 0 {
-        ga := deref(arg_p(g))
-        out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = eh
+      loop {
+        match g {
+          Some(gq) => {
+            if not (out.n == 0) { break }
+            ga := deref(arg_p(gq))
+            out = sema_comptime_cond_runtime_local(ga.e, src, locals, nloc)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Index(b, ix) => {
@@ -11535,8 +11804,8 @@ expr_discharge_var := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena)) -
       ## "unbound"). A real container free is unary; requiring `na == 1` excludes the multi-arg helpers.
       is_free := na == 1 and tn >= 5 and str_at((src + cs + toff + tn - 5), 5) == "_free"
       if is_forget or is_free {
-        mut g := ah
-        while g != 0 { ga := deref(arg_p(g)) ; vv := expr_var_span(ga.e) ; if vv.n != 0 { res = vv } ; g = ga.next }
+        mut g : Option(ptr(mut Arg)) = ah
+        loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; vv := expr_var_span(ga.e) ; if vv.n != 0 { res = vv } ; g = ga.next }; None => { break } } }
       }
     }
     ## UFCS discharge over a simple-`Var` receiver (`x.strbuf_free()` — the corpus form) parses as an
@@ -11829,18 +12098,24 @@ sema_plain_fn_capture_struct := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : u
       di := type_decl_index(decls, upto, src, ss, sl)
       mut fld : Option(ptr(mut FieldDecl)) = Option.None
       if di != 0 { fld = (deref(decl_at(Decl, rt::vec_get(deref(decls), di - 1)))).fields_head }
-      mut g := fh
-      while g != 0 and bad == 0 {
-        ga := deref(arg_p(g))
-        match fld {
-          Some(fldq) => {
-            fd := deref(fld_p(fldq))
-            bad = sema_plain_fn_capture_span(fd.ts, fd.tl, ga.e, src, locals, nloc, a)
-            fld = fd.next
+      mut g : Option(ptr(mut Arg)) = fh
+      loop {
+        match g {
+          Some(gq) => {
+            if not (bad == 0) { break }
+            ga := deref(arg_p(gq))
+            match fld {
+              Some(fldq) => {
+                fd := deref(fld_p(fldq))
+                bad = sema_plain_fn_capture_span(fd.ts, fd.tl, ga.e, src, locals, nloc, a)
+                fld = fd.next
+              }
+              None => {}
+            }
+            g = ga.next
           }
-          None => {}
+          None => { break }
         }
-        g = ga.next
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -13453,16 +13728,16 @@ sema_bad_typeinfo_field_expr := fn(e : ptr(Expr), src : ptr(u8), vs : usize, vl 
       loop { match arm { Some(armq) => { if not (bad == 0) { break }; am := deref(arm_p(armq)); bad = sema_bad_typeinfo_field_expr(am.body, src, vs, vl, a); if bad == 0 and am.body_stmts != 0 { bad = sema_bad_typeinfo_field_stmts(am.body_stmts, src, vs, vl, a) } ; arm = am.next }; None => { break } } }
     }
     Expr::Call(cs, cl, na, ah) => {
-      mut arg := ah
-      while arg != 0 and bad == 0 { aa := deref(arg_p(arg)); bad = sema_bad_typeinfo_field_expr(aa.e, src, vs, vl, a); arg = aa.next }
+      mut arg : Option(ptr(mut Arg)) = ah
+      loop { match arg { Some(argq) => { if not (bad == 0) { break }; aa := deref(arg_p(argq)); bad = sema_bad_typeinfo_field_expr(aa.e, src, vs, vl, a); arg = aa.next }; None => { break } } }
     }
     Expr::StructLit(ss, sl, nf, ah) => {
-      mut arg := ah
-      while arg != 0 and bad == 0 { aa := deref(arg_p(arg)); bad = sema_bad_typeinfo_field_expr(aa.e, src, vs, vl, a); arg = aa.next }
+      mut arg : Option(ptr(mut Arg)) = ah
+      loop { match arg { Some(argq) => { if not (bad == 0) { break }; aa := deref(arg_p(argq)); bad = sema_bad_typeinfo_field_expr(aa.e, src, vs, vl, a); arg = aa.next }; None => { break } } }
     }
     Expr::EnumLit(es, el, evs, evl, na, ah) => {
-      mut arg := ah
-      while arg != 0 and bad == 0 { aa := deref(arg_p(arg)); bad = sema_bad_typeinfo_field_expr(aa.e, src, vs, vl, a); arg = aa.next }
+      mut arg : Option(ptr(mut Arg)) = ah
+      loop { match arg { Some(argq) => { if not (bad == 0) { break }; aa := deref(arg_p(argq)); bad = sema_bad_typeinfo_field_expr(aa.e, src, vs, vl, a); arg = aa.next }; None => { break } } }
     }
     Expr::Field(base, fs, fl) => {
       vn := expr_var_span(base)
@@ -13474,8 +13749,8 @@ sema_bad_typeinfo_field_expr := fn(e : ptr(Expr), src : ptr(u8), vs : usize, vl 
     Expr::AddrOf(x) => { bad = sema_bad_typeinfo_field_expr(x, src, vs, vl, a) }
     Expr::Deref(x) => { bad = sema_bad_typeinfo_field_expr(x, src, vs, vl, a) }
     Expr::ArrayLit(n, ah) => {
-      mut arg := ah
-      while arg != 0 and bad == 0 { aa := deref(arg_p(arg)); bad = sema_bad_typeinfo_field_expr(aa.e, src, vs, vl, a); arg = aa.next }
+      mut arg : Option(ptr(mut Arg)) = ah
+      loop { match arg { Some(argq) => { if not (bad == 0) { break }; aa := deref(arg_p(argq)); bad = sema_bad_typeinfo_field_expr(aa.e, src, vs, vl, a); arg = aa.next }; None => { break } } }
     }
     Expr::Index(base, idx) => { bad = sema_bad_typeinfo_field_expr(base, src, vs, vl, a); if bad == 0 { bad = sema_bad_typeinfo_field_expr(idx, src, vs, vl, a) } }
     Expr::Try(x) => { bad = sema_bad_typeinfo_field_expr(x, src, vs, vl, a) }
@@ -13575,27 +13850,27 @@ expr_uses_var_cons := fn(e : ptr(Expr), src : ptr(u8), xs : usize, xl : usize, a
     Expr::Index(b, i) => { expr_uses_var_cons(b, src, xs, xl, a) or expr_uses_var_cons(i, src, xs, xl, a) }
     Expr::Call(cs, cl, na, ah) => {
       mut r := false
-      mut g := ah
-      while g != 0 { ga := deref(arg_p(g)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }; None => { break } } }
       r
     }
     Expr::StructLit(ns, nl, nf, fh) => {
       mut r := false
-      mut g := fh
-      while g != 0 { ga := deref(arg_p(g)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = fh
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }; None => { break } } }
       r
     }
     Expr::ArrayLit(cnt, eh) => {
       mut r := false
-      mut g := eh
-      while g != 0 { ga := deref(arg_p(g)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = eh
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }; None => { break } } }
       r
     }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
       ## receiver name (`es/el`, a UFCS receiver) counts as a use; plus any payload/arg exprs.
       mut r := streq(src, es, el, xs, xl)
-      mut g := ph
-      while g != 0 { ga := deref(arg_p(g)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ph
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_uses_var_cons(ga.e, src, xs, xl, a) { r = true } ; g = ga.next }; None => { break } } }
       r
     }
     Expr::If | Expr::Match | Expr::Slice | Expr::CompField | Expr::Lambda | Expr::FnRef
@@ -14625,7 +14900,7 @@ sema_guard_size_operand := fn(e : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt:
   match deref(e) {
     Expr::Call(cs, cl, nargs, ah) => {
       if str_at((src + cs), cl) == "size" and nargs >= 1 {
-        aa := deref(arg_p(ah))
+        aa := deref(arg_at(ah, "argument list ended early"))
         tn := expr_var_span(aa.e)
         if tn.n == 0 { return 0 - 1 }
         rv := sema_guard_resolve_tp(tp, src, tn.s, tn.n)
@@ -14761,8 +15036,8 @@ sema_builtin_aggregate_conversion_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec),
   if cs.n == 0 or expr_call_arity(e) != 1 { return false }
   if sema_conv_kind(str_at((src + cs.s), cs.n)) < 0 { return false }
   ah := expr_call_args_head(e)
-  if ah == 0 { return false }
-  a0 := deref(arg_p(ah))
+  if not arg_any(ah) { return false }
+  a0 := deref(arg_at(ah, "argument list ended early"))
   vs := expr_var_span(a0.e)
   if vs.n == 0 or nloc == 0 or not local_in(locals, nloc, src, vs.s, vs.n) { return false }
   lv := deref(locals)
@@ -14857,7 +15132,7 @@ sema_guard_typeinfo_kind := fn(scrut : ptr(Expr), tp : ptr(SGuardTP), decls : pt
   match deref(scrut) {
     Expr::Call(cs, cl, nargs, ah) => {
       if str_at((src + cs), cl) == "typeinfo" and nargs >= 1 {
-        aa := deref(arg_p(ah))
+        aa := deref(arg_at(ah, "argument list ended early"))
         tn := expr_var_span(aa.e)
         if tn.n == 0 { return 0 - 1 }
         rv := sema_guard_resolve_tp(tp, src, tn.s, tn.n)
@@ -14878,7 +15153,7 @@ sema_guard_typeinfo_arg_type := fn(scrut : ptr(Expr), tp : ptr(SGuardTP), src : 
   match deref(scrut) {
     Expr::Call(cs, cl, nargs, ah) => {
       if str_at((src + cs), cl) == "typeinfo" and nargs >= 1 {
-        aa := deref(arg_p(ah))
+        aa := deref(arg_at(ah, "argument list ended early"))
         tn := expr_var_span(aa.e)
         return sema_guard_resolve_tp(tp, src, tn.s, tn.n)
       }
@@ -15004,14 +15279,14 @@ sema_guard_pred_call_fold := fn(be : ptr(Expr), ph : Option(ptr(mut Param)), ah 
   mut t3s := 0
   mut t3l := 0
   mut pp := ph
-  mut ag := ah
+  mut ag : Option(ptr(mut Arg)) = ah
   mut slot := 0
   loop {
     match pp {
       Some(ppq) => {
         pm := deref(param_p(ppq))
-        if str_at((src + pm.ts), pm.tl) == "type" and ag != 0 {
-          aa := deref(arg_p(ag))
+        if str_at((src + pm.ts), pm.tl) == "type" and arg_any(ag) {
+          aa := deref(arg_at(ag, "argument list ended early"))
           av := expr_var_span(aa.e)
           rv := sema_guard_resolve_tp(tp, src, av.s, av.n)
           if slot == 0 { i1s = pm.ns ; i1l = pm.nl ; t1s = rv.s ; t1l = rv.n }
@@ -15019,7 +15294,7 @@ sema_guard_pred_call_fold := fn(be : ptr(Expr), ph : Option(ptr(mut Param)), ah 
           else if slot == 2 { i3s = pm.ns ; i3l = pm.nl ; t3s = rv.s ; t3l = rv.n }
           slot += 1
         }
-        if ag != 0 { agn := deref(arg_p(ag)) ; ag = agn.next }
+        match ag { Some(agq) => { agn := deref(arg_p(agq)) ; ag = agn.next }; None => {} }
         pp = pm.next
       }
       None => { break }
@@ -15110,7 +15385,7 @@ sema_guard_fold_inst := fn(cond : ptr(Expr), tp : ptr(SGuardTP), decls : ptr(rt:
 ## `when` predicate (`when_cond != 0`) that folds FALSE for this call's concrete type-args, returns the
 ## call-site span `cs`; else 0. Type-PARAM→type-ARG bindings are collected POSITIONALLY (the arg at a
 ## `type` param position is a type NAME), up to three (mirroring the lower's instance-slot collection).
-sema_when_guard_false_span := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ah : usize, a : ptr(mut rt::Arena)) -> usize {
+sema_when_guard_false_span := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ah : Option(ptr(mut Arg)), a : ptr(mut rt::Arena)) -> usize {
   mut gi : i64 = 0 - 1
   cnt := rt::vec_len(deref(decls))
   mut i := 0
@@ -15136,13 +15411,13 @@ sema_when_guard_false_span := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize
   mut t3l := 0
   mut slot := 0
   mut pp := gd.params_head
-  mut ag := ah
+  mut ag : Option(ptr(mut Arg)) = ah
   loop {
     match pp {
       Some(ppq) => {
         pm := deref(param_p(ppq))
-        if str_at((src + pm.ts), pm.tl) == "type" and ag != 0 {
-          aa := deref(arg_p(ag))
+        if str_at((src + pm.ts), pm.tl) == "type" and arg_any(ag) {
+          aa := deref(arg_at(ag, "argument list ended early"))
           av0 := expr_var_span(aa.e)
           mut av := av0
           tv := tuple_typearg_span(aa.e, src)
@@ -15152,7 +15427,7 @@ sema_when_guard_false_span := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize
           else if slot == 2 { i3s = pm.ns ; i3l = pm.nl ; t3s = av.s ; t3l = av.n }
           slot += 1
         }
-        if ag != 0 { agn := deref(arg_p(ag)) ; ag = agn.next }
+        match ag { Some(agq) => { agn := deref(arg_p(agq)) ; ag = agn.next }; None => {} }
         pp = pm.next
       }
       None => { break }
@@ -15530,20 +15805,20 @@ expr_has_unchecked := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> bool {
     }
     Expr::Call(cs, cl, na, ah) => {
       mut bad := false
-      mut g := ah
-      while g != 0 and bad == false { ga := deref(arg_p(g)); if expr_has_unchecked(ga.e, a) { bad = true }; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { if not (bad == false) { break }; ga := deref(arg_p(gq)); if expr_has_unchecked(ga.e, a) { bad = true }; g = ga.next }; None => { break } } }
       bad
     }
     Expr::StructLit(ss, sl, nf, fh) => {
       mut bad := false
-      mut g := fh
-      while g != 0 and bad == false { ga := deref(arg_p(g)); if expr_has_unchecked(ga.e, a) { bad = true }; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = fh
+      loop { match g { Some(gq) => { if not (bad == false) { break }; ga := deref(arg_p(gq)); if expr_has_unchecked(ga.e, a) { bad = true }; g = ga.next }; None => { break } } }
       bad
     }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
       mut bad := false
-      mut g := ph
-      while g != 0 and bad == false { ga := deref(arg_p(g)); if expr_has_unchecked(ga.e, a) { bad = true }; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ph
+      loop { match g { Some(gq) => { if not (bad == false) { break }; ga := deref(arg_p(gq)); if expr_has_unchecked(ga.e, a) { bad = true }; g = ga.next }; None => { break } } }
       bad
     }
     Expr::Field(base, fs, fl) => { expr_has_unchecked(base, a) }
@@ -15551,8 +15826,8 @@ expr_has_unchecked := fn(e : ptr(Expr), a : ptr(mut rt::Arena)) -> bool {
     Expr::Deref(p) => { expr_has_unchecked(p, a) }
     Expr::ArrayLit(nel, eh) => {
       mut bad := false
-      mut g := eh
-      while g != 0 and bad == false { ga := deref(arg_p(g)); if expr_has_unchecked(ga.e, a) { bad = true }; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = eh
+      loop { match g { Some(gq) => { if not (bad == false) { break }; ga := deref(arg_p(gq)); if expr_has_unchecked(ga.e, a) { bad = true }; g = ga.next }; None => { break } } }
       bad
     }
     Expr::Index(base, idx) => { expr_has_unchecked(base, a) or expr_has_unchecked(idx, a) }
@@ -15667,16 +15942,16 @@ expr_has_abstraction := fn(e : ptr(Expr), src : ptr(u8), a : ptr(mut rt::Arena))
       if not is_asm_instr_name(src, cs, cl) { true }
       else {
         mut bad := false
-        mut g := ah
-        while g != 0 and bad == false { ga := deref(arg_p(g)); if expr_has_abstraction(ga.e, src, a) { bad = true }; g = ga.next }
+        mut g : Option(ptr(mut Arg)) = ah
+        loop { match g { Some(gq) => { if not (bad == false) { break }; ga := deref(arg_p(gq)); if expr_has_abstraction(ga.e, src, a) { bad = true }; g = ga.next }; None => { break } } }
         bad
       }
     }
     Expr::Unchecked(inner) => { expr_has_abstraction(inner, src, a) }
     Expr::ArrayLit(nel, eh) => {
       mut bad := false
-      mut g := eh
-      while g != 0 and bad == false { ga := deref(arg_p(g)); if expr_has_abstraction(ga.e, src, a) { bad = true }; g = ga.next }
+      mut g : Option(ptr(mut Arg)) = eh
+      loop { match g { Some(gq) => { if not (bad == false) { break }; ga := deref(arg_p(gq)); if expr_has_abstraction(ga.e, src, a) { bad = true }; g = ga.next }; None => { break } } }
       bad
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::FloatLit | Expr::Lambda
@@ -17377,13 +17652,13 @@ sema_collect_expr := fn(e : ptr(Expr), locals : ptr(LVec), src : ptr(u8), a : pt
         }
       }
     }
-    Expr::Call(cs, cl, na, ah) => { mut g := ah; while g != 0 { ga := deref(arg_p(g)); sema_collect_expr(ga.e, locals, src, a); g = ga.next } }
-    Expr::StructLit(cs, cl, nf, fh) => { mut g := fh; while g != 0 { ga := deref(arg_p(g)); sema_collect_expr(ga.e, locals, src, a); g = ga.next } }
-    Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g := ph; while g != 0 { ga := deref(arg_p(g)); sema_collect_expr(ga.e, locals, src, a); g = ga.next } }
+    Expr::Call(cs, cl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah; loop {match g { Some(gq) => { ga := deref(arg_p(gq)); sema_collect_expr(ga.e, locals, src, a); g = ga.next }; None => { break } } } }
+    Expr::StructLit(cs, cl, nf, fh) => { mut g : Option(ptr(mut Arg)) = fh; loop {match g { Some(gq) => { ga := deref(arg_p(gq)); sema_collect_expr(ga.e, locals, src, a); g = ga.next }; None => { break } } } }
+    Expr::EnumLit(es, el, vs, vl, np, ph) => { mut g : Option(ptr(mut Arg)) = ph; loop {match g { Some(gq) => { ga := deref(arg_p(gq)); sema_collect_expr(ga.e, locals, src, a); g = ga.next }; None => { break } } } }
     Expr::Field(b, fs, fl) => { sema_collect_expr(b, locals, src, a) }
     Expr::AddrOf(p) => { sema_collect_expr(p, locals, src, a) }
     Expr::Deref(p) => { sema_collect_expr(p, locals, src, a) }
-    Expr::ArrayLit(ne, eh) => { mut g := eh; while g != 0 { ga := deref(arg_p(g)); sema_collect_expr(ga.e, locals, src, a); g = ga.next } }
+    Expr::ArrayLit(ne, eh) => { mut g : Option(ptr(mut Arg)) = eh; loop {match g { Some(gq) => { ga := deref(arg_p(gq)); sema_collect_expr(ga.e, locals, src, a); g = ga.next }; None => { break } } } }
     Expr::Index(b, ix) => { sema_collect_expr(b, locals, src, a); sema_collect_expr(ix, locals, src, a) }
     Expr::Try(inner) => { sema_collect_expr(inner, locals, src, a) }
     Expr::Slice(b, lo, hi) => { sema_collect_expr(b, locals, src, a); sema_collect_expr(lo, locals, src, a); sema_collect_expr(hi, locals, src, a) }
@@ -17719,13 +17994,19 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
     return bad
   }
   ah0 := expr_call_args_head(e)
-  if ah0 != 0 {
-    mut g := ah0
+  if arg_any(ah0) {
+    mut g : Option(ptr(mut Arg)) = ah0
     mut bad0 := 0
-    while g != 0 and bad0 == 0 {
-      ga := deref(arg_p(g))
-      bad0 = sema_enum_global_array_value_bad(ga.e, decls, upto, src, locals, nloc, a, false)
-      g = ga.next
+    loop {
+      match g {
+        Some(gq) => {
+          if not (bad0 == 0) { break }
+          ga := deref(arg_p(gq))
+          bad0 = sema_enum_global_array_value_bad(ga.e, decls, upto, src, locals, nloc, a, false)
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     return bad0
   }
@@ -17743,24 +18024,24 @@ sema_enum_global_array_value_bad := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto
       sema_enum_global_array_value_bad(f, decls, upto, src, locals, nloc, a, false)
     }
     Expr::StructLit(ss, sl, nf, fh) => {
-      mut g1 := fh
+      mut g1 : Option(ptr(mut Arg)) = fh
       mut bad4 := 0
-      while g1 != 0 and bad4 == 0 { ga1 := deref(arg_p(g1)); bad4 = sema_enum_global_array_value_bad(ga1.e, decls, upto, src, locals, nloc, a, false); g1 = ga1.next }
+      loop { match g1 { Some(g1q) => { if not (bad4 == 0) { break }; ga1 := deref(arg_p(g1q)); bad4 = sema_enum_global_array_value_bad(ga1.e, decls, upto, src, locals, nloc, a, false); g1 = ga1.next }; None => { break } } }
       bad4
     }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
-      mut g2 := ph
+      mut g2 : Option(ptr(mut Arg)) = ph
       mut bad5 := 0
-      while g2 != 0 and bad5 == 0 { ga2 := deref(arg_p(g2)); bad5 = sema_enum_global_array_value_bad(ga2.e, decls, upto, src, locals, nloc, a, false); g2 = ga2.next }
+      loop { match g2 { Some(g2q) => { if not (bad5 == 0) { break }; ga2 := deref(arg_p(g2q)); bad5 = sema_enum_global_array_value_bad(ga2.e, decls, upto, src, locals, nloc, a, false); g2 = ga2.next }; None => { break } } }
       bad5
     }
     Expr::Field(base, fs, fl) => { sema_enum_global_array_value_bad(base, decls, upto, src, locals, nloc, a, false) }
     Expr::AddrOf(p) => { sema_enum_global_array_value_bad(p, decls, upto, src, locals, nloc, a, false) }
     Expr::Deref(p) => { sema_enum_global_array_value_bad(p, decls, upto, src, locals, nloc, a, false) }
     Expr::ArrayLit(ne, eh) => {
-      mut g3 := eh
+      mut g3 : Option(ptr(mut Arg)) = eh
       mut bad6 := 0
-      while g3 != 0 and bad6 == 0 { ga3 := deref(arg_p(g3)); bad6 = sema_enum_global_array_value_bad(ga3.e, decls, upto, src, locals, nloc, a, false); g3 = ga3.next }
+      loop { match g3 { Some(g3q) => { if not (bad6 == 0) { break }; ga3 := deref(arg_p(g3q)); bad6 = sema_enum_global_array_value_bad(ga3.e, decls, upto, src, locals, nloc, a, false); g3 = ga3.next }; None => { break } } }
       bad6
     }
     Expr::Try(inner) => { sema_enum_global_array_value_bad(inner, decls, upto, src, locals, nloc, a, false) }
@@ -17960,17 +18241,23 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       cr0 = sema_callee_ambiguous(decls, src, ec0.s, ec0.n, cs, cl)
       if cr0 == 0 { cr0 = sema_bare_private(decls, src, ec0.s, ec0.n, cs, cl, 1, 4) }
     }
-    mut cg0 := expr_call_args_head(e)
+    mut cg0 : Option(ptr(mut Arg)) = expr_call_args_head(e)
     if cr0 == 0 and callee_is_type_builtin(src, ec0.s, ec0.n) {
-      if cg0 != 0 {
-        cga0 := deref(arg_p(cg0))
+      if arg_any(cg0) {
+        cga0 := deref(arg_at(cg0, "argument list ended early"))
         cr0 = sema_package_type_builtin_arg_bad(cga0.e, decls, src, cs, cl)
       }
     }
-    while cg0 != 0 and cr0 == 0 {
-      cga0 := deref(arg_p(cg0))
-      cr0 = sema_vis_expr(cga0.e, decls, src, cs, cl, locals, nloc, a)
-      cg0 = cga0.next
+    loop {
+      match cg0 {
+        Some(cg0q) => {
+          if not (cr0 == 0) { break }
+          cga0 := deref(arg_p(cg0q))
+          cr0 = sema_vis_expr(cga0.e, decls, src, cs, cl, locals, nloc, a)
+          cg0 = cga0.next
+        }
+        None => { break }
+      }
     }
     return cr0
   }
@@ -17988,31 +18275,49 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
       if r == 0 { r = sema_vis_qual(decls, src, ss, sl, cs, cl, 2, 3) }
       if r == 0 { r = sema_callee_ambiguous(decls, src, ss, sl, cs, cl) }
       if r == 0 { r = sema_bare_private(decls, src, ss, sl, cs, cl, 1, 4) }
-      mut g := ah
-      while g != 0 and r == 0 {
-        ga := deref(arg_p(g))
-        r = sema_vis_expr(ga.e, decls, src, cs, cl, locals, nloc, a)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            if not (r == 0) { break }
+            ga := deref(arg_p(gq))
+            r = sema_vis_expr(ga.e, decls, src, cs, cl, locals, nloc, a)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       r
     }
     Expr::StructLit(ss, sl, nf, fh) => {
       mut r := sema_vis_type_span(decls, src, ss, sl, cs, cl, Option.None)
-      mut g := fh
-      while g != 0 and r == 0 {
-        ga := deref(arg_p(g))
-        r = sema_vis_expr(ga.e, decls, src, cs, cl, locals, nloc, a)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = fh
+      loop {
+        match g {
+          Some(gq) => {
+            if not (r == 0) { break }
+            ga := deref(arg_p(gq))
+            r = sema_vis_expr(ga.e, decls, src, cs, cl, locals, nloc, a)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       r
     }
     Expr::EnumLit(es, el, vs, vl, np, ph) => {
       mut r := sema_vis_type_span(decls, src, es, el, cs, cl, Option.None)
-      mut g := ph
-      while g != 0 and r == 0 {
-        ga := deref(arg_p(g))
-        r = sema_vis_expr(ga.e, decls, src, cs, cl, locals, nloc, a)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ph
+      loop {
+        match g {
+          Some(gq) => {
+            if not (r == 0) { break }
+            ga := deref(arg_p(gq))
+            r = sema_vis_expr(ga.e, decls, src, cs, cl, locals, nloc, a)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       r
     }
@@ -18050,8 +18355,8 @@ sema_vis_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), cs : usi
     Expr::Deref(p) => { sema_vis_expr(p, decls, src, cs, cl, locals, nloc, a) }
     Expr::ArrayLit(ne, eh) => {
       mut r := 0
-      mut g := eh
-      while g != 0 and r == 0 { ga := deref(arg_p(g)); r = sema_vis_expr(ga.e, decls, src, cs, cl, locals, nloc, a); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = eh
+      loop { match g { Some(gq) => { if not (r == 0) { break }; ga := deref(arg_p(gq)); r = sema_vis_expr(ga.e, decls, src, cs, cl, locals, nloc, a); g = ga.next }; None => { break } } }
       r
     }
     Expr::Index(base, ix) => {

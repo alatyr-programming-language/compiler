@@ -32,6 +32,7 @@
 ## parse error in the self-host parser unless a QUALIFIED alias (`x := m::y`) separates them.
 strbuf := rt
 arg_p := ast::arg_p
+arg_at := ast::arg_at
 arm_p := ast::arm_p
 fld_p := ast::fld_p
 param_p := ast::param_p
@@ -416,7 +417,7 @@ comptime_query_arg_ok := fn(e : ptr(Expr), pm : ptr(mut Param), cx : ptr(LCtx), 
   if comptime_query_is_str_lit(e) { return str_at((cx.src + pb.s), pb.n) == "str" }
   true
 }
-comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), cx : ptr(LCtx), a : rt::Arena, types : bool) -> bool {
+comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena, types : bool) -> bool {
   cnt := rt::vec_len(deref(cx.decls))
   cp := colon_pos(cx.src, cs, cl)
   mut qns := cs
@@ -464,21 +465,25 @@ comptime_query_call_ok := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Ar
         found = true
       } else {
         mut p := d.params_head
-        mut g := ah
+        mut g : Option(ptr(mut Arg)) = ah
         mut ok := true
         loop {
           match p {
             Some(pq) => {
-              if not (g != 0) { break }
-              pm := param_p(pq)
-              if not comptime_query_arg_ok(deref(arg_p(g)).e, pm, cx, a) { ok = false }
-              p = deref(pm).next
-              g = deref(arg_p(g)).next
+              match g {
+                None => { break }
+                Some(gq) => {
+                  pm := param_p(pq)
+                  if not comptime_query_arg_ok(deref(arg_p(gq)).e, pm, cx, a) { ok = false }
+                  p = deref(pm).next
+                  g = deref(arg_p(gq)).next
+                }
+              }
             }
             None => { break }
           }
         }
-        if param_any(p) or g != 0 { ok = false }
+        if param_any(p) or arg_any(g) { ok = false }
         if ok { found = true }
       }
     }
@@ -523,38 +528,58 @@ pub comptime_query_expr_ok := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena, t
     }
     Expr::Call(cs, cl, na, ah) => {
       if not comptime_query_call_ok(cs, cl, na, ah, cx, a, types) { return false }
-      mut g := ah
+      mut g : Option(ptr(mut Arg)) = ah
       mut ok := true
-      while g != 0 {
-        if not comptime_query_expr_ok(deref(arg_p(g)).e, cx, a, types) { ok = false }
-        g = deref(arg_p(g)).next
+      loop {
+        match g {
+          Some(gq) => {
+            if not comptime_query_expr_ok(deref(arg_p(gq)).e, cx, a, types) { ok = false }
+            g = deref(arg_p(gq)).next
+          }
+          None => { break }
+        }
       }
       ok
     }
     Expr::StructLit(_ss, _sl, _nf, fh) => {
-      mut g := fh
+      mut g : Option(ptr(mut Arg)) = fh
       mut ok := true
-      while g != 0 {
-        if not comptime_query_expr_ok(deref(arg_p(g)).e, cx, a, types) { ok = false }
-        g = deref(arg_p(g)).next
+      loop {
+        match g {
+          Some(gq) => {
+            if not comptime_query_expr_ok(deref(arg_p(gq)).e, cx, a, types) { ok = false }
+            g = deref(arg_p(gq)).next
+          }
+          None => { break }
+        }
       }
       ok
     }
     Expr::EnumLit(_es, _el, _vs, _vl, _np, ph) => {
-      mut g := ph
+      mut g : Option(ptr(mut Arg)) = ph
       mut ok := true
-      while g != 0 {
-        if not comptime_query_expr_ok(deref(arg_p(g)).e, cx, a, types) { ok = false }
-        g = deref(arg_p(g)).next
+      loop {
+        match g {
+          Some(gq) => {
+            if not comptime_query_expr_ok(deref(arg_p(gq)).e, cx, a, types) { ok = false }
+            g = deref(arg_p(gq)).next
+          }
+          None => { break }
+        }
       }
       ok
     }
     Expr::ArrayLit(_nel, eh) => {
-      mut g := eh
+      mut g : Option(ptr(mut Arg)) = eh
       mut ok := true
-      while g != 0 {
-        if not comptime_query_expr_ok(deref(arg_p(g)).e, cx, a, types) { ok = false }
-        g = deref(arg_p(g)).next
+      loop {
+        match g {
+          Some(gq) => {
+            if not comptime_query_expr_ok(deref(arg_p(gq)).e, cx, a, types) { ok = false }
+            g = deref(arg_p(gq)).next
+          }
+          None => { break }
+        }
       }
       ok
     }
@@ -942,7 +967,7 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
         f0 := arg_expr_at(ah, 0, a)
         fsp := var_name_span(f0)
         if fsp.n == 0 { return -1 }
-        rtail := deref(arg_p(ah)).next
+        rtail := deref(arg_at(ah, "argument list ended early")).next
         if comptime_query_call_ok(fsp.s, fsp.n, na - 1, rtail, cx, a, true) { return 1 }
         return 0
       }

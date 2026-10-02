@@ -36,6 +36,8 @@ param_any := ast::param_any
 param_same := ast::param_same
 arm_p := ast::arm_p
 arg_p := ast::arg_p
+arg_at := ast::arg_at
+arg_any := ast::arg_any
 stmt_p := ast::stmt_p
 ## Local aliases for the cross-module state types — a struct constructed through a
 ## fully-`::` qualified path does not lower in construction position (the documented
@@ -540,7 +542,7 @@ d_lift_expr := fn(e : ptr(Expr), ms : usize, ml : usize, in out decls : rt::Vec,
     }
     Expr::Bin(op, l, r) => { d_lift_expr(l, ms, ml, decls, na, tar); d_lift_expr(r, ms, ml, decls, na, tar) }
     Expr::If(c, t, f) => { d_lift_expr(c, ms, ml, decls, na, tar); d_lift_expr(t, ms, ml, decls, na, tar); d_lift_expr(f, ms, ml, decls, na, tar) }
-    Expr::Call(cs, cl, nn, ah) => { mut g := ah; while g != 0 { ga := deref(arg_p(g)); d_lift_expr(ga.e, ms, ml, decls, na, tar); g = ga.next } }
+    Expr::Call(cs, cl, nn, ah) => { mut g : Option(ptr(mut Arg)) = ah; loop {match g { Some(gq) => { ga := deref(arg_p(gq)); d_lift_expr(ga.e, ms, ml, decls, na, tar); g = ga.next }; None => { break } } } }
     Expr::Try(inner) => { d_lift_expr(inner, ms, ml, decls, na, tar) }
     Expr::Unchecked(inner) => { d_lift_expr(inner, ms, ml, decls, na, tar) }
     Expr::Bitcast(inner, bps, bpl) => { d_lift_expr(inner, ms, ml, decls, na, tar) }
@@ -814,11 +816,16 @@ d_cap_free := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), na : ptr(mut rt::Ar
     Expr::Index(b, ix) => { d_flag_nonscalar_base(b, ph, na, decls, src, locals, body, hardreject); d_cap_free(b, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free(ix, ph, na, decls, src, locals, caps, body, hardreject) }
     Expr::If(c, th, el) => { d_cap_free(c, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free(th, ph, na, decls, src, locals, caps, body, hardreject); d_cap_free(el, ph, na, decls, src, locals, caps, body, hardreject) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_cap_free(ga.e, ph, na, decls, src, locals, caps, body, hardreject)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_cap_free(ga.e, ph, na, decls, src, locals, caps, body, hardreject)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
@@ -928,11 +935,16 @@ d_expr_uses_var := fn(e : ptr(Expr), s : usize, n : usize, na : ptr(mut rt::Aren
     Expr::Slice(b, lo, hi) => { d_expr_uses_var(b, s, n, na, src, found); d_expr_uses_var(lo, s, n, na, src, found); d_expr_uses_var(hi, s, n, na, src, found) }
     Expr::If(c, th, el) => { d_expr_uses_var(c, s, n, na, src, found); d_expr_uses_var(th, s, n, na, src, found); d_expr_uses_var(el, s, n, na, src, found) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_expr_uses_var(ga.e, s, n, na, src, found)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_expr_uses_var(ga.e, s, n, na, src, found)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
@@ -978,11 +990,16 @@ d_expr_rw_calls := fn(e : ptr(Expr), fs : usize, fl : usize, caps : ptr(rt::Vec)
     Expr::Index(b, ix) => { d_expr_rw_calls(b, fs, fl, caps, na, src); d_expr_rw_calls(ix, fs, fl, caps, na, src) }
     Expr::If(c, th, el) => { d_expr_rw_calls(c, fs, fl, caps, na, src); d_expr_rw_calls(th, fs, fl, caps, na, src); d_expr_rw_calls(el, fs, fl, caps, na, src) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_expr_rw_calls(ga.e, fs, fl, caps, na, src)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_expr_rw_calls(ga.e, fs, fl, caps, na, src)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       if str_at((src + cs), cl) == str_at((src + fs), fl) {
         ncaps := rt::vec_len(deref(caps))
@@ -990,26 +1007,27 @@ d_expr_rw_calls := fn(e : ptr(Expr), fs : usize, fl : usize, caps : ptr(rt::Vec)
         ## (`set_arg_next`) — the stores must run in the parser module (they mis-lower in the driver,
         ## writing a pointer instead of copying); the Call-node OVERWRITE below is a local-enum store via
         ## an inline bitcast, which DOES work in the driver (the Lambda→FnRef rewrite uses the same shape).
-        mut chain_head := 0
-        mut chain_tail := 0
+        mut chain_head : Option(ptr(mut Arg)) = Option.None
+        mut chain_tail : Option(ptr(mut Arg)) = Option.None
         mut k := 0
         while k < ncaps {
           pk := rt::vec_get(deref(caps), k)
           vptr := parser::newnode(na, Expr.Var(pk / 1024, pk % 1024))
-          argh := parser::gnode(na, Arg(e = vptr, next = unchecked bitcast(ptr(mut Arg), 0)))
-          if chain_head == 0 { chain_head = argh } else { parser::set_arg_next(na, chain_tail, argh) }
-          chain_tail = argh
+          argh := parser::gnode(na, Arg(e = vptr, next = Option.None))
+          match chain_tail { Some(ct0) => { parser::set_arg_next(na, ct0, Option.Some(argh)) }; None => { chain_head = Option.Some(argh) } }
+          chain_tail = Option.Some(argh)
           k = k + 1
         }
-        if ah == 0 {
-          nc := Expr.Call(cs, cl, nargs + ncaps, chain_head)
-          deref(unchecked bitcast(ptr(mut Expr), e)) = nc
-        } else {
-          mut cur := ah
-          while deref(arg_p(cur)).next != 0 { cur = deref(arg_p(cur)).next }
-          parser::set_arg_next(na, cur, chain_head)
-          nc := Expr.Call(cs, cl, nargs + ncaps, ah)
-          deref(unchecked bitcast(ptr(mut Expr), e)) = nc
+        match ah {
+          None => {
+            nc := Expr.Call(cs, cl, nargs + ncaps, chain_head)
+            deref(unchecked bitcast(ptr(mut Expr), e)) = nc
+          }
+          Some(ahq) => {
+            d_args_append(na, ahq, chain_head)
+            nc := Expr.Call(cs, cl, nargs + ncaps, ah)
+            deref(unchecked bitcast(ptr(mut Expr), e)) = nc
+          }
         }
       }
     }
@@ -1091,14 +1109,19 @@ d_scan_hof_expr := fn(e : ptr(Expr), fs : usize, fl : usize, na : ptr(mut rt::Ar
     Expr::Slice(b, lo, hi) => { d_scan_hof_expr(b, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(lo, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(hi, fs, fl, na, src, nt, nf, hs, hl, ap) }
     Expr::If(c, th, el) => { d_scan_hof_expr(c, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(th, fs, fl, na, src, nt, nf, hs, hl, ap); d_scan_hof_expr(el, fs, fl, na, src, nt, nf, hs, hl, ap) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
+      mut g : Option(ptr(mut Arg)) = ah
       mut idx := 0
-      while g != 0 {
-        ga := deref(arg_p(g))
-        if d_is_var_named(ga.e, fs, fl, src) == 1 { deref(hs) = cs; deref(hl) = cl; deref(ap) = idx; f0 := deref(nf); deref(nf) = f0 + 1 }
-        d_scan_hof_expr(ga.e, fs, fl, na, src, nt, nf, hs, hl, ap)
-        g = ga.next
-        idx = idx + 1
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            if d_is_var_named(ga.e, fs, fl, src) == 1 { deref(hs) = cs; deref(hl) = cl; deref(ap) = idx; f0 := deref(nf); deref(nf) = f0 + 1 }
+            d_scan_hof_expr(ga.e, fs, fl, na, src, nt, nf, hs, hl, ap)
+            g = ga.next
+            idx = idx + 1
+          }
+          None => { break }
+        }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
@@ -1145,12 +1168,17 @@ d_count_calls_expr := fn(e : ptr(Expr), cs : usize, cl : usize, na : ptr(mut rt:
     Expr::Slice(b, lo, hi) => { d_count_calls_expr(b, cs, cl, na, src, cnt); d_count_calls_expr(lo, cs, cl, na, src, cnt); d_count_calls_expr(hi, cs, cl, na, src, cnt) }
     Expr::If(c, th, el) => { d_count_calls_expr(c, cs, cl, na, src, cnt); d_count_calls_expr(th, cs, cl, na, src, cnt); d_count_calls_expr(el, cs, cl, na, src, cnt) }
     Expr::Call(ecs, ecl, nargs, ah) => {
-      mut g := ah
+      mut g : Option(ptr(mut Arg)) = ah
       if str_at((src + ecs), ecl) == str_at((src + cs), cl) { c0 := deref(cnt); deref(cnt) = c0 + 1 }
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_count_calls_expr(ga.e, cs, cl, na, src, cnt)
-        g = ga.next
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_count_calls_expr(ga.e, cs, cl, na, src, cnt)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::EnumLit
@@ -1320,38 +1348,44 @@ d_expr_rw_hof_site := fn(e : ptr(Expr), hs : usize, hl : usize, fs : usize, fl :
     Expr::Index(b, ix) => { d_expr_rw_hof_site(b, hs, hl, fs, fl, ns, nl, caps, na, src); d_expr_rw_hof_site(ix, hs, hl, fs, fl, ns, nl, caps, na, src) }
     Expr::If(c, th, el) => { d_expr_rw_hof_site(c, hs, hl, fs, fl, ns, nl, caps, na, src); d_expr_rw_hof_site(th, hs, hl, fs, fl, ns, nl, caps, na, src); d_expr_rw_hof_site(el, hs, hl, fs, fl, ns, nl, caps, na, src) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_expr_rw_hof_site(ga.e, hs, hl, fs, fl, ns, nl, caps, na, src)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_expr_rw_hof_site(ga.e, hs, hl, fs, fl, ns, nl, caps, na, src)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       if str_at((src + cs), cl) == str_at((src + hs), hl) {
         mut hasf := false
-        mut g2 := ah
-        while g2 != 0 { ga := deref(arg_p(g2)); if d_is_var_named(ga.e, fs, fl, src) == 1 { hasf = true }; g2 = deref(arg_p(g2)).next }
+        mut g2 : Option(ptr(mut Arg)) = ah
+        loop { match g2 { Some(g2q) => { ga := deref(arg_p(g2q)); if d_is_var_named(ga.e, fs, fl, src) == 1 { hasf = true }; g2 = deref(arg_p(g2q)).next }; None => { break } } }
         if hasf {
           ncaps := rt::vec_len(deref(caps))
-          mut chain_head := 0
-          mut chain_tail := 0
+          mut chain_head : Option(ptr(mut Arg)) = Option.None
+          mut chain_tail : Option(ptr(mut Arg)) = Option.None
           mut k := 0
           while k < ncaps {
             pk := rt::vec_get(deref(caps), k)
             vptr := parser::newnode(na, Expr.Var(pk / 1024, pk % 1024))
-            argh := parser::gnode(na, Arg(e = vptr, next = unchecked bitcast(ptr(mut Arg), 0)))
-            if chain_head == 0 { chain_head = argh } else { parser::set_arg_next(na, chain_tail, argh) }
-            chain_tail = argh
+            argh := parser::gnode(na, Arg(e = vptr, next = Option.None))
+            match chain_tail { Some(ct0) => { parser::set_arg_next(na, ct0, Option.Some(argh)) }; None => { chain_head = Option.Some(argh) } }
+            chain_tail = Option.Some(argh)
             k = k + 1
           }
-          if ah == 0 {
-            nc := Expr.Call(ns, nl, nargs + ncaps, chain_head)
-            deref(unchecked bitcast(ptr(mut Expr), e)) = nc
-          } else {
-            mut cur := ah
-            while deref(arg_p(cur)).next != 0 { cur = deref(arg_p(cur)).next }
-            parser::set_arg_next(na, cur, chain_head)
-            nc := Expr.Call(ns, nl, nargs + ncaps, ah)
-            deref(unchecked bitcast(ptr(mut Expr), e)) = nc
+          match ah {
+            None => {
+              nc := Expr.Call(ns, nl, nargs + ncaps, chain_head)
+              deref(unchecked bitcast(ptr(mut Expr), e)) = nc
+            }
+            Some(ahq) => {
+              d_args_append(na, ahq, chain_head)
+              nc := Expr.Call(ns, nl, nargs + ncaps, ah)
+              deref(unchecked bitcast(ptr(mut Expr), e)) = nc
+            }
           }
         }
       }
@@ -1360,6 +1394,15 @@ d_expr_rw_hof_site := fn(e : ptr(Expr), hs : usize, hl : usize, fs : usize, fl :
       | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
   }
+}
+## Append the arg chain `chain` after the last node of the non-empty arg list that starts at `ah`.
+d_args_append := fn(na : ptr(mut rt::Arena), ah : ptr(mut Arg), chain : Option(ptr(mut Arg))) {
+  mut cur := ah
+  loop {
+    cn := deref(arg_p(cur))
+    match cn.next { Some(nq) => { cur = nq }; None => { break } }
+  }
+  parser::set_arg_next(na, cur, chain)
 }
 d_stmts_rw_hof_site := fn(head : ptr(mut Stmt), hs : usize, hl : usize, fs : usize, fl : usize, ns : usize, nl : usize, caps : ptr(rt::Vec), na : ptr(mut rt::Arena), src : ptr(u8)) {
   mut st := head
@@ -1541,9 +1584,12 @@ d_uses_dyn_over_expr := fn(e : ptr(Expr), fs : usize, fl : usize, na : ptr(mut r
     Expr::Index(b, ix) => { d_uses_dyn_over_expr(b, fs, fl, na, src, res); d_uses_dyn_over_expr(ix, fs, fl, na, src, res) }
     Expr::If(c, th, el) => { d_uses_dyn_over_expr(c, fs, fl, na, src, res); d_uses_dyn_over_expr(th, fs, fl, na, src, res); d_uses_dyn_over_expr(el, fs, fl, na, src, res) }
     Expr::Call(cs, cl, nargs, ah) => {
-      if str_at((src + cs), cl) == "dyn_over" and ah != 0 and d_addr_is_var(deref(arg_p(ah)).e, fs, fl, src) == 1 { deref(res) = 1 }
-      mut g := ah
-      while g != 0 { ga := deref(arg_p(g)); d_uses_dyn_over_expr(ga.e, fs, fl, na, src, res); g = ga.next }
+      match ah {
+        Some(ahq) => { if str_at((src + cs), cl) == "dyn_over" and d_addr_is_var(deref(arg_p(ahq)).e, fs, fl, src) == 1 { deref(res) = 1 } }
+        None => {}
+      }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_uses_dyn_over_expr(ga.e, fs, fl, na, src, res); g = ga.next }; None => { break } } }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::EnumLit
       | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
@@ -1642,7 +1688,7 @@ d_try_capture := fn(fs : usize, fl : usize, v : ptr(Expr), body : ptr(mut Stmt),
 ## A capturing closure passed to a pure forwarding HOF `app(f, args)` (app = `fn(g, x0, …){ return
 ## g(x0, …) }`) is inlined at LIFT to a DIRECT call `f(args)` — f no longer escapes, so the existing
 ## capture pass injects its captures. General HOFs (loops / multiple calls) still need env/dyn (rejected).
-CallInfo := struct { is_call : bool, cs : usize, cl : usize, nargs : usize, ah : ptr(mut Arg) }
+CallInfo := struct { is_call : bool, cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)) }
 ## Call fields of `e` (extracted via a STANDALONE match — NOT an inline match inside d_fwd_hof_arity,
 ## which failed to fire on a top-level-fn body's returned Call).
 expr_call_info := fn(e : ptr(Expr)) -> CallInfo {
@@ -1651,7 +1697,7 @@ expr_call_info := fn(e : ptr(Expr)) -> CallInfo {
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CallInfo(is_call = false, cs = 0, cl = 0, nargs = 0, ah = unchecked bitcast(ptr(mut Arg), 0)) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CallInfo(is_call = false, cs = 0, cl = 0, nargs = 0, ah = Option.None) }
   }
 }
 d_var_span := fn(e : ptr(Expr)) -> CSpan {
@@ -1679,22 +1725,26 @@ d_fwd_hof_arity := fn(d : Decl, na : ptr(mut rt::Arena), src : ptr(u8)) -> i64 {
           mut ok := true
           if str_at((src + p0.ns), p0.nl) != str_at((src + ci.cs), ci.cl) { ok = false }
           mut pp := p0.next
-          mut g := ci.ah
+          mut g : Option(ptr(mut Arg)) = ci.ah
           loop {
             match pp {
               Some(ppq) => {
-                if g == 0 { ok = false; break }
-                pm := deref(param_p(ppq))
-                ga := deref(arg_p(g))
-                av := d_var_span(ga.e)
-                if av.n == 0 { ok = false } else { if str_at((src + av.s), av.n) != str_at((src + pm.ns), pm.nl) { ok = false } }
-                g = ga.next
-                pp = pm.next
+                match g {
+                  None => { ok = false; break }
+                  Some(gq) => {
+                    pm := deref(param_p(ppq))
+                    ga := deref(arg_p(gq))
+                    av := d_var_span(ga.e)
+                    if av.n == 0 { ok = false } else { if str_at((src + av.s), av.n) != str_at((src + pm.ns), pm.nl) { ok = false } }
+                    g = ga.next
+                    pp = pm.next
+                  }
+                }
               }
               None => { break }
             }
           }
-          if g != 0 { ok = false }
+          if arg_any(g) { ok = false }
           if ok { r = i64(d.arity) }
         }
       }
@@ -1808,33 +1858,38 @@ d_param_name_at := fn(decls : rt::Vec, di : usize, p : usize, na : ptr(mut rt::A
   r
 }
 ## The value expr of the j-th (0-based) arg in the arena-linked Arg list `fhead`, or null.
-d_arg_e_at := fn(fhead : ptr(mut Arg), j : usize, na : ptr(mut rt::Arena)) -> ptr(Expr) {
-  mut g := fhead
+d_arg_e_at := fn(fhead : Option(ptr(mut Arg)), j : usize, na : ptr(mut rt::Arena)) -> ptr(Expr) {
+  mut g : Option(ptr(mut Arg)) = fhead
   mut k := 0
   mut r := unchecked bitcast(ptr(Expr), 0)
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if k == j { r = ga.e }
-    k = k + 1
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if k == j { r = ga.e }
+        k = k + 1
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   r
 }
-d_arg_count := fn(fhead : ptr(mut Arg), na : ptr(mut rt::Arena)) -> usize {
-  mut g := fhead
+d_arg_count := fn(fhead : Option(ptr(mut Arg)), na : ptr(mut rt::Arena)) -> usize {
+  mut g : Option(ptr(mut Arg)) = fhead
   mut k := 0
-  while g != 0 { ga := deref(arg_p(g)); k = k + 1; g = ga.next }
+  loop { match g { Some(gq) => { ga := deref(arg_p(gq)); k = k + 1; g = ga.next }; None => { break } } }
   k
 }
 ## Rewrite a named-call StructLit `f(b = e1, a = e0)` in place to a positional `Call(f, e0, e1)`:
 ## match each field name to a parameter and reorder the value args. Fail-loud on any name/arity mismatch.
-d_rewrite_named_call := fn(e : ptr(Expr), ss : usize, sl : usize, nf : usize, fhead : ptr(mut Arg), di : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_rewrite_named_call := fn(e : ptr(Expr), ss : usize, sl : usize, nf : usize, fhead : Option(ptr(mut Arg)), di : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
   arity := (deref(decl_at(Decl, rt::vec_get(decls, di)))).arity
   m := d_arg_count(fhead, na)
   if m != arity { panic("selfhost: named call argument count does not match the function's arity") }
   ## build the reordered arg list: output position p = the value whose field name == param p's name.
-  mut head := 0
-  mut tail := 0
+  mut head : Option(ptr(mut Arg)) = Option.None
+  mut tail : Option(ptr(mut Arg)) = Option.None
   mut p := 0
   while p < arity {
     pn := d_param_name_at(decls, di, p, na)
@@ -1848,9 +1903,9 @@ d_rewrite_named_call := fn(e : ptr(Expr), ss : usize, sl : usize, nf : usize, fh
     }
     if found < 0 { panic("selfhost: named call argument does not match any parameter name") }
     ve := d_arg_e_at(fhead, usize(found), na)
-    argh := parser::gnode(na, Arg(e = ve, next = unchecked bitcast(ptr(mut Arg), 0)))
-    if head == 0 { head = argh } else { parser::set_arg_next(na, tail, argh) }
-    tail = argh
+    argh := parser::gnode(na, Arg(e = ve, next = Option.None))
+    match tail { Some(tl0) => { parser::set_arg_next(na, tl0, Option.Some(argh)) }; None => { head = Option.Some(argh) } }
+    tail = Option.Some(argh)
     p = p + 1
   }
   nc := Expr.Call(ss, sl, arity, head)
@@ -1861,8 +1916,8 @@ d_rewrite_fwd_expr := fn(e : ptr(Expr), decls : rt::Vec, na : ptr(mut rt::Arena)
   match deref(e) {
     Expr::Bin(op, l, r) => { d_rewrite_fwd_expr(l, decls, na, src); d_rewrite_fwd_expr(r, decls, na, src) }
     Expr::StructLit(ss, sl, nf, fhead) => {
-      mut g := fhead
-      while g != 0 { ga := deref(arg_p(g)); d_rewrite_fwd_expr(ga.e, decls, na, src); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = fhead
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_rewrite_fwd_expr(ga.e, decls, na, src); g = ga.next }; None => { break } } }
       di := d_value_fn_idx(decls, ss, sl, na, src)
       if di != 0 { d_rewrite_named_call(e, ss, sl, nf, fhead, di - 1, decls, na, src) }
     }
@@ -1870,17 +1925,20 @@ d_rewrite_fwd_expr := fn(e : ptr(Expr), decls : rt::Vec, na : ptr(mut rt::Arena)
     Expr::Try(inner) => { d_rewrite_fwd_expr(inner, decls, na, src) }
     Expr::If(c, th, el) => { d_rewrite_fwd_expr(c, decls, na, src); d_rewrite_fwd_expr(th, decls, na, src); d_rewrite_fwd_expr(el, decls, na, src) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
-      while g != 0 { ga := deref(arg_p(g)); d_rewrite_fwd_expr(ga.e, decls, na, src); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_rewrite_fwd_expr(ga.e, decls, na, src); g = ga.next }; None => { break } } }
       fa := d_fwd_call_arity(decls, cs, cl, na, src)
       if fa == i64(nargs) {
-        if ah != 0 {
-          a0 := deref(arg_p(ah))
-          av := d_var_span(a0.e)
-          if av.n != 0 {
-            nc := Expr.Call(av.s, av.n, nargs - 1, a0.next)
-            deref(unchecked bitcast(ptr(mut Expr), e)) = nc
+        match ah {
+          Some(ahq) => {
+            a0 := deref(arg_p(ahq))
+            av := d_var_span(a0.e)
+            if av.n != 0 {
+              nc := Expr.Call(av.s, av.n, nargs - 1, a0.next)
+              deref(unchecked bitcast(ptr(mut Expr), e)) = nc
+            }
           }
+          None => {}
         }
       }
     }
@@ -1962,8 +2020,8 @@ d_expr_has_dynvar := fn(e : ptr(Expr), body : ptr(mut Stmt), na : ptr(mut rt::Ar
     Expr::Slice(b, lo, hi) => { d_expr_has_dynvar(b, body, na, src, res); d_expr_has_dynvar(lo, body, na, src, res); d_expr_has_dynvar(hi, body, na, src, res) }
     Expr::If(c, th, el) => { d_expr_has_dynvar(c, body, na, src, res); d_expr_has_dynvar(th, body, na, src, res); d_expr_has_dynvar(el, body, na, src, res) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
-      while g != 0 { ga := deref(arg_p(g)); d_expr_has_dynvar(ga.e, body, na, src, res); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_expr_has_dynvar(ga.e, body, na, src, res); g = ga.next }; None => { break } } }
     }
     Expr::Num | Expr::BoolLit | Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::StrLit
       | Expr::ArrayLit | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Bitcast
@@ -2079,19 +2137,30 @@ d_alloc_callee := fn(decls : rt::Vec, cs : usize, cl : usize, na : ptr(mut rt::A
   r
 }
 ## Splice `ae` as arg index `k` into arena-linked Arg list `ah`; returns the (possibly new) head.
-d_insert_arg := fn(ah : ptr(mut Arg), k : usize, ae : ptr(Expr), na : ptr(mut rt::Arena)) -> usize {
-  newarg := parser::gnode(na, Arg(e = ae, next = unchecked bitcast(ptr(mut Arg), 0)))
-  if k == 0 { parser::set_arg_next(na, newarg, ah); return newarg }
-  mut g := ah
+d_insert_arg := fn(ah : Option(ptr(mut Arg)), k : usize, ae : ptr(Expr), na : ptr(mut rt::Arena)) -> Option(ptr(mut Arg)) {
+  newarg := parser::gnode(na, Arg(e = ae, next = Option.None))
+  if k == 0 { parser::set_arg_next(na, newarg, ah); return Option.Some(newarg) }
+  mut g : Option(ptr(mut Arg)) = ah
   mut i := 0
-  while i < k - 1 and g != 0 { g = deref(arg_p(g)).next; i = i + 1 }
-  gn := deref(arg_p(g)).next
-  parser::set_arg_next(na, newarg, gn)
-  parser::set_arg_next(na, g, newarg)
-  unchecked bitcast(usize, ah)
+  loop {
+    if i >= k - 1 { break }
+    match g {
+      Some(gq) => { gm := deref(arg_p(gq)); g = gm.next; i = i + 1 }
+      None => { break }
+    }
+  }
+  match g {
+    Some(gp) => {
+      gn := deref(arg_p(gp)).next
+      parser::set_arg_next(na, newarg, gn)
+      parser::set_arg_next(na, gp, Option.Some(newarg))
+    }
+    None => { panic("d_insert_arg: the call has fewer arguments than the insertion index") }
+  }
+  ah
 }
 ## If Call `e` (span cs,cl; nargs; arg head ah) omits its allocator param, splice `ptr(amb)` at it.
-d_elide_call := fn(e : ptr(Expr), cs : usize, cl : usize, nargs : usize, ah : ptr(mut Arg), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
+d_elide_call := fn(e : ptr(Expr), cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), amb : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
   di1 := d_alloc_callee(decls, cs, cl, na, src)
   if di1 != 0 {
     k := d_arena_param_idx(decls, di1 - 1, na, src)
@@ -2113,8 +2182,8 @@ d_elide_alloc_expr := fn(e : ptr(Expr), amb : usize, decls : rt::Vec, na : ptr(m
     Expr::AddrOf(inner) => { d_elide_alloc_expr(inner, amb, decls, na, src) }
     Expr::If(c, th, el) => { d_elide_alloc_expr(c, amb, decls, na, src); d_elide_alloc_expr(th, amb, decls, na, src); d_elide_alloc_expr(el, amb, decls, na, src) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
-      while g != 0 { ga := deref(arg_p(g)); d_elide_alloc_expr(ga.e, amb, decls, na, src); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_elide_alloc_expr(ga.e, amb, decls, na, src); g = ga.next }; None => { break } } }
       if amb != 0 { d_elide_call(e, cs, cl, nargs, ah, amb, decls, na, src) }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::Field
@@ -2166,11 +2235,11 @@ d_convert_expr := fn(e : ptr(Expr), ph : Option(ptr(mut Param)), bh : ptr(mut St
     Expr::AddrOf(inner) => { d_convert_expr(inner, ph, bh, decls, na, src) }
     Expr::If(c, th, el) => { d_convert_expr(c, ph, bh, decls, na, src); d_convert_expr(th, ph, bh, decls, na, src); d_convert_expr(el, ph, bh, decls, na, src) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
-      while g != 0 { ga := deref(arg_p(g)); d_convert_expr(ga.e, ph, bh, decls, na, src); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_convert_expr(ga.e, ph, bh, decls, na, src); g = ga.next }; None => { break } } }
       ## null-ok: the call's first argument, or none — twin_convert_callee reads a null `a0` as "no operand"
       mut a0 := unchecked bitcast(ptr(Expr), 0)
-      if ah != 0 { a0 = deref(arg_p(ah)).e }
+      match ah { Some(ahq) => { a0 = deref(arg_p(ahq)).e }; None => {} }
       mut dv := decls
       ci := lower::twin_convert_callee(ptr(dv), src, cs, cl, nargs, a0, ph, bh)
       if ci >= 0 {
@@ -2451,7 +2520,7 @@ d_callee_name_matches := fn(src : ptr(u8), d : Decl, cs : usize, cl : usize) -> 
 ## which is what tells the appendix's `iter(CharIter)` and `iter(SplitIter)` apart at `for c in
 ## iter(cur)`. A callee naming no function is tried as a constructor `T(…)`, whose result type is `T`.
 ## `{0, 0}` means "not resolvable here", and every caller then leaves the statement alone.
-d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : ptr(mut Arg), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
+d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), decls : rt::Vec, src : ptr(u8), body : ptr(mut Stmt), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
   mut cnt := 0
   mut hit := 0
   mut i := 0
@@ -2465,8 +2534,8 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : ptr(mut Arg), 
     return d_type_base_span(src, d1.ret_ts, d1.ret_tl)
   }
   if cnt > 1 {
-    if unchecked bitcast(usize, ah) == 0 { return DSpan(s = 0, n = 0) }
-    ab := d_expr_type_base(deref(arg_p(ah)).e, decls, src, body, ph, na, depth + 1)
+    if not arg_any(ah) { return DSpan(s = 0, n = 0) }
+    ab := d_expr_type_base(deref(arg_at(ah, "argument list ended early")).e, decls, src, body, ph, na, depth + 1)
     if ab.n == 0 { return DSpan(s = 0, n = 0) }
     mut c2 := 0
     mut h2 := 0
@@ -2580,9 +2649,9 @@ d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(E
   mut nol := 0
   nos := d_iterfor_lit(na, src_int, "None", ptr(nol))
   ## `x := unwrap(<T>, __foropt<N>)` in front of the author's body
-  uwa1 := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(ops, opl)), next = ast::arg_null()))
-  uwa0 := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(pays, payl)), next = uwa1))
-  bindst := parser::snode(na, Stmt.Assign(fns, fnl, parser::newnode(na, Expr.Call(uws, uwl, 2, uwa0)), fb))
+  uwa1 := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(ops, opl)), next = Option.None))
+  uwa0 := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(pays, payl)), next = Option.Some(uwa1)))
+  bindst := parser::snode(na, Stmt.Assign(fns, fnl, parser::newnode(na, Expr.Call(uws, uwl, 2, Option.Some(uwa0))), fb))
   ## §2.3 — `Some` is present (yield and continue), `None` is absent (leave the loop)
   dummy := parser::newnode(na, Expr.Num(0, 0, 0))
   brk := parser::snode(na, Stmt.Break(unchecked bitcast(ptr(Expr), 0), 0, ast::stmt_null()))
@@ -2591,8 +2660,8 @@ d_iterfor_rewrite := fn(s : ptr(mut Stmt), fns : usize, fnl : usize, flo : ptr(E
   arms := parser::anode(na, Arm(wild = 0, lit = 0, body = dummy, next = Option.Some(armn), vs = sms, vl = sml, binds_head = Option.Some(bh), body_stmts = bindst, hi = 0))
   mst := parser::snode(na, Stmt.Match(parser::newnode(na, Expr.Var(ops, opl)), Option.Some(arms), ast::stmt_null()))
   ## `__foropt<N> := next(__forit<N>)`, then the match — both inside the loop
-  nca := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(its, itl)), next = ast::arg_null()))
-  ost := parser::snode(na, Stmt.Assign(ops, opl, parser::newnode(na, Expr.Call(nxs, nxl, 1, nca)), mst))
+  nca := parser::gnode(na, Arg(e = parser::newnode(na, Expr.Var(its, itl)), next = Option.None))
+  ost := parser::snode(na, Stmt.Assign(ops, opl, parser::newnode(na, Expr.Call(nxs, nxl, 1, Option.Some(nca))), mst))
   lst := parser::snode(na, Stmt.Loop(ost, nx))
   ## `@label(name) for …` labels the LOOP; move the mark off the node that becomes the binding so a
   ## labeled `break name` still resolves and the binding does not inherit a control label.
@@ -3567,8 +3636,8 @@ d_manifest_module_decls := fn(pv : rt::Vec, name_start : rt::Vec, name_len : rt:
       rt::vec_push(decls, th)
       lit := parser::newnode(ptr(na), Expr.StrLit(MANIFEST_VERSION_S, MANIFEST_VERSION_N, nstr, 0, 0))
       nstr += 1
-      ah := parser::gnode(ptr(na), Arg(e = lit, next = unchecked bitcast(ptr(mut Arg), 0)))
-      value := parser::newnode(ptr(na), Expr.StructLit(MANIFEST_TYPE_S, MANIFEST_TYPE_N, 1, ah))
+      ah := parser::gnode(ptr(na), Arg(e = lit, next = Option.None))
+      value := parser::newnode(ptr(na), Expr.StructLit(MANIFEST_TYPE_S, MANIFEST_TYPE_N, 1, Option.Some(ah)))
       ad := Decl(name_start = MANIFEST_BIND_S, name_len = MANIFEST_BIND_N, value = value, is_fn = false, kind = 0, arity = 0, is_generic = false, params_head = Option.None, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), fields_head = Option.None, ret_ts = 0, ret_tl = 0, mod_start = ms, mod_len = ml, when_cond = unchecked bitcast(ptr(Expr), 0), alias_ts = 0, alias_tl = 0)
       ahd := d_manifest_decl_node(tar, ad)
       rt::vec_push(decls, ahd)
@@ -3645,35 +3714,55 @@ d_manifest_rewrite_expr := fn(e : ptr(Expr), allow : bool, in out nstr : usize, 
       }
     }
     Expr::Call(cs, cl, nn, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_manifest_rewrite_expr(ga.e, allow, nstr, src, na)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_manifest_rewrite_expr(ga.e, allow, nstr, src, na)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::StructLit(ss, sl, nn, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_manifest_rewrite_expr(ga.e, allow, nstr, src, na)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_manifest_rewrite_expr(ga.e, allow, nstr, src, na)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::EnumLit(es, el, vs, vl, nn, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_manifest_rewrite_expr(ga.e, allow, nstr, src, na)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_manifest_rewrite_expr(ga.e, allow, nstr, src, na)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::ArrayLit(nn, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_manifest_rewrite_expr(ga.e, allow, nstr, src, na)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_manifest_rewrite_expr(ga.e, allow, nstr, src, na)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Unchecked(inner) => { d_manifest_rewrite_expr(inner, allow, nstr, src, na) }
@@ -5509,7 +5598,7 @@ d_one_reexport_module := fn(src : ptr(u8), hs : usize, hl : usize, decls : rt::V
 mut D_QUAL_PH : Option(ptr(mut Param)) = Option.None        ## enclosing fn's `params_head`, while its body is walked
 mut D_QUAL_BODY : usize = 0      ## enclosing fn's `body_stmts`, for the annotated-local lookup
 mut D_QUAL_NA : usize = 0        ## the node arena those statements live in
-mut D_QUAL_ARGS : usize = 0      ## the `Arg` list of the call currently being resolved
+mut D_QUAL_ARGS : Option(ptr(mut Arg)) = Option.None      ## the `Arg` list of the call currently being resolved
 
 ## The BASE type name of a declared-type span (`Option(u64)` → `Option`, `u64` → `u64`), with the
 ## pointer-width spellings normalized the way `lower::norm_type_str` normalizes them, so a `usize`
@@ -5603,8 +5692,8 @@ d_ovl_pick := fn(decls : rt::Vec, src : ptr(u8), di : usize) -> usize {
   }
   if nset < 2 { return di }
   mut nargs := 0
-  mut g := unchecked bitcast(ptr(mut Arg), D_QUAL_ARGS)
-  while g != 0 { ga := deref(arg_p(g)) ; nargs = nargs + 1 ; g = ga.next }
+  mut g : Option(ptr(mut Arg)) = D_QUAL_ARGS
+  loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; nargs = nargs + 1 ; g = ga.next }; None => { break } } }
   mut hit := 0
   mut nhit := 0
   i = 0
@@ -5617,19 +5706,23 @@ d_ovl_pick := fn(decls : rt::Vec, src : ptr(u8), di : usize) -> usize {
       mut ok := np == nargs
       if ok {
         mut pp := d.params_head
-        mut gg := unchecked bitcast(ptr(mut Arg), D_QUAL_ARGS)
+        mut gg : Option(ptr(mut Arg)) = D_QUAL_ARGS
         loop {
           match pp {
             Some(ppq) => {
-              if not (gg != 0) { break }
-              pm2 := deref(param_p(ppq))
-              ga2 := deref(arg_p(gg))
-              at := d_ovl_arg_type(ga2.e, na, src)
-              if at.n != 0 and pm2.tl != 0 {
-                if d_ovl_norm_type(src, at.s, at.n) != d_ovl_norm_type(src, pm2.ts, pm2.tl) { ok = false }
+              match gg {
+                None => { break }
+                Some(ggq) => {
+                  pm2 := deref(param_p(ppq))
+                  ga2 := deref(arg_p(ggq))
+                  at := d_ovl_arg_type(ga2.e, na, src)
+                  if at.n != 0 and pm2.tl != 0 {
+                    if d_ovl_norm_type(src, at.s, at.n) != d_ovl_norm_type(src, pm2.ts, pm2.tl) { ok = false }
+                  }
+                  pp = pm2.next
+                  gg = ga2.next
+                }
               }
-              pp = pm2.next
-              gg = ga2.next
             }
             None => { break }
           }
@@ -5863,18 +5956,23 @@ d_qual_expr := fn(e : ptr(Expr), ms : usize, ml : usize, decls : rt::Vec, na : p
     Expr::Index(b, ix) => { d_qual_expr(b, ms, ml, decls, na, src); d_qual_expr(ix, ms, ml, decls, na, src) }
     Expr::If(c, th, el) => { d_qual_expr(c, ms, ml, decls, na, src); d_qual_expr(th, ms, ml, decls, na, src); d_qual_expr(el, ms, ml, decls, na, src) }
     Expr::Call(cs, cl, nargs, ah) => {
-      mut g := ah
-      while g != 0 {
-        ga := deref(arg_p(g))
-        d_qual_expr(ga.e, ms, ml, decls, na, src)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ah
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            d_qual_expr(ga.e, ms, ml, decls, na, src)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       ## The ARG list of THIS call, for `d_ovl_pick`'s signature match. Set AFTER the recursion
       ## above so a nested call in an argument has already consumed (and restored) its own.
-      D_QUAL_ARGS = unchecked bitcast(usize, ah)
+      D_QUAL_ARGS = ah
       d_mark_callee(cs, cl, ms, ml, decls, src)
       if D_QUAL_RW != 0 {
-        D_QUAL_ARGS = unchecked bitcast(usize, ah)
+        D_QUAL_ARGS = ah
         di := d_qual_target_ok(cs, cl, ms, ml, decls, src)
         if di != 0 {
           td := deref(decl_at(Decl, rt::vec_get(decls, di - 1)))
@@ -6097,8 +6195,8 @@ d_aggcmp_expr := fn(e : ptr(Expr), body : ptr(mut Stmt), decls : rt::Vec, na : p
     Expr::If(c, th, el) => { d_aggcmp_expr(c, body, decls, na, src); d_aggcmp_expr(th, body, decls, na, src); d_aggcmp_expr(el, body, decls, na, src) }
     Expr::Index(b, ix) => { d_aggcmp_expr(b, body, decls, na, src); d_aggcmp_expr(ix, body, decls, na, src) }
     Expr::Call(cs, cl, n, ah) => {
-      mut g := ah
-      while g != 0 { ga := deref(arg_p(g)); d_aggcmp_expr(ga.e, body, decls, na, src); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ah
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); d_aggcmp_expr(ga.e, body, decls, na, src); g = ga.next }; None => { break } } }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StructLit | Expr::Field
       | Expr::EnumLit | Expr::StrLit | Expr::ArrayLit | Expr::FloatLit | Expr::Slice | Expr::CompField

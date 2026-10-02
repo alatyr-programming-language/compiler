@@ -42,6 +42,8 @@ param_any := ast::param_any
 param_at := ast::param_at
 arm_p := ast::arm_p
 arg_p := ast::arg_p
+arg_at := ast::arg_at
+arg_any := ast::arg_any
 stmt_p := ast::stmt_p
 stmt_label_span := ast::stmt_label_span
 ## FN-6 expression-callee site set — the parser's marker for a call whose ARGUMENT 0 IS THE CALLEE
@@ -1730,7 +1732,7 @@ variadic_hole_type_span := fn(e : ptr(Expr), block_head : ptr(mut Stmt), decls :
 ## interleaving `[seg0, arg0, seg1, …]`. v1: holes fill trailing args in order; each arg needs an
 ## inferable type (`expr_type_span` plus `variadic_hole_type_span`); `{{`/`}}` escapes + non-literal
 ## templates are follow-ups.
-emit_variadic_print := fn(args_head : ptr(mut Arg), block_head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   fmt := arg_expr_at(args_head, 0, a)
   fi := str_lit_info(fmt)
   ## A NON-LITERAL template (`t : str = "…"` then `print(t)`): §7.1 specifies the expansion over the
@@ -4912,7 +4914,7 @@ arg_src_idx := fn(i : usize, skip : i64, skip2 : i64, skip3 : i64) -> usize {
   src
 }
 
-str_arg_tmp_off := fn(args_head : ptr(mut Arg), skip : i64, skip2 : i64, skip3 : i64, i : usize, cx : ptr(LCtx), a : rt::Arena) -> i64 {
+str_arg_tmp_off := fn(args_head : Option(ptr(mut Arg)), skip : i64, skip2 : i64, skip3 : i64, i : usize, cx : ptr(LCtx), a : rt::Arena) -> i64 {
   ei := arg_expr_at(args_head, arg_src_idx(i, skip, skip2, skip3), a)
   ## a str LITERAL / `str_at(…)` view / `bytes(<literal|str_at>)` argument consumes a 2-word temp
   ## block (same predicate as `scan_call_str_args`, so the pool is sized + indexed consistently).
@@ -5042,20 +5044,25 @@ emit_byte_array_lit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : pt
   ali := array_lit_info(e)
   boff := agg_alloc(cx)
   if ali.nel > cx.agg_w * 8 { panic("selfhost: a byte-array literal argument is wider than the aggregate-value call-arg temp block") }
-  mut g := ali.ehead
+  mut g : Option(ptr(mut Arg)) = ali.ehead
   mut k : i64 = 0
   ## null-ok: Arg.next — an argument list ends in a null link (ast.al "0 = end")
-  while unchecked bitcast(usize, g) != 0 {
-    ga := deref(arg_p(g))
-    if struct_lit_info(ga.e).is_s or enum_lit_info(ga.e).is_e or str_lit_info(ga.e).is_s or array_lit_info(ga.e).is_a {
-      panic("selfhost: a byte-packed array literal must contain scalar elements")
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if struct_lit_info(ga.e).is_s or enum_lit_info(ga.e).is_e or str_lit_info(ga.e).is_s or array_lit_info(ga.e).is_a {
+          panic("selfhost: a byte-packed array literal must contain scalar elements")
+        }
+        emit_gas(ga.e, sb, cx, a, nl)
+        push_str(sb, "  popq %rax\n  movb %al, -")
+        push_int(sb, (boff + 1) * 8 - k)
+        push_str(sb, "(%rbp)\n")
+        k += 1
+        g = ga.next
+      }
+      None => { break }
     }
-    emit_gas(ga.e, sb, cx, a, nl)
-    push_str(sb, "  popq %rax\n  movb %al, -")
-    push_int(sb, (boff + 1) * 8 - k)
-    push_str(sb, "(%rbp)\n")
-    k += 1
-    g = ga.next
   }
   bent := SlotEntry(ns = 0, nl = 0, off = usize(boff), sns = 0, snl = 0, ek = 5, estride = 1, eek = 0, is_ref = false, tmod_s = 0, tmod_l = 0)
   emit_agg_base_addr(bent, sb)
@@ -5187,7 +5194,7 @@ emit_out_scalar_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LC
   }
 }
 
-emit_call_args := fn(args_head : ptr(mut Arg), skip : i64, skip2 : i64, skip3 : i64, nvals : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
+emit_call_args := fn(args_head : Option(ptr(mut Arg)), skip : i64, skip2 : i64, skip3 : i64, nvals : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
   a := arena_of(cx)
   ## AGGREGATE-VALUE args (§8, no silent miscompiles): each struct/enum/tuple LITERAL or struct-RETURNING
   ## call arg materializes into a DISTINCT agg-temp slice (bump allocator, `agg_alloc`) and is passed by
@@ -5326,14 +5333,14 @@ enum_lit_info := fn(e : ptr(Expr)) -> EInfo {
 ## The FULL parts of an enum-variant construction `E.V(payload…)` — enum type span, variant name span,
 ## payload arg count, and payload `Arg`-list head — for laying an ENUM-valued mutable global into `.data`
 ## (`[disc, payload…, pad]`). Ptr-param match (a local-Expr `match deref` degenerates).
-EFull := struct { is_e : bool, es : usize, el : usize, vs : usize, vl : usize, np : usize, phead : ptr(mut Arg) }
+EFull := struct { is_e : bool, es : usize, el : usize, vs : usize, vl : usize, np : usize, phead : Option(ptr(mut Arg)) }
 enum_lit_full := fn(e : ptr(Expr)) -> EFull {
   match deref(e) {
     Expr::EnumLit(es, el, vs, vl, np, phead) => { EFull(is_e = true, es = es, el = el, vs = vs, vl = vl, np = np, phead = phead) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { EFull(is_e = false, es = 0, el = 0, vs = 0, vl = 0, np = 0, phead = unchecked bitcast(ptr(mut Arg), 0)) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { EFull(is_e = false, es = 0, el = 0, vs = 0, vl = 0, np = 0, phead = Option.None) }
   }
 }
 ## Is `e` a `Call` expression. Kept beside the AST-shape probes used by literal slot synthesis so
@@ -5363,14 +5370,19 @@ slit_scalar_fields := fn(v : ptr(Expr), cx : ptr(LCtx)) -> bool {
 elit_scalar_payloads := fn(v : ptr(Expr), cx : ptr(LCtx)) -> bool {
   ef := enum_lit_full(v)
   if ef.is_e == false { return false }
-  mut g := ef.phead
+  mut g : Option(ptr(mut Arg)) = ef.phead
   mut ok := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    ## reject a struct / nested-enum / str payload (a str is 2 words: `is_str_operand` catches a literal,
-    ## a var, and `sub(…)`) — any of those is >1 word and would mis-store at the 1-word-per-payload path.
-    if struct_lit_info(ga.e).is_s or enum_lit_info(ga.e).is_e or is_str_operand(ga.e, cx) { ok = false }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        ## reject a struct / nested-enum / str payload (a str is 2 words: `is_str_operand` catches a literal,
+        ## a var, and `sub(…)`) — any of those is >1 word and would mis-store at the 1-word-per-payload path.
+        if struct_lit_info(ga.e).is_s or enum_lit_info(ga.e).is_e or is_str_operand(ga.e, cx) { ok = false }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   ok
 }
@@ -5487,13 +5499,13 @@ agg_cmp_operand_tag := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
 ## The arena-linked field-value (`Arg`) list head of a struct literal `S(f = v, …)`, or 0. Lets a
 ## caller read a struct literal's FIRST field value (`arg_expr_at(struct_lit_fields(e), 0, a)`) —
 ## e.g. the enum-return convention returning a struct payload's word 0. Isolated deref-match.
-struct_lit_fields := fn(e : ptr(Expr)) -> usize {
+struct_lit_fields := fn(e : ptr(Expr)) -> Option(ptr(mut Arg)) {
   match deref(e) {
     Expr::StructLit(ss, sl, nf, fhead) => { fhead }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { 0 }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { Option.None }
   }
 }
 ## The FIELD (argument) count of a struct literal `S(f0, …, f_{nf-1})`, or 0. The number of ARGS — NOT
@@ -5685,14 +5697,14 @@ is_bytes_call := fn(e : ptr(Expr), src : ptr(u8)) -> bool {
 ## match over a pointer PARAM (the lowerable shape, like `struct_lit_info`). An array LOCAL
 ## (`name := [e0, …]`) is laid out as N contiguous word-sized frame slots (element `i` at slot
 ## `off + i`, byte offset -(off + i + 1) * 8(%rbp)); `ek == 5` marks the base slot.
-ArrInfo := struct { is_a : bool, nel : usize, ehead : ptr(mut Arg) }
+ArrInfo := struct { is_a : bool, nel : usize, ehead : Option(ptr(mut Arg)) }
 array_lit_info := fn(e : ptr(Expr)) -> ArrInfo {
   match deref(e) {
     Expr::ArrayLit(nel, ehead) => { ArrInfo(is_a = true, nel = nel, ehead = ehead) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { ArrInfo(is_a = false, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { ArrInfo(is_a = false, nel = 0, ehead = Option.None) }
   }
 }
 
@@ -5865,10 +5877,10 @@ std_array_direct_scalar_byte_tier := fn(decls : ptr(rt::Vec), src : ptr(u8), ts 
   std_array_elem_byte_tier(decls, src, ts, tl, a) and not std_struct_has_byte_layout(decls, src, ts, tl, a)
 }
 
-arr_elem_info := fn(ehead : ptr(mut Arg), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, slots : ptr(SVec)) -> AElem {
+arr_elem_info := fn(ehead : Option(ptr(mut Arg)), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, slots : ptr(SVec)) -> AElem {
   mut res := AElem(eek = 0, ess = 0, esl = 0, stride = 1)
-  if ehead == 0 { return res }
-  ga := deref(arg_p(ehead))
+  if not arg_any(ehead) { return res }
+  ga := deref(arg_at(ehead, "argument list ended early"))
   si := struct_lit_info(ga.e)
   ei := enum_lit_info(ga.e)
   ti := str_lit_info(ga.e)
@@ -7490,26 +7502,36 @@ emit_mut_global_whole_assign := fn(gs : usize, gn : usize, v : ptr(Expr), in out
     ai := array_lit_info(v)
     if not ai.is_a { panic("selfhost: whole-value assignment of a NON-LITERAL array to a mutable ARRAY global is unsupported (would silently drop elements) — assign elements individually, or copy through a local") }
     ## reject aggregate elements (multi-word) — the scalar-per-word store below would mis-lay them
-    mut gel := ai.ehead
-    while gel != 0 {
-      ge := deref(arg_p(gel))
-      if struct_lit_info(ge.e).is_s or enum_lit_info(ge.e).is_e or str_lit_info(ge.e).is_s or array_lit_info(ge.e).is_a {
-        panic("selfhost: whole-value assignment of an array-of-AGGREGATE to a mutable ARRAY global is unsupported (would drop element words) — assign elements individually")
+    mut gel : Option(ptr(mut Arg)) = ai.ehead
+    loop {
+      match gel {
+        Some(gelq) => {
+          ge := deref(arg_p(gelq))
+          if struct_lit_info(ge.e).is_s or enum_lit_info(ge.e).is_e or str_lit_info(ge.e).is_s or array_lit_info(ge.e).is_a {
+            panic("selfhost: whole-value assignment of an array-of-AGGREGATE to a mutable ARRAY global is unsupported (would drop element words) — assign elements individually")
+          }
+          gel = ge.next
+        }
+        None => { break }
       }
-      gel = ge.next
     }
-    mut g := ai.ehead
+    mut g : Option(ptr(mut Arg)) = ai.ehead
     mut k := 0
-    while g != 0 {
-      ga := deref(arg_p(g))
-      emit_gas(ga.e, sb, cx, a, nl)
-      push_str(sb, "  popq %rax\n  leaq ")
-      emit_global_label(sb, cx.decls, cx.src, gs, gn)
-      push_str(sb, "(%rip), %rbx\n  movq %rax, ")
-      push_int(sb, i64(k * 8))
-      push_str(sb, "(%rbx)\n")
-      k += 1
-      g = ga.next
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          emit_gas(ga.e, sb, cx, a, nl)
+          push_str(sb, "  popq %rax\n  leaq ")
+          emit_global_label(sb, cx.decls, cx.src, gs, gn)
+          push_str(sb, "(%rip), %rbx\n  movq %rax, ")
+          push_int(sb, i64(k * 8))
+          push_str(sb, "(%rbx)\n")
+          k += 1
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     return true
   }
@@ -7953,13 +7975,13 @@ match_depth_expr := fn(e : ptr(Expr), a : rt::Arena, decls : ptr(rt::Vec), src :
       }
       m = 1 + inner
     }
-    Expr::Call(cs, cl, nargs, args_head) => { mut g : usize = args_head; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next } }
-    Expr::StructLit(cs, cl, nf, fhead) => { mut g : usize = fhead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next } }
+    Expr::Call(cs, cl, nargs, args_head) => { mut g : Option(ptr(mut Arg)) = args_head; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next }; None => { break } } } }
+    Expr::StructLit(cs, cl, nf, fhead) => { mut g : Option(ptr(mut Arg)) = fhead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next }; None => { break } } } }
     Expr::Field(base, fs, fl) => { m = match_depth_expr(base, a, decls, src, cw) }
-    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g : usize = phead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next } }
+    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g : Option(ptr(mut Arg)) = phead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next }; None => { break } } } }
     Expr::AddrOf(p) => { m = match_depth_expr(p, a, decls, src, cw) }
     Expr::Deref(p) => { m = match_depth_expr(p, a, decls, src, cw) }
-    Expr::ArrayLit(nel, ehead) => { mut g : usize = ehead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next } }
+    Expr::ArrayLit(nel, ehead) => { mut g : Option(ptr(mut Arg)) = ehead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, match_depth_expr(ga.e, a, decls, src, cw)); g = ga.next }; None => { break } } } }
     Expr::Index(base, idx) => { m = imax(match_depth_expr(base, a, decls, src, cw), match_depth_expr(idx, a, decls, src, cw)) }
     Expr::Try(inner) => { m = match_depth_expr(inner, a, decls, src, cw) }
     Expr::Unchecked(inner) => { m = match_depth_expr(inner, a, decls, src, cw) }
@@ -8353,8 +8375,8 @@ inline_frame_need_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
         loop { match vp { Some(vpq) => { if not (vk < vpc) { break }; vpm := deref(param_p(vpq)); vw = vw + param_words(decls, src, vpm, a); vp = vpm.next; vk += 1 }; None => { break } } }
         m = imax(m, vw)
       }
-      mut g := args_head
-      while g != 0 { ga := deref(arg_p(g)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = args_head
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next }; None => { break } } }
     }
     Expr::Bin(op, l, r) => {
       m = imax(inline_frame_need_expr(l, decls, src, ms, ml, slots, a, mar), inline_frame_need_expr(r, decls, src, ms, ml, slots, a, mar))
@@ -8381,9 +8403,9 @@ inline_frame_need_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
       mut arm : Option(ptr(mut Arm)) = head
       loop { match arm { Some(armq) => { am := deref(arm_p(armq)); m = imax(m, inline_frame_need_expr(am.body, decls, src, ms, ml, slots, a, mar)); m = imax(m, inline_frame_need_stmts(am.body_stmts, decls, src, ms, ml, slots, a, mar)); arm = am.next }; None => { break } } }
     }
-    Expr::StructLit(cs, cl, nf, fhead) => { mut g : usize = fhead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next } }
-    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g : usize = phead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next } }
-    Expr::ArrayLit(nel, ehead) => { mut g : usize = ehead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next } }
+    Expr::StructLit(cs, cl, nf, fhead) => { mut g : Option(ptr(mut Arg)) = fhead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next }; None => { break } } } }
+    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g : Option(ptr(mut Arg)) = phead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next }; None => { break } } } }
+    Expr::ArrayLit(nel, ehead) => { mut g : Option(ptr(mut Arg)) = ehead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, inline_frame_need_expr(ga.e, decls, src, ms, ml, slots, a, mar)); g = ga.next }; None => { break } } } }
     Expr::Field(base, fs, fl) => { m = inline_frame_need_expr(base, decls, src, ms, ml, slots, a, mar) }
     Expr::Index(base, idx) => { m = imax(inline_frame_need_expr(base, decls, src, ms, ml, slots, a, mar), inline_frame_need_expr(idx, decls, src, ms, ml, slots, a, mar)) }
     Expr::AddrOf(p) => { m = inline_frame_need_expr(p, decls, src, ms, ml, slots, a, mar) }
@@ -9907,7 +9929,7 @@ emit_str_eq_core := fn(a0 : ptr(Expr), a1 : ptr(Expr), in out sb : strbuf::StrBu
   push_str(sb, ":\n")
 }
 
-emit_str_eq := fn(args_head : ptr(mut Arg), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_str_eq := fn(args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   a0 := arg_expr_at(args_head, 0, a)
   a1 := arg_expr_at(args_head, 1, a)
   emit_str_eq_core(a0, a1, sb, cx, a, nl)
@@ -10127,8 +10149,8 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       ## #852 — a payload declared `Option(ptr(T))` is one folded word: it takes the scalar register
       ## path with `emit_store_value`, never the multi-word enum shift.
       pf0 := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, 0, deref(cx.mar))
-      if phead != 0 and np == 1 and pf0.n == 0 {
-        ga0 := deref(arg_p(phead))
+      if arg_any(phead) and np == 1 and pf0.n == 0 {
+        ga0 := deref(arg_at(phead, "argument list ended early"))
         reject_unsupported_enum_call_payload(es, el, vs, vl, ga0.e, cx, a)
         apw := enum_lit_array_payload_words(e, cx.decls, cx.src, a)
         if apw != 0 {
@@ -10179,7 +10201,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
         ## whole return lands in retreg(0..pw-1) = %rax:%rdx:%rcx:…), then SHIFT each word up one
         ## register (word k → payload reg k+1) so the payload rides %rdx.. and %rax is free for the
         ## outer discriminant. The Call arm below leaves the registers (no push).
-        ga := deref(arg_p(phead))
+        ga := deref(arg_at(phead, "argument list ended early"))
         emit_enum_value(ga.e, sb, cx, a, nl)
         mut j := pw
         while j > 0 {
@@ -10193,7 +10215,7 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
         ## the discriminant → %rax is emitted by the shared tail below (%rax still holds the call's
         ## word 0 here, but the shift already copied it to %rdx, so the tail overwrite is safe).
       } else if pw > 1 {
-        ga := deref(arg_p(phead))
+        ga := deref(arg_at(phead, "argument list ended early"))
         if is_str_operand(ga.e, cx) {
           ## str payload: `emit_str_pair` pushes ptr (deeper) then len (top); pop len → payload word 1
           ## (retreg 2 = %rcx), ptr → payload word 0 (retreg 1 = %rdx). The discriminant → %rax follows.
@@ -10261,25 +10283,35 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
         ## field among the scalars → an unmodeled mixed register layout) rather than truncate, and on a
         ## payload wider than the 6-register budget (%rdx..%r11).
         mut allscalar := true
-        mut gs := phead
+        mut gs : Option(ptr(mut Arg)) = phead
         mut cnt := 0
-        while gs != 0 {
-          gsa := deref(arg_p(gs))
-          gsf := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, usize(cnt), deref(cx.mar))
-          if gsf.n == 0 and (payload_agg_words(gsa.e, cx, a) != 0 or payload_enum_words(gsa.e, cx, a) != 0) { allscalar = false }
-          cnt += 1
-          gs = gsa.next
+        loop {
+          match gs {
+            Some(gsq) => {
+              gsa := deref(arg_p(gsq))
+              gsf := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, usize(cnt), deref(cx.mar))
+              if gsf.n == 0 and (payload_agg_words(gsa.e, cx, a) != 0 or payload_enum_words(gsa.e, cx, a) != 0) { allscalar = false }
+              cnt += 1
+              gs = gsa.next
+            }
+            None => { break }
+          }
         }
         if allscalar == false { panic("selfhost: a multi-field enum variant with a multi-word aggregate field returned by value is unsupported") }
         if cnt > 6 { panic("selfhost: an enum variant with more than 6 payload words returned by value exceeds the return-register budget") }
-        mut gp := phead
+        mut gp : Option(ptr(mut Arg)) = phead
         mut gk : usize = 0
-        while gp != 0 {
-          gpa := deref(arg_p(gp))
-          gpf := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, gk, deref(cx.mar))
-          emit_store_value(gpa.e, CSpan(s = gpf.s, n = gpf.n), sb, cx, a, nl)
-          gk += 1
-          gp = gpa.next
+        loop {
+          match gp {
+            Some(gpq) => {
+              gpa := deref(arg_p(gpq))
+              gpf := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, gk, deref(cx.mar))
+              emit_store_value(gpa.e, CSpan(s = gpf.s, n = gpf.n), sb, cx, a, nl)
+              gk += 1
+              gp = gpa.next
+            }
+            None => { break }
+          }
         }
         mut jj := 0
         while jj < cnt {
@@ -10291,8 +10323,8 @@ emit_enum_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx),
       } else {
         ## payload word 0 → %rdx (a nullary variant leaves %rdx 0); lower the first payload (if
         ## any) BEFORE moving the discriminant into %rax (the payload lowering clobbers %rax).
-        if phead != 0 {
-          ga := deref(arg_p(phead))
+        if arg_any(phead) {
+          ga := deref(arg_at(phead, "argument list ended early"))
           psi := struct_lit_info(ga.e)
           if psi.is_s {
             ## a 1-word STRUCT-literal payload (`Ok(Ty(kind=…))`): return the struct's WORD 0 (its
@@ -10524,7 +10556,7 @@ fn_returns_str := fn(d : Decl, src : ptr(u8)) -> bool {
 ## callee's `: type` parameter, and the corresponding explicit type argument is the two-word byte view.
 ## This is deliberately narrower than treating every generic result as a str — generic scalar and
 ## aggregate returns keep their existing classifiers and ABI paths.
-generic_str_return_instance := fn(d : Decl, args_head : ptr(mut Arg), src : ptr(u8), a : rt::Arena) -> bool {
+generic_str_return_instance := fn(d : Decl, args_head : Option(ptr(mut Arg)), src : ptr(u8), a : rt::Arena) -> bool {
   if not d.is_generic or d.ret_tl == 0 { return false }
   mut p := d.params_head
   mut pi := 0
@@ -10636,7 +10668,7 @@ callee_has_float_param := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena,
 ## SSE return and its `x : T` is not an SSE parameter), so only the CONSUMER's classification is missing:
 ## without this a surrounding `u64(…)` read the f64 BITS as an integer — the silent 0. The `Arg` list is
 ## walked directly (no arena handle needed — `arg_expr_at` ignores its own).
-gen_ret_targ_float := fn(d : Decl, head : ptr(mut Arg), src : ptr(u8)) -> bool {
+gen_ret_targ_float := fn(d : Decl, head : Option(ptr(mut Arg)), src : ptr(u8)) -> bool {
   if d.ret_tl == 0 { return false }
   mut pp := d.params_head
   mut k : i64 = 0
@@ -10653,20 +10685,25 @@ gen_ret_targ_float := fn(d : Decl, head : ptr(mut Arg), src : ptr(u8)) -> bool {
     }
   }
   if ti < 0 { return false }
-  mut g := head
+  mut g : Option(ptr(mut Arg)) = head
   mut j : i64 = 0
   mut r := false
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if j == ti {
-      vn := var_name_span(ga.e)
-      if vn.n != 0 {
-        tn := str_at((src + vn.s), vn.n)
-        if tn == "f64" or tn == "f32" { r = true }
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if j == ti {
+          vn := var_name_span(ga.e)
+          if vn.n != 0 {
+            tn := str_at((src + vn.s), vn.n)
+            if tn == "f64" or tn == "f32" { r = true }
+          }
+        }
+        g = ga.next
+        j = j + 1
       }
+      None => { break }
     }
-    g = ga.next
-    j = j + 1
   }
   r
 }
@@ -10839,7 +10876,7 @@ try_value_payload_words := fn(inner : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) 
 ## `sema::check_program` (now run on the build path), which rejects the class post-overload-resolution
 ## with a located diagnostic, in BOTH directions. Only the `T(aggregate)` builtin-CONVERSION net (in
 ## `emit_call_dispatch`'s value-position arm) remains here — sema does not yet model conversions.
-emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : ptr(mut Arg), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_call_dispatch := fn(cs : usize, cl : usize, nargs : usize, args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## USER CONVERSION-CONSTRUCTOR `T(v)` (Types §4.6 / TYP-6): the callee `T` is a type name with an
   ## in-scope `@convert fn(…) -> T` — dispatch to that fn by ITS OWN (mangled) name, not `T` (there is
   ## no fn named `T`). The result is delivered in the return registers (%rax/%rdx…), matching the
@@ -11253,11 +11290,16 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       ## per-field delivery (the `Slice(u64)(ptr = p, len = n)` shape, as in `emit_struct_assign`).
       mut badrv := false
       if struct_decl_of(cx.decls, cx.src, cs, cl) < 0 {
-        mut grv := fhead
-        while grv != 0 {
-          garv := deref(arg_p(grv))
-          if array_lit_info(garv.e).is_a { badrv = true }
-          grv = garv.next
+        mut grv : Option(ptr(mut Arg)) = fhead
+        loop {
+          match grv {
+            Some(grvq) => {
+              garv := deref(arg_p(grvq))
+              if array_lit_info(garv.e).is_a { badrv = true }
+              grv = garv.next
+            }
+            None => { break }
+          }
         }
       }
       if badrv { panic("selfhost: a struct construction's head does not resolve to a declared struct type — an unknown type constructor (e.g. `X(128)(words = […])` with no `X` declared) cannot materialize an array-literal field; declare the type or fix the name") }
@@ -11682,7 +11724,7 @@ emit_enum_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
       disc := variant_index(cx.decls, cx.src, es, el, vs, vl, deref(cx.mar))
       ## payload → words 1.. (emitted BEFORE the disc, which is written last).
       if np == 1 {
-        ga := deref(arg_p(phead))
+        ga := deref(arg_at(phead, "argument list ended early"))
         psl := struct_lit_info(ga.e)
         va := var_agg_info(ga.e, cx.slots, cx.src)
         if psl.is_s {
@@ -13086,7 +13128,7 @@ mk_arm := fn(in out a : rt::Arena, val : Arm) -> ptr(mut Arm) {
 ## `mk_arg`/`mk_expr`; an inline `deref(node_ptr(…)) = Expr.X(…)` at the store site is unlowered). Used
 ## by the §5.1 default filler to relink an arg tail (`set_arg`) and rewrite a `Call`'s count/head
 ## (`set_expr`).
-set_arg := fn(in out a : rt::Arena, h : usize, val : Arg) {
+set_arg := fn(in out a : rt::Arena, h : ptr(mut Arg), val : Arg) {
   deref(arg_p(h)) = val
 }
 set_expr := fn(e : ptr(Expr), val : Expr) {
@@ -13497,7 +13539,7 @@ twin_operand_aggregate := fn(e : ptr(Expr), params_head : Option(ptr(mut Param))
 ## than classifying ANY same-name decl (which let `struct_ret_call` fire on `vec::map` and mis-size an
 ## `Option`-returning `map`). Falls back to last-match when no arity matches (implicit-type-arg calls /
 ## single-arity names) so `src/`'s per-module same-name generics stay byte-identical.
-ret_call_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, args_head : ptr(mut Arg), a : rt::Arena) -> i64 {
+ret_call_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, nargs : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> i64 {
   cnt := rt::vec_len(deref(decls))
   nm := callee_name_span(src, cs, cl)
   ## Resolve to the SAME decl `generic_decl_of` dispatches to, so the result-binding CLASSIFIER (enum
@@ -14737,13 +14779,19 @@ is_type_name := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::A
 ## the first non-type arg. `map(u64, u64, u64, r, f)` → 3; `map(u64, u64, arena, s, f)` → 2. Equals the
 ## type-parameter count of the intended overload, so a same-arity cross-module collision
 ## (`result::map`/ntpc 3 vs `vec::map`/ntpc 2) resolves to the one whose `tparam_count` matches.
-leading_type_arg_count := fn(args_head : ptr(mut Arg), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
-  mut g := args_head
+leading_type_arg_count := fn(args_head : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+  mut g : Option(ptr(mut Arg)) = args_head
   mut c := 0
   mut go := true
-  while g != 0 and go {
-    ga := deref(arg_p(g))
-    if is_type_name(ga.e, decls, src, a) { c = c + 1; g = ga.next } else { go = false }
+  loop {
+    match g {
+      Some(gq) => {
+        if not (go) { break }
+        ga := deref(arg_p(gq))
+        if is_type_name(ga.e, decls, src, a) { c = c + 1; g = ga.next } else { go = false }
+      }
+      None => { break }
+    }
   }
   c
 }
@@ -14765,7 +14813,7 @@ callee_mod_rank := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : u
 ## (`alloc::vec::push(T, …)`) is monomorphized like a same-module generic call — the instance
 ## label `<callee-module>__<fn>__<typetag>` is produced consistently at both the definition
 ## (the decl's own module) and the call site (`emit_mangled_call` splits the head module).
-generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, nargs : usize, args_head : ptr(mut Arg), a : rt::Arena) -> i64 {
+generic_decl_of := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, nargs : usize, args_head : Option(ptr(mut Arg)), a : rt::Arena) -> i64 {
   cnt := rt::vec_len(deref(decls))
   nm := callee_name_span(src, cs, cl)
   ## SAME-NAME disambiguation: if the DECL of this tail name in the RESOLVED module is NON-generic,
@@ -14961,7 +15009,7 @@ implicit_targ_from_recv := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, rec
 ## (`map`/`map_err`'s `f : fn(T) -> U`) it IS the whole return span. Only a NAMED fn arg is recovered (a
 ## lambda has no decl entry) → 0/0 otherwise (caller keeps its fail-loud). `src/` spells its type-args →
 ## never reached → fixpoint-neutral.
-infer_map_targ3 := fn(decls : ptr(rt::Vec), src : ptr(u8), args_head : ptr(mut Arg), nargs : usize, rcv_bs : usize, rcv_bn : usize, a : rt::Arena) -> CSpan {
+infer_map_targ3 := fn(decls : ptr(rt::Vec), src : ptr(u8), args_head : Option(ptr(mut Arg)), nargs : usize, rcv_bs : usize, rcv_bn : usize, a : rt::Arena) -> CSpan {
   if nargs == 0 { return CSpan(s = 0, n = 0) }
   fe := arg_expr_at(args_head, nargs - 1, a)
   fv := var_name_span(fe)
@@ -15031,7 +15079,7 @@ recv_redirect_generic := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, nargs
 ## and the receiver already sits there — which is why the pre-existing arg-0 receiver redirect
 ## (`recv_redirect_generic`) never reached an EXPLICIT generic call's value arguments, and why two
 ## explicit-type-arg overloads were resolved by arity alone.
-generic_value_arg_idx := fn(args_head : ptr(mut Arg), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
+generic_value_arg_idx := fn(args_head : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> usize {
   leading_type_arg_count(args_head, decls, src, a)
 }
 
@@ -15193,7 +15241,7 @@ tparam_idx3 := fn(decls : ptr(rt::Vec), gi : i64, src : ptr(u8), a : rt::Arena) 
 ## inferred type-param position, `allocate(…).expect(…)`); callers gate that out with `is_fn_name`
 ## (a legitimate type argument never names a function). Kept arena-by-value + no `decls`/`src` so the
 ## arg count stays within the 6 SysV registers (adding them corrupts the arena).
-type_arg_at := fn(args_head : ptr(mut Arg), ti : usize, a : rt::Arena) -> CSpan {
+type_arg_at := fn(args_head : Option(ptr(mut Arg)), ti : usize, a : rt::Arena) -> CSpan {
   e := arg_expr_at(args_head, ti, a)
   if unchecked bitcast(usize, e) == 0 { return CSpan(s = 0, n = 0) }
   dv := deref_var_info(e)
@@ -15210,14 +15258,14 @@ type_arg_at := fn(args_head : ptr(mut Arg), ti : usize, a : rt::Arena) -> CSpan 
 
 ## The parts of a `Call` expr (callee span + arg-list head), via a ptr-PARAM match (a `match deref`
 ## on a LOCAL `ptr(Expr)` degenerates — the ek-0 landmine — so callers pass the expr here).
-CallParts := struct { is_call : bool, cs : usize, cl : usize, na : usize, ah : ptr(mut Arg) }
+CallParts := struct { is_call : bool, cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)) }
 call_parts := fn(p : ptr(Expr)) -> CallParts {
   match deref(p) {
     Expr::Call(cs, cl, na, ah) => { CallParts(is_call = true, cs = cs, cl = cl, na = na, ah = ah) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit
       | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
-      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CallParts(is_call = false, cs = 0, cl = 0, na = 0, ah = unchecked bitcast(ptr(mut Arg), 0)) }
+      | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { CallParts(is_call = false, cs = 0, cl = 0, na = 0, ah = Option.None) }
   }
 }
 ## The callee (head) name span of a `Call` expr, else 0/0.
@@ -15387,7 +15435,7 @@ is_fn_name := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> b
 ## The TYPE-ARGUMENT lexeme span of a generic call's arg 0 (an ident naming the concrete
 ## type, e.g. `u64`). Returns its source span as an `NSpan` (start, len); 0/0 if arg 0 is not
 ## a bare `Var` (a well-formed generic call always passes a type ident first).
-type_arg_span := fn(args_head : ptr(mut Arg), a : rt::Arena) -> CSpan {
+type_arg_span := fn(args_head : Option(ptr(mut Arg)), a : rt::Arena) -> CSpan {
   e := arg_expr_at(args_head, 0, a)
   if unchecked bitcast(usize, e) == 0 { return CSpan(s = 0, n = 0) }
   ## extract the type-arg ident's span via `deref_var_info` (a function-body `match deref(p)` over a
@@ -15409,7 +15457,7 @@ type_arg_span := fn(args_head : ptr(mut Arg), a : rt::Arena) -> CSpan {
 ## type-param position is rejected before extension by the callee-name check, preserving the old
 ## filter. The full span is required for niche/layout decisions and distinct generic labels
 ## (`ptr(u64)` must not share an instance with `ptr(str)`).
-type_arg_full_at := fn(args_head : ptr(mut Arg), ti : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+type_arg_full_at := fn(args_head : Option(ptr(mut Arg)), ti : usize, decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   e := arg_expr_at(args_head, ti, a)
   if unchecked bitcast(usize, e) == 0 { return CSpan(s = 0, n = 0) }
   ## `ptr(T)` is parsed as AddrOf(Var(T)); `deref_var_info` would expose the
@@ -16162,13 +16210,18 @@ expr_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
 ## The type-name discriminator for an overloaded CALL: the first argument whose type is inferable.
 ## `a` is the EMIT arena where the Arg nodes live (NOT `cx.mar` — using the wrong arena to resolve
 ## an Arg handle yields a garbage pointer → segfault).
-arg_type_name := fn(head : ptr(mut Arg), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
-  mut g := head
-  while g != 0 {
-    ga := deref(arg_p(g))
-    t := expr_type_span(ga.e, cx)
-    if t.n != 0 { return t }
-    g = ga.next
+arg_type_name := fn(head : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
+  mut g : Option(ptr(mut Arg)) = head
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        t := expr_type_span(ga.e, cx)
+        if t.n != 0 { return t }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   CSpan(s = 0, n = 0)
 }
@@ -16349,7 +16402,7 @@ gen_ret_str_infer := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), 
   res
 }
 
-infer_implicit_targ := fn(gi : i64, args_head : ptr(mut Arg), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
+infer_implicit_targ := fn(gi : i64, args_head : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena) -> CSpan {
   gd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(gi))))
   mut tpn_s := 0
   mut tpn_l := 0
@@ -16514,7 +16567,7 @@ param_type_has_tparam := fn(src : ptr(u8), ts : usize, tl : usize, tpn_s : usize
 ## the callee decl (bare or qualified), and if its (name, module) is an overload set, append the
 ## inferred argument type. A no-op when the callee is not overloaded (every `src/` call). `a` is the
 ## EMIT arena (the Arg nodes' arena — the emit_gas / emit_call_dispatch `a` param).
-emit_overload_suffix := fn(in out sb : strbuf::StrBuf, cs : usize, cl : usize, args_head : ptr(mut Arg), cx : ptr(LCtx), a : rt::Arena) {
+emit_overload_suffix := fn(in out sb : strbuf::StrBuf, cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena) {
   cp := colon_pos(cx.src, cs, cl)
   mut idx := -1
   if cp >= 0 {
@@ -16530,8 +16583,8 @@ emit_overload_suffix := fn(in out sb : strbuf::StrBuf, cs : usize, cl : usize, a
   ## parameter-type suffix — matching the definition side. When resolution is ambiguous (too many
   ## arguments untyped) no suffix is emitted, matching the pre-existing "cannot infer" behavior.
   mut nargs := 0
-  mut ga := args_head
-  while ga != 0 { an := deref(arg_p(ga)); nargs = nargs + 1; ga = an.next }
+  mut ga : Option(ptr(mut Arg)) = args_head
+  loop { match ga { Some(gaq) => { an := deref(arg_p(gaq)); nargs = nargs + 1; ga = an.next }; None => { break } } }
   ridx := overload_resolve_idx(cx.decls, cx.src, cd.name_start, cd.name_len, cd.mod_start, cd.mod_len, nargs, args_head, cx, a)
   if ridx < 0 { return }
   rd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(ridx))))
@@ -16592,45 +16645,49 @@ emit_generic_sig_suffix := fn(in out sb : strbuf::StrBuf, decls : ptr(rt::Vec), 
 ## (`expr_type_span`) must equal the corresponding parameter's normalized base type; an argument
 ## whose type is not inferable (a bare literal) matches any parameter (a wildcard). Parameters live
 ## in `deref(cx.mar)`; the Arg nodes live in the emit arena `a`.
-overload_args_match := fn(d : Decl, args_head : ptr(mut Arg), cx : ptr(LCtx), a : rt::Arena) -> bool {
+overload_args_match := fn(d : Decl, args_head : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena) -> bool {
   mut p := d.params_head
-  mut g := args_head
+  mut g : Option(ptr(mut Arg)) = args_head
   loop {
     match p {
       Some(pq) => {
-        if not (g != 0) { break }
-        pm := deref(param_p(pq))
-        an := deref(arg_p(g))
-        at := expr_type_span(an.e, cx)
-        if at.n != 0 {
-          pb := base_type_name(cx.src, pm.ts, pm.tl)
-          if not norm_type_eq(cx.src, at.s, at.n, pb.s, pb.n) { return false }
-        } else if arg_is_num_literal(an.e) {
-          ## a bare integer/bool literal defaults to an integer type — it can only match an integer
-          ## scalar parameter, never a struct / enum / str / float one. So `h(2, 10)` selects the
-          ## `h(u64, u64)` overload over `h(u64, A)` / `h(u64, B)` (both structs), rather than being an
-          ## ambiguous wildcard. A NON-literal uninferable arg stays a wildcard (match anything).
-          pb := base_type_name(cx.src, pm.ts, pm.tl)
-          if not is_int_scalar_type(cx.src, pb.s, pb.n) { return false }
-        } else if arg_is_float_literal(an.e) {
-          ## a bare float literal (`2.0`) mirrors the integer case — it can only match a FLOAT scalar
-          ## parameter, so `g(2.0)` selects `g(f64)` over `g(u64)` rather than matching both (which left
-          ## the call ambiguous → no suffix → an undefined bare callee label at link).
-          pb := base_type_name(cx.src, pm.ts, pm.tl)
-          if not is_float_scalar_type(cx.src, pb.s, pb.n) { return false }
-        } else if str_lit_info(an.e).is_s {
-          ## a bare STRING literal (`"ok"`) mirrors the integer/float cases: it carries no type span
-          ## (`expr_type_span` is 0/0 for a `StrLit`), so without this it matched EVERY parameter as a
-          ## wildcard — leaving `f("ok")` over the overload set `f(u64)` / `f(str)` AMBIGUOUS (two
-          ## candidates), which emits NO signature suffix and so a BARE callee label `<mod>__f` that
-          ## matches neither definition (`…__f__u64` / `…__f__str`) → an `undefined reference` at link
-          ## (Functions §1.4-A-5 per-signature overload mangling). A string literal can bind ONLY to a
-          ## `str` parameter, so restricting it here resolves the set to the `str` overload.
-          pb := base_type_name(cx.src, pm.ts, pm.tl)
-          if str_at((cx.src + pb.s), pb.n) != "str" { return false }
+        match g {
+          None => { break }
+          Some(gq) => {
+            pm := deref(param_p(pq))
+            an := deref(arg_p(gq))
+            at := expr_type_span(an.e, cx)
+            if at.n != 0 {
+              pb := base_type_name(cx.src, pm.ts, pm.tl)
+              if not norm_type_eq(cx.src, at.s, at.n, pb.s, pb.n) { return false }
+            } else if arg_is_num_literal(an.e) {
+              ## a bare integer/bool literal defaults to an integer type — it can only match an integer
+              ## scalar parameter, never a struct / enum / str / float one. So `h(2, 10)` selects the
+              ## `h(u64, u64)` overload over `h(u64, A)` / `h(u64, B)` (both structs), rather than being an
+              ## ambiguous wildcard. A NON-literal uninferable arg stays a wildcard (match anything).
+              pb := base_type_name(cx.src, pm.ts, pm.tl)
+              if not is_int_scalar_type(cx.src, pb.s, pb.n) { return false }
+            } else if arg_is_float_literal(an.e) {
+              ## a bare float literal (`2.0`) mirrors the integer case — it can only match a FLOAT scalar
+              ## parameter, so `g(2.0)` selects `g(f64)` over `g(u64)` rather than matching both (which left
+              ## the call ambiguous → no suffix → an undefined bare callee label at link).
+              pb := base_type_name(cx.src, pm.ts, pm.tl)
+              if not is_float_scalar_type(cx.src, pb.s, pb.n) { return false }
+            } else if str_lit_info(an.e).is_s {
+              ## a bare STRING literal (`"ok"`) mirrors the integer/float cases: it carries no type span
+              ## (`expr_type_span` is 0/0 for a `StrLit`), so without this it matched EVERY parameter as a
+              ## wildcard — leaving `f("ok")` over the overload set `f(u64)` / `f(str)` AMBIGUOUS (two
+              ## candidates), which emits NO signature suffix and so a BARE callee label `<mod>__f` that
+              ## matches neither definition (`…__f__u64` / `…__f__str`) → an `undefined reference` at link
+              ## (Functions §1.4-A-5 per-signature overload mangling). A string literal can bind ONLY to a
+              ## `str` parameter, so restricting it here resolves the set to the `str` overload.
+              pb := base_type_name(cx.src, pm.ts, pm.tl)
+              if str_at((cx.src + pb.s), pb.n) != "str" { return false }
+            }
+            p = pm.next
+            g = an.next
+          }
         }
-        p = pm.next
-        g = an.next
       }
       None => { break }
     }
@@ -16684,7 +16741,7 @@ is_float_scalar_type := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ## Resolve an overloaded CALL to the UNIQUE decl index in the overload set (same name + module,
 ## non-generic, arity == nargs) whose parameter types match every inferable argument (§1 item 3).
 ## Returns -1 when none or more than one candidate matches (ambiguous → no distinguishing suffix).
-overload_resolve_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, ms : usize, ml : usize, nargs : usize, args_head : ptr(mut Arg), cx : ptr(LCtx), a : rt::Arena) -> i64 {
+overload_resolve_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, ms : usize, ml : usize, nargs : usize, args_head : Option(ptr(mut Arg)), cx : ptr(LCtx), a : rt::Arena) -> i64 {
   cnt := rt::vec_len(deref(decls))
   mut found := 0 - 1
   mut nfound := 0
@@ -16722,11 +16779,11 @@ is_arch_mnemonic := fn(name : str) -> bool {
 ## (`idivq`/`divq`, `iremq`/`remq`, `imulhiq`/`mulhiq`, `addsd`/…). The `…ss` (f32) forms reuse the
 ## `…sd` (f64) shape under the P1b f32≈f64 approximation. Additive + fixpoint-safe: `src/` names no
 ## intrinsic (it uses the built-in operators), so this only fires on an explicit `x86_64.*` call.
-emit_arch_intr := fn(mn_s : usize, mn_l : usize, phead : ptr(mut Arg), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_arch_intr := fn(mn_s : usize, mn_l : usize, phead : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   mn := str_at((cx.src + mn_s), mn_l)
-  a0 := deref(arg_p(phead))
+  a0 := deref(arg_at(phead, "argument list ended early"))
   dst := a0.e
-  a1 := deref(arg_p(a0.next))
+  a1 := deref(arg_at(a0.next, "argument list ended early"))
   srce := a1.e
   dv := var_name_span(dst)
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, dv.s, dv.n)))
@@ -16738,7 +16795,7 @@ emit_arch_intr := fn(mn_s : usize, mn_l : usize, phead : ptr(mut Arg), in out sb
     ## 3-operand integer COMPARISON `set*(out, a, b)`: out = (a <cc> b). Lower a,b onto the stack,
     ## `cmpq %rbx(b), %rax(a)`, materialize the 0/1 boolean via the matching setcc (sete/setb-unsigned/
     ## setl-signed), zero-extend into %rax. The shared store writes it to `out`'s slot.
-    a2 := deref(arg_p(a1.next))
+    a2 := deref(arg_at(a1.next, "argument list ended early"))
     emit_gas(srce, sb, cx, a, nl)
     emit_gas(a2.e, sb, cx, a, nl)
     push_str(sb, "  popq %rbx\n  popq %rax\n  cmpq %rbx, %rax\n")
@@ -16750,7 +16807,7 @@ emit_arch_intr := fn(mn_s : usize, mn_l : usize, phead : ptr(mut Arg), in out sb
     ## 3-operand FLOAT comparison `feqsd`/`fltsd` (+ `…ss` under P1b f32≈f64): `ucomisd %xmm1(b),
     ## %xmm0(a)` then a NaN-UNORDERED-safe setcc — equal/less is FALSE when unordered, so AND the
     ## setcc (sete/setb) with `setnp` (not-parity), exactly the built-in ordered-compare shape.
-    a2 := deref(arg_p(a1.next))
+    a2 := deref(arg_at(a1.next, "argument list ended early"))
     emit_gas(srce, sb, cx, a, nl)
     emit_gas(a2.e, sb, cx, a, nl)
     push_str(sb, "  popq %rax\n  movq %rax, %xmm1\n  popq %rax\n  movq %rax, %xmm0\n  ucomisd %xmm1, %xmm0\n")
@@ -16935,7 +16992,7 @@ inline_param_kind := fn(decls : ptr(rt::Vec), src : ptr(u8), pm : Param) -> u8 {
 ## the value stack, then hand off to `emit_inline_body` (shared with the operator-routing path) to bind
 ## params + emit the body.
 ## The caller guarantees `inl_ci >= 0 and cx.inl_tmp >= 0`.
-emit_inline_call := fn(inl_ci : i64, args_head : ptr(mut Arg), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_inline_call := fn(inl_ci : i64, args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   icd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(inl_ci))))
   ## evaluate ALL args onto the stack FIRST (arg 0 at the bottom), THEN pop them into the scratch
   ## param slots in REVERSE — so a nested `@inline` in a LATER arg, which transiently reuses the
@@ -17290,7 +17347,7 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
 ## its own block). FIRST INCREMENT: NO leading fixed params (nfixed == 0), native scalar element,
 ## ≤6 gathered args (register-only), x86_64. A leading fixed param / >6 args / float element are
 ## follow-ups — fail-loud so there is never a silent miscompile.
-emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : ptr(mut Arg), nargs : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : Option(ptr(mut Arg)), nargs : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   scd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(sv_ci))))
   nfixed := usize(scd.arity) - 1
   ## §7.2 LEADING FIXED params (`fn(base : A, rest : ...T)`). The fixed args ride argreg(0..nfixed-1)
@@ -17451,7 +17508,7 @@ emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : 
 ## `@inline` protocol); the trailing args form the comptime PACK, made available to the body via
 ## `cx.pack_args`. The body's `comptime for v in <pack>` (a `CompForRange` with a null hi) unrolls over
 ## that pack. `nfixed = arity - 1` (the last param is the `...` rest). The caller guarantees `cx.inl_tmp >= 0`.
-emit_variadic_call := fn(var_ci : i64, args_head : ptr(mut Arg), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_variadic_call := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   icd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(var_ci))))
   nfixed := usize(icd.arity) - 1
   mut pi := 0
@@ -17467,7 +17524,7 @@ emit_variadic_call := fn(var_ci : i64, args_head : ptr(mut Arg), in out sb : str
 ## `cx.pack_args` at the first trailing (pack) arg + record the pack param name, reserve+alias the body's
 ## own locals PAST the fixed-param words, and emit the statement body with `return` redirected to a fresh
 ## inline-end label — so a variadic call lowers to straight-line code with its pack loop unrolled inline.
-emit_variadic_body := fn(var_ci : i64, args_head : ptr(mut Arg), nfixed : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   icd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(var_ci))))
   ## fixed-param word total (the pack param contributes no scratch words — its args stay as Arg exprs)
   mut totw := 0
@@ -17524,9 +17581,9 @@ emit_variadic_body := fn(var_ci : i64, args_head : ptr(mut Arg), nfixed : usize,
   ## point the pack at the first trailing arg (the unroll reads `cx.pack_args`; a null-hi CompForRange is
   ## itself the pack marker, so the pack param name need not be threaded)
   ov_pa := cx.pack_args
-  mut ah := args_head
+  mut ah : Option(ptr(mut Arg)) = args_head
   mut aidx := 0
-  while aidx < nfixed and ah != 0 { ah = deref(arg_p(ah)).next; aidx += 1 }
+  while aidx < nfixed and arg_any(ah) { ah = deref(arg_at(ah, "argument list ended early")).next; aidx += 1 }
   cx.pack_args = ah
   if icd.body_stmts == 0 {
     emit_gas(icd.value, sb, cx, a, nl)
@@ -17980,9 +18037,9 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             swap := op == 25 or op == 26
             a0 := if swap { r } else { l }
             a1 := if swap { l } else { r }
-            arg1 := mk_arg(deref(cx.mar), Arg(e = a1, next = unchecked bitcast(ptr(mut Arg), 0)))
-            arg0 := mk_arg(deref(cx.mar), Arg(e = a0, next = arg1))
-            cidx := mk_expr(deref(cx.mar), Expr.Call(dd.name_start, dd.name_len, 2, arg0))
+            arg1 := mk_arg(deref(cx.mar), Arg(e = a1, next = Option.None))
+            arg0 := mk_arg(deref(cx.mar), Arg(e = a0, next = Option.Some(arg1)))
+            cidx := mk_expr(deref(cx.mar), Expr.Call(dd.name_start, dd.name_len, 2, Option.Some(arg0)))
             cptr := node_ptr(Expr, deref(cx.mar), cidx)
             emit_gas(cptr, sb, cx, a, nl)
             ## `!=` / `<=` / `>=` are the boolean NEGATION of `eq` / `lt(b,a)` / `lt(a,b)`.
@@ -19834,7 +19891,8 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         ivn := var_name_span(fbi.arr)
         igmv := if ivn.n != 0 { mut_global_value(cx.decls, cx.src, ivn.s, ivn.n) } else { unchecked bitcast(ptr(Expr), 0) }
         if unchecked bitcast(usize, igmv) != 0 and array_lit_info(igmv).is_a {
-          iesli := struct_lit_info(arg_expr_at(array_lit_info(igmv).ehead, 0, a))
+          igmvehi := array_lit_info(igmv)
+          iesli := struct_lit_info(arg_expr_at(igmvehi.ehead, 0, a))
           if iesli.is_s {
             istride := struct_words(cx.decls, cx.src, iesli.ss, iesli.sl, a)
             ifi := struct_field_index(cx.decls, cx.src, iesli.ss, iesli.sl, fs, fl, a)
@@ -20490,7 +20548,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
         vidx := mk_expr(deref(cx.mar), Expr.Var(es, el))
         vptr := node_ptr(Expr, deref(cx.mar), vidx)
         aidx := mk_arg(deref(cx.mar), Arg(e = vptr, next = phead))
-        cidx := mk_expr(deref(cx.mar), Expr.Call(vs, vl, np + 1, aidx))
+        cidx := mk_expr(deref(cx.mar), Expr.Call(vs, vl, np + 1, Option.Some(aidx)))
         cptr := node_ptr(Expr, deref(cx.mar), cidx)
         emit_gas(cptr, sb, cx, a)
       } else if np == 0 {
@@ -21054,12 +21112,17 @@ tuple_flat_single_word := fn(e : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::V
   ali := array_lit_info(e)
   if ali.is_a == false { return false }
   if ali.nel == 0 { return false }
-  mut g := ali.ehead
+  mut g : Option(ptr(mut Arg)) = ali.ehead
   mut flat := true
-  while g != 0 {
-    ga := deref(arg_p(g))
-    if elem_expr_width(ga.e, slots, decls, src, a) != 1 { flat = false }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        if elem_expr_width(ga.e, slots, decls, src, a) != 1 { flat = false }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   flat
 }
@@ -21269,33 +21332,43 @@ tuple_layout_collect := fn(head : ptr(mut Stmt), slots : ptr(SVec), in out tcomp
           slot := slot_of(slots, src, ns, nl)
           if slot >= 0 {
             ## first pass: uniform? (all components same eek+width). second pass: if mixed, record each.
-            mut g0 := ali.ehead
+            mut g0 : Option(ptr(mut Arg)) = ali.ehead
             mut w0 := i64(-1)
             mut ek0 := u8(255)
             mut mixed := false
-            while g0 != 0 {
-              g0a := deref(arg_p(g0))
-              cw := elem_expr_width(g0a.e, slots, decls, src, a)
-              ce := comp_eek(g0a.e, slots, src, decls, a)
-              if w0 < 0 { w0 = cw; ek0 = ce } else if cw != w0 or ce != ek0 { mixed = true }
-              g0 = g0a.next
+            loop {
+              match g0 {
+                Some(g0q) => {
+                  g0a := deref(arg_p(g0q))
+                  cw := elem_expr_width(g0a.e, slots, decls, src, a)
+                  ce := comp_eek(g0a.e, slots, src, decls, a)
+                  if w0 < 0 { w0 = cw; ek0 = ce } else if cw != w0 or ce != ek0 { mixed = true }
+                  g0 = g0a.next
+                }
+                None => { break }
+              }
             }
             if mixed {
-              mut g := ali.ehead
+              mut g : Option(ptr(mut Arg)) = ali.ehead
               mut idx := 0
               mut cum := i64(0)
-              while g != 0 {
-                ga := deref(arg_p(g))
-                cts := comp_type_span(ga.e, slots, src)
-                ## `ek` = 6 marks a component that is a FLAT single-word-position tuple — the ONLY shape the
-                ## nested `t.N.M` value-read supports (see `tuple_flat_single_word` + the `emit_gas` Index arm);
-                ## every other component keeps `ek` = 5 (the value used elsewhere is `estride`/`eek`, not `ek`).
-                mut cmek : u8 = 5
-                if tuple_flat_single_word(ga.e, slots, decls, src, a) { cmek = 6 }
-                svec_push(tcomps, SlotEntry(ns = usize(slot), nl = usize(idx), off = usize(cum), sns = cts.s, snl = cts.n, ek = cmek, estride = 1, eek = comp_eek(ga.e, slots, src, decls, a), is_ref = false, tmod_s = 0, tmod_l = 0))
-                cum += elem_expr_width(ga.e, slots, decls, src, a)
-                idx += 1
-                g = ga.next
+              loop {
+                match g {
+                  Some(gq) => {
+                    ga := deref(arg_p(gq))
+                    cts := comp_type_span(ga.e, slots, src)
+                    ## `ek` = 6 marks a component that is a FLAT single-word-position tuple — the ONLY shape the
+                    ## nested `t.N.M` value-read supports (see `tuple_flat_single_word` + the `emit_gas` Index arm);
+                    ## every other component keeps `ek` = 5 (the value used elsewhere is `estride`/`eek`, not `ek`).
+                    mut cmek : u8 = 5
+                    if tuple_flat_single_word(ga.e, slots, decls, src, a) { cmek = 6 }
+                    svec_push(tcomps, SlotEntry(ns = usize(slot), nl = usize(idx), off = usize(cum), sns = cts.s, snl = cts.n, ek = cmek, estride = 1, eek = comp_eek(ga.e, slots, src, decls, a), is_ref = false, tmod_s = 0, tmod_l = 0))
+                    cum += elem_expr_width(ga.e, slots, decls, src, a)
+                    idx += 1
+                    g = ga.next
+                  }
+                  None => { break }
+                }
               }
             }
           }
@@ -21516,47 +21589,57 @@ emit_tuple_byte_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
   if tt.n == 0 { panic("selfhost: standard-layout byte tuple has no declared tuple type") }
   tv := mk_expr(deref(cx.mar), Expr.Var(ent.ns, ent.nl))
   tp := node_ptr(Expr, deref(cx.mar), tv)
-  mut g := ai.ehead
+  mut g : Option(ptr(mut Arg)) = ai.ehead
   mut i := 0
-  while g != 0 {
-    cs := typearg_at(cx.src, tt.s, 0, usize(i))
-    if cs.n == 0 { panic("selfhost: standard-layout byte tuple initializer has more components than its type") }
-    ga := deref(arg_p(g))
-    bo := tuple_component_offset(tp, usize(i), cx)
-    if bo < 0 { panic("selfhost: standard-layout byte tuple component has no byte offset") }
-    aes := array_elem_span(cx.src, cs.s, cs.n)
-    mut beek := u8(0)
-    if aes.n != 0 { beek = byte_type_eek(cx.src, aes.s, aes.n) }
-    if beek != 0 {
-      ali := array_lit_info(ga.e)
-      if ali.is_a == false { panic("selfhost: a standard-layout byte tuple component must be an array literal") }
-      mut ae := ali.ehead
-      mut k := 0
-      while ae != 0 {
-        av := deref(arg_p(ae))
-        if struct_lit_info(av.e).is_s or enum_lit_info(av.e).is_e or str_lit_info(av.e).is_s or array_lit_info(av.e).is_a { panic("selfhost: a standard-layout byte tuple array must contain scalar elements") }
-        emit_gas(av.e, sb, cx, a, nl)
-        push_str(sb, "  popq %rax\n  movb %al, -")
-        push_int(sb, (base + 1) * 8 - bo - i64(k))
-        push_str(sb, "(%rbp)\n")
-        k += 1
-        ae = av.next
+  loop {
+    match g {
+      Some(gq) => {
+        cs := typearg_at(cx.src, tt.s, 0, usize(i))
+        if cs.n == 0 { panic("selfhost: standard-layout byte tuple initializer has more components than its type") }
+        ga := deref(arg_p(gq))
+        bo := tuple_component_offset(tp, usize(i), cx)
+        if bo < 0 { panic("selfhost: standard-layout byte tuple component has no byte offset") }
+        aes := array_elem_span(cx.src, cs.s, cs.n)
+        mut beek := u8(0)
+        if aes.n != 0 { beek = byte_type_eek(cx.src, aes.s, aes.n) }
+        if beek != 0 {
+          ali := array_lit_info(ga.e)
+          if ali.is_a == false { panic("selfhost: a standard-layout byte tuple component must be an array literal") }
+          mut ae : Option(ptr(mut Arg)) = ali.ehead
+          mut k := 0
+          loop {
+            match ae {
+              Some(aeq) => {
+                av := deref(arg_p(aeq))
+                if struct_lit_info(av.e).is_s or enum_lit_info(av.e).is_e or str_lit_info(av.e).is_s or array_lit_info(av.e).is_a { panic("selfhost: a standard-layout byte tuple array must contain scalar elements") }
+                emit_gas(av.e, sb, cx, a, nl)
+                push_str(sb, "  popq %rax\n  movb %al, -")
+                push_int(sb, (base + 1) * 8 - bo - i64(k))
+                push_str(sb, "(%rbp)\n")
+                k += 1
+                ae = av.next
+              }
+              None => { break }
+            }
+          }
+        } else if str_at((cx.src + cs.s), cs.n) == "str" or struct_decl_of(cx.decls, cx.src, cs.s, cs.n) >= 0 or enum_decl_of(cx.decls, cx.src, cs.s, cs.n) >= 0 or array_elem_span(cx.src, cs.s, cs.n).n != 0 {
+          panic("selfhost: standard-layout byte tuple supports only direct byte-array and scalar components")
+        } else {
+          emit_gas(ga.e, sb, cx, a, nl)
+          push_str(sb, "  popq %rax\n")
+          sz := scalar_byte_size(cx.src, cs.s, cs.n)
+          if sz == 1 { push_str(sb, "  movb %al, -") }
+          else if sz == 2 { push_str(sb, "  movw %ax, -") }
+          else if sz == 4 { push_str(sb, "  movl %eax, -") }
+          else { push_str(sb, "  movq %rax, -") }
+          push_int(sb, (base + 1) * 8 - bo)
+          push_str(sb, "(%rbp)\n")
+        }
+        i += 1
+        g = ga.next
       }
-    } else if str_at((cx.src + cs.s), cs.n) == "str" or struct_decl_of(cx.decls, cx.src, cs.s, cs.n) >= 0 or enum_decl_of(cx.decls, cx.src, cs.s, cs.n) >= 0 or array_elem_span(cx.src, cs.s, cs.n).n != 0 {
-      panic("selfhost: standard-layout byte tuple supports only direct byte-array and scalar components")
-    } else {
-      emit_gas(ga.e, sb, cx, a, nl)
-      push_str(sb, "  popq %rax\n")
-      sz := scalar_byte_size(cx.src, cs.s, cs.n)
-      if sz == 1 { push_str(sb, "  movb %al, -") }
-      else if sz == 2 { push_str(sb, "  movw %ax, -") }
-      else if sz == 4 { push_str(sb, "  movl %eax, -") }
-      else { push_str(sb, "  movq %rax, -") }
-      push_int(sb, (base + 1) * 8 - bo)
-      push_str(sb, "(%rbp)\n")
+      None => { break }
     }
-    i += 1
-    g = ga.next
   }
 }
 
@@ -21585,17 +21668,22 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
           push_str(sb, "(%rbp)\n")
           z += 1
         }
-        mut g := ehead
+        mut g : Option(ptr(mut Arg)) = ehead
         mut k := 0
-        while g != 0 {
-          ga := deref(arg_p(g))
-          si := struct_lit_info(ga.e)
-          if si.is_s == false or not streq(cx.src, si.ss, si.sl, ent.sns, ent.snl) {
-            panic("selfhost: a direct scalar standard-byte array literal must contain elements of its declared struct type")
+        loop {
+          match g {
+            Some(gq) => {
+              ga := deref(arg_p(gq))
+              si := struct_lit_info(ga.e)
+              if si.is_s == false or not streq(cx.src, si.ss, si.sl, ent.sns, ent.snl) {
+                panic("selfhost: a direct scalar standard-byte array literal must contain elements of its declared struct type")
+              }
+              emit_standard_value(ga.e, base, i64(k) * i64(strideb), sb, cx, a, nl)
+              k += 1
+              g = ga.next
+            }
+            None => { break }
           }
-          emit_standard_value(ga.e, base, i64(k) * i64(strideb), sb, cx, a, nl)
-          k += 1
-          g = ga.next
         }
       }
       Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -21616,19 +21704,24 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
         push_str(sb, "  leaq -")
         push_int(sb, base * 8)
         push_str(sb, "(%rbp), %r13\n")
-        mut g := ehead
+        mut g : Option(ptr(mut Arg)) = ehead
         mut k := 0
-        while g != 0 {
-          ga := deref(arg_p(g))
-          if struct_lit_info(ga.e).is_s or enum_lit_info(ga.e).is_e or str_lit_info(ga.e).is_s or array_lit_info(ga.e).is_a {
-            panic("selfhost: a byte-packed array literal must contain scalar elements")
+        loop {
+          match g {
+            Some(gq) => {
+              ga := deref(arg_p(gq))
+              if struct_lit_info(ga.e).is_s or enum_lit_info(ga.e).is_e or str_lit_info(ga.e).is_s or array_lit_info(ga.e).is_a {
+                panic("selfhost: a byte-packed array literal must contain scalar elements")
+              }
+              emit_gas(ga.e, sb, cx, a, nl)
+              push_str(sb, "  popq %rax\n  movb %al, ")
+              push_int(sb, k)
+              push_str(sb, "(%r13)\n")
+              k += 1
+              g = ga.next
+            }
+            None => { break }
           }
-          emit_gas(ga.e, sb, cx, a, nl)
-          push_str(sb, "  popq %rax\n  movb %al, ")
-          push_int(sb, k)
-          push_str(sb, "(%r13)\n")
-          k += 1
-          g = ga.next
         }
       }
       Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -21651,48 +21744,53 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
       ## `(Pt(…), 9)` it places each component correctly (the old code emitted the scalar `9` via the
       ## struct path — dropping it — so `t.1` read uninitialised). Handles struct / enum / str / scalar
       ## element EXPRs, whether literals (struct_lit_info/…) or aggregate VARs (var_agg_info).
-      mut g := ehead
+      mut g : Option(ptr(mut Arg)) = ehead
       mut cumw := 0
-      while g != 0 {
-        ga := deref(arg_p(g))
-        ebase := base - cumw          ## §4 UP-GROWING: element at word `cumw` lives at slot `base - cumw`
-        esl := struct_lit_info(ga.e)
-        eil := enum_lit_info(ga.e)
-        esr := str_lit_info(ga.e)
-        va := var_agg_info(ga.e, cx.slots, cx.src)
-        if esl.is_s {
-          emit_struct_assign(ga.e, ebase, sb, cx, a, nl)
-          cumw += i64(struct_words(cx.decls, cx.src, esl.ss, esl.sl, a))
-        } else if va.ek == 2 {
-          emit_struct_assign(ga.e, ebase, sb, cx, a, nl)
-          cumw += i64(struct_words(cx.decls, cx.src, va.s, va.n, a))
-        } else if eil.is_e {
-          emit_enum_assign(ga.e, ebase, sb, cx, a, nl)
-          cumw += 1 + i64(enum_inst_words(cx.decls, cx.src, eil.es, eil.el, a))
-        } else if va.ek == 3 {
-          emit_enum_assign(ga.e, ebase, sb, cx, a, nl)
-          cumw += 1 + i64(enum_inst_words(cx.decls, cx.src, va.s, va.n, a))
-        } else if esr.is_s {
-          ## a str element: store the {ptr, len} pair into the element's two slots (ptr at
-          ## `ebase`, len at `ebase+1`) — the same 2-word layout a str-local binding uses.
-          emit_str_assign(ga.e, ebase, sb)
-          cumw += 2
-        } else if array_lit_info(ga.e).is_a {
-          ## a TUPLE / nested-ARRAY element (`[(a, b), …]`) — store its components at the element base
-          ## via a recursive `emit_array_assign` (ascending within the element), then advance by the
-          ## element's component count. Was `emit_gas` → `$0` (a bare ArrayLit has no frame home), so
-          ## every tuple element stored one zero word and `xs[i].N` read 0.
-          nai := array_lit_info(ga.e)
-          emit_array_assign(ga.e, ebase, sb, cx, nl)
-          cumw += i64(nai.nel)
-        } else {
-          emit_gas(ga.e, sb, cx, a, nl)
-          push_str(sb, "  popq %rax\n  movq %rax, -")
-          push_int(sb, (ebase + 1) * 8)
-          push_str(sb, "(%rbp)\n")
-          cumw += 1
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            ebase := base - cumw          ## §4 UP-GROWING: element at word `cumw` lives at slot `base - cumw`
+            esl := struct_lit_info(ga.e)
+            eil := enum_lit_info(ga.e)
+            esr := str_lit_info(ga.e)
+            va := var_agg_info(ga.e, cx.slots, cx.src)
+            if esl.is_s {
+              emit_struct_assign(ga.e, ebase, sb, cx, a, nl)
+              cumw += i64(struct_words(cx.decls, cx.src, esl.ss, esl.sl, a))
+            } else if va.ek == 2 {
+              emit_struct_assign(ga.e, ebase, sb, cx, a, nl)
+              cumw += i64(struct_words(cx.decls, cx.src, va.s, va.n, a))
+            } else if eil.is_e {
+              emit_enum_assign(ga.e, ebase, sb, cx, a, nl)
+              cumw += 1 + i64(enum_inst_words(cx.decls, cx.src, eil.es, eil.el, a))
+            } else if va.ek == 3 {
+              emit_enum_assign(ga.e, ebase, sb, cx, a, nl)
+              cumw += 1 + i64(enum_inst_words(cx.decls, cx.src, va.s, va.n, a))
+            } else if esr.is_s {
+              ## a str element: store the {ptr, len} pair into the element's two slots (ptr at
+              ## `ebase`, len at `ebase+1`) — the same 2-word layout a str-local binding uses.
+              emit_str_assign(ga.e, ebase, sb)
+              cumw += 2
+            } else if array_lit_info(ga.e).is_a {
+              ## a TUPLE / nested-ARRAY element (`[(a, b), …]`) — store its components at the element base
+              ## via a recursive `emit_array_assign` (ascending within the element), then advance by the
+              ## element's component count. Was `emit_gas` → `$0` (a bare ArrayLit has no frame home), so
+              ## every tuple element stored one zero word and `xs[i].N` read 0.
+              nai := array_lit_info(ga.e)
+              emit_array_assign(ga.e, ebase, sb, cx, nl)
+              cumw += i64(nai.nel)
+            } else {
+              emit_gas(ga.e, sb, cx, a, nl)
+              push_str(sb, "  popq %rax\n  movq %rax, -")
+              push_int(sb, (ebase + 1) * 8)
+              push_str(sb, "(%rbp)\n")
+              cumw += 1
+            }
+            g = ga.next
+          }
+          None => { break }
         }
-        g = ga.next
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -21756,13 +21854,18 @@ packed_byte_base_entry := fn(base : ptr(Expr), cx : ptr(LCtx)) -> i64 {
 emit_folded_array_elems := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(v) {
     Expr::ArrayLit(nel, ehead) => {
-      mut g := ehead
+      mut g : Option(ptr(mut Arg)) = ehead
       mut k : i64 = 0
-      while g != 0 {
-        ga := deref(arg_p(g))
-        emit_folded_option_assign(ga.e, base - k, sb, cx, a, nl)
-        k += 1
-        g = ga.next
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            emit_folded_option_assign(ga.e, base - k, sb, cx, a, nl)
+            k += 1
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -21946,7 +22049,8 @@ index_value_layout := fn(v : ptr(Expr), slots : ptr(SVec), src : ptr(u8), decls 
         if bvn.n != 0 {
           gmv := mut_global_value(decls, src, bvn.s, bvn.n)
           if unchecked bitcast(usize, gmv) != 0 and array_lit_info(gmv).is_a {
-            gesli := struct_lit_info(arg_expr_at(array_lit_info(gmv).ehead, 0, a))
+            gmvehi := array_lit_info(gmv)
+            gesli := struct_lit_info(arg_expr_at(gmvehi.ehead, 0, a))
             if gesli.is_s {
               gw := struct_words(decls, src, gesli.ss, gesli.sl, a)
               res = IVLayout(is_agg = true, arr = b, idx = i, stride = gw, eek = 2, ess = gesli.ss, esl = gesli.sl)
@@ -22383,8 +22487,8 @@ pair_value_expr := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
 emit_folded_option_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(v) {
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
-      if phead != 0 {
-        ga := deref(arg_p(phead))
+      if arg_any(phead) {
+        ga := deref(arg_at(phead, "argument list ended early"))
         emit_gas(ga.e, sb, cx, a, nl)               ## Some(p): the pointer value → stack top
         push_str(sb, "  popq %rax\n  movq %rax, -")
         push_int(sb, (base + 1) * 8)
@@ -22558,8 +22662,8 @@ field_place_type_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Ve
 emit_folded_option_value := fn(v : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(v) {
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
-      if phead != 0 {
-        ga := deref(arg_p(phead))
+      if arg_any(phead) {
+        ga := deref(arg_at(phead, "argument list ended early"))
         emit_gas(ga.e, sb, cx, a, nl)               ## Some(p): the pointer value → stack top
         push_str(sb, "  popq %rax\n")
       } else {
@@ -22587,17 +22691,20 @@ emit_folded_option_value := fn(v : ptr(Expr), in out sb : strbuf::StrBuf, cx : p
 emit_union_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(v) {
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
-      if phead != 0 {
-        ga := deref(arg_p(phead))
-        psi := struct_lit_info(ga.e)
-        if psi.is_s {
-          emit_struct_assign(ga.e, base, sb, cx, a, nl)
-        } else {
-          emit_gas(ga.e, sb, cx, a, nl)
-          push_str(sb, "  popq %rax\n  movq %rax, -")
-          push_int(sb, (base + 1) * 8)
-          push_str(sb, "(%rbp)\n")
+      match phead {
+        Some(pheadq) => {
+          ga := deref(arg_p(pheadq))
+          psi := struct_lit_info(ga.e)
+          if psi.is_s {
+            emit_struct_assign(ga.e, base, sb, cx, a, nl)
+          } else {
+            emit_gas(ga.e, sb, cx, a, nl)
+            push_str(sb, "  popq %rax\n  movq %rax, -")
+            push_int(sb, (base + 1) * 8)
+            push_str(sb, "(%rbp)\n")
+          }
         }
+        None => {}
       }
     }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
@@ -22772,138 +22879,143 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
       emit_repr_tag_store(sb, base, disc, repr_tag_code(cx.src, ersp.s, ersp.n))
       ## walk the arena-linked `Arg` payload-value list; payload `i` is stored at word `i+1`,
       ## i.e. slot `base + 1 + i` (byte offset -(base + i + 2) * 8(%rbp)).
-      mut g := phead
+      mut g : Option(ptr(mut Arg)) = phead
       mut i := 0
       mut pci : usize = 0
-      while g != 0 {
-        ga := deref(arg_p(g))
-        reject_unsupported_enum_call_payload(es, el, vs, vl, ga.e, cx, a)
-        ## A fixed-array payload is an inline aggregate, not one scalar payload word. Store its
-        ## complete literal into the enum's payload block so a subsequent match binding aliases the
-        ## real array elements. The array element itself may be a plain struct (the claimed slice);
-        ## aggregate array leaves remain rejected by the match place resolver.
-        apw := enum_lit_array_payload_words(v, cx.decls, cx.src, a)
-        if apw != 0 and i == 0 {
-          if array_lit_info(ga.e).is_a {
-            emit_array_assign(ga.e, base - 1 - i, sb, cx, nl)
-            i += i64(apw)
-          } else {
-            panic("selfhost: an enum array payload must be constructed from an array literal; bind the array to a local first")
-          }
-          g = ga.next
-          continue
-        }
-        psi := struct_lit_info(ga.e)
-        pstr := str_lit_info(ga.e)
-        ## #852 — a payload component declared `Option(ptr(T))` is one folded word, whatever its value
-        ## form (a bare `Option.Some/None`, a folded local or field, a call).
-        pft := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, pci, deref(cx.mar))
-        pci += 1
-        if pft.n != 0 {
-          emit_store_value(ga.e, CSpan(s = pft.s, n = pft.n), sb, cx, a, nl)
-          push_str(sb, "  popq %rax\n  movq %rax, -")
-          push_int(sb, (base - i) * 8)
-          push_str(sb, "(%rbp)\n")
-          i += 1
-        } else if psi.is_s {
-          ## a STRUCT-literal payload (`V(P(a=…, …))`) — store ALL its words at the payload slots
-          ## `base+1+i …` via `emit_struct_assign` (its base slot is `base+1+i`), then advance `i`
-          ## by the struct's word count. Was `emit_gas` → a placeholder `$0` (a struct is not a
-          ## scalar value), truncating the payload to one zero word (the aggregate-enum-payload bug).
-          emit_struct_assign(ga.e, base - 1 - i, sb, cx, a, nl)
-          i += i64(struct_words(cx.decls, cx.src, psi.ss, psi.sl, deref(cx.mar)))
-        } else if pstr.is_s {
-          ## a str-literal payload (`V("…")`) — store its {ptr, len} as TWO words at `base+1+i` (ptr)
-          ## and `base+2+i` (len), like a str local, then advance `i` by 2. Was `emit_gas` → one word
-          ## (the ptr), dropping the len so a payload `match { V(s) => s.len }` read 0.
-          emit_str_assign(ga.e, base - 1 - i, sb)
-          i += 2
-        } else if pair_value_expr(ga.e, cx) {
-          ## A Slice(T)/str VIEW expression (`d[lo..hi]`, `bytes(s)`, a view local, or a
-          ## view-returning call) is a two-word payload even when it is not a literal. The scalar
-          ## fallback below would pop only the length/top word and leave the pointer uninitialized,
-          ## making a local `Option(Slice(T)).Some(view)` disagree with the return-register path.
-          ## Reuse the struct-field pair store so pointer/length direction stays identical to the
-          ## existing str-literal constructor path.
-          emit_pair_field_store(ga.e, base - 1 - i, sb, cx, a, nl)
-          i += 2
-        } else if enum_lit_info(ga.e).is_e {
-          ## a NESTED ENUM payload (`Outer.X(Inner.A(…))`) — store the inner enum's `[disc, payload…]`
-          ## words at `base+1+i …` via `emit_enum_assign` (its base slot is `base+1+i`), then advance
-          ## `i` by the inner enum's instance width. Was `emit_gas` → one word, truncating the nested
-          ## enum so `match X(i) { … match i { A(v) => … } }` read a garbage disc/payload.
-          pei := enum_lit_info(ga.e)
-          emit_enum_assign(ga.e, base - 1 - i, sb, cx, a, nl)
-          i += i64(enum_inst_words(cx.decls, cx.src, pei.es, pei.el, deref(cx.mar)))
-        } else if enum_ret_call_d(ga.e, cx.decls, cx.src, a) {
-          ## An enum-returning CALL payload (`Some(inner())` / `Err(make_e())`) already leaves the
-          ## complete inner enum in the return registers. Store every word into the outer enum's
-          ## inline payload block, the local-storage dual of `emit_enum_value`'s register shift.
-          ## The hidden-pointer (>7-word) return is a separate SRET destination path; keep this narrow
-          ## slice fail-loud rather than storing a partial register result.
-          ces := call_ret_enum_span_d(ga.e, cx.decls, cx.src, a)
-          if ces.n == 0 { panic("selfhost: an enum CALL payload has no resolvable return type") }
-          cew := 1 + enum_inst_words(cx.decls, cx.src, ces.s, ces.n, a)
-          if cew > 7 { panic("selfhost: an enum CALL payload wider than 7 words needs the nested SRET path") }
-          ## ISSUE #461: the register→frame store is `emit_enum_place_words_at`'s call arm, at the
-          ## payload base `base - 1 - i` (its `-(base' - j + 1) * 8` is this arm's `-(base - i - j) * 8`).
-          ## The two width panics stay HERE: they are this payload's contract, not the shared writer's.
-          ## The result is not asserted HERE: this arm's own guards (`enum_ret_call_d` + the two
-          ## width panics above) already established the shape, so the writer's call arm fires.
-          cwok := emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
-          if cwok == false { panic("selfhost: an enum CALL payload passed its own width guards but the shared enum-words writer declined it") }
-          i += i64(cew)
-        } else if var_agg_info(ga.e, cx.slots, cx.src).ek == 2 and struct_words(cx.decls, cx.src, var_agg_info(ga.e, cx.slots, cx.src).s, var_agg_info(ga.e, cx.slots, cx.src).n, deref(cx.mar)) > 1 {
-          ## a MULTI-WORD struct VAR payload (`Some(q)` with q a struct LOCAL / by-ref param) — store ALL
-          ## its words at the payload slots `base-i, base-i-1, …`, then advance `i` by the struct's word
-          ## count. Was `emit_gas` → a single word (word 0), truncating fields past the first (the
-          ## aggregate-enum-payload local-BIND bug, the store dual of the return-register truncation).
-          ## Gated `> 1` so a 1-word struct var keeps the byte-identical scalar emission below (neutral).
-          vai := var_agg_info(ga.e, cx.slots, cx.src)
-          pwv := struct_words(cx.decls, cx.src, vai.s, vai.n, deref(cx.mar))
-          vn := var_name_span(ga.e)
-          vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
-          if vent.is_ref {
-            ## a by-ref struct PARAM: the slot holds a POINTER; load it into %r11 and read pointee word j.
-            push_str(sb, "  movq -")
-            push_int(sb, i64((vent.off + 1) * 8))
-            push_str(sb, "(%rbp), %r11\n")
-            for j in 0..pwv {
-              push_str(sb, "  movq ")
-              push_int(sb, i64(j * 8))
-              push_str(sb, "(%r11), %rax\n  movq %rax, -")
-              push_int(sb, (base - i - i64(j)) * 8)
-              push_str(sb, "(%rbp)\n")
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            reject_unsupported_enum_call_payload(es, el, vs, vl, ga.e, cx, a)
+            ## A fixed-array payload is an inline aggregate, not one scalar payload word. Store its
+            ## complete literal into the enum's payload block so a subsequent match binding aliases the
+            ## real array elements. The array element itself may be a plain struct (the claimed slice);
+            ## aggregate array leaves remain rejected by the match place resolver.
+            apw := enum_lit_array_payload_words(v, cx.decls, cx.src, a)
+            if apw != 0 and i == 0 {
+              if array_lit_info(ga.e).is_a {
+                emit_array_assign(ga.e, base - 1 - i, sb, cx, nl)
+                i += i64(apw)
+              } else {
+                panic("selfhost: an enum array payload must be constructed from an array literal; bind the array to a local first")
+              }
+              g = ga.next
+              continue
             }
-          } else {
-            for j in 0..pwv {
-              push_str(sb, "  movq -")
-              push_frame_word(sb, vent.off, j)
-              push_str(sb, "(%rbp), %rax\n  movq %rax, -")
-              push_int(sb, (base - i - i64(j)) * 8)
+            psi := struct_lit_info(ga.e)
+            pstr := str_lit_info(ga.e)
+            ## #852 — a payload component declared `Option(ptr(T))` is one folded word, whatever its value
+            ## form (a bare `Option.Some/None`, a folded local or field, a call).
+            pft := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, pci, deref(cx.mar))
+            pci += 1
+            if pft.n != 0 {
+              emit_store_value(ga.e, CSpan(s = pft.s, n = pft.n), sb, cx, a, nl)
+              push_str(sb, "  popq %rax\n  movq %rax, -")
+              push_int(sb, (base - i) * 8)
               push_str(sb, "(%rbp)\n")
+              i += 1
+            } else if psi.is_s {
+              ## a STRUCT-literal payload (`V(P(a=…, …))`) — store ALL its words at the payload slots
+              ## `base+1+i …` via `emit_struct_assign` (its base slot is `base+1+i`), then advance `i`
+              ## by the struct's word count. Was `emit_gas` → a placeholder `$0` (a struct is not a
+              ## scalar value), truncating the payload to one zero word (the aggregate-enum-payload bug).
+              emit_struct_assign(ga.e, base - 1 - i, sb, cx, a, nl)
+              i += i64(struct_words(cx.decls, cx.src, psi.ss, psi.sl, deref(cx.mar)))
+            } else if pstr.is_s {
+              ## a str-literal payload (`V("…")`) — store its {ptr, len} as TWO words at `base+1+i` (ptr)
+              ## and `base+2+i` (len), like a str local, then advance `i` by 2. Was `emit_gas` → one word
+              ## (the ptr), dropping the len so a payload `match { V(s) => s.len }` read 0.
+              emit_str_assign(ga.e, base - 1 - i, sb)
+              i += 2
+            } else if pair_value_expr(ga.e, cx) {
+              ## A Slice(T)/str VIEW expression (`d[lo..hi]`, `bytes(s)`, a view local, or a
+              ## view-returning call) is a two-word payload even when it is not a literal. The scalar
+              ## fallback below would pop only the length/top word and leave the pointer uninitialized,
+              ## making a local `Option(Slice(T)).Some(view)` disagree with the return-register path.
+              ## Reuse the struct-field pair store so pointer/length direction stays identical to the
+              ## existing str-literal constructor path.
+              emit_pair_field_store(ga.e, base - 1 - i, sb, cx, a, nl)
+              i += 2
+            } else if enum_lit_info(ga.e).is_e {
+              ## a NESTED ENUM payload (`Outer.X(Inner.A(…))`) — store the inner enum's `[disc, payload…]`
+              ## words at `base+1+i …` via `emit_enum_assign` (its base slot is `base+1+i`), then advance
+              ## `i` by the inner enum's instance width. Was `emit_gas` → one word, truncating the nested
+              ## enum so `match X(i) { … match i { A(v) => … } }` read a garbage disc/payload.
+              pei := enum_lit_info(ga.e)
+              emit_enum_assign(ga.e, base - 1 - i, sb, cx, a, nl)
+              i += i64(enum_inst_words(cx.decls, cx.src, pei.es, pei.el, deref(cx.mar)))
+            } else if enum_ret_call_d(ga.e, cx.decls, cx.src, a) {
+              ## An enum-returning CALL payload (`Some(inner())` / `Err(make_e())`) already leaves the
+              ## complete inner enum in the return registers. Store every word into the outer enum's
+              ## inline payload block, the local-storage dual of `emit_enum_value`'s register shift.
+              ## The hidden-pointer (>7-word) return is a separate SRET destination path; keep this narrow
+              ## slice fail-loud rather than storing a partial register result.
+              ces := call_ret_enum_span_d(ga.e, cx.decls, cx.src, a)
+              if ces.n == 0 { panic("selfhost: an enum CALL payload has no resolvable return type") }
+              cew := 1 + enum_inst_words(cx.decls, cx.src, ces.s, ces.n, a)
+              if cew > 7 { panic("selfhost: an enum CALL payload wider than 7 words needs the nested SRET path") }
+              ## ISSUE #461: the register→frame store is `emit_enum_place_words_at`'s call arm, at the
+              ## payload base `base - 1 - i` (its `-(base' - j + 1) * 8` is this arm's `-(base - i - j) * 8`).
+              ## The two width panics stay HERE: they are this payload's contract, not the shared writer's.
+              ## The result is not asserted HERE: this arm's own guards (`enum_ret_call_d` + the two
+              ## width panics above) already established the shape, so the writer's call arm fires.
+              cwok := emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
+              if cwok == false { panic("selfhost: an enum CALL payload passed its own width guards but the shared enum-words writer declined it") }
+              i += i64(cew)
+            } else if var_agg_info(ga.e, cx.slots, cx.src).ek == 2 and struct_words(cx.decls, cx.src, var_agg_info(ga.e, cx.slots, cx.src).s, var_agg_info(ga.e, cx.slots, cx.src).n, deref(cx.mar)) > 1 {
+              ## a MULTI-WORD struct VAR payload (`Some(q)` with q a struct LOCAL / by-ref param) — store ALL
+              ## its words at the payload slots `base-i, base-i-1, …`, then advance `i` by the struct's word
+              ## count. Was `emit_gas` → a single word (word 0), truncating fields past the first (the
+              ## aggregate-enum-payload local-BIND bug, the store dual of the return-register truncation).
+              ## Gated `> 1` so a 1-word struct var keeps the byte-identical scalar emission below (neutral).
+              vai := var_agg_info(ga.e, cx.slots, cx.src)
+              pwv := struct_words(cx.decls, cx.src, vai.s, vai.n, deref(cx.mar))
+              vn := var_name_span(ga.e)
+              vent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, vn.s, vn.n)))
+              if vent.is_ref {
+                ## a by-ref struct PARAM: the slot holds a POINTER; load it into %r11 and read pointee word j.
+                push_str(sb, "  movq -")
+                push_int(sb, i64((vent.off + 1) * 8))
+                push_str(sb, "(%rbp), %r11\n")
+                for j in 0..pwv {
+                  push_str(sb, "  movq ")
+                  push_int(sb, i64(j * 8))
+                  push_str(sb, "(%r11), %rax\n  movq %rax, -")
+                  push_int(sb, (base - i - i64(j)) * 8)
+                  push_str(sb, "(%rbp)\n")
+                }
+              } else {
+                for j in 0..pwv {
+                  push_str(sb, "  movq -")
+                  push_frame_word(sb, vent.off, j)
+                  push_str(sb, "(%rbp), %rax\n  movq %rax, -")
+                  push_int(sb, (base - i - i64(j)) * 8)
+                  push_str(sb, "(%rbp)\n")
+                }
+              }
+              i += i64(pwv)
+            } else if var_agg_info(ga.e, cx.slots, cx.src).ek == 3 and (1 + enum_inst_words(cx.decls, cx.src, var_agg_info(ga.e, cx.slots, cx.src).s, var_agg_info(ga.e, cx.slots, cx.src).n, deref(cx.mar))) > 1 {
+              ## A MULTI-WORD ENUM VAR payload (`Some(r)` with r an enum LOCAL/PARAM) — copy the complete
+              ## inner `[disc, payload…]` block into the outer payload. This is the storage dual of the
+              ## enum-returning-call path and the enum-literal recursion above.
+              ## ISSUE #461: the by-ref / frame word copy is `emit_enum_place_words_at`'s place arm, at the
+              ## payload base `base - 1 - i`; the emitted text is byte-identical to the loops that were here.
+              vai := var_agg_info(ga.e, cx.slots, cx.src)
+              pwv := 1 + enum_inst_words(cx.decls, cx.src, vai.s, vai.n, deref(cx.mar))
+              pwok := emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
+              if pwok == false { panic("selfhost: a multi-word enum VAR payload passed its own `ek == 3` guard but the shared enum-words writer declined it") }
+              i += i64(pwv)
+            } else {
+              emit_gas(ga.e, sb, cx, a, nl)
+              push_str(sb, "  popq %rax\n  movq %rax, -")
+              push_int(sb, (base - i) * 8)
+              push_str(sb, "(%rbp)\n")
+              i += 1
             }
+            g = ga.next
           }
-          i += i64(pwv)
-        } else if var_agg_info(ga.e, cx.slots, cx.src).ek == 3 and (1 + enum_inst_words(cx.decls, cx.src, var_agg_info(ga.e, cx.slots, cx.src).s, var_agg_info(ga.e, cx.slots, cx.src).n, deref(cx.mar))) > 1 {
-          ## A MULTI-WORD ENUM VAR payload (`Some(r)` with r an enum LOCAL/PARAM) — copy the complete
-          ## inner `[disc, payload…]` block into the outer payload. This is the storage dual of the
-          ## enum-returning-call path and the enum-literal recursion above.
-          ## ISSUE #461: the by-ref / frame word copy is `emit_enum_place_words_at`'s place arm, at the
-          ## payload base `base - 1 - i`; the emitted text is byte-identical to the loops that were here.
-          vai := var_agg_info(ga.e, cx.slots, cx.src)
-          pwv := 1 + enum_inst_words(cx.decls, cx.src, vai.s, vai.n, deref(cx.mar))
-          pwok := emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
-          if pwok == false { panic("selfhost: a multi-word enum VAR payload passed its own `ek == 3` guard but the shared enum-words writer declined it") }
-          i += i64(pwv)
-        } else {
-          emit_gas(ga.e, sb, cx, a, nl)
-          push_str(sb, "  popq %rax\n  movq %rax, -")
-          push_int(sb, (base - i) * 8)
-          push_str(sb, "(%rbp)\n")
-          i += 1
+          None => { break }
         }
-        g = ga.next
       }
     }
     ## ISSUE #461: NOT an `EnumLit`. This arm emitted nothing, which made `h.t = v` (an enum PARAM or
@@ -23496,12 +23608,12 @@ match_if_first_body := fn(v : ptr(Expr), a : rt::Arena) -> ptr(Expr) {
 ## The aggregate/str KIND an expression yields (for sizing a `match`/`if`-bound local): kind 2 struct
 ## (+ type span), 3 enum (+ type span), 5 tuple/array (+ element count `nel` and elem-list `ehead`),
 ## 4 str, 0 none (a scalar). Classifies a match arm / if branch body.
-AggKind := struct { kind : u8, s : usize, n : usize, nel : usize, ehead : ptr(mut Arg) }
+AggKind := struct { kind : u8, s : usize, n : usize, nel : usize, ehead : Option(ptr(mut Arg)) }
 agg_kind_of := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> AggKind {
   si := struct_lit_info(e)
-  if si.is_s { return AggKind(kind = 2, s = si.ss, n = si.sl, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
+  if si.is_s { return AggKind(kind = 2, s = si.ss, n = si.sl, nel = 0, ehead = Option.None) }
   ei := enum_lit_info(e)
-  if ei.is_e { return AggKind(kind = 3, s = ei.es, n = ei.el, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
+  if ei.is_e { return AggKind(kind = 3, s = ei.es, n = ei.el, nel = 0, ehead = Option.None) }
   ai := array_lit_info(e)
   if ai.is_a { return AggKind(kind = 5, s = 0, n = 0, nel = ai.nel, ehead = ai.ehead) }
   ## a CALL returning a small (1..7-word) STRUCT as an `if`/`match` branch VALUE (`if c { f() } else
@@ -23512,10 +23624,10 @@ agg_kind_of := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
   ## a §Priority-1 SILENT word-0-drop → 0. (A str-returning call already rides kind 4 via `expr_is_str_val`.)
   if struct_ret_call(e, decls, src, a) {
     csp := call_ret_struct_span(e, decls, src, a)
-    if csp.n != 0 { return AggKind(kind = 2, s = csp.s, n = csp.n, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
+    if csp.n != 0 { return AggKind(kind = 2, s = csp.s, n = csp.n, nel = 0, ehead = Option.None) }
   }
-  if expr_is_str_val(e, decls, src, a) { return AggKind(kind = 4, s = 0, n = 0, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
-  AggKind(kind = 0, s = 0, n = 0, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0))
+  if expr_is_str_val(e, decls, src, a) { return AggKind(kind = 4, s = 0, n = 0, nel = 0, ehead = Option.None) }
+  AggKind(kind = 0, s = 0, n = 0, nel = 0, ehead = Option.None)
 }
 
 ## The aggregate/str kind a `match`/`if` EXPRESSION yields (classified on its first value body), or
@@ -23524,7 +23636,7 @@ agg_kind_of := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
 ## the stack in bare expression position, so the generic scalar store would truncate them).
 match_if_agg_kind := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> AggKind {
   fb := match_if_first_body(v, a)
-  if unchecked bitcast(usize, fb) == 0 { return AggKind(kind = 0, s = 0, n = 0, nel = 0, ehead = unchecked bitcast(ptr(mut Arg), 0)) }
+  if unchecked bitcast(usize, fb) == 0 { return AggKind(kind = 0, s = 0, n = 0, nel = 0, ehead = Option.None) }
   agg_kind_of(fb, decls, src, a)
 }
 
@@ -24611,7 +24723,7 @@ guard_field_count := fn(e : ptr(Expr), tp : ptr(GuardTP), decls : ptr(rt::Vec), 
 ## home (a `GuardTP` local built and address-taken deep inside a match arm of `guard_fold_inst` does NOT — the
 ## lean lower's aggregate-local frame-home limit; mirror `emit_program`'s top-level-local `gtp`). Up to three
 ## type-params (extra ones ignored). `src/`+`lib/` carry no generic `when` → never built → fixpoint-neutral.
-guard_pred_call_fold := fn(be : ptr(Expr), ph : Option(ptr(mut Param)), ah : ptr(mut Arg), tp : ptr(GuardTP), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
+guard_pred_call_fold := fn(be : ptr(Expr), ph : Option(ptr(mut Param)), ah : Option(ptr(mut Arg)), tp : ptr(GuardTP), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> i64 {
   mut i1s := 0
   mut i1l := 0
   mut t1s := 0
@@ -24991,41 +25103,46 @@ emit_st_comp_for_range := fn(rvs : usize, rvl : usize, rlo : ptr(Expr), rhi : pt
     ## `v` to each TRAILING pack argument (`cx.pack_args`) in turn (evaluate the arg → `v`'s slot),
     ## then emit the body. Control flow erased; an empty pack (`pack_args == 0`) emits nothing.
     rslot := slot_of(cx.slots, cx.src, rvs, rvl)
-    mut pa := cx.pack_args
-    while pa != 0 {
-      pam := deref(arg_p(pa))
-      mut handled := false
-      ## HETEROGENEOUS packs (Functions §7.1): a pack arg that is a bound VARIABLE keeps its OWN type.
-      ## Alias the loop var to that variable's storage + type for this iteration by pushing a slot
-      ## entry with the arg's off/ek/type under the loop var's NAME — `slot_of`/`entry_of` are
-      ## last-match-wins, so it shadows the loop var's own (scalar) slot; it is popped after the body.
-      ## This is what lets a struct / str / any-typed pack arg work (`p.x`, `p.len`, … resolve).
-      ## `var_name_span` (not an inline `match`, which degenerates here) recovers a `Var` arg's name.
-      vsp := var_name_span(pam.e)
-      if vsp.n != 0 {
-        aei := entry_of(cx.slots, cx.src, vsp.s, vsp.n)
-        aent := deref(svec_at(SlotEntry, cx.slots, aei))
-        if streq(cx.src, aent.ns, aent.nl, vsp.s, vsp.n) {
-          asv := svec_len(cx.slots)
-          svec_push(deref(cx.slots), SlotEntry(ns = rvs, nl = rvl, off = aent.off, sns = aent.sns, snl = aent.snl, ek = aent.ek, estride = aent.estride, eek = aent.eek, is_ref = aent.is_ref, tmod_s = aent.tmod_s, tmod_l = aent.tmod_l))
-          emit_stmts(rbody, sb, cx, nl)
-          svec_truncate(deref(cx.slots), asv)
-          handled = true
+    mut pa : Option(ptr(mut Arg)) = cx.pack_args
+    loop {
+      match pa {
+        Some(paq) => {
+          pam := deref(arg_p(paq))
+          mut handled := false
+          ## HETEROGENEOUS packs (Functions §7.1): a pack arg that is a bound VARIABLE keeps its OWN type.
+          ## Alias the loop var to that variable's storage + type for this iteration by pushing a slot
+          ## entry with the arg's off/ek/type under the loop var's NAME — `slot_of`/`entry_of` are
+          ## last-match-wins, so it shadows the loop var's own (scalar) slot; it is popped after the body.
+          ## This is what lets a struct / str / any-typed pack arg work (`p.x`, `p.len`, … resolve).
+          ## `var_name_span` (not an inline `match`, which degenerates here) recovers a `Var` arg's name.
+          vsp := var_name_span(pam.e)
+          if vsp.n != 0 {
+            aei := entry_of(cx.slots, cx.src, vsp.s, vsp.n)
+            aent := deref(svec_at(SlotEntry, cx.slots, aei))
+            if streq(cx.src, aent.ns, aent.nl, vsp.s, vsp.n) {
+              asv := svec_len(cx.slots)
+              svec_push(deref(cx.slots), SlotEntry(ns = rvs, nl = rvl, off = aent.off, sns = aent.sns, snl = aent.snl, ek = aent.ek, estride = aent.estride, eek = aent.eek, is_ref = aent.is_ref, tmod_s = aent.tmod_s, tmod_l = aent.tmod_l))
+              emit_stmts(rbody, sb, cx, nl)
+              svec_truncate(deref(cx.slots), asv)
+              handled = true
+            }
+          }
+          if handled == false {
+            ## a non-variable pack arg must be a SINGLE-word scalar (integer/pointer): evaluate it and bind
+            ## the value into the loop var's 1-word slot. A multi-word LITERAL (struct/array/str literal) is
+            ## rejected — fail LOUDLY (§8, no silent miscompile) rather than misread it from a 1-word slot;
+            ## pass such a value through a variable to use it as a pack arg.
+            pw := emit_operand_words(pam.e, sb, cx, a, nl)
+            if pw != 1 { panic("selfhost: comptime-variadic pack arg must be a single-word scalar or a bound variable (multi-word literal pack args not supported)") }
+            push_str(sb, "  popq %rax\n  movq %rax, -")
+            push_int(sb, (rslot + 1) * 8)
+            push_str(sb, "(%rbp)\n")
+            emit_stmts(rbody, sb, cx, nl)
+          }
+          pa = pam.next
         }
+        None => { break }
       }
-      if handled == false {
-        ## a non-variable pack arg must be a SINGLE-word scalar (integer/pointer): evaluate it and bind
-        ## the value into the loop var's 1-word slot. A multi-word LITERAL (struct/array/str literal) is
-        ## rejected — fail LOUDLY (§8, no silent miscompile) rather than misread it from a 1-word slot;
-        ## pass such a value through a variable to use it as a pack arg.
-        pw := emit_operand_words(pam.e, sb, cx, a, nl)
-        if pw != 1 { panic("selfhost: comptime-variadic pack arg must be a single-word scalar or a bound variable (multi-word literal pack args not supported)") }
-        push_str(sb, "  popq %rax\n  movq %rax, -")
-        push_int(sb, (rslot + 1) * 8)
-        push_str(sb, "(%rbp)\n")
-        emit_stmts(rbody, sb, cx, nl)
-      }
-      pa = pam.next
     }
   } else {
     rlo_v := comptime_range_bound(rlo, cx)
@@ -25705,7 +25822,8 @@ emit_stmts := fn(head : ptr(mut Stmt), in out sb : strbuf::StrBuf, cx : ptr(LCtx
         } else if unchecked bitcast(usize, gfor_mgv) != 0 and array_lit_info(gfor_mgv).is_a {
           is_glob_arr = true
           glob_nel = array_lit_info(gfor_mgv).nel
-          gesli := struct_lit_info(arg_expr_at(array_lit_info(gfor_mgv).ehead, 0, a))
+          gfor_mgvehi := array_lit_info(gfor_mgv)
+          gesli := struct_lit_info(arg_expr_at(gfor_mgvehi.ehead, 0, a))
           ## an ENUM-element array global: the loop var would be bound as a SCALAR and each iteration
           ## would read ONE word at `LABEL + i*8` — mid-element, a silent wrong-discriminant read.
           if global_arr_enum(cx.decls, cx.src, fv.s, fv.n, gfor_mgv, a).is_e {
@@ -26904,7 +27022,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
       ir_inl_tmp = i64(ib) + i64(inl_reserve) - 1
     }
   }
-  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
   cxv.fn_id = di
   cxv.ctslots = ptr(ir_cts)
   cx := ptr(cxv)
@@ -27666,7 +27784,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## this branch never fires for the self-host build (byte-identical → the TOOL-1 fixpoint holds).
   if fn_is_naked(p.src, d.name_start, d.name_len) {
     push_str(sb, ":\n")
-    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
     ncx.fn_id = di
     ncx.ctslots = ptr(ct_slots)
     emit_stmts(d.body_stmts, sb, ptr(ncx), nl)
@@ -27929,7 +28047,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## push/drain ops are skipped and the emitted tree gas stays byte-identical (the TOOL-1 fixpoint is
   ## neutral). `defer_sp` starts at 0: the fn body has NO frame, only nested blocks push.
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
-  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = 0, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
+  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = 0, ind_fn_fmask = 0)
   cx.fn_id = di
   cx.ctslots = ptr(ct_slots)
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)
@@ -28153,7 +28271,7 @@ fixed_array_param_len := fn(ns : usize, nl : usize, params : Option(ptr(mut Para
 ## inside `hashmap_insert(K, V, …, key : K, …)` yields `K`, which the transitive worklist then
 ## substitutes to the concrete instance type (K→u64). 0/0 when not inferable. `src/` spells its
 ## type-args (never implicit) → never fires → fixpoint-neutral.
-infer_implicit_pre := fn(gi : i64, args_head : ptr(mut Arg), penv : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
+infer_implicit_pre := fn(gi : i64, args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut Param)), decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena) -> CSpan {
   gd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut tpn_s := 0
   mut tpn_l := 0
@@ -28331,16 +28449,21 @@ infer_implicit_pre := fn(gi : i64, args_head : ptr(mut Arg), penv : Option(ptr(m
 
 ## The first-resolvable call argument's type in the mono PRE-PASS (a Var resolved against the enclosing
 ## params `penv`). Used to decide whether a call matches a CONCRETE overload (→ not the generic).
-arg_type_name_pre := fn(args_head : ptr(mut Arg), penv : Option(ptr(mut Param)), src : ptr(u8), a : rt::Arena) -> CSpan {
-  mut g := args_head
-  while g != 0 {
-    ga := deref(arg_p(g))
-    vn := var_name_span(ga.e)
-    if vn.n != 0 {
-      t := param_type_of(vn.s, vn.n, penv, src, a)
-      if t.n != 0 { return t }
+arg_type_name_pre := fn(args_head : Option(ptr(mut Arg)), penv : Option(ptr(mut Param)), src : ptr(u8), a : rt::Arena) -> CSpan {
+  mut g : Option(ptr(mut Arg)) = args_head
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        vn := var_name_span(ga.e)
+        if vn.n != 0 {
+          t := param_type_of(vn.s, vn.n, penv, src, a)
+          if t.n != 0 { return t }
+        }
+        g = ga.next
+      }
+      None => { break }
     }
-    g = ga.next
   }
   CSpan(s = 0, n = 0)
 }
@@ -28499,10 +28622,10 @@ expr_have_defer := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> bool {
     Expr::Unchecked(inner) => { res = expr_have_defer(inner, src, a) }
     Expr::Bitcast(inner, ts, tl) => { res = expr_have_defer(inner, src, a) }
     Expr::Slice(b, lo, hi) => { if expr_have_defer(b, src, a) or expr_have_defer(lo, src, a) or expr_have_defer(hi, src, a) { res = true } }
-    Expr::Call(cs, cl, na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_have_defer(unchecked bitcast(ptr(Expr), ga.e), src, a) { res = true } ; g = ga.next } }
-    Expr::StructLit(cs, cl, na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_have_defer(unchecked bitcast(ptr(Expr), ga.e), src, a) { res = true } ; g = ga.next } }
-    Expr::EnumLit(es, el, vs, vl, na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_have_defer(unchecked bitcast(ptr(Expr), ga.e), src, a) { res = true } ; g = ga.next } }
-    Expr::ArrayLit(na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_have_defer(unchecked bitcast(ptr(Expr), ga.e), src, a) { res = true } ; g = ga.next } }
+    Expr::Call(cs, cl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_have_defer(unchecked bitcast(ptr(Expr), ga.e), src, a) {res = true } ; g = ga.next }; None => { break } } } }
+    Expr::StructLit(cs, cl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_have_defer(unchecked bitcast(ptr(Expr), ga.e), src, a) { res = true } ; g = ga.next }; None => { break } } } }
+    Expr::EnumLit(es, el, vs, vl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop {match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_have_defer(unchecked bitcast(ptr(Expr), ga.e), src, a) { res = true } ; g = ga.next }; None => { break } } } }
+    Expr::ArrayLit(na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_have_defer(unchecked bitcast(ptr(Expr), ga.e), src, a) { res = true } ; g = ga.next }; None => { break } } } }
     Expr::CompField(b, i) => { if expr_have_defer(b, src, a) or expr_have_defer(i, src, a) { res = true } }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::StrLit | Expr::Try | Expr::FloatLit | Expr::Lambda
       | Expr::FnRef => {}
@@ -28573,10 +28696,10 @@ expr_has_try := fn(e : ptr(Expr)) -> bool {
     Expr::Unchecked(inner) => { res = expr_has_try(inner) }
     Expr::Bitcast(inner, ts, tl) => { res = expr_has_try(inner) }
     Expr::Slice(b, lo, hi) => { if expr_has_try(b) or expr_has_try(lo) or expr_has_try(hi) { res = true } }
-    Expr::Call(cs, cl, na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_has_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next } }
-    Expr::StructLit(cs, cl, na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_has_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next } }
-    Expr::EnumLit(es, el, vs, vl, na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_has_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next } }
-    Expr::ArrayLit(na, ah) => { mut g := ah ; while g != 0 { ga := deref(arg_p(g)) ; if expr_has_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next } }
+    Expr::Call(cs, cl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga:= deref(arg_p(gq)) ; if expr_has_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next }; None => { break } } } }
+    Expr::StructLit(cs, cl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_has_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next }; None => { break } } } }
+    Expr::EnumLit(es, el, vs, vl, na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop {match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_has_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next }; None => { break } } } }
+    Expr::ArrayLit(na, ah) => { mut g : Option(ptr(mut Arg)) = ah ; loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if expr_has_try(unchecked bitcast(ptr(Expr), ga.e)) { res = true } ; g = ga.next }; None => { break } } } }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Match | Expr::StrLit | Expr::FloatLit
       | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => {}
   }
@@ -28920,22 +29043,32 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
       ## marked on the self-host tree (no `@require` in src/lib → the reachable set is byte-identical).
       rqp := require_pred(decls, src, cs, cl)
       if rqp.n != 0 { mark_name(rb, decls, src, rqp.s, rqp.n) }
-      mut g := args_head
-      while g != 0 {
-        ga := deref(arg_p(g))
-        mark_calls_expr(ga.e, rb, decls, src, a)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = args_head
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            mark_calls_expr(ga.e, rb, decls, src, a)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::StructLit(cs, cl, nf, fhead) => {
       ## Modules §3 for a qualified CONSTRUCTION `geo::Pt(x = …)` — the type is a declaration like any
       ## other, so naming a non-`pub` one from outside its subtree is the same violation as a call.
       if _op_walk_active == false { vis_check_type_span(decls, src, cs, cl, _mark_ms, _mark_ml) }
-      mut g := fhead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        mark_calls_expr(ga.e, rb, decls, src, a)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = fhead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            mark_calls_expr(ga.e, rb, decls, src, a)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Field(base, fs, fl) => {
@@ -28946,21 +29079,31 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
       ## Modules §3 for a qualified enum literal `geo::Color.red` — same rule, same reject.
       if _op_walk_active == false { vis_check_type_span(decls, src, es, el, _mark_ms, _mark_ml) }
       mark_name(rb, decls, src, vs, vl)
-      mut g := phead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        mark_calls_expr(ga.e, rb, decls, src, a)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = phead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            mark_calls_expr(ga.e, rb, decls, src, a)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::AddrOf(p) => { mark_calls_expr(p, rb, decls, src, a) }
     Expr::Deref(p) => { mark_calls_expr(p, rb, decls, src, a) }
     Expr::ArrayLit(nel, ehead) => {
-      mut g := ehead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        mark_calls_expr(ga.e, rb, decls, src, a)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ehead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            mark_calls_expr(ga.e, rb, decls, src, a)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Index(base, idx) => {
@@ -29154,9 +29297,18 @@ fill_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
         fill_stop := if vf { cd.arity - 1 } else { cd.arity }
         if cd.is_fn and fill_stop > nargs {
           ## the tail of the existing arg list (0 when the call had no args) — new defaults link after it.
-          mut newhead := ahead
-          mut tail := ahead
-          while tail != 0 and deref(arg_p(tail)).next != 0 { tail = deref(arg_p(tail)).next }
+          mut newhead : Option(ptr(mut Arg)) = ahead
+          mut tail : Option(ptr(mut Arg)) = ahead
+          loop {
+            match tail {
+              Some(tq) => {
+                tm := deref(arg_p(tq))
+                if not arg_any(tm.next) { break }
+                tail = tm.next
+              }
+              None => { break }
+            }
+          }
           mut pp := cd.params_head
           mut k := 0
           mut added := 0
@@ -29168,12 +29320,15 @@ fill_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
                 ## an omitted (index >= nargs) NON-pointer value param with a stored default (`pps != 0`).
                 if k >= nargs and str_at((src + pm.ts), pm.tl) != "ptr" and pm.pps != 0 {
                   defp := unchecked bitcast(ptr(Expr), pm.pps)
-                  h := mk_arg(deref(mar), Arg(e = defp, next = unchecked bitcast(ptr(mut Arg), 0)))
-                  if newhead == 0 { newhead = h } else {
-                    told := deref(arg_p(tail))
-                    set_arg(deref(mar), tail, Arg(e = told.e, next = h))
+                  h := mk_arg(deref(mar), Arg(e = defp, next = Option.None))
+                  match tail {
+                    Some(tl0) => {
+                      told := deref(arg_p(tl0))
+                      set_arg(deref(mar), tl0, Arg(e = told.e, next = Option.Some(h)))
+                    }
+                    None => { newhead = Option.Some(h) }
                   }
-                  tail = h
+                  tail = Option.Some(h)
                   added += 1
                 }
                 k += 1
@@ -29214,28 +29369,33 @@ fill_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
       }
     }
     Expr::Call(cs, cl, nargs, args_head) => {
-      mut g := args_head
-      while g != 0 {
-        ga := deref(arg_p(g))
-        fill_expr(ga.e, decls, src, ms, ml, mar)
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = args_head
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            fill_expr(ga.e, decls, src, ms, ml, mar)
+            g = ga.next
+          }
+          None => { break }
+        }
       }
       fill_call(e, decls, src, ms, ml, mar)
     }
     Expr::StructLit(cs, cl, nf, fhead) => {
-      mut g := fhead
-      while g != 0 { ga := deref(arg_p(g)); fill_expr(ga.e, decls, src, ms, ml, mar); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = fhead
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); fill_expr(ga.e, decls, src, ms, ml, mar); g = ga.next }; None => { break } } }
     }
     Expr::Field(base, fs, fl) => { fill_expr(base, decls, src, ms, ml, mar) }
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
-      mut g := phead
-      while g != 0 { ga := deref(arg_p(g)); fill_expr(ga.e, decls, src, ms, ml, mar); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = phead
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); fill_expr(ga.e, decls, src, ms, ml, mar); g = ga.next }; None => { break } } }
     }
     Expr::AddrOf(p) => { fill_expr(p, decls, src, ms, ml, mar) }
     Expr::Deref(p) => { fill_expr(p, decls, src, ms, ml, mar) }
     Expr::ArrayLit(nel, ehead) => {
-      mut g := ehead
-      while g != 0 { ga := deref(arg_p(g)); fill_expr(ga.e, decls, src, ms, ml, mar); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = ehead
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); fill_expr(ga.e, decls, src, ms, ml, mar); g = ga.next }; None => { break } } }
     }
     Expr::Index(base, ix) => { fill_expr(base, decls, src, ms, ml, mar); fill_expr(ix, decls, src, ms, ml, mar) }
     Expr::Slice(base, lo, hi) => { fill_expr(base, decls, src, ms, ml, mar); fill_expr(lo, decls, src, ms, ml, mar); fill_expr(hi, decls, src, ms, ml, mar) }

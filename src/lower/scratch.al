@@ -21,15 +21,20 @@ stmt_p := ast::stmt_p
 ## `emit_str_pair`, not the pool, but counting their args too just reserves a couple of unused words.
 ##
 ## Count the str-LITERAL arguments of ONE call's arena-linked `Arg` list head `head`.
-scan_call_str_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Arg), a : rt::Arena) -> usize {
-  mut g := head
+scan_call_str_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Arg)), a : rt::Arena) -> usize {
+  mut g : Option(ptr(mut Arg)) = head
   mut cnt := 0
-  while g != 0 {
-    ga := deref(arg_p(g))
-    ## a str LITERAL / `str_at(base, len)` view / `bytes(<literal|str_at>)` argument needs a 2-word
-    ## temp block (no frame home → materialized + passed by reference, see `emit_arg`).
-    if arg_str_temp(ga.e, src, decls, a) { cnt = cnt + 1 }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        ## a str LITERAL / `str_at(base, len)` view / `bytes(<literal|str_at>)` argument needs a 2-word
+        ## temp block (no frame home → materialized + passed by reference, see `emit_arg`).
+        if arg_str_temp(ga.e, src, decls, a) { cnt = cnt + 1 }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   cnt
 }
@@ -57,38 +62,58 @@ pub scan_str_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
     }
     Expr::Call(cs, cl, nargs, args_head) => {
       m = scan_call_str_args(src, decls, args_head, a)
-      mut g := args_head
-      while g != 0 {
-        ga := deref(arg_p(g))
-        m = imax(m, scan_str_arg_expr(src, decls, ga.e, a))
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = args_head
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            m = imax(m, scan_str_arg_expr(src, decls, ga.e, a))
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::StructLit(cs, cl, nf, fhead) => {
-      mut g := fhead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        m = imax(m, scan_str_arg_expr(src, decls, ga.e, a))
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = fhead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            m = imax(m, scan_str_arg_expr(src, decls, ga.e, a))
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Field(base, fs, fl) => { m = scan_str_arg_expr(src, decls, base, a) }
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
-      mut g := phead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        m = imax(m, scan_str_arg_expr(src, decls, ga.e, a))
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = phead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            m = imax(m, scan_str_arg_expr(src, decls, ga.e, a))
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::AddrOf(p) => { m = scan_str_arg_expr(src, decls, p, a) }
     Expr::Deref(p) => { m = scan_str_arg_expr(src, decls, p, a) }
     Expr::ArrayLit(nel, ehead) => {
-      mut g := ehead
-      while g != 0 {
-        ga := deref(arg_p(g))
-        m = imax(m, scan_str_arg_expr(src, decls, ga.e, a))
-        g = ga.next
+      mut g : Option(ptr(mut Arg)) = ehead
+      loop {
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            m = imax(m, scan_str_arg_expr(src, decls, ga.e, a))
+            g = ga.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Index(base, idx) => { m = imax(scan_str_arg_expr(src, decls, base, a), scan_str_arg_expr(src, decls, idx, a)) }
@@ -201,13 +226,18 @@ agg_value_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
   ali := array_lit_info(e)
   if ali.is_a {
     mut w := 0
-    mut g := ali.ehead
-    while g != 0 {
-      ga := deref(arg_p(g))
-      mut ew := agg_value_words(ga.e, decls, src, a)
-      if ew == 0 { ew = 1 }
-      w += ew
-      g = ga.next
+    mut g : Option(ptr(mut Arg)) = ali.ehead
+    loop {
+      match g {
+        Some(gq) => {
+          ga := deref(arg_p(gq))
+          mut ew := agg_value_words(ga.e, decls, src, a)
+          if ew == 0 { ew = 1 }
+          w += ew
+          g = ga.next
+        }
+        None => { break }
+      }
     }
     if w == 0 { w = 1 }
     return w
@@ -247,8 +277,8 @@ agg_value_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
     gai := array_lit_info(gv)
     if gai.is_a {
       mut w := 0
-      mut gg := gai.ehead
-      while gg != 0 { ge := deref(arg_p(gg)); mut ew := agg_value_words(ge.e, decls, src, a); if ew == 0 { ew = 1 }; w += ew; gg = ge.next }
+      mut gg : Option(ptr(mut Arg)) = gai.ehead
+      loop { match gg { Some(ggq) => { ge := deref(arg_p(ggq)); mut ew := agg_value_words(ge.e, decls, src, a); if ew == 0 { ew = 1 }; w += ew; gg = ge.next }; None => { break } } }
       if w != 0 { return w }
     }
     panic("selfhost: mutable-global aggregate scratch width could not be resolved")
@@ -272,13 +302,13 @@ pub scan_agg_width_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)
       mut arm : Option(ptr(mut Arm)) = head
       loop { match arm { Some(armq) => { am := deref(arm_p(armq)); m = imax(m, scan_agg_width_expr(am.body, decls, src, a)); m = imax(m, scan_agg_width_stmts(am.body_stmts, decls, src, a)); arm = am.next }; None => { break } } }
     }
-    Expr::Call(cs, cl, nargs, args_head) => { mut g := args_head; while g != 0 { ga := deref(arg_p(g)); m = imax(m, scan_agg_width_expr(ga.e, decls, src, a)); g = ga.next } }
-    Expr::StructLit(cs, cl, nf, fhead) => { mut g := fhead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, scan_agg_width_expr(ga.e, decls, src, a)); g = ga.next } }
+    Expr::Call(cs, cl, nargs, args_head) => { mut g : Option(ptr(mut Arg)) = args_head; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, scan_agg_width_expr(ga.e, decls, src, a)); g = ga.next }; None => { break } } } }
+    Expr::StructLit(cs, cl, nf, fhead) => { mut g : Option(ptr(mut Arg)) = fhead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, scan_agg_width_expr(ga.e, decls, src, a)); g = ga.next }; None => { break } } } }
     Expr::Field(base, fs, fl) => { m = imax(m, scan_agg_width_expr(base, decls, src, a)) }
-    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g := phead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, scan_agg_width_expr(ga.e, decls, src, a)); g = ga.next } }
+    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g : Option(ptr(mut Arg)) = phead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, scan_agg_width_expr(ga.e, decls, src, a)); g = ga.next }; None => { break } } } }
     Expr::AddrOf(p) => { m = imax(m, scan_agg_width_expr(p, decls, src, a)) }
     Expr::Deref(p) => { m = imax(m, scan_agg_width_expr(p, decls, src, a)) }
-    Expr::ArrayLit(nel, ehead) => { mut g := ehead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, scan_agg_width_expr(ga.e, decls, src, a)); g = ga.next } }
+    Expr::ArrayLit(nel, ehead) => { mut g : Option(ptr(mut Arg)) = ehead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, scan_agg_width_expr(ga.e, decls, src, a)); g = ga.next }; None => { break } } } }
     Expr::Index(base, idx) => { m = imax(m, imax(scan_agg_width_expr(base, decls, src, a), scan_agg_width_expr(idx, decls, src, a))) }
     Expr::Try(inner) => { m = imax(m, scan_agg_width_expr(inner, decls, src, a)) }
     Expr::Unchecked(inner) => { m = imax(m, scan_agg_width_expr(inner, decls, src, a)) }
@@ -322,15 +352,20 @@ pub scan_agg_width_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), src :
 }
 ## Count the aggregate-VALUE arguments of ONE call's arg list — each needs a distinct agg-temp slice
 ## (N in one call → N slices; sharing one slot aliases them, a §8 miscompile — see `emit_call_args`).
-scan_call_agg_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : ptr(mut Arg), a : rt::Arena) -> usize {
-  mut g := head
+scan_call_agg_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Arg)), a : rt::Arena) -> usize {
+  mut g : Option(ptr(mut Arg)) = head
   mut cnt := 0
-  while g != 0 {
-    ga := deref(arg_p(g))
-    rb := require_agg_blocks(ga.e, decls, src, a)
-    if rb != 0 { cnt = cnt + rb }
-    else if arg_is_agg_value(ga.e, decls, src, a) { cnt = cnt + 1 }
-    g = ga.next
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        rb := require_agg_blocks(ga.e, decls, src, a)
+        if rb != 0 { cnt = cnt + rb }
+        else if arg_is_agg_value(ga.e, decls, src, a) { cnt = cnt + 1 }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
   cnt
 }
@@ -394,8 +429,8 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
       ## no aggregate-value arg, or one whose args hold no further aggregate-value call).
       mut own := scan_call_agg_args(src, decls, args_head, a)
       mut deepest := 0
-      mut g := args_head
-      while g != 0 { ga := deref(arg_p(g)); deepest = imax(deepest, scan_agg_arg_expr(src, decls, ga.e, a)); g = ga.next }
+      mut g : Option(ptr(mut Arg)) = args_head
+      loop { match g { Some(gq) => { ga := deref(arg_p(gq)); deepest = imax(deepest, scan_agg_arg_expr(src, decls, ga.e, a)); g = ga.next }; None => { break } } }
       ## A require call itself consumes its preserved-result block plus its predicate-copy block. The
       ## ordinary recursive walk still sees the source constructor as a nested aggregate expression and
       ## may over-reserve one block; over-reservation is harmless, under-reservation would alias the
@@ -404,12 +439,12 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
       if reqb > own { own = reqb }
       m = own + deepest
     }
-    Expr::StructLit(cs, cl, nf, fhead) => { mut g := fhead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, scan_agg_arg_expr(src, decls, ga.e, a)); g = ga.next } }
+    Expr::StructLit(cs, cl, nf, fhead) => { mut g : Option(ptr(mut Arg)) = fhead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, scan_agg_arg_expr(src, decls, ga.e, a)); g = ga.next }; None => { break } } } }
     Expr::Field(base, fs, fl) => { m = scan_agg_arg_expr(src, decls, base, a) }
-    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g := phead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, scan_agg_arg_expr(src, decls, ga.e, a)); g = ga.next } }
+    Expr::EnumLit(es, el, vs, vl, np, phead) => { mut g : Option(ptr(mut Arg)) = phead; loop { match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, scan_agg_arg_expr(src, decls, ga.e, a)); g = ga.next }; None => { break } } } }
     Expr::AddrOf(p) => { m = scan_agg_arg_expr(src, decls, p, a) }
     Expr::Deref(p) => { m = scan_agg_arg_expr(src, decls, p, a) }
-    Expr::ArrayLit(nel, ehead) => { mut g := ehead; while g != 0 { ga := deref(arg_p(g)); m = imax(m, scan_agg_arg_expr(src, decls, ga.e, a)); g = ga.next } }
+    Expr::ArrayLit(nel, ehead) => { mut g : Option(ptr(mut Arg)) = ehead; loop {match g { Some(gq) => { ga := deref(arg_p(gq)); m = imax(m, scan_agg_arg_expr(src, decls, ga.e, a)); g = ga.next }; None => { break } } } }
     Expr::Index(base, idx) => { m = imax(scan_agg_arg_expr(src, decls, base, a), scan_agg_arg_expr(src, decls, idx, a)) }
     Expr::Try(inner) => { m = scan_agg_arg_expr(src, decls, inner, a) }
     Expr::Unchecked(inner) => { m = scan_agg_arg_expr(src, decls, inner, a) }

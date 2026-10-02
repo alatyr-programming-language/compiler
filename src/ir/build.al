@@ -17,6 +17,7 @@
 ## (`VRegId`, `LabelId`, `SymId`, `FnId`).
 (Arg, Decl, Expr, Param, Stmt) := ast
 arg_p := ast::arg_p
+arg_at := ast::arg_at
 stmt_p := ast::stmt_p
 param_p := ast::param_p
 streq := lower_ctx::streq
@@ -438,7 +439,7 @@ ib_bx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Option(VR
 }
 
 ## A call in value position: it must have a result.
-ib_bx_callv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : ptr(mut Arg)) -> Option(VRegId) {
+ib_bx_callv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg))) -> Option(VRegId) {
   co : CallOut = ib_call(bp, a, e, cs, cl, na, ah)
   match co {
     CoValue(v) => { Option(VRegId).Some(v) }
@@ -855,7 +856,7 @@ ib_bx_bitcast := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), inne
 ## A call: a width conversion when the callee names a scalar type (`u8(x)`, `i64(x)`), a shift or
 ## rotation operation-function, else a direct call to the one non-generic function of that name whose
 ## parameters and result are all kernel scalars.
-ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : ptr(mut Arg)) -> CallOut {
+ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
   src := ib_b_src(bp)
   tk : Option(IbKS) = ib_name_ks(src, cs, cl)
   match tk {
@@ -878,9 +879,9 @@ ib_call_out := fn(v : Option(VRegId)) -> CallOut {
 ## width inside `unchecked` (Types §9.2, CG-7; sema refuses one that does not fit in a checked scope).
 ## An integer is widened, or narrowed by `fit` (`narrow` trap) — `ext` inside `unchecked` (§4). A `bool`
 ## becomes 0 or 1.
-ib_bx_conv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), to : IbKS, na : usize, ah : ptr(mut Arg)) -> Option(VRegId) {
+ib_bx_conv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), to : IbKS, na : usize, ah : Option(ptr(mut Arg))) -> Option(VRegId) {
   if na != 1 or not kty_is_int(to.ty) { return ib_no(bp, e, NyWhy.NwOutside) }
-  a0 := deref(arg_p(ah))
+  a0 := deref(arg_at(ah, "argument list ended early"))
   lk : VTy = sty_get(a0.e)
   if vty_is_lit(lk) {
     nv : Option(i64) = ib_num_value(a0.e)
@@ -911,9 +912,9 @@ ib_bx_conv := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), to : Ib
 ## `n >= N`, N the TYPE's width (a checked guard, Concurrency §6.1); inside `unchecked` it is the
 ## hardware shift (§6.2). `shr` is arithmetic on a signed type, logical on an unsigned one. A rotation
 ## is total (count mod N). A narrow type shifts at 64 bits and wraps back to its width (V3).
-ib_bx_shift := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), sk : ShiftK, ah : ptr(mut Arg)) -> Option(VRegId) {
-  a0 := deref(arg_p(ah))
-  a1 := deref(arg_p(a0.next))
+ib_bx_shift := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), sk : ShiftK, ah : Option(ptr(mut Arg))) -> Option(VRegId) {
+  a0 := deref(arg_at(ah, "argument list ended early"))
+  a1 := deref(arg_at(a0.next, "argument list ended early"))
   xv0 := ib_bx(bp, a, a0.e)?
   nv0 := ib_bx(bp, a, a1.e)?
   k := ib_int_ty(bp, e)?
@@ -1010,7 +1011,7 @@ ib_rotate := fn(bp : ptr(mut IbB), in out a : rt::Arena, sk : ShiftK, k : IbKS, 
 ## A direct call to a user function. Each argument takes its parameter's declared type (widened by
 ## `ib_coerce` when sema accepted a narrower integer); the result is sema's record of the call, and it
 ## must be the callee's declared result.
-ib_call_user := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : ptr(mut Arg)) -> CallOut {
+ib_call_user := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
   ci : Option(u64) = ib_callee_decl(bp, cs, cl)
   match ci {
     Some(x) => { return ib_call_decl(bp, a, e, usize(x), na, ah) }
@@ -1019,7 +1020,7 @@ ib_call_user := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : 
   ib_refuse_expr(bp, e, NyWhy.NwOutside)
   CallOut.CoRefused
 }
-ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : usize, na : usize, ah : ptr(mut Arg)) -> CallOut {
+ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : usize, na : usize, ah : Option(ptr(mut Arg))) -> CallOut {
   src := ib_b_src(bp)
   d : Decl = deref(ib_decl_ptr(ib_b_decls(bp), di))
   ## Only an Alatyr function with a body is called through the Alatyr convention; a syscall or an extern
@@ -1038,21 +1039,26 @@ ib_call_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), di : 
   ## The argument vregs are built first, then pushed onto the pool as one run.
   args := wb_new(a, 8)
   mut pp := d.params_head
-  mut g := ah
-  while ib_arg_present(g) {
-    ga := deref(arg_p(g))
-    ## An argument with no parameter left is a call sema would not accept; the builder refuses it
-    ## rather than read past the list.
-    match pp {
-      Some(pq) => {
-        pm := deref(param_p(pq))
-        avo : Option(VRegId) = ib_arg(bp, a, e, pm, ga.e)
-        match avo { Some(av) => { k1 := wb_push(args, a, usize(av)) }; None => { return CallOut.CoRefused } }
-        pp = pm.next
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        ## An argument with no parameter left is a call sema would not accept; the builder refuses it
+        ## rather than read past the list.
+        match pp {
+          Some(pq) => {
+            pm := deref(param_p(pq))
+            avo : Option(VRegId) = ib_arg(bp, a, e, pm, ga.e)
+            match avo { Some(av) => { k1 := wb_push(args, a, usize(av)) }; None => { return CallOut.CoRefused } }
+            pp = pm.next
+          }
+          None => { return CallOut.CoRefused }
+        }
+        g = ga.next
       }
-      None => { return CallOut.CoRefused }
+      None => { break }
     }
-    g = ga.next
   }
   f := ib_b_f(bp)
   mut it := inst0(Op.OpCall)
@@ -1114,8 +1120,6 @@ ib_num_value := fn(e : ptr(Expr)) -> Option(i64) {
       | Expr::Bitcast | Expr::Loop => { Option(i64).None }
   }
 }
-## null-ok: Arg.next — an argument list ends in a null link (ast.al "0 = end"; the field is not an Option).
-ib_arg_present := fn(g : ptr(mut Arg)) -> bool { unchecked bitcast(usize, g) != 0 }
 ## unchecked-ok: `decls` holds Decl record addresses (the parser's `rt::Vec` of handles).
 ib_decl_ptr := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { unchecked bitcast(ptr(Decl), rt::vec_get(deref(decls), i)) }
 ## The index of the ONE non-generic function declaration named `[cs, cs+cl)`; none when there is no such
