@@ -969,7 +969,10 @@ char_lit_val := fn(src : ptr(u8), start : usize, len : usize) -> i64 {
 ## Grammar §2.4, `_` separators included, and a malformed one REJECTED located (`lit_val_at`).
 int_at := fn(in out pc : PC) -> i64 {
   t := cur(pc)
-  i64(lit_val_at(pc, t.start, t.len))
+  ## `Expr::Num` carries the literal's 64-bit PATTERN in an i64 word: a literal above i64's range
+  ## (`18446744073709551615`) is stored as its two's-complement bits and read back by its type.
+  ## unchecked-ok: the i64 word is the literal's bit pattern, not its value (#881)
+  unchecked i64(lit_val_at(pc, t.start, t.len))
 }
 
 ## Overwrite an `Arm`'s `.next` / `.body` / `.body_stmts` (reconstruct the struct with the one

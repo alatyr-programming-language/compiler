@@ -212,10 +212,30 @@ ir_lower_call := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut Arg)
   ## admitted integer as one 64-bit word. The Slice(u8) loop's dedicated `movzbq` defines x as the correct
   ## zero-extended value, so the native-width conversion is an identity and must not demote this codec-like
   ## loop to TEXT. Narrow conversions remain excluded: they need the width-specific instruction/guard path.
+  ## A CHECKED `u64(x)` of a SIGNED `x` is not an identity (Types §4.4 + I11, #881): a negative value
+  ## does not fit, so the text path's decision (`int_conv_needs_fit`) is taken here too, and its guard
+  ## is the same `cmp $0; jge CONT; ud2; CONT:` sign test, budgeted by `ir_check_expr` via IRP_NCHK.
   if cnm == "u64" {
     if na != 1 { panic("selfhost: regalloc emit — u64 conversion arity mismatch") }
-    if not ir_u64_identity_arg(deref(arg_at(ah, "argument list ended early")).e) { panic("selfhost: regalloc emit — u64 conversion requires a scalar leaf") }
-    return ir_lower_expr(deref(arg_at(ah, "argument list ended early")).e, cx, unch)
+    ua := deref(arg_at(ah, "argument list ended early")).e
+    if not ir_u64_identity_arg(ua) { panic("selfhost: regalloc emit — u64 conversion requires a scalar leaf") }
+    uo := ir_lower_expr(ua, cx, unch)
+    if (not unch) and (not expr_is_numlit(ua)) and int_conv_needs_fit("u64", int_operand_sign(ua, expr_type_span(ua, cx), cx), 8) {
+      ## The leaf is a vreg (a `Var`, or one under `unchecked`/`bitcast`), compared in place; an
+      ## immediate (a bitcast literal) is first moved into a vreg, as `cmp` cannot take two immediates.
+      mut ck : IROperand = uo
+      if uo.k != 3 {
+        t := ir_fresh_vreg()
+        regalloc::ra_ir_emit(0, 3, i64(t), uo.k, uo.v)        ## mov t, x
+        ck = IROperand(k = 3, v = i64(t))
+      }
+      cont := ir_fresh_label()
+      regalloc::ra_ir_emit(4, ck.k, ck.v, 1, 0)               ## cmp x, $0
+      regalloc::ra_ir_emit(9, 4, i64(cont), 1, 5)             ## jge CONT  (not negative: it fits)
+      regalloc::ra_ir_emit(13, 0, 0, 0, 0)                    ## ud2       (a negative value is no u64)
+      regalloc::ra_ir_emit(10, 4, i64(cont), 0, 0)            ## CONT:
+    }
+    return uo
   }
   ## TARGET-NATIVE ALIAS CONVERSION `usize(u64(x))` (P3-RA-AGG next seam): on x86_64 `usize` and `u64`
   ## occupy the same unsigned native word. The inner u64 identity has already proved that the operand is a
@@ -1416,7 +1436,11 @@ ir_check_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), unch : b
       ## globals, aggregate values, calls, fields, and other unsupported shapes remain rejected normally.
       if str_at((src + cs), cl) == "u64" {
         if na != 1 { IRP_OK = false }
-        else if ir_u64_identity_arg(deref(arg_at(ah, "argument list ended early")).e) { ir_check_expr(src, decls, deref(arg_at(ah, "argument list ended early")).e, unch) }
+        else if ir_u64_identity_arg(deref(arg_at(ah, "argument list ended early")).e) {
+          ## a checked one may carry the #881 sign guard (`ir_lower_call`): budget it like a checked bin.
+          if not unch { IRP_NCHK = IRP_NCHK + 1 }
+          ir_check_expr(src, decls, deref(arg_at(ah, "argument list ended early")).e, unch)
+        }
         else { IRP_OK = false }
       } else if str_at((src + cs), cl) == "usize" {
         ## Only the exact native-alias wrapper over the already-admitted u64 leaf is identity-safe here.
