@@ -969,7 +969,7 @@ int_at := fn(in out pc : PC) -> i64 {
 ## shape the surrounding code uses (a non-place struct ctor cannot store directly through a ptr).
 set_arm_next := fn(a : ptr(mut rt::Arena), h : ptr(mut Arm), nx : ptr(mut Arm)) {
   o := deref(arm_p(h))
-  deref(arm_p(h)) = Arm(wild = o.wild, lit = o.lit, body = o.body, next = nx, vs = o.vs, vl = o.vl, binds_head = o.binds_head, body_stmts = o.body_stmts, hi = o.hi)
+  deref(arm_p(h)) = Arm(wild = o.wild, lit = o.lit, body = o.body, next = Option.Some(nx), vs = o.vs, vl = o.vl, binds_head = o.binds_head, body_stmts = o.body_stmts, hi = o.hi)
 }
 set_arm_body := fn(a : ptr(mut rt::Arena), h : ptr(mut Arm), b : ptr(Expr)) {
   o := deref(arm_p(h))
@@ -1078,7 +1078,7 @@ parse_pat_alt := fn(in out pc : PC) -> ptr(mut Arm) {
     else if cur(pc).kind == 37 { pc.idx = pc.idx + 1; hi = pat_endpoint(pc); w = 6 }
   }
   dummy := newnode(pc.arena, Expr.Num(0, 0, 0))
-  anode(pc.arena, Arm(wild = w, lit = lit, body = dummy, next = unchecked bitcast(ptr(mut Arm), 0), vs = vs, vl = vl, binds_head = bhead, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), hi = hi))
+  anode(pc.arena, Arm(wild = w, lit = lit, body = dummy, next = Option.None, vs = vs, vl = vl, binds_head = bhead, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), hi = hi))
 }
 
 ## Is the cursor on a pointer intrinsic `mem :: (addr|val) (` — the `::`-path shape this toy
@@ -1656,8 +1656,8 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         zmt := reject_here(pc, "selfhost: a `match` SUBJECT must be followed by a braced arm list `{ ... }` - the input ends or continues with something else, so the match has no arms (a truncated file, a partial copy, or a bad merge)")
       }
       pc.idx = pc.idx + 1                 ## '{'
-      mut ahead := 0
-      mut atail := 0
+      mut armh : Option(ptr(mut Arm)) = Option.None
+      mut armt : Option(ptr(mut Arm)) = Option.None
       while cur(pc).kind != 13 and cur(pc).kind != 0 {
         mut w : u8 = 0
         mut lit := 0
@@ -1697,14 +1697,17 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
           pc.idx = pc.idx + 1                 ## '=>'
           tbe := p_or(pc)                     ## EXPRESSION body
           pc.idx = pc.idx + 1                 ## '}' (comptime-for body close)
-          anew2 := anode(pc.arena, Arm(wild = 2, lit = 0, body = tbe, next = unchecked bitcast(ptr(mut Arm), 0), vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), hi = 0))
-          if ahead == 0 { ahead = unchecked bitcast(usize, anew2) } else {
-            ap2 := arm_p(atail)
-            old2 := deref(ap2)
-            upd2 := Arm(wild = old2.wild, lit = old2.lit, body = old2.body, next = anew2, vs = old2.vs, vl = old2.vl, binds_head = old2.binds_head, body_stmts = old2.body_stmts, hi = old2.hi)
-            deref(ap2) = upd2
+          anew2 := anode(pc.arena, Arm(wild = 2, lit = 0, body = tbe, next = Option.None, vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = unchecked bitcast(ptr(mut Stmt), 0), hi = 0))
+          match armt {
+            Some(armt0) => {
+              ap2 := arm_p(armt0)
+              old2 := deref(ap2)
+              upd2 := Arm(wild = old2.wild, lit = old2.lit, body = old2.body, next = Option.Some(anew2), vs = old2.vs, vl = old2.vl, binds_head = old2.binds_head, body_stmts = old2.body_stmts, hi = old2.hi)
+              deref(ap2) = upd2
+            }
+            None => { armh = Option.Some(anew2) }
           }
-          atail = unchecked bitcast(usize, anew2)
+          armt = Option.Some(anew2)
           if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }
         }
         else {
@@ -1737,14 +1740,14 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         pc.idx = pc.idx + 1              ## '=>'
         abody := p_or(pc)
         ## wire the shared body onto every alternative and splice the chain into the arm list, in order.
-        mut g := first
-        while g != 0 {
-          gm := deref(arm_p(g))
-          set_arm_body(pc.arena, g, abody)
-          if ahead == 0 { ahead = unchecked bitcast(usize, g) } else { set_arm_next(pc.arena, atail, g) }
-          atail = unchecked bitcast(usize, g)
+        mut g : Option(ptr(mut Arm)) = Option.Some(first)
+        loop { match g { Some(gq) => {
+          gm := deref(arm_p(gq))
+          set_arm_body(pc.arena, gq, abody)
+          match armt { Some(armt0) => { set_arm_next(pc.arena, armt0, gq) }; None => { armh = Option.Some(gq) } }
+          armt = Option.Some(gq)
           g = gm.next
-        }
+        }; None => { break } } }
         ## optional arm separator: `;` (kind 30) OR `,` (kind 9). Only `,` was unhandled — a
         ## comma-separated EXPRESSION match (`r := match x { 7 => 42, _ => 0 }`, the natural
         ## int/str-match syntax) left `pc` parked on the `,`, so the next loop iteration parsed
@@ -1756,7 +1759,7 @@ p_factor := fn(in out pc : PC) -> ptr(mut Expr) {
         }
       }
       pc.idx = pc.idx + 1                 ## '}'
-      return newnode(pc.arena, Expr.Match(scrut, ahead))
+      return newnode(pc.arena, Expr.Match(scrut, armh))
     }
     ## POINTER intrinsics `ptr(<place>)` / `deref(<ptr>)` — a `::`-path call whose
     ## head ident is `mem` and tail ident is `addr` or `val` (kinds: 1 ident, 7 `::`, 10 `(`,
@@ -3373,7 +3376,7 @@ defer_expr_try := fn(e : ptr(Expr)) -> bool {
     Expr::Try(inner) => { res = true }
     Expr::Bin(op, l, r) => { if defer_expr_try(l) or defer_expr_try(r) { res = true } }
     Expr::If(c, t, el) => { if defer_expr_try(c) or defer_expr_try(t) or defer_expr_try(el) { res = true } }
-    Expr::Match(sc, ah) => { mut arm := ah ; while arm != 0 { am := deref(arm_p(arm)) ; if defer_expr_try(am.body) { res = true } ; arm = am.next } }
+    Expr::Match(sc, ah) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { am := deref(arm_p(armq)) ; if defer_expr_try(am.body) { res = true } ; arm = am.next }; None => { break } } } }
     Expr::Field(b, fs, fl) => { res = defer_expr_try(b) }
     Expr::Index(b, i) => { if defer_expr_try(b) or defer_expr_try(i) { res = true } }
     Expr::Deref(p) => { res = defer_expr_try(p) }
@@ -3410,7 +3413,7 @@ defer_stmts_clean := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
       Stmt::While(c, b, nx) => { if defer_expr_try(c) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
       Stmt::Loop(b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
       Stmt::If(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th, a) == false or defer_stmts_clean(el, a) == false { ok = false } ; s = nx }
-      Stmt::Match(sc, ah, nx) => { mut arm := ah ; while arm != 0 and ok { am := deref(arm_p(arm)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next } ; s = nx }
+      Stmt::Match(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
       Stmt::For(fns, fnl, flo, fhi, fb, nx) => { if defer_expr_try(flo) or defer_expr_try(fhi) or defer_stmts_clean(fb, a) == false { ok = false } ; s = nx }
       Stmt::DerefAssign(p, v, nx) => { if defer_expr_try(p) or defer_expr_try(v) { ok = false } ; s = nx }
       Stmt::IndexAssign(b, i, v, nx) => { if defer_expr_try(b) or defer_expr_try(i) or defer_expr_try(v) { ok = false } ; s = nx }
@@ -3424,7 +3427,7 @@ defer_stmts_clean := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
       Stmt::CompIf(c, th, el, nx) => { if defer_expr_try(c) or defer_stmts_clean(th, a) == false or defer_stmts_clean(el, a) == false { ok = false } ; s = nx }
       Stmt::CompFor(vs, vl, iv, b, nx) => { if defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
       Stmt::CompForRange(vs, vl, lo, hi, b, nx) => { if defer_expr_try(lo) or defer_expr_try(hi) or defer_stmts_clean(b, a) == false { ok = false } ; s = nx }
-      Stmt::CompMatch(sc, ah, nx) => { mut arm := ah ; while arm != 0 and ok { am := deref(arm_p(arm)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next } ; s = nx }
+      Stmt::CompMatch(sc, ah, nx) => { mut arm : Option(ptr(mut Arm)) = ah ; loop { match arm { Some(armq) => { if not (ok) { break }; am := deref(arm_p(armq)) ; if defer_expr_try(sc) or defer_stmts_clean(am.body_stmts, a) == false { ok = false } ; arm = am.next }; None => { break } } } ; s = nx }
     }
   }
   ok
@@ -3681,8 +3684,8 @@ p_stmt := fn(in out pc : PC) -> usize {
       pc.idx = pc.idx + 1                 ## 'match'
       cmscrut := p_or(pc)                 ## typeinfo(T)
       pc.idx = pc.idx + 1                 ## '{'
-      mut cmhead := 0
-      mut cmtail := 0
+      mut cmhead : Option(ptr(mut Arm)) = Option.None
+      mut cmtail : Option(ptr(mut Arm)) = Option.None
       while cur(pc).kind != 13 and cur(pc).kind != 0 {
         mut cw : u8 = 0
         mut cvs := 0
@@ -3715,14 +3718,17 @@ p_stmt := fn(in out pc : PC) -> usize {
           cmbody = p_stmt(pc)
         }
         dummycm := newnode(pc.arena, Expr.Num(0, 0, 0))
-        anewcm := anode(pc.arena, Arm(wild = cw, lit = 0, body = dummycm, next = unchecked bitcast(ptr(mut Arm), 0), vs = cvs, vl = cvl, binds_head = Option.None, body_stmts = cmbody, hi = 0))
-        if cmhead == 0 { cmhead = unchecked bitcast(usize, anewcm) } else {
-          apcm := arm_p(cmtail)
-          oldcm := deref(apcm)
-          updcm := Arm(wild = oldcm.wild, lit = oldcm.lit, body = oldcm.body, next = anewcm, vs = oldcm.vs, vl = oldcm.vl, binds_head = oldcm.binds_head, body_stmts = oldcm.body_stmts, hi = oldcm.hi)
-          deref(apcm) = updcm
+        anewcm := anode(pc.arena, Arm(wild = cw, lit = 0, body = dummycm, next = Option.None, vs = cvs, vl = cvl, binds_head = Option.None, body_stmts = cmbody, hi = 0))
+        match cmtail {
+          Some(cmtail0) => {
+            apcm := arm_p(cmtail0)
+            oldcm := deref(apcm)
+            updcm := Arm(wild = oldcm.wild, lit = oldcm.lit, body = oldcm.body, next = Option.Some(anewcm), vs = oldcm.vs, vl = oldcm.vl, binds_head = oldcm.binds_head, body_stmts = oldcm.body_stmts, hi = oldcm.hi)
+            deref(apcm) = updcm
+          }
+          None => { cmhead = Option.Some(anewcm) }
         }
-        cmtail = unchecked bitcast(usize, anewcm)
+        cmtail = Option.Some(anewcm)
         if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }
       }
       pc.idx = pc.idx + 1                 ## '}'
@@ -3985,8 +3991,8 @@ p_stmt := fn(in out pc : PC) -> usize {
     pc.idx = pc.idx + 1                 ## 'match'
     scrut := p_or(pc)
     pc.idx = pc.idx + 1                 ## '{'
-    mut ahead := 0
-    mut atail := 0
+    mut armh : Option(ptr(mut Arm)) = Option.None
+    mut armt : Option(ptr(mut Arm)) = Option.None
     while cur(pc).kind != 13 and cur(pc).kind != 0 {
       mut w : u8 = 0
       mut lit := 0
@@ -4032,14 +4038,17 @@ p_stmt := fn(in out pc : PC) -> usize {
         pc.idx = pc.idx + 1                 ## '}' (arm body)
         pc.idx = pc.idx + 1                 ## '}' (comptime-for body)
 dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
-        anewc := anode(pc.arena, Arm(wild = 2, lit = 0, body = dummyc, next = unchecked bitcast(ptr(mut Arm), 0), vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = tbody, hi = 0))
-        if ahead == 0 { ahead = unchecked bitcast(usize, anewc) } else {
-          apc := arm_p(atail)
-          oldc := deref(apc)
-          updc := Arm(wild = oldc.wild, lit = oldc.lit, body = oldc.body, next = anewc, vs = oldc.vs, vl = oldc.vl, binds_head = oldc.binds_head, body_stmts = oldc.body_stmts, hi = oldc.hi)
-          deref(apc) = updc
+        anewc := anode(pc.arena, Arm(wild = 2, lit = 0, body = dummyc, next = Option.None, vs = cfv.start, vl = cfv.len, binds_head = bhead, body_stmts = tbody, hi = 0))
+        match armt {
+          Some(armt0) => {
+            apc := arm_p(armt0)
+            oldc := deref(apc)
+            updc := Arm(wild = oldc.wild, lit = oldc.lit, body = oldc.body, next = Option.Some(anewc), vs = oldc.vs, vl = oldc.vl, binds_head = oldc.binds_head, body_stmts = oldc.body_stmts, hi = oldc.hi)
+            deref(apc) = updc
+          }
+          None => { armh = Option.Some(anewc) }
         }
-        atail = unchecked bitcast(usize, anewc)
+        armt = Option.Some(anewc)
         if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }
       }
       else {
@@ -4074,19 +4083,19 @@ dummyc := newnode(pc.arena, Expr.Num(0, 0, 0))
       sbody := p_stmts(pc)              ## arm body is a STATEMENT LIST
       pc.idx = pc.idx + 1               ## '}'
       ## wire the shared statement body onto every alternative and splice the chain into the arm list.
-      mut g := first
-      while g != 0 {
-        gm := deref(arm_p(g))
-        set_arm_body_stmts(pc.arena, g, sbody)
-        if ahead == 0 { ahead = unchecked bitcast(usize, g) } else { set_arm_next(pc.arena, atail, g) }
-        atail = unchecked bitcast(usize, g)
+      mut g : Option(ptr(mut Arm)) = Option.Some(first)
+      loop { match g { Some(gq) => {
+        gm := deref(arm_p(gq))
+        set_arm_body_stmts(pc.arena, gq, sbody)
+        match armt { Some(armt0) => { set_arm_next(pc.arena, armt0, gq) }; None => { armh = Option.Some(gq) } }
+        armt = Option.Some(gq)
         g = gm.next
-      }
+      }; None => { break } } }
       if cur(pc).kind == 30 { pc.idx = pc.idx + 1 }   ## optional ';'
       }
     }
     pc.idx = pc.idx + 1                 ## '}'
-    return unchecked bitcast(usize, snode(pc.arena, Stmt.Match(scrut, ahead, 0)))
+    return unchecked bitcast(usize, snode(pc.arena, Stmt.Match(scrut, armh, 0)))
   }
   ## `for <i> in <lo> .. <hi> { <stmts> }` — a counted for loop. `for`/`in` are keywords
   ## (kind 2, `tok_kw`); `..` is the range token (kind 31). The bounds are full expressions

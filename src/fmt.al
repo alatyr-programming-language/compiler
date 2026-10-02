@@ -2065,89 +2065,117 @@ fmt_same_value_arm_body := fn(a : Arm, b : Arm) -> bool {
 ## Pretty-print a comma-separated value-match arm list in its compact form. Wrapping is decided by the
 ## caller after this trial; this function deliberately remains the one-line renderer used by the
 ## existing formatter for all constructs that fit.
-emit_fmt_arms := fn(arms_head : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
-  mut arm := arms_head
+emit_fmt_arms := fn(arms_head : Option(ptr(mut Arm)), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
+  mut arm : Option(ptr(mut Arm)) = arms_head
   mut first := true
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    if not first { push_str(sb, ", ") }
-    fmt_emit_value_arm_pattern(am, sb, src, a, decls)
-    mut g := am.next
-    while g != 0 {
-      gm := deref(arm_p(g))
-      if not fmt_same_value_arm_body(am, gm) { break }
-      push_str(sb, " | ")
-      fmt_emit_value_arm_pattern(gm, sb, src, a, decls)
-      g = gm.next
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if not first { push_str(sb, ", ") }
+        fmt_emit_value_arm_pattern(am, sb, src, a, decls)
+        mut g : Option(ptr(mut Arm)) = am.next
+        loop {
+          match g {
+            Some(gq) => {
+              gm := deref(arm_p(gq))
+              if not fmt_same_value_arm_body(am, gm) { break }
+              push_str(sb, " | ")
+              fmt_emit_value_arm_pattern(gm, sb, src, a, decls)
+              g = gm.next
+            }
+            None => { break }
+          }
+        }
+        push_str(sb, " => ")
+        if am.body_stmts != 0 { panic("selfhost: fmt — braced match arm not modelled") }
+        emit_fmt_expr(am.body, sb, src, a, decls)
+        if am.wild == 2 { push_str(sb, " }") }
+        first = false
+        arm = g
+      }
+      None => { break }
     }
-    push_str(sb, " => ")
-    if am.body_stmts != 0 { panic("selfhost: fmt — braced match arm not modelled") }
-    emit_fmt_expr(am.body, sb, src, a, decls)
-    if am.wild == 2 { push_str(sb, " }") }
-    first = false
-    arm = g
   }
 }
 
 ## Wrapped value-match arms: one arm per line, expression arms with a trailing comma, and a comptime
 ## template rendered as a real block even when its own header/body would fit on one line. OR-pattern
 ## continuations start one further level in, with `|` at the beginning of the continuation line.
-emit_fmt_arms_multi := fn(arms_head : usize, indent : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
-  mut arm := arms_head
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    fmt_emit_spaces(sb, indent + 2)
-    arm_mark := sb.len
-    mut template_open : usize = 0
-    if am.wild == 2 {
-      fmt_emit_template_header(am, sb, src, ptr(template_open))
-      push_str(sb, "\n")
-      fmt_emit_spaces(sb, indent + 4)
-      fmt_emit_template_pattern(am, template_open, sb, src)
-    } else {
-      fmt_emit_value_arm_pattern(am, sb, src, a, decls)
-    }
-    mut g := am.next
-    if g != 0 {
-      gm0 := deref(arm_p(g))
-      if fmt_same_value_arm_body(am, gm0) {
-        while g != 0 {
-          gm := deref(arm_p(g))
-          if not fmt_same_value_arm_body(am, gm) { break }
-          push_str(sb, " | ")
-          fmt_emit_value_arm_pattern(gm, sb, src, a, decls)
-          g = gm.next
-        }
-        if fmt_open_line_cols(sb, arm_mark) > 100 {
-          sb.len = arm_mark
+emit_fmt_arms_multi := fn(arms_head : Option(ptr(mut Arm)), indent : usize, in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) {
+  mut arm : Option(ptr(mut Arm)) = arms_head
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        fmt_emit_spaces(sb, indent + 2)
+        arm_mark := sb.len
+        mut template_open : usize = 0
+        if am.wild == 2 {
+          fmt_emit_template_header(am, sb, src, ptr(template_open))
+          push_str(sb, "\n")
+          fmt_emit_spaces(sb, indent + 4)
+          fmt_emit_template_pattern(am, template_open, sb, src)
+        } else {
           fmt_emit_value_arm_pattern(am, sb, src, a, decls)
-          g = am.next
-          while g != 0 {
-            gm := deref(arm_p(g))
-            if not fmt_same_value_arm_body(am, gm) { break }
-            push_str(sb, "\n")
-            fmt_emit_spaces(sb, indent + 4)
-            push_str(sb, "| ")
-            fmt_emit_value_arm_pattern(gm, sb, src, a, decls)
-            g = gm.next
-          }
         }
+        mut g : Option(ptr(mut Arm)) = am.next
+        match g {
+          Some(g0q) => {
+            gm0 := deref(arm_p(g0q))
+            if fmt_same_value_arm_body(am, gm0) {
+              loop {
+                match g {
+                  Some(gq) => {
+                    gm := deref(arm_p(gq))
+                    if not fmt_same_value_arm_body(am, gm) { break }
+                    push_str(sb, " | ")
+                    fmt_emit_value_arm_pattern(gm, sb, src, a, decls)
+                    g = gm.next
+                  }
+                  None => { break }
+                }
+              }
+              if fmt_open_line_cols(sb, arm_mark) > 100 {
+                sb.len = arm_mark
+                fmt_emit_value_arm_pattern(am, sb, src, a, decls)
+                g = am.next
+                loop {
+                  match g {
+                    Some(gq2) => {
+                      gm2 := deref(arm_p(gq2))
+                      if not fmt_same_value_arm_body(am, gm2) { break }
+                      push_str(sb, "\n")
+                      fmt_emit_spaces(sb, indent + 4)
+                      push_str(sb, "| ")
+                      fmt_emit_value_arm_pattern(gm2, sb, src, a, decls)
+                      g = gm2.next
+                    }
+                    None => { break }
+                  }
+                }
+              }
+            }
+          }
+          None => {}
+        }
+        if am.wild == 2 {
+          push_str(sb, " => ")
+          if am.body_stmts != 0 { panic("selfhost: fmt — braced comptime arm not modelled") }
+          emit_fmt_expr_res(am.body, sb, src, a, decls, 1)
+          push_str(sb, "\n")
+          fmt_emit_spaces(sb, indent + 2)
+          push_str(sb, "}\n")
+        } else {
+          push_str(sb, " => ")
+          if am.body_stmts != 0 { panic("selfhost: fmt — braced match arm not modelled") }
+          emit_fmt_expr_res(am.body, sb, src, a, decls, 1)
+          push_str(sb, ",\n")
+        }
+        arm = g
       }
+      None => { break }
     }
-    if am.wild == 2 {
-      push_str(sb, " => ")
-      if am.body_stmts != 0 { panic("selfhost: fmt — braced comptime arm not modelled") }
-      emit_fmt_expr_res(am.body, sb, src, a, decls, 1)
-      push_str(sb, "\n")
-      fmt_emit_spaces(sb, indent + 2)
-      push_str(sb, "}\n")
-    } else {
-      push_str(sb, " => ")
-      if am.body_stmts != 0 { panic("selfhost: fmt — braced match arm not modelled") }
-      emit_fmt_expr_res(am.body, sb, src, a, decls, 1)
-      push_str(sb, ",\n")
-    }
-    arm = g
   }
 }
 
@@ -2196,11 +2224,11 @@ fmt_stmt_compmatch_scrut := fn(s : ptr(mut Stmt)) -> ptr(Expr) {
   r
 }
 
-fmt_stmt_compmatch_arms := fn(s : ptr(mut Stmt)) -> usize {
-  mut r : usize = 0
+fmt_stmt_compmatch_arms := fn(s : ptr(mut Stmt)) -> Option(ptr(mut Arm)) {
+  mut r : Option(ptr(mut Arm)) = Option.None
   st := deref(stmt_p(Stmt, s))
   match st {
-    Stmt::CompMatch(sc, ah, nx) => { r = unchecked bitcast(usize, ah) }
+    Stmt::CompMatch(sc, ah, nx) => { r = ah }
     Stmt::Assign | Stmt::While | Stmt::FieldAssign | Stmt::Return | Stmt::If | Stmt::Match
       | Stmt::For | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
       | Stmt::FieldPathAssign | Stmt::Loop | Stmt::Break | Stmt::Continue | Stmt::ExprStmt
@@ -2320,36 +2348,41 @@ emit_fmt_bare_comptime_match := fn(s : ptr(mut Stmt), in out sb : rt::StrBuf, sr
   push_str(sb, "}\n")
 }
 
-emit_fmt_comptime_arms := fn(arms_head : usize, scrut : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), indent : usize, tparam : str) {
+emit_fmt_comptime_arms := fn(arms_head : Option(ptr(mut Arm)), scrut : ptr(Expr), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), indent : usize, tparam : str) {
   if not fmt_comptime_match_arms_supported(scrut, src) { panic("selfhost: fmt — non-braced comptime match arm not modelled") }
-  mut arm := arms_head
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    if am.wild >= 2 { panic("selfhost: fmt — comptime template/var match arm not modelled") }
-    emit_indent(sb, indent)
-    if am.wild == 1 { push_str(sb, "_") }
-    if am.wild == 0 {
-      push_str(sb, str_at((src + am.vs), am.vl))
-      emit_fmt_binds(am.binds_head, sb, src)
+  mut arm : Option(ptr(mut Arm)) = arms_head
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if am.wild >= 2 { panic("selfhost: fmt — comptime template/var match arm not modelled") }
+        emit_indent(sb, indent)
+        if am.wild == 1 { push_str(sb, "_") }
+        if am.wild == 0 {
+          push_str(sb, str_at((src + am.vs), am.vl))
+          emit_fmt_binds(am.binds_head, sb, src)
+        }
+        ## An empty `{}` arm has the same null statement-list pointer as a malformed/unsupported bare arm,
+        ## but the source-shape pass above has already proved every outer `=>` is either braced or the
+        ## exact nested-comptime form. A valid null list is therefore the empty braced spelling; emit its
+        ## canonical two-line block. Non-empty bare arms remain handled by the recursive path below.
+        if am.body_stmts == 0 {
+          push_str(sb, " => {\n")
+          emit_indent(sb, indent)
+          push_str(sb, "}\n")
+        } else if fmt_compmatch_stmt_is_bare(am.body_stmts, src) {
+          push_str(sb, " => ")
+          emit_fmt_bare_comptime_match(am.body_stmts, sb, src, a, decls, indent, tparam)
+        } else {
+          push_str(sb, " => {\n")
+          emit_fmt_stmts(am.body_stmts, am.body_stmts, sb, src, a, indent + 1, decls, tparam)
+          emit_indent(sb, indent)
+          push_str(sb, "}\n")
+        }
+        arm = am.next
+      }
+      None => { break }
     }
-    ## An empty `{}` arm has the same null statement-list pointer as a malformed/unsupported bare arm,
-    ## but the source-shape pass above has already proved every outer `=>` is either braced or the
-    ## exact nested-comptime form. A valid null list is therefore the empty braced spelling; emit its
-    ## canonical two-line block. Non-empty bare arms remain handled by the recursive path below.
-    if am.body_stmts == 0 {
-      push_str(sb, " => {\n")
-      emit_indent(sb, indent)
-      push_str(sb, "}\n")
-    } else if fmt_compmatch_stmt_is_bare(am.body_stmts, src) {
-      push_str(sb, " => ")
-      emit_fmt_bare_comptime_match(am.body_stmts, sb, src, a, decls, indent, tparam)
-    } else {
-      push_str(sb, " => {\n")
-      emit_fmt_stmts(am.body_stmts, am.body_stmts, sb, src, a, indent + 1, decls, tparam)
-      emit_indent(sb, indent)
-      push_str(sb, "}\n")
-    }
-    arm = am.next
   }
 }
 
@@ -2357,61 +2390,66 @@ emit_fmt_comptime_arms := fn(arms_head : usize, scrut : ptr(Expr), in out sb : r
 ## the value-match form (variant `V(b0, …)` / integer literal / `_`); the body renders multi-line and
 ## indented (like `emit_fmt_comptime_arms`). A str-literal pattern (`wild == 4`) renders `"…"`; comptime
 ## template arms (`wild` 2) render the nested `comptime for`; var arms (`wild` 3) remain fail-loud.
-emit_fmt_stmt_match_arms := fn(arms_head : usize, body_head : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), indent : usize, tparam : str) {
-  mut arm := arms_head
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    if am.wild == 3 { panic("selfhost: fmt — comptime statement-match var arm not modelled") }
-    if am.wild == 2 {
-      emit_indent(sb, indent + 1)
-      push_str(sb, "comptime for ")
-      push_str(sb, str_at((src + am.vs), am.vl))
-      push_str(sb, " in typeinfo(")
-      push_str(sb, tparam)
-      push_str(sb, ").variants {\n")
-      emit_indent(sb, indent + 2)
-      push_str(sb, tparam)
-      push_str(sb, ".(")
-      push_str(sb, str_at((src + am.vs), am.vl))
-      push_str(sb, ")")
-      emit_fmt_binds(am.binds_head, sb, src)
-      push_str(sb, " => {\n")
-      emit_fmt_stmts(am.body_stmts, body_head, sb, src, a, indent + 3, decls, tparam)
-      emit_indent(sb, indent + 2)
-      push_str(sb, "}\n")
-      emit_indent(sb, indent + 1)
-      push_str(sb, "}\n")
-    } else {
-    emit_indent(sb, indent + 1)
-    if am.wild == 1 { push_str(sb, "_") }
-    if am.wild == 4 {
-      ## STR-LITERAL pattern `"lit" => { … }` (§5.4): `am.lit` holds the `Expr::StrLit` node handle
-      ## (recovered as a `ptr(Expr)`), rendered `"…"` by the StrLit arm — the statement-match twin of the
-      ## value-match `emit_fmt_arms` str-pattern case.
-      pat := unchecked bitcast(ptr(Expr), usize(am.lit))
-      emit_fmt_expr(pat, sb, src, a, decls)
-    }
-    ## SCALAR RANGE patterns (§5.4): half-open `lo..hi` (wild 5) / inclusive `lo..=hi` (wild 6) — the
-    ## statement-match twin of the value-match range case. Endpoints re-emit as decimal literals.
-    if am.wild == 5 { push_int(sb, am.lit); push_str(sb, ".."); push_int(sb, am.hi) }
-    if am.wild == 6 { push_int(sb, am.lit); push_str(sb, "..="); push_int(sb, am.hi) }
-    if am.wild == 0 {
-      if am.vl != 0 {
-        ## the statement-match twin of the value-match qualifier recovery above: a `match` whose arms
-        ## are braced blocks renders here, and it de-qualified `Result::Ok` exactly the same way.
-        svps := fmt_variant_pat_start(src, am.vs, am.vl)
-        push_str(sb, str_at((src + svps), am.vs + am.vl - svps))
-        emit_fmt_binds(am.binds_head, sb, src)
-      } else {
-        push_int(sb, am.lit)
+emit_fmt_stmt_match_arms := fn(arms_head : Option(ptr(mut Arm)), body_head : ptr(mut Stmt), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec), indent : usize, tparam : str) {
+  mut arm : Option(ptr(mut Arm)) = arms_head
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if am.wild == 3 { panic("selfhost: fmt — comptime statement-match var arm not modelled") }
+        if am.wild == 2 {
+          emit_indent(sb, indent + 1)
+          push_str(sb, "comptime for ")
+          push_str(sb, str_at((src + am.vs), am.vl))
+          push_str(sb, " in typeinfo(")
+          push_str(sb, tparam)
+          push_str(sb, ").variants {\n")
+          emit_indent(sb, indent + 2)
+          push_str(sb, tparam)
+          push_str(sb, ".(")
+          push_str(sb, str_at((src + am.vs), am.vl))
+          push_str(sb, ")")
+          emit_fmt_binds(am.binds_head, sb, src)
+          push_str(sb, " => {\n")
+          emit_fmt_stmts(am.body_stmts, body_head, sb, src, a, indent + 3, decls, tparam)
+          emit_indent(sb, indent + 2)
+          push_str(sb, "}\n")
+          emit_indent(sb, indent + 1)
+          push_str(sb, "}\n")
+        } else {
+        emit_indent(sb, indent + 1)
+        if am.wild == 1 { push_str(sb, "_") }
+        if am.wild == 4 {
+          ## STR-LITERAL pattern `"lit" => { … }` (§5.4): `am.lit` holds the `Expr::StrLit` node handle
+          ## (recovered as a `ptr(Expr)`), rendered `"…"` by the StrLit arm — the statement-match twin of the
+          ## value-match `emit_fmt_arms` str-pattern case.
+          pat := unchecked bitcast(ptr(Expr), usize(am.lit))
+          emit_fmt_expr(pat, sb, src, a, decls)
+        }
+        ## SCALAR RANGE patterns (§5.4): half-open `lo..hi` (wild 5) / inclusive `lo..=hi` (wild 6) — the
+        ## statement-match twin of the value-match range case. Endpoints re-emit as decimal literals.
+        if am.wild == 5 { push_int(sb, am.lit); push_str(sb, ".."); push_int(sb, am.hi) }
+        if am.wild == 6 { push_int(sb, am.lit); push_str(sb, "..="); push_int(sb, am.hi) }
+        if am.wild == 0 {
+          if am.vl != 0 {
+            ## the statement-match twin of the value-match qualifier recovery above: a `match` whose arms
+            ## are braced blocks renders here, and it de-qualified `Result::Ok` exactly the same way.
+            svps := fmt_variant_pat_start(src, am.vs, am.vl)
+            push_str(sb, str_at((src + svps), am.vs + am.vl - svps))
+            emit_fmt_binds(am.binds_head, sb, src)
+          } else {
+            push_int(sb, am.lit)
+          }
+        }
+        push_str(sb, " => {\n")
+        emit_fmt_stmts(am.body_stmts, body_head, sb, src, a, indent + 2, decls, tparam)
+        emit_indent(sb, indent + 1)
+        push_str(sb, "}\n")
+        }
+        arm = am.next
       }
+      None => { break }
     }
-    push_str(sb, " => {\n")
-    emit_fmt_stmts(am.body_stmts, body_head, sb, src, a, indent + 2, decls, tparam)
-    emit_indent(sb, indent + 1)
-    push_str(sb, "}\n")
-    }
-    arm = am.next
   }
 }
 

@@ -1095,7 +1095,7 @@ pub comptime_cond_eval := fn(cond : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) ->
       ## `Struct`/`Enum`/`Array`/`Scalar`; a non-`typeinfo(<type>)` scrutinee now folds to -1.
       k := guard_typeinfo_kind(scrut, tp, cx.decls, src, a)
       if k < 0 { return -1 }
-      am := deref(arm_p(arms_head))
+      am := deref(arm_p(ast::arm_at(arms_head, "ctfold: comptime match has no arms")))
       if am.vl != 0 {
         want := comptime_kind_of_name(src, am.vs, am.vl)
         if want >= 0 {
@@ -1123,7 +1123,7 @@ pub stmts_have_compfor := fn(head : ptr(mut Stmt), a : rt::Arena) -> bool {
     match st {
       Stmt::CompFor(vs, vl, iv, b, nx) => { if iv == 0 { found = true } ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if stmts_have_compfor(rb, a) { found = true } ; s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : usize = cmah; while car != 0 { cam := deref(arm_p(car)); if stmts_have_compfor(cam.body_stmts, a) { found = true }; car = cam.next } ; s = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); if stmts_have_compfor(cam.body_stmts, a) { found = true }; car = cam.next }; None => { break } } } ; s = nx }
       Stmt::CompIf(c, th, el, nx) => {
         if stmts_have_compfor(th, a) { found = true }
         if stmts_have_compfor(el, a) { found = true }
@@ -1161,12 +1161,17 @@ pub stmts_have_variant_template := fn(head : ptr(mut Stmt), a : rt::Arena) -> bo
     st := deref(stmt_p(Stmt, s))
     match st {
       Stmt::Match(sc, ah, nx) => {
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          if am.wild == 2 { found = true }
-          if stmts_have_variant_template(am.body_stmts, a) { found = true }
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              if am.wild == 2 { found = true }
+              if stmts_have_variant_template(am.body_stmts, a) { found = true }
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         s = nx
       }
@@ -1177,7 +1182,7 @@ pub stmts_have_variant_template := fn(head : ptr(mut Stmt), a : rt::Arena) -> bo
       }
       Stmt::CompFor(cvs, cvl, civ, cb, nx) => { if stmts_have_variant_template(cb, a) { found = true } ; s = nx }
       Stmt::CompForRange(rvs, rvl, rlo, rhi, rb, nx) => { if stmts_have_variant_template(rb, a) { found = true } ; s = nx }
-      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : usize = cmah; while car != 0 { cam := deref(arm_p(car)); if stmts_have_variant_template(cam.body_stmts, a) { found = true }; car = cam.next } ; s = nx }
+      Stmt::CompMatch(cmsc, cmah, nx) => { mut car : Option(ptr(mut Arm)) = cmah; loop { match car { Some(carq) => { cam := deref(arm_p(carq)); if stmts_have_variant_template(cam.body_stmts, a) { found = true }; car = cam.next }; None => { break } } } ; s = nx }
       Stmt::If(c, th, el, nx) => {
         if stmts_have_variant_template(th, a) { found = true }
         if stmts_have_variant_template(el, a) { found = true }

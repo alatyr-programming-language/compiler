@@ -387,12 +387,17 @@ pub collect_insts_expr := fn(e : ptr(Expr), in out insts : IVec, decls : ptr(rt:
     }
     Expr::Match(scrut, head) => {
       collect_insts_expr(scrut, insts, decls, src, a, penv)
-      mut arm := head
-      while arm != 0 {
-        am := deref(arm_p(arm))
-        collect_insts_expr(am.body, insts, decls, src, a, penv)
-        collect_insts_stmts(am.body_stmts, insts, decls, src, a, penv)
-        arm = am.next
+      mut arm : Option(ptr(mut Arm)) = head
+      loop {
+        match arm {
+          Some(armq) => {
+            am := deref(arm_p(armq))
+            collect_insts_expr(am.body, insts, decls, src, a, penv)
+            collect_insts_stmts(am.body_stmts, insts, decls, src, a, penv)
+            arm = am.next
+          }
+          None => { break }
+        }
       }
     }
     Expr::Call(cs, cl, nargs, args_head) => {
@@ -598,11 +603,16 @@ pub collect_insts_stmts := fn(head : ptr(mut Stmt), in out insts : IVec, decls :
       }
       Stmt::Match(sc, ah, nx) => {
         collect_insts_expr(sc, insts, decls, src, a, penv)
-        mut arm := ah
-        while arm != 0 {
-          am := deref(arm_p(arm))
-          collect_insts_stmts(am.body_stmts, insts, decls, src, a, penv)
-          arm = am.next
+        mut arm : Option(ptr(mut Arm)) = ah
+        loop {
+          match arm {
+            Some(armq) => {
+              am := deref(arm_p(armq))
+              collect_insts_stmts(am.body_stmts, insts, decls, src, a, penv)
+              arm = am.next
+            }
+            None => { break }
+          }
         }
         s = nx
       }
@@ -628,8 +638,8 @@ pub collect_insts_stmts := fn(head : ptr(mut Stmt), in out insts : IVec, decls :
       ## bounds + generic calls is rare and its instances are reached transitively.
       Stmt::CompForRange(crvs, crvl, crlo, crhi, crb, nx) => { s = nx }
       Stmt::CompMatch(cmsc, cmah, nx) => {
-        mut car := cmah
-        while car != 0 { cam := deref(arm_p(car)); collect_insts_stmts(cam.body_stmts, insts, decls, src, a, penv); car = cam.next }
+        mut car : Option(ptr(mut Arm)) = cmah
+        loop { match car { Some(carq) => { cam := deref(arm_p(carq)); collect_insts_stmts(cam.body_stmts, insts, decls, src, a, penv); car = cam.next }; None => { break } } }
         s = nx
       }
       Stmt::DerefAssign(ptr, val, nx) => {

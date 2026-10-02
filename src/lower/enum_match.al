@@ -510,7 +510,7 @@ pub try_folded_value_scrut := fn(scrut : ptr(Expr), skip : bool, in out sb : str
 ## Set an `Arm`'s `next` link (bind-then-store — an inline `deref(node_ptr(Arm,…)) = Arm(…)` mis-lowers).
 pub set_arm_next := fn(mar : ptr(mut rt::Arena), h : ptr(mut Arm), nx : ptr(mut Arm)) {
   old := deref(arm_p(h))
-  upd := Arm(wild = old.wild, lit = old.lit, body = old.body, next = nx, vs = old.vs, vl = old.vl, binds_head = old.binds_head, body_stmts = old.body_stmts, hi = old.hi)
+  upd := Arm(wild = old.wild, lit = old.lit, body = old.body, next = Option.Some(nx), vs = old.vs, vl = old.vl, binds_head = old.binds_head, body_stmts = old.body_stmts, hi = old.hi)
   deref(arm_p(h)) = upd
 }
 
@@ -519,50 +519,60 @@ pub set_arm_next := fn(mar : ptr(mut rt::Arena), h : ptr(mut Arm), nx : ptr(mut 
 ## enum `es`/`el` (each with that variant's name + the template's bindings/body). Non-template arms are
 ## copied through. Returns the new head (built in the AST arena `cx.mar`). No template → returns `head`
 ## unchanged (byte-identical for ordinary matches). Only meaningful in a mono instance (concrete enum).
-pub expand_variant_arms := fn(head : ptr(mut Arm), es : usize, el : usize, cx : ptr(LCtx), a : rt::Arena) -> usize {
+pub expand_variant_arms := fn(head : Option(ptr(mut Arm)), es : usize, el : usize, cx : ptr(LCtx), a : rt::Arena) -> Option(ptr(mut Arm)) {
   mut has2 := false
-  mut sc := head
-  while sc != 0 {
-    scm := deref(arm_p(sc))
-    if scm.wild == 2 or scm.wild == 3 { has2 = true }
-    sc = scm.next
-  }
-  if has2 == false { return unchecked bitcast(usize, head) }
-  mut nh := 0
-  mut nt := 0
-  mut arm := head
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    if am.wild == 2 {
-      edi := enum_decl_of(cx.decls, cx.src, es, el)
-      if edi >= 0 {
-        ed := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(edi))))
-        mut fv := ed.fields_head
-        loop {
-          match fv {
-            Some(fvq) => {
-              fvm := deref(fld_p(fvq))
-              ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = unchecked bitcast(ptr(mut Arm), 0), vs = fvm.ns, vl = fvm.nl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
-              if nh == 0 { nh = unchecked bitcast(usize, ai) } else { set_arm_next(cx.mar, nt, ai) }
-              nt = unchecked bitcast(usize, ai)
-              fv = fvm.next
-            }
-            None => { break }
-          }
-        }
+  mut sc : Option(ptr(mut Arm)) = head
+  loop {
+    match sc {
+      Some(scq) => {
+        scm := deref(arm_p(scq))
+        if scm.wild == 2 or scm.wild == 3 { has2 = true }
+        sc = scm.next
       }
-    } else if am.wild == 3 {
-      ## `T.(v)` comptime-variant PATTERN → resolve `v` to the current loop variant (`cf_curvar`,
-      ## set by the enclosing comptime-for arm body). A concrete variant arm matching that variant.
-      ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = unchecked bitcast(ptr(mut Arm), 0), vs = cx.cf_curvar_s, vl = cx.cf_curvar_l, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
-      if nh == 0 { nh = unchecked bitcast(usize, ai) } else { set_arm_next(cx.mar, nt, ai) }
-      nt = unchecked bitcast(usize, ai)
-    } else {
-      ai := mk_arm(deref(cx.mar), Arm(wild = am.wild, lit = am.lit, body = am.body, next = unchecked bitcast(ptr(mut Arm), 0), vs = am.vs, vl = am.vl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = am.hi))
-      if nh == 0 { nh = unchecked bitcast(usize, ai) } else { set_arm_next(cx.mar, nt, ai) }
-      nt = unchecked bitcast(usize, ai)
+      None => { break }
     }
-    arm = am.next
+  }
+  if has2 == false { return head }
+  mut nh : Option(ptr(mut Arm)) = Option.None
+  mut nt : Option(ptr(mut Arm)) = Option.None
+  mut arm : Option(ptr(mut Arm)) = head
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        if am.wild == 2 {
+          edi := enum_decl_of(cx.decls, cx.src, es, el)
+          if edi >= 0 {
+            ed := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(edi))))
+            mut fv := ed.fields_head
+            loop {
+              match fv {
+                Some(fvq) => {
+                  fvm := deref(fld_p(fvq))
+                  ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = Option.None, vs = fvm.ns, vl = fvm.nl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
+                  match nt { Some(ntq) => { set_arm_next(cx.mar, ntq, ai) }; None => { nh = Option.Some(ai) } }
+                  nt = Option.Some(ai)
+                  fv = fvm.next
+                }
+                None => { break }
+              }
+            }
+          }
+        } else if am.wild == 3 {
+          ## `T.(v)` comptime-variant PATTERN → resolve `v` to the current loop variant (`cf_curvar`,
+          ## set by the enclosing comptime-for arm body). A concrete variant arm matching that variant.
+          ai := mk_arm(deref(cx.mar), Arm(wild = 0, lit = 0, body = am.body, next = Option.None, vs = cx.cf_curvar_s, vl = cx.cf_curvar_l, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = 0))
+          match nt { Some(ntq) => { set_arm_next(cx.mar, ntq, ai) }; None => { nh = Option.Some(ai) } }
+          nt = Option.Some(ai)
+        } else {
+          ai := mk_arm(deref(cx.mar), Arm(wild = am.wild, lit = am.lit, body = am.body, next = Option.None, vs = am.vs, vl = am.vl, binds_head = am.binds_head, body_stmts = am.body_stmts, hi = am.hi))
+          match nt { Some(ntq) => { set_arm_next(cx.mar, ntq, ai) }; None => { nh = Option.Some(ai) } }
+          nt = Option.Some(ai)
+        }
+        arm = am.next
+      }
+      None => { break }
+    }
   }
   nh
 }
@@ -603,17 +613,22 @@ pub emit_repr_tag_store := fn(in out sb : strbuf::StrBuf, base : i64, disc : i64
   if code == 6 { push_str(sb, "  movl $"); push_int(sb, disc); push_str(sb, ", -"); push_int(sb, off); push_str(sb, "(%rbp)\n") }
 }
 
-pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
+pub emit_enum_match := fn(head_in : Option(ptr(mut Arm)), si : ScrutInfo, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ## Capture the comptime-for-VARIANT loop-var name from the template arm (`wild==2`, whose `vs/vl`
   ## still hold the loop var — `expand_variant_arms` overwrites the GENERATED arms' `vs/vl` with each
   ## variant's own name). Threaded into `cx.cf_vloop_*` for the body pass so `var.name`/`var.payload`
   ## resolve; restored at the end. 0/0 for an ordinary (non-template) match → byte-identical.
   ov_vls := cx.cf_vloop_s; ov_vll := cx.cf_vloop_l
-  mut tpl := head_in
-  while tpl != 0 {
-    tm := deref(arm_p(tpl))
-    if tm.wild == 2 { cx.cf_vloop_s = tm.vs; cx.cf_vloop_l = tm.vl }
-    tpl = tm.next
+  mut tpl : Option(ptr(mut Arm)) = head_in
+  loop {
+    match tpl {
+      Some(tplq) => {
+        tm := deref(arm_p(tplq))
+        if tm.wild == 2 { cx.cf_vloop_s = tm.vs; cx.cf_vloop_l = tm.vl }
+        tpl = tm.next
+      }
+      None => { break }
+    }
   }
   ## A scrutinee slot may carry the nominal enum's declaration module even when its source type span
   ## is only the tail (`Error`). Publish that identity for arm expansion, layout and variant lookup;
@@ -647,34 +662,39 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
   ## nonzero (a non-null `ptr` — Memory §4.2). `si.es/el` is the folded slot's full `Option(ptr(T))` span.
   folded := is_niche_folded(cx.src, si.es, si.el)
   ## dispatch pass
-  mut arm := head
+  mut arm : Option(ptr(mut Arm)) = head
   mut hadwild := false
-  while arm != 0 {
-    am := deref(arm_p(arm))
-    lbody := nl
-    nl += 1
-    if am.wild != 0 {
-      push_str(sb, "  jmp ")
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
-      hadwild = true
-    } else if folded {
-      ## nullary `None` (binds none) ⟺ `word == 0`; payload `Some` (binds one) ⟺ `word != 0`. The bind
-      ## count avoids resolving the parenthesized `Option(ptr(T))` span through `enum_decl_of`.
-      fnb := bind_count(am.binds_head)
-      if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }          ## None ⟺ null (0)
-      else { push_str(sb, "  cmpq $0, %r12\n  jne ") }                ## Some ⟺ nonzero pointer
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
-    } else {
-      disc := variant_index(cx.decls, cx.src, si.es, si.el, am.vs, am.vl, deref(cx.mar))
-      push_str(sb, "  movq $")
-      push_int(sb, disc)
-      push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
-      emit_label(sb, lbody)
-      push_str(sb, "\n")
+  loop {
+    match arm {
+      Some(armq) => {
+        am := deref(arm_p(armq))
+        lbody := nl
+        nl += 1
+        if am.wild != 0 {
+          push_str(sb, "  jmp ")
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+          hadwild = true
+        } else if folded {
+          ## nullary `None` (binds none) ⟺ `word == 0`; payload `Some` (binds one) ⟺ `word != 0`. The bind
+          ## count avoids resolving the parenthesized `Option(ptr(T))` span through `enum_decl_of`.
+          fnb := bind_count(am.binds_head)
+          if fnb == 0 { push_str(sb, "  cmpq $0, %r12\n  je ") }          ## None ⟺ null (0)
+          else { push_str(sb, "  cmpq $0, %r12\n  jne ") }                ## Some ⟺ nonzero pointer
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+        } else {
+          disc := variant_index(cx.decls, cx.src, si.es, si.el, am.vs, am.vl, deref(cx.mar))
+          push_str(sb, "  movq $")
+          push_int(sb, disc)
+          push_str(sb, ", %rax\n  cmpq %rax, %r12\n  je ")
+          emit_label(sb, lbody)
+          push_str(sb, "\n")
+        }
+        arm = am.next
+      }
+      None => { break }
     }
-    arm = am.next
   }
   if hadwild == false {
     push_str(sb, "  pushq $0\n  jmp ")
@@ -682,139 +702,144 @@ pub emit_enum_match := fn(head_in : usize, si : ScrutInfo, in out sb : strbuf::S
     push_str(sb, "\n")
   }
   ## body pass — bind payloads, emit, restore the slot map
-  mut arm2 := head
+  mut arm2 : Option(ptr(mut Arm)) = head
   mut lbody2 := lend + 1
-  while arm2 != 0 {
-    am2 := deref(arm_p(arm2))
-    emit_label(sb, lbody2)
-    push_str(sb, ":\n")
-    ## alias each payload binding name to its scrutinee payload slot (binding `i` → word
-    ## `base + 1 + i`), walking the arm's arena-linked `Bind` list. Pushed onto `cx.slots`
-    ## (last-match-wins lookup) for the body emission, then truncated back after.
-    saved := svec_len(cx.slots)
-    ## count the arm's payload bindings — a SINGLE binding whose (substituted) payload type is a
-    ## struct/enum is bound as an AGGREGATE local (ek 2/3) at the payload slot `base+1`, so a use
-    ## like `ty_eq(bt, …)` passes it BY REFERENCE (its slot address). A multi-binding variant
-    ## (`Bin(op,l,r)`) or a scalar payload keeps the one-word-per-binding scalar aliasing. Fixes
-    ## the `check`/sema crash: `Ok(bt : Ty)` was bound as a 1-word scalar → passed by-value to a
-    ## by-ref `Ty` param → deref of the tag value. The payload TYPE is resolved via the enum's
-    ## variant + the instance's type-args (`variant_payload_type`, generic-aware).
-    nbind := bind_count(am2.binds_head)
-    pty := variant_payload_type(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, deref(cx.mar))
-    mut agg_ek : u8 = 0
-    mut agg_ess := 0
-    mut agg_esl := 0
-    mut agg_estride := 1
-    mut agg_nel := 0
-    if nbind == 1 and pty.n != 0 {
-      if struct_decl_of(cx.decls, cx.src, base_type_name(cx.src, pty.s, pty.n).s, base_type_name(cx.src, pty.s, pty.n).n) >= 0 { agg_ek = 2 }
-      else if enum_decl_of(cx.decls, cx.src, base_type_name(cx.src, pty.s, pty.n).s, base_type_name(cx.src, pty.s, pty.n).n) >= 0 { agg_ek = 3 }   ## nested generic-instance payload resolves via BASE name; FULL span kept in the slot
-      else if str_at((cx.src + pty.s), pty.n) == "str" { agg_ek = 4 }   ## a str payload → 2-word {ptr, len} binding
-      else {
-        ## A single fixed-array payload is itself an indexable aggregate binding. Preserve its
-        ## element type/stride in the alias SlotEntry so `xs[i].a.arr[j]` reaches the existing
-        ## deep fixed-array place resolver. The enum payload parser keeps the complete `[T; N]`
-        ## span; no source-side type invention is needed here.
-        pae := array_elem_span(cx.src, pty.s, pty.n)
-        if pae.n != 0 {
-          pbn := base_type_name(cx.src, pae.s, pae.n)
-          if struct_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 {
-            panic("selfhost: a match binding rooted at an array payload currently requires a plain-struct element (`xs[i].a.arr[j]`); aggregate array leaves remain a fail-loud frontier")
-          }
-          agg_ek = 5
-          agg_ess = pae.s
-          agg_esl = pae.n
-          agg_estride = struct_words(cx.decls, cx.src, pbn.s, pbn.n, a)
-          agg_nel = parse_arr_len(cx.src, pty.s, pty.n)
-          if agg_nel == 0 or agg_estride == 0 {
-            panic("selfhost: a match binding array payload has no resolvable fixed length/element stride")
+  loop {
+    match arm2 {
+      Some(arm2q) => {
+        am2 := deref(arm_p(arm2q))
+        emit_label(sb, lbody2)
+        push_str(sb, ":\n")
+        ## alias each payload binding name to its scrutinee payload slot (binding `i` → word
+        ## `base + 1 + i`), walking the arm's arena-linked `Bind` list. Pushed onto `cx.slots`
+        ## (last-match-wins lookup) for the body emission, then truncated back after.
+        saved := svec_len(cx.slots)
+        ## count the arm's payload bindings — a SINGLE binding whose (substituted) payload type is a
+        ## struct/enum is bound as an AGGREGATE local (ek 2/3) at the payload slot `base+1`, so a use
+        ## like `ty_eq(bt, …)` passes it BY REFERENCE (its slot address). A multi-binding variant
+        ## (`Bin(op,l,r)`) or a scalar payload keeps the one-word-per-binding scalar aliasing. Fixes
+        ## the `check`/sema crash: `Ok(bt : Ty)` was bound as a 1-word scalar → passed by-value to a
+        ## by-ref `Ty` param → deref of the tag value. The payload TYPE is resolved via the enum's
+        ## variant + the instance's type-args (`variant_payload_type`, generic-aware).
+        nbind := bind_count(am2.binds_head)
+        pty := variant_payload_type(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, deref(cx.mar))
+        mut agg_ek : u8 = 0
+        mut agg_ess := 0
+        mut agg_esl := 0
+        mut agg_estride := 1
+        mut agg_nel := 0
+        if nbind == 1 and pty.n != 0 {
+          if struct_decl_of(cx.decls, cx.src, base_type_name(cx.src, pty.s, pty.n).s, base_type_name(cx.src, pty.s, pty.n).n) >= 0 { agg_ek = 2 }
+          else if enum_decl_of(cx.decls, cx.src, base_type_name(cx.src, pty.s, pty.n).s, base_type_name(cx.src, pty.s, pty.n).n) >= 0 { agg_ek = 3 }   ## nested generic-instance payload resolves via BASE name; FULL span kept in the slot
+          else if str_at((cx.src + pty.s), pty.n) == "str" { agg_ek = 4 }   ## a str payload → 2-word {ptr, len} binding
+          else {
+            ## A single fixed-array payload is itself an indexable aggregate binding. Preserve its
+            ## element type/stride in the alias SlotEntry so `xs[i].a.arr[j]` reaches the existing
+            ## deep fixed-array place resolver. The enum payload parser keeps the complete `[T; N]`
+            ## span; no source-side type invention is needed here.
+            pae := array_elem_span(cx.src, pty.s, pty.n)
+            if pae.n != 0 {
+              pbn := base_type_name(cx.src, pae.s, pae.n)
+              if struct_decl_of(cx.decls, cx.src, pbn.s, pbn.n) < 0 {
+                panic("selfhost: a match binding rooted at an array payload currently requires a plain-struct element (`xs[i].a.arr[j]`); aggregate array leaves remain a fail-loud frontier")
+              }
+              agg_ek = 5
+              agg_ess = pae.s
+              agg_esl = pae.n
+              agg_estride = struct_words(cx.decls, cx.src, pbn.s, pbn.n, a)
+              agg_nel = parse_arr_len(cx.src, pty.s, pty.n)
+              if agg_nel == 0 or agg_estride == 0 {
+                panic("selfhost: a match binding array payload has no resolvable fixed length/element stride")
+              }
+            }
           }
         }
-      }
-    }
-    mut bnd := am2.binds_head
-    mut bi := 0
-    loop {
-      match bnd {
-        Some(bndq) => {
-          bmns := bnd_ns(bndq)
-          bmnl := bnd_nl(bndq)
-          if agg_ek == 5 {
-            ## Match aliases point into the enum's already-reserved payload block rather than owning a
-            ## newly allocated array block. Mirror bind_array_slot's filler metadata solely for checked
-            ## bounds recovery (`agg_arr_fill_count`); the filler `off`s are intentionally irrelevant.
-            for fi in 0..(agg_nel * agg_estride) {
-              svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+        mut bnd := am2.binds_head
+        mut bi := 0
+        loop {
+          match bnd {
+            Some(bndq) => {
+              bmns := bnd_ns(bndq)
+              bmnl := bnd_nl(bndq)
+              if agg_ek == 5 {
+                ## Match aliases point into the enum's already-reserved payload block rather than owning a
+                ## newly allocated array block. Mirror bind_array_slot's filler metadata solely for checked
+                ## bounds recovery (`agg_arr_fill_count`); the filler `off`s are intentionally irrelevant.
+                for fi in 0..(agg_nel * agg_estride) {
+                  svec_push(deref(cx.slots), SlotEntry(ns = 0, nl = 0, off = 0, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
+                }
+                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = agg_ess, snl = agg_esl, ek = 5, estride = agg_estride, eek = 2, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+              } else if agg_ek != 0 {
+                ## aggregate payload (struct ek 2 / enum ek 3): the payload words live inline at
+                ## `base+1 …`; record the type span so a field/aggregate use resolves + is passed by-ref.
+                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+              } else if folded {
+                ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`si.base`) — the pointer occupies the
+                ## whole slot (no separate payload word), so bind `p` there as a scalar (ek 0) pointer value.
+                ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
+                ## still lowers as the two-word str view. eek 13 identifies this niche provenance; eek 6 is
+                ## reserved for the pre-existing call-derived pointer-to-view binding.
+                mut pview_s := 0
+                mut pview_l := 0
+                mut pview_eek : u8 = 0
+                pview := niche_str_ptr_span(cx.src, pty.s, pty.n)
+                if pview.n != 0 {
+                  pview_s = pview.s
+                  pview_l = pview.n
+                  pview_eek = 13
+                }
+                ## #768 — a `ptr(S)` / `ptr(E)` payload over a declared aggregate binds as the pointer-to-struct
+                ## (7) / pointer-to-enum (6) kind an annotated `p : ptr(S)` local gets. As a bare scalar its
+                ## pointee was unknown, so `deref(p).f` and `n := deref(p); n.f` read 0 with no diagnostic.
+                mut pkind : u8 = 0
+                if pview.n == 0 {
+                  ppt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+                  pkind = pointee_agg_kind(cx.decls, cx.src, ppt.s, ppt.n)
+                  if pkind != 0 { pview_s = ppt.s; pview_l = ppt.n }
+                }
+                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = pview_s, snl = pview_l, ek = pkind, estride = 1, eek = pview_eek, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+              } else {
+                ## #852 — a component that is itself a niche-folded `Option(ptr(T))` binds as that one-word Option
+                ## (ek 3). #858 — a component typed `ptr(S)` / `ptr(E)` (a one-payload `B(q)` or any component of
+                ## `D(k, q)`) is the same pointer-to-struct / pointer-to-enum local as the folded `Some(p)` above;
+                ## bound untyped, `deref(q).f` had no pointee and read 0.
+                mpf := payload_folded_ty(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, usize(bi), deref(cx.mar))
+                bpt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
+                mut bkind : u8 = 0
+                mut bks := 0
+                mut bkl := 0
+                if mpf.n != 0 { bkind = 3; bks = mpf.s; bkl = mpf.n }
+                else {
+                  bkind = pointee_agg_kind(cx.decls, cx.src, bpt.s, bpt.n)
+                  if bkind != 0 { bks = bpt.s; bkl = bpt.n }
+                }
+                svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = bks, snl = bkl, ek = bkind, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+              }
+              bi += 1
+              bnd = bnd_next(bndq)
             }
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = agg_ess, snl = agg_esl, ek = 5, estride = agg_estride, eek = 2, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
-          } else if agg_ek != 0 {
-            ## aggregate payload (struct ek 2 / enum ek 3): the payload words live inline at
-            ## `base+1 …`; record the type span so a field/aggregate use resolves + is passed by-ref.
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = pty.s, snl = pty.n, ek = agg_ek, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
-          } else if folded {
-            ## §8 `@niche`: the folded `Some(p)` payload IS word 0 (`si.base`) — the pointer occupies the
-            ## whole slot (no separate payload word), so bind `p` there as a scalar (ek 0) pointer value.
-            ## §6.2/§7: when that scalar is ptr(str), retain the declared pointee view span so deref(p)
-            ## still lowers as the two-word str view. eek 13 identifies this niche provenance; eek 6 is
-            ## reserved for the pre-existing call-derived pointer-to-view binding.
-            mut pview_s := 0
-            mut pview_l := 0
-            mut pview_eek : u8 = 0
-            pview := niche_str_ptr_span(cx.src, pty.s, pty.n)
-            if pview.n != 0 {
-              pview_s = pview.s
-              pview_l = pview.n
-              pview_eek = 13
-            }
-            ## #768 — a `ptr(S)` / `ptr(E)` payload over a declared aggregate binds as the pointer-to-struct
-            ## (7) / pointer-to-enum (6) kind an annotated `p : ptr(S)` local gets. As a bare scalar its
-            ## pointee was unknown, so `deref(p).f` and `n := deref(p); n.f` read 0 with no diagnostic.
-            mut pkind : u8 = 0
-            if pview.n == 0 {
-              ppt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
-              pkind = pointee_agg_kind(cx.decls, cx.src, ppt.s, ppt.n)
-              if pkind != 0 { pview_s = ppt.s; pview_l = ppt.n }
-            }
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base, sns = pview_s, snl = pview_l, ek = pkind, estride = 1, eek = pview_eek, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
-          } else {
-            ## #852 — a component that is itself a niche-folded `Option(ptr(T))` binds as that one-word Option
-            ## (ek 3). #858 — a component typed `ptr(S)` / `ptr(E)` (a one-payload `B(q)` or any component of
-            ## `D(k, q)`) is the same pointer-to-struct / pointer-to-enum local as the folded `Some(p)` above;
-            ## bound untyped, `deref(q).f` had no pointee and read 0.
-            mpf := payload_folded_ty(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, usize(bi), deref(cx.mar))
-            bpt := variant_bind_pointee(cx.decls, cx.src, si.es, si.el, am2.vs, am2.vl, nbind, bi, deref(cx.mar))
-            mut bkind : u8 = 0
-            mut bks := 0
-            mut bkl := 0
-            if mpf.n != 0 { bkind = 3; bks = mpf.s; bkl = mpf.n }
-            else {
-              bkind = pointee_agg_kind(cx.decls, cx.src, bpt.s, bpt.n)
-              if bkind != 0 { bks = bpt.s; bkl = bpt.n }
-            }
-            svec_push(deref(cx.slots), SlotEntry(ns = bmns, nl = bmnl, off = si.base - 1 - bi, sns = bks, snl = bkl, ek = bkind, estride = 1, eek = 0, is_ref = false, tmod_s = owner_type_s, tmod_l = owner_type_l))
+            None => { break }
           }
-          bi += 1
-          bnd = bnd_next(bndq)
         }
-        None => { break }
+        ov_cvs := cx.cf_curvar_s; ov_cvl := cx.cf_curvar_l
+        if am2.wild == 0 { cx.cf_curvar_s = am2.vs; cx.cf_curvar_l = am2.vl }
+        cx.mdepth = cx.mdepth + 1                            ## a nested match uses a higher scratch level
+        if body_type_swap {
+          if entry_type_on { lower_layout::set_type_ref_module(entry_type_s, entry_type_l, ROOT_MOD_S, ROOT_MOD_L) } else { lower_layout::clear_type_ref_module() }
+        }
+        emit_gas(am2.body, sb, cx, a, nl)   ## body — leaves its value on the stack
+        if body_type_swap { lower_layout::set_type_ref_module(owner_type_s, owner_type_l, ROOT_MOD_S, ROOT_MOD_L) }
+        cx.mdepth = cx.mdepth - 1
+        cx.cf_curvar_s = ov_cvs; cx.cf_curvar_l = ov_cvl
+        svec_truncate(deref(cx.slots), saved)
+        push_str(sb, "  jmp ")
+        emit_label(sb, lend)
+        push_str(sb, "\n")
+        lbody2 += 1
+        arm2 = am2.next
       }
+      None => { break }
     }
-    ov_cvs := cx.cf_curvar_s; ov_cvl := cx.cf_curvar_l
-    if am2.wild == 0 { cx.cf_curvar_s = am2.vs; cx.cf_curvar_l = am2.vl }
-    cx.mdepth = cx.mdepth + 1                            ## a nested match uses a higher scratch level
-    if body_type_swap {
-      if entry_type_on { lower_layout::set_type_ref_module(entry_type_s, entry_type_l, ROOT_MOD_S, ROOT_MOD_L) } else { lower_layout::clear_type_ref_module() }
-    }
-    emit_gas(am2.body, sb, cx, a, nl)   ## body — leaves its value on the stack
-    if body_type_swap { lower_layout::set_type_ref_module(owner_type_s, owner_type_l, ROOT_MOD_S, ROOT_MOD_L) }
-    cx.mdepth = cx.mdepth - 1
-    cx.cf_curvar_s = ov_cvs; cx.cf_curvar_l = ov_cvl
-    svec_truncate(deref(cx.slots), saved)
-    push_str(sb, "  jmp ")
-    emit_label(sb, lend)
-    push_str(sb, "\n")
-    lbody2 += 1
-    arm2 = am2.next
   }
   emit_label(sb, lend)
   push_str(sb, ":\n")
