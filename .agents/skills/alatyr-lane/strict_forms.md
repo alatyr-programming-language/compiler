@@ -25,7 +25,7 @@ issue in the marker's reason. Do not quietly route around it.
 
 | § | form | defect class it retires | held by |
 |---|---|---|---|
-| 1 | absence is `Option(ptr(T))` walked with `match`, not a sentinel | 0 as null, −1 as "not found", 255 as "poisoned" | `strict_forms_check.sh` `null` (typed + lexical); the transitional marker names its blocker (#809, #792) |
+| 1 | absence is `Option(ptr(T))` walked with `match`, not a sentinel | 0 as null, −1 as "not found", 255 as "poisoned" | `strict_forms_check.sh` `null` (typed + lexical); the transitional marker names an open blocker (the historical #809 and #792 are closed) |
 | 2 | a kind is an enum, not an integer; flags are not packed into it | #583 (134 literal `.tag` sites), #626, `+128` mut flag | `strict_forms_check.sh` `kind-literal` |
 | 3 | decide with an exhaustive `match` on the value | #544 (249 blind wildcard arms), #716, #464 | `wildcard_arm_check.sh`; the rest by review |
 | 4 | one decision, one place | the #540 family, #539 | `idiom_gate.sh` (for the shapes it knows) |

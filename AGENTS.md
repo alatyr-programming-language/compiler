@@ -115,10 +115,11 @@ around it.
    "poisoned" (#659, #681). The target form is `Option(ptr(T))` (one word, niche-folded) walked with
    `match`, or `Option(u64)`. An explicit `unchecked bitcast(usize, p) != 0` only makes the null
    visible. It is a transitional form, allowed only where the typed form cannot be compiled yet, and
-   its `null-ok` reason names the blocking issue: today #809 (a direct `match` over such a field
-   through `deref(p)` or an array element) and #792 (an enum or `Option` field read through
-   `deref(p)`). The tree and seed 0.2.5 compile the walk itself. Held by the `null` rule of
-   `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`) forms together.
+   its `null-ok` reason names an OPEN blocking issue. The two historical blockers, #809 (a direct
+   `match` over such a field through `deref(p)` or an array element) and #792 (an enum or `Option`
+   field read through `deref(p)`), are closed, so a new sentinel needs a newly filed blocker. Held by
+   the `null` rule of `scripts/strict_forms_check.sh`, which counts explicit and implicit (`p == 0`)
+   forms together.
 2. **A kind is an enum, and flags are separate fields.** Do not compare a `kind`/`tag` with a literal,
    and do not pack a flag into a tag byte (`+128`) (#583, #626). Held by `kind-literal`.
 3. **Decide with an exhaustive `match` on the value.** Never use `_` over an enum (#544, #464). Do not
@@ -126,7 +127,8 @@ around it.
 4. **One decision, one place.** `grep` for the question before you answer it again (#540, #539). Held,
    for the shapes it knows, by `scripts/idiom_gate.sh`.
 5. **Width and signedness are spelled.** Annotate a local before `/`, `%` or an ordering. Never infer
-   them from the form of an operand (#546, #608, #764–#766). Held by review.
+   them from the form of an operand (#546, #608, #764–#766). **Review-only** today; the shared IR
+   (docs/ir.md §3.8) makes it structural by taking both from sema's side table.
 6. **`unchecked` is explicit and justified.** No implicit `usize` ↔ `ptr(T)` (#529, Types §4.3). Held by
    `unchecked` (marker `unchecked-ok`) and the typed `ptrint` rule (no marker: write it explicitly).
 7. **Bind a `?` before using its value** (`x := f()?`), never `f()?.a` or `g(f()?)` (#752). Seed
@@ -140,7 +142,7 @@ around it.
    walkers). Held by the checker at a `deref`; the typed-handle proposal is in the skill file.
 10. **A quantity with an identity is a `brand`**, not a bare number: a byte offset, a word count and a
     slot index get distinct brands, converted by named functions (#167, #760, #299). The checker
-    refuses a sibling or raw mix since #299. Choosing a brand for a new quantity is held by review.
+    refuses a sibling or raw mix since #299. Choosing a brand for a new quantity is **review-only**.
 
 ## Work reaching `main`
 
