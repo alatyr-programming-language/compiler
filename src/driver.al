@@ -6424,7 +6424,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   }
   ## `docs/ir.md` slice 0a: the shared IR's builder over the same front half the twins run. It emits no
   ## code — it reports, per function, what the builder answered (`ir::report_program`).
-  if backend == 3 { kir := ir::report_program(ptr(ed), out, base, ptr(pv), ptr(src_off), ptr(src_len)) }
+  if backend == 3 { kir := ir::report_program(ptr(ed), out, base, ptr(pv), ptr(src_off), ptr(src_len), tar) }
   out
 }
 

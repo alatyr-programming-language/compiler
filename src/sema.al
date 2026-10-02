@@ -8269,9 +8269,58 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
   r := check_expr_core(e, decls, upto, src, a, locals, nloc)
   if ir::sty_on() {
     match r {
-      Result::Ok(t) => { sema_vty_record(e, t, decls, src) }
+      Result::Ok(t) => { sema_vty_record(e, t, decls, src); sema_vty_var(e, locals, nloc, src, decls) }
       Result::Err(x) => {}
     }
+  }
+  r
+}
+## The declaration offset of the innermost local named `[s, s+n)`, when one is in scope.
+sema_vty_local_ns := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), s : usize, n : usize) -> Option(u64) {
+  mut found : Option(u64) = Option(u64).None
+  mut i : usize = 0
+  while i < nloc {
+    l := lvec_at(locals, i)
+    if streq(src, l.ns, l.nl, s, n) { found = Option(u64).Some(u64(l.ns)) }
+    i += 1
+  }
+  found
+}
+## The recorded type of the innermost local named `[s, s+n)`: its declaration's binding record.
+sema_vty_local := fn(locals : ptr(LVec), nloc : usize, src : ptr(u8), s : usize, n : usize) -> ir::VTy {
+  lo : Option(u64) = sema_vty_local_ns(locals, nloc, src, s, n)
+  match lo { Some(dns) => { ir::sty_bind_get(usize(dns)) }; None => { ir::vty_unknown() } }
+}
+## A use of a name whose `Ty` names no type takes the type recorded for its declaration: the innermost
+## local of that name (`ir::sty_bind_put`, as `local_lookup` resolves it), and with no local of that
+## name, the module-level value binding (`sema_vty_global`).
+sema_vty_var := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, src : ptr(u8), decls : ptr(rt::Vec)) {
+  vs := expr_var_span(e)
+  if vs.n == 0 { return }
+  cur : ir::VTy = ir::sty_get(e)
+  if ir::vty_known(cur) { return }
+  lo : Option(u64) = sema_vty_local_ns(locals, nloc, src, vs.s, vs.n)
+  mut bt : ir::VTy = ir::vty_unknown()
+  match lo { Some(dns) => { bt = ir::sty_bind_get(usize(dns)) }; None => { bt = sema_vty_global(decls, src, vs.s, vs.n) } }
+  if ir::vty_known(bt) { ir::sty_put(e, bt) }
+}
+## docs/ir-slice-1.md §2 — the value type of the module-level value binding named `[s, s+n)`: its
+## annotation, else its initializer's record, where a literal initializer takes the documented default
+## `i64` (Types §9.1, as an unannotated local's does).
+sema_vty_global := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize) -> ir::VTy {
+  ann := global_type_span(decls, src, s, n)
+  if ann.n != 0 { return sema_vty_name(src, ann.s, ann.n, decls) }
+  cnt := rt::vec_len(deref(decls))
+  mut r : ir::VTy = ir::vty_unknown()
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    ## null-ok: Decl.value — a declaration with no initializer carries a null value (ast.al; not an Option).
+    if not d.is_fn and unchecked bitcast(usize, d.value) != 0 and streq(src, d.name_start, d.name_len, s, n) {
+      r = ir::sty_get(d.value)
+      if ir::vty_is_lit(r) { r = ir::vty_s(8) }
+    }
+    i += 1
   }
   r
 }
@@ -8279,9 +8328,65 @@ pub check_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : pt
 sema_vty_record := fn(e : ptr(Expr), t : Ty, decls : ptr(rt::Vec), src : ptr(u8)) {
   mut vt : ir::VTy = ir::vty_unknown()
   if t.nl != 0 { vt = sema_vty_name(src, t.ns, t.nl, decls) }
+  if not ir::vty_known(vt) { vt = sema_vty_kind(ty_kind(t)) }
   if not ir::vty_known(vt) { vt = sema_vty_shape(e, decls, src) }
   ir::sty_put(e, vt)
   if sema_vty_site(e, src) { ir::sign_site(e) }
+  match deref(e) {
+    Expr::Call(cs, cl, na, ah) => { sema_vty_call_args(cs, cl, na, ah, decls, src) }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+}
+## docs/ir-slice-1.md §2 — each parameter's declared type is the context of a literal argument
+## (Types §2.3). Only for a callee sema resolves to ONE function (it models no overload resolution); the
+## arguments were typed before the call is recorded, so their literal records are rewritten here.
+sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : ptr(mut Arg), decls : ptr(rt::Vec), src : ptr(u8)) {
+  ## OP-6: a shift or rotation's count is a `usize` (`op(in v : T, in n : usize) -> T`, Stdlib appendix
+  ## §4), so a literal count takes that type. `na == 2` is the parser's count of the two links.
+  cnm := str_at((src + cs), cl)
+  if na == 2 and (cnm == "shl" or cnm == "shr" or cnm == "rotl" or cnm == "rotr") {
+    sa0 := deref(arg_p(ah))
+    sa1 := deref(arg_p(sa0.next))
+    sema_vty_push(sa1.e, ir::vty_u(8))
+    return
+  }
+  upto := rt::vec_len(deref(decls))
+  if cl == 0 or callee_fn_name_count(decls, upto, src, cs, cl) != 1 { return }
+  mut i : usize = 0
+  while i < upto {
+    d := deref(decl_get(decls, i))
+    if d.is_fn and name_matches(src, d.name_start, d.name_len, cs, cl) {
+      mut pp := d.params_head
+      mut g := ah
+      ## null-ok: Arg.next — an argument list ends in a null link (ast.al "0 = end").
+      while unchecked bitcast(usize, g) != 0 {
+        ga := deref(arg_p(g))
+        match pp {
+          Some(pq) => {
+            pm := deref(param_p(pq))
+            sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
+            pp = pm.next
+          }
+          None => { return }
+        }
+        g = ga.next
+      }
+      return
+    }
+    i += 1
+  }
+}
+## The value class a `Ty`'s kind alone decides: an aggregate (Types §3.2: never an IR value) or a
+## pointer. A scalar kind says nothing about width or signedness, so it is left to the name and the shape.
+sema_vty_kind := fn(k : TyKind) -> ir::VTy {
+  match k {
+    TyStruct | TyEnum | TyStr | TyArray | TyHiddenStruct | TyHiddenEnum | TyTupleMark => { ir::vty_agg() }
+    TyPtr => { ir::vty_ptr() }
+    TyUnknown | TyInt | TyBool | TyBrand | TyWrapper | TyOther => { ir::vty_unknown() }
+  }
 }
 ## The kernel value type a type NAME `[s, s+n)` denotes: a scalar by its name, a brand by its
 ## underlying type (one level, Types §4.2), anything else unknown to this slice.
@@ -8292,7 +8397,7 @@ sema_vty_name := fn(src : ptr(u8), s : usize, n : usize, decls : ptr(rt::Vec)) -
   if bu.n != 0 { return sema_vty_scalar(src, bu.s, bu.n) }
   sv
 }
-sema_vty_scalar := fn(src : ptr(u8), s : usize, n : usize) -> ir::VTy {
+pub sema_vty_scalar := fn(src : ptr(u8), s : usize, n : usize) -> ir::VTy {
   bn := base_type_name(src, s, n)
   if bn.n == 0 { return ir::vty_unknown() }
   tx := str_at((src + bn.s), bn.n)
@@ -8320,10 +8425,54 @@ sema_vty_shape := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::
     Expr::Bitcast(inner, ts, tl) => { sema_vty_name(src, ts, tl, decls) }
     Expr::Call(cs, cl, na, ah) => { sema_vty_call(e, cs, cl, na, ah, decls, src) }
     Expr::If(c, th, el) => { sema_vty_join(th, el) }
+    Expr::Loop(b) => { sema_vty_breaks(b, 0) }
     Expr::Var | Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref
       | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField
-      | Expr::Lambda | Expr::FnRef | Expr::Loop => { ir::vty_unknown() }
+      | Expr::Lambda | Expr::FnRef => { ir::vty_unknown() }
   }
+}
+## docs/ir-slice-1.md §2 — a value `loop`'s type is the type of the values its `break`s carry: the first
+## `break v` that targets it (loop depth `depth` from the statement list `h`) whose value sema typed.
+sema_vty_breaks := fn(h : ptr(mut Stmt), depth : usize) -> ir::VTy {
+  mut s := h
+  ## null-ok: Stmt.next — the AST's statement lists end in a null link (ast.al "0 = end").
+  while unchecked bitcast(usize, s) != 0 {
+    st := deref(stmt_p(Stmt, s))
+    mut r : ir::VTy = ir::vty_unknown()
+    match st {
+      Stmt::Break(bv, bd, nx) => {
+        ## null-ok: Stmt::Break — a valueless `break` carries a null value expression (ast.al).
+        if bd == depth and unchecked bitcast(usize, bv) != 0 { r = sema_vty_child(bv) }
+        s = nx
+      }
+      Stmt::If(c, th, el, nx) => { r = sema_vty_breaks(th, depth); if not ir::vty_known(r) { r = sema_vty_breaks(el, depth) }; s = nx }
+      Stmt::Unchecked(b, nx) => { r = sema_vty_breaks(b, depth); s = nx }
+      Stmt::While(c, b, nx) => { r = sema_vty_breaks(b, depth + 1); s = nx }
+      Stmt::Loop(b, nx) => { r = sema_vty_breaks(b, depth + 1); s = nx }
+      Stmt::For(fns, fnl, lo, hi, b, nx) => { r = sema_vty_breaks(b, depth + 1); s = nx }
+      Stmt::Match(sc, ah, nx) => {
+        mut arm := ah
+        while arm != 0 and not ir::vty_known(r) { am := deref(arm_p(arm)); r = sema_vty_breaks(am.body_stmts, depth); arm = am.next }
+        s = nx
+      }
+      Stmt::Assign(ns, nl, v, nx) => { s = nx }
+      Stmt::FieldAssign(bns, bnl, fns2, fnl2, fv, nx) => { s = nx }
+      Stmt::Return(rv, nx) => { s = nx }
+      Stmt::DerefAssign(p, v2, nx) => { s = nx }
+      Stmt::IndexAssign(b2, i2, v3, nx) => { s = nx }
+      Stmt::IndexFieldAssign(b3, i3, fs, fl, v4, nx) => { s = nx }
+      Stmt::FieldPathAssign(pl, pv, nx) => { s = nx }
+      Stmt::Continue(cd, nx) => { s = nx }
+      Stmt::ExprStmt(e, nx) => { s = nx }
+      Stmt::CompIf(c2, th2, el2, nx) => { s = nx }
+      Stmt::CompFor(vs, vl, iv, b4, nx) => { s = nx }
+      Stmt::CompMatch(sc2, ah2, nx) => { s = nx }
+      Stmt::CompForRange(vs2, vl2, lo2, hi2, b5, nx) => { s = nx }
+      Stmt::AllocWith(ae, b6, nx) => { s = nx }
+    }
+    if ir::vty_known(r) { return r }
+  }
+  ir::vty_unknown()
 }
 ## A child's record, `VcUnknown` when sema never typed it.
 sema_vty_child := fn(c : ptr(Expr)) -> ir::VTy {
@@ -8350,7 +8499,12 @@ sema_vty_bin := fn(op : u8, l : ptr(Expr), r : ptr(Expr)) -> ir::VTy {
   } else if ir::vty_is_lit(lt) and ir::vty_is_lit(rt0) {
     res = ir::vty_lit()
   }
-  if sema_vty_op_is_bool(op) { return ir::vty_bool() }
+  ## A comparison yields `bool`, so nothing outside gives its literal operands a type: with no context
+  ## they take the documented default, the native signed integer (Types §9.1).
+  if sema_vty_op_is_bool(op) {
+    if ir::vty_is_lit(lt) and ir::vty_is_lit(rt0) { sema_vty_push(l, ir::vty_s(8)); sema_vty_push(r, ir::vty_s(8)) }
+    return ir::vty_bool()
+  }
   res
 }
 ## Both arms of a value `if` have one type; a literal arm takes the other's.
@@ -10478,7 +10632,12 @@ lbv_known_tag := fn(e : ptr(Expr), decls : ptr(rt::Vec), upto : usize, src : ptr
     mut tag : TyKind = raw.ty.kind
     if kind_is_hidden_struct(tag) { tag = TyKind.TyStruct }
     if kind_is_hidden_enum(tag) { tag = TyKind.TyEnum }
-    if raw.found and not raw.poison { return tag }
+    if raw.found and not raw.poison {
+      ## docs/ir-slice-1.md §2 — the break value is typed here and nowhere else (the ordinary checker
+      ## does not visit it), so its record is written here: a value `loop`'s type is read from it.
+      if ir::sty_on() { sema_vty_record(e, raw.ty, decls, src) }
+      return tag
+    }
   }
   rv := check_expr(e, decls, upto, src, a, locals, nloc)
   match rv {
@@ -11657,8 +11816,23 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
         ## aggregate copy outrun the destination's proven layout.
         tv := check_expr_da_mode(v, decls, upto, src, a, locals, cnt, da,
           not assign_is_reassign(src, ns, nl) and ann.n == 0)?
-        ## docs/ir.md §3.8 — the annotation is the literal-only initializer's context (Types §2.3).
+        ## docs/ir.md §3.8 — the annotation is the literal-only initializer's context (Types §2.3); a
+        ## reassignment's context is the assigned local's declared type (docs/ir-slice-1.md §2).
         sema_vty_ctx(v, ann.s, ann.n, decls, src)
+        if ir::sty_on() and assign_is_reassign(src, ns, nl) {
+          rbt : ir::VTy = sema_vty_local(locals, cnt, src, ns, nl)
+          if ir::vty_is_int(rbt) { sema_vty_push(v, rbt) }
+        }
+        ## Types §9.1 — with NO context (an unannotated declaration), an integer literal takes the
+        ## documented default, the target's native signed integer: `i64` on every target this compiler
+        ## emits (x86_64, aarch64, riscv64, and wasm, whose kernel words are i64).
+        if ir::sty_on() and not assign_is_reassign(src, ns, nl) and ann.n == 0 { sema_vty_push(v, ir::vty_s(8)) }
+        ## …and the binding's own type, read by each later use of the name (`sema_vty_var`).
+        if ir::sty_on() and not assign_is_reassign(src, ns, nl) {
+          mut bvt : ir::VTy = ir::sty_get(v)
+          if ann.n != 0 { bvt = sema_vty_name(src, ann.s, ann.n, decls) }
+          ir::sty_bind_put(ns, bvt)
+        }
         ## Comptime §2.2 — the bounded worker slice admits only closed scalar literals/arithmetic and
         ## nullary user-enum values. The lower erases such bindings, so reject a runtime-dependent or
         ## otherwise unsupported initializer before it can be mistaken for a normal local slot.
@@ -12466,6 +12640,8 @@ check_stmts := fn(head : ptr(mut Stmt), decls : ptr(rt::Vec), upto : usize, src 
           thi := check_expr_da(fhi, decls, upto, src, a, locals, cnt, da)?
           if not kind_is_unknown(tlo.kind) and not kind_is_int(tlo.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(flo, a), 0)) }
           if not kind_is_unknown(thi.kind) and not kind_is_int(thi.kind) { return Result(usize, CheckErr).Err(mismatch_err(s_of(fhi, a), 0)) }
+          ## docs/ir-slice-1.md §2 — the two bounds have one type: a literal bound takes the other's.
+          if ir::sty_on() { rj : ir::VTy = sema_vty_join(flo, fhi); ir::sty_bind_put(fns, rj) }
           vtag = TyKind.TyInt
         } else {
           tf := check_expr_da(flo, decls, upto, src, a, locals, cnt, da)?
