@@ -122,6 +122,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+## 0.2.10 — 2026-10-02
+
+- **Seed promotion; no emitted byte moves.** The frozen `seed/alatyr` advances from 0.2.9 to 0.2.10 so
+  it carries #865's fix, which the AST Arm list migration (#529) needs: the 0.2.9 seed refuses a local
+  annotated `Option(ptr(T))` that is initialised from a payload component. Seed, Stage1, Stage2 and
+  Stage3 are identical in GAS (1 452 193 lines) and Stage1..3 in the binary, all answering
+  `alatyr 0.2.10`; `seed/VERSION` records the hashes.
 - **A local annotated `Option(ptr(T))` may be initialized from a multi-payload variant's pattern
   binding.** `mut lp : Option(ptr(mut P)) = h` over `Lam(a, h, b) => …` was refused with "cannot see the
   scrutinee's enum type" when `lp` was matched, even with the annotation: the local was sized from its
