@@ -129,8 +129,8 @@ analyse() {
     printf '  %-8s %9s %8s %8s %10s %10s %14s\n' "$lbl" "$nf" "$nb" "$nn" "$((nn - ng))" "$ng" "$nv"
   done
   echo "  corpus programs: $ncorpus (refused-by-check $refused, failed $failed); lib rc=$lib_rc src rc=$src_rc"
-  echo "  (slice 1b: the builder is target-independent and no selector consumes a built function yet,"
-  echo "   so one \"built\" column stands for all four targets; the per-target columns arrive with 1c)"
+  echo "  (the builder is target-independent: \"built\" counts for every target. From slice 1c each twin"
+  echo "   selects a built function from its IR unless its selector refuses an op; see docs/ir-slice-1.md §4)"
   if [ -s "$W/corpus.failed" ]; then
     echo "  failed corpus runs:"; sed 's/^/    /' "$W/corpus.failed"
   fi

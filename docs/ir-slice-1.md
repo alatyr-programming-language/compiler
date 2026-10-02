@@ -111,6 +111,13 @@ One child module per target, as §6 names them: `src/aarch64/isel.al`, `src/risc
 3. **1c, the selectors, plus the wasm exit byte.** Intentional twin transitions: the slice's expected
    rows from §7.2 (`unchecked_narrow_shift_wrap`, the MISSING-TRAP and LOUD rows, the scalar-CF traps,
    value-`loop`) and #764/#766/#777 shapes. Each moved row is predicted in advance (§7.1 rule 4).
+   *Landed as built (1c):* the hook is `ir::select_input` in each `emit_*_program` loop. A selector
+   may refuse a function it cannot select and leave it to the legacy emitter: wasm refuses a member of
+   a driver-disambiguated overload set, and all three refuse an `addr @g` of a global that has no
+   one-word scalar cell, more than 8 parameters, or an op outside slice 1. The wasm `& 255` exit byte
+   was already on `main` (`$proc_exit`, #683), so 1c moves no row for it. Twin traps carry
+   `<kind> <file>:<line>:<col>`. The builder also folds literal-only `+ - *` exactly (Types §2.3)
+   instead of typing each literal at the context's type.
 4. **1d, `scripts/ir_diff.sh` and the x86 dev selector.** Reporting only. It proves the builder means
    what the reference lowering means before the twins' rows are trusted. It may land before 1c and
    then gates it.

@@ -25,7 +25,7 @@
 ## reason.
 (Arg, Arm, Decl, Expr, Param, Stmt) := ast
 ## The slice-1 builder, a child module (`src/ir/build.al`), imported by bare name.
-(build_one, BuildOut, BuildWhy, NyWhy, nywhy_is_gap, nywhy_name) := build
+(build_one, BuildOut, BuildWhy, NyWhy, nywhy_is_gap, nywhy_name, ast_op_cc) := build
 ## The golden builds `ir --self-test` runs (`src/ir/golden.al`).
 (golden_run) := golden
 arg_p := ast::arg_p
@@ -124,7 +124,7 @@ mode_name := fn(m : Mode) -> str {
 mode_is_none := fn(m : Mode) -> bool {
   match m { MdNone => { true }; MdWrap | MdChk | MdHw => { false } }
 }
-mode_is_chk := fn(m : Mode) -> bool {
+pub mode_is_chk := fn(m : Mode) -> bool {
   match m { MdChk => { true }; MdWrap | MdHw | MdNone => { false } }
 }
 mode_is_hw := fn(m : Mode) -> bool {
@@ -409,6 +409,21 @@ pub wb_push := fn(w : ptr(mut WBuf), in out a : rt::Arena, x : usize) -> usize {
   n
 }
 
+## Drop the last element (a selector's region stack). Answers false on an empty buffer.
+pub wb_pop := fn(w : ptr(mut WBuf)) -> bool {
+  n := wb_len(w)
+  if n == 0 { return false }
+  deref(w).len = n - 1
+  true
+}
+## Replace the last element. Answers false on an empty buffer.
+pub wb_set_top := fn(w : ptr(mut WBuf), x : usize) -> bool {
+  wv : WBuf = deref(w)
+  if wv.len == 0 { return false }
+  deref(word_at(wv.data, wv.len - 1)) = x
+  true
+}
+
 ## ───────────────────────────── the IR records ─────────────────────────────
 ##
 ## Every record is read back by COPYING it into an annotated local first (`it : IrInst = deref(ip)`), and
@@ -528,14 +543,14 @@ pub prog_add := fn(p : IrProg, in out a : rt::Arena, f : ptr(mut IrFn)) -> FnId 
 ## Record reads, one copy-then-read each (#792, see the band comment above).
 pub fn_nparams := fn(f : ptr(mut IrFn)) -> usize { fv : IrFn = deref(f); fv.nparams }
 pub fn_has_ret := fn(f : ptr(mut IrFn)) -> bool { fv : IrFn = deref(f); fv.has_ret }
-fn_ret_ty := fn(f : ptr(mut IrFn)) -> Kty { fv : IrFn = deref(f); fv.ret_ty }
-fn_ret_sg := fn(f : ptr(mut IrFn)) -> Sgn { fv : IrFn = deref(f); fv.ret_sg }
+pub fn_ret_ty := fn(f : ptr(mut IrFn)) -> Kty { fv : IrFn = deref(f); fv.ret_ty }
+pub fn_ret_sg := fn(f : ptr(mut IrFn)) -> Sgn { fv : IrFn = deref(f); fv.ret_sg }
 fn_nlabels := fn(f : ptr(mut IrFn)) -> usize { fv : IrFn = deref(f); fv.nlabels }
 fn_vregs := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.vregs }
 fn_frames := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.frames }
 fn_insts := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.insts }
 fn_pool := fn(f : ptr(mut IrFn)) -> ptr(mut WBuf) { fv : IrFn = deref(f); fv.pool }
-irfn_name := fn(f : ptr(mut IrFn)) -> str { fv : IrFn = deref(f); str_at(fv.name_p, fv.name_n) }
+pub irfn_name := fn(f : ptr(mut IrFn)) -> str { fv : IrFn = deref(f); str_at(fv.name_p, fv.name_n) }
 
 ## Declare a new vreg of type `ty`/`sg` and return its handle.
 pub new_vreg := fn(f : ptr(mut IrFn), in out a : rt::Arena, ty : Kty, sg : Sgn) -> VRegId {
@@ -566,39 +581,39 @@ pub new_label := fn(f : ptr(mut IrFn)) -> LabelId {
   LabelId(l)
 }
 pub pool_push := fn(f : ptr(mut IrFn), in out a : rt::Arena, x : usize) -> usize { wb_push(fn_pool(f), a, x) }
-pool_get := fn(f : ptr(mut IrFn), i : usize) -> usize { wb_get(fn_pool(f), i) }
+pub pool_get := fn(f : ptr(mut IrFn), i : usize) -> usize { wb_get(fn_pool(f), i) }
 pool_len := fn(f : ptr(mut IrFn)) -> usize { wb_len(fn_pool(f)) }
 
 pub fn_ninst := fn(f : ptr(mut IrFn)) -> usize { wb_len(fn_insts(f)) }
 pub fn_inst := fn(f : ptr(mut IrFn), i : usize) -> ptr(mut IrInst) { inst_ptr(wb_get(fn_insts(f), i)) }
 pub fn_nvregs := fn(f : ptr(mut IrFn)) -> usize { wb_len(fn_vregs(f)) }
 fn_nframes := fn(f : ptr(mut IrFn)) -> usize { wb_len(fn_frames(f)) }
-vreg_ty := fn(f : ptr(mut IrFn), v : usize) -> Kty { vi : VInfo = deref(vinfo_ptr(wb_get(fn_vregs(f), v))); vi.ty }
-vreg_sg := fn(f : ptr(mut IrFn), v : usize) -> Sgn { vi : VInfo = deref(vinfo_ptr(wb_get(fn_vregs(f), v))); vi.sg }
+pub vreg_ty := fn(f : ptr(mut IrFn), v : usize) -> Kty { vi : VInfo = deref(vinfo_ptr(wb_get(fn_vregs(f), v))); vi.ty }
+pub vreg_sg := fn(f : ptr(mut IrFn), v : usize) -> Sgn { vi : VInfo = deref(vinfo_ptr(wb_get(fn_vregs(f), v))); vi.sg }
 frame_bytes := fn(f : ptr(mut IrFn), k : usize) -> usize { fr : Frame = deref(frame_ptr(wb_get(fn_frames(f), k))); fr.size }
 frame_align_of := fn(f : ptr(mut IrFn), k : usize) -> usize { fr : Frame = deref(frame_ptr(wb_get(fn_frames(f), k))); fr.align }
 
 ## Instruction field reads (#792: copy first, then read; the call is what a `match` scrutinizes).
-i_op := fn(ip : ptr(mut IrInst)) -> Op { it : IrInst = deref(ip); it.op }
-i_ty := fn(ip : ptr(mut IrInst)) -> Kty { it : IrInst = deref(ip); it.ty }
-i_sg := fn(ip : ptr(mut IrInst)) -> Sgn { it : IrInst = deref(ip); it.sg }
-i_md := fn(ip : ptr(mut IrInst)) -> Mode { it : IrInst = deref(ip); it.md }
-i_cc := fn(ip : ptr(mut IrInst)) -> Cc { it : IrInst = deref(ip); it.cc }
-i_tk := fn(ip : ptr(mut IrInst)) -> TrapKind { it : IrInst = deref(ip); it.tk }
-i_from := fn(ip : ptr(mut IrInst)) -> Kty { it : IrInst = deref(ip); it.from }
-i_fsg := fn(ip : ptr(mut IrInst)) -> Sgn { it : IrInst = deref(ip); it.fsg }
-i_dk := fn(ip : ptr(mut IrInst)) -> OpndK { it : IrInst = deref(ip); it.dk }
-i_ak := fn(ip : ptr(mut IrInst)) -> OpndK { it : IrInst = deref(ip); it.ak }
-i_bk := fn(ip : ptr(mut IrInst)) -> OpndK { it : IrInst = deref(ip); it.bk }
-i_dv := fn(ip : ptr(mut IrInst)) -> i64 { it : IrInst = deref(ip); it.dv }
-i_av := fn(ip : ptr(mut IrInst)) -> i64 { it : IrInst = deref(ip); it.av }
-i_bv := fn(ip : ptr(mut IrInst)) -> i64 { it : IrInst = deref(ip); it.bv }
-i_off := fn(ip : ptr(mut IrInst)) -> i64 { it : IrInst = deref(ip); it.off }
-i_n := fn(ip : ptr(mut IrInst)) -> usize { it : IrInst = deref(ip); it.n }
-i_pool := fn(ip : ptr(mut IrInst)) -> usize { it : IrInst = deref(ip); it.pool }
-i_lbl := fn(ip : ptr(mut IrInst)) -> usize { it : IrInst = deref(ip); it.lbl }
-i_has_span := fn(ip : ptr(mut IrInst)) -> bool { it : IrInst = deref(ip); it.has_span }
-i_span := fn(ip : ptr(mut IrInst)) -> usize { it : IrInst = deref(ip); it.span }
+pub i_op := fn(ip : ptr(mut IrInst)) -> Op { it : IrInst = deref(ip); it.op }
+pub i_ty := fn(ip : ptr(mut IrInst)) -> Kty { it : IrInst = deref(ip); it.ty }
+pub i_sg := fn(ip : ptr(mut IrInst)) -> Sgn { it : IrInst = deref(ip); it.sg }
+pub i_md := fn(ip : ptr(mut IrInst)) -> Mode { it : IrInst = deref(ip); it.md }
+pub i_cc := fn(ip : ptr(mut IrInst)) -> Cc { it : IrInst = deref(ip); it.cc }
+pub i_tk := fn(ip : ptr(mut IrInst)) -> TrapKind { it : IrInst = deref(ip); it.tk }
+pub i_from := fn(ip : ptr(mut IrInst)) -> Kty { it : IrInst = deref(ip); it.from }
+pub i_fsg := fn(ip : ptr(mut IrInst)) -> Sgn { it : IrInst = deref(ip); it.fsg }
+pub i_dk := fn(ip : ptr(mut IrInst)) -> OpndK { it : IrInst = deref(ip); it.dk }
+pub i_ak := fn(ip : ptr(mut IrInst)) -> OpndK { it : IrInst = deref(ip); it.ak }
+pub i_bk := fn(ip : ptr(mut IrInst)) -> OpndK { it : IrInst = deref(ip); it.bk }
+pub i_dv := fn(ip : ptr(mut IrInst)) -> i64 { it : IrInst = deref(ip); it.dv }
+pub i_av := fn(ip : ptr(mut IrInst)) -> i64 { it : IrInst = deref(ip); it.av }
+pub i_bv := fn(ip : ptr(mut IrInst)) -> i64 { it : IrInst = deref(ip); it.bv }
+pub i_off := fn(ip : ptr(mut IrInst)) -> i64 { it : IrInst = deref(ip); it.off }
+pub i_n := fn(ip : ptr(mut IrInst)) -> usize { it : IrInst = deref(ip); it.n }
+pub i_pool := fn(ip : ptr(mut IrInst)) -> usize { it : IrInst = deref(ip); it.pool }
+pub i_lbl := fn(ip : ptr(mut IrInst)) -> usize { it : IrInst = deref(ip); it.lbl }
+pub i_has_span := fn(ip : ptr(mut IrInst)) -> bool { it : IrInst = deref(ip); it.has_span }
+pub i_span := fn(ip : ptr(mut IrInst)) -> usize { it : IrInst = deref(ip); it.span }
 i_proven := fn(ip : ptr(mut IrInst)) -> bool { it : IrInst = deref(ip); it.proven }
 
 ## ── operands and the instruction builder ──
@@ -1857,6 +1872,94 @@ report_verify_failure := fn(in out eb : rt::StrBuf, p : IrProg, f : ptr(mut IrFn
   put(eb, " at ")
   put_loc(eb, src, at, paths, offs, lens)
   put(eb, "\n")
+}
+
+## ───────────────────────────── the selectors' hook (`docs/ir-slice-1.md` §4) ─────────────────────────────
+##
+## The three twins' program loops hand every function declaration to `select_input` before their
+## legacy emitter. It answers `SiBuilt(f)` for a function the builder BUILT and the verifier accepted,
+## and `SiLegacy` for a builder `NotYet` (the function keeps its legacy emission, owner decision D7).
+## A verifier refusal is never a silent fallback (§5): it prints the located internal error, counts it
+## in `IR_VERIFY_FAILED` (the twin verb then exits 70 instead of printing what it emitted), and answers
+## `SiLegacy` so the emission loop can finish.
+pub SelIn := enum { SiBuilt(ptr(mut IrFn)), SiLegacy }
+## The predicate of an AST comparison operator byte (`CcNone` for any other byte), for the legacy
+## emitters that share a selector's condition table instead of keeping their own.
+pub cc_of_ast_op := fn(op : u8) -> Cc { ast_op_cc(op) }
+
+## The front end's module tables, for the `<file>:<line>:<col>` a selector writes beside each trap it
+## emits (§3.6) and for the verifier's located error. The twins' driver path sets them before the
+## emitters run; a path that never does prints `<no source>`.
+mut IR_SM_PATHS : Option(ptr(rt::Vec)) = Option.None
+mut IR_SM_OFFS : Option(ptr(rt::Vec)) = Option.None
+mut IR_SM_LENS : Option(ptr(rt::Vec)) = Option.None
+pub set_source_map := fn(paths : ptr(rt::Vec), offs : ptr(rt::Vec), lens : ptr(rt::Vec)) {
+  IR_SM_PATHS = Option(ptr(rt::Vec)).Some(paths)
+  IR_SM_OFFS = Option(ptr(rt::Vec)).Some(offs)
+  IR_SM_LENS = Option(ptr(rt::Vec)).Some(lens)
+}
+## `<file>:<line>:<col>` of source offset `off`, through the module tables `set_source_map` recorded.
+pub put_src_loc := fn(in out sb : rt::StrBuf, src : ptr(u8), off : usize) {
+  pso : Option(ptr(rt::Vec)) = IR_SM_PATHS
+  oso : Option(ptr(rt::Vec)) = IR_SM_OFFS
+  lso : Option(ptr(rt::Vec)) = IR_SM_LENS
+  match pso {
+    Some(paths) => {
+      match oso {
+        Some(offs) => {
+          match lso {
+            Some(lens) => { put_loc(sb, src, off, paths, offs, lens); return }
+            None => {}
+          }
+        }
+        None => {}
+      }
+    }
+    None => {}
+  }
+  put(sb, "<no source>")
+}
+## The source location of instruction `ip`: its span when it carries one, else `fallback` (the owning
+## function's name).
+pub put_inst_loc := fn(in out sb : rt::StrBuf, src : ptr(u8), ip : ptr(mut IrInst), fallback : usize) {
+  mut at : usize = fallback
+  if i_has_span(ip) { at = i_span(ip) }
+  put_src_loc(sb, src, at)
+}
+
+## Build declaration `di` of `decls` and verify it, for a selector.
+pub select_input := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, in out a : rt::Arena) -> SelIn {
+  ## unchecked-ok: `decls` holds Decl record addresses (the parser's `rt::Vec` of handles).
+  dp : ptr(Decl) = unchecked bitcast(ptr(Decl), rt::vec_get(deref(decls), di))
+  d : Decl = deref(dp)
+  if not d.is_fn or d.name_len == 0 { return SelIn.SiLegacy }
+  mut why := BuildWhy(c = Construct.CEmpty, w = NyWhy.NwOutside, span = u64(d.name_start))
+  out : BuildOut = build_one(p, decls, src, di, a, why)
+  match out {
+    Built(fid) => {
+      f := prog_fn(p, fid)
+      r : VRule = verify_fn(p, f, a)
+      if vrule_is_ok(r) { return SelIn.SiBuilt(f) }
+      mut eb := rt::strbuf(a, 4096)
+      put(eb, "alatyr: internal: IR verify ")
+      put_rule(eb, r)
+      put(eb, " in ")
+      put_qual_name(eb, src, d)
+      put(eb, " at ")
+      mut at : usize = d.name_start
+      if V_AT < fn_ninst(f) {
+        vip := fn_inst(f, V_AT)
+        if i_has_span(vip) { at = i_span(vip) }
+      }
+      put_src_loc(eb, src, at)
+      put(eb, "\n")
+      IR_VERIFY_FAILED = IR_VERIFY_FAILED + 1
+      ew := rt::sb_flush(eb, 2)
+      if ew < 0 { panic("selfhost: ir — the IR verifier's located error could not be written to stderr") }
+      SelIn.SiLegacy
+    }
+    Refused => { SelIn.SiLegacy }
+  }
 }
 
 ## ───────────────────────────── the self-test (`alatyr ir --self-test`) ─────────────────────────────

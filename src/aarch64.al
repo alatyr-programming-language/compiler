@@ -36,6 +36,8 @@ arm_p := ast::arm_p
 arg_p := ast::arg_p
 stmt_p := ast::stmt_p
 (push_str, push_int) := rt
+## The shared-IR instruction selector, a child module (`src/aarch64/isel.al`).
+(a64_isel_try, a64_cc_code, A64Cmp) := isel
 (layout_kind, layout_kind_is_packed, layout_kind_is_byte, struct_decl_of, struct_words, field_word_offset, field_words, standard_field_byte_offset, layout_field_offset_bytes, layout_elem_stride_bytes, array_elem_word_reservation, array_lit_byte_elem, std_array_elem_byte_tier, std_struct_is_byte_writable, std_struct_is_word_granular, standard_type_byte_size, scalar_byte_size, std_struct_has_direct_byte_layout, std_struct_has_byte_layout, std_struct_is_u8_pair, std_struct_is_native_u8_pair, packed_field_byte_offset, std_copy_kind, std_copy_image_bytes, layout_copy_nsteps, layout_copy_step, require_no_byte_layout_array_elem) := lower_layout
 (enum_decl_of, variant_index, enum_max_arity, enum_inst_words) := lower_layout
 (typearg_at, base_type_name) := lower_layout
@@ -4701,38 +4703,24 @@ a64_is_float_expr := fn(e : ptr(Expr), body_head : ptr(mut Stmt), src : ptr(u8),
 }
 
 
+## The condition codes of an AST comparison operator byte: signed (`a64_cond`), unsigned (`a64_ucond`,
+## used when BOTH operands are provably unsigned, so `0 < u64::MAX` reads TRUE) and float after `fcmp`
+## (`a64_fcond`). Each reads the selector's one table (`aarch64::isel`); a byte that is not a
+## comparison answers `eq`, as these always did.
 a64_cond := fn(op : u8) -> str {
-  if op == 20 { return "eq" }
-  if op == 28 { return "ne" }
-  if op == 24 { return "lt" }
-  if op == 25 { return "gt" }
-  if op == 26 { return "le" }
-  if op == 27 { return "ge" }
-  return "eq"
+  c : ir::Cc = ir::cc_of_ast_op(op)
+  r : Option(str) = a64_cc_code(c, A64Cmp.CkSigned)
+  match r { Some(x) => { x }; None => { "eq" } }
 }
-## UNSIGNED ordering condition codes — the DUAL of the signed `a64_cond`, used when BOTH operands are
-## provably unsigned (`a64_cmp_unsigned`): `<`=lo, `>`=hi, `<=`=ls, `>=`=hs. So a `u64`/`usize`
-## comparison whose operands straddle 2^63 (`0 < u64::MAX`) reads TRUE instead of treating the high-bit
-## operand as negative. Equality (`eq`/`ne`) is sign-agnostic and unchanged.
 a64_ucond := fn(op : u8) -> str {
-  if op == 20 { return "eq" }
-  if op == 28 { return "ne" }
-  if op == 24 { return "lo" }
-  if op == 25 { return "hi" }
-  if op == 26 { return "ls" }
-  if op == 27 { return "hs" }
-  return "eq"
+  c : ir::Cc = ir::cc_of_ast_op(op)
+  r : Option(str) = a64_cc_code(c, A64Cmp.CkUnsigned)
+  match r { Some(x) => { x }; None => { "eq" } }
 }
-## FLOAT comparison condition codes (after `fcmp`): `<`=mi, `<=`=ls, `>`=gt, `>=`=ge — ordered result +
-## correct NaN semantics (unordered C=1,V=1 reads false for all ordered / `eq`, true for `ne`).
 a64_fcond := fn(op : u8) -> str {
-  if op == 20 { return "eq" }
-  if op == 28 { return "ne" }
-  if op == 24 { return "mi" }
-  if op == 25 { return "gt" }
-  if op == 26 { return "ls" }
-  if op == 27 { return "ge" }
-  return "eq"
+  c : ir::Cc = ir::cc_of_ast_op(op)
+  r : Option(str) = a64_cc_code(c, A64Cmp.CkFloat)
+  match r { Some(x) => { x }; None => { "eq" } }
 }
 ## Is `e` a FLOAT comparison? A FRESH match binds its own operands (the outer Bin arm's destructured
 ## l/r mis-lower when passed to the detector — pass the whole ptr).
@@ -9310,7 +9298,9 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
     d := deref(decl_get(decls, i))
     if d.kind == 1 or (A64_TEST_MODE and d.kind == 5 and a64_test_selected(src, d.name_start, d.name_len)) {
       if d.kind == 5 { A64_TEST_DECL_INDEX = i }
-      emit_a64_fn(d, sb, a, src, decls)
+      ## IR slice 1c: a function the shared IR builds and verifies is emitted by the selector
+      ## (`src/aarch64/isel.al`); every other one keeps its legacy emission (owner decision D7).
+      if not (d.kind == lower_layout::DECL_KIND_FN and a64_isel_try(decls, i, sb, src, a)) { emit_a64_fn(d, sb, a, src, decls) }
     }
     i += 1
   }

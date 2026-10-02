@@ -122,6 +122,17 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **aarch64, riscv64 and wasm emit scalar functions from the shared IR (IR slice 1c).** A function the
+  IR builder builds and verifies is now emitted by a per-target instruction selector
+  (`src/aarch64/isel.al`, `src/riscv64/isel.al`, `src/wat/isel.al`), not by the twin's legacy
+  emitter. Every other function keeps its legacy emission. On those functions `and`/`or` short-circuit
+  on the twins (#777), signedness and width come from sema's types, and a checked narrowing
+  `u8(x)` of an out-of-range value traps as Types §4.2 says. x86_64 still truncates it (#872), so
+  `conv_narrow` and `int_narrow_conv` now trap on the twins. A checked division by zero on wasm
+  traps at the IR's located `unreachable`, not at the hardware `div`. x86_64 output is unchanged.
+- **The IR builder folds literal-only `+ - *`.** `a : i8 = 0 - 128` used to build `0 - (-128)` at `i8`,
+  which overflows. It is now the constant -128 at the type its context gives it (Types §2.3).
+
 ## 0.2.9 — 2026-10-02
 
 - **Seed promotion; the bootstrap stores a folded `None` field through a pointer.** The frozen
