@@ -23,7 +23,7 @@ consumer := @extern("trunc_guard_shared") fn() -> u64
 
 main := fn() -> u64 {
   b := Box(u64)(v = 1)
-  n := sys_write(1, 1, 0, 0)
+  n := sys_write(std::sysno::WRITE, 1, 0, 0)
   mut acc := consumer() + b.v
   if n == 0 { acc = acc + 1 }
   return acc

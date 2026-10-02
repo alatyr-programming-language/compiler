@@ -9,7 +9,7 @@ sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usiz
 E := enum { A(u64), B(u64, u64) }
 reade := fn(p : ptr(mut E)) -> u64 { match deref(p) { E::A(x) => { x } E::B(x, y) => { x + y } } }
 main := fn() -> u64 {
-  r0 := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, 0 - 1), 0)
+  r0 := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, 0 - 1), 0)
   base := unchecked bitcast(usize, r0)
   p := unchecked bitcast(ptr(mut E), base + 64)
   deref(p) = E.B(30, 12)

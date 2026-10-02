@@ -1606,7 +1606,7 @@ pub construct_name := fn(c : Construct) -> str {
   match c {
     CGeneric => { "generic function (needs a mono instance)" }; CEmpty => { "empty body" }
     CSignature => { "signature (a parameter or result that is not a kernel scalar)" }
-    CBodyless => { "a declaration with no body (`@abi(syscall)`, `@extern`: slice 2)" }
+    CBodyless => { "a declaration with no body (an `@extern` import: slice 2's `call_c`)" }
     SAssign => { "stmt Assign" }; SWhile => { "stmt While" }; SFieldAssign => { "stmt FieldAssign" }
     SReturn => { "stmt Return" }; SIf => { "stmt If" }; SMatch => { "stmt Match" }; SFor => { "stmt For" }
     SDerefAssign => { "stmt DerefAssign" }; SIndexAssign => { "stmt IndexAssign" }
@@ -1926,6 +1926,21 @@ pub put_inst_loc := fn(in out sb : rt::StrBuf, src : ptr(u8), ip : ptr(mut IrIns
   mut at : usize = fallback
   if i_has_span(ip) { at = i_span(ip) }
   put_src_loc(sb, src, at)
+}
+
+## The linker symbol of function declaration `d` on the register twins: `<module>__<name>`, or the bare
+## name in the root module (the label `aarch64`'s legacy emitter always gave a function). It is the one
+## spelling: the definition and every call site of the same declaration print it, so they cannot drift
+## (`docs/ir.md` §3.7). A bodyless `@abi(syscall)` trampoline is named by it on aarch64 AND riscv64
+## (`docs/ir-slice-2.md`), because the same call can be declared in two modules (`std::io` and
+## `std::fmt` both declare `sys_write`).
+pub put_fn_symbol := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
+  if not lower::is_root_mod(d.mod_start, d.mod_len) {
+    if d.mod_len == 0 { put(sb, "main") } else { mn := str_at((src + d.mod_start), d.mod_len); put(sb, mn) }
+    put(sb, "__")
+  }
+  nm := str_at((src + d.name_start), d.name_len)
+  put(sb, nm)
 }
 
 ## Build declaration `di` of `decls` and verify it, for a selector.

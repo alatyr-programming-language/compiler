@@ -1,7 +1,7 @@
 ## std::process — spawning child processes (Stdlib §7).
 ##
-## The OS process primitives via `@abi(syscall)` (Linux x86_64): `fork(2)` = 57,
-## `execve(2)` = 59, `wait4(2)` = 61. Raw-level, so each wrapper is `unchecked`.
+## The OS process primitives via `@abi(syscall)`: `fork(2)`, `execve(2)`, `wait4(2)`, numbered per
+## target by `std::sysno` (`fork` exists on x86_64 only). Raw-level, so each wrapper is `unchecked`.
 ## This is the surface a self-hosted compiler needs to invoke `as`/`ld` itself
 ## (the reproducible-build fixpoint): build an argv, `fork`, `execve` in the
 ## child, `wait4` the child in the parent, decode its exit status.
@@ -124,7 +124,7 @@ pub exited := fn(status : usize) -> bool {
 ## The arena `a` backs the cstrings and the argv/envp arrays; they live for the
 ## arena's extent (region-backed).
 pub run := fn(path : str, args : Slice(str), a : ptr(mut Arena)) -> isize {
-  pid := unchecked sys_fork(57)
+  pid := unchecked sys_fork(std::sysno::FORK)
   neg1 : isize = 0 - 1
   if pid < 0 {
     ## fork failed.
@@ -160,7 +160,7 @@ pub run := fn(path : str, args : Slice(str), a : ptr(mut Arena)) -> isize {
     empty_ptrs := Slice(usize)(ptr = unchecked bitcast(ptr(usize), tbase), len = 0)
     envp := ptr_array(a, empty_ptrs)
     ## execve replaces the image; if it returns, exec failed → exit with 127.
-    er := unchecked sys_execve(59, path_c, argv, envp)
+    er := unchecked sys_execve(std::sysno::EXECVE, path_c, argv, envp)
     exit(127)
   }
   ## In the PARENT: wait4(pid, &status, 0, 0), decode the exit code. The status
@@ -177,7 +177,7 @@ pub run := fn(path : str, args : Slice(str), a : ptr(mut Arena)) -> isize {
   sp := unchecked bitcast(usize, sbase)
   sw := unchecked bitcast(ptr(mut usize), sp)
   deref(sw) = 0
-  wr := unchecked sys_wait4(61, bitcast(usize, pid), sp, 0, 0)
+  wr := unchecked sys_wait4(std::sysno::WAIT4, bitcast(usize, pid), sp, 0, 0)
   if wr < 0 {
     return neg1
   }

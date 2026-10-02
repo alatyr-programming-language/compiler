@@ -7,7 +7,7 @@ P8 := struct { a : u8, b : u8 }
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   base := bitcast(usize, r) + 128
   deref(unchecked bitcast(ptr(mut u8), base)) = 3
   deref(unchecked bitcast(ptr(mut u8), base + 1)) = 11

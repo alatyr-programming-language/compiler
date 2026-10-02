@@ -30,7 +30,7 @@ P := struct { x : u64, y : u64 }
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   bp := unchecked bitcast(ptr(mut bits8), bitcast(usize, r))
   mut ar := arena_over(bp, 65536)
   ## trigger base/alloc injection transitively via the alloc::strbuf lib module:

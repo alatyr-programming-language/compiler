@@ -11,7 +11,7 @@ fmt := std::fmt
 vec := alloc::vec
 
 main := fn() -> u64 {
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, 0 - 1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, 0 - 1), 0)
   mut ar := arena_over(unchecked bitcast(ptr(mut bits8), bitcast(usize, r)), 65536)
   mut sum : u64 = 0
   alloc::with(ar) {

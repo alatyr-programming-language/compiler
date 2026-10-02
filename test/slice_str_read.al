@@ -14,7 +14,7 @@ elem_code := fn(parts : Slice(str), i : usize) -> u64 {
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   base := unchecked bitcast(usize, r)
   s0 := "hi"
   s1 := "Bye"

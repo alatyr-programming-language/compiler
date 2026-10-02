@@ -24,6 +24,6 @@ pub production_api := fn() -> u64 {
 
 @test("test-only abi remains in dedicated test artifact") fn() {
   neg1 : isize = 0 - 1
-  pid := unchecked sys_mmap(9, 0, 4096, 3, 34, bitcast(usize, neg1), 0)
+  pid := unchecked sys_mmap(std::sysno::MMAP, 0, 4096, 3, 34, bitcast(usize, neg1), 0)
   if pid < 0 { panic("getpid failed") }
 }

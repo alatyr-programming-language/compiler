@@ -390,6 +390,20 @@ sa_load := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
   sa_put(sb, "]\n")
   sa_st11(sb, ip)
 }
+## The argument run of call or syscall `ip` into x0, x1, … (the one register mapping both share).
+sa_args := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) {
+  n := ir::i_n(ip)
+  mut j : usize = 0
+  while j < n {
+    av := ir::pool_get(x.f, ir::i_pool(ip) + j)
+    sa_put(sb, "  ldr x")
+    sa_u(sb, j)
+    sa_put(sb, ", [x29, #")
+    sa_int(sb, sa_off(av))
+    sa_put(sb, "]\n")
+    j = j + 1
+  }
+}
 ## A direct call: the arguments in x0..x7, `bl` the callee's legacy label, the result from x0,
 ## re-canonicalized from the destination's type.
 sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
@@ -399,16 +413,7 @@ sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
   match cdo {
     Some(cd) => {
       if not cd.is_fn or cd.name_len == 0 { return false }
-      mut j : usize = 0
-      while j < n {
-        av := ir::pool_get(x.f, ir::i_pool(ip) + j)
-        sa_put(sb, "  ldr x")
-        sa_u(sb, j)
-        sa_put(sb, ", [x29, #")
-        sa_int(sb, sa_off(av))
-        sa_put(sb, "]\n")
-        j = j + 1
-      }
+      sa_args(sb, x, ip)
       sa_put(sb, "  bl ")
       a64_emit_fn_label(sb, x.src, cd)
       sa_put(sb, "\n")
@@ -424,6 +429,24 @@ sa_call := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool
       ok
     }
     None => { false }
+  }
+}
+## `%r = syscall %nr(args…)` (ABI §5): the Linux AArch64 system-call convention — the number in x8,
+## up to six arguments in x0..x5, `svc #0`, the result in x0 (re-canonicalized from the destination's
+## type, as a call's is).
+sa_syscall := fn(in out sb : rt::StrBuf, x : SaX, ip : ptr(mut ir::IrInst)) -> bool {
+  n := ir::i_n(ip)
+  if n > 6 { return false }
+  if not sa_lda(sb, "x8", ip) { return false }
+  sa_args(sb, x, ip)
+  sa_put(sb, "  svc #0\n")
+  dv : Option(usize) = sa_dst(ip)
+  match dv {
+    Some(d) => {
+      sa_stv(sb, "x0", d)
+      sa_canon_slot(sb, x, d, "x9", "w9")
+    }
+    None => { true }
   }
 }
 
@@ -519,6 +542,7 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
     OpAddrSym => { sa_addr(sb, x, ip) }
     OpLoad => { sa_load(sb, ip) }
     OpCall => { sa_call(sb, x, ip) }
+    OpSyscall => { sa_syscall(sb, x, ip) }
     OpBlock | OpUnch => { stk_push(x, a, i); true }
     OpLoop => { stk_push(x, a, i); sa_def_lbl(sb, x, i); true }
     OpIf => {
@@ -566,7 +590,7 @@ sa_inst := fn(in out sb : rt::StrBuf, x : SaX, in out a : rt::Arena, i : usize) 
     }
     OpFConst | OpAddrFrame | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
       | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpStore | OpBSwap | OpCopy | OpZero | OpGep | OpBound | OpCallInd
-      | OpCallC | OpSyscall | OpSwitch => { false }
+      | OpCallC | OpSwitch => { false }
   }
 }
 

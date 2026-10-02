@@ -35,7 +35,7 @@ raw := fn(base : usize, k : usize) -> u64 {
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 262144, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 262144, 3, 34, bitcast(usize, neg1), 0)
   bp := unchecked bitcast(ptr(mut bits8), bitcast(usize, r))
   base := unchecked bitcast(usize, bp)
 
