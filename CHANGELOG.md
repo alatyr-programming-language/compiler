@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A loop nest deeper than 64 leaves through the right loop (x86_64).** The loop-target frames were
+  `[_; 64]` arrays whose push dropped the 65th frame while every pop still popped, so each later
+  `break`/`continue` jumped to another loop's label (#829). They now live in a word table that grows
+  with the nesting (#801's form) and is released with the function. The compiler's own GAS is
+  unchanged.
+
 ## 0.2.12 — 2026-10-02
 
 - **Seed promotion; the bootstrap traps an unrepresentable signedness change.** The frozen
