@@ -39,6 +39,19 @@ folded_local_expect := fn(slots : ptr(SVec), src : ptr(u8), ns : usize, nl : usi
   folded_slot_span(slots, src, ns, nl)
 }
 
+## #NNN — the folded type a local binding takes: the folded type of its initializer
+## (`folded_value_span`), else its OWN `Option(ptr(T))` annotation. A folded local is ONE word whatever
+## initializes it, including a name `collect_slots` cannot type here (a component of a multi-payload
+## variant's pattern, which only `emit_match` types); the annotation alone says it is the folded Option.
+## 0/0 when the local is neither.
+folded_bind_span := fn(v : ptr(Expr), slots : ptr(SVec), decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> CSpan {
+  fvs := folded_value_span(v, folded_local_expect(slots, src, ns, nl), slots, decls, src, a)
+  if fvs.n != 0 { return fvs }
+  lts := local_type_span(src, ns, nl)
+  if lts.n != 0 and is_niche_folded(src, lts.s, lts.n) { return CSpan(s = lts.s, n = lts.n) }
+  CSpan(s = 0, n = 0)
+}
+
 pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8), decls : ptr(rt::Vec), a : rt::Arena, synth : ptr(mut rt::Arena), sub : ptr(Subst), ctslots : ptr(SVec)) {
   mut s := head
   while s != 0 {
@@ -115,14 +128,14 @@ pub collect_slots := fn(in out slots : SVec, head : ptr(mut Stmt), src : ptr(u8)
           rw := require_agg_words(rqa.under, decls, src, a)
           if rk == 3 { bind_enum_slot(slots, decls, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
           else { bind_struct_slot(slots, decls, src, ns, nl, rqa.under.s, rqa.under.n, rw) }
-        } else if folded_value_span(v, folded_local_expect(ptr(slots), src, ns, nl), ptr(slots), decls, src, a).n != 0 {
+        } else if folded_bind_span(v, ptr(slots), decls, src, ns, nl, a).n != 0 {
           ## #775 — a NICHE-FOLDED `Option(ptr(T))` local is ONE word whatever initializes it: a call, a
           ## variant literal with a folded head, another folded local or parameter, a field read or
           ## `deref(p).f`. Recording the full `Option(ptr(T))` span (ek 3) is what routes the assignment to
           ## `emit_folded_option_assign` and a `match` to the folded dispatch. #789 — a bare `Option.None` /
           ## `Option.Some(q)` takes the local's own folded type (`folded_local_expect`), so re-assigning a
           ## folded local from one is the same one word, not a wider `[disc, payload]` re-binding.
-          fvs := folded_value_span(v, folded_local_expect(ptr(slots), src, ns, nl), ptr(slots), decls, src, a)
+          fvs := folded_bind_span(v, ptr(slots), decls, src, ns, nl, a)
           bind_enum_slot(slots, decls, src, ns, nl, fvs.s, fvs.n, 1)
         } else if si.is_s {
           ## Types §9.4: inside a generic INSTANCE a construction head over the callee's own type
