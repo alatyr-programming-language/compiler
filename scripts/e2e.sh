@@ -10638,6 +10638,9 @@ run_x86 issue824_option_ptr_global_array 42
 # #828 — nested calls passing `Option(ptr(T))` values with no frame home (field reads, call results, an
 # element, a global): every staged folded word fits the measured agg-temp pool (#815).
 run_x86 issue828_option_ptr_nested_args 42
+# #899 — an annotated enum local (`h : Option(S) = Option.None`) takes its declared width; the bare literal
+# head sized `T` as one word and under-reserved it.
+run_x86 issue899_annotated_enum_local 42
 # #852 — `Option(ptr(T))` as a payload component of another enum's variant: one folded payload word in the
 # local store and the return registers, and the match binding typed as the folded Option.
 run_x86 issue852_option_ptr_enum_payload 42
