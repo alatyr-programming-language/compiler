@@ -461,9 +461,7 @@ pub emit_addr_of := fn(p : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx)
             ia_done = true
           }
         }
-      }
-      if unchecked bitcast(usize, imgv) != 0 and ia_done == false {
-        if array_lit_info(imgv).is_a or global_array_byte_eek(cx.decls, cx.src, ibv.s, ibv.n) != 0 {
+        if ia_done == false and (gsa.is_a or global_array_byte_eek(cx.decls, cx.src, ibv.s, ibv.n) != 0) {
           glen := global_array_len(cx.decls, cx.src, ibv.s, ibv.n, imgv)
           emit_gas(idx, sb, cx, a, nl)                 ## index → stack
           push_str(sb, "  leaq ")
