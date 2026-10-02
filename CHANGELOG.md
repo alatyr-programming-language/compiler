@@ -132,6 +132,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   traps at the IR's located `unreachable`, not at the hardware `div`. x86_64 output is unchanged.
 - **The IR builder folds literal-only `+ - *`.** `a : i8 = 0 - 128` used to build `0 - (-128)` at `i8`,
   which overflows. It is now the constant -128 at the type its context gives it (Types §2.3).
+- **A dev verb emits x86_64 through the shared IR (IR slice 1d).** `alatyr x86-ir <file.al>` prints the
+  x86 GAS and `alatyr x86-ir -o <exe> <file.al>` builds it, with every function the IR builder builds
+  and verifies emitted by `src/lower/isel.al` instead of the legacy emitter. The verb is listed in
+  `alatyr help`. No other surface uses it, and the default x86 output is unchanged.
+  `scripts/ir_diff.sh` compares the two paths over the corpus and only reports. On 313 programs with
+  an IR-selected function it found 3 disagreements, each a legacy x86 wrong value the IR answers per
+  the specification (#872, #875).
 ## 0.2.10 — 2026-10-02
 
 - **Seed promotion; no emitted byte moves.** The frozen `seed/alatyr` advances from 0.2.9 to 0.2.10 so

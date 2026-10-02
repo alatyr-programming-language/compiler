@@ -4122,7 +4122,7 @@ parse_uint_arg := fn(s : str) -> usize {
 ## `fd`/`status` let the no-argument path reuse the exact same material while remaining a failing
 ## invocation-level diagnostic.
 cli_help := fn(in out a : rt::Arena, fd : usize, status : usize) -> usize {
-  mut b := rt::strbuf(a, 768)
+  mut b := rt::strbuf(a, 1024)
   k0 := rt::push_str(b, "Usage: alatyr <command> [options]\n\nCommands:\n")
   k1 := rt::push_str(b, "  new      create a package\n")
   k2 := rt::push_str(b, "  build    build a package\n")
@@ -4133,7 +4133,8 @@ cli_help := fn(in out a : rt::Arena, fd : usize, status : usize) -> usize {
   k7 := rt::push_str(b, "  fmt      format package sources\n")
   ## D5 (`docs/ir.md` §8, owner decision on #786): a dev surface is a CLI verb listed here, never an
   ## environment switch (Codegen §3.1).
-  k9 := rt::push_str(b, "  ir       report the shared IR builder's answer per function (dev)\n\n")
+  k9 := rt::push_str(b, "  ir       report the shared IR builder's answer per function (dev)\n")
+  ka := rt::push_str(b, "  x86-ir   emit x86_64 with IR-built functions selected from the shared IR (dev)\n\n")
   k8 := rt::push_str(b, "Run program arguments after `--`: alatyr run <program> -- <args>\n")
   kf := diag_flush(b, fd)
   if kf != 0 { return kf }
@@ -5569,9 +5570,37 @@ emit_dump_status := fn(nwrote : isize, want : usize) -> usize {
 ## twin package emit; otherwise 1 + the driver's twin code (0 wasm, 1 aarch64, 2 riscv64).
 mut CLI_TWIN_PKG : usize = 0
 
+## `cmd` without its `i`-th NUL-terminated argument.
+cli_drop_arg := fn(in out a : rt::Arena, cmd : str, i : usize) -> str {
+  mut b := rt::strbuf(a, cmd.len + 1)
+  mut idx : usize = 0
+  mut k : usize = 0
+  while k < cmd.len {
+    c := bytes(cmd)[k]
+    if idx != i { kb := rt::push_byte(b, c) }
+    if c == 0 { idx += 1 }
+    k += 1
+  }
+  return str_at(b.data, b.len)
+}
+
 pub run_cli := fn(in out a : rt::Arena) -> usize {
   mut cmd := read_cmdline(a)
   mut n := arg_count(cmd)
+  ## IR slice 1d (`docs/ir-slice-1.md` §5 item 4): the x86-via-IR dev verb. `alatyr x86-ir <file.al>`
+  ## is the x86 GAS dump and `alatyr x86-ir -o <exe> <file.al>` the x86 build, each with every function
+  ## the shared IR builds, verifies and selects emitted by `src/lower/isel.al` instead of the legacy
+  ## emitter. A verb, never an environment switch (owner decision D5, Codegen §3.1): it sets the
+  ## selection flag and drops itself from the argument list, so the rest of the invocation is the
+  ## default surface's own, front half, peephole and link included.
+  mut x86ir := false
+  if n >= 2 and arg_at(cmd, 1) == "x86-ir" {
+    if n < 3 { return cli_config_diag(a, "x86-ir requires a source file, or -o <exe> and a source file") }
+    x86ir = true
+    lower::set_x86_ir_select()
+    cmd = cli_drop_arg(a, cmd, 1)
+    n = n - 1
+  }
   ## modes: 0 = emit GAS to stdout; 1 = build to `<out>` (`-o`); 2 = build to a temp exe + run it;
   ## 3 = check (type-check only); 4 = new (scaffold a pkg); 5 = test (build a @test runner + run it);
   ## 6 = build (manifest-driven: artifact → `<target_dir>/<output>`, the spec `alatyr build`);
@@ -5603,6 +5632,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   if n >= 4 {
     if arg_at(cmd, 1) == "-o" { mode = 1; oi = 2; fi = 3 }
   }
+  if x86ir and mode != 0 and mode != 1 { return cli_config_diag(a, "x86-ir accepts a source file, or -o <exe> and a source file") }
   ## TOOL-14 — mode 0 is the legacy direct-source/GAS surface, so retain an existing source path (and
   ## the established `-o` spelling) but do not reinterpret a missing non-source first argument as a
   ## file. A typo such as `biuld package.al` is an unrecognized command, not a source-path failure.
@@ -6213,6 +6243,9 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   mut spb := 0
   if mode != 0 and osplit_on(a) { spb = rt::bump(a, 262144) }
   mut sb := driver::compile_files_target(paths, a, entry_sym, lim_ceiling, spb, artifact_kind == "object" or artifact_kind == "static_lib" or artifact_kind == "shared_lib")
+  ## IR slice 1d: under `x86-ir`, a built function the verifier refused is a located internal error,
+  ## never emitted or linked (docs/ir.md §5).
+  if x86ir and ir::verify_failures() != 0 { return 70 }
   ## The driver has already resolved a non-default package entry against the package declaration
   ## graph before emitting GAS. Use that linker symbol (not the manifest path) for the subsequent
   ## assembler/linker step; empty preserves the established `_start` compatibility path.

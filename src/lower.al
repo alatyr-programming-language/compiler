@@ -77,6 +77,9 @@ ecallee_is := ast::ecallee_is
 ## §3 ancestor chain; `emit_fn_ir` itself stays HERE too, because it calls the `collect_slots` CHILD and
 ## a child-to-child bare call is a SIBLING reach that Modules §3 gives no legal spelling.
 (is_scalar_leaf_shape, index_plain_scalar_struct, ir_var_vreg, ir_argreg_id, ir_csreg_id, ir_native_scalar, ir_phys_name, ir_lower_expr, ir_lower_stmts, ir_render) := ir
+## The x86_64 selector over the SHARED IR (`src/lower/isel.al`, `docs/ir-slice-1.md` §4, slice 1d) — a
+## CHILD module, reached only when the `alatyr x86-ir` dev verb sets `X86_IR_SELECT` (owner decision D5).
+(x86_isel_try) := isel
 ## COMPILE-TIME FOLDING (`src/lower/ctfold.al`) — a CHILD module under MOD-12. It is NOT called
 ## `comptime`: `comptime` is a KEYWORD, so `(…) := comptime` is a parse error, and a submodule named
 ## after it could never be imported by bare name (measured — see the file's header).
@@ -29493,6 +29496,24 @@ module_decl_ranges := fn(decls : ptr(rt::Vec), src : ptr(u8), base : usize) -> u
 ## is 0 or a buffer → the fixpoint GAS dump (which passes 0) is unaffected. The build path (link_exe, 1c-γ)
 ## consumes the table to split the single `.s` into per-module `.o`; `start` is a byte offset from `sb.data`
 ## (the buffer only ever grows by append, so an offset captured mid-emit is its final file offset).
+## IR slice 1d: whether `emit_program` hands each function to the shared IR's x86 selector first
+## (`x86_isel_try`). Only the `alatyr x86-ir` verb sets it (owner decision D5: a dev surface is a verb,
+## never an environment switch, Codegen §3.1); every other surface, the self-build included, leaves it
+## false and the `and` below never reaches the selector, so the default GAS is byte-identical.
+mut X86_IR_SELECT : bool = false
+pub set_x86_ir_select := fn() { X86_IR_SELECT = true }
+pub x86_ir_select_on := fn() -> bool { X86_IR_SELECT }
+## Whether `d`'s code is reached through its bare mangled label `<module>__<name>` under the legacy
+## internal convention — the x86 IR selector's question for a function it defines or calls, answered
+## here because its parts live in sibling modules: an ordinary named non-generic function, not an
+## overload-set member (its label carries a signature suffix), not `@abi(naked)` or `@abi(c)` (no
+## convention, or another one), not a bodyless extern.
+x86_plain_label := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl) -> bool {
+  if not d.is_fn or d.is_generic or d.kind != lower_layout::DECL_KIND_FN or d.name_len == 0 { return false }
+  if extern_symbol(src, d.name_start, d.name_len).n != 0 { return false }
+  if overload_set_count(decls, src, d.name_start, d.name_len, d.mod_start, d.mod_len) >= 2 { return false }
+  not fn_is_naked(src, d.name_start, d.name_len) and not callee_is_abi_c(src, d.name_start, d.name_len)
+}
 pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : ptr(u8), src_n : usize, mar : ptr(mut rt::Arena), a : rt::Arena, in out nl : usize, spanbase : usize, library_mode : bool) {
   ## #529 — the lowerers see identity-class bitcasts erased into their operands (`ast::bitcast_identity_erase`).
   ast::bitcast_identity_erase(unchecked bitcast(usize, a.base), unchecked bitcast(usize, a.base) + a.off)
@@ -30218,7 +30239,9 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     ## An `@extern` fn (Modules §7) is a bodyless import — its definition lives in another object, so
     ## emit no body here; calls to it were routed to the external symbol by `emit_mangled_call`.
     if d.kind == 1 and not d.is_generic and not decl_is_variadic(d, src, deref(mar)) and extern_symbol(src, d.name_start, d.name_len).n == 0 {
-      if rb_get(rb, ti) == 1 { emit_fn(d, ti, sb, ptr(pcx), nl) }
+      if rb_get(rb, ti) == 1 {
+        if not (X86_IR_SELECT and x86_isel_try(decls, ti, sb, src, a)) { emit_fn(d, ti, sb, ptr(pcx), nl) }
+      }
     }
     ## `@test` bodies belong only to the dedicated TOOL-5 artifact. Production executables and
     ## object/archive library artifacts must not carry test code or accidentally retain its helpers.

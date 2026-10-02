@@ -5064,6 +5064,10 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## re-parse. sema accepts the whole self-host src/ tree, so this returns 0 for the TOOL-1 self-build →
   ## identical emission → GAS byte-identical → fixpoint unaffected; the emit-site aggregate→scalar
   ## fail-loud nets are RETAINED (sema does not yet reject those sinks). `d_sema_reject` aborts fail-loud.
+  ## IR slice 1d: under the `x86-ir` verb sema also RECORDS each expression's type (`ir::sty_*`, slice
+  ## 1a) over these very nodes, which the shared IR's builder reads. Recording moves no verdict; every
+  ## other surface leaves it off, as before.
+  if lower::x86_ir_select_on() { ir::sty_enable() }
   scode := sema::check_program(ptr(decls), base, ptr(na))
   if scode != 0 { d_sema_reject(scode, base, ptr(ftab), tar) }
   dlc := sema::enforce_declared_limits(ptr(decls), base, ptr(na))
@@ -5397,6 +5401,8 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## field workaround while scalar `in out` write-back was unimplemented.)
   mut nl := 0
   zdiag := lower::set_codegen_files(unchecked bitcast(usize, ptr(name_start)), unchecked bitcast(usize, ptr(name_len)), unchecked bitcast(usize, ptr(src_off)), unchecked bitcast(usize, ptr(src_len)), n)
+  ## IR slice 1d: the `x86-ir` verb's selector locates each trap it emits (`docs/ir.md` §3.6); inert otherwise.
+  ir::set_source_map(ptr(pv), ptr(src_off), ptr(src_len))
   lower::emit_program(ptr(decls), gas, base, strbuf::buf_len(bld), ptr(na), na, nl, spanbase, library_mode)
   ## TOOL-6 1c-γ: when a span buffer was supplied (the build path), peephole PER SPAN and rewrite the
   ## table to post-peephole offsets so `cli::link_exe` can split the final `.s` into per-module `.o`.
