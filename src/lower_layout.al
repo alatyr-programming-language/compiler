@@ -933,7 +933,7 @@ pub field_index := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize,
 ## `{0,0}` when the span is not an array type (no leading `[`). The layout dual of `lower::array_elem_span`
 ## (duplicated here so `lower_layout` stays self-contained — a leaf like `streq`/`decl_at`). Drives the
 ## `[T; N]` field-width fold in `field_words`/`field_word_offset` below.
-arr_field_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
+pub arr_field_elem_span := fn(src : ptr(u8), ts : usize, tl : usize) -> LSpan {
   if tl < 2 { return LSpan(s = 0, n = 0) }
   if str_at((src + ts), 1) != "[" { return LSpan(s = 0, n = 0) }
   mut es := ts + 1
@@ -3455,6 +3455,11 @@ pub ex_slice_hi := fn(v : ptr(Expr)) -> ptr(Expr) {
 pub DECL_KIND_VALUE : u8 = 0
 ## `Decl.kind` of a function declaration, named for the same reason.
 pub DECL_KIND_FN : u8 = 1
+## `Decl.kind` of a struct, an enum and an `@abi(syscall)` function declaration, named for sema's
+## record pass (docs/ir.md §3.8) for the same reason.
+pub DECL_KIND_STRUCT : u8 = 2
+pub DECL_KIND_ENUM : u8 = 3
+pub DECL_KIND_SYSCALL : u8 = 4
 ## Does module declaration `d` own the one-word scalar data cell each twin emits for a scalar global —
 ## `<name>: .quad <init>` on aarch64/riscv64, `(global $<name> (mut i64) …)` on wasm? The twins'
 ## `emit_*_program` data loops emit exactly these; an IR selector addresses a global (`addr @g`) only
