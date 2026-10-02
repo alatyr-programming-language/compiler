@@ -122,6 +122,18 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A wide struct or enum returned as a literal keeps every component (x86_64).** A struct or enum
+  returned through the hidden result pointer as a literal with an aggregate field or payload (an enum or
+  struct literal, a `str`, a bare `Option.Some(p)`) stored the `$0` placeholder and displaced the fields
+  after it (#836). The literal is now built by the frame writer and copied through the result pointer.
+  The compiler's own GAS is unchanged.
+
+- **An aggregate literal stored at an address keeps every component (x86_64).** `deref(p) = E.V(…)` and
+  `deref(p) = S(…)` with a component wider than one word (a struct or payloaded-enum literal, a `str`, a
+  multi-word struct var, a struct-returning call) or a bare `Option.Some(p)` stored the `$0` placeholder
+  and displaced the components after it (#892). The literal is now built by the frame writer and copied whole. The frame writers also deliver every word of a struct-returning call used as an enum payload or
+  a struct field (they kept word 0, or stored nothing). The compiler's own GAS is unchanged.
+
 ## 0.2.12 — 2026-10-02
 
 - **Seed promotion; the bootstrap traps an unrepresentable signedness change.** The frozen
