@@ -621,10 +621,12 @@ a64_param_fixed_array_len := fn(params_head : Option(ptr(mut Param)), src : ptr(
 a64_deref_param_word_struct_span := fn(e : ptr(Expr), params_head : Option(ptr(mut Param)), src : ptr(u8), a : rt::Arena, decls : ptr(rt::Vec)) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
   if not a64_is_deref(e) { return r }
-  inner := a64_deref_inner(e)
-  if inner == 0 { return r }
-  ns := ex_var_ns(inner)
-  nl := ex_var_nl(inner)
+  mut ns : usize = 0
+  mut nl : usize = 0
+  match a64_deref_inner(e) {
+    Some(iq) => { ns = ex_var_ns(iq); nl = ex_var_nl(iq) }
+    None => { return r }
+  }
   if nl == 0 { return r }
   mut p := params_head
   loop {
@@ -690,10 +692,10 @@ a64_is_deref := fn(e : ptr(Expr)) -> bool {
   r
 }
 
-a64_deref_inner := fn(e : ptr(Expr)) -> ptr(Expr) {
-  mut r : ptr(Expr) = unchecked bitcast(ptr(Expr), 0)
+a64_deref_inner := fn(e : ptr(Expr)) -> Option(ptr(Expr)) {
+  mut r : Option(ptr(Expr)) = Option.None
   match deref(e) {
-    Expr::Deref(inner) => { r = inner }
+    Expr::Deref(inner) => { r = Option.Some(inner) }
     Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call
       | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::StrLit | Expr::ArrayLit
       | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked
@@ -3781,9 +3783,13 @@ emit_a64_place_addr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, 
   if (not isf) and (not isi) {
     droot := a64_deref_param_word_struct_span(e, params_head, src, a, decls)
     if droot.n != 0 {
-      innerD := a64_deref_inner(e)
-      pidxD := param_find(params_head, src, ex_var_ns(innerD), ex_var_nl(innerD), a)
-      if pidxD >= 0 { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, 16 + pidxD * 8) ; push_str(sb, "]\n") ; isd = true }
+      match a64_deref_inner(e) {
+        Some(innerD) => {
+          pidxD := param_find(params_head, src, ex_var_ns(innerD), ex_var_nl(innerD), a)
+          if pidxD >= 0 { push_str(sb, "  ldr x0, [x29, #") ; push_int(sb, 16 + pidxD * 8) ; push_str(sb, "]\n") ; isd = true }
+        }
+        None => {}
+      }
     }
   }
   if (not isf) and (not isi) and (not isd) {
