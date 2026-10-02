@@ -8773,8 +8773,11 @@ sema_vty_ctx := fn(e : ptr(Expr), s : usize, n : usize, decls : ptr(rt::Vec), sr
 ## for types or functions. Where the type depends on an instance (a generic's type parameter) or no
 ## single declaration answers (an overload set, two equally ranked candidates), nothing is recorded:
 ## `VcUnknown`, never a guess.
-sema_spell_none := fn() -> ir::TySpell { ir::TySpell(s = 0, n = 0) }
-sema_spell_at := fn(s : usize, n : usize) -> ir::TySpell { ir::TySpell(s = s, n = n) }
+sema_spell_none := fn() -> ir::TySpell { ir::TySpell(s = 0, n = 0, bytes_view = false) }
+sema_spell_at := fn(s : usize, n : usize) -> ir::TySpell { ir::TySpell(s = s, n = n, bytes_view = false) }
+sema_spell_bytes_view := fn() -> ir::TySpell { ir::TySpell(s = 0, n = 0, bytes_view = true) }
+## Has sema resolved a type for the value at all (a declaration's text, or a builtin byte view)?
+sema_spell_known := fn(sp : ir::TySpell) -> bool { sp.n != 0 or sp.bytes_view }
 ## A declared type's WHOLE spelling. The parser keeps only the head token of some annotations (a
 ## parameter's or a field's `ptr(mut T)` is recorded as `ptr`, a generic instance as `Vec`) and leaves
 ## the `( … )` group in the source right after it — the recovery `ptr_pointee_span` and `typearg_at`
@@ -8833,6 +8836,7 @@ sema_spell_decl := fn(s : usize, n : usize, src : ptr(u8)) -> ir::TySpell {
 ## The kernel value type the spelling names: a scalar or a brand's underlying scalar (`sema_vty_name`),
 ## else the class its resolved kind decides (an aggregate or a pointer).
 sema_vty_spell := fn(sp : ir::TySpell, decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
+  if sp.bytes_view { return ir::vty_agg() }
   if sp.n == 0 { return ir::vty_unknown() }
   vt : ir::VTy = sema_vty_name(src, sp.s, sp.n, decls)
   if ir::vty_known(vt) { return vt }
@@ -8933,7 +8937,13 @@ sema_spell_call := fn(cs : usize, cl : usize, na : usize, decls : ptr(rt::Vec), 
       if rs.n == 0 or sema_spell_mentions_param(d.params_head, src, rs.s, rs.n, false) { return sema_spell_none() }
       rs
     }
-    None => { sema_spell_none() }
+    None => {
+      ## the Stage-0 string intrinsics the lower emits with no declaration in reach: `str_at(p, n)` is a
+      ## `str`, `bytes(s)` its `[u8]` (Stdlib appendix §3.5, `bytes(in self) -> [u8]`) — one byte view
+      nm := str_at((src + cs), cl)
+      if (na == 2 and nm == "str_at") or (na == 1 and nm == "bytes") { return sema_spell_bytes_view() }
+      sema_spell_none()
+    }
   }
 }
 ## The declared type of field `[fs, fs+fl)` of the struct the spelling `bs` names, or of the struct its
@@ -8946,14 +8956,8 @@ sema_spell_field := fn(bs : ir::TySpell, fs : usize, fl : usize, decls : ptr(rt:
   mut tn := bs.n
   pn := lower_layout::ptr_target_pointee_n(src, ts, tn)
   if pn != 0 { ts = lower_layout::ptr_target_pointee_s(src, ts, tn); tn = pn }
-  ## a view (`str`, `[T]`) is the library pair `Slice(T)` (Types §7): its fields are that struct's
-  if sema_spell_is_view(sema_spell_at(ts, tn), src) {
-    vi := sema_view_decl(decls, src)
-    match vi {
-      Some(vdi) => { return sema_spell_view_field(usize(vdi), sema_spell_elem(sema_spell_at(ts, tn), src), fs, fl, decls, src, a) }
-      None => { return sema_spell_none() }
-    }
-  }
+  ## a view's fields are builtin (`sema_vty_builtin`): no declaration text spells them
+  if sema_spell_is_view(sema_spell_at(ts, tn), src) { return sema_spell_none() }
   bn := base_type_name(src, ts, tn)
   if bn.n == 0 { return sema_spell_none() }
   di := type_decl_index(decls, rt::vec_len(deref(decls)), src, bn.s, bn.n)
@@ -8986,6 +8990,7 @@ sema_spell_field := fn(bs : ir::TySpell, fs : usize, fl : usize, decls : ptr(rt:
 }
 ## Is `sp` a view spelling — `str` (`[u8]`) or `[T]` — rather than a declared struct (Types §7)?
 sema_spell_is_view := fn(sp : ir::TySpell, src : ptr(u8)) -> bool {
+  if sp.bytes_view { return true }
   if sp.n == 0 { return false }
   if sp.n == 3 and str_at((src + sp.s), 3) == "str" { return true }
   if str_at((src + sp.s), 1) != "[" { return false }
@@ -8995,44 +9000,6 @@ sema_spell_is_view := fn(sp : ir::TySpell, src : ptr(u8)) -> bool {
     i += 1
   }
   true
-}
-## The library's `Slice` declaration (lib/base/slice.al), the layout every view has, when exactly one
-## struct of that name is declared.
-sema_view_decl := fn(decls : ptr(rt::Vec), src : ptr(u8)) -> Option(u64) {
-  cnt := rt::vec_len(deref(decls))
-  mut r : Option(u64) = Option(u64).None
-  mut hits : usize = 0
-  mut i : usize = 0
-  while i < cnt {
-    d := deref(decl_get(decls, i))
-    if d.kind == 2 and d.name_len == 5 and str_at((src + d.name_start), 5) == "Slice" { r = Option(u64).Some(u64(i)); hits += 1 }
-    i += 1
-  }
-  if hits != 1 { return Option(u64).None }
-  r
-}
-## Field `[fs, fs+fl)` of a view whose element spelling is `el` (`{0,0}` for `str`, whose `u8` has no
-## spelling of its own): the `Slice` field's annotation, `T` replaced by the element.
-sema_spell_view_field := fn(di : usize, el : ir::TySpell, fs : usize, fl : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) -> ir::TySpell {
-  d := deref(decl_get(decls, di))
-  mut f := d.fields_head
-  loop {
-    match f {
-      Some(fq) => {
-        fd := deref(fld_p(fq))
-        if streq(src, fd.ns, fd.nl, fs, fl) {
-          pos := lower_layout::param_pos(decls, di, src, fd.ts, fd.tl, deref(a))
-          if pos >= 0 { return el }
-          fsp : ir::TySpell = sema_spell_type(fd.ts, fd.tl, src)
-          if sema_spell_mentions_param(d.params_head, src, fsp.s, fsp.n, true) { return sema_spell_none() }
-          return fsp
-        }
-        f = fd.next
-      }
-      None => { break }
-    }
-  }
-  sema_spell_none()
 }
 ## What `deref` of a value of type `sp` reads: the pointee inside `ptr(…)`.
 sema_spell_pointee := fn(sp : ir::TySpell, src : ptr(u8)) -> ir::TySpell {
@@ -9096,12 +9063,14 @@ sema_spell_shape := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : 
     Expr::Unchecked(inner) => { ir::sty_spell_get(inner) }
     Expr::Bitcast(inner, ts, tl) => { sema_spell_decl(ts, tl, src) }
     Expr::StructLit(scs, scl, snf, sfh) => { sema_spell_at(scs, scl) }
+    ## a string literal is a `str`; an `embed(…)` (`pn != 0`) is a `[u8; N]` the checker leaves unknown
+    Expr::StrLit(ls, ln, lbl, lps, lpn) => { if lpn == 0 { sema_spell_bytes_view() } else { sema_spell_none() } }
     ## a sub-slice of a view is a view of the same element type
     Expr::Slice(sb, slo, shi) => {
       bsp : ir::TySpell = ir::sty_spell_get(sb)
       if sema_spell_is_view(bsp, src) { bsp } else { sema_spell_none() }
     }
-    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit | Expr::AddrOf | Expr::StrLit
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::EnumLit | Expr::AddrOf
       | Expr::ArrayLit | Expr::FloatLit | Expr::CompField | Expr::Lambda | Expr::FnRef | Expr::Loop => { sema_spell_none() }
   }
 }
@@ -9174,21 +9143,37 @@ sema_spell_arm_binds := fn(sc : ptr(Expr), am : Arm, decls : ptr(rt::Vec), src :
     }
   }
 }
+## The value types of a view's builtin parts, which no declaration spells: a view's `len` is a `usize`
+## and its `ptr` a pointer (the `Slice(T)` pair, Stdlib appendix §3.5), and an element of a byte view
+## is a `u8` (`str` is `[u8]`, Types §7).
+sema_vty_builtin := fn(e : ptr(Expr), src : ptr(u8)) -> ir::VTy {
+  match deref(e) {
+    Expr::Field(fb, fs, fl) => {
+      bsp : ir::TySpell = ir::sty_spell_get(fb)
+      if not sema_spell_is_view(bsp, src) { return ir::vty_unknown() }
+      fname := str_at((src + fs), fl)
+      if fname == "len" { return ir::vty_u(8) }
+      if fname == "ptr" { return ir::vty_ptr() }
+      ir::vty_unknown()
+    }
+    Expr::Index(ib, ii) => {
+      isp : ir::TySpell = ir::sty_spell_get(ib)
+      if isp.bytes_view or (isp.n == 3 and str_at((src + isp.s), 3) == "str") { return ir::vty_u(1) }
+      ir::vty_unknown()
+    }
+    Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice
+      | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => { ir::vty_unknown() }
+  }
+}
 ## Record `e`'s spelling, and the value type it names where the record so far has none.
 sema_spell_record := fn(e : ptr(Expr), locals : ptr(LVec), nloc : usize, decls : ptr(rt::Vec), src : ptr(u8), a : ptr(mut rt::Arena)) {
   sp : ir::TySpell = sema_spell_shape(e, locals, nloc, decls, src, a)
-  if sp.n == 0 {
-    ## an element of `str` is a `u8` (`str` is `[u8]`, Types §7), a type no declaration spells
-    match deref(e) {
-      Expr::Index(ib, ii) => {
-        bsp : ir::TySpell = ir::sty_spell_get(ib)
-        cur0 : ir::VTy = ir::sty_get(e)
-        if not ir::vty_known(cur0) and bsp.n == 3 and str_at((src + bsp.s), 3) == "str" { ir::sty_put(e, ir::vty_u(1)) }
-      }
-      Expr::Num | Expr::BoolLit | Expr::Var | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
-        | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Try | Expr::FloatLit | Expr::Slice
-        | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
-    }
+  if not sema_spell_known(sp) {
+    cur0 : ir::VTy = ir::sty_get(e)
+    if ir::vty_known(cur0) or ir::vty_is_lit(cur0) { return }
+    bt : ir::VTy = sema_vty_builtin(e, src)
+    if ir::vty_known(bt) { ir::sty_put(e, bt) }
     return
   }
   ir::sty_spell_put(e, sp)

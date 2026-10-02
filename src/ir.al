@@ -2575,8 +2575,10 @@ sty_get_key := fn(k : usize) -> VTy {
 ## recorder's own companion, never read by a builder: a value type (`VTy`) is enough to emit a scalar,
 ## but reaching the scalar a field, a `deref` or an element holds needs the aggregate or pointer it is
 ## read from, and only its spelling names that. Same table, own key space (bit 62), so a spelling key
-## meets neither a node key (an arena address) nor a binding key (bit 63 alone).
-pub TySpell := struct { s : usize, n : usize }
+## meets neither a node key (an arena address) nor a binding key (bit 63 alone). `bytes_view` marks the
+## one type a builtin produces that no declaration spells: a byte view — `str`, which is `[u8]` (Types
+## §7) — answered by `str_at`/`bytes` or a string literal; `s`/`n` are then 0.
+pub TySpell := struct { s : usize, n : usize, bytes_view : bool }
 spell_key := fn(k : usize) -> usize { k | shl(usize(1), 62) }
 pub sty_spell_put := fn(e : ptr(Expr), t : TySpell) {
   ## unchecked-ok: the node's address is the table key; nothing reads it back as a pointer.
@@ -2619,7 +2621,7 @@ sty_spell_get_key := fn(k : usize) -> TySpell {
     }
     None => {}
   }
-  TySpell(s = 0, n = 0)
+  TySpell(s = 0, n = 0, bytes_view = false)
 }
 
 ## ───────────────────────────── the signedness differential census (docs/ir.md §3.8.5) ─────────────────────────────
