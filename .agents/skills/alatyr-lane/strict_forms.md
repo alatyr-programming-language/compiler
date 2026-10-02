@@ -213,6 +213,15 @@ call it. If two exist, reducing them to one is part of your fix (`SKILL.md` §4)
 to the type it is about (`TyKind`'s predicates are one exhaustive `match` each, so a new kind has to be
 answered in all of them).
 
+```alatyr
+## not this — a second scan answers "is this payload a folded Option?" from the source text
+is_folded_here := fn(src : ptr(u8), s : usize, n : usize) -> bool { str_at(src + s, 7) == "Option(" }
+
+## this — ask the one place that already decides it (lower_layout), and extend it there if it is short
+pf := payload_folded_ty(cx.decls, cx.src, es, el, vs, vl, usize(bi), deref(cx.mar))
+if pf.n != 0 { … }
+```
+
 **Check.** `scripts/idiom_gate.sh` (the TABLE and SCAN rules) refuses a new duplicated decision of the
 shapes it knows. Anything it cannot see is held by review.
 
@@ -230,6 +239,18 @@ shapes it knows. Anything it cannot see is held by review.
 use it (`d : i64 = unchecked bitcast(i64, x)` ; `if d < 0`). Do not rely on a literal-only expression or
 an `if` / `match` expression to carry signedness into `/`, `%` or an ordering. Choose the narrowest
 width that holds the value, and write that width.
+
+```alatyr
+## not this — the ordering takes its signedness from the operand's spelling (#546, #764)
+if unchecked bitcast(i64, x) < 0 { … }          ## compiled as an unsigned compare: always false
+q := (if c { a } else { b }) / k                ## the `if` carries no declared signedness (#766)
+
+## this — the value has a declared type before it is compared or divided
+d : i64 = unchecked bitcast(i64, x)
+if d < 0 { … }
+v : i64 = if c { a } else { b }
+q := v / k
+```
 
 **Check.** None. Held by review. A typed rule is possible over a census channel, as for §6.
 
@@ -297,6 +318,16 @@ The statement form `f()?` is fine, because there is no value to read.
 the tree's own compiler handles it correctly. For a long time these forms were recorded **only** as
 comments at the workaround sites. A comment cannot tell anyone whether it is still true, and nothing
 noticed when a promotion made one obsolete. The owner's decision on #785 made them a registry.
+
+```text
+## not this — a workaround with only a comment to say why
+x := mk() ; k := x.kind        ## seed miscompiles is_c(mk().kind)   (true? since when? nobody checks)
+
+## this — the same workaround, plus a row in scripts/seed_forms.tsv with a planted program
+x := mk() ; k := x.kind        ## seed form `call_result_enum_field_arg` (scripts/seed_forms.tsv, #791)
+## the row's `sites` field names this function; the check fails the promotion that fixes the form,
+## so the row and the workaround retire together
+```
 
 **The registry.** `scripts/seed_forms.tsv` has one row per form. Each row points to a planted
 program, `scripts/seed_forms/<name>.al`, and gives its correct exit value, its issue and its
@@ -411,6 +442,16 @@ the plumbing that makes this possible: "the pass-plumbing params that thread an 
 `ptr(mut Stmt)`, `ptr(Expr)`. Do not use `usize`, and do not use a sibling node's type. Where a handle
 passes through an untyped container (`rt::Vec` stores `usize`), convert it back at exactly one
 accessor, with its `unchecked-ok` reason (§6).
+
+```alatyr
+## not this — an arm-list head declared as a statement pointer, or as a bare integer (#760)
+walk_arms := fn(head : ptr(mut Stmt)) { … deref(arm_p(head)) … }
+walk_args := fn(h : usize) { … }
+
+## this — the handle has its own node's type, and a list head is the list's Option (§1)
+walk_arms := fn(head : Option(ptr(mut Arm))) { … }
+walk_one_arm := fn(a : ptr(mut Arm)) { … }
+```
 
 **Check.** Since #760, the checker refuses a sibling-pointer mix at a `deref`. The `usize` plumbing is
 held by review. The next step is proposed below.
