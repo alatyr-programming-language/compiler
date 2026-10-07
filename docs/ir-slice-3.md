@@ -195,3 +195,18 @@ Stacked on 3a (#910).
 - **Outside 3b**: pointer arithmetic (`gep`, with arrays in 3c), a pointer whose type no declaration
   spells (an unannotated `m := ptr(x)`), `ptr(G)` of a global, nested field paths, a place reached
   through a call result.
+
+### 6.1 Predicted manifest transitions (measured before the gate)
+
+Fresh manifests of 3a and of 3b on the gate machine, joined on (backend, path):
+
+| backend | path | before → after | why |
+|---|---|---|---|
+| aarch64, riscv64 | `test/deref_field_write.al` | run/133 → run/42 | `deref(p).f = v` through a pointer parameter |
+| riscv64 | `test/accept_ptr_target.al` | run/133 → run/139 | the program dereferences a null `ptr(A)`; now the same SIGSEGV as x86_64 and aarch64 (139) |
+| wasm | `test/package/visibility_pub_mut_lib/package.al`, `…/src/api.al` | assemble/1 → assemble/1 (stderr) | a function writing a `pub mut` module scalar is selected from the IR; the module still fails to assemble elsewhere |
+| all | 3 new fixtures | 12 ADDED rows | `ir_ptr_place` 42 (wasm 134), `ir_ptr_agree` 42 (riscv64 133, wasm 134), `ir_global_mut` 42 |
+
+No x86_64 row moves. Legacy values of the new fixtures (3a's compiler): `ir_ptr_place` aarch64/riscv64
+133; `ir_ptr_agree` aarch64 133; `ir_global_mut` 42 everywhere (the legacy twins already agree on
+whole-cell module scalars; the fixture pins the IR's store width against them).
