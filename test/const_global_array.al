@@ -5,7 +5,7 @@
 ## and an accumulating loop. `src/`+`lib/` declare no const global arrays (they use fns/spans), so this
 ## stays fixpoint-neutral.
 TAB := [10, 20, 12]
-PRIMES := [2, 3, 5, 7, 11]
+PRIMES : [u64; 5] = [2, 3, 5, 7, 11]
 
 main := fn() -> u64 {
   a := TAB[0] + TAB[1] + TAB[2]      ## 10 + 20 + 12 = 42 (direct indexed reads)

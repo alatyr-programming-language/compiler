@@ -16,7 +16,7 @@ main := fn() -> u64 {
   mut total : u64 = 0
   xs : [C; 3] = [C.R, C.G, C.B]
   match xs[1] { R => { total += 1 }; G => { total += 2 }; B => { total += 3 } }
-  v := match xs[2] { R => { 1 }; G => { 2 }; B => { 3 } }
+  v : u64 = match xs[2] { R => { 1 }; G => { 2 }; B => { 3 } }
   total += v
   total += elem(xs, 0)
   b := false
@@ -25,7 +25,7 @@ main := fn() -> u64 {
   match b { true | false => { total += 1 } }
   n : u8 = 7
   match n { 0 => { total += 100 }; 1 => { total += 100 }; _ => { total += 5 } }
-  w := match n { 0..=6 => { 100 }; 7..=255 => { 6 } }
+  w : u64 = match n { 0..=6 => { 100 }; 7..=255 => { 6 } }
   total += w
   k : i8 = -3
   match k { -128..=-1 => { total += 4 }; 0..=127 => { total += 100 } }

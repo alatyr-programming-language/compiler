@@ -14,6 +14,6 @@ main := fn() -> u64 {
   v := mkV()
   n := mkN()
   s := match v { W::Some(x) => x.a + x.b + x.c + x.d + x.e + x.f + x.g, W::None => 0 }   ## 28
-  t := match n { W::Some(x) => 0, W::None => 14 }                                         ## 14
+  t : u64 = match n { W::Some(x) => 0, W::None => 14 }                                         ## 14
   s + t                                                                                    ## 42
 }

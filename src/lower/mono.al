@@ -175,7 +175,7 @@ collect_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : Opti
   fi := str_lit_info(fmt)
   if fi.is_s == false { return }
   mut ai := 1
-  mut i := 0
+  mut i : usize = 0
   while i < fi.sl {
     mut step := false
     if i + 1 < fi.sl {

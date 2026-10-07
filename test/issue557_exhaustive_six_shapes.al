@@ -8,7 +8,7 @@ p_param := fn(c : C) -> u64 { match c { R => { return 1 }; G => { return 2 }; B 
 p_deref := fn(q : ptr(C)) -> u64 { match deref(q) { R => { return 1 }; G => { return 2 }; B => { return 3 } } return 0 }
 p_call_src := fn() -> C { return C.G }
 main := fn() -> u64 {
-  mut total := 0
+  mut total : u64 = 0
   total += p_param(C.R) + p_param(C.G) + p_param(C.B)
   a : C = C.B
   match a { R => { total += 1 }; G => { total += 2 }; B => { total += 3 } }

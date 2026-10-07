@@ -39,7 +39,7 @@ main := fn() -> u64 {
   o := Outer(p = p)
   q := res(2)
   t := two()
-  mut acc := 0
+  mut acc : u64 = 0
   ## multi-token return types
   acc = acc + p.a + p.b                        ## 10 + 11
   acc = acc + o.p.a                            ## chained field: 10
@@ -56,7 +56,7 @@ main := fn() -> u64 {
   ## an expression `if`, with a nested one in the else position
   acc = acc + if acc > 0 { 1 } else { if acc == 0 { 5 } else { 9 } }
   ## a `match` expression
-  m := match acc {
+  m : u64 = match acc {
     0 => { 100 }
     _ => { 1 }
   }

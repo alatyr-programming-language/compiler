@@ -187,7 +187,7 @@ pub try_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
     push_str(sb, "  leaq ")
     emit_global_label(sb, cx.decls, cx.src, gp.gs, gp.gn)
     push_str(sb, "(%rip), %rax\n")
-    mut gpj := 0
+    mut gpj : usize = 0
     while gpj < gpnw {
       push_str(sb, "  movq ")
       push_int(sb, (gp.off + i64(gpj)) * 8)
@@ -219,7 +219,7 @@ pub try_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
     nnw := 1 + enum_inst_words(cx.decls, cx.src, nfa.s, nfa.n, a)
     ntb := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
     emit_agg_base_addr(nrent, sb)                    ## ROOT struct word-0 address → %rax
-    mut nj := 0
+    mut nj : usize = 0
     while nj < nnw {
       push_str(sb, "  movq ")
       push_int(sb, nfa.fwo * 8 + i64(nj) * 8)
@@ -260,7 +260,7 @@ pub try_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
   nw := 1 + enum_inst_words(cx.decls, cx.src, ft.s, ft.n, a)
   tbase := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
   emit_agg_base_addr(bent, sb)                       ## struct word-0 address → %rax
-  mut j := 0
+  mut j : usize = 0
   while j < nw {
     ## enum field word `j` sits at struct byte `efp.off + j*8` from the base (down-growing);
     ## copy it into scratch slot `tbase + 1 + j`.
@@ -302,7 +302,7 @@ pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
         push_str(sb, "  imulq $")
         push_int(sb, i64(gaen.stride * 8))
         push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq %rax, %r13\n")
-        mut gj := 0
+        mut gj : usize = 0
         while gj < gaen.stride {
           push_str(sb, "  movq ")
           push_int(sb, i64(gj * 8))
@@ -331,7 +331,7 @@ pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
           nw := 1 + enum_inst_words(cx.decls, cx.src, ees, eel, a)
           tbase := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
           emit_index_addr(base, idx, sb, cx, a, nl)     ## element word-0 address → %rax
-          mut j := 0
+          mut j : usize = 0
           while j < nw {
             ## element word `j` at `-(j*8)(%rax)` (down-growing) → scratch slot `tbase+1+j`.
             push_str(sb, "  movq ")
@@ -374,7 +374,7 @@ pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
               push_str(sb, "  imulq $")
               push_int(sb, i64(gnw * 8))
               push_str(sb, ", %rcx\n  addq %rcx, %rax\n  movq %rax, %r13\n")
-              mut gj := 0
+              mut gj : usize = 0
               while gj < gnw {
                 push_str(sb, "  movq ")
                 push_int(sb, i64(gj * 8))
@@ -406,7 +406,7 @@ pub try_index_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::StrBuf, cx
               fnw := 1 + enum_inst_words(cx.decls, cx.src, faes.s, faes.n, a)
               ftb := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
               emit_index_addr(base, idx, sb, cx, a, nl)   ## element word-0 address → %rax
-              mut fj := 0
+              mut fj : usize = 0
               while fj < fnw {
                 push_str(sb, "  movq ")
                 push_int(sb, i64(fj * 8))
@@ -450,7 +450,7 @@ pub try_arrelem_field_enum_scrut := fn(scrut : ptr(Expr), in out sb : strbuf::St
               nw := 1 + enum_inst_words(cx.decls, cx.src, ft.s, ft.n, a)
               tbase := usize(cx.tslot) + cx.mdepth * cx.swidth + cx.swidth - 1
               emit_index_addr(fbi.arr, fbi.idx, sb, cx, a, nl)   ## element base address → %rax
-              mut j := 0
+              mut j : usize = 0
               while j < nw {
                 push_str(sb, "  movq ")
                 push_int(sb, afp.off + i64(j) * 8)
@@ -755,7 +755,7 @@ pub emit_enum_match := fn(head_in : Option(ptr(mut Arm)), si : ScrutInfo, in out
           }
         }
         mut bnd := am2.binds_head
-        mut bi := 0
+        mut bi : usize = 0
         loop {
           match bnd {
             Some(bndq) => {

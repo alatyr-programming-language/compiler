@@ -23,7 +23,7 @@ mk_e := fn() -> E { return E.B(1) }
 mk_r := fn() -> Result(u64, u64) { return Result.Ok(1) }
 
 main := fn() -> u64 {
-  mut a := 0
+  mut a : u64 = 0
   match get() { Option::Some(v) => { a = v } Option::None => { a = 100 } }
   match mk_e() { E::A(x) => { a = a + 100 } E::B(y) => { a = a + y } }
   match mk_r() { Result::Ok(z) => { a = a + z } Result::Err(e) => { a = a + 100 } }

@@ -1,6 +1,6 @@
 ## A library target retains the public API and its private transitive helper, but does not invent an
 ## executable entry point for this package.
-TABLE := [1]
+TABLE : [u64; 1] = [1]
 
 leaf := fn(x : u64) -> u64 {
   x

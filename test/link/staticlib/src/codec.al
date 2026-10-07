@@ -1,5 +1,5 @@
 ## Same API as objectlib; static_lib wraps the deterministic single package object in an ar archive.
-TABLE := [1]
+TABLE : [u64; 1] = [1]
 
 leaf := fn(x : u64) -> u64 {
   x

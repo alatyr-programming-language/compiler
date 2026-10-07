@@ -146,7 +146,7 @@ fn_decl_by_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usiz
   if nl == 0 { return 0 - 1 }
   cnt := rt::vec_len(deref(decls))
   mut res : i64 = 0 - 1
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and streq(src, d.name_start, d.name_len, ns, nl) { res = i64(i) }
@@ -341,7 +341,7 @@ fnty_param_span := fn(src : ptr(u8), p0 : usize, idx : usize) -> CSpan {
   if str_at((src + p), 1) != "(" { return CSpan(s = 0, n = 0) }
   p = p + 1
   mut d := 1
-  mut k := 0
+  mut k : usize = 0
   mut ss := p
   mut rs := 0
   mut rn := 0
@@ -635,7 +635,7 @@ pub emit_ecallee_call := fn(nargs : usize, args_head : Option(ptr(mut Arg)), in 
 ## Bit `k` of a float-argument mask (k ≤ 6 — the SysV register-argument budget).
 fmask_bit := fn(m : usize, k : usize) -> bool {
   mut v := m
-  mut i := 0
+  mut i : usize = 0
   while i < k {
     v = v / 2
     i = i + 1
@@ -697,7 +697,7 @@ pub dyn_user_arg_is_float := fn(cx : ptr(LCtx), ftpos : usize, i : usize) -> boo
 pub lam_cap_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), lidx : usize, larity : usize, ncap : usize) -> bool {
   d := deref(decl_get(decls, lidx))
   mut pp := d.params_head
-  mut k := 0
+  mut k : usize = 0
   mut r := false
   loop {
     match pp {

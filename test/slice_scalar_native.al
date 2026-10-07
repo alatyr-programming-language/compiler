@@ -3,7 +3,7 @@
 ## and a `while` loop (native backends lack `for`) — the minimal shape for the native slice-index
 ## lowering (x86 already does it). 10 + 20 + 12 = 42.
 main := fn() -> u64 {
-  xs := [10, 20, 12, 99]
+  xs : [u64; 4] = [10, 20, 12, 99]
   s := xs[0..3]
   mut acc : u64 = 0
   mut i : usize = 0

@@ -12,7 +12,7 @@ main := fn() -> u64 {
   while i < 10 { i = i + 1; if i == 5 { continue } w = w + i }
   ## range-for: skip odds in 0..10 -> 0+2+4+6+8 = 20
   mut f : u64 = 0
-  for k in 0..10 { if k % 2 == 1 { continue } f = f + k }
+  for k in 0..u64(10) { if k % 2 == 1 { continue } f = f + k }
   ## loop: sum 1..9, break past 100 -> 45
   mut j : u64 = 0
   mut lp : u64 = 0
@@ -23,7 +23,7 @@ main := fn() -> u64 {
   for x in a { if x == 99 { continue } ar = ar + x }
   ## nested: inner continue skips inner odd; outer runs 3 times -> inner sum(0,2,4)=6 each *3 = 18
   mut nn : u64 = 0
-  for p in 0..3 { for q in 0..5 { if q % 2 == 1 { continue } nn = nn + q } }
+  for p in 0..3 { for q in 0..u64(5) { if q % 2 == 1 { continue } nn = nn + q } }
   ## w=50, f=20, lp=45, ar=42, nn=18 -> 42 + (w-50) + (f-20) + (lp-45) + (ar-42) + (nn-18) = 42
   42 + (w - 50) + (f - 20) + (lp - 45) + (ar - 42) + (nn - 18)
 }

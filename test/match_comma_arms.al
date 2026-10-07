@@ -17,7 +17,7 @@ main := fn() -> u64 {
   b := pick(3)          ## 9
   z := pick(99)         ## 0 (wildcard)
   ## integer match on a LITERAL scrutinee (comma arms)
-  lit := match 3 { 1 => 100, 3 => 6, _ => 0 }   ## 6
+  lit : u64 = match 3 { 1 => 100, 3 => 6, _ => 0 }   ## 6
   ## comma-separated str-literal match in value position
   s := classify("fn") + classify("x")           ## 10 + 1 = 11
   a + b + z + lit + s + 9                        ## 7 + 9 + 0 + 6 + 11 + 9 = 42

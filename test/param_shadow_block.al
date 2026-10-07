@@ -22,7 +22,7 @@ Shape := enum { A(u64), B(u64) }
 if_block := fn(p : u64) -> u64 {
   mut acc : u64 = 0
   if p == 1 {
-    p := 8
+    p : u64 = 8
     acc = acc * 10 + p
   }
   return acc
@@ -35,7 +35,7 @@ seed_before := fn(p : u64) -> u64 {
   mut acc : u64 = 0
   if p == 3 {
     acc = acc * 10 + p
-    p := 8
+    p : u64 = 8
     acc = acc * 10 + p
   }
   return acc
@@ -49,7 +49,7 @@ loop_body := fn(p : u64) -> u64 {
   mut acc : u64 = 0
   mut i : u64 = 0
   while i < 3 {
-    p := 5
+    p : u64 = 5
     acc = acc * 10 + p
     i = i + 1
   }
@@ -63,7 +63,7 @@ two_levels := fn(p : u64) -> u64 {
   if p == 2 {
     acc = acc * 10 + p
     if p == 2 {
-      p := 9
+      p : u64 = 9
       acc = acc * 10 + p
     }
   }
