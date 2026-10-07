@@ -3,7 +3,9 @@
 ## WORD-tier struct (every field one 8-byte word) and an 8-byte scalar that agreement is proved here in
 ## both directions: the IR writes and a legacy function reads, then the reverse. The `l*` functions
 ## each hold a float local, which keeps them on the legacy emitter until slice 8 builds floats; `main`,
-## `put`, `get` and `bump` are IR-built on aarch64/riscv64. Answers 42 everywhere.
+## `put`, `get` and `bump` are IR-built on aarch64/riscv64. The legacy functions spell the field place
+## `deref(p).f`, the form aarch64's legacy emitter reads and writes; riscv64's legacy emitter has no
+## field place through a pointer at all (a located trap, so nothing legacy-written can disagree there).
 S := struct { a : i64, b : u64 }
 put := fn(p : ptr(mut S), x : i64) {
   p.a = x
@@ -12,12 +14,12 @@ put := fn(p : ptr(mut S), x : i64) {
 get := fn(p : ptr(S)) -> i64 { p.a + i64(deref(p).b) }
 lput := fn(p : ptr(mut S), x : i64) {
   f : f64 = 1.0
-  p.a = x
-  p.b = 9
+  deref(p).a = x
+  deref(p).b = 9
 }
 lget := fn(p : ptr(S)) -> i64 {
   f : f64 = 2.0
-  p.a + i64(p.b)
+  deref(p).a + i64(deref(p).b)
 }
 bump := fn(q : ptr(mut u64)) { deref(q) = deref(q) + 5 }
 lbump := fn(q : ptr(mut u64)) {
