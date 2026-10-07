@@ -8570,12 +8570,14 @@ run_wat ir_twins_short_circuit 42
 ## is asserted by value; the legacy twin emitters trapped on `ir_struct_local` and `ir_size_align` and
 ## divided the signed field of `ir_struct_field_signed` unsigned (#765). wasm keeps its legacy emission
 ## for a function with a frame object until the shadow stack exists, so only `ir_size_align` (no frame
-## object) is asserted there. `ir_struct_assign_self` is #909: x86_64 and the legacy emitters build the
-## literal in place (22); the IR-selected twins answer the literal's value (21).
+## object) is asserted there. `ir_struct_field_signed` is asserted with `run_x86`, not `run`: on wasm it
+## is still #765's wrong value, and the wasm sweep walks every `run` row. `ir_struct_assign_self` is
+## #909: x86_64 and the legacy emitters build the literal in place (22); the IR-selected twins answer
+## the literal's value (21).
 run ir_struct_local 42
 run_a64 ir_struct_local 42
 run_rv64 ir_struct_local 42
-run ir_struct_field_signed 42
+run_x86 ir_struct_field_signed 42
 run_a64 ir_struct_field_signed 42
 run_rv64 ir_struct_field_signed 42
 run ir_size_align 42
