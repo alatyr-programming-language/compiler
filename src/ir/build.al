@@ -1563,8 +1563,11 @@ ib_bs_agg_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt
 ## 8-byte kernel type: a narrower store through a pointer would leave the upper bytes of a word a
 ## legacy reader loads whole.
 
-## A place: its base operand and the struct type there (flat: no struct inside an `Option` payload).
-IbPlace := struct { base : Opnd, di : usize, s : usize, n : usize }
+## A place: its base operand's kind and payload, and the struct type there. Flat — the base is not an
+## `Opnd` field — because an `Option` of a struct holding a struct crashes the frozen seed's build (the
+## note at `IbIntOp`).
+IbPlace := struct { bk : OpndK, bv : i64, di : usize, s : usize, n : usize }
+ib_place_base := fn(pl : IbPlace) -> Opnd { Opnd(k = pl.bk, v = pl.bv) }
 ## The struct type `pl` names.
 ib_place_st := fn(bp : ptr(mut IbB), in out a : rt::Arena, pl : IbPlace) -> Option(IbSt) { ib_struct_bound(bp, a, pl.di, pl.s, pl.n) }
 
@@ -1586,7 +1589,7 @@ ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
   if ib_names_global(bp, s, n) { return Option(IbPlace).None }
   bd : IbBind = ib_lookup(bp, s, n)
   match bd {
-    BdAgg(fr, sd, ts, tn) => { return Option(IbPlace).Some(IbPlace(base = o_frame(fr), di = sd, s = ts, n = tn)) }
+    BdAgg(fr, sd, ts, tn) => { return Option(IbPlace).Some(IbPlace(bk = OpndK.OkFrame, bv = i64(usize(fr)), di = sd, s = ts, n = tn)) }
     BdVal(v, vts, vtn) => {
       if not kty_is_ptr(vreg_ty(ib_b_f(bp), usize(v))) { return Option(IbPlace).None }
       po : Option(IbSpan) = ib_pointee(bp, vts, vtn)
@@ -1596,7 +1599,7 @@ ib_place_name := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usiz
           match sto {
             Some(st) => {
               if not ib_struct_word(bp, a, st) { return Option(IbPlace).None }
-              return Option(IbPlace).Some(IbPlace(base = o_vreg(v), di = st.di, s = st.s, n = st.n))
+              return Option(IbPlace).Some(IbPlace(bk = OpndK.OkVReg, bv = i64(usize(v)), di = st.di, s = st.s, n = st.n))
             }
             None => {}
           }
@@ -1675,7 +1678,7 @@ ib_bs_store_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stm
           match flo {
             Some(fld) => {
               vo : Option(VRegId) = ib_value_ctx(bp, a, fv, IbKS(ty = fld.ty, sg = fld.sg))
-              match vo { Some(v) => { ib_store_at(bp, a, pl.base, fld, v) }; None => {} }
+              match vo { Some(v) => { pb := ib_place_base(pl); ib_store_at(bp, a, pb, fld, v) }; None => {} }
               return
             }
             None => {}
@@ -1702,7 +1705,8 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
             Some(fld) => {
               k := ib_ty(bp, e)?
               if not ib_ks_eq(k, IbKS(ty = fld.ty, sg = fld.sg)) { return ib_no(bp, e, NyWhy.NwDisagree) }
-              lv := ib_load_at(bp, a, pl.base, fld)
+              pb := ib_place_base(pl)
+              lv := ib_load_at(bp, a, pb, fld)
               return Option(VRegId).Some(lv)
             }
             None => {}
