@@ -289,6 +289,15 @@ pub collect_slots := fn(in out slots : SVec, head : Option(ptr(mut Stmt)), src :
                     if ft.n != 0 { es2 = ft.s; el2 = ft.n }
                   }
                 }
+                ## The local's DECLARED type decides its layout when it names an enum (`h : Option(S) =
+                ## Option.None`): the bare literal head `Option` names no type argument, so it sized `T` as one
+                ## word and the local took two words of a three-word value — a store through `ptr(h)` or a
+                ## re-assignment then overran its neighbour (#899). Only a SCALAR literal payload (no synthesized
+                ## type above) defers to it; a declared instance never makes the local narrower.
+                lta := local_type_span(src, ns, nl)
+                if lta.n != 0 and es2 == ei.es and el2 == ei.el and enum_decl_of(decls, src, base_type_name(src, lta.s, lta.n).s, base_type_name(src, lta.s, lta.n).n) >= 0 and is_union_decl(decls, src, lta.s, lta.n) == false {
+                  if enum_type_payload_words(decls, src, lta.s, lta.n, a) >= enum_type_payload_words(decls, src, es2, el2, a) { es2 = lta.s; el2 = lta.n }
+                }
                 mut mx := enum_type_payload_words(decls, src, es2, el2, a)
                 ## A direct enum literal may carry a complete array payload even when its constructor
                 ## span is the bare enum head (`Opt.Some([Row; N])`). Keep the literal-specific answer
