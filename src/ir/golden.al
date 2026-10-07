@@ -16,7 +16,7 @@
 ## One golden: its module name (the file stem), its source, and the report it must print.
 Golden := struct { name : str, src : str, want : str }
 
-golden_count := fn() -> usize { 8 }
+golden_count := fn() -> usize { 9 }
 golden_at := fn(i : usize) -> Golden {
   if i == 0 { return Golden(name = "ig_arith", src = g_arith_src(), want = g_arith_want()) }
   if i == 1 { return Golden(name = "ig_logic", src = g_logic_src(), want = g_logic_want()) }
@@ -25,6 +25,7 @@ golden_at := fn(i : usize) -> Golden {
   if i == 4 { return Golden(name = "ig_call", src = g_call_src(), want = g_call_want()) }
   if i == 5 { return Golden(name = "ig_litfold", src = g_litfold_src(), want = g_litfold_want()) }
   if i == 6 { return Golden(name = "ig_sys", src = g_sys_src(), want = g_sys_want()) }
+  if i == 7 { return Golden(name = "ig_agg", src = g_agg_src(), want = g_agg_want()) }
   Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want())
 }
 
@@ -87,12 +88,21 @@ g_sys_want := fn() -> str {
   "fn ig_sys::sys_write Built\nfn sys_write(%0 : i64 u, %1 : i64 u, %2 : ptr, %3 : i64 u) -> i64 s {\n  %4 = syscall %0(%1, %2, %3)\n  ret %4\n}\nfn ig_sys::none Built\nfn none(%0 : ptr) -> i64 s {\n  unchecked {\n    %1 = const.u i64 1\n    %2 = const.u i64 1\n    %3 = const.u i64 0\n    %4 = call @sys_write(%1, %2, %0, %3)\n  }\n  ret %4\n}\nfn ig_sys::same Built\nfn same(%0 : ptr, %1 : ptr) -> bool {\n  %2 = cmp.== ptr %0, %1\n  ret %2\n}\nir: functions=3 built=3 notyet=0 sema_gaps=0 verify_failed=0\n"
 }
 
+## Slice 3a (`docs/ir-slice-3.md`): a struct local is a frame object; fields are loads and stores at
+## their byte offsets, a whole-struct assignment is a `copy`, `size`/`align` are constants.
+g_agg_src := fn() -> str {
+  "P := struct { a : i64, b : u8 }\n## a literal into a fresh frame object (zeroed first: `b` leaves padding), a field write, a copy\nmk := fn(x : i64) -> i64 {\n  mut p := P(a = x, b = 7)\n  p.b = 9\n  q := p\n  q.a / 3 + i64(q.b)\n}\n## `size`/`align` of a struct and of a scalar are constants\nsz := fn() -> u64 { size(P) + align(u16) }\n## outside 3a: a struct with a layout attribute (slice 3e)\nR := @packed struct { a : u8, b : u64 }\npk := fn() -> u64 { r := R(a = 1, b = 2); r.b }\n"
+}
+g_agg_want := fn() -> str {
+  "fn ig_agg::mk Built\nfn mk(%0 : i64 s) -> i64 s {\n  $0 : frame 16 align 8\n  $1 : frame 16 align 8\n  zero $0, 16\n  store i64 [$0 + 0], %0\n  %1 = const.u i8 7\n  store i8 [$0 + 8], %1\n  %2 = const.u i8 9\n  store i8 [$0 + 8], %2\n  copy $1, $0, 16\n  %3 = load.s i64 [$1 + 0]\n  %4 = const.s i64 3\n  %5 = cmp.== i64 %4, 0\n  trap_if %5 div_zero  @8389\n  %6 = cmp.== i64 %3, -9223372036854775808\n  %7 = cmp.== i64 %4, -1\n  if %6 {\n    %8 = mov bool %7\n  } else {\n    %9 = const bool 0\n    %8 = mov bool %9\n  }\n  trap_if %8 div_overflow  @8389\n  %10 = div.chk.s i64 %3, %4 div_zero  @8389\n  %11 = load.u i8 [$1 + 8]\n  %12 = ext.u i64 <- i8 %11\n  %13 = fit.u i64 <- i64 %12 narrow  @8399\n  %14 = add.chk.s i64 %10, %13 overflow  @8389\n  ret %14\n}\nfn ig_agg::sz Built\nfn sz() -> i64 u {\n  %0 = const.u i64 16\n  %1 = const.u i64 2\n  %2 = add.chk.u i64 %0, %1 overflow  @8490\n  ret %2\n}\nfn ig_agg::pk NotYet(stmt Assign, ig_agg.al:13:21)\nir: functions=3 built=2 notyet=1 sema_gaps=0 verify_failed=0\n"
+}
+
 ## Refusals: constructs outside the subset, and sema gaps (D6).
 g_notyet_src := fn() -> str {
-  "S := struct { a : u64 }\n## outside the subset: an aggregate parameter, an aggregate value\ntake := fn(s : S) -> u64 { s.a }\npair := fn(x : u64) -> u64 {\n  t := S(a = x)\n  t.a\n}\n## a sema gap, counted and never defaulted (D6): a default argument is filled after sema ran\n## (a value `loop`'s body is recorded since docs/ir.md §3.8.8, so `first` builds)\ndflt := fn(x : u64 = 5) -> u64 { x }\nfill := fn() -> u64 { dflt() }\nfirst := fn(n : u64) -> u64 {\n  mut i : u64 = 0\n  r := loop {\n    if i * i > n { break i }\n    i = i + 1\n  }\n  r\n}\n"
+  "S := struct { a : u64 }\n## outside the subset: an aggregate parameter (a struct local builds since slice 3a)\ntake := fn(s : S) -> u64 { s.a }\npair := fn(x : u64) -> u64 {\n  t := S(a = x)\n  t.a\n}\n## a sema gap, counted and never defaulted (D6): a default argument is filled after sema ran\n## (a value `loop`'s body is recorded since docs/ir.md §3.8.8, so `first` builds)\ndflt := fn(x : u64 = 5) -> u64 { x }\nfill := fn() -> u64 { dflt() }\nfirst := fn(n : u64) -> u64 {\n  mut i : u64 = 0\n  r := loop {\n    if i * i > n { break i }\n    i = i + 1\n  }\n  r\n}\n"
 }
 g_notyet_want := fn() -> str {
-  "fn ig_notyet::take NotYet(signature (a parameter or result that is not a kernel scalar), ig_notyet.al:3:1)\nfn ig_notyet::pair NotYet(expr StructLit, ig_notyet.al:5:8)\nfn ig_notyet::dflt Built\nfn dflt(%0 : i64 u) -> i64 u {\n  ret %0\n}\nfn ig_notyet::fill NotYet(sema-gap absent: expr Num, ig_notyet.al:10:22)\nfn ig_notyet::first Built\nfn first(%0 : i64 u) -> i64 u {\n  %1 = const.u i64 0\n  %2 = mov i64 %1\n  block L0 {\n    loop L1 {\n      %4 = mul.chk.u i64 %2, %2 overflow  @8677\n      %5 = cmp.>.u i64 %4, %0\n      if %5 {\n        %3 = mov i64 %2\n        br L0\n      } else {\n      }\n      %6 = const.u i64 1\n      %7 = add.chk.u i64 %2, %6 overflow  @8707\n      %2 = mov i64 %7\n      br L1\n    }\n  }\n  %8 = mov i64 %3\n  ret %8\n}\nir: functions=5 built=2 notyet=3 sema_gaps=1 verify_failed=0\n"
+  "fn ig_notyet::take NotYet(signature (a parameter or result that is not a kernel scalar), ig_notyet.al:3:1)\nfn ig_notyet::pair Built\nfn pair(%0 : i64 u) -> i64 u {\n  $0 : frame 8 align 8\n  store i64 [$0 + 0], %0\n  %1 = load.u i64 [$0 + 0]\n  ret %1\n}\nfn ig_notyet::dflt Built\nfn dflt(%0 : i64 u) -> i64 u {\n  ret %0\n}\nfn ig_notyet::fill NotYet(sema-gap absent: expr Num, ig_notyet.al:10:22)\nfn ig_notyet::first Built\nfn first(%0 : i64 u) -> i64 u {\n  %1 = const.u i64 0\n  %2 = mov i64 %1\n  block L0 {\n    loop L1 {\n      %4 = mul.chk.u i64 %2, %2 overflow  @8696\n      %5 = cmp.>.u i64 %4, %0\n      if %5 {\n        %3 = mov i64 %2\n        br L0\n      } else {\n      }\n      %6 = const.u i64 1\n      %7 = add.chk.u i64 %2, %6 overflow  @8726\n      %2 = mov i64 %7\n      br L1\n    }\n  }\n  %8 = mov i64 %3\n  ret %8\n}\nir: functions=5 built=3 notyet=2 sema_gaps=1 verify_failed=0\n"
 }
 
 ## ── the runner ──

@@ -1,14 +1,16 @@
 ## IR slice 3a (`docs/ir-slice-3.md` §1): struct locals built through the shared IR on the register
 ## twins — a literal into a fresh frame object, field reads and writes at the field's width and
-## signedness (narrow and `bool` fields included), whole-struct assignment as a `copy`, and a literal
-## that reads the struct it is assigned to (`p = P(a = p.b, b = p.a)` must see the OLD fields: the
-## literal is built in its own object before the copy, `docs/ir.md` §3.3). Answers 42 everywhere.
+## signedness (narrow and `bool` fields, a BYTE-tier layout), whole-struct assignment as a `copy` that
+## leaves the source independent, and a reassignment from another local. Answers 42 everywhere.
 P := struct { a : i64, b : i64 }
 N := struct { x : u8, y : i16, f : bool, w : u32 }
-swap := fn(a : i64, b : i64) -> i64 {
+pair := fn(a : i64, b : i64) -> i64 {
   mut p := P(a = a, b = b)
-  p = P(a = p.b, b = p.a)
-  p.a * 10 + p.b
+  q := P(a = 7, b = 0 - 3)
+  r := p
+  p = q
+  p.b = p.b * 2
+  (p.a + p.b) * 10 + r.a + r.b + q.b + 3
 }
 narrow := fn() -> i64 {
   mut n := N(x = 250, y = 0 - 300, f = true, w = 70000)
@@ -24,8 +26,8 @@ narrow := fn() -> i64 {
   r
 }
 main := fn() -> u64 {
-  s := swap(1, 2)
+  s := pair(1, 2)
   v := narrow()
-  if s == 21 and v == 31 { return 42 }
+  if s == 13 and v == 31 { return 42 }
   1
 }

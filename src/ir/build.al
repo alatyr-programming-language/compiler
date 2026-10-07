@@ -1233,8 +1233,9 @@ ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
 ## Sema records an aggregate as `VcAgg` with no type name (`docs/ir-slice-3.md` §3.4), so the struct
 ## TYPE is taken from the declaration the expression names: a binding's annotation, a struct literal's
 ## name, the struct local a name is bound to. Every scalar the builder reads out of a struct is still
-## sema's: a field read must carry the field's declared type in sema's record, else the function is
-## refused (`NwDisagree`), which is what types a signed field's division signed (#765).
+## sema's: a field read takes sema's record of it (a gap when sema left it untyped) and that record
+## must be the field's declared type, else the function is refused (`NwDisagree`). That is what types
+## a signed field's division signed (#765).
 ##
 ## 3a builds a WORD- or BYTE-tier struct (`lower_layout::layout_kind`) whose every field is a kernel
 ## scalar and that carries no layout attribute (`@packed`, `@align`, `@offset`, `@endian` are slice
@@ -1565,7 +1566,8 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
               fo : Option(IbFld) = ib_field(bp, a, st, fs, fl)
               match fo {
                 Some(fld) => {
-                  if not ib_field_rec_ok(e, fld) { return ib_no(bp, e, NyWhy.NwDisagree) }
+                  k := ib_ty(bp, e)?
+                  if not ib_ks_eq(k, IbKS(ty = fld.ty, sg = fld.sg)) { return ib_no(bp, e, NyWhy.NwDisagree) }
                   lv := ib_load_field(bp, a, fr, fld)
                   return Option(VRegId).Some(lv)
                 }
@@ -1587,24 +1589,9 @@ ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : pt
   ib_no(bp, e, NyWhy.NwOutside)
 }
 
-## Does sema's record of the field read `e` agree with the field's declared type? A typed record must
-## be that type exactly. A field read sema leaves untyped (`VcAbsent`/`VcUnknown`: the checker answers a
-## field of a struct local without its type name, `docs/ir-slice-3.md` §3.4) takes the type the field's
-## DECLARATION gives it — the declaration the expression names, never its shape.
-ib_field_rec_ok := fn(e : ptr(Expr), fld : IbFld) -> bool {
-  t : VTy = sty_get(e)
-  c : VCls = t.cls
-  match c {
-    VcAbsent | VcUnknown => { true }
-    VcInt | VcBool | VcPtr => {
-      ko : Option(IbKS) = ib_vty_ks(t)
-      match ko { Some(k) => { ib_ks_eq(k, IbKS(ty = fld.ty, sg = fld.sg)) }; None => { false } }
-    }
-    VcLit | VcFloat | VcAgg => { false }
-  }
-}
-## The value of `e` at the type `k` of the position it initializes (a struct field). A literal-only
-## expression no context typed (`VcLit`) takes that position's type, as Types §2.3 gives it: its exact
+## The value of `e` at the type `k` of the struct field it initializes. A literal-only expression no
+## context typed (`VcLit`: sema gives a call argument its parameter's type, not yet a struct literal's
+## initializer its field's) takes the field's DECLARED type, the context Types §2.3 names: its exact
 ## value as a constant at `k`, refused in a checked scope when `k` cannot hold it (sema accepts only
 ## one that fits) and wrapped inside `unchecked`. Anything else is `ib_value_at`.
 ib_value_ctx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), k : IbKS) -> Option(VRegId) {
@@ -2030,7 +2017,21 @@ ib_bs_break_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt),
 
 ## Build the function declaration `di` of `decls` into `p`. `Built(id)` when every construct is in the
 ## subset; `Refused`, with the construct, the reason and the span in `why`, otherwise.
+##
+## A type name in the function resolves from the function's own module (Modules §3), as x86_64's emit
+## loop publishes it (`lower_layout::set_type_ref_module`): published for the build and restored after,
+## so a legacy emitter that runs next sees what it saw before.
 pub build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, in out a : rt::Arena, in out why : BuildWhy) -> BuildOut {
+  d : Decl = deref(ib_decl_ptr(decls, di))
+  was_on := lower_layout::type_ref_mod_on()
+  was_s := lower_layout::type_ref_mod_s()
+  was_l := lower_layout::type_ref_mod_l()
+  lower_layout::set_type_ref_module(d.mod_start, d.mod_len, lower::root_mod_s(), lower::root_mod_l())
+  out : BuildOut = ib_build_one(p, decls, src, di, a, why)
+  if was_on { lower_layout::set_type_ref_module(was_s, was_l, lower::root_mod_s(), lower::root_mod_l()) } else { lower_layout::clear_type_ref_module() }
+  out
+}
+ib_build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize, in out a : rt::Arena, in out why : BuildWhy) -> BuildOut {
   dp := ib_decl_ptr(decls, di)
   d : Decl = deref(dp)
   why.span = u64(d.name_start)
