@@ -3,7 +3,7 @@
 ## (The build path is covered by loop_expr_labels.al.)
 main := fn() -> u64 {
   mut k : u64 = 0
-  z := loop {
+  z : u64 = loop {
     k = k + 1
     if k == 1 { break 100 }
     break 200

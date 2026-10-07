@@ -8,7 +8,7 @@ w_param := fn(c : C) -> u64 { match c { R => { return 7 }; _ => { return 0 } } r
 w_deref := fn(q : ptr(C)) -> u64 { match deref(q) { R => { return 7 }; _ => { return 0 } } return 0 }
 w_call_src := fn() -> C { return C.R }
 main := fn() -> u64 {
-  mut total := 0
+  mut total : u64 = 0
   total += w_param(C.R)
   a : C = C.R
   match a { R => { total += 7 }; _ => {} }

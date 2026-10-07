@@ -251,7 +251,7 @@ pub write_file := fn(path_cstr : usize, buf : usize, len : usize) -> isize {
   fd := sys_open(2, path_cstr, 577, 420)
   if fd < 0 { return fd }
   ufd := unchecked bitcast(usize, fd)
-  mut off := 0
+  mut off : usize = 0
   while off < len {
     nw := sys_write(1, ufd, buf + off, len - off)
     if nw <= 0 { cc := sys_close(3, ufd); return -1 }

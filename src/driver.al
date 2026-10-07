@@ -142,7 +142,7 @@ d_struct_nfields := fn(d : Decl) -> usize {
 ## (name, module, field count) plus 4 per field (name, default span). Exact, not an estimate.
 d_struct_table_words := fn(decls : rt::Vec) -> usize {
   mut w : usize = 0
-  mut di := 0
+  mut di : usize = 0
   while di < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, di)))
     if d.kind == 2 { w = w + 5 + 4 * d_struct_nfields(d) }
@@ -158,7 +158,7 @@ d_enum_table_words := fn(decls : rt::Vec, extra : usize) -> usize { (rt::vec_len
 ## Fill the PASS-1 enum-name table: every enum declaration's name, then the one-hop aliases.
 d_collect_enum_table := fn(decls : rt::Vec, src : ptr(u8), in out ev : rt::Vec) {
   dcnt1 := rt::vec_len(decls)
-  mut cdi := 0
+  mut cdi : usize = 0
   while cdi < dcnt1 {
     cd := deref(decl_at(Decl, rt::vec_get(decls, cdi)))
     ## bind the two spans to LOCALS before pushing: passing `cd.name_start` — a field read off a
@@ -174,7 +174,7 @@ d_collect_enum_table := fn(decls : rt::Vec, src : ptr(u8), in out ev : rt::Vec) 
 
 collect_struct_table := fn(decls : rt::Vec, src : ptr(u8), in out sv : rt::Vec) {
   dcnt := rt::vec_len(decls)
-  mut di := 0
+  mut di : usize = 0
   while di < dcnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, di)))
     if d.kind == 2 {
@@ -219,7 +219,7 @@ collect_struct_table := fn(decls : rt::Vec, src : ptr(u8), in out sv : rt::Vec) 
 ## `src/` compiles no `_start` (its `package.al` manifest is excluded), so this is false for the
 ## self-host build → the wrapper is emitted exactly as before → the TOOL-1 fixpoint is unaffected.
 d_has_start := fn(decls : rt::Vec, src : ptr(u8)) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.kind == 1 and d.name_len != 0 {
@@ -251,7 +251,7 @@ d_alias_type_head := fn(src : ptr(u8), d : Decl) -> DSpan {
 ## It intentionally ignores aliases already added to the parser table: that keeps this collector to
 ## one hop instead of accidentally admitting an alias-of-alias constructor spelling.
 d_direct_enum_decl_has := fn(decls : rt::Vec, src : ptr(u8), s : usize, n : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.kind == 3 and streq(src, d.name_start, d.name_len, s, n) { return true }
@@ -264,7 +264,7 @@ d_direct_enum_decl_has := fn(decls : rt::Vec, src : ptr(u8), s : usize, n : usiz
 ## `R.Ok(x)` is parsed as a value UFCS call even though `R` denotes the same nominal enum as `Result`.
 ## The table is additive and only affects ctor-vs-UFCS AST shape; unsupported alias chains remain out.
 collect_enum_aliases := fn(decls : rt::Vec, src : ptr(u8), in out ev : rt::Vec) {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.kind == 0 and d.arity == 0 {
@@ -594,7 +594,7 @@ d_nalloc := fn(a : ptr(mut rt::Arena), sz : usize) -> usize {
   aligned
 }
 d_cap_has := fn(caps : ptr(rt::Vec), s : usize, n : usize, src : ptr(u8)) -> bool {
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i < rt::vec_len(deref(caps)) {
     pk := rt::vec_get(deref(caps), i)
@@ -620,7 +620,7 @@ d_is_param := fn(s : usize, n : usize, ph : Option(ptr(mut Param)), na : ptr(mut
 }
 ## `decls` BY VALUE (3-word Vec) — `ptr()` of the in-out param destabilizes through this recursion.
 d_is_topdecl := fn(s : usize, n : usize, decls : rt::Vec, src : ptr(u8)) -> bool {
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -653,7 +653,7 @@ d_lit_type_span := fn(v : ptr(Expr), src : ptr(u8)) -> CSpan {
 }
 d_is_agg_type_name := fn(decls : rt::Vec, src : ptr(u8), ts : usize, tl : usize) -> bool {
   mut r := false
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if (d.kind == 2 or d.kind == 3) and streq(src, d.name_start, d.name_len, ts, tl) { r = true }
@@ -666,7 +666,7 @@ d_call_ret_type_span := fn(v : ptr(Expr), decls : rt::Vec, src : ptr(u8)) -> CSp
   mut r := CSpan(s = 0, n = 0)
   match deref(v) {
     Expr::Call(cs, cl, nargs, ah) => {
-      mut i := 0
+      mut i : usize = 0
       while i < rt::vec_len(decls) {
         d := deref(decl_at(Decl, rt::vec_get(decls, i)))
         if d.kind == 1 and d.ret_tl != 0 and streq(src, d.name_start, d.name_len, cs, cl) {
@@ -1009,7 +1009,7 @@ d_expr_rw_calls := fn(e : ptr(Expr), fs : usize, fl : usize, caps : ptr(rt::Vec)
         ## an inline bitcast, which DOES work in the driver (the Lambda→FnRef rewrite uses the same shape).
         mut chain_head : Option(ptr(mut Arg)) = Option.None
         mut chain_tail : Option(ptr(mut Arg)) = Option.None
-        mut k := 0
+        mut k : usize = 0
         while k < ncaps {
           pk := rt::vec_get(deref(caps), k)
           vptr := parser::newnode(na, Expr.Var(pk / 1024, pk % 1024))
@@ -1229,7 +1229,7 @@ d_count_calls_stmts := fn(head : Option(ptr(mut Stmt)), cs : usize, cl : usize, 
 }
 d_count_prog_calls := fn(cs : usize, cl : usize, decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
   mut cnt := 0
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn {
@@ -1244,7 +1244,7 @@ d_count_prog_calls := fn(cs : usize, cl : usize, decls : rt::Vec, na : ptr(mut r
 ## Mirrors lower::colon_pos — splits `a::b::c` into module head `a::b` + tail fn `c`.
 d_colon_pos := fn(src : ptr(u8), cs : usize, cl : usize) -> i64 {
   mut res := -1
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < cl {
     if str_at((src + cs + i), 1) == ":" and str_at((src + cs + i + 1), 1) == ":" { res = i64(i); i = i + 2 } else { i = i + 1 }
   }
@@ -1257,7 +1257,7 @@ d_colon_pos := fn(src : ptr(u8), cs : usize, cl : usize) -> i64 {
 d_mod_seg_eq := fn(src : ptr(u8), as_ : usize, al : usize, bs : usize, bl : usize) -> bool {
   if al != bl { return false }
   mut ok := true
-  mut i := 0
+  mut i : usize = 0
   while i < al {
     ca := str_at((src + as_ + i), 1)
     cb := str_at((src + bs + i), 1)
@@ -1280,7 +1280,7 @@ d_emission_paths := fn(decls : rt::Vec, pv : rt::Vec, name_start : rt::Vec, name
   cnt := rt::vec_len(decls)
   pcount := rt::vec_len(pv)
   mut out := rt::strbuf(tar, 16777216)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(ptr(decls), i))
     ms := d.mod_start
@@ -1296,7 +1296,7 @@ d_emission_paths := fn(decls : rt::Vec, pv : rt::Vec, name_start : rt::Vec, name
       if same { j += 1 } else { go = false }
     }
     mut path_i := pcount
-    mut k := 0
+    mut k : usize = 0
     while k < pcount and path_i == pcount {
       ns := rt::vec_get(name_start, k)
       nl := rt::vec_get(name_len, k)
@@ -1323,7 +1323,7 @@ d_emission_paths := fn(decls : rt::Vec, pv : rt::Vec, name_start : rt::Vec, name
 ## lowerer's qualified-callee resolution (colon_pos + callee_name_span + mod_head_matches).
 d_find_fn_decl := fn(cs : usize, cl : usize, decls : rt::Vec, src : ptr(u8)) -> usize {
   mut r := 0
-  mut i := 0
+  mut i : usize = 0
   cp := d_colon_pos(src, cs, cl)
   if cp >= 0 {
     hl := usize(cp)                  ## module-head length
@@ -1382,7 +1382,7 @@ d_expr_rw_hof_site := fn(e : ptr(Expr), hs : usize, hl : usize, fs : usize, fl :
           ncaps := rt::vec_len(deref(caps))
           mut chain_head : Option(ptr(mut Arg)) = Option.None
           mut chain_tail : Option(ptr(mut Arg)) = Option.None
-          mut k := 0
+          mut k : usize = 0
           while k < ncaps {
             pk := rt::vec_get(deref(caps), k)
             vptr := parser::newnode(na, Expr.Var(pk / 1024, pk % 1024))
@@ -1547,7 +1547,7 @@ d_append_cap_params := fn(ph : Option(ptr(mut Param)), caps : ptr(rt::Vec), decl
   ## `mut p_pmode : u8 = 0` — an int literal in the u8 field gave the stored Param a byte layout a
   ## WHOLE-STRUCT read (`d_lam_arity`) mis-decoded.
   mut pm8 : u8 = 0
-  mut k := 0
+  mut k : usize = 0
   while k < ncaps {
     pk := rt::vec_get(deref(caps), k)
     ## TYPE the capture param: a scalar capture stays untyped (ts/tl = 0 → word slot); a struct/enum
@@ -1784,7 +1784,7 @@ d_fwd_hof_arity := fn(d : Decl, na : ptr(mut rt::Arena), src : ptr(u8)) -> i64 {
 }
 d_fwd_call_arity := fn(decls : rt::Vec, cs : usize, cl : usize, na : ptr(mut rt::Arena), src : ptr(u8)) -> i64 {
   mut r : i64 = 0 - 1
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn {
@@ -1819,7 +1819,7 @@ d_ident_char := fn(c : str) -> bool {
 ## Decl index+1 of a VALUE-returning fn named `[cs,cl)` (is_fn, return type not `type`), else 0.
 d_value_fn_idx := fn(decls : rt::Vec, cs : usize, cl : usize, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
   mut r := 0
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn {
@@ -1842,7 +1842,7 @@ d_field_name_at := fn(src : ptr(u8), pos : usize, j : usize) -> CSpan {
   if str_at((src + i), 1) != "(" { return CSpan(s = 0, n = 0) }
   i = i + 1
   mut depth := 0
-  mut ai := 0
+  mut ai : usize = 0
   mut atname := true
   mut r := CSpan(s = 0, n = 0)
   mut scanning := true
@@ -1870,7 +1870,7 @@ d_field_name_at := fn(src : ptr(u8), pos : usize, j : usize) -> CSpan {
 d_param_name_at := fn(decls : rt::Vec, di : usize, p : usize, na : ptr(mut rt::Arena)) -> CSpan {
   d := deref(decl_at(Decl, rt::vec_get(decls, di)))
   mut ph := d.params_head
-  mut k := 0
+  mut k : usize = 0
   mut r := CSpan(s = 0, n = 0)
   loop {
     match ph {
@@ -1888,7 +1888,7 @@ d_param_name_at := fn(decls : rt::Vec, di : usize, p : usize, na : ptr(mut rt::A
 ## The value expr of the j-th (0-based) arg in the arena-linked Arg list `fhead`, or null.
 d_arg_e_at := fn(fhead : Option(ptr(mut Arg)), j : usize, na : ptr(mut rt::Arena)) -> ptr(Expr) {
   mut g : Option(ptr(mut Arg)) = fhead
-  mut k := 0
+  mut k : usize = 0
   mut r := unchecked bitcast(ptr(Expr), 0)
   loop {
     match g {
@@ -1918,7 +1918,7 @@ d_rewrite_named_call := fn(e : ptr(Expr), ss : usize, sl : usize, nf : usize, fh
   ## build the reordered arg list: output position p = the value whose field name == param p's name.
   mut head : Option(ptr(mut Arg)) = Option.None
   mut tail : Option(ptr(mut Arg)) = Option.None
-  mut p := 0
+  mut p : usize = 0
   while p < arity {
     pn := d_param_name_at(decls, di, p, na)
     ## find the source-order field j whose name matches param p
@@ -2134,8 +2134,8 @@ d_capture_pass := fn(body : Option(ptr(mut Stmt)), fn_val : ptr(Expr), in out de
 ## Last `::`-segment of a (possibly `a::b::c`) name span → its (start,len). Byte access via the
 ## `str_at((src + s + i), 1) == ":"` idiom (mirrors `name_tail`) — a rebased-handle-safe 1-char view.
 d_span_tail := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
-  mut i := 0
-  mut last := 0
+  mut i : usize = 0
+  mut last : usize = 0
   while i < n {
     if str_at(((src + s) + i), 1) == ":" { last = i + 1 }
     i = i + 1
@@ -2174,7 +2174,7 @@ d_param_count := fn(decls : rt::Vec, di : usize, na : ptr(mut rt::Arena)) -> usi
 d_alloc_callee := fn(decls : rt::Vec, cs : usize, cl : usize, na : ptr(mut rt::Arena), src : ptr(u8)) -> usize {
   ct := d_span_tail(src, cs, cl)
   mut r := 0
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn { if d.name_len != 0 {
@@ -2189,7 +2189,7 @@ d_insert_arg := fn(ah : Option(ptr(mut Arg)), k : usize, ae : ptr(Expr), na : pt
   newarg := parser::gnode(na, Arg(e = ae, next = Option.None))
   if k == 0 { parser::set_arg_next(na, newarg, ah); return Option.Some(newarg) }
   mut g : Option(ptr(mut Arg)) = ah
-  mut i := 0
+  mut i : usize = 0
   loop {
     if i >= k - 1 { break }
     match g {
@@ -2273,7 +2273,7 @@ d_elide_alloc_stmts := fn(head : Option(ptr(mut Stmt)), amb : usize, decls : rt:
 ## @convert fn's own name; `lower::twin_convert_callee` decides which calls and which decl, by x86_64's
 ## rules. It walks the same statement/expression shapes as `d_elide_alloc_*` above.
 d_desugar_convert := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn { d_convert_stmts(d.body_stmts, d.params_head, d.body_stmts, decls, na, src) }
@@ -2465,7 +2465,7 @@ d_self_param_base := fn(src : ptr(u8), d : Decl) -> DSpan {
 ## than one function; a slice, array, range or `Vec` matches none of them and keeps the counted loop.
 d_iter_next_decl := fn(decls : rt::Vec, src : ptr(u8), ts : usize, tn : usize) -> usize {
   mut r := 0
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn and d.name_len != 0 {
@@ -2584,7 +2584,7 @@ d_callee_name_matches := fn(src : ptr(u8), d : Decl, cs : usize, cl : usize) -> 
 d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut Arg)), decls : rt::Vec, src : ptr(u8), body : Option(ptr(mut Stmt)), ph : Option(ptr(mut Param)), na : ptr(mut rt::Arena), depth : usize) -> DSpan {
   mut cnt := 0
   mut hit := 0
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn and d.name_len != 0 and d.arity == nargs and d_callee_name_matches(src, d, cs, cl) { cnt = cnt + 1; hit = i + 1 }
@@ -2600,7 +2600,7 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut
     if ab.n == 0 { return DSpan(s = 0, n = 0) }
     mut c2 := 0
     mut h2 := 0
-    mut j := 0
+    mut j : usize = 0
     while j < rt::vec_len(decls) {
       d2 := deref(decl_at(Decl, rt::vec_get(decls, j)))
       if d2.is_fn and d2.name_len != 0 and d2.arity == nargs and d_callee_name_matches(src, d2, cs, cl) {
@@ -2614,7 +2614,7 @@ d_call_ret_base := fn(cs : usize, cl : usize, nargs : usize, ah : Option(ptr(mut
     return d_type_base_span(src, d3.ret_ts, d3.ret_tl)
   }
   mut tk := 0
-  mut k := 0
+  mut k : usize = 0
   while k < rt::vec_len(decls) {
     dk := deref(decl_at(Decl, rt::vec_get(decls, k)))
     if dk.is_fn == false and dk.name_len != 0 and d_callee_name_matches(src, dk, cs, cl) { tk = k + 1 }
@@ -2818,7 +2818,7 @@ d_iterfor_arms := fn(ah : Option(ptr(mut Arm)), body : Option(ptr(mut Stmt)), ph
 ## formatter's path deliberately does NOT run it — `fmt` must reprint the author's `for`, not this
 ## desugar.
 d_desugar_iter_for := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn { d_iterfor_stmts(d.body_stmts, d.body_stmts, d.params_head, decls, src, na) }
@@ -2831,7 +2831,7 @@ d_desugar_iter_for := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8)
 ## Expr::Lambda stored in `Decl.value`, so lift that value too. Reads decls the WORKING driver way
 ## (`decl_at` bitcast over `vec_get`).
 d_lift_lambdas := fn(in out decls : rt::Vec, na : ptr(mut rt::Arena), tar : ptr(mut rt::Arena), src : ptr(u8)) {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     ## Most non-function declarations carry a Num(0) placeholder, so this is a no-op for them. A
@@ -2952,8 +2952,8 @@ pub compile_pair := fn(sa : str, sb_src : str, in out a : Arena) -> strbuf::StrB
   mut name_len := rt::Vec(data = rt::bump(tar, 2 * 8), len = 0, cap = 2)
   mut src_off := rt::Vec(data = rt::bump(tar, 2 * 8), len = 0, cap = 2)
   mut src_len := rt::Vec(data = rt::bump(tar, 2 * 8), len = 0, cap = 2)
-  la := 2                  ## len("m0")
-  lb := 4                  ## len("main")
+  la : usize = 2                  ## len("m0")
+  lb : usize = 4                  ## len("main")
   lsa := sa.len
   lsb := sb_src.len
   rt::vec_push(name_start, strbuf::buf_len(bld))
@@ -3042,7 +3042,7 @@ pub compile_program := fn(names : ptr(rt::Vec), srcs : ptr(rt::Vec), in out a : 
   mut src_off := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   ## --- append all module NAMES first (so each name span precedes the source bytes) ---
-  mut k := 0
+  mut k : usize = 0
   while k < n {
     nm := rt::svec_str_get(deref(names), k)
     rt::vec_push(name_start, strbuf::buf_len(bld))
@@ -3111,8 +3111,8 @@ module_name := fn(p : str) -> str {
   ## the lean self-host parser does not yet handle — and str_at lowers identically under both).
   pb := unchecked bitcast(usize, p.ptr)
   ## start = one past the last '/'
-  mut start := 0
-  mut i := 0
+  mut start : usize = 0
+  mut i : usize = 0
   while i < n {
     c := bytes(p)[i]
     if c == 47 { start = i + 1 }   ## '/'
@@ -3169,7 +3169,7 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
 
   ## find the LAST "/lib/" in the path
   mut q := -1
-  mut i := 0
+  mut i : usize = 0
   while i + 5 <= p.len {
     if bytes(p)[i] == 47 and bytes(p)[i + 1] == 108 and bytes(p)[i + 2] == 105 and bytes(p)[i + 3] == 98 and bytes(p)[i + 4] == 47 { q = i64(i) }
     i += 1
@@ -3178,7 +3178,7 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
     ## Prefer the manifest-provided source root. This covers arbitrary `source_dir` values and
     ## flat packages (`source_dir = "."`) where the path has no `/src/` marker. The root is a
     ## pointer/length context set by the CLI immediately after package discovery.
-    mut s := 0
+    mut s : usize = 0
     mut found_root := false
     if MODULE_ROOT_N != 0 and p.len > MODULE_ROOT_N and str_at(unchecked bitcast(usize, p.ptr), MODULE_ROOT_N) == str_at(MODULE_ROOT_P, MODULE_ROOT_N) and bytes(p)[MODULE_ROOT_N] == 47 {
       s = MODULE_ROOT_N + 1
@@ -3186,7 +3186,7 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
     }
     ## Direct/non-package builds have no manifest context. Locate the conventional source_dir
     ## marker in both absolute (`…/src/…`) and relative (`src/…`) paths for those callers.
-    mut i := 0
+    mut i : usize = 0
     while found_root == false and i + 5 <= p.len {
       if bytes(p)[i] == 47 and bytes(p)[i + 1] == 115 and bytes(p)[i + 2] == 114 and bytes(p)[i + 3] == 99 and bytes(p)[i + 4] == 47 {
         s = i + 5
@@ -3236,7 +3236,7 @@ pub push_module_name := fn(in out bld : strbuf::StrBuf, p : str) {
 ## without being a library at all. Keep the two tests adjacent so the classes cannot drift apart.
 d_path_is_trusted_lib := fn(p : str) -> bool {
   if dep_root_prefix(p) != 0 { return true }
-  mut i := 0
+  mut i : usize = 0
   mut lib := false
   while i + 5 <= p.len {
     if bytes(p)[i] == 47 and str_at(unchecked bitcast(usize, p.ptr) + i, 5) == "/lib/" { lib = true }
@@ -3262,7 +3262,7 @@ d_publish_lib_modules := fn(pv : rt::Vec, mod_start : rt::Vec, mod_len : rt::Vec
   base := rt::bump(tar, n * 2 * 8 + 8)
   tbl := unchecked bitcast(ptr(mut u8), base)
   mut c := 0
-  mut k := 0
+  mut k : usize = 0
   while k < n {
     if d_path_is_trusted_lib(rt::svec_str_get(pv, k)) {
       rt::rec_set(tbl, c, rt::vec_get(mod_start, k))
@@ -3417,7 +3417,7 @@ d_manifest_scan := fn(s : str, soff : usize) {
   mut i := p + 7
   while i + 7 <= s.len {
     mut ok := true
-    mut j := 0
+    mut j : usize = 0
     while j < 7 { if bytes(s)[i + j] != bytes("version")[j] { ok = false } ; j += 1 }
     if ok {
       mut q := i + 7
@@ -3470,7 +3470,7 @@ d_manifest_path := fn(in out a : rt::Arena) -> str {
   if d_manifest_exists(a, cand) { return cand }
   mut last := 0
   mut seen := false
-  mut i := 0
+  mut i : usize = 0
   while i < root.len { if bytes(root)[i] == 47 { last = i ; seen = true } ; i += 1 }
   mut p := strbuf::strbuf(a, root.len + 32)
   if seen {
@@ -3494,7 +3494,7 @@ d_manifest_root_process := fn(in out a : rt::Arena, manifest : str) -> str {
   mut scan := strbuf::strbuf(a, 16777216)
   n := read_file_into(scan, a, manifest)
   src := str_at(scan.data, n)
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < n and found == false {
     c := bytes(src)[i]
@@ -3534,7 +3534,7 @@ d_manifest_root_process := fn(in out a : rt::Arena, manifest : str) -> str {
 ## `lib/base/process.al`; both are the same module and must occupy one slot in `pv`.
 d_manifest_is_base_process_path := fn(p : str) -> bool {
   if module_name(p) != "process" { return false }
-  mut i := 0
+  mut i : usize = 0
   while i + 10 <= p.len {
     if str_at(unchecked bitcast(usize, p.ptr) + i, 10) == "/lib/base/" { return true }
     i += 1
@@ -3544,7 +3544,7 @@ d_manifest_is_base_process_path := fn(p : str) -> bool {
 }
 
 d_manifest_has_base_process := fn(pv : rt::Vec) -> bool {
-  mut k := 0
+  mut k : usize = 0
   while k < rt::vec_len(pv) {
     if d_manifest_is_base_process_path(rt::svec_str_get(pv, k)) { return true }
     k += 1
@@ -3563,7 +3563,7 @@ d_manifest_package_path := fn(p : str) -> bool {
   if d_is_root_path(p) { return false }
   if dep_root_prefix(p) != 0 { return false }
   mut lib := false
-  mut i := 0
+  mut i : usize = 0
   while i + 5 <= p.len {
     if bytes(p)[i] == 47 and str_at(unchecked bitcast(usize, p.ptr) + i, 5) == "/lib/" { lib = true }
     i += 1
@@ -3604,20 +3604,20 @@ d_manifest_owned_path := fn(p : str) -> bool {
 ## for the required two-sided duplicate diagnostic.
 d_manifest_find_child := fn(pv : rt::Vec) -> bool {
   if MANIFEST_HAS == false or MANIFEST_BIND_N == 0 { return false }
-  mut k := 0
+  mut k : usize = 0
   mut found := false
   while k < rt::vec_len(pv) and found == false {
     p := rt::svec_str_get(pv, k)
     if d_manifest_package_path(p) {
       root := str_at(MODULE_ROOT_P, MODULE_ROOT_N)
-      mut rs := 0
+      mut rs : usize = 0
       if root != "." { rs = MODULE_ROOT_N + 1 }
       if root == "." and p.len >= 2 and str_at(unchecked bitcast(usize, p.ptr), 2) == "./" { rs = 2 }
       if rs < p.len {
         rem := p.len - rs
         if rem == MANIFEST_BIND_N + 3 and bytes(p)[p.len - 3] == 46 and bytes(p)[p.len - 2] == 97 and bytes(p)[p.len - 1] == 108 {
           mut same := true
-          mut i := 0
+          mut i : usize = 0
           while i < MANIFEST_BIND_N { if bytes(p)[rs + i] != bytes(str_at(MANIFEST_BIND_P, MANIFEST_BIND_N))[i] { same = false } ; i += 1 }
           if same {
             MANIFEST_CHILD_P = unchecked bitcast(usize, p.ptr)
@@ -3690,7 +3690,7 @@ d_manifest_decl_node := fn(in out a : rt::Arena, d : Decl) -> usize {
 
 d_manifest_module_decls := fn(pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec, in out decls : rt::Vec, in out na : rt::Arena, in out tar : rt::Arena, in out nstr : usize) {
   if MANIFEST_HAS == false or MANIFEST_VERSION_N == 0 { return }
-  mut k := 0
+  mut k : usize = 0
   while k < rt::vec_len(pv) {
     p := rt::svec_str_get(pv, k)
     if d_manifest_owned_path(p) {
@@ -3724,7 +3724,7 @@ d_manifest_module_decls := fn(pv : rt::Vec, name_start : rt::Vec, name_len : rt:
 d_manifest_drop_root_decl := fn(in out decls : rt::Vec, root_ms : usize, root_ml : usize) {
   if MANIFEST_HAS == false or MANIFEST_BIND_N == 0 { return }
   mut kept := 0
-  mut i := 0
+  mut i : usize = 0
   cnt := rt::vec_len(decls)
   while i < cnt {
     h := rt::vec_get(decls, i)
@@ -3916,7 +3916,7 @@ d_manifest_rewrite_stmts := fn(head : Option(ptr(mut Stmt)), allow : bool, in ou
 }
 
 d_manifest_owned_module := fn(src : ptr(u8), ms : usize, ml : usize, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec) -> bool {
-  mut k := 0
+  mut k : usize = 0
   mut found := false
   while k < rt::vec_len(pv) and found == false {
     p := rt::svec_str_get(pv, k)
@@ -3932,8 +3932,8 @@ d_manifest_owned_module := fn(src : ptr(u8), ms : usize, ml : usize, pv : rt::Ve
 ## `foo::bar` from accidentally resolving to a distinct `foo_bar` module.
 d_entry_module_eq := fn(src : ptr(u8), ms : usize, ml : usize, entry : str, head_len : usize) -> bool {
   eb := unchecked bitcast(usize, entry.ptr)
-  mut mi := 0
-  mut ei := 0
+  mut mi : usize = 0
+  mut ei : usize = 0
   mut ok := true
   while mi < ml and ei < head_len and ok {
     if ei + 1 < head_len and bytes(entry)[ei] == 58 and bytes(entry)[ei + 1] == 58 {
@@ -3957,9 +3957,9 @@ d_entry_module_eq := fn(src : ptr(u8), ms : usize, ml : usize, entry : str, head
 d_entry_matches_decl := fn(src : ptr(u8), d : Decl, entry : str) -> bool {
   if d.kind != 1 or d.name_len == 0 { return false }
   eb := unchecked bitcast(usize, entry.ptr)
-  mut sep := 0
+  mut sep : usize = 0
   mut qualified := false
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < entry.len {
     if bytes(entry)[i] == 58 and bytes(entry)[i + 1] == 58 { sep = i; qualified = true }
     i += 1
@@ -3983,7 +3983,7 @@ d_entry_matches_decl := fn(src : ptr(u8), d : Decl, entry : str) -> bool {
 ## emission, which also keeps a same-named dependency from satisfying the root package's target.
 d_package_entry_count := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec) -> usize {
   mut count := 0
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d_entry_matches_decl(src, d, entry) and d_manifest_owned_module(src, d.mod_start, d.mod_len, pv, name_start, name_len) { count += 1 }
@@ -3996,7 +3996,7 @@ d_package_entry_count := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : rt
 ## the count, so `-1` is only the defensive no-match result. Keeping the index lets the driver publish
 ## the selected declaration to lower's DCE without resolving the path a second way.
 d_package_entry_index := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec) -> i64 {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d_entry_matches_decl(src, d, entry) and d_manifest_owned_module(src, d.mod_start, d.mod_len, pv, name_start, name_len) { return i64(i) }
@@ -4019,7 +4019,7 @@ d_entry_result_kind := fn(src : ptr(u8), d : Decl) -> i64 {
 ## re-emitted under the reserved `__alatyr_raw_entry_body`. Catch an exact export or an anonymous-root
 ## function that already claims that reserved name before GAS is emitted.
 d_entry_wrapper_symbol_taken := fn(decls : rt::Vec, src : ptr(u8), symbol : str) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     ex := d_export_name(src, d.name_start, d.name_len)
@@ -4053,7 +4053,7 @@ d_entry_body_symbol := fn(src : ptr(u8), d : Decl, in out tar : rt::Arena) -> st
 ## automatic module/name mangling; both are views into the live compile arena except the derived
 ## spelling, which is copied into a small arena-backed buffer for the CLI linker call.
 d_package_entry_symbol := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec, in out tar : rt::Arena) -> str {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d_entry_matches_decl(src, d, entry) and d_manifest_owned_module(src, d.mod_start, d.mod_len, pv, name_start, name_len) {
@@ -4061,7 +4061,7 @@ d_package_entry_symbol := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : r
       if ex.n != 0 { return str_at((src + ex.s), ex.n) }
       if lower::is_root_mod(d.mod_start, d.mod_len) { return str_at((src + d.name_start), d.name_len) }
       mut out := rt::strbuf(tar, entry.len + 8)
-      mut k := 0
+      mut k : usize = 0
       while k < entry.len {
         if k + 1 < entry.len and bytes(entry)[k] == 58 and bytes(entry)[k + 1] == 58 {
           rt::push_str(out, "__")
@@ -4082,7 +4082,7 @@ d_package_entry_symbol := fn(decls : rt::Vec, src : ptr(u8), entry : str, pv : r
 ## The returned offset is global in the driver's concatenated source buffer and is shifted by one
 ## byte so the existing located-reject renderer also locates a field beginning at file offset zero.
 d_manifest_entry_span := fn(src : ptr(u8), off : usize, len : usize) -> DSpan {
-  mut i := 0
+  mut i : usize = 0
   while i < len {
     c := str_at((src + off + i), 1)
     if c == "#" {
@@ -4121,7 +4121,7 @@ d_manifest_set_sema_modules := fn(pv : rt::Vec, name_start : rt::Vec, name_len :
   }
   cap := rt::vec_len(pv) * 2 + 2
   mut owned := rt::Vec(data = rt::bump(tar, cap * 8), len = 0, cap = cap)
-  mut k := 0
+  mut k : usize = 0
   while k < rt::vec_len(pv) {
     if d_manifest_owned_path(rt::svec_str_get(pv, k)) {
       rt::vec_push(owned, rt::vec_get(name_start, k))
@@ -4133,7 +4133,7 @@ d_manifest_set_sema_modules := fn(pv : rt::Vec, name_start : rt::Vec, name_len :
 }
 
 d_manifest_rewrite_decls := fn(decls : rt::Vec, pv : rt::Vec, name_start : rt::Vec, name_len : rt::Vec, src : ptr(u8), in out nstr : usize, na : ptr(mut rt::Arena)) {
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_get(ptr(decls), i))
     if d_manifest_owned_module(src, d.mod_start, d.mod_len, pv, name_start, name_len) {
@@ -4155,7 +4155,7 @@ d_manifest_type_source := fn(in out bld : strbuf::StrBuf, n : usize) {
   k2 := strbuf::push_str(bld, "version")
   MANIFEST_FIELD_N = strbuf::buf_len(bld) - MANIFEST_FIELD_S
   MANIFEST_FIELD_STRIDE = MANIFEST_FIELD_N + 1
-  mut i := 1
+  mut i : usize = 1
   while i < n {
     ks := strbuf::push_byte(bld, 32)
     kv := strbuf::push_str(bld, "version")
@@ -4192,7 +4192,7 @@ mut DEP_ALIAS_N : usize = 0
 dep_root_prefix := fn(p : str) -> usize {
   if DEP_ROOTS_N == 0 { return 0 }
   rows := str_at(DEP_ROOTS_P, DEP_ROOTS_N)
-  mut i := 0
+  mut i : usize = 0
   mut hit := 0
   while i < rows.len and hit == 0 {
     mut e := i
@@ -4225,7 +4225,7 @@ read_file_into := fn(in out sb : strbuf::StrBuf, in out scratch : rt::Arena, pat
   ## Raw `rt::sys_*` syscalls + raw isize return checks — no `std::io`/`Result`/`io::File`, which the
   ## lean self-host lower cannot compile; this lowers identically under both compilers.
   mut pbuf := strbuf::strbuf(scratch, path.len + 16)
-  mut k := 0
+  mut k : usize = 0
   while k < path.len {
     kk := strbuf::push_byte(pbuf, bytes(path)[k])
     k += 1
@@ -4235,7 +4235,7 @@ read_file_into := fn(in out sb : strbuf::StrBuf, in out scratch : rt::Arena, pat
   fd := rt::sys_open(2, pa, 0, 0)   ## open(path, O_RDONLY, 0)
   if fd < 0 { panic("selfhost: cannot open source file") }
   ufd := unchecked bitcast(usize, fd)
-  mut total := 0
+  mut total : usize = 0
   mut done := false
   ## Read each chunk DIRECTLY into the output buffer at `sb.data + sb.len` (the next free byte) —
   ## no intermediate chunk array. The kernel writes exactly `c` bytes; advance `sb.len` past them.
@@ -4245,7 +4245,7 @@ read_file_into := fn(in out sb : strbuf::StrBuf, in out scratch : rt::Arena, pat
   while done == false {
     if sb.len >= sb.cap { panic("rt: StrBuf overflow") }
     available := sb.cap - sb.len
-    mut chunk := 8192
+    mut chunk : usize = 8192
     if available < chunk { chunk = available }
     nr := rt::sys_read(0, ufd, sb.data + sb.len, chunk)   ## read(fd, sb.data+sb.len, min(8192, available))
     if nr <= 0 {
@@ -4288,7 +4288,7 @@ d_lim_delim := fn(c : str) -> bool {
 ## `@limits` list live in DIFFERENT source buffers, so a same-base `streq` can't be used).
 d_span_eq := fn(a1 : usize, n1 : usize, a2 : usize, n2 : usize) -> bool {
   if n1 != n2 { return false }
-  mut i := 0
+  mut i : usize = 0
   mut ok := true
   while i < n1 { if str_at(a1 + i, 1) != str_at(a2 + i, 1) { ok = false } ; i += 1 }
   ok
@@ -4297,7 +4297,7 @@ d_span_eq := fn(a1 : usize, n1 : usize, a2 : usize, n2 : usize) -> bool {
 ## FND-11 — does the limit word [wbase+ws, +wl) appear as a WHOLE name in the list [lbase+ls, +ll)?
 ## Both are delimiter-split into names; a name equals the needle by cross-buffer byte compare.
 d_word_in_list := fn(wbase : usize, ws : usize, wl : usize, lbase : usize, ls : usize, ll : usize) -> bool {
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < ll {
     if d_lim_delim(str_at(lbase + ls + i, 1)) {
@@ -4319,65 +4319,70 @@ d_word_in_list := fn(wbase : usize, ws : usize, wl : usize, lbase : usize, ls : 
 DFileTab := struct { ns : ptr(rt::Vec), nl : ptr(rt::Vec), so : ptr(rt::Vec), sl : ptr(rt::Vec), n : usize }
 ## High-bit diagnostic marker shared with sema::ambiguous_err. It preserves the bootstrap-sensitive
 ## low-two-bit CheckErr encoding while giving the public check/build renderers one distinct message.
-DIAG_AMBIG_MARKER := 4611686018427387904
-DIAG_LIMIT_MARKER := 2305843009213693952
-DIAG_LINKER_SYMBOL_KIND := 7
-DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER := 5188146770730811392
-DIAG_MANIFEST_VALUE_MARKER := 5476377146882523136
-DIAG_SCALAR_CONVERSION_MARKER := 5764607523034234880
-DIAG_AGG_SCALAR_CONVERSION_MARKER := 6050000000000000000
+DIAG_AMBIG_MARKER : usize = 4611686018427387904
+DIAG_LIMIT_MARKER : usize = 2305843009213693952
+DIAG_LINKER_SYMBOL_KIND : usize = 7
+DIAG_UNKNOWN_TYPE_CONSTRUCTOR_MARKER : usize = 5188146770730811392
+DIAG_MANIFEST_VALUE_MARKER : usize = 5476377146882523136
+DIAG_SCALAR_CONVERSION_MARKER : usize = 5764607523034234880
+DIAG_AGG_SCALAR_CONVERSION_MARKER : usize = 6050000000000000000
 ## Types §9.4 / Memory §§1.6, 5.9 — the pre-emission fence for a non-literal aggregate
 ## assigned to a mutable struct global. Keep it between scalar-conversion and comptime classes so
 ## every pre-existing CheckErr range remains byte-identical while all CLI renderers agree.
-DIAG_GLOBAL_AGG_MARKER := 6341068275337658368
+DIAG_GLOBAL_AGG_MARKER : usize = 6341068275337658368
 ## Memory §2.2 — a CONST module-level aggregate runtime-call initializer has no implicit execution phase.
 ## Keep its located diagnostic between the mutable-global and standard-byte-tuple classes so all public
 ## semantic entry points identify the same pre-emission boundary without changing older error ranges.
-DIAG_GLOBAL_INIT_CALL_MARKER := 6485183463413514240
+DIAG_GLOBAL_INIT_CALL_MARKER : usize = 6485183463413514240
 ## Types §6.1 / Memory — the explicit standard-byte tuple global has a separate located diagnostic so
 ## check/build/emit surfaces can share the lower's existing ABI-boundary wording.
-DIAG_STANDARD_TUPLE_GLOBAL_MARKER := 6629298651489350912
+DIAG_STANDARD_TUPLE_GLOBAL_MARKER : usize = 6629298651489350912
 ## Shared with sema::enum_global_array_err: a direct enum-element array global read in a generic value
 ## position cannot use the backend's one-word Index path. Keep the class between tuple globals and CT.
-DIAG_ENUM_GLOBAL_ARRAY_MARKER := 6773413839565216384
+DIAG_ENUM_GLOBAL_ARRAY_MARKER : usize = 6773413839565216384
 ## Types §8 — initialized local array literal whose element is a @packed struct. Keep this class
 ## between the enum-array and comptime markers so check/build/emit share one located pre-emission reject.
-DIAG_PACKED_ARRAY_MARKER := 6845468423603140608
+DIAG_PACKED_ARRAY_MARKER : usize = 6845468423603140608
 ## Issue #215 — the bounded local 2D fixed-array lowering fence. Keep this class between the packed-array
 ## and comptime markers so check/build/emit share one located diagnostic without changing older ranges.
-DIAG_LOCAL_MULTIDIM_ARRAY_MARKER := 6880000000000000000
+DIAG_LOCAL_MULTIDIM_ARRAY_MARKER : usize = 6880000000000000000
 ## Issue #214 — the bounded direct multidimensional struct-field fence. Keep it distinct from the local
 ## array class so check/build render the field-specific lower diagnostic while preserving old ranges.
 ## Issue #16 / Types §6.2 — the duplicate-discriminant class. Between the local-multidim and
 ## field-multidim markers so no older range moves.
-DIAG_ENUM_DUP_DISC_MARKER := 6885000000000000000
-DIAG_MULTIDIM_ARRAY_FIELD_MARKER := 6890000000000000000
+DIAG_ENUM_DUP_DISC_MARKER : usize = 6885000000000000000
+DIAG_MULTIDIM_ARRAY_FIELD_MARKER : usize = 6890000000000000000
 ## Issue #324 — the bounded direct nested fixed-array parameter fence. Keep it between the field and
 ## visibility classes so check/build/emit share one located refusal without changing older ranges.
-DIAG_NESTED_ARRAY_PARAM_MARKER := 6895000000000000000
+DIAG_NESTED_ARRAY_PARAM_MARKER : usize = 6895000000000000000
 ## Issue #299 / Types §4.2-§4.3 + §5.4 — the sema-side IMPLICIT BRAND CONVERSION class
 ## (`sema::BRAND_CONVERSION_DIAG_MARKER`). It sits between the nested-array-parameter and
 ## same-scope-redeclaration windows, so only the former's upper bound moves and every other decoded
 ## range stays byte-identical.
-DIAG_BRAND_CONVERSION_MARKER := 6896000000000000000
+DIAG_BRAND_CONVERSION_MARKER : usize = 6896000000000000000
+## Types §4.2/§4.3 — the sema-side IMPLICIT SIGNED/UNSIGNED conversion class
+## (`sema::SIGNEDNESS_CONVERSION_DIAG_MARKER`): two integer operands of one operator, one signed and one
+## unsigned. It sits between the brand-conversion and same-scope-redeclaration windows, so only the
+## former's upper bound moves and every other decoded range stays byte-identical.
+DIAG_SIGNEDNESS_CONVERSION_MARKER : usize = 6896500000000000000
 ## Issue #414 / Declarations §6.2 — the sema-side same-scope redeclaration class
 ## (`sema::SAME_SCOPE_REDECL_DIAG_MARKER`). It sits between the nested-array parameter and the
 ## qualified-private-constant windows, so only the former's upper bound moves and every other
 ## decoded range stays byte-identical.
-DIAG_SAME_SCOPE_REDECL_MARKER := 6897000000000000000
+DIAG_SAME_SCOPE_REDECL_MARKER : usize = 6897000000000000000
 ## Issue #429 / Types §7 + Stdlib appendix §3.6 + Memory §3.3 — the sema-side `str`-element store class
 ## (`sema::STR_ELEM_WRITE_DIAG_MARKER`). It sits between the same-scope-redeclaration and the
 ## qualified-private-constant windows, so only the former's upper bound moves and every other decoded
 ## range stays byte-identical.
-DIAG_STR_ELEM_WRITE_MARKER := 6898000000000000000
+DIAG_STR_ELEM_WRITE_MARKER : usize = 6898000000000000000
 ## Issue #513 / Types §9.4 — the sema-side ENUM-VARIANT CONSTRUCTOR ARITY class
 ## (`sema::ENUM_VARIANT_ARITY_DIAG_MARKER`). Its payload is 1024-wide: the low 5 bits are the SUPPLIED
 ## component count, the next 5 the DECLARED count, and the rest the VARIANT NAME's source offset. It
 ## sits between the str-element-store and the qualified-private-constant windows, so only the former's
 ## upper bound moves and every other decoded range stays byte-identical.
-DIAG_ENUM_VARIANT_ARITY_MARKER := 6899000000000000000
-DIAG_ENUM_VARIANT_ARITY_SLOT := 1024
-DIAG_ENUM_VARIANT_ARITY_COUNT_BASE := 32
+DIAG_ENUM_VARIANT_ARITY_MARKER : usize = 6899000000000000000
+DIAG_ENUM_VARIANT_ARITY_SLOT : usize = 1024
+DIAG_ENUM_VARIANT_ARITY_COUNT_BASE : usize = 32
 ## The length of the identifier that STARTS at `base + s`. The enum-variant arity diagnostic locates
 ## itself at the variant NAME, and its message quotes that name, so the renderer needs the name's
 ## extent — the same source-scan discipline `manifest_value` uses to read `Package`/`Target` back out
@@ -4385,7 +4390,7 @@ DIAG_ENUM_VARIANT_ARITY_COUNT_BASE := 32
 ## is not exported), never the negative `d_ident_char` list: a variant name can be followed by `}` or
 ## `]`, which that list admits. Bounded so a corrupt offset cannot walk the buffer.
 d_diag_ident_len := fn(base : usize, s : usize) -> usize {
-  mut n := 0
+  mut n : usize = 0
   mut scanning := true
   while scanning and n < 64 {
     sv := str_at(base + s + n, 1)
@@ -4398,34 +4403,34 @@ d_diag_ident_len := fn(base : usize, s : usize) -> usize {
 ## Issue #693 / Types §6.2 + §9.4 — the sema-side ENUM-OWNER FIELD ACCESS class
 ## (`sema::ENUM_FIELD_ACCESS_DIAG_MARKER`). It sits between the unresolved-`::`-head and the comptime
 ## windows, so only the former's upper bound moves and every other decoded range stays byte-identical.
-DIAG_ENUM_FIELD_ACCESS_MARKER := 6902000000000000000
+DIAG_ENUM_FIELD_ACCESS_MARKER : usize = 6902000000000000000
 ## Issue #221 / Modules §3 — the exact qualified private-constant value path. Keep this class distinct
 ## from the generic located visibility reject and below the comptime range so older codes stay stable.
-DIAG_QUALIFIED_PRIVATE_CONST_MARKER := 6900000000000000000
+DIAG_QUALIFIED_PRIVATE_CONST_MARKER : usize = 6900000000000000000
 ## Issue #580 / Modules §3+§6 + Tooling §5 — the sema-side UNRESOLVED `::`-HEAD class
 ## (`sema::UNRESOLVED_QUAL_HEAD_DIAG_MARKER`). Its payload is 128-wide: the low 7 bits are the
 ## head's LENGTH and the rest is the head's source offset, so the renderer can quote the exact
 ## spelling instead of a bare "unresolved". It sits between the qualified-private-constant and the
 ## comptime windows, so only the former's upper bound moves and every other decoded range stays
 ## byte-identical.
-DIAG_UNRESOLVED_QUAL_HEAD_MARKER := 6901000000000000000
-DIAG_UNRESOLVED_QUAL_HEAD_SLOT := 128
+DIAG_UNRESOLVED_QUAL_HEAD_MARKER : usize = 6901000000000000000
+DIAG_UNRESOLVED_QUAL_HEAD_SLOT : usize = 128
 ## Issue #857 / Comptime §10 + Types §6.2 — the sema-side UNAPPLIED TYPE FUNCTION class
 ## (`sema::UNAPPLIED_TYPE_FN_DIAG_MARKER`), payload 128-wide exactly like the unresolved-head class:
 ## the low 7 bits are the name's LENGTH, the rest its source offset. It sits between the
 ## unresolved-`::`-head and enum-field-access windows, so only the former's upper bound moves.
-DIAG_UNAPPLIED_TYPE_FN_MARKER := 6901500000000000000
+DIAG_UNAPPLIED_TYPE_FN_MARKER : usize = 6901500000000000000
 ## CT-12 / Comptime §2.6 — the COMPTIME guard-failure class (shared with sema::comptime_err). Above
 ## the ambiguous marker so every pre-existing `CheckErr` value decodes byte-for-byte as before; the
 ## payload uses eight-byte slots (low three bits = the guard kind, the rest = the source offset).
-DIAG_CT_MARKER := 6917529027641081856
+DIAG_CT_MARKER : usize = 6917529027641081856
 ## Comptime §9.1/§9.2 — a `comptime if` condition that reads a runtime local is rejected before
 ## emission. The four-byte payload carries the offending source offset, matching sema's class.
-DIAG_COMPTIME_COND_MARKER := 7493989779944505344
+DIAG_COMPTIME_COND_MARKER : usize = 7493989779944505344
 ## Declarations §3.1 / Memory §1.6 — a write to an existing binding without `mut`. This sits above
 ## the comptime marker and below 2^63, preserving every older CheckErr range while giving both public
 ## semantic entry points one stable, located message.
-DIAG_IMMUTABLE_MARKER := 8070450532247928832
+DIAG_IMMUTABLE_MARKER : usize = 8070450532247928832
 comptime_guard_name := fn(kind : usize) -> str {
   if kind == 1 { return "comptime overflow" }
   if kind == 2 { return "comptime division by zero" }
@@ -4460,7 +4465,7 @@ d_limit_kind := fn(base : usize, s : usize, n : usize) -> usize {
 d_limit_reject := fn(code : usize, what : str, base : usize, ft : ptr(DFileTab), in out a : rt::Arena) {
   limit := code >= DIAG_LIMIT_MARKER and code < DIAG_AMBIG_MARKER
   mut span := code / 4
-  mut lkind := 0
+  mut lkind : usize = 0
   if limit {
     raw_limit := code - DIAG_LIMIT_MARKER
     span = raw_limit / 8
@@ -4486,8 +4491,8 @@ d_limit_reject := fn(code : usize, what : str, base : usize, ft : ptr(DFileTab),
     ## Map the GLOBAL concatenated-buffer offset back to the owning file (`so[k] <= span < so[k]+sl[k]`)
     ## so the line is FILE-relative and the module is named — never a line counted across earlier files.
     mut fk := 0
-    mut fbase := 0
-    mut fi := 0
+    mut fbase : usize = 0
+    mut fi : usize = 0
     while fi < ft.n {
       fo := rt::vec_get(deref(ft.so), fi)
       fln := rt::vec_get(deref(ft.sl), fi)
@@ -4538,7 +4543,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   enum_field_access := code >= DIAG_ENUM_FIELD_ACCESS_MARKER and code < DIAG_CT_MARKER
   multidim_array_field := code >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and code < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := code >= DIAG_NESTED_ARRAY_PARAM_MARKER and code < DIAG_BRAND_CONVERSION_MARKER
-  brand_conv := code >= DIAG_BRAND_CONVERSION_MARKER and code < DIAG_SAME_SCOPE_REDECL_MARKER
+  brand_conv := code >= DIAG_BRAND_CONVERSION_MARKER and code < DIAG_SIGNEDNESS_CONVERSION_MARKER
+  sign_conv := code >= DIAG_SIGNEDNESS_CONVERSION_MARKER and code < DIAG_SAME_SCOPE_REDECL_MARKER
   same_scope_redecl := code >= DIAG_SAME_SCOPE_REDECL_MARKER and code < DIAG_STR_ELEM_WRITE_MARKER
   str_elem_write := code >= DIAG_STR_ELEM_WRITE_MARKER and code < DIAG_ENUM_VARIANT_ARITY_MARKER
   enum_variant_arity := code >= DIAG_ENUM_VARIANT_ARITY_MARKER and code < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
@@ -4554,7 +4560,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ambig := code >= DIAG_AMBIG_MARKER and code < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := code
   mut kind := 0
-  mut span := 0
+  mut span : usize = 0
   if limit {
     raw = code - DIAG_LIMIT_MARKER
     kind = raw % 8
@@ -4589,6 +4595,9 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     span = raw / 4
   } else if brand_conv {
     raw = code - DIAG_BRAND_CONVERSION_MARKER
+    span = raw / 4
+  } else if sign_conv {
+    raw = code - DIAG_SIGNEDNESS_CONVERSION_MARKER
     span = raw / 4
   } else if same_scope_redecl {
     raw = code - DIAG_SAME_SCOPE_REDECL_MARKER
@@ -4648,7 +4657,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
   ## then the default `unbound_err(0,0)` == 1. The standard-byte tuple global fence is also a located
   ## CheckErr when its declaration starts at byte offset 0, so keep that dedicated class in the located
   ## branch. Other zero-span failures remain honest unlocated messages.
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or global_init_call or unknown_ctor or manifest_value {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or global_init_call or unknown_ctor or manifest_value {
     if limit {
       wk0 := rt::fd_str(2, "@limits(")
       wk1 := rt::fd_str(2, limit_name(kind))
@@ -4664,6 +4673,7 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if multidim_array_field { wkmda := rt::fd_str(2, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if nested_array_param { wknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
     else if brand_conv { wkbc := rt::fd_str(2, "implicit brand conversion: a brand has a distinct nominal identity and every brand conversion is explicit (Types §4.2/§4.3) — write the constructor form `T(v)`; two SIBLING brands do not convert into each other at all (§5.4), so route one through the block they share, as `A(u64(b))`") }
+    else if sign_conv { wksc := rt::fd_str(2, "implicit signed/unsigned conversion: the two operands are integers of opposite signedness, and a signed<->unsigned conversion is a numeric conversion, always explicit (Types §4.2/§4.3) - convert one operand with the constructor form `T(v)`, or declare the binding with the type it is used as (an unannotated integer literal is an `i64`, Types §9.1)") }
     else if same_scope_redecl { wkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if str_elem_write { wkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
     else if enum_variant_arity {
@@ -4707,8 +4717,8 @@ d_sema_reject := fn(code : usize, base : usize, ft : ptr(DFileTab), in out a : r
     else if kind == 3 { wk := rt::fd_str(2, "duplicate name") }
     else { wk := rt::fd_str(2, "invalid") }
     mut fk := 0
-    mut fbase := 0
-    mut fi := 0
+    mut fbase : usize = 0
+    mut fi : usize = 0
     while fi < ft.n {
       fo := rt::vec_get(deref(ft.so), fi)
       fln := rt::vec_get(deref(ft.sl), fi)
@@ -4755,7 +4765,7 @@ d_check_limits_ceiling := fn(ceiling : str, decls : ptr(rt::Vec), src : ptr(u8))
   if ceiling.len == 0 { return 0 }
   cbase := unchecked bitcast(usize, ceiling.ptr)
   cnt := rt::vec_len(deref(decls))
-  mut ci := 0
+  mut ci : usize = 0
   while ci < ceiling.len {
     if d_lim_delim(str_at(cbase + ci, 1)) {
       ci += 1
@@ -4763,7 +4773,7 @@ d_check_limits_ceiling := fn(ceiling : str, decls : ptr(rt::Vec), src : ptr(u8))
       mut cj := ci
       while cj < ceiling.len and not d_lim_delim(str_at(cbase + cj, 1)) { cj += 1 }
       ## the ceiling name [ci, cj) must be present in EVERY module's @limits marker
-      mut k := 0
+      mut k : usize = 0
       while k < cnt {
         d := deref(decl_get(decls, k))
         if d.kind == 0 and d.arity == 99 and d.ret_tl != 0 {
@@ -4933,7 +4943,7 @@ pub compile_files_test_with_options := fn(paths : str, in out a : Arena, keep_go
 test_desc_matches := fn(base : usize, start : usize, len : usize, filter : str) -> bool {
   if filter.len == 0 { return true }
   if filter.len > len { return false }
-  mut i := 0
+  mut i : usize = 0
   while i + filter.len <= len {
     if str_eq(str_at(base + start + i, filter.len), filter) { return true }
     i += 1
@@ -4956,7 +4966,7 @@ emit_test_desc_data := fn(in out gas : strbuf::StrBuf, base : usize, start : usi
   if len == 0 {
     strbuf::push_str(gas, "0\n")
   } else {
-    mut i := 0
+    mut i : usize = 0
     while i < len {
       if i != 0 { strbuf::push_str(gas, ", ") }
       strbuf::push_int(gas, i64(bytes(str_at(base + start, len))[i]))
@@ -5025,8 +5035,8 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## and a previous package must not leave TOOL-15 ownership or sema package-boundary facts live.
   MANIFEST_HAS = false
   if manifest.len != 0 { mh := rt::svec_str_push(pv, tar, manifest) }
-  mut si := 0
-  mut seg := 0
+  mut si : usize = 0
+  mut seg : usize = 0
   while si <= paths.len {
     mut isnl := true
     if si < paths.len { isnl = bytes(paths)[si] == 10 }
@@ -5058,7 +5068,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## mangling site can recognise it. A multi-module package never compiles its `package.al`, so
   ## `root_k == n` for the compiler's own build → nothing published → emission byte-identical.
   mut root_k := n
-  mut k := 0
+  mut k : usize = 0
   while k < n {
     p := rt::svec_str_get(pv, k)
     rt::vec_push(name_start, strbuf::buf_len(bld))
@@ -5102,7 +5112,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   ## TOOL-15: package.al is parsed as the anonymous root, but its configuration binding is replaced
   ## by the private synthetic declarations below.  Recover the manifest's source region from the
   ## root entry in `pv`; its real spans keep diagnostics and the field rewrite source-located.
-  mut manifest_off := 0
+  mut manifest_off : usize = 0
   mut manifest_len := 0
   if manifest.len != 0 and root_k < n {
     manifest_off = rt::vec_get(src_off, root_k)
@@ -5306,7 +5316,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
   if test_mode {
     dcnt_e := rt::vec_len(decls)
     mut kept := 0
-    mut ei := 0
+    mut ei : usize = 0
     while ei < dcnt_e {
       dh := rt::vec_get(decls, ei)
       de := deref(decl_at(Decl, dh))
@@ -5334,7 +5344,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     strbuf::push_str(gas, ".section .rodata\n.Ltestprefix: .byte 116, 101, 115, 116, 32\n.Ltestok: .byte 58, 32, 111, 107, 10\n.Ltestsoft: .byte 58, 32, 70, 65, 73, 76, 32, 40, 115, 111, 102, 116, 41, 10\n.Ltesttrap: .byte 58, 32, 70, 65, 73, 76, 32, 40, 116, 114, 97, 112, 41, 10\n")
     ddata := rt::vec_len(decls)
     mut selected_count := 0
-    mut dii := 0
+    mut dii : usize = 0
     while dii < ddata {
       dhh := rt::vec_get(decls, dii)
       ddd := deref(decl_at(Decl, dhh))
@@ -5365,7 +5375,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
     if keep_going { } else { strbuf::push_str(gas, "  movq $1, %r15\n") }
     strbuf::push_str(gas, "  jmp .Ltestfill\n.Ltestwaiterr:\n  incq %rbx\n  xorq %r14, %r14\n  movq $1, %r15\n  jmp .Ltestreports\n.Ltestclassnz:\n")
     dcnt := rt::vec_len(decls)
-    mut ti := 0
+    mut ti : usize = 0
     mut ord := 0
     while ti < dcnt {
       hh := rt::vec_get(decls, ti)
@@ -5529,7 +5539,7 @@ compile_files_mode := fn(paths : str, in out a : Arena, test_mode : bool, entry 
       if n > 0 {
         mut es := rt::vec_get(mod_start, n - 1)
         mut el := rt::vec_get(mod_len, n - 1)
-        mut mi := 0
+        mut mi : usize = 0
         while mi < n {
           ms := rt::vec_get(mod_start, mi)
           ml := rt::vec_get(mod_len, mi)
@@ -5636,7 +5646,7 @@ d_one_reexport_module := fn(src : ptr(u8), hs : usize, hl : usize, decls : rt::V
   alias_s := hs + owner_len + 2
   alias_l := hl - owner_len - 2
   if alias_l == 0 { return CSpan(s = 0, n = 0) }
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0
@@ -5679,7 +5689,7 @@ mut D_QUAL_ARGS : Option(ptr(mut Arg)) = Option.None      ## the `Arg` list of t
 ## pointer-width spellings normalized the way `lower::norm_type_str` normalizes them, so a `usize`
 ## argument and a `u64` parameter are the same type.
 d_ovl_norm_type := fn(src : ptr(u8), s : usize, n : usize) -> str {
-  mut e := 0
+  mut e : usize = 0
   while e < n and str_at((src + s + e), 1) != "(" { e = e + 1 }
   while e > 0 and str_at((src + s + e - 1), 1) == " " { e = e - 1 }
   t := str_at((src + s), e)
@@ -5764,7 +5774,7 @@ d_ovl_pick := fn(decls : rt::Vec, src : ptr(u8), di : usize) -> usize {
   na := unchecked bitcast(ptr(mut rt::Arena), D_QUAL_NA)
   cnt := rt::vec_len(decls)
   mut nset := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d_ovl_same_set(d, cd, src) { nset = nset + 1 }
@@ -5819,7 +5829,7 @@ d_ovl_pick := fn(decls : rt::Vec, src : ptr(u8), di : usize) -> usize {
 ## How many declarations share decl `cd`'s exact (module, name)?
 d_ovl_set_size := fn(decls : rt::Vec, src : ptr(u8), cd : Decl) -> usize {
   mut n := 0
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d_ovl_same_set(d, cd, src) { n = n + 1 }
@@ -5901,7 +5911,7 @@ d_qual_target := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
   cnt := rt::vec_len(decls)
   mut ehs := 0
   mut ehn := 0
-  mut i := 0
+  mut i : usize = 0
   if d_colon_pos(src, cs, hl) >= 0 {
     ## Exactly one facade re-export: `facade::math::floor` → RHS `std::math`.
     one := d_one_reexport_module(src, cs, hl, decls)
@@ -6003,7 +6013,7 @@ d_mark_callee := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
     return
   }
   cnt := rt::vec_len(decls)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.kind == 1 and d.name_len == cl and cl != 0 {
@@ -6078,7 +6088,7 @@ d_own_syscall := fn(cs : usize, cl : usize, ms : usize, ml : usize, decls : rt::
   if d_colon_pos(src, cs, cl) >= 0 { return 0 }
   cnt := rt::vec_len(decls)
   mut r := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn and d.kind == lower_layout::DECL_KIND_SYSCALL and d.name_len == cl and cl != 0 {
@@ -6118,7 +6128,7 @@ d_find_value_decl := fn(vs : usize, vl : usize, decls : rt::Vec, src : ptr(u8)) 
   tl := vl
   cnt := rt::vec_len(decls)
   mut r := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.name_len == tl {
@@ -6132,7 +6142,7 @@ d_find_value_decl := fn(vs : usize, vl : usize, decls : rt::Vec, src : ptr(u8)) 
 d_value_name_count := fn(vs : usize, vl : usize, decls : rt::Vec, src : ptr(u8)) -> usize {
   cnt := rt::vec_len(decls)
   mut k := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.is_fn == false and d.kind == lower_layout::DECL_KIND_VALUE and d.name_len == vl and vl != 0 {
@@ -6201,7 +6211,7 @@ d_qual_stmts := fn(head : Option(ptr(mut Stmt)), ms : usize, ml : usize, decls :
 ## fn decls when `keep` is 0. One sweep of the marking / rewriting pass.
 d_qual_sweep := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8), keep : usize) {
   cnt := rt::vec_len(decls)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     mut live := true
     if keep != 0 { live = rt::rec_get(unchecked bitcast(ptr(mut u8), keep), i) != 0 }
@@ -6239,7 +6249,7 @@ d_emits_bare_label := fn(d : Decl) -> bool {
 d_kept_name_clash := fn(decls : rt::Vec, src : ptr(u8), keep : usize) -> bool {
   kb := unchecked bitcast(ptr(mut u8), keep)
   cnt := rt::vec_len(decls)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     if rt::rec_get(kb, i) != 0 {
       di := deref(decl_at(Decl, rt::vec_get(decls, i)))
@@ -6283,7 +6293,7 @@ d_resolve_and_prune := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8
   wat::wat_ovl_reset()
   cnt := rt::vec_len(decls)
   kb := rt::bump(deref(tar), cnt * 8 + 8)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     mut seed := 0
@@ -6419,7 +6429,7 @@ d_aggcmp_stmts := fn(head : Option(ptr(mut Stmt)), body : Option(ptr(mut Stmt)),
 d_entry_aggcmp := fn(decls : rt::Vec, na : ptr(mut rt::Arena), src : ptr(u8), ems : usize, eml : usize) -> bool {
   D_AGGCMP = 0
   cnt := rt::vec_len(decls)
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(decls, i)))
     if d.kind == 1 and d_mod_seg_eq(src, d.mod_start, d.mod_len, ems, eml) {
@@ -6502,8 +6512,8 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## scan the newline-joined path list into an rt `str`-vector for random access by module index
   pbase := unchecked bitcast(usize, paths.ptr)
   mut pv := rt::Vec(data = rt::bump(tar, 256 * 8), len = 0, cap = 256)
-  mut si := 0
-  mut seg := 0
+  mut si : usize = 0
+  mut seg : usize = 0
   while si <= paths.len {
     mut isnl := true
     if si < paths.len { isnl = bytes(paths)[si] == 10 }
@@ -6532,7 +6542,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
   ## declarations on those three backends — a real §6.1 gap, but a different one from this issue, and
   ## it moves a corpus row (`test/package/mod8_root_duplicate_names/root_legal_controls`).
   mut root_k := n
-  mut k := 0
+  mut k : usize = 0
   while k < n {
     p := rt::svec_str_get(pv, k)
     rt::vec_push(name_start, strbuf::buf_len(bld))
@@ -6690,7 +6700,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     ## x86 package build names it (`_start` → `main__main`, falling back to the last module).
     mut entry_k := n - 1
     if D_PKG_ENTRY != 0 {
-      mut mk := 0
+      mut mk : usize = 0
       while mk < n {
         mnl := rt::vec_get(name_len, mk)
         if mnl == 4 and str_at((strbuf::strbuf_base(bld) + rt::vec_get(name_start, mk)), mnl) == "main" { entry_k = mk }
@@ -6728,7 +6738,7 @@ d_compile_file_multi := fn(path : str, backend : usize) -> strbuf::StrBuf {
     }
     ecnt := rt::vec_len(ed)
     mut ekept := 0
-    mut ei := 0
+    mut ei : usize = 0
     while ei < ecnt {
       eh := rt::vec_get(ed, ei)
       ee := deref(decl_at(Decl, eh))
@@ -6863,7 +6873,7 @@ fmt_file_size := fn(in out scratch : rt::Arena, path : str) -> usize {
   ## a NUL-terminated copy of `path` for `open` (the `path` str is a span into a larger buffer) —
   ## the same idiom `read_file_into` uses, for the same reason.
   mut pbuf := strbuf::strbuf(scratch, path.len + 16)
-  mut k := 0
+  mut k : usize = 0
   while k < path.len {
     kk := strbuf::push_byte(pbuf, bytes(path)[k])
     k += 1
@@ -6987,7 +6997,7 @@ pub compile_file_fmt := fn(path : str, in out a : Arena) -> strbuf::StrBuf {
   parser::set_module_base(0)
   pr1 := parser::parse_program(pc1, decls, tar)
   match pr1 { Result::Ok(c) => {}; Result::Err(e) => { pek := d_perr_kind(e) ; d_parse_reject(pc1, pek, 0, nread, fmns, fmnl, tar) } }
-  mut di := 0
+  mut di : usize = 0
   while di < rt::vec_len(decls) {
     d := deref(decl_at(Decl, rt::vec_get(decls, di)))
     if d.kind == 3 { rt::vec_push(ev, d.name_start); rt::vec_push(ev, d.name_len) }
@@ -7208,8 +7218,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## Keep check's front-end state isolated from an earlier build/check pass in this process.
   MANIFEST_HAS = false
   if manifest.len != 0 { mh := rt::svec_str_push(pv, tar, manifest) }
-  mut si := 0
-  mut seg := 0
+  mut si : usize = 0
+  mut seg : usize = 0
   while si <= paths.len {
     mut isnl := true
     if si < paths.len { isnl = bytes(paths)[si] == 10 }
@@ -7232,7 +7242,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## whether it really starts with a valid Package binding, so an unrelated file merely named
   ## `package.al` remains ordinary source and is fenced by sema.
   if manifest.len == 0 {
-    mut rk := 0
+    mut rk : usize = 0
     while rk < n and manifest.len == 0 {
       root_candidate := rt::svec_str_get(pv, rk)
       if d_is_root_path(root_candidate) { manifest = root_candidate; direct_root_manifest = true }
@@ -7247,7 +7257,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   mut src_off := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut src_len := rt::Vec(data = rt::bump(tar, n * 8), len = 0, cap = n)
   mut root_k := n
-  mut k := 0
+  mut k : usize = 0
   while k < n {
     p := rt::svec_str_get(pv, k)
     rt::vec_push(name_start, strbuf::buf_len(bld))
@@ -7288,7 +7298,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     k += 1
   }
   ## TOOL-15: recover the package handle from the anonymous root entry now present in `pv`.
-  mut manifest_off := 0
+  mut manifest_off : usize = 0
   mut manifest_len := 0
   if manifest.len != 0 and root_k < n {
     manifest_off = rt::vec_get(src_off, root_k)
@@ -7471,7 +7481,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   enum_field_access := r >= DIAG_ENUM_FIELD_ACCESS_MARKER and r < DIAG_CT_MARKER
   multidim_array_field := r >= DIAG_MULTIDIM_ARRAY_FIELD_MARKER and r < DIAG_NESTED_ARRAY_PARAM_MARKER
   nested_array_param := r >= DIAG_NESTED_ARRAY_PARAM_MARKER and r < DIAG_BRAND_CONVERSION_MARKER
-  brand_conv := r >= DIAG_BRAND_CONVERSION_MARKER and r < DIAG_SAME_SCOPE_REDECL_MARKER
+  brand_conv := r >= DIAG_BRAND_CONVERSION_MARKER and r < DIAG_SIGNEDNESS_CONVERSION_MARKER
+  sign_conv := r >= DIAG_SIGNEDNESS_CONVERSION_MARKER and r < DIAG_SAME_SCOPE_REDECL_MARKER
   same_scope_redecl := r >= DIAG_SAME_SCOPE_REDECL_MARKER and r < DIAG_STR_ELEM_WRITE_MARKER
   str_elem_write := r >= DIAG_STR_ELEM_WRITE_MARKER and r < DIAG_ENUM_VARIANT_ARITY_MARKER
   enum_variant_arity := r >= DIAG_ENUM_VARIANT_ARITY_MARKER and r < DIAG_QUALIFIED_PRIVATE_CONST_MARKER
@@ -7486,8 +7497,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   conv := r >= DIAG_SCALAR_CONVERSION_MARKER and r < DIAG_AGG_SCALAR_CONVERSION_MARKER
   ambig := r >= DIAG_AMBIG_MARKER and r < DIAG_SCALAR_CONVERSION_MARKER
   mut raw := r
-  mut kind := 0
-  mut span := 0
+  mut kind : usize = 0
+  mut span : usize = 0
   if limit {
     raw = r - DIAG_LIMIT_MARKER
     kind = raw % 8
@@ -7522,6 +7533,9 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     span = raw / 4
   } else if brand_conv {
     raw = r - DIAG_BRAND_CONVERSION_MARKER
+    span = raw / 4
+  } else if sign_conv {
+    raw = r - DIAG_SIGNEDNESS_CONVERSION_MARKER
     span = raw / 4
   } else if same_scope_redecl {
     raw = r - DIAG_SAME_SCOPE_REDECL_MARKER
@@ -7582,7 +7596,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
   ## standard-byte tuple global fence is also a located CheckErr when its declaration starts at byte
   ## offset 0, so keep that dedicated class in the located branch. Other zero-span failures remain
   ## honest unlocated messages (no misleading kind/line).
-  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
+  if span > 0 or ctcond or tuple_global or enum_global_array or packed_array or multidim_array or enum_dup_disc or multidim_array_field or nested_array_param or brand_conv or sign_conv or same_scope_redecl or str_elem_write or enum_variant_arity or private_const or unresolved_qual_head or unapplied_type_fn or enum_field_access or global_init_call or unknown_ctor or manifest_value or (limit and kind == DIAG_LINKER_SYMBOL_KIND) {
     if limit {
       if kind == DIAG_LINKER_SYMBOL_KIND { dwk0 := rt::fd_str(2, "duplicate linker symbol") }
       else {
@@ -7601,6 +7615,7 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     else if multidim_array_field { dwkmda := rt::fd_str(2, "a fixed-array field whose element is another fixed array is not supported yet — nested array-field addressing is not implemented; rejected rather than silently miscompiled") }
     else if nested_array_param { dwknap := rt::fd_str(2, "a nested fixed-array parameter is not supported yet — nested parameter addressing is not implemented; rejected rather than silently miscompiled") }
     else if brand_conv { dwkbc := rt::fd_str(2, "implicit brand conversion: a brand has a distinct nominal identity and every brand conversion is explicit (Types §4.2/§4.3) — write the constructor form `T(v)`; two SIBLING brands do not convert into each other at all (§5.4), so route one through the block they share, as `A(u64(b))`") }
+    else if sign_conv { dwksc := rt::fd_str(2, "implicit signed/unsigned conversion: the two operands are integers of opposite signedness, and a signed<->unsigned conversion is a numeric conversion, always explicit (Types §4.2/§4.3) - convert one operand with the constructor form `T(v)`, or declare the binding with the type it is used as (an unannotated integer literal is an `i64`, Types §9.1)") }
     else if same_scope_redecl { dwkssr := rt::fd_str(2, "a name already bound in this scope cannot be re-declared (Declarations §6.2) — use `=` to assign to the existing binding, or choose another name") }
     else if str_elem_write { dwkstr := rt::fd_str(2, "str element store: str is [u8] and its bytes are read-only — mut moves the binding, not the bytes (Types §7 / Memory §3.3)") }
     else if enum_variant_arity {
@@ -7647,8 +7662,8 @@ pub check_files := fn(paths : str, in out a : Arena, ceiling : str) -> usize {
     ## src_off[k]+src_len[k]`), so a multi-file check reports a FILE-RELATIVE line + names the module
     ## — not a line counted across every earlier file's source (§1 item 6: stable locations per file).
     mut fk := 0
-    mut fbase := 0
-    mut fi := 0
+    mut fbase : usize = 0
+    mut fi : usize = 0
     while fi < n {
       fo := rt::vec_get(src_off, fi)
       fln := rt::vec_get(src_len, fi)

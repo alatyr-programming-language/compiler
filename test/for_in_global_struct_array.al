@@ -5,7 +5,7 @@
 Pt := struct { x : u64, y : u64 }
 mut ARR := [Pt(x = 10, y = 1), Pt(x = 20, y = 2), Pt(x = 8, y = 1)]
 main := fn() -> u64 {
-  mut acc := 0
+  mut acc : u64 = 0
   for e in ARR { acc = acc + e.x + e.y }
   acc
 }

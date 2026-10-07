@@ -30,8 +30,8 @@ stmt_p := ast::stmt_p
 ## `sl` logical bytes: a simple escape consumes two raw bytes while `\xHH` consumes four. Emitting
 ## `sl` raw bytes instead would truncate a literal by the extra source bytes in an x-escape.
 rodata_raw_span := fn(src : ptr(u8), ss : usize, sl : usize) -> usize {
-  mut bi := 0
-  mut si := 0
+  mut bi : usize = 0
+  mut si : usize = 0
   while bi < sl {
     if bytes(str_at((src + ss + si), 1))[0] == 92 {
       if bytes(str_at((src + ss + si + 1), 1))[0] == 120 { si = si + 4 }
@@ -48,8 +48,8 @@ rodata_hex_digit := fn(c : u8) -> usize {
   0
 }
 rodata_has_x_escape := fn(src : ptr(u8), ss : usize, sl : usize) -> bool {
-  mut bi := 0
-  mut si := 0
+  mut bi : usize = 0
+  mut si : usize = 0
   while bi < sl {
     if bytes(str_at((src + ss + si), 1))[0] == 92 {
       if bytes(str_at((src + ss + si + 1), 1))[0] == 120 { return true }
@@ -63,11 +63,11 @@ rodata_has_x_escape := fn(src : ptr(u8), ss : usize, sl : usize) -> bool {
 ## portable for a following source byte (`"\x00A"` was assembled as 0x0A), so x-escape literals
 ## bypass it and are decoded by the compiler before assembly.
 emit_rodata_decoded := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ss : usize, sl : usize) {
-  mut bi := 0
-  mut si := 0
+  mut bi : usize = 0
+  mut si : usize = 0
   mut any := false
   while bi < sl {
-    mut b := 0
+    mut b : usize = 0
     if bytes(str_at((src + ss + si), 1))[0] == 92 {
       esc := bytes(str_at((src + ss + si + 1), 1))[0]
       if esc == 120 {
@@ -120,7 +120,7 @@ emit_strlit_rodata := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ss : usize, 
   push_lstr(sb, lbl)
   if lbl % 1000000 >= 500000 {
     push_str(sb, ":")
-    mut ei := 0
+    mut ei : usize = 0
     while ei < sl {
       eb := bytes(str_at(unchecked bitcast(ptr(u8), ss + ei), 1))[0]
       if ei == 0 { push_str(sb, " .byte ") } else { push_str(sb, ", ") }
@@ -260,7 +260,7 @@ emit_rodata_expr := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, src : ptr(u8),
       ## here would make the real pass skip its `.rodata` cell → an undefined `.Lflt` reference).
       if ROD_SCAN == 0 {
       mut fdup := false
-      mut fk := 0
+      mut fk : usize = 0
       while fk < rt::vec_len(deref(seen)) {
         if rt::vec_get(deref(seen), fk) == fss { fdup = true }
         fk += 1

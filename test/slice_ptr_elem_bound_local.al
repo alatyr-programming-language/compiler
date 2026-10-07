@@ -8,7 +8,7 @@ main := fn() -> u64 {
   mut b2 := Box(v = 20, w = 1)
   arr := [ptr(mut b0), ptr(mut b1), ptr(mut b2)]
   s := arr[0..3]
-  mut sum := 0
+  mut sum : u64 = 0
   for i in 0..s.len {
     p := s[i]                          ## inferred ptr(mut Box) — no annotation
     sum = sum + deref(p).v + deref(p).w   ## (10+12+20) + (1+1+1) = 45

@@ -253,7 +253,7 @@ ra_caller_std := fn() {
 ## ===== CFG liveness ==================================================================================
 ## Map every label id to its instruction index (for branch-target resolution).
 ra_build_labels := fn(n : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     if RA_OP[i] == 10 { LABELIDX[usize(RA_O0V[i])] = i64(i) }
     i = i + 1
@@ -288,7 +288,7 @@ ra_bit := fn(w : usize, b : usize) -> usize { return w.shr(b) & 1 }
 ##   live_out[i] = ∪ live_in[succ];  live_in[i] = use[i] ∪ (live_out[i] − def[i]).
 ## Each per-instruction live set is a single-word bitmask over vregs (bit v = vreg v).
 ra_liveness := fn(n : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < n { LIVEIN[i] = 0; LIVEOUT[i] = 0; i = i + 1 }
   mut changed := true
   while changed {
@@ -298,12 +298,12 @@ ra_liveness := fn(n : usize) {
       ii = ii - 1
       ra_succ(ii, n)
       ## live-out = union (bitwise-OR) of the successors' live-in masks.
-      mut o := 0
+      mut o : usize = 0
       if RA_SC >= 1 { o = o | LIVEIN[RA_S0] }
       if RA_SC >= 2 { o = o | LIVEIN[RA_S1] }
       if o != LIVEOUT[ii] { LIVEOUT[ii] = o; changed = true }
       ## live-in = use ∪ (live-out − def), computed bit by bit over the vregs.
-      mut ni := 0
+      mut ni : usize = 0
       mut v := 0
       while v < 32 {
         mut b := 0
@@ -348,7 +348,7 @@ ra_intervals := fn(n : usize) {
     SPILL[rv] = -1
     rv = rv + 1
   }
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     mut v := 0
     while v < 32 {
@@ -369,9 +369,9 @@ ra_intervals := fn(n : usize) {
 ## Physicals occupied at each index: pre-colored Phys operands + per-instruction clobbers (mul → rax:rdx;
 ## call → every caller-saved). A vreg cannot take a physical busy anywhere in its interval.
 ra_build_busy := fn(n : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < n {
-    mut m := 0
+    mut m : usize = 0
     op := RA_OP[i]
     if RA_O0K[i] == 2 { m = m | usize(1).shl(usize(RA_O0V[i])) }
     if RA_O1K[i] == 2 { m = m | usize(1).shl(usize(RA_O1V[i])) }
@@ -502,7 +502,7 @@ ra_rewrite := fn(n : usize) {
   ## bind the spill temps to locals first (a bare global scalar as a call argument mis-resolves).
   mut t0 := RA_ST0
   mut t1 := RA_ST1
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     op := RA_OP[i]
     if op == 25 or op == 26 {
@@ -596,7 +596,7 @@ ra_is_copy_between := fn(j : usize, a : i64, b : i64) -> bool {
 ## Do vregs a and b interfere? Chaitin: a def of one while the other is live-out, outside their own copy.
 ## Requires LIVEOUT already built for the CURRENT IR.
 ra_interfere := fn(a : i64, b : i64, n : usize) -> bool {
-  mut j := 0
+  mut j : usize = 0
   while j < n {
     if ra_is_copy_between(j, a, b) == false {
       if ra_defs_v(j, usize(a)) and ra_bit(LIVEOUT[j], usize(b)) == 1 { return true }
@@ -617,7 +617,7 @@ ra_interfere := fn(a : i64, b : i64, n : usize) -> bool {
 ## caller-saved set, so the allocator keeps a live-across value in a callee-saved reg; the cost guard catches
 ## any regression there.)
 ra_crosses_barrier := fn(a : i64, b : i64, n : usize) -> bool {
-  mut j := 0
+  mut j : usize = 0
   while j < n {
     op := RA_OP[j]
     if ra_op_is_splice(op) {
@@ -633,7 +633,7 @@ ra_crosses_barrier := fn(a : i64, b : i64, n : usize) -> bool {
 
 ## Rename every VReg operand equal to `from` into `to` across the IR (apply a merge).
 ra_rename_vreg := fn(from : i64, to : i64, n : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     if RA_O0K[i] == 3 and RA_O0V[i] == from { RA_O0V[i] = to }
     if RA_O1K[i] == 3 and RA_O1V[i] == from { RA_O1V[i] = to }
@@ -648,11 +648,11 @@ mut BAK_O0V : [i64; 64] = [0; 64]
 mut BAK_O1V : [i64; 64] = [0; 64]
 mut BAK_O2V : [i64; 64] = [0; 64]
 ra_ir_snapshot := fn(n : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < n { BAK_O0V[i] = RA_O0V[i]; BAK_O1V[i] = RA_O1V[i]; BAK_O2V[i] = RA_O2V[i]; i = i + 1 }
 }
 ra_ir_restore := fn(n : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < n { RA_O0V[i] = BAK_O0V[i]; RA_O1V[i] = BAK_O1V[i]; RA_O2V[i] = BAK_O2V[i]; i = i + 1 }
 }
 
@@ -700,7 +700,7 @@ ra_coalesce := fn(n : usize) {
   mut changed := true
   while changed {
     changed = false
-    mut i := 0
+    mut i : usize = 0
     while i < n and changed == false {
       if RA_OP[i] == 0 and RA_O0K[i] == 3 and RA_O1K[i] == 3 {
         a := RA_O0V[i]                        ## dst vreg
@@ -733,7 +733,7 @@ ra_coalesce := fn(n : usize) {
 ## lowering and before liveness/allocation, so the optimization is deterministic and the `ALATYR_RA=0` lowering
 ## fallback remains untouched.
 ra_fold_const_scalar := fn(n : usize) -> usize {
-  mut i := 0
+  mut i : usize = 0
   mut left := n
   mut folded := 0
   while i + 1 < left {
@@ -782,7 +782,7 @@ ra_fold_const_scalar := fn(n : usize) -> usize {
 ## Counts use x86's native low-six-bit rule, matching the unchecked backend operation exactly. The scalar IR
 ## admits only native-width values, and the transform removes no calls, memory, effects, or guards.
 ra_fold_const_shift := fn(n : usize) -> usize {
-  mut i := 0
+  mut i : usize = 0
   mut left := n
   mut folded := 0
   while i + 2 < left {
@@ -846,7 +846,7 @@ ra_widen_imm64 := fn(n : usize) -> usize {
   mut left := n
   ## the first UNUSED vreg id (the IR's vreg numbering is dense from 0, so max-in-use + 1 is fresh)
   mut next_vreg := 0
-  mut s := 0
+  mut s : usize = 0
   while s < left {
     if RA_O0K[s] == 3 and RA_O0V[s] >= next_vreg { next_vreg = RA_O0V[s] + 1 }
     if RA_O1K[s] == 3 and RA_O1V[s] >= next_vreg { next_vreg = RA_O1V[s] + 1 }
@@ -854,7 +854,7 @@ ra_widen_imm64 := fn(n : usize) -> usize {
     s = s + 1
   }
   mut widened := 0
-  mut i := 0
+  mut i : usize = 0
   while i < left {
     op := RA_OP[i]
     alu := op == 1 or op == 2 or op == 3 or op == 4 or op == 16 or op == 17 or op == 18
@@ -928,7 +928,7 @@ ra_report := fn(in out sb : rt::StrBuf, name : str, ok : bool) -> usize {
 ## Run all 6 cases; print PASS/FAIL lines + a summary to stdout; return the failure count (the exit code).
 pub selftest := fn(in out a : rt::Arena) -> usize {
   mut sb := rt::strbuf(a, 65536)
-  mut fails := 0
+  mut fails : usize = 0
 
   ## Case 1 — two simultaneously-live vregs get DISTINCT physicals.
   ## v0 = 1; v1 = 2; v0 += v1   (v0, v1 overlap at the add)

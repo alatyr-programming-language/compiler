@@ -22,15 +22,15 @@ Shape := enum { A(u64), B(u64) }
 reassign := fn() -> u64 {
   mut x : u64 = 3
   x = 9
-  y := 4
+  y : u64 = 4
   return x * 10 + y
 }
 
 cross_scope := fn() -> u64 {
-  n := 2
+  n : u64 = 2
   mut acc : u64 = 0
   if n == 2 {
-    n := 7
+    n : u64 = 7
     acc = acc * 10 + n
   }
   return acc
@@ -39,11 +39,11 @@ cross_scope := fn() -> u64 {
 sibling_blocks := fn() -> u64 {
   mut acc : u64 = 0
   if true {
-    t := 3
+    t : u64 = 3
     acc = acc * 10 + t
   }
   if true {
-    t := 4
+    t : u64 = 4
     acc = acc * 10 + t
   }
   return acc
@@ -51,11 +51,11 @@ sibling_blocks := fn() -> u64 {
 
 sibling_loops := fn() -> u64 {
   mut acc : u64 = 0
-  for i in 0..2 {
+  for i in 0..u64(2) {
     d := i + 1
     acc = acc * 10 + d
   }
-  for i in 0..2 {
+  for i in 0..u64(2) {
     d := i + 5
     acc = acc * 10 + d
   }

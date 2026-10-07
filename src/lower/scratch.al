@@ -230,7 +230,7 @@ agg_value_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
   if eli.is_e { return 1 + enum_inst_words(decls, src, eli.es, eli.el, a) }
   ali := array_lit_info(e)
   if ali.is_a {
-    mut w := 0
+    mut w : usize = 0
     mut g : Option(ptr(mut Arg)) = ali.ehead
     loop {
       match g {
@@ -281,7 +281,7 @@ agg_value_words := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), a : rt
     if gs.is_s { return struct_words(decls, src, gs.ss, gs.sl, a) }
     gai := array_lit_info(gv)
     if gai.is_a {
-      mut w := 0
+      mut w : usize = 0
       mut gg : Option(ptr(mut Arg)) = gai.ehead
       loop { match gg { Some(ggq) => { ge := deref(arg_p(ggq)); mut ew := agg_value_words(ge.e, decls, src, a); if ew == 0 { ew = 1 }; w += ew; gg = ge.next }; None => { break } } }
       if w != 0 { return w }
@@ -364,7 +364,7 @@ pub scan_agg_width_stmts := fn(head : Option(ptr(mut Stmt)), decls : ptr(rt::Vec
 ## (N in one call → N slices; sharing one slot aliases them, a §8 miscompile — see `emit_call_args`).
 scan_call_agg_args := fn(src : ptr(u8), decls : ptr(rt::Vec), head : Option(ptr(mut Arg)), a : rt::Arena) -> usize {
   mut g : Option(ptr(mut Arg)) = head
-  mut cnt := 0
+  mut cnt : usize = 0
   loop {
     match g {
       Some(gq) => {
@@ -402,7 +402,7 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
       ## against itself and always answer EQUAL). A `Var` operand is NOT counted: it already has a
       ## frame home and `emit_arg` passes its address directly, taking no pool block — which is why
       ## the two-`Var` shape that was routed before this change keeps its exact frame.
-      mut own := 0
+      mut own : usize = 0
       if op == 20 or op == 24 or op == 25 or op == 26 or op == 27 or op == 28 {
         if struct_lit_info(l).is_s or enum_lit_info(l).is_e {
           if agg_value_words(l, decls, src, a) > 1 { own = own + 1 }
@@ -438,7 +438,7 @@ pub scan_agg_arg_expr := fn(src : ptr(u8), decls : ptr(rt::Vec), e : ptr(Expr), 
       ## because `a64_aggval_words_e` counts TREE-WIDE. Identical whenever either term is 0 (a call with
       ## no aggregate-value arg, or one whose args hold no further aggregate-value call).
       mut own := scan_call_agg_args(src, decls, args_head, a)
-      mut deepest := 0
+      mut deepest : usize = 0
       mut g : Option(ptr(mut Arg)) = args_head
       loop { match g { Some(gq) => { ga := deref(arg_p(gq)); deepest = imax(deepest, scan_agg_arg_expr(src, decls, ga.e, a)); g = ga.next }; None => { break } } }
       ## A require call itself consumes its preserved-result block plus its predicate-copy block. The

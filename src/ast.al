@@ -1095,7 +1095,7 @@ bci_operand := fn(p : ptr(Expr), s : usize, n : usize) -> ptr(Expr) {
 ## Rewrite every recorded identity-class node inside `[lo, hi)` into a copy of its operand, in
 ## creation order, then forget the table. Idempotent: a second call finds nothing to do.
 pub bitcast_identity_erase := fn(lo : usize, hi : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < BCI_LEN {
     k := rt::wtab_get(BCI_BASE, rt::wtab_at(i, 3, 0))
     if k >= lo and k < hi {
@@ -1108,7 +1108,7 @@ pub bitcast_identity_erase := fn(lo : usize, hi : usize) {
         ## (#790; measured, the copy left a `Var` whose name span pointed nowhere, and the x86 lowerer
         ## faulted hashing it). The tree is fixed and seed 0.2.7 handles it (its registry row retired),
         ## so this word-by-word copy may become `deref(np) = deref(inner)` in a change of its own.
-        mut w := 0
+        mut w : usize = 0
         while w < 8 {
           dw := unchecked bitcast(ptr(mut usize), k + w * 8)
           sw := unchecked bitcast(ptr(usize), unchecked bitcast(usize, inner) + w * 8)

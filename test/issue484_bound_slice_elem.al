@@ -111,10 +111,10 @@ main := fn() -> u64 {
   mut i1 := 0
   for x in ssbi { i1 = i1 + x }
   if i1 != 60 { return 62 }
-  mut i2 := 0
+  mut i2 : u64 = 0
   for x in ssba { i2 = i2 + x }
   if i2 != 60 { return 63 }
-  mut i3 := 0
+  mut i3 : u64 = 0
   for x in ssbb { i3 = i3 + x }
   if i3 != 60 { return 64 }
 

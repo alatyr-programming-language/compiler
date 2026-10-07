@@ -220,7 +220,7 @@ svec_push := fn(in out v : SVec, x : SlotEntry) {
     noff := node_alloc(deref(v.arena), new_cap * st + pad)
     nbase := arena_base(v.arena) + noff + pad
     nwords := (v.len * st + pad) / 8
-    mut k := 0
+    mut k : usize = 0
     while k < nwords {
       sp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base - pad + k * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), nbase - pad + k * 8)
@@ -430,7 +430,7 @@ emit_mangled_def := fn(in out sb : strbuf::StrBuf, src : ptr(u8), ms : usize, ml
 ## first-`::` scan (the entire self-host source is 2-segment → the TOOL-1 fixpoint is unaffected).
 colon_pos := fn(src : ptr(u8), cs : usize, cl : usize) -> i64 {
   mut res := -1
-  mut i := 0
+  mut i : usize = 0
   while i + 1 < cl {
     if str_at((src + cs + i), 1) == ":" and str_at((src + cs + i + 1), 1) == ":" { res = i64(i); i = i + 2 } else { i = i + 1 }
   }
@@ -446,7 +446,7 @@ colon_pos := fn(src : ptr(u8), cs : usize, cl : usize) -> i64 {
 ## and same-module resolution is byte-for-byte unchanged (fixpoint-safe).
 mod_seg_eq := fn(src : ptr(u8), as_ : usize, al : usize, bs : usize, bl : usize) -> bool {
   if al != bl { return false }
-  mut i := 0
+  mut i : usize = 0
   while i < al {
     ca := str_at((src + as_ + i), 1)
     cb := str_at((src + bs + i), 1)
@@ -464,7 +464,7 @@ mod_seg_eq := fn(src : ptr(u8), as_ : usize, al : usize, bs : usize, bl : usize)
 ## multi-segment path head `std::io` becomes the GAS-symbol prefix `std__io`). A single-segment head
 ## (`rt`, `parser`) passes through unchanged — no `::` to rewrite.
 emit_mangled_head := fn(in out sb : strbuf::StrBuf, src : ptr(u8), hs : usize, hl : usize) {
-  mut i := 0
+  mut i : usize = 0
   while i < hl {
     if i + 1 < hl and str_at((src + hs + i), 1) == ":" and str_at((src + hs + i + 1), 1) == ":" {
       push_str(sb, "__")
@@ -494,8 +494,8 @@ emit_mangled_head := fn(in out sb : strbuf::StrBuf, src : ptr(u8), hs : usize, h
 ## last segment == the whole name → this reduces to `mod_seg_eq` for the self-host build (fixpoint).
 mod_head_matches := fn(src : ptr(u8), as_ : usize, al : usize, ms : usize, ml : usize) -> bool {
   if mod_seg_eq(src, as_, al, ms, ml) { return true }
-  mut ls := 0
-  mut k := 0
+  mut ls : usize = 0
+  mut k : usize = 0
   while k + 1 < al {
     ca := str_at((src + as_ + k), 1)
     cb := str_at((src + as_ + k + 1), 1)
@@ -960,7 +960,7 @@ binding_head_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : us
   mut hl := 0
   mut ts := 0
   mut tl := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0
@@ -989,7 +989,7 @@ binding_rhs_span := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usi
   z := CSpan(s = 0, n = 0)
   if nl == 0 or cl == 0 { return z }
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and d.ret_tl != 0 and d.name_len != 0
@@ -1078,8 +1078,8 @@ qual_head_pick := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize
         } else if r == best and r == 0 and res >= 0 {
           rd := deref(decl_get(decls, usize(res)))
           if mod_seg_eq(src, rd.mod_start, rd.mod_len, d.mod_start, d.mod_len) == false { lenient_other = true }
-        }
-      }
+    }
+  }
     }
   }
   if lenient_other {
@@ -1298,7 +1298,7 @@ variadic_print_target := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl 
 decl_by_lit_name := fn(decls : ptr(rt::Vec), src : ptr(u8), nm : str) -> i64 {
   cnt := rt::vec_len(deref(decls))
   mut res := -1
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn and str_at((src + d.name_start), d.name_len) == nm { res = i64(i) }
@@ -1541,7 +1541,7 @@ tuple_value_var_slot := fn(e : ptr(Expr), cx : ptr(LCtx)) -> usize {
 ## Word `k` of a block based at slot `off` lives at `-(off - k + 1) * 8(%rbp)` (the §4 up-growing
 ## layout) — routed through `push_frame_word`, the single choke point for that offset.
 emit_block_word_eq := fn(in out sb : strbuf::StrBuf, lb : BlockRef, rb : BlockRef, nw : usize, neg : bool) {
-  mut k := 0
+  mut k : usize = 0
   while k < nw {
     emit_block_word_load(sb, lb, k)
     push_str(sb, "  movq %rax, %rdx\n")
@@ -1583,7 +1583,7 @@ emit_local_struct_index_eq := fn(l : ptr(Expr), r : ptr(Expr), nw : usize, neg :
   push_str(sb, "  pushq %rax\n")
   emit_index_addr(rp.arr, rp.idx, sb, cx, a, nl)
   push_str(sb, "  popq %rbx\n")
-  mut k := 0
+  mut k : usize = 0
   while k < nw {
     push_str(sb, "  movq ")
     push_int(sb, i64(k * 8))
@@ -1807,7 +1807,7 @@ emit_variadic_print := fn(args_head : Option(ptr(mut Arg)), block_head : Option(
   aggsave := cx.agg_next
   mut ai := 1
   mut runstart := fi.ss
-  mut i := 0
+  mut i : usize = 0
   while i < fi.sl {
     mut step := false
     if i + 1 < fi.sl {
@@ -2089,7 +2089,7 @@ global_ref_candidate := fn(decls : ptr(rt::Vec), src : ptr(u8), d : Decl, s : us
   }
   cnt := rt::vec_len(deref(decls))
   mut hits := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     q := deref(decl_get(decls, i))
     if q.is_fn == false and q.kind == 0 and q.ret_tl == 0 and q.arity == 0
@@ -2373,7 +2373,7 @@ vis_check_projection := fn(decls : ptr(rt::Vec), src : ptr(u8), rs : usize, rl :
 ## exact module attribution (`_mark_ms`/`_mark_ml`).
 vis_check_program := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     ## a fn SIGNATURE: each parameter type, then the return type
@@ -3059,13 +3059,13 @@ paren_is_struct_lit := fn(src : ptr(u8), lp : usize) -> bool {
 ## for itself) is pushed unchanged, so existing labels do not move.
 push_label_text := fn(in out sb : strbuf::StrBuf, src : ptr(u8), s : usize, n : usize) {
   mut clean := true
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     if not lower_layout::ll_ident_byte(src, s + i) { clean = false }
     i += 1
   }
   if clean { push_str(sb, str_at((src + s), n)) ; return }
-  mut j := 0
+  mut j : usize = 0
   while j < n {
     if lower_layout::ll_ident_byte(src, s + j) { push_str(sb, str_at((src + s + j), 1)) } else { push_str(sb, "_") }
     j += 1
@@ -3163,7 +3163,7 @@ slot_of := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> i64 {
   st := svec_stride()
   base := deref(slots).base
   mut res := -1
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
     ## LENGTH pre-check INLINE: `streq` rejects on length too, but only after the call + two `str_at`
@@ -3191,7 +3191,7 @@ slot_declared_before := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usiz
   st := svec_stride()
   base := deref(slots).base
   mut res := false
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
     ## The same inline length pre-check `slot_of` uses, and `streq` is the same arbiter; only the
@@ -3214,7 +3214,7 @@ comptime_slot_is := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usize,
   cnt := svec_len(ctslots)
   st := svec_stride()
   base := deref(ctslots).base
-  mut i := 0
+  mut i : usize = 0
   mut found : u8 = 0
   mut found_s : usize = 0
   while i < cnt {
@@ -3232,7 +3232,7 @@ comptime_slot_expr := fn(ctslots : ptr(SVec), src : ptr(u8), s : usize, n : usiz
   cnt := svec_len(ctslots)
   st := svec_stride()
   base := deref(ctslots).base
-  mut i := 0
+  mut i : usize = 0
   mut result : usize = 0
   mut result_s : usize = 0
   mut found := false
@@ -3268,7 +3268,7 @@ local_entry := fn(slots : ptr(SVec), src : ptr(u8), s : usize, n : usize) -> Opt
   st := svec_stride()
   base := deref(slots).base
   mut res : Option(u64) = Option(u64).None
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     e : ptr(mut SlotEntry) = unchecked bitcast(ptr(mut SlotEntry), base + i * st)
     if deref(e).nl == n {
@@ -3777,8 +3777,8 @@ comp_field_scalar_value := fn(cx : ptr(LCtx)) -> bool {
 ## each) — byte-identical to the former direct `cf_fld_s` use.
 cf_member_woff := fn(cx : ptr(LCtx), a : rt::Arena) -> usize {
   if str_at((cx.src + cx.it_s), 1) == "(" {
-    mut wo := 0
-    mut j := 0
+    mut wo : usize = 0
+    mut j : usize = 0
     while j < cx.cf_fld_s {
       cj := typearg_at(cx.src, cx.it_s, 0, j)
       cjb := base_type_name(cx.src, cj.s, cj.n)
@@ -4120,7 +4120,7 @@ require_emit_source := fn(e : ptr(Expr), dst : i64, under : CSpan, kind : u8, in
 emit_require_predicate := fn(pred : CSpan, under : CSpan, arg_off : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), in out nl : usize) {
   if pred.n == 0 { panic("selfhost: aggregate require has no predicate") }
   mut inline := false
-  mut i := 0
+  mut i : usize = 0
   while i < pred.n { if str_at((cx.src + pred.s + i), 1) == "(" { inline = true }; i += 1 }
   if inline == false {
     pi := callee_decl_idx(cx.decls, cx.src, pred.s, pred.n, cx.mod_s, cx.mod_l)
@@ -4315,7 +4315,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
     if cx.agg_tmp >= 0 {
       sgmv := mut_global_value(cx.decls, cx.src, scvn.s, scvn.n)
       if unchecked bitcast(usize, sgmv) != 0 {
-        mut gnw := 0
+        mut gnw : usize = 0
         gspn := struct_lit_info(sgmv)
         if gspn.is_s { gnw = struct_words(cx.decls, cx.src, gspn.ss, gspn.sl, a) }
         else {
@@ -4331,7 +4331,7 @@ emit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt
           push_str(sb, "  leaq ")
           emit_global_label(sb, cx.decls, cx.src, scvn.s, scvn.n)
           push_str(sb, "(%rip), %rax\n")
-          mut gk := 0
+          mut gk : usize = 0
           while gk < gnw {
             push_str(sb, "  movq ")
             push_int(sb, i64(gk * 8))
@@ -4908,7 +4908,7 @@ nstack_args := fn(nvals : usize) -> usize {
 ## remain (%rsi..%r9). The lean call splitter is still value-index based; this shifted helper covers
 ## the all-integer sret shape while the full classed ABI splitter remains a later roadmap slice.
 nstack_args_shift := fn(nvals : usize, sc_shift : usize) -> usize {
-  cap := if sc_shift != 0 { 5 } else { 6 }
+  cap : usize = if sc_shift != 0 { 5 } else { 6 }
   if nvals > cap { return nvals - cap }
   0
 }
@@ -4954,8 +4954,8 @@ arg_src_idx := fn(i : usize, skip : i64, skip2 : i64, skip3 : i64) -> usize {
   ## -1 = none — a 2-type-param generic `map(T, U, …)` erases the two leading args, a 3-type-param
   ## `Result::map(T, E, U, …)` three), counting the value args; the `i`-th value arg's source index is
   ## returned. For a single skip this is byte-identical to the old `i >= skip ? i+1 : i`; -1 = identity.
-  mut src := 0
-  mut cnt := 0
+  mut src : usize = 0
+  mut cnt : usize = 0
   mut guard := 0
   while guard < 256 {
     is_skip := (skip >= 0 and src == usize(skip)) or (skip2 >= 0 and src == usize(skip2)) or (skip3 >= 0 and src == usize(skip3))
@@ -5011,7 +5011,7 @@ callee_out_scalar := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx
   if cidx < 0 { return false }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
-  mut k := 0
+  mut k : usize = 0
   loop {
     match pp {
       Some(ppq) => {
@@ -5039,7 +5039,7 @@ callee_param_ty_span := fn(decls : ptr(rt::Vec), cidx : i64, pidx : usize) -> CS
   if cidx < 0 { return CSpan(s = 0, n = 0) }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
-  mut k := 0
+  mut k : usize = 0
   loop {
     match pp {
       Some(ppq) => {
@@ -5074,7 +5074,7 @@ callee_byte_array_param_eek := fn(cidx : i64, pidx : usize, cx : ptr(LCtx)) -> u
   if cidx < 0 { return 0 }
   d := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(cidx))))
   mut pp := d.params_head
-  mut k := 0
+  mut k : usize = 0
   loop {
     match pp {
       Some(ppq) => {
@@ -5100,7 +5100,7 @@ callee_byte_array_param_eek := fn(cidx : i64, pidx : usize, cx : ptr(LCtx)) -> u
 emit_byte_array_lit_arg := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   ali := array_lit_info(e)
   boff := agg_alloc(cx)
-  if ali.nel > cx.agg_w * 8 { panic("selfhost: a byte-array literal argument is wider than the aggregate-value call-arg temp block") }
+  if ali.nel > usize(cx.agg_w) * 8 { panic("selfhost: a byte-array literal argument is wider than the aggregate-value call-arg temp block") }
   mut g : Option(ptr(mut Arg)) = ali.ehead
   mut k : i64 = 0
   ## null-ok: Arg.next — an argument list ends in a null link (ast.al "0 = end")
@@ -5151,7 +5151,7 @@ callee_param_is_scalar_value := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i
   if cidx < 0 { return false }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
-  mut k := 0
+  mut k : usize = 0
   loop {
     match pp {
       Some(ppq) => {
@@ -5276,10 +5276,10 @@ emit_call_args := fn(args_head : Option(ptr(mut Arg)), skip : i64, skip2 : i64, 
   ## result ptr). -1 / 0 for an ordinary call → the byte-identical existing path.
   sc := cx.sret_call
   cx.sret_call = -1
-  sc_shift := if sc >= 0 { 1 } else { 0 }
+  sc_shift : usize = if sc >= 0 { 1 } else { 0 }
   ## `skip` is the SOURCE index of the erased comptime type argument (-1 = none); value arg `i`
   ## maps to source arg `arg_src_idx(i, skip, skip2, skip3)` (skips past a type arg at ANY position, not only 0).
-  reg_cap := if sc_shift != 0 { 5 } else { 6 }
+  reg_cap : usize = if sc_shift != 0 { 5 } else { 6 }
   ## alignment pad (one word) when the stack-arg count is odd
   if align_pad_shift(nvals, sc_shift) != 0 { push_str(sb, "  subq $8, %rsp\n") }
   ## stack args (indices 6..nvals-1) pushed in REVERSE so arg7 lands at the lowest address
@@ -5314,7 +5314,7 @@ emit_call_args := fn(args_head : Option(ptr(mut Arg)), skip : i64, skip2 : i64, 
       j = j - 1
       if call_param_is_float(cx, cidx, ift, arg_src_idx(j, skip, skip2, skip3), j) {
         mut si := 0
-        mut t := 0
+        mut t : usize = 0
         while t < j {
           if call_param_is_float(cx, cidx, ift, arg_src_idx(t, skip, skip2, skip3), t) { si = si + 1 }
           t += 1
@@ -5323,8 +5323,8 @@ emit_call_args := fn(args_head : Option(ptr(mut Arg)), skip : i64, skip2 : i64, 
         emit_xmmreg(sb, si)
         push_str(sb, "\n")
       } else {
-        mut gj := 0
-        mut u := 0
+        mut gj : usize = 0
+        mut u : usize = 0
         while u < j {
           if not call_param_is_float(cx, cidx, ift, arg_src_idx(u, skip, skip2, skip3), u) { gj = gj + 1 }
           u += 1
@@ -5629,7 +5629,7 @@ emit_global_data_cells := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, decls : 
     mut gfd : Option(ptr(mut FieldDecl)) = Option.None
     gsdi := struct_decl_of(decls, src, sli.ss, sli.sl)
     if gsdi >= 0 { gfd = (deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gsdi))))).fields_head }
-    mut k := 0
+    mut k : usize = 0
     while k < nfa {
       gv := arg_expr_at(struct_lit_fields(e), k, a)
       mut gfolded := false
@@ -5654,7 +5654,7 @@ emit_global_data_cells := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, decls : 
     ## an ARRAY FIELD (`xs = [10, 20, 12]`) — emit each element cell in order (recursively, so a
     ## struct/str element lays out correctly), matching the top-level array-global emission and the
     ## `g.xs[i]` read (element `i` at `field_word_offset(xs) + i`).
-    mut ak := 0
+    mut ak : usize = 0
     while ak < ali.nel {
       emit_global_data_cells(arg_expr_at(ali.ehead, ak, a), sb, decls, src, a)
       ak += 1
@@ -5696,7 +5696,7 @@ emit_global_data_cells := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, decls : 
       push_str(sb, "  .quad ")
       push_int(sb, variant_index(decls, src, ef.es, ef.el, ef.vs, ef.vl, a))
       push_str(sb, "\n")
-      mut pk := 0
+      mut pk : usize = 0
       while pk < ef.np {
         push_str(sb, "  .quad ")
         push_int(sb, global_init_value(arg_expr_at(ef.phead, pk, a), decls, src))
@@ -6092,8 +6092,8 @@ parse_arr_len := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   ## Read via `bytes(str)[i]` (a Slice(u8) byte view) — NOT `deref(bitcast(ptr(u8), ...))`, which the
   ## lean lower reads as a WORD (the bitcast target type is discarded), so `;` (byte 59) was missed.
   bs := bytes(str_at((src + ts), tl))
-  mut i := 0
-  mut sp := 0
+  mut i : usize = 0
+  mut sp : usize = 0
   mut found := false
   while i < tl {
     if bs[i] == 59 { sp = i + 1; found = true }
@@ -6101,7 +6101,7 @@ parse_arr_len := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   }
   if found == false { return 0 }
   mut j := sp
-  mut n := 0
+  mut n : usize = 0
   mut any := false
   mut going := true
   while going and j < tl {
@@ -6136,7 +6136,7 @@ array_payload_words := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : 
   ae := array_elem_span(src, ts, tl)
   if ae.n == 0 { return 0 }
   nel := parse_arr_len(src, ts, tl)
-  mut stride := 1
+  mut stride : usize = 1
   if struct_decl_of(decls, src, ae.s, ae.n) >= 0 {
     stride = struct_words(decls, src, ae.s, ae.n, a)
   } else if enum_decl_of(decls, src, ae.s, ae.n) >= 0 {
@@ -6159,7 +6159,7 @@ enum_type_payload_words := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n 
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(di))))
   if d.is_generic { return enum_inst_words(decls, src, s, n, a) }
   mut f := d.fields_head
-  mut mx := 0
+  mut mx : usize = 0
   loop {
     match f {
       Some(fq) => {
@@ -7492,7 +7492,7 @@ emit_global_agg_store := fn(fv : ptr(Expr), gs : usize, gn : usize, off : i64, t
     push_str(sb, "  leaq ")
     emit_global_label(sb, cx.decls, cx.src, gs, gn)
     push_str(sb, "(%rip), %rbx\n")
-    mut j := 0
+    mut j : usize = 0
     while j < nw {
       push_str(sb, "  movq -")
       push_int(sb, i64((tb - j + 1) * 8))
@@ -7607,7 +7607,7 @@ emit_mut_global_whole_assign := fn(gs : usize, gn : usize, v : ptr(Expr), in out
     push_str(sb, "  leaq ")
     emit_global_label(sb, cx.decls, cx.src, gs, gn)
     push_str(sb, "(%rip), %rbx\n")
-    mut j := 0
+    mut j : usize = 0
     while j < nw {
       push_str(sb, "  movq -")
       push_int(sb, i64((gaoff - i64(j) + 1) * 8))
@@ -7629,7 +7629,7 @@ emit_mut_global_whole_assign := fn(gs : usize, gn : usize, v : ptr(Expr), in out
     push_str(sb, "  leaq ")
     emit_global_label(sb, cx.decls, cx.src, gs, gn)
     push_str(sb, "(%rip), %rbx\n")
-    mut j := 0
+    mut j : usize = 0
     while j < nw {
       push_str(sb, "  movq -")
       push_int(sb, i64((gaoff - i64(j) + 1) * 8))
@@ -8227,7 +8227,7 @@ param_words := fn(decls : ptr(rt::Vec), src : ptr(u8), pm : Param, a : rt::Arena
 ## never delivered on the value stack.
 inline_callee_pwords := fn(decls : ptr(rt::Vec), src : ptr(u8), ci : i64, a : rt::Arena) -> usize {
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(ci))))
-  mut c := 0
+  mut c : usize = 0
   mut p := d.params_head
   loop { match p { Some(pq) => { pm := deref(param_p(pq)); if param_is_comptime(src, pm.ns) == false { c = c + param_words(decls, src, pm, a) }; p = pm.next }; None => { break } } }
   c
@@ -8525,10 +8525,10 @@ inline_frame_need_expr := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
       vci := variadic_callee_idx(decls, src, cs, cl, ms, ml, a)
       if vci >= 0 {
         vd := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(vci))))
-        mut vw := 1
+        mut vw : usize = 1
         mut vp := vd.params_head
         mut vpc := usize(vd.arity) - 1
-        mut vk := 0
+        mut vk : usize = 0
         loop { match vp { Some(vpq) => { if not (vk < vpc) { break }; vpm := deref(param_p(vpq)); vw = vw + param_words(decls, src, vpm, a); vp = vpm.next; vk += 1 }; None => { break } } }
         m = imax(m, vw)
       }
@@ -9510,7 +9510,7 @@ is_dyn_type := fn(src : ptr(u8), s : usize, n : usize) -> bool {
 ## The number of USER parameters in a `dyn fn(T0, …)->R` annotation — top-level types inside `fn( )`
 ## (0 if the parameter list is empty). Depth-1 commas separate the params.
 dyn_type_nuser := fn(src : ptr(u8), s : usize, n : usize) -> usize {
-  mut i := 0
+  mut i : usize = 0
   while i < n and str_at((src + s + i), 1) != "(" { i = i + 1 }
   if i >= n { return 0 }
   i = i + 1
@@ -9574,7 +9574,7 @@ pub fnref_info := fn(e : ptr(Expr)) -> FnRefInfo {
 lam_idx_by_fnpos := fn(decls : ptr(rt::Vec), fnpos : usize) -> i64 {
   cnt := rt::vec_len(deref(decls))
   mut res : i64 = 0 - 1
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.name_len == 0 and d.name_start == fnpos { res = i64(i) }
@@ -9605,7 +9605,7 @@ lam_last_param_span := fn(decls : ptr(rt::Vec), lidx : usize) -> CSpan {
 lam_param_span_at := fn(decls : ptr(rt::Vec), lidx : usize, idx : usize) -> CSpan {
   d := deref(decl_get(decls, lidx))
   mut pp := d.params_head
-  mut i := 0
+  mut i : usize = 0
   mut r := CSpan(s = 0, n = 0)
   loop {
     match pp {
@@ -9738,7 +9738,7 @@ bind_dyn_store_slot := fn(in out slots : SVec, src : ptr(u8), s : usize, n : usi
   if existing >= 0 { return }
   off := svec_len(ptr(slots))
   svec_push(slots, SlotEntry(ns = s, nl = n, off = off, sns = fnpos, snl = fms, ek = 12, estride = fml, eek = u8(ncap), is_ref = false))
-  mut j := 1
+  mut j : usize = 1
   while j < ncap {
     fo := svec_len(ptr(slots))
     svec_push(slots, SlotEntry(ns = 0, nl = 0, off = fo, sns = 0, snl = 0, ek = 0, estride = 1, eek = 0, is_ref = false))
@@ -10693,7 +10693,7 @@ pub fn_returns_tuple := fn(d : Decl, src : ptr(u8)) -> bool {
 pub tuple_words := fn(src : ptr(u8), ts : usize, tl : usize) -> usize {
   mut depth := 0
   mut commas := 0
-  mut i := 0
+  mut i : usize = 0
   while i < tl {
     c := str_at((src + ts + i), 1)
     if c == "(" { depth = depth + 1 }
@@ -10797,7 +10797,7 @@ callee_param_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, 
   if cidx < 0 { return false }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
-  mut k := 0
+  mut k : usize = 0
   mut res := false
   loop {
     match pp {
@@ -11755,16 +11755,16 @@ emit_struct_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LC
         emit_frame_words_to_r11(sbase, snw, sb)
         cx.agg_next = ssave
       } else {
-        for k in 0..nf {
-          fk := arg_expr_at(fhead, k, a)
-          emit_gas(fk, sb, cx, a, nl)                       ## field value on the stack
-          push_str(sb, "  popq %rcx\n  movq -")
-          push_int(sb, i64((cx.sret_slot + 1) * 8))
-          push_str(sb, "(%rbp), %rax\n  movq %rcx, ")
-          push_int(sb, i64(k * 8))
-          push_str(sb, "(%rax)\n")
-        }
+      for k in 0..nf {
+        fk := arg_expr_at(fhead, k, a)
+        emit_gas(fk, sb, cx, a, nl)                       ## field value on the stack
+        push_str(sb, "  popq %rcx\n  movq -")
+        push_int(sb, i64((cx.sret_slot + 1) * 8))
+        push_str(sb, "(%rbp), %rax\n  movq %rcx, ")
+        push_int(sb, i64(k * 8))
+        push_str(sb, "(%rax)\n")
       }
+    }
     }
     Expr::Var(s, n) => {
       ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
@@ -13611,7 +13611,7 @@ convert_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
   ## through its ancestor's `@convert` was rejected as ambiguous because a sibling declared one too).
   ## The fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
   mut bestr := 0 - 2                     ## below EVERY rank, including the -1 "not on the chain"
-  mut j := 0
+  mut j : usize = 0
   je := dcv_hi(cnt)
   while j < je {
     i := dcv_at(cnt, j)
@@ -13649,7 +13649,7 @@ convert_callee_idx_incl_builtin := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : 
   ## through its ancestor's `@convert` was rejected as ambiguous because a sibling declared one too).
   ## The fail-loud is PRESERVED for a genuine tie — two candidates at the SAME best rank.
   mut bestr := 0 - 2                     ## below EVERY rank, including the -1 "not on the chain"
-  mut j := 0
+  mut j : usize = 0
   je := dcv_hi(cnt)
   while j < je {
     i := dcv_at(cnt, j)
@@ -13688,7 +13688,7 @@ pub twin_convert_callee := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, c
   ## kind-literal-ok: an index with a -1 absence, not a kind tag (see above)
   if conv_kind(str_at((src + cs), cl)) < 0 {
     cnt := rt::vec_len(deref(decls))
-    mut i := 0
+    mut i : usize = 0
     while i < cnt {
       d := deref(decl_get(decls, i))
       if d.is_fn and streq(src, d.name_start, d.name_len, cs, cl) { return 0 - 1 }
@@ -13949,7 +13949,7 @@ fixed_array_return_span := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
   mut i := ts
   mut depth := 0
   mut done := false
-  mut end := 0
+  mut end : usize = 0
   while i < ts + 256 and not done {
     c := str_at((src + i), 1)
     if c == "[" { depth += 1 }
@@ -14746,7 +14746,7 @@ recv_payload_targ := fn(src : ptr(u8), pts : usize, ptl : usize, tpn_s : usize, 
 ## the pre-existing path so it stays byte-identical (no regression).
 is_concrete_scalar_tag := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize, a : rt::Arena) -> bool {
   if n == 0 { return false }
-  mut i := 0
+  mut i : usize = 0
   while i < n {
     if str_at((src + s + i), 1) == "(" { return false }
     i += 1
@@ -15172,7 +15172,7 @@ implicit_targ_from_recv := fn(decls : ptr(rt::Vec), src : ptr(u8), gi : i64, rec
   if gi < 0 { return CSpan(s = 0, n = 0) }
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(gi))))
   mut p := d.params_head
-  mut tpi := 0
+  mut tpi : usize = 0
   mut tpn_s := 0
   mut tpn_l := 0
   mut found_tp := false
@@ -15530,7 +15530,7 @@ generic_inst_typearg_span := fn(e : ptr(Expr), src : ptr(u8)) -> CSpan {
       ## forward at paren depth to the matching `)`.
       mut depth := 0
       mut j := op
-      mut cp := 0
+      mut cp : usize = 0
       mut lim2 := op + 4096
       while cp == 0 and j < lim2 {
         c := str_at((src + j), 1)
@@ -15631,8 +15631,8 @@ pub tuple_typearg_span := fn(e : ptr(Expr), src : ptr(u8), a : rt::Arena) -> CSp
 ## the span unchanged when unqualified. `name_tail` strips only the FIRST segment, so a 3-segment
 ## qualified callee needs this to match a bare decl name.
 last_seg := fn(src : ptr(u8), s : usize, n : usize) -> CSpan {
-  mut start := 0
-  mut i := 0
+  mut start : usize = 0
+  mut i : usize = 0
   while i + 1 < n {
     if str_at((src + s + i), 1) == ":" and str_at((src + s + i + 1), 1) == ":" { start = i + 2 }
     i += 1
@@ -16072,7 +16072,7 @@ global_array_signedness_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan 
       bv := var_name_span(base)
       if bv.n != 0 and slot_of(cx.slots, cx.src, bv.s, bv.n) < 0 {
         cnt := rt::vec_len(deref(cx.decls))
-        mut i := 0
+        mut i : usize = 0
         mut found := CSpan(s = 0, n = 0)
         while i < cnt {
           d := deref(decl_get(cx.decls, i))
@@ -16184,9 +16184,9 @@ comptime_local_type_span := fn(e : ptr(Expr), cx : ptr(LCtx)) -> CSpan {
       cts := cx.ctslots
       if unchecked bitcast(usize, cts) == 0 { return CSpan(s = 0, n = 0) }
       cnt := svec_len(cts)
-      mut i := 0
+      mut i : usize = 0
       mut found := false
-      mut found_off := 0
+      mut found_off : usize = 0
       mut found_kind : u8 = 0
       mut decl_s := 0
       mut decl_n := 0
@@ -17022,7 +17022,7 @@ overload_resolve_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl :
   cnt := rt::vec_len(deref(decls))
   mut found := 0 - 1
   mut nfound := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if (d.kind == 1 or d.kind == 4) and d.is_generic == false and d.arity == nargs and streq(src, d.name_start, d.name_len, ns, nl) and streq(src, d.mod_start, d.mod_len, ms, ml) {
@@ -17174,7 +17174,7 @@ emit_operand_words := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
           return 2
         }
         if ent.ek == 2 or ent.ek == 3 {
-          mut w := 0
+          mut w : usize = 0
           if ent.ek == 2 { w = struct_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
           else { w = 1 + enum_inst_words(cx.decls, cx.src, ent.sns, ent.snl, deref(cx.mar)) }
           ## A BY-REFERENCE aggregate PARAM (`is_ref`): its frame slot holds a POINTER to the caller's
@@ -17185,7 +17185,7 @@ emit_operand_words := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
           if ent.is_ref {
             emit_agg_base_addr(ent, sb)
             push_str(sb, "  movq %rax, %rbx\n")
-            mut k := 0
+            mut k : usize = 0
             while k < w {
               push_str(sb, "  movq ")
               push_int(sb, i64(k * 8))
@@ -17194,7 +17194,7 @@ emit_operand_words := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
             }
             return w
           }
-          mut k := 0
+          mut k : usize = 0
           while k < w {
             push_str(sb, "  movq -")
             push_frame_word(sb, ent.off, k)
@@ -17215,7 +17215,7 @@ emit_operand_words := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
     Expr::StructLit(cs, cl, nf, fhead) => {
       w := struct_words(cx.decls, cx.src, cs, cl, a)
       emit_struct_value(e, sb, cx, a, nl)
-      mut k := 0
+      mut k : usize = 0
       while k < w {
         push_str(sb, "  pushq ")
         emit_retreg(sb, k)
@@ -17454,13 +17454,13 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
   ## path); a USER struct/enum param → ek 2/3 with the type span, occupying its `param_words` words
   ## inline so a field/aggregate use resolves; otherwise a plain scalar (ek 0).
   mut qp := icd.params_head
-  mut cum := 0
+  mut cum : usize = 0
   loop {
     match qp {
       Some(qpq) => {
         qm := deref(param_p(qpq))
         bn := base_type_name(cx.src, qm.ts, qm.tl)
-        mut pw := 0
+        mut pw : usize = 0
         if param_is_comptime(cx.src, qm.ns) == false { pw = param_words(cx.decls, cx.src, qm, a) }
         ## TYP-10 slice B: a COMPTIME VALUE parameter (`comptime N : u64` on a generic operator) is
         ## bound at expansion time (`ct_bind_push` at the route site) — it consumes NO argument word
@@ -17524,8 +17524,8 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
     lsub := Subst(gps = 0, gpl = 0, its = 0, itl = 0, gps2 = 0, gpl2 = 0, its2 = 0, itl2 = 0, gps3 = 0, gpl3 = 0, its3 = 0, itl3 = 0)
     collect_slots(ls, icd.body_stmts, cx.src, cx.decls, deref(cx.mar), cx.mar, ptr(lsub), cx.ctslots)
     lcnt := svec_len(ptr(ls)) - lseed
-    mut li := 0
-    mut lcum := 0
+    mut li : usize = 0
+    mut lcum : usize = 0
     while li < lcnt {
       le := deref(svec_at(SlotEntry, ptr(ls), li + lseed))
       if le.nl != 0 {
@@ -17538,7 +17538,7 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
         ## is the anonymous-filler run before the base (+ the base word for a non-aggregate
         ## kind — a str/slice filler IS a payload word; a struct/enum/array filler run already
         ## counts every word). Byte-identical for a scalar-only body (`lcum` == `le.off`).
-        mut lwc := 0
+        mut lwc : usize = 0
         mut lj := li + lseed
         while lj > 0 {
           pf := deref(svec_at(SlotEntry, ptr(ls), lj - 1))
@@ -17591,7 +17591,7 @@ emit_inline_body := fn(inl_ci : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx),
     push_str(sb, ":\n")
     if cstruct {
       srw := struct_words(cx.decls, cx.src, srbn.s, srbn.n, deref(cx.mar))
-      mut sk := 0
+      mut sk : usize = 0
       while sk < srw {
         push_str(sb, "  pushq ")
         emit_retreg(sb, sk)
@@ -17634,7 +17634,7 @@ emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : 
   ## fixed param (a different ABI) fails loud rather than silently miscompiling.
   if nfixed > 5 { panic("selfhost: §7.2 slice variadic with >5 leading fixed parameters is a follow-up") }
   mut fp := scd.params_head
-  mut fpi := 0
+  mut fpi : usize = 0
   loop {
     match fp {
       Some(fpq) => {
@@ -17672,7 +17672,7 @@ emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : 
   ## the sequence (the {ptr,len} block above the data, leading-fixed args, the call, the reclaim,
   ## the float-return route) mirrors the scalar path.
   mut rp := scd.params_head
-  mut rpi := 0
+  mut rpi : usize = 0
   loop {
     if rpi >= nfixed { break }
     match rp { Some(rpq) => { rp = deref(param_p(rpq)).next; rpi += 1 }; None => { break } }
@@ -17681,7 +17681,7 @@ emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : 
   rebn := base_type_name(cx.src, rpn.ts, rpn.tl)
   re_sdi := struct_decl_of(cx.decls, cx.src, rebn.s, rebn.n)
   re_edi := enum_decl_of(cx.decls, cx.src, rebn.s, rebn.n)
-  mut estride := 0
+  mut estride : usize = 0
   if re_sdi >= 0 { estride = struct_words(cx.decls, cx.src, rebn.s, rebn.n, a) }
   else if re_edi >= 0 { estride = 1 + enum_inst_words(cx.decls, cx.src, rebn.s, rebn.n, a) }
   if estride != 0 {
@@ -17689,11 +17689,11 @@ emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : 
     push_str(sb, "  subq $")
     push_int(sb, i64(ng * estride * 8))
     push_str(sb, ", %rsp\n")
-    mut ei := 0
+    mut ei : usize = 0
     while ei < ng {
       emit_arg(arg_expr_at(args_head, nfixed + ei, a), sb, cx, a, nl, 0 - 1)
       push_str(sb, "  popq %rsi\n")
-      mut ck := 0
+      mut ck : usize = 0
       while ck < estride {
         push_str(sb, "  movq ")
         push_int(sb, i64(ck * 8))
@@ -17707,7 +17707,7 @@ emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : 
     push_str(sb, "  movq %rsp, %rax\n  pushq $")
     push_int(sb, i64(ng))
     push_str(sb, "\n  pushq %rax\n")
-    mut fai2 := 0
+    mut fai2 : usize = 0
     while fai2 < nfixed {
       emit_gas(arg_expr_at(args_head, fai2, a), sb, cx, a, nl)
       fai2 += 1
@@ -17753,7 +17753,7 @@ emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : 
   ## before ANY register is set means a fixed arg that is itself a call cannot clobber an already-placed
   ## arg register, and its own push/pop leaves the {ptr,len} block (at higher addresses) untouched. The
   ## nfixed pushes + nfixed pops are net-zero on %rsp, so %rsp = &block still holds for the slice below.
-  mut fai := 0
+  mut fai : usize = 0
   while fai < nfixed {
     emit_gas(arg_expr_at(args_head, fai, a), sb, cx, a, nl)
     fai += 1
@@ -17788,7 +17788,7 @@ emit_slice_variadic_call := fn(sv_ci : i64, cs : usize, cl : usize, args_head : 
 emit_variadic_call := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   icd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(var_ci))))
   nfixed := usize(icd.arity) - 1
-  mut pi := 0
+  mut pi : usize = 0
   while pi < nfixed {
     emit_gas(arg_expr_at(args_head, pi, a), sb, cx, a, nl)
     pi += 1
@@ -17804,9 +17804,9 @@ emit_variadic_call := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), in out 
 emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   icd := deref(decl_at(Decl, rt::vec_get(deref(cx.decls), usize(var_ci))))
   ## fixed-param word total (the pack param contributes no scratch words — its args stay as Arg exprs)
-  mut totw := 0
+  mut totw : usize = 0
   mut cpp := icd.params_head
-  mut cpi := 0
+  mut cpi : usize = 0
   loop {
     match cpp {
       Some(cppq) => {
@@ -17830,8 +17830,8 @@ emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed 
   ## alias each FIXED param name → its scratch slot at its cumulative word offset (float ek 9 / struct ek 2
   ## / enum ek 3 / scalar ek 0 — the same classification as `emit_inline_body`).
   mut qp := icd.params_head
-  mut cum := 0
-  mut qi := 0
+  mut cum : usize = 0
+  mut qi : usize = 0
   loop {
     match qp {
       Some(qpq) => {
@@ -17859,7 +17859,7 @@ emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed 
   ## itself the pack marker, so the pack param name need not be threaded)
   ov_pa := cx.pack_args
   mut ah : Option(ptr(mut Arg)) = args_head
-  mut aidx := 0
+  mut aidx : usize = 0
   while aidx < nfixed and arg_any(ah) { ah = deref(arg_at(ah, "argument list ended early")).next; aidx += 1 }
   cx.pack_args = ah
   if not stmt_any(icd.body_stmts) {
@@ -17870,7 +17870,7 @@ emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed 
     lsub := Subst(gps = 0, gpl = 0, its = 0, itl = 0, gps2 = 0, gpl2 = 0, its2 = 0, itl2 = 0, gps3 = 0, gpl3 = 0, its3 = 0, itl3 = 0)
     collect_slots(ls, icd.body_stmts, cx.src, cx.decls, deref(cx.mar), cx.mar, ptr(lsub), cx.ctslots)
     lcnt := svec_len(ptr(ls))
-    mut li := 0
+    mut li : usize = 0
     while li < lcnt {
       le := deref(svec_at(SlotEntry, ptr(ls), li))
       if le.nl != 0 {
@@ -17909,7 +17909,7 @@ emit_variadic_body := fn(var_ci : i64, args_head : Option(ptr(mut Arg)), nfixed 
     push_str(sb, ":\n")
     if cstruct {
       srw := struct_words(cx.decls, cx.src, srbn.s, srbn.n, deref(cx.mar))
-      mut sk := 0
+      mut sk : usize = 0
       while sk < srw {
         push_str(sb, "  pushq ")
         emit_retreg(sb, sk)
@@ -18688,7 +18688,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       ## arm's body label). A wildcard arm is an unconditional jump (the default).
       mut arm : Option(ptr(mut Arm)) = head
       mut hadwild := false
-      mut ai := 0
+      mut ai : usize = 0
       loop {
         match arm {
           Some(armq) => {
@@ -19007,7 +19007,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
             ## Named-fn predicate only in this slice: an INLINE `fn(v){…}` predicate (its span carries a
             ## `(`) is a distinct construct (anonymous fn hoist/inline) — fail LOUD rather than skip the
             ## check (a missed contract check would be a silent violation, the forbidden outcome).
-            mut pi := 0
+            mut pi : usize = 0
             mut inline := false
             while pi < rp.n { if str_at((cx.src + rp.s + pi), 1) == "(" { inline = true }; pi = pi + 1 }
             ## Inline predicates are lifted by the driver to `<module>__lam<fnpos>`. The predicate span
@@ -21488,8 +21488,8 @@ tuple_standard_byte_words := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize,
 
 tuple_standard_byte_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, a : rt::Arena) -> usize {
   if tl == 0 or str_at((src + ts), 1) != "(" { return 0 }
-  mut off := 0
-  mut al := 1
+  mut off : usize = 0
+  mut al : usize = 1
   mut i := 0
   mut scanning := true
   while scanning {
@@ -21507,7 +21507,7 @@ tuple_standard_byte_bytes := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize,
 
 tuple_standard_byte_align_value := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, a : rt::Arena) -> usize {
   if tl == 0 or str_at((src + ts), 1) != "(" { return 0 }
-  mut al := 1
+  mut al : usize = 1
   mut i := 0
   mut scanning := true
   while scanning {
@@ -21528,9 +21528,9 @@ tuple_component_offset := fn(base : ptr(Expr), idx : usize, cx : ptr(LCtx)) -> i
   if ent.ek != 5 or ent.is_ref or ent.eek != 12 { return -1 }
   tt := tuple_local_type(cx.src, ent.ns, ent.nl)
   if tt.n == 0 { return -1 }
-  mut off := 0
-  mut al := 1
-  mut i := 0
+  mut off : usize = 0
+  mut al : usize = 1
+  mut i : usize = 0
   mut res : i64 = -1
   mut scanning := true
   while scanning {
@@ -21603,7 +21603,7 @@ tuple_byte_component_base_eek := fn(base : ptr(Expr), cx : ptr(LCtx)) -> u8 {
 
 tuple_byte_slot_for_off := fn(base : i64, cx : ptr(LCtx)) -> i64 {
   if base < 0 { return -1 }
-  mut i := 0
+  mut i : usize = 0
   cnt := svec_len(cx.slots)
   while i < cnt {
     ent := deref(svec_at(SlotEntry, cx.slots, i))
@@ -21843,7 +21843,7 @@ comp_type_span := fn(e : ptr(Expr), slots : ptr(SVec), src : ptr(u8)) -> CSpan {
 ## Look up the mixed-tuple component entry for base slot `slot`, component index `idx` (a null-`snl`
 ## sentinel if absent — the tuple is uniform / not recorded, so callers fall back to the uniform path).
 tcomp_find := fn(cx : ptr(LCtx), slot : usize, idx : usize) -> SlotEntry {
-  mut i := 0
+  mut i : usize = 0
   cnt := svec_len(cx.tcomps)
   while i < cnt {
     e := deref(svec_at(SlotEntry, cx.tcomps, i))
@@ -21864,7 +21864,7 @@ emit_embed_byte_assign := fn(v : ptr(Expr), base : i64, n : usize, in out sb : s
   push_str(sb, "  leaq -")
   push_int(sb, base * 8)
   push_str(sb, "(%rbp), %r13\n")
-  mut i := 0
+  mut i : usize = 0
   while i < si.sl {
     eb := bytes(str_at(unchecked bitcast(ptr(u8), si.ss + i), 1))[0]
     push_str(sb, "  movb $")
@@ -21957,7 +21957,7 @@ emit_array_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, c
     reserve := array_elem_word_reservation(cx.decls, cx.src, ent.sns, ent.snl, a)
     match deref(v) {
       Expr::ArrayLit(nel, ehead) => {
-        mut z := 0
+        mut z : usize = 0
         nw := nel * reserve
         while z < nw {
           push_str(sb, "  movq $0, -")
@@ -22175,7 +22175,7 @@ emit_folded_array_elems := fn(v : ptr(Expr), base : i64, in out sb : strbuf::Str
 ## #808 — the NICHE-FOLDED element type of the local array whose base slot is `base`, else 0/0. The
 ## literal writer asks it so each `Option(ptr(T))` element is stored as its one folded word.
 folded_array_elem_for_off := fn(base : i64, cx : ptr(LCtx)) -> CSpan {
-  mut i := 0
+  mut i : usize = 0
   cnt := svec_len(cx.slots)
   while i < cnt {
     ent := deref(svec_at(SlotEntry, cx.slots, i))
@@ -22187,7 +22187,7 @@ folded_array_elem_for_off := fn(base : i64, cx : ptr(LCtx)) -> CSpan {
 
 packed_byte_slot_for_off := fn(base : i64, cx : ptr(LCtx)) -> i64 {
   if base < 0 { return -1 }
-  mut i := 0
+  mut i : usize = 0
   cnt := svec_len(cx.slots)
   while i < cnt {
     ent := deref(svec_at(SlotEntry, cx.slots, i))
@@ -22202,7 +22202,7 @@ packed_byte_slot_for_off := fn(base : i64, cx : ptr(LCtx)) -> i64 {
 ## shapes stay on their existing word-granular or fail-loud paths.
 standard_byte_array_slot_for_off := fn(base : i64, cx : ptr(LCtx), a : rt::Arena) -> i64 {
   if base < 0 { return -1 }
-  mut i := 0
+  mut i : usize = 0
   cnt := svec_len(cx.slots)
   while i < cnt {
     ent := deref(svec_at(SlotEntry, cx.slots, i))
@@ -22636,7 +22636,7 @@ slice_base_is_byte := fn(base : ptr(Expr), cx : ptr(LCtx)) -> bool {
 ## non-uniform tuple)? Used to detect a nested `t.N.M` access whose uniform stride math would be wrong.
 var_has_tcomps := fn(cx : ptr(LCtx), s : usize, n : usize) -> bool {
   ent := deref(svec_at(SlotEntry, cx.slots, entry_of(cx.slots, cx.src, s, n)))
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   cnt := svec_len(cx.tcomps)
   while i < cnt {
@@ -23572,7 +23572,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
       nl += arm_count(mi.head, a)
       mut arm : Option(ptr(mut Arm)) = mi.head
       mut hadwild := false
-      mut ai := 0
+      mut ai : usize = 0
       loop {
         match arm {
           Some(armq) => {
@@ -23714,7 +23714,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
       emit_repr_tag_load(sb, sbase, repr_tag_code(cx.src, mrsp.s, mrsp.n))
       mut arm : Option(ptr(mut Arm)) = head
       mut hadwild := false
-      mut ai := 0
+      mut ai : usize = 0
       loop {
         match arm {
           Some(armq) => {
@@ -23795,7 +23795,7 @@ emit_return_value := fn(rv : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCt
               }
             }
             mut bnd := am2.binds_head
-            mut bi := 0
+            mut bi : usize = 0
             loop {
               match bnd {
                 Some(bndq) => {
@@ -24072,7 +24072,7 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : Option(ptr(mut Arm)), ba
     nl += arm_count(ehead, a)
     mut earm : Option(ptr(mut Arm)) = ehead
     mut ehadwild := false
-    mut eai := 0
+    mut eai : usize = 0
     loop {
       match earm {
         Some(earmq) => {
@@ -24110,7 +24110,7 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : Option(ptr(mut Arm)), ba
           ## `emit_enum_match`, so a bound payload (`Some(x) => P(x, …)`) resolves in the arm body.
           esaved := svec_len(cx.slots)
           mut ebnd := eam2.binds_head
-          mut ebi := 0
+          mut ebi : usize = 0
           loop {
             match ebnd {
               Some(ebndq) => {
@@ -24150,7 +24150,7 @@ emit_val_match_to_local := fn(scrut : ptr(Expr), head : Option(ptr(mut Arm)), ba
   nl += arm_count(head, a)
   mut arm : Option(ptr(mut Arm)) = head
   mut hadwild := false
-  mut ai := 0
+  mut ai : usize = 0
   loop {
     match arm {
       Some(armq) => {
@@ -24445,7 +24445,7 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
   ## dispatch pass
   mut arm : Option(ptr(mut Arm)) = head
   mut hadwild := false
-  mut ai := 0
+  mut ai : usize = 0
   loop {
     match arm {
       Some(armq) => {
@@ -24570,7 +24570,7 @@ emit_match_stmt := fn(scrut : ptr(Expr), head_in : Option(ptr(mut Arm)), in out 
         ## down-growing `sbase + 1 + bi` produced a garbage-but-non-trapping offset for that dead path.
         if sise {
           mut bnd := am2.binds_head
-          mut bi := 0
+          mut bi : usize = 0
           loop {
             match bnd {
               Some(bndq) => {
@@ -25296,7 +25296,7 @@ loop_push := fn(cx : ptr(LCtx), brk : i64, cont : i64, isexpr : usize) {
   rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 0), usize(brk))
   rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 1), usize(cont))
   rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 2), isexpr)
-  cx.loop_sp = cx.loop_sp + 1
+    cx.loop_sp = cx.loop_sp + 1
 }
 loop_pop := fn(cx : ptr(LCtx)) { if cx.loop_sp > 0 { cx.loop_sp = cx.loop_sp - 1 } }
 ## Make frame `k` of the loop table writable.
@@ -25567,7 +25567,7 @@ emit_st_comp_for := fn(cvs : usize, cvl : usize, cisvar : u8, cbody : Option(ptr
     ov_vs := cx.cf_var_s; ov_vl := cx.cf_var_l
     ov_fs := cx.cf_fld_s; ov_fl := cx.cf_fld_l
     ov_ts := cx.cf_ty_s; ov_tl := cx.cf_ty_l
-    mut ai := 0
+    mut ai : usize = 0
     while ai < an {
       cx.cf_var_s = cvs
       cx.cf_var_l = cvl
@@ -26152,7 +26152,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             mut glob_is_agg := false  ## a STRUCT-element global array: copy `glob_stride` words per element
             mut glob_stride := 1     ## the global array's element width in words
             mut agg_n := 0           ## element count (parsed from the `[T; N]` annotation)
-            mut agg_stride := 0      ## element width in words
+            mut agg_stride : usize = 0      ## element width in words
             mut b_snl := 0           ## the var array's static scalar/float count (bent.snl)
             mut b_estride := 1       ## the var array's element stride in words (bent.estride)
             mut b_is_ref := false
@@ -26251,14 +26251,14 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 if agg_n == 0 and agg_stride > 0 { agg_n = agg_arr_fill_count(cx.slots, bslot) / agg_stride }
                 ## the loop var is `agg_stride` words wide, so the hidden index sits at `vslot+agg_stride`
                 ## (where collect_slots reserved it), not `vslot+1` — avoid clobbering the aggregate var.
-                islot = vslot + agg_stride
+                islot = vslot + i64(agg_stride)
               }
               if is_agg_slice {
                 ## a struct/enum-element slice VIEW: element width from the slot's stride; the loop var is
                 ## that wide, so the hidden index sits at `vslot+agg_stride`; word 0 is the element ptr (by
                 ## value for a local view, or behind the caller's Slice block for a param). Length is runtime.
                 agg_stride = bent.estride
-                islot = vslot + agg_stride
+                islot = vslot + i64(agg_stride)
                 if bent_slice_param_elem.n == 0 { b_is_ref = false }
               }
             }
@@ -26364,7 +26364,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 push_str(sb, "  movq ")
                 push_int(sb, i64(k * 8))
                 push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-                push_int(sb, i64((vslot - k + 1) * 8))
+                push_int(sb, i64((vslot - i64(k) + 1) * 8))
                 push_str(sb, "(%rbp)\n")
               }
             } else if is_agg_slice {
@@ -26388,7 +26388,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
                 push_str(sb, "  movq ")
                 push_int(sb, i64(k * 8))
                 push_str(sb, "(%rax), %rdx\n  movq %rdx, -")
-                push_int(sb, i64((vslot - k + 1) * 8))
+                push_int(sb, i64((vslot - i64(k) + 1) * 8))
                 push_str(sb, "(%rbp)\n")
               }
             } else if is_arr {
@@ -26729,7 +26729,7 @@ pub PCtx := struct {
 ## the field offset came back -1 → a malformed `--8(%rax)`). A paren-free name (`Quad`, `str`, `ptr`)
 ## is returned unchanged, so non-generic params are byte-identical.
 base_type_name := fn(src : ptr(u8), ts : usize, tl : usize) -> CSpan {
-  mut i := 0
+  mut i : usize = 0
   while i < tl {
     if str_at((src + ts + i), 1) == "(" { return CSpan(s = ts, n = i) }
     i += 1
@@ -27145,7 +27145,7 @@ modtab_base := fn(m : usize, w : usize) -> usize {
 ## `k == base[m] + n` is recoverable. 19 modules → the linear scan is free.
 modtab_of := fn(k : usize, w : usize) -> usize {
   mut m := 0
-  mut i := 1
+  mut i : usize = 1
   while i < MODTAB_N {
     if modtab_base(i, w) <= k { m = i }
     i = i + 1
@@ -27226,7 +27226,7 @@ ra_env_init := fn(a : rt::Arena) {
   ## loops (that mis-lowers in the lean lower — a layout-dependent stack corruption); use a `found` flag
   ## + clear RA_ON after. The final byte is 48 (`0`); an unset env or any other value keeps default-on.
   mut found := false
-  mut i := 0
+  mut i : usize = 0
   while i < env.len and (not found) {
     if i + 11 <= env.len and bytes(env)[i] == 65 and bytes(env)[i + 1] == 76 and bytes(env)[i + 2] == 65 and bytes(env)[i + 3] == 84 and bytes(env)[i + 4] == 89 and bytes(env)[i + 5] == 82 and bytes(env)[i + 6] == 95 and bytes(env)[i + 7] == 82 and bytes(env)[i + 8] == 65 and bytes(env)[i + 9] == 61 and bytes(env)[i + 10] == 48 {
       found = true
@@ -27264,7 +27264,7 @@ mut IRC_N := 0                        ## recorded calls (< 32)
 ## already-lowered `a` while lowering `g`'s `b`.
 mut IRCA_K : [usize; 32] = [0; 32]
 mut IRCA_V : [i64; 32]   = [0; 32]
-mut IRCA_TOP := 0
+mut IRCA_TOP : usize = 0
 
 ## COMMIT 6 — per-fn BARRIER side-table. A construct the scalar-leaf IR does NOT model (this commit: a
 ## SCALAR field read `p.f` of a by-ref struct param) is emitted through the EXISTING TEXT emitter
@@ -27350,8 +27350,8 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   mut ir_inl_tmp := 0 - 1
   mut ir_agg_next := 0 - 1
   mut ir_agg_words : usize = 0
-  mut ir_agg_w := 0
-  mut ir_swidth := 2
+  mut ir_agg_w : usize = 0
+  mut ir_swidth : usize = 2
   if IRP_NGBAR > 0 {
     ir_shape := fn_scratch_shape(d, p.decls, p.src, deref(p.mar))
     ir_swidth = ir_shape.width
@@ -27424,13 +27424,13 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   ## as an array local — else an RA spill slot would ALIAS a Vec/Arena word. (Only reached for an ADMITTED fn;
   ## a non-barrier scalar-leaf fn has no `ek == 2` local, so its layout is unchanged.)
   mut hasarr := false
-  mut zz := 0
+  mut zz : usize = 0
   while zz < svec_len(ptr(slots)) {
     ek := deref(svec_at(SlotEntry, ptr(slots), zz)).ek
     if ek == 5 or ek == 2 { hasarr = true }
     zz = zz + 1
   }
-  mut wbase := 0
+  mut wbase : usize = 0
   if anystruct or hasarr { wbase = svec_len(ptr(slots)) }
   regalloc::ra_scalarleaf_begin()
   if wbase > 0 { regalloc::ra_set_spill_base(0 - i64(wbase + 1) * 8) }
@@ -27468,7 +27468,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   ## #794: a function that splices text-emitter code (a barrier) saves the WHOLE callee-saved set — the
   ## splice writes %rbx/%r12/%r13 the allocator never assigned, and a caller may hold a value there.
   splice := regalloc::ra_out_has_splice()
-  mut nsave := 0
+  mut nsave : usize = 0
   mut ci := 0
   while ci < 5 {
     if splice or regalloc::ra_out_uses_reg(ir_csreg_id(ci)) { nsave = nsave + 1 }
@@ -27527,7 +27527,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   ## save each used callee-saved reg into its frame slot (below all spill slots), so a value the allocator
   ## parked in it survives across the fn (the ABI requires the callee preserve rbx/r12..r15).
   mut si := 0
-  mut sk := 0
+  mut sk : usize = 0
   while si < 5 {
     r := ir_csreg_id(si)
     if splice or regalloc::ra_out_uses_reg(r) {
@@ -27546,7 +27546,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
   push_str(sb, ":\n")
   ## restore the callee-saved regs (all return paths jump here) before tearing down the frame.
   mut ri := 0
-  mut rk := 0
+  mut rk : usize = 0
   while ri < 5 {
     r := ir_csreg_id(ri)
     if splice or regalloc::ra_out_uses_reg(r) {
@@ -27575,20 +27575,20 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
 ## under the allocator's capacity. Anything else → text path.
 mut IRB_S : [usize; 64] = [0; 64]   ## the predicate's bound-name set (params + all assign targets)
 mut IRB_L : [usize; 64] = [0; 64]
-mut IRB_N := 0
+mut IRB_N : usize = 0
 mut IRP_OK : bool = true            ## running verdict
-mut IRP_NBIN := 0                   ## arithmetic/div/cmp Bin nodes (vreg/inst budget)
-mut IRP_NCHK := 0                   ## CHECKED arith bins that emit an inline overflow guard (extra inst/label budget)
-mut IRP_NCTRL := 0                  ## if/while count (label budget)
-mut IRP_NSTMT := 0                  ## statements (inst budget)
-mut IRP_NCALL := 0                  ## modeled scalar calls (inst/vreg/side-table budget)
-mut IRP_NCALLARG := 0               ## total args across all modeled calls (arg-mov inst budget)
-mut IRP_NSLFOR := 0                 ## iterable `for x in <slice param>` loops (inst/vreg/label budget)
-mut IRP_NARRFOR := 0                ## iterable `for x in <array local>` loops (inst/vreg/label budget)
-mut IRP_NARRINIT := 0               ## inline-array-literal INITs routed to the statement barrier (inst budget)
-mut IRP_NVECFOR := 0                ## iterable `for x in <Vec local>` loops (inst/vreg/label budget)
-mut IRP_NGBAR := 0                  ## general statement barriers (Vec-build; inst budget + side-table cap)
-mut IRP_NSYNC := 0                  ## modeled-scalar → frame-slot syncs emitted before barriers (inst budget)
+mut IRP_NBIN : usize = 0                   ## arithmetic/div/cmp Bin nodes (vreg/inst budget)
+mut IRP_NCHK : usize = 0                   ## CHECKED arith bins that emit an inline overflow guard (extra inst/label budget)
+mut IRP_NCTRL : usize = 0                  ## if/while count (label budget)
+mut IRP_NSTMT : usize = 0                  ## statements (inst budget)
+mut IRP_NCALL : usize = 0                  ## modeled scalar calls (inst/vreg/side-table budget)
+mut IRP_NCALLARG : usize = 0               ## total args across all modeled calls (arg-mov inst budget)
+mut IRP_NSLFOR : usize = 0                 ## iterable `for x in <slice param>` loops (inst/vreg/label budget)
+mut IRP_NARRFOR : usize = 0                ## iterable `for x in <array local>` loops (inst/vreg/label budget)
+mut IRP_NARRINIT : usize = 0               ## inline-array-literal INITs routed to the statement barrier (inst budget)
+mut IRP_NVECFOR : usize = 0                ## iterable `for x in <Vec local>` loops (inst/vreg/label budget)
+mut IRP_NGBAR : usize = 0                  ## general statement barriers (Vec-build; inst budget + side-table cap)
+mut IRP_NSYNC : usize = 0                  ## modeled-scalar → frame-slot syncs emitted before barriers (inst budget)
 mut IRP_SAWMODEL : bool = false     ## a MODELED (register-allocated) statement has been seen — general barriers
                                     ## must all PRECEDE modeled statements (so a barrier never reads a vreg local)
 mut IRP_MS := 0                     ## enclosing module span (for callee resolution in ir_check_call)
@@ -27602,7 +27602,7 @@ mut IRSP_L : [usize; 8] = [0; 8]
 mut IRSP_TS : [usize; 8] = [0; 8]
 mut IRSP_TL : [usize; 8] = [0; 8]
 mut IRSP_N := 0
-mut IRP_NBARR := 0
+mut IRP_NBARR : usize = 0
 mut IRP_MARP : usize = 0
 
 ## SLICE-PARAM (COMMIT 6c): a by-ref `Slice(<native-scalar-word>)` param admitted for ITERATION via
@@ -27645,11 +27645,11 @@ emit_csreg_moves := fn(in out sb : strbuf::StrBuf, base : usize, save : bool) {
     if save {
       push_str(sb, pn)
       push_str(sb, ", -")
-      push_int(sb, i64((base + k + 1) * 8))
+      push_int(sb, i64((base + usize(k) + 1) * 8))
       push_str(sb, "(%rbp)\n")
     } else {
       push_str(sb, "-")
-      push_int(sb, i64((base + k + 1) * 8))
+      push_int(sb, i64((base + usize(k) + 1) * 8))
       push_str(sb, "(%rbp), ")
       push_str(sb, pn)
       push_str(sb, "\n")
@@ -28029,7 +28029,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## takes no aggregate param) → the frame is byte-identical → fixpoint-neutral.
   mut abi_c_struct_pool_base := -1
   if fn_abi_c {
-    mut acw := 0
+    mut acw : usize = 0
     mut acp := d.params_head
     mut aci := 0
     loop {
@@ -28195,7 +28195,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## (Supported for ≤5 real integer params — the common wide-struct-returning shape; a 6th+ GPR param
   ## under sret would overflow the arg registers, unhandled for now.) 0 for every non-sret fn.
   sret_shift := if d_is_sret { 1 } else { 0 }
-  reg_cap := if d_is_sret { 5 } else { 6 }
+  reg_cap : usize = if d_is_sret { 5 } else { 6 }
   ## RECEIVING side — the SysV-CONFORMING param prologue for an `@abi(c)` fn (called FROM C). This is
   ## the MIRROR of `emit_abi_c_call_args`: each param's SysV placement (`abi_c_arg_disp`, seeded past
   ## the hidden sret %rdi via `sret_shift`) is either registers or the caller's stack area. An
@@ -28210,7 +28210,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## scalar stack args, enum/str aggregate params, and > 16-byte MEMORY struct params + sret returns.
   ## Gated on `fn_abi_c` → the whole branch is dormant for the self-host build (fixpoint-neutral).
   if fn_abi_c {
-    mut ac_pcur := 0                     ## running INCOMING-AGGREGATE-POOL word cursor
+    mut ac_pcur : usize = 0                     ## running INCOMING-AGGREGATE-POOL word cursor
     for j in 0..nspill {
       dj := abi_c_arg_disp(p.decls, p.src, deref(p.mar), i64(di), j, sret_shift)
       if abi_c_param_is_agg(p.decls, p.src, i64(di), j) {
@@ -28221,7 +28221,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
         w := abi_c_param_words(p.decls, p.src, deref(p.mar), i64(di), j)
         base_off := usize(abi_c_struct_pool_base) + ac_pcur + w - 1
         if dj.on_stack {
-          mut ei := 0
+          mut ei : usize = 0
           while ei < w {
             push_str(sb, "  movq ")
             push_int(sb, i64(16 + (dj.swoff + ei) * 8))
@@ -28231,9 +28231,9 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
             ei += 1
           }
         } else {
-          mut ic := 0
-          mut scnt := 0
-          mut ei := 0
+          mut ic : usize = 0
+          mut scnt : usize = 0
+          mut ei : usize = 0
           while ei < w {
             push_str(sb, "  movq ")
             if abi_c_eightbyte_is_sse(p.decls, p.src, deref(p.mar), ts.s, ts.n, ei) {
@@ -28294,7 +28294,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
       if selffloat and callee_param_is_float(p.decls, p.src, deref(p.mar), i64(di), arg_src_idx(i, sk, sk2, sk3)) {
         ## SSE source index = number of float value-params before `i`.
         mut si := 0
-        mut t := 0
+        mut t : usize = 0
         while t < i {
           if callee_param_is_float(p.decls, p.src, deref(p.mar), i64(di), arg_src_idx(t, sk, sk2, sk3)) { si = si + 1 }
           t += 1
@@ -28307,7 +28307,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
       } else {
         ## GPR source index = number of NON-float value-params before `i` (== `i` when no floats).
         mut gj := 0
-        mut u := 0
+        mut u : usize = 0
         while u < i {
           if not (selffloat and callee_param_is_float(p.decls, p.src, deref(p.mar), i64(di), arg_src_idx(u, sk, sk2, sk3))) { gj = gj + 1 }
           u += 1
@@ -28403,7 +28403,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   mut str_tmp_top := str_tmp_base
   if str_tmp_base >= 0 { str_tmp_top = str_tmp_base + 1 }
   mut agg_tmp_top := agg_tmp_base
-  if aggw > 0 { agg_tmp_top = agg_tmp_base + aggw - 1 }
+  if aggw > 0 { agg_tmp_top = agg_tmp_base + i64(aggw) - 1 }
   ## param loop, where bind_param needs them; reused here for the LCtx so `size(T)` resolves.)
   ## body statements, then the trailing return expression.
   ## DEFER (§9.3): the per-fn defer machinery, initialised in the ctx (it used to be three module
@@ -28412,7 +28412,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## push/drain ops are skipped and the emitted tree gas stays byte-identical (the TOOL-1 fixpoint is
   ## neutral). `defer_sp` starts at 0: the fn body has NO frame, only nested blocks push.
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
-  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
+  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = i64(aggw), tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
   cx.fn_id = di
   cx.ctslots = ptr(ct_slots)
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)
@@ -28542,7 +28542,7 @@ ivec_push := fn(in out v : IVec, x : Inst) {
     noff := node_alloc(deref(v.arena), new_cap * st)
     nbase := arena_base(v.arena) + noff
     nwords := (v.len * st) / 8
-    mut k := 0
+    mut k : usize = 0
     while k < nwords {
       sp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), v.base + k * 8)
       dp : ptr(mut usize) = unchecked bitcast(ptr(mut usize), nbase + k * 8)
@@ -29313,7 +29313,7 @@ mark_calls_expr := fn(e : ptr(Expr), rb : usize, decls : ptr(rt::Vec), src : ptr
     ## name_start is the lambda's `fn` offset == fnpos) reachable, so DCE keeps it (the lambda is called
     ## INDIRECTLY, so no callee-name marks it). The reachability fixpoint then walks its body.
     Expr::FnRef(fnpos, fms, fml) => {
-      mut j := 0
+      mut j : usize = 0
       cntl := rt::vec_len(deref(decls))
       while j < cntl {
         dj := deref(decl_get(decls, j))
@@ -29662,8 +29662,8 @@ fill_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8), ms : usize, 
             }
           }
           mut pp := cd.params_head
-          mut k := 0
-          mut added := 0
+          mut k : usize = 0
+          mut added : usize = 0
           loop {
             match pp {
               Some(ppq) => {
@@ -29915,7 +29915,7 @@ pub validate_repr := fn(decls : ptr(rt::Vec), src : ptr(u8)) {
           panic("selfhost: @repr(T) tag type must be an integer type (uN / iN / usize / bitsN)")
         }
         mut f := d.fields_head
-        mut vc := 0
+        mut vc : usize = 0
         loop { match f { Some(fq) => { fd := deref(fld_p(fq)); vc = vc + 1; f = fd.next }; None => { break } } }
         cap := repr_ty_capacity(src, rsp.s, rsp.n)
         if cap != 0 and vc > cap {
@@ -29970,8 +29970,8 @@ emit_field_name_rodata := fn(decls : ptr(rt::Vec), src : ptr(u8), in out sb : st
 ## keys; the visit order is unchanged). The caller reserves `base` for up to `cnt` ranges.
 module_decl_ranges := fn(decls : ptr(rt::Vec), src : ptr(u8), base : usize) -> usize {
   cnt := rt::vec_len(deref(decls))
-  mut nmod := 0
-  mut i := 0
+  mut nmod : usize = 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     ms := d.mod_start
@@ -30143,7 +30143,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   ## `collect_insts_*` unchanged — the substitution is applied to their results, not threaded in.
   ## For `src/` the generic fns (`node_ptr`/`decl_at`/`svec_at`) make NO nested generic call, so this
   ## adds nothing and the instance set + order is unchanged → the TOOL-1 fixpoint is unaffected.
-  mut done := 0
+  mut done : usize = 0
   mut guard := 0
   while done < ivec_len(ptr(insts)) and guard < 100000 {
     ie := ivec_at(ptr(insts), done)
@@ -30159,7 +30159,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
       if tparam_count(decls, i64(ie.gi), src, a) >= 2 {
         i2 := tparam_idx2(decls, i64(ie.gi), src, a)
         mut pq := gd.params_head
-        mut pj := 0
+        mut pj : usize = 0
         loop {
           match pq {
             Some(pqq) => {
@@ -30178,7 +30178,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
       if tparam_count(decls, i64(ie.gi), src, a) >= 3 {
         i3 := tparam_idx3(decls, i64(ie.gi), src, a)
         mut pq3 := gd.params_head
-        mut pj3 := 0
+        mut pj3 : usize = 0
         loop {
           match pq3 {
             Some(pq3q) => {
@@ -30336,7 +30336,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
     ## the contract emitter still references `<module>__lam<fnpos>`.
     mut require_lam := false
     if d.kind == 1 and d.name_len == 0 {
-      mut ri := 0
+      mut ri : usize = 0
       while ri < cnt {
         rd := deref(decl_get(decls, ri))
         if rd.kind == 0 and rd.arity == 1 {
@@ -30439,14 +30439,14 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   ## This table must be bumped from `mar` BEFORE `emit_hw` so the per-fn scratch reset never reclaims it.
   MODTAB = rt::bump(deref(mar), tnr * 16 + 32)
   MODTAB_N = tnr
-  mut msb := 0
-  mut mlb := 0
+  mut msb : usize = 0
+  mut mlb : usize = 0
   ROD_SCAN = 1
   for tm in 0..tnr {
     tmeb0 := unchecked bitcast(ptr(mut u8), tbase + tm * 32)
     tms0 := rt::rec_get(tmeb0, 2)
     tmc0 := rt::rec_get(tmeb0, 3)
-    mut smin := 0
+    mut smin : usize = 0
     mut shas := 0
     for k in 0..tmc0 {
       d := deref(decl_get(decls, tms0 + k))
@@ -30478,7 +30478,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
   ## the CURRENT (not-yet-closed) span began. Each boundary closes the previous span (writes its len) and
   ## opens a new one; the tail is finalized after the instances block. Inert when `spanbase == 0`.
   mut sp_n := 0
-  mut sp_prev := 0
+  mut sp_prev : usize = 0
   for tm in 0..tnr {
     ## open this module's span (and close the previous one) at the current GAS offset. Span 0 starts at
     ## byte 0 (not `sb.len`) so it ABSORBS the emit_program preamble emitted before this loop — the
@@ -30596,7 +30596,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
           push_str(sb, "  .quad ")
           push_int(sb, variant_index(decls, src, efi.es, efi.el, efi.vs, efi.vl, a))
           push_str(sb, "\n")
-          mut eek := 0
+          mut eek : usize = 0
           while eek < efi.np {
             push_str(sb, "  .quad ")
             push_int(sb, global_init_value(arg_expr_at(efi.phead, eek, a), decls, src))
@@ -30619,7 +30619,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
           ## `mut B : [u8; N] = embed("...")` — the parser represents the baked bytes as a StrLit,
           ## but the declared array type owns the runtime storage contract. Do not emit the usual
           ## `{ptr,len}` str pair: that would make B eight-byte cells and break direct `B[i]`/`ptr(B[i])`.
-          mut bk := 0
+          mut bk : usize = 0
           glen := global_array_len(decls, src, d.name_start, d.name_len, d.value)
           while bk < glen {
             eb := bytes(str_at(unchecked bitcast(ptr(u8), gsti.ss + bk), 1))[0]
@@ -30635,7 +30635,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
           ## surface. The initializer values are already compile-time checked by sema; `.byte` stores
           ## the low byte for u8/i8/bits8 without changing any call ABI.
           if gbyte != 0 {
-            mut bk := 0
+            mut bk : usize = 0
             while bk < ali.nel {
               push_str(sb, "  .byte ")
               push_int(sb, global_byte_init_value(arg_expr_at(ali.ehead, bk, a), decls, src))
@@ -30659,7 +30659,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
           ## image as ONE `.quad 0` per element: a null pointer, no length word, and a 1-word stride —
           ## every element read answered an empty view no matter how the address was composed.
           gastr := global_arr_str(d.value, a)
-          mut k := 0
+          mut k : usize = 0
           while k < ali.nel {
             ekx := arg_expr_at(ali.ehead, k, a)
             eksli := struct_lit_info(ekx)
@@ -30690,7 +30690,7 @@ pub emit_program := fn(decls : ptr(rt::Vec), in out sb : strbuf::StrBuf, src : p
               push_str(sb, "  .quad ")
               push_int(sb, variant_index(decls, src, gee.es, gee.el, gee.vs, gee.vl, a))
               push_str(sb, "\n")
-              mut gpk := 0
+              mut gpk : usize = 0
               while gpk < gee.np {
                 gpe := arg_expr_at(gee.phead, gpk, a)
                 ## a MULTI-WORD payload (struct / nested enum / str / float literal) has no single-`.quad`

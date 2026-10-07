@@ -155,6 +155,13 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
   multi-word struct var, a struct-returning call) or a bare `Option.Some(p)` stored the `$0` placeholder
   and displaced the components after it (#892). The literal is now built by the frame writer and copied whole. The frame writers also deliver every word of a struct-returning call used as an enum payload or
   a struct field (they kept word 0, or stored nothing). The compiler's own GAS is unchanged.
+- **`check` refuses a signed and an unsigned operand of one operator.** `k + n` with `k : i64` and
+  `n : usize`, `i < s.len` with an unannotated `mut i := 0` (an `i64`, Types §9.1), and the same pair
+  under `unchecked` are now a located compile error on every backend ("implicit signed/unsigned
+  conversion"), as Types §4.2/§4.3 require: signed<->unsigned is a numeric conversion and is always
+  explicit. Before, each backend picked a signedness by its own rule, and they disagreed. This newly
+  rejects programs the specification declares invalid, so it is a PATCH: spell the binding's type
+  (`mut i : usize = 0`, `0..u64(9)`) or convert one operand with `T(v)`.
 
 ## 0.2.12 — 2026-10-02
 

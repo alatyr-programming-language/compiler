@@ -10,7 +10,7 @@ State := @repr(u8) enum { Idle, Run, Stop, Done }
 Msg := @repr(i32) enum { Quit, Move(u64), Write(u64) }
 
 main := fn() -> u64 {
-  mut acc := 0
+  mut acc : u64 = 0
   c := Color.Blue
   match c {
     Color.Red => { acc = acc + 1 }

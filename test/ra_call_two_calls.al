@@ -5,7 +5,7 @@
 ## answer under default (regalloc) and ALATYR_RA=0 (text path).
 add := fn(a : u64, b : u64) -> u64 { a + b }
 main := fn() -> u64 {
-  keep := 30 + 6
+  keep : u64 = 30 + 6
   x := add(2, 2)
   y := add(1, 1)
   keep + x + y

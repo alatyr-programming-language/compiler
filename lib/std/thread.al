@@ -72,7 +72,7 @@ pub Thread := struct { ctid_addr : usize, stack_base : usize, stack_len : usize 
 ## word as 0 before CHILD_SETTID runs), then clones. Returns the `Thread` handle (the raw child
 ## tid is discarded — the join word is the join primitive).
 pub spawn := fn(fn_ptr : usize, arg : usize) -> Thread when target.arch == Arch.x86_64 {
-  slen := 65536
+  slen : usize = 65536
   neg1 : isize = 0 - 1
   base := unchecked sys_mmap(std::sysno::MMAP, 0, slen, 3, 34, bitcast(usize, neg1), 0)
   ubase := unchecked bitcast(usize, base)

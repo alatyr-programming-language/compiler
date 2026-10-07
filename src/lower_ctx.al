@@ -463,7 +463,7 @@ pub CSpan := struct { s : usize, n : usize }
 pub typeinfo_arg_span := fn(src : ptr(u8), field_s : usize, generic1_s : usize, generic1_n : usize, instance1_s : usize, instance1_n : usize, generic2_s : usize, generic2_n : usize, instance2_s : usize, instance2_n : usize, generic3_s : usize, generic3_n : usize, instance3_s : usize, instance3_n : usize) -> CSpan {
   mut r := CSpan(s = 0, n = 0)
   mut q := field_s
-  mut open := 0
+  mut open : usize = 0
   mut found := false
   while q > 0 and not found {
     q = q - 1
@@ -598,7 +598,7 @@ pub num_lit_value := fn(e : ptr(Expr)) -> i64 {
 }
 pub arg_expr_at := fn(head : Option(ptr(mut Arg)), i : usize, a : rt::Arena) -> ptr(Expr) {
   mut g : Option(ptr(mut Arg)) = head
-  mut k := 0
+  mut k : usize = 0
   mut res := 0
   loop {
     match g {

@@ -16,7 +16,7 @@ mk2 := fn(x : u64) -> E2 { return E2.B(38, 2) }
 mk3 := fn(x : u64) -> E3 { return E3.B(1, 1, 0) }
 
 main := fn() -> u64 {
-  mut a := 0
+  mut a : u64 = 0
   match mk2(1) {
     E2::A(v) => { a = v }
     E2::B(p, q) => { a = p + q }        ## 38 + 2 = 40

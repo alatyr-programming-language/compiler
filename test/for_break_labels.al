@@ -9,7 +9,7 @@ main := fn() -> u64 {
 
   ## 2. break inside an `if` inside a for — sum 0..5 then break at 6
   mut b : u64 = 0
-  for i in 0..100 { if i == 6 { break } b = b + i }    ## b = 0+1+2+3+4+5 = 15
+  for i in 0..u64(100) { if i == 6 { break } b = b + i }    ## b = 0+1+2+3+4+5 = 15
 
   ## 3. labeled `break o` exiting a labeled OUTER for from an inner for (exits BOTH)
   mut c : u64 = 0
@@ -28,7 +28,7 @@ main := fn() -> u64 {
 
   ## 5. for-continue (regression guard): skip odds in 0..6 -> 0+2+4 = 6
   mut e : u64 = 0
-  for i in 0..6 { if i % 2 == 1 { continue } e = e + i }   ## e = 6
+  for i in 0..u64(6) { if i % 2 == 1 { continue } e = e + i }   ## e = 6
 
   ## 6. labeled `continue ot` re-iterating an outer for from an inner for
   mut f : u64 = 0

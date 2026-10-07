@@ -9,7 +9,7 @@ pass := fn(T : type, v : T) -> T { v }
 width := fn(T : type, v : T) -> u64 { 5 }
 val := fn(c : C) -> u64 { match c { R => { return 1 }; G => { return 2 }; B => { return 3 } } return 0 }
 main := fn() -> u64 {
-  mut total := 0
+  mut total : u64 = 0
   c1 := pass(C, C.R)
   match c1 { R => { total += 1 }; G => { total += 2 }; B => { total += 3 } }
   c2 := pass(C, C.B)

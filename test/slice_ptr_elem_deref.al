@@ -10,7 +10,7 @@ main := fn() -> u64 {
   s := arr[0..3]
   ## `.len` on a pointer-element slice VIEW must be the ELEMENT COUNT (hi - lo), like a scalar slice.
   if s.len != 3 { return 0 }
-  mut sum := 0
+  mut sum : u64 = 0
   for i in 0..s.len {                  ## the IDIOMATIC loop bound — must read len == 3, not garbage
     sum = sum + deref(s[i]).v          ## 10 + 12 + 20 = 42 (field at offset 0)
   }

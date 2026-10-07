@@ -860,7 +860,7 @@ a64_body := fn() -> Option(ptr(mut Stmt)) { A64_BODY }
 ## per-instance in `emit_a64_program`'s mono pass (the A64_PARAMS/A64_CHK pattern — one fn at a time,
 ## no re-entrancy) and read by `a64_comp_cond_fold` (`comptime if T == …`). Zero → no substitution.
 mut A64_SUB_GPS := 0    ## the generic type-param NAME span start …
-mut A64_SUB_GPL := 0    ## … and length (0 = no active substitution)
+mut A64_SUB_GPL : usize = 0    ## … and length (0 = no active substitution)
 mut A64_SUB_ITS := 0    ## the instance's concrete type span start …
 mut A64_SUB_ITL := 0    ## … and length (non-zero while emitting an instance = instance mode)
 ## 2nd/3rd type-param substitution (a leading RUN of 2..3 comptime type-params, `pick3(A, B, C, …)`):
@@ -2127,8 +2127,8 @@ a64_bind_agg_span := fn(bind_head : Option(ptr(mut Bind)), src : ptr(u8), ns : u
 emit_a64_str_bytes := fn(in out sb : rt::StrBuf, src : ptr(u8), ss : usize, sl : usize, lbl : usize) {
   push_str(sb, ".Lstr") ; push_int(sb, i64(lbl)) ; push_str(sb, ":\n  .byte ")
   raw := str_at((src + ss), sl * 4 + 16)
-  mut k := 0
-  mut em := 0
+  mut k : usize = 0
+  mut em : usize = 0
   mut any := false
   while em < sl {
     if any { push_str(sb, ", ") }
@@ -2164,8 +2164,8 @@ emit_a64_print_template := fn(in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u
   firstarg := deref(arg_at(ah, "argument list ended early"))
   mut argp : Option(ptr(mut Arg)) = firstarg.next
   mut k := 0
-  mut dpos := 0
-  mut runstart := 0
+  mut dpos : usize = 0
+  mut runstart : usize = 0
   while dpos < sl {
     if bytes(raw)[k] == 123 and bytes(raw)[k + 1] == 125 {
       if dpos > runstart { emit_a64_print_run(sb, lbl, i64(runstart), i64(dpos - runstart)) }
@@ -2705,7 +2705,7 @@ a64_emit_fn_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) { ir::p
 
 a64_callee_defined := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a : rt::Arena) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut ok := false
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -2725,7 +2725,7 @@ a64_callee_defined := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
 a64_emit_bl_target := fn(in out sb : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) {
   cnt := rt::vec_len(deref(decls))
   mut target_i : i64 = 0 - 1
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if target_i < 0 and d.is_fn and d.name_start == cs and d.name_len == cl and cl != 0 { target_i = i64(i) }
@@ -2913,7 +2913,7 @@ a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
     Expr::BoolLit(x) => { r = i64(x) }
     Expr::Var(vs, vn) => {
       cnt := rt::vec_len(deref(decls))
-      mut i := 0
+      mut i : usize = 0
       while i < cnt {
         d := deref(decl_get(decls, i))
         if d.kind == 0 and d.is_fn == false and streq(src, d.name_start, d.name_len, vs, vn) {
@@ -3017,7 +3017,7 @@ a64_comp_range_bound := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8)) -
 ## `{i}` positional-operand substitution.
 a64_arg_at := fn(head : Option(ptr(mut Arg)), i : usize, a : rt::Arena) -> ptr(Expr) {
   mut g : Option(ptr(mut Arg)) = head
-  mut k := 0
+  mut k : usize = 0
   mut res : usize = 0
   loop { match g { Some(gq) => { ga := deref(arg_p(gq)) ; if k == i { res = unchecked bitcast(usize, ga.e) } ; k = k + 1 ; g = ga.next }; None => { break } } }
   unchecked bitcast(ptr(Expr), res)
@@ -3025,7 +3025,7 @@ a64_arg_at := fn(head : Option(ptr(mut Arg)), i : usize, a : rt::Arena) -> ptr(E
 
 a64_is_global := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize, a : rt::Arena) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut found := false
   while i < cnt {
     d := deref(decl_get(decls, i))
@@ -3047,7 +3047,7 @@ a64_value_is_agg := fn(v : ptr(Expr)) -> bool { expr_is_struct_lit(v) or expr_is
 a64_global_value := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> ptr(Expr) {
   cnt := rt::vec_len(deref(decls))
   mut res : usize = 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.is_fn == false and d.kind == 0 and d.arity == 0 and streq(src, d.name_start, d.name_len, ns, nl) { res = unchecked bitcast(usize, d.value) }
@@ -4404,7 +4404,7 @@ a64_emit_narrow_trap := fn(name : str, in out sb : rt::StrBuf) {
 ## (`mut F := 40.0`). Guards `deref(d.value)` on a null value (some decls carry no value expr).
 a64_global_is_float := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : usize) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
@@ -4455,7 +4455,7 @@ a64_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
   mut rn := 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
-    mut i := 0
+    mut i : usize = 0
     while i < cnt {
       d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
       if d.is_fn and d.name_len != 0 and streq(src, d.name_start, d.name_len, cs, cl) {
@@ -4472,7 +4472,7 @@ a64_call_ret_struct_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8
               rrb := bytes(str_at((src + d.ret_ts), d.ret_tl))
               grb := bytes(str_at((src + tpn.s), tpn.n))
               mut eqk := true
-              mut bj := 0
+              mut bj : usize = 0
               while bj < d.ret_tl { if rrb[bj] != grb[bj] { eqk = false } ; bj = bj + 1 }
               retmatch = eqk
             }
@@ -4513,7 +4513,7 @@ a64_call_ret_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
   mut rn := 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
-    mut i := 0
+    mut i : usize = 0
     while i < cnt {
       d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
       if d.is_fn and d.name_len != 0 and streq(src, d.name_start, d.name_len, cs, cl) {
@@ -4529,7 +4529,7 @@ a64_call_ret_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
 ## name, not the call Expr) for injecting the `add x8, x29, #dst` indirect-result setup before the `bl`.
 a64_fn_returns_sret := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, a : rt::Arena) -> bool {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r := false
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
@@ -4581,7 +4581,7 @@ a64_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
   mut rn := 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
-    mut i := 0
+    mut i : usize = 0
     while i < cnt {
       d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
       if d.is_fn and d.name_len != 0 and streq(src, d.name_start, d.name_len, cs, cl) {
@@ -4599,7 +4599,7 @@ a64_call_ret_enum_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
               rrb := bytes(str_at((src + d.ret_ts), d.ret_tl))
               grb := bytes(str_at((src + tpn.s), tpn.n))
               mut eqk := true
-              mut bj := 0
+              mut bj : usize = 0
               while bj < d.ret_tl { if rrb[bj] != grb[bj] { eqk = false } ; bj = bj + 1 }
               retmatch = eqk
             }
@@ -4636,7 +4636,7 @@ a64_call_ret_enum_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
   mut rn := 0
   if cl != 0 {
     cnt := rt::vec_len(deref(decls))
-    mut i := 0
+    mut i : usize = 0
     while i < cnt {
       d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
       if d.is_fn and d.name_len != 0 and streq(src, d.name_start, d.name_len, cs, cl) {
@@ -4652,7 +4652,7 @@ a64_call_ret_enum_sret_span := fn(v : ptr(Expr), decls : ptr(rt::Vec), src : ptr
 ## register routing (route arg i to d<float-idx> or x<int-idx> per the callee's param class).
 a64_callee_params := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) -> Option(ptr(mut Param)) {
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   mut r : Option(ptr(mut Param)) = Option.None
   while i < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), i)))
@@ -5008,7 +5008,7 @@ a64_bound_lambda := fn(body : Option(ptr(mut Stmt)), src : ptr(u8), ns : usize, 
     if fr.is_r { fnpos = fr.fnpos; found = true }
   }
   if not found { return 0 - 1 }
-  mut i := 0
+  mut i : usize = 0
   while i < rt::vec_len(deref(decls)) {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and d.name_len == 0 and d.name_start == fnpos { return i64(i) }
@@ -5521,13 +5521,13 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         ss := expr_str_lit_ns(sarg)
         sl := expr_str_lit_nl(sarg)
         push_str(sb, "  ")
-        mut j := 0
+        mut j : usize = 0
         while j < sl {
           c := str_at((src + ss + j), 1)
           d0 := if j + 1 < sl { dec_digit_val(str_at((src + ss + j + 1), 1)) } else { -1 }
           if c == "{" and d0 >= 0 {
             mut k := j + 1
-            mut idx := 0
+            mut idx : usize = 0
             while k < sl and dec_digit_val(str_at((src + ss + k), 1)) >= 0 { idx = idx * 10 + usize(dec_digit_val(str_at((src + ss + k), 1))) ; k = k + 1 }
             oe := a64_arg_at(args_head, idx + 1, a)   ## operand idx = arg idx+1 (arg 0 is the template)
             push_int(sb, ex_value_init(oe))
@@ -5626,7 +5626,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           ## type-params erases source indices [0, lead) (`erase_lead`); a single NON-LEADING type-param
           ## erases its one position (`erase_one`, `gf(s, T, k)`). Implicit calls carry none. The loop walks
           ## ALL args by index and keeps arg `gidx` iff `gidx >= erase_lead and gidx != erase_one`.
-          mut erase_lead := 0
+          mut erase_lead : usize = 0
           mut erase_one := usize(argc) + 1
           if argc == i64(gd.arity) {
             cntc := decl_tparam_count(gd, src)
@@ -5641,7 +5641,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
           ## separate ifs inside the guard (mirrors the >8-arg loop; an if/else-if chain here miscompiles).
           mut nv := i64(0)
           mut g : Option(ptr(mut Arg)) = args_head
-          mut gidx := 0
+          mut gidx : usize = 0
           loop {
             match g {
               Some(gq) => {
@@ -5893,7 +5893,7 @@ emit_a64_expr := fn(e : ptr(Expr), in out sb : rt::StrBuf, a : rt::Arena, src : 
         if callee_ret_is_float(decls, src, cs, cl) { push_str(sb, "  fmov x0, d0\n") }
       } else {
         mut g : Option(ptr(mut Arg)) = args_head
-        mut gidx := 0
+        mut gidx : usize = 0
         loop {
           match g {
             Some(gq) => {
@@ -9204,7 +9204,7 @@ emit_a64_fn := fn(d : Decl, in out sb : rt::StrBuf, a : rt::Arena, src : ptr(u8)
         rbs := bytes(str_at((src + d.ret_ts), d.ret_tl))
         gbs := bytes(str_at((src + A64_SUB_GPS), A64_SUB_GPL))
         mut alleq := true
-        mut bi := 0
+        mut bi : usize = 0
         while bi < d.ret_tl { if rbs[bi] != gbs[bi] { alleq = false } ; bi = bi + 1 }
         if alleq { rts = A64_SUB_ITS ; rtl = A64_SUB_ITL }
       }
@@ -9510,7 +9510,7 @@ a64_test_selected := fn(src : ptr(u8), start : usize, len : usize) -> bool {
   desc := str_at((src + start), len)
   needle := str_at(unchecked bitcast(ptr(u8), A64_TEST_FILTER_P), A64_TEST_FILTER_N)
   if needle.len > desc.len { return false }
-  mut i := 0
+  mut i : usize = 0
   while i + needle.len <= desc.len {
     if str_at(unchecked bitcast(usize, desc.ptr) + i, needle.len) == needle { return true }
     i += 1
@@ -9526,7 +9526,7 @@ a64_test_is_result := fn(src : ptr(u8), d : Decl) -> bool {
 a64_emit_test_desc := fn(in out sb : rt::StrBuf, src : ptr(u8), start : usize, len : usize, idx : usize) {
   push_str(sb, ".La64testdesc") ; push_int(sb, i64(idx)) ; push_str(sb, ":\n  .byte ")
   if len == 0 { push_str(sb, "0\n") } else {
-    mut i := 0
+    mut i : usize = 0
     while i < len {
       if i != 0 { push_str(sb, ", ") }
       push_int(sb, i64(bytes(str_at((src + start), len))[i]))
@@ -9561,7 +9561,7 @@ a64_emit_test_report := fn(in out sb : rt::StrBuf, idx : usize, dlen : usize, ki
 a64_emit_test_runner := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : ptr(u8), a : rt::Arena) {
   push_str(sb, ".section .rodata\n.La64testprefix: .byte 116, 101, 115, 116, 32\n.La64testok: .byte 58, 32, 111, 107, 10\n.La64testsoft: .byte 58, 32, 70, 65, 73, 76, 32, 40, 115, 111, 102, 116, 41, 10\n.La64testtrap: .byte 58, 32, 70, 65, 73, 76, 32, 40, 116, 114, 97, 112, 41, 10\n")
   cnt := rt::vec_len(deref(decls))
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 5 and a64_test_selected(src, d.name_start, d.name_len) { a64_emit_test_desc(sb, src, d.name_start, d.name_len, i) }
@@ -9615,7 +9615,7 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   if not A64_TEST_MODE {
     push_str(sb, ".text\n.global _start\n_start:\n  bl ")
     mut entry_found := false
-    mut ei := 0
+    mut ei : usize = 0
     while ei < cnt {
       d := deref(decl_get(decls, ei))
       if not entry_found and d.kind == 1 and d.name_len == 4 and str_at((src + d.name_start), d.name_len) == "main" and extern_symbol(src, d.name_start, d.name_len).n == 0 {
@@ -9636,7 +9636,7 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   A64_INST_N = 0
   ## the float-literal pool is per PROGRAM, like the instance set (see A64_FLT_OFF).
   A64_FLT_N = 0
-  mut i := 0
+  mut i : usize = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 or (A64_TEST_MODE and d.kind == 5 and a64_test_selected(src, d.name_start, d.name_len)) {
@@ -9680,7 +9680,7 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## `.data`: a print newline byte + a 24-byte itoa buffer, one `.quad` cell per module-level SCALAR
   ## global (8-byte aligned), then the print strings.
   push_str(sb, ".data\n.Lprnl:\n  .byte 10\n.align 3\n.Lnumbuf:\n  .zero 24\n")
-  mut gi := 0
+  mut gi : usize = 0
   while gi < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), gi)))
     ## `name_len != 0` on all three arms: a `when`-guarded decl that folded FALSE for this target was
@@ -9713,7 +9713,7 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
     }
     gi += 1
   }
-  mut si := 0
+  mut si : usize = 0
   while si < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), si)))
     if d.kind == 1 { emit_a64_str_data(d.body_stmts, sb, src, a) }
@@ -9727,7 +9727,7 @@ pub emit_a64_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : p
   ## (`fn(x : f64) -> f64 { if x < 0.0 { 0.0 - x } else { x } }`, a pure trailing `if` expression).
   ## `d.value` is the `Num(-1)` no-tail sentinel when a fn has no trailing expr, and may be null on a
   ## decl that carries no value — both guarded, mirroring `emit_a64_fn`'s own tail emit.
-  mut fdi := 0
+  mut fdi : usize = 0
   while fdi < cnt {
     d := deref(decl_at(Decl, rt::vec_get(deref(decls), fdi)))
     if d.kind == 1 {

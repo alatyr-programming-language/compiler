@@ -22,7 +22,7 @@ main := fn() -> u64 {
   eb := E.A(5)            ## field-equal with ea, at a DIFFERENT address
   ec := E.A(9)            ## SAME variant as ea, different payload
 
-  mut r := 0
+  mut r : u64 = 0
   if ea == eb { r = r + 1 }     ## enum locals, equal contents             -> +1
   if ea == ec { r = r + 64 }    ## enum locals, same disc, payload differs -> +0
   r = r + ecmp(ea, eb) * 2      ## enum params, equal contents             -> +2

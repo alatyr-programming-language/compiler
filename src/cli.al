@@ -63,7 +63,7 @@ read_proc_lim := fn(in out a : rt::Arena, path_cstr : usize, cap : usize, in out
 ## The `str` at the NUL-terminated C-string address `p` (the inverse of `cstr`), for naming a file
 ## in a diagnostic.
 cstr_str := fn(p : usize) -> str {
-  mut n := 0
+  mut n : usize = 0
   while bytes(str_at(p + n, 1))[0] != 0 { n = n + 1 }
   return str_at(p, n)
 }
@@ -97,7 +97,7 @@ pub read_proc := fn(in out a : rt::Arena, path_cstr : usize, cap : usize) -> str
 ## on `a`; return its address (for `sys_open`/`sys_execve`).
 pub cstr := fn(in out a : rt::Arena, path : str) -> usize {
   mut pb := rt::strbuf(a, path.len + 8)
-  mut k := 0
+  mut k : usize = 0
   while k < path.len { kk := rt::push_byte(pb, bytes(path)[k]); k = k + 1 }
   kn := rt::push_byte(pb, 0)
   return unchecked bitcast(usize, rt::strbuf_base(pb))
@@ -117,7 +117,7 @@ pub read_cmdline := fn(in out a : rt::Arena) -> str {
 ## NUL after the last arg, so the count is the number of NUL terminators.
 pub arg_count := fn(cmd : str) -> usize {
   mut n := 0
-  mut i := 0
+  mut i : usize = 0
   while i < cmd.len {
     if bytes(cmd)[i] == 0 { n = n + 1 }
     i += 1
@@ -128,8 +128,8 @@ pub arg_count := fn(cmd : str) -> usize {
 ## The i-th (0-based) NUL-separated argument of a cmdline `str`, as a `str` span (0-len if past the
 ## end). Skips `i` NUL-terminated fields, then spans to the next NUL.
 pub arg_at := fn(cmd : str, i : usize) -> str {
-  mut off := 0
-  mut idx := 0
+  mut off : usize = 0
+  mut idx : usize = 0
   while idx < i and off < cmd.len {
     while off < cmd.len and bytes(cmd)[off] != 0 { off = off + 1 }
     off += 1
@@ -156,9 +156,9 @@ pub arg_at := fn(cmd : str, i : usize) -> str {
 ## a PATH probe string ("…n/as" showed up as an environment pointer). One read, one buffer, one
 ## answer: the environment the tool is handed and the `$PATH` it is found on are now the same bytes.
 pub resolve_in_path := fn(in out a : rt::Arena, env : str, name : str) -> usize {
-  mut i := 0
-  mut pvs := 0
-  mut pve := 0
+  mut i : usize = 0
+  mut pvs : usize = 0
+  mut pve : usize = 0
   mut found := false
   while i < env.len and found == false {
     if i + 5 <= env.len and bytes(env)[i] == 80 and bytes(env)[i + 1] == 65 and bytes(env)[i + 2] == 84 and bytes(env)[i + 3] == 72 and bytes(env)[i + 4] == 61 {
@@ -182,7 +182,7 @@ pub resolve_in_path := fn(in out a : rt::Arena, env : str, name : str) -> usize 
     mut k := ds
     while k < de { kk := rt::push_byte(cb, bytes(env)[k]); k = k + 1 }
     ksl := rt::push_byte(cb, 47)
-    mut m := 0
+    mut m : usize = 0
     while m < name.len { mm := rt::push_byte(cb, bytes(name)[m]); m = m + 1 }
     kn := rt::push_byte(cb, 0)
     ca := unchecked bitcast(usize, rt::strbuf_base(cb))
@@ -248,8 +248,8 @@ pub cat2 := fn(in out a : rt::Arena, s1 : str, s2 : str) -> str {
 ## future caller can reproduce the overrun even if the trap is ever relaxed.
 pub build_envp := fn(in out a : rt::Arena, env : str) -> usize {
   base := unchecked bitcast(usize, env.ptr)
-  mut cnt := 0
-  mut i := 0
+  mut cnt : usize = 0
+  mut i : usize = 0
   while i < env.len {
     if bytes(env)[i] == 0 { cnt = cnt + 1 }
     i += 1
@@ -258,8 +258,8 @@ pub build_envp := fn(in out a : rt::Arena, env : str) -> usize {
     panic("cli: refusing to build an execve envp from an environment buffer whose last entry has no NUL terminator (a truncated /proc/self/environ read)")
   }
   arr := rt::bump(a, (cnt + 1) * 8)
-  mut k := 0
-  mut off := 0
+  mut k : usize = 0
+  mut off : usize = 0
   while off < env.len and k < cnt {
     wword(arr + k * 8, base + off)
     while off < env.len and bytes(env)[off] != 0 { off = off + 1 }
@@ -308,8 +308,8 @@ split_module_path := fn(in out a : rt::Arena, paths : str, i : usize, nspan : us
   if i + 1 == nspan { return "instances" }
   span_paths := emission_paths_for(paths)
   ip := emission_input_path(span_paths, i)
-  mut start := 0
-  mut j := 0
+  mut start : usize = 0
+  mut j : usize = 0
   while j + 4 < ip.len {
     if bytes(ip)[j] == 47 and bytes(ip)[j + 1] == 115 and bytes(ip)[j + 2] == 114 and bytes(ip)[j + 3] == 99 and bytes(ip)[j + 4] == 47 { start = j + 5 }
     j += 1
@@ -431,8 +431,8 @@ pub exec6 := fn(in out a : rt::Arena, prog_c : usize, a1 : usize, a2 : usize, a3
 ## rewrite serves `plan` and `build --plan`; both commands remain the child's original argv surface.
 run_target_command := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usize, target : str, drop_selector : bool, envp : usize) -> rt::Spawned {
   av := rt::bump(a, (n + 1) * 8)
-  mut i := 0
-  mut k := 0
+  mut i : usize = 0
+  mut k : usize = 0
   while i < n {
     x := arg_at(cmd, i)
     mut selector := false
@@ -464,8 +464,8 @@ run_target_command := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usi
 ## profile validation, and source/type checks in one authoritative path; no shell is involved.
 run_target_check := fn(in out a : rt::Arena, exe_c : usize, cmd : str, n : usize, target : str, drop_selector : bool, envp : usize) -> rt::Spawned {
   av := rt::bump(a, (n + 1) * 8)
-  mut i := 0
-  mut k := 0
+  mut i : usize = 0
+  mut k : usize = 0
   while i < n {
     x := arg_at(cmd, i)
     if i == 1 {
@@ -713,10 +713,10 @@ emit_library_artifact := fn(in out a : rt::Arena, kind : str, out : str, gbase :
 ## ld) / 15 (no cc) / 14 (linker failed).
 link_with_libs := fn(in out a : rt::Arena, outo_c : usize, out_c : usize, entry : str, libnames : str, any_dyn : bool, lflags : str, environ : str, envp : usize) -> usize {
   dash_o := cstr(a, "-o")
-  mut prog_c := 0
+  mut prog_c : usize = 0
   ## argv slots (a generous fixed cap — a manifest names a handful of libs/flags).
   av := rt::bump(a, 4096)
-  mut k := 0
+  mut k : usize = 0
   if any_dyn {
     prog_c = resolve_in_path(a, environ, "cc")
     if prog_c == 0 { tool_error("alatyr: neither `cc` nor `ld` found on PATH (needed to link)"); return 15 }
@@ -751,7 +751,7 @@ link_with_libs := fn(in out a : rt::Arena, outo_c : usize, out_c : usize, entry 
   }
   ## the raw linker_flags (each already a whole flag token, e.g. `-L/abs/dir`), BEFORE the `-l`s.
   lb := unchecked bitcast(usize, lflags.ptr)
-  mut fi := 0
+  mut fi : usize = 0
   while fi < lflags.len {
     mut fe := fi
     while fe < lflags.len and bytes(lflags)[fe] != 10 { fe = fe + 1 }
@@ -764,7 +764,7 @@ link_with_libs := fn(in out a : rt::Arena, outo_c : usize, out_c : usize, entry 
   }
   ## each library name as `-l<name>`.
   nb := unchecked bitcast(usize, libnames.ptr)
-  mut li := 0
+  mut li : usize = 0
   while li < libnames.len {
     mut le := li
     while le < libnames.len and bytes(libnames)[le] != 10 { le = le + 1 }
@@ -799,7 +799,7 @@ emission_span_hash := fn(base : usize, start : usize, len : usize) -> u64 {
   ## the manifest as unsigned decimal. This is deliberately local to cli.al: no source reread,
   ## filesystem metadata, host hash, or platform-dependent tool is part of the fingerprint.
   mut h : u64 = 1469598103934665603
-  mut i := 0
+  mut i : usize = 0
   while i < len {
     b := u64(bytes(str_at(base + start + i, 1))[0])
     h = unchecked ((h ^ b) * 1099511628211)
@@ -824,9 +824,9 @@ emission_push_u64 := fn(in out b : rt::StrBuf, n : u64) {
 ## marker rather than silently assigning a neighboring source to a GAS span.
 emission_input_path := fn(paths : str, want : usize) -> str {
   base := unchecked bitcast(usize, paths.ptr)
-  mut seg := 0
-  mut i := 0
-  mut seen := 0
+  mut seg : usize = 0
+  mut i : usize = 0
+  mut seen : usize = 0
   while i <= paths.len {
     mut end_line := false
     if i == paths.len { end_line = true }
@@ -864,10 +864,10 @@ emission_manifest := fn(in out a : rt::Arena, out : str, paths : str, gbase : us
   rt::push_str(b, "span_count=")
   emission_push_u64(b, u64(nspan))
   rt::push_byte(b, 10)
-  mut prev := 0
+  mut prev : usize = 0
   mut bad_geometry := false
   mut bad_attribution := false
-  mut i := 0
+  mut i : usize = 0
   while i < nspan {
     st := rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 1 + i * 2)
     ln := rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 2 + i * 2)
@@ -951,7 +951,7 @@ link_exe_split := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize
   ## Worth knowing before reaching for it: the split's payoff is <2%. `perf` measured `as` + `ld` at
   ## ~0.67 s of a ~28 s build — the compiler's OWN execution dominates, so parallelising or splitting
   ## the toolchain calls is not where a faster build comes from.
-  mut nspan := 0
+  mut nspan : usize = 0
   if spanbase != 0 { nspan = rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 0) }
   if nspan <= 1 { return link_exe(a, out, gbase, glen, entry, libnames, any_dyn, lflags) }
   if libnames.len > 0 or lflags.len > 0 { return link_exe(a, out, gbase, glen, entry, libnames, any_dyn, lflags) }
@@ -970,7 +970,7 @@ link_exe_split := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize
   dash_o := cstr(sc, "-o")
   ## ld argv slots: ld + N object cstrs + `-o` + out + optional `-e <entry>` + NUL terminator.
   av := rt::bump(sc, nspan * 8 + 128)
-  mut k := 0
+  mut k : usize = 0
   wword(av + k * 8, ld_c) ; k = k + 1
   ## Build every module-path `.s` / `.o` name UP FRONT into its own scratch buffer, storing the `.o` cstr
   ## pointers in `av`, BEFORE running any `as`. Doing the name-building and the `as`/`write_file` in one
@@ -979,7 +979,7 @@ link_exe_split := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize
   ## phases keeps each loop body simple and sidesteps it. `sos`/`oos` hold the per-span `.s`/`.o` cstrs.
   sos := rt::bump(sc, nspan * 8 + 64)
   oos := rt::bump(sc, nspan * 8 + 64)
-  mut i := 0
+  mut i : usize = 0
   while i < nspan {
     sname0 := split_module_artifact_path(sc, out, paths, i, nspan, ".s")
     mut nbs := rt::strbuf(sc, sname0.len + 8)
@@ -1004,7 +1004,7 @@ link_exe_split := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize
   ## corruption (documented at `lower::ra_env_init`; here it surfaced as a heisen "rt: StrBuf overflow").
   ## Accumulate an error code and return AFTER the loop instead.
   mut err := 0
-  mut j := 0
+  mut j : usize = 0
   while j < nspan and err == 0 {
     st := rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 1 + j * 2)
     ln := rt::rec_get(unchecked bitcast(ptr(mut u8), spanbase), 2 + j * 2)
@@ -1046,7 +1046,7 @@ link_exe_split := fn(in out a : rt::Arena, out : str, paths : str, gbase : usize
 pub ends_with := fn(s : str, suf : str) -> bool {
   if s.len < suf.len { return false }
   off := s.len - suf.len
-  mut i := 0
+  mut i : usize = 0
   while i < suf.len {
     if bytes(s)[off + i] != bytes(suf)[i] { return false }
     i += 1
@@ -1058,7 +1058,7 @@ pub ends_with := fn(s : str, suf : str) -> bool {
 pub dir_of := fn(path : str) -> str {
   mut last := 0
   mut seen := false
-  mut i := 0
+  mut i : usize = 0
   while i < path.len {
     if bytes(path)[i] == 47 { last = i; seen = true }
     i += 1
@@ -1075,7 +1075,7 @@ parent_dir := fn(path : str) -> str {
   if path.len == 0 { return "." }
   mut last := 0
   mut seen := false
-  mut i := 0
+  mut i : usize = 0
   while i < path.len {
     if bytes(path)[i] == 47 { last = i ; seen = true }
     i += 1
@@ -1089,8 +1089,8 @@ parent_dir := fn(path : str) -> str {
 ## The stem of the first root source file for a manifest-less invocation (TOOL-11/14). Keep the
 ## directory out of the artifact name; the location is chosen separately by the CLI build mode.
 file_stem := fn(path : str) -> str {
-  mut start := 0
-  mut i := 0
+  mut start : usize = 0
+  mut i : usize = 0
   while i < path.len {
     if bytes(path)[i] == 47 { start = i + 1 }
     i += 1
@@ -1113,7 +1113,7 @@ file_stem := fn(path : str) -> str {
 str_lt := fn(astr : str, s1 : usize, l1 : usize, s2 : usize, l2 : usize) -> bool {
   mut mn := l1
   if l2 < l1 { mn = l2 }
-  mut i := 0
+  mut i : usize = 0
   while i < mn {
     c1 := bytes(astr)[s1 + i]
     c2 := bytes(astr)[s2 + i]
@@ -1133,7 +1133,7 @@ sort_path_lines := fn(in out a : rt::Arena, astr : str) -> str {
   mut tb := rt::WTab(0)
   mut tc := rt::Words(0)
   mut n : usize = 0
-  mut p := 0
+  mut p : usize = 0
   while p < astr.len {
     mut e := p
     while e < astr.len and bytes(astr)[e] != 10 { e = e + 1 }
@@ -1180,7 +1180,7 @@ pub list_al_in_dir := fn(in out a : rt::Arena, dir : str) -> str {
   all := list_al_in_tree(a, dir)
   mut out := rt::strbuf(a, all.len + 16)
   base := unchecked bitcast(usize, all.ptr)
-  mut p := 0
+  mut p : usize = 0
   while p < all.len {
     mut e := p
     while e < all.len and bytes(all)[e] != 10 { e += 1 }
@@ -1212,7 +1212,7 @@ list_al_in_tree := fn(in out a : rt::Arena, root : str) -> str {
   mut dirs := rt::strbuf(a, 262144)
   k0 := rt::push_str(dirs, root)
   k1 := rt::push_byte(dirs, 10)
-  mut qpos := 0
+  mut qpos : usize = 0
   while qpos < dirs.len {
     mut qe := qpos
     while qe < dirs.len and bytes(str_at(dirs.data, dirs.len))[qe] != 10 { qe += 1 }
@@ -1229,7 +1229,7 @@ list_al_in_tree := fn(in out a : rt::Arena, root : str) -> str {
           if nr <= 0 { going = false } else {
             m := unchecked bitcast(usize, nr)
             bs := str_at(buf, m)
-            mut pos := 0
+            mut pos : usize = 0
             while pos < m {
               reclen := bytes(bs)[pos + 16] + bytes(bs)[pos + 17] * 256
               if reclen == 0 { pos = m } else {
@@ -1279,7 +1279,7 @@ list_al_in_tree := fn(in out a : rt::Arena, root : str) -> str {
 ## fail-loud parse diagnostic still aborts the command. Valid files are processed in sorted order,
 ## making both the rewrite order and the first reported invalid path deterministic.
 fmt_package_files := fn(in out a : rt::Arena, paths : str) -> usize {
-  mut p := 0
+  mut p : usize = 0
   while p < paths.len {
     mut e := p
     while e < paths.len and bytes(paths)[e] != 10 { e += 1 }
@@ -1300,15 +1300,15 @@ fmt_package_files := fn(in out a : rt::Arena, paths : str) -> usize {
 line_in_set := fn(in out setbuf : rt::StrBuf, needle : str) -> bool {
   s := str_at(setbuf.data, setbuf.len)
   mut found := false
-  mut i := 0
-  mut ls := 0
+  mut i : usize = 0
+  mut ls : usize = 0
   while i <= s.len and found == false {
     mut isnl := true
     if i < s.len { isnl = bytes(s)[i] == 10 }
     if isnl {
       if i - ls == needle.len {
         mut eq := true
-        mut j := 0
+        mut j : usize = 0
         while j < needle.len {
           if bytes(s)[ls + j] != bytes(needle)[j] { eq = false }
           j += 1
@@ -1331,9 +1331,9 @@ normalize_path := fn(in out a : rt::Arena, p : str) -> str {
   mut out := rt::strbuf(a, p.len + 16)
   if abs { kk := rt::push_byte(out, 47) }
   pbase := unchecked bitcast(usize, p.ptr)
-  mut minlen := 0
+  mut minlen : usize = 0
   if abs { minlen = 1 }
-  mut i := 0
+  mut i : usize = 0
   while i < p.len {
     while i < p.len and bytes(p)[i] == 47 { i = i + 1 }   ## skip a run of '/'
     s := i
@@ -1415,8 +1415,8 @@ edge_live_target := fn(in out edges : rt::StrBuf, in out dead : rt::StrBuf, from
   sbase := unchecked bitcast(usize, s.ptr)
   mut res := str_at(sbase, 0)
   mut found := false
-  mut ls := 0
-  mut i := 0
+  mut ls : usize = 0
+  mut i : usize = 0
   while i <= s.len {
     mut isnl := true
     if i < s.len { isnl = bytes(s)[i] == 10 }
@@ -1463,8 +1463,8 @@ graph_cycle_chain := fn(in out a : rt::Arena, nodes : str, in out edges : rt::St
   mut changed := true
   while changed {
     changed = false
-    mut ls := 0
-    mut i := 0
+    mut ls : usize = 0
+    mut i : usize = 0
     while i <= nodes.len {
       mut isnl := true
       if i < nodes.len { isnl = bytes(nodes)[i] == 10 }
@@ -1489,8 +1489,8 @@ graph_cycle_chain := fn(in out a : rt::Arena, nodes : str, in out edges : rt::St
   ## same one on every run and on every conforming implementation of this walk.
   mut start := str_at(nbase, 0)
   mut have := false
-  mut ls1 := 0
-  mut i1 := 0
+  mut ls1 : usize = 0
+  mut i1 : usize = 0
   while i1 <= nodes.len {
     mut isnl := true
     if i1 < nodes.len { isnl = bytes(nodes)[i1] == 10 }
@@ -1526,8 +1526,8 @@ graph_cycle_chain := fn(in out a : rt::Arena, nodes : str, in out edges : rt::St
   pbase := unchecked bitcast(usize, ps.ptr)
   mut out := rt::strbuf(a, path.len + 256)
   mut emitting := false
-  mut ls2 := 0
-  mut i2 := 0
+  mut ls2 : usize = 0
+  mut i2 : usize = 0
   while i2 <= ps.len {
     mut isnl := true
     if i2 < ps.len { isnl = bytes(ps)[i2] == 10 }
@@ -1631,7 +1631,7 @@ mut MANIFEST_PACKAGE_END : usize = 0
 manifest_package_bounds := fn(mtext : str) -> bool {
   MANIFEST_PACKAGE_OPEN = 0
   MANIFEST_PACKAGE_END = 0
-  mut i := 0
+  mut i : usize = 0
   base := unchecked bitcast(usize, mtext.ptr)
   while i < mtext.len {
     c := bytes(mtext)[i]
@@ -1834,7 +1834,7 @@ manifest_machine_variant := fn(s : str) -> str {
 manifest_machine_arg := fn(s : str, wanted : usize) -> str {
   base := unchecked bitcast(usize, s.ptr)
   mut open := s.len
-  mut i := 0
+  mut i : usize = 0
   while i < s.len and open == s.len {
     if bytes(s)[i] == 40 { open = i }
     i += 1
@@ -1843,7 +1843,7 @@ manifest_machine_arg := fn(s : str, wanted : usize) -> str {
   mut p := open + 1
   mut start := manifest_skip_trivia(s, p, s.len)
   mut depth := 0
-  mut index := 0
+  mut index : usize = 0
   mut done := false
   while p <= s.len and not done {
     mut delimiter := false
@@ -1902,8 +1902,8 @@ manifest_subsystem_valid := fn(tok : str) -> bool {
 
 manifest_decimal_u32_valid := fn(s : str) -> bool {
   if s.len == 0 { return false }
-  mut v := 0
-  mut i := 0
+  mut v : usize = 0
+  mut i : usize = 0
   mut ok := true
   while i < s.len {
     c := bytes(s)[i]
@@ -1916,8 +1916,8 @@ manifest_decimal_u32_valid := fn(s : str) -> bool {
 }
 
 manifest_decimal_u32 := fn(s : str) -> usize {
-  mut v := 0
-  mut i := 0
+  mut v : usize = 0
+  mut i : usize = 0
   while i < s.len { v = v * 10 + (bytes(s)[i] - 48) ; i += 1 }
   v
 }
@@ -2210,11 +2210,11 @@ dep_config_error := fn(in out a : rt::Arena, msg : str, pkg_al : str, detail : s
   DEP_CONFIG_BAD = true
   mc := cstr(a, pkg_al)
   mtext := read_proc(a, mc, 262144)
-  mut off := 0
+  mut off : usize = 0
   fi := mf_find_word(mtext, 0, "dependencies")
   if fi >= 0 { off = usize(fi) }
   mut line := 1
-  mut i := 0
+  mut i : usize = 0
   while i < off and i < mtext.len { if bytes(mtext)[i] == 10 { line = line + 1 } ; i = i + 1 }
   mut db := rt::strbuf(a, msg.len + pkg_al.len + detail.len + 64)
   k0 := rt::push_str(db, msg)
@@ -2239,7 +2239,7 @@ dep_alias_at := fn(mtext : str, hit : usize) -> str {
   mbase := unchecked bitcast(usize, mtext.ptr)
   mut dep_open := 0
   mut dep_end := 0
-  mut k := 0
+  mut k : usize = 0
   while k < hit {
     c := bytes(mtext)[k]
     if c == 35 { k = manifest_skip_trivia(mtext, k, hit) }
@@ -2291,7 +2291,7 @@ scan_deps_into_queue := fn(in out a : rt::Arena, pkg_al : str, pkgdir : str, in 
   ## this package's own graph IDENTITY (MOD-10) — the same key the BFS records in its seen-set, so an
   ## edge's two endpoints and the node set agree.
   from_key := abs_norm_path(a, base_dir)
-  mut scan_start := 0
+  mut scan_start : usize = 0
   mut scan_end := mtext.len
   if manifest_package_bounds(mtext) {
     mut package_open := MANIFEST_PACKAGE_OPEN
@@ -2408,9 +2408,9 @@ manifest_field := fn(in out a : rt::Arena, pkg_al : str, field : str) -> str {
   mtext := read_proc(a, mc, 262144)
   mbase := unchecked bitcast(usize, mtext.ptr)
   if field.len == 0 { return str_at(mbase, 0) }
-  mut i := 0
+  mut i : usize = 0
   while i + field.len <= mtext.len {
-    mut j := 0
+    mut j : usize = 0
     mut ok := true
     while j < field.len {
       if bytes(mtext)[i + j] != bytes(field)[j] { ok = false }
@@ -2448,7 +2448,7 @@ manifest_limits_normalize := fn(in out a : rt::Arena, raw : str) -> str {
   ## so reserve the input length plus that invariant's headroom.
   mut out := rt::strbuf(a, raw.len + 16)
   base := unchecked bitcast(usize, raw.ptr)
-  mut i := 0
+  mut i : usize = 0
   while i < raw.len {
     c := bytes(raw)[i]
     if c == 44 or c == 32 or c == 9 or c == 10 or c == 13 or c == 91 or c == 93 or c == 40 or c == 41 {
@@ -2482,7 +2482,7 @@ manifest_limits := fn(in out a : rt::Arena, pkg_al : str) -> str {
   mc := cstr(a, pkg_al)
   mtext := read_proc(a, mc, 262144)
   mbase := unchecked bitcast(usize, mtext.ptr)
-  mut i := 0
+  mut i : usize = 0
   while i + 6 <= mtext.len {
     hit := bytes(mtext)[i] == 108 and bytes(mtext)[i+1] == 105 and bytes(mtext)[i+2] == 109 and bytes(mtext)[i+3] == 105 and bytes(mtext)[i+4] == 116 and bytes(mtext)[i+5] == 115   ## "limits"
     mut boundary := true
@@ -2527,10 +2527,10 @@ manifest_list_field := fn(in out a : rt::Arena, pkg_al : str, field : str) -> st
   mtext := read_proc(a, mc, 262144)
   mbase := unchecked bitcast(usize, mtext.ptr)
   if field.len == 0 { return str_at(mbase, 0) }
-  mut i := 0
+  mut i : usize = 0
   while i + field.len <= mtext.len {
     mut ok := true
-    mut j := 0
+    mut j : usize = 0
     while j < field.len {
       if bytes(mtext)[i + j] != bytes(field)[j] { ok = false }
       j += 1
@@ -2577,7 +2577,7 @@ manifest_list_field := fn(in out a : rt::Arena, pkg_al : str, field : str) -> st
 extract_quoted_lines := fn(in out a : rt::Arena, s : str) -> str {
   sbase := unchecked bitcast(usize, s.ptr)
   mut out := rt::strbuf(a, s.len + 64)
-  mut i := 0
+  mut i : usize = 0
   while i < s.len {
     if bytes(s)[i] == 34 {   ## '"' (34)
       mut e := i + 1
@@ -2597,10 +2597,10 @@ extract_quoted_lines := fn(in out a : rt::Arena, s : str) -> str {
 str_contains := fn(hay : str, needle : str) -> bool {
   if needle.len == 0 { return false }
   if needle.len > hay.len { return false }
-  mut i := 0
+  mut i : usize = 0
   while i + needle.len <= hay.len {
     mut ok := true
-    mut j := 0
+    mut j : usize = 0
     while j < needle.len {
       if bytes(hay)[i + j] != bytes(needle)[j] { ok = false }
       j += 1
@@ -2640,7 +2640,7 @@ mf_find_word := fn(s : str, from : usize, word : str) -> i64 {
       i = manifest_skip_string(s, i, s.len)
     } else {
       mut ok := true
-      mut j := 0
+      mut j : usize = 0
       while j < word.len { if bytes(s)[i + j] != bytes(word)[j] { ok = false } ; j += 1 }
       mut lb := true
       if i > 0 { lb = not amb_idc(bytes(s)[i - 1]) }
@@ -2712,9 +2712,9 @@ mut CLI_SELECTED_TARGET_N : usize = 0
 manifest_target_record := fn(in out a : rt::Arena, pkg_al : str) -> str {
   blk := manifest_list_field(a, pkg_al, "targets")
   bb := unchecked bitcast(usize, blk.ptr)
-  mut first_s := 0
+  mut first_s : usize = 0
   mut first_n := 0
-  mut i := 0
+  mut i : usize = 0
   while i + 7 <= blk.len {
     mut is_target := true
     if bytes(blk)[i] != 84 { is_target = false }
@@ -2769,7 +2769,7 @@ manifest_target_token := fn(in out a : rt::Arena, pkg_al : str, field : str) -> 
 
 manifest_target_field_value := fn(rec : str, wanted : str) -> bool {
   mut open := rec.len
-  mut i := 0
+  mut i : usize = 0
   while i < rec.len and open == rec.len {
     if bytes(rec)[i] == 40 { open = i }
     i += 1
@@ -2999,7 +2999,7 @@ manifest_build_verbose := fn(pkg_al : str, profile : str, artifact : str, paths 
   }
   tool_stderr_newline()
   tool_stderr_line("verbose: modules")
-  mut i := 0
+  mut i : usize = 0
   while i < paths.len {
     mut e := i
     while e < paths.len and bytes(paths)[e] != 10 { e += 1 }
@@ -3054,7 +3054,7 @@ manifest_dynamic_lib_names := fn(in out a : rt::Arena, pkg_al : str) -> str {
   blk := manifest_list_field(a, pkg_al, "libs")
   base := unchecked bitcast(usize, blk.ptr)
   mut out := rt::strbuf(a, blk.len + 32)
-  mut i := 0
+  mut i : usize = 0
   while i < blk.len {
     c := bytes(blk)[i]
     if c == 35 {
@@ -3117,7 +3117,7 @@ manifest_target_selection_resolve := fn(in out a : rt::Arena, pkg_al : str) -> u
   }
   ## No explicit selector: preserve the existing first-target default, but remember its name so every
   ## later field scanner (kind/code-size/output/entry/artifact directory) reads the same record.
-  mut i := 0
+  mut i : usize = 0
   while i + 7 <= blk.len {
     if bytes(blk)[i] == 84 and bytes(blk)[i + 1] == 97 and bytes(blk)[i + 2] == 114 and bytes(blk)[i + 3] == 103 and bytes(blk)[i + 4] == 101 and bytes(blk)[i + 5] == 116 and bytes(blk)[i + 6] == 40 {
       mut e := i + 7
@@ -3205,7 +3205,7 @@ manifest_located_error_at := fn(in out a : rt::Arena, msg : str, pkg_al : str, o
   mc := cstr(a, pkg_al)
   mtext := read_proc(a, mc, 262144)
   mut line := 1
-  mut i := 0
+  mut i : usize = 0
   while i < off and i < mtext.len { if bytes(mtext)[i] == 10 { line = line + 1 } ; i = i + 1 }
   mut db := rt::strbuf(a, msg.len + pkg_al.len + 64)
   k0 := rt::push_str(db, msg)
@@ -3244,7 +3244,7 @@ manifest_output_reject := fn(in out a : rt::Arena, pkg_al : str) {
   if wi < 0 { return }
   value := mf_quoted(rec, usize(wi), 6)
   mut bad := value.len == 0
-  mut i := 0
+  mut i : usize = 0
   while i < value.len {
     if bytes(value)[i] == 47 or bytes(value)[i] == 92 { bad = true }
     i += 1
@@ -3262,7 +3262,7 @@ manifest_output_reject := fn(in out a : rt::Arena, pkg_al : str) {
 mf_path_has_escape := fn(v : str) -> bool {
   if v.len > 0 { if bytes(v)[0] == 47 { return true } }   ## an absolute POSIX path
   mut depth := 0
-  mut i := 0
+  mut i : usize = 0
   mut base := unchecked bitcast(usize, v.ptr)
   while i <= v.len {
     s := i
@@ -3287,7 +3287,7 @@ mf_path_contains := fn(parent : str, child : str) -> bool {
   if parent == "." { return true }
   if parent == child { return true }
   if child.len <= parent.len { return false }
-  mut i := 0
+  mut i : usize = 0
   while i < parent.len {
     if bytes(parent)[i] != bytes(child)[i] { return false }
     i += 1
@@ -3493,7 +3493,7 @@ mf_is_int_type := fn(t : str) -> bool {
 
 mf_is_digits := fn(v : str) -> bool {
   if v.len == 0 { return false }
-  mut i := 0
+  mut i : usize = 0
   while i < v.len { c := bytes(v)[i] ; if c < 48 or c > 57 { return false } ; i += 1 }
   return true
 }
@@ -3520,7 +3520,7 @@ mf_int_value_matches_type := fn(t : str, v : str) -> bool {
 }
 
 mf_has_dot := fn(v : str) -> bool {
-  mut i := 0
+  mut i : usize = 0
   while i < v.len { if bytes(v)[i] == 46 { return true } ; i += 1 }
   return false
 }
@@ -3534,13 +3534,13 @@ mf_config_error := fn(in out a : rt::Arena, msg : str, pkg_al : str, field : str
   PROFILE_CONFIG_BAD = true
   mc := cstr(a, pkg_al)
   mtext := read_proc(a, mc, 262144)
-  mut off := 0
+  mut off : usize = 0
   if field.len != 0 {
     fi := mf_find_word(mtext, 0, field)
     if fi >= 0 { off = usize(fi) }
   }
   mut line := 1
-  mut i := 0
+  mut i : usize = 0
   while i < off and i < mtext.len { if bytes(mtext)[i] == 10 { line = line + 1 } ; i = i + 1 }
   mut db := rt::strbuf(a, msg.len + pkg_al.len + 48)
   k0 := rt::push_str(db, msg)
@@ -3640,7 +3640,7 @@ manifest_profile_flags := fn(in out a : rt::Arena, pkg_al : str, sel : str) -> s
 ## Scanned over the compiler-argument portion (the `run` caller bounds it at `--`; a `--profile`
 ## consumes the next compiler argument as its name).
 cli_profile := fn(in out a : rt::Arena, cmd : str, n : usize, emp : str) -> str {
-  mut k := 2
+  mut k : usize = 2
   while k < n {
     ak := arg_at(cmd, k)
     if ak == "--release" { return "release" }
@@ -3691,7 +3691,7 @@ manifest_package_binding := fn(in out a : rt::Arena, pkg_al : str) -> str {
   mc := cstr(a, pkg_al)
   mtext := read_proc(a, mc, 262144)
   base := unchecked bitcast(usize, mtext.ptr)
-  mut i := 0
+  mut i : usize = 0
   while i < mtext.len {
     c := bytes(mtext)[i]
     if c == 35 {
@@ -3794,7 +3794,7 @@ manifest_artifact_basename := fn(in out a : rt::Arena, pkg_al : str) -> str {
 manifest_target_count := fn(in out a : rt::Arena, pkg_al : str) -> usize {
   blk := manifest_list_field(a, pkg_al, "targets")
   mut n := 0
-  mut i := 0
+  mut i : usize = 0
   while i + 7 <= blk.len {
     if bytes(blk)[i] == 84 and bytes(blk)[i + 1] == 97 and bytes(blk)[i + 2] == 114
        and bytes(blk)[i + 3] == 103 and bytes(blk)[i + 4] == 101 and bytes(blk)[i + 5] == 116
@@ -3812,7 +3812,7 @@ manifest_target_names := fn(in out a : rt::Arena, pkg_al : str) -> str {
   blk := manifest_list_field(a, pkg_al, "targets")
   bb := unchecked bitcast(usize, blk.ptr)
   mut out := rt::strbuf(a, blk.len + 64)
-  mut i := 0
+  mut i : usize = 0
   while i + 7 <= blk.len {
     mut is_target := true
     if bytes(blk)[i] != 84 { is_target = false }
@@ -3987,7 +3987,7 @@ pkg_module_paths := fn(in out a : rt::Arena, root_pkg : str) -> str {
   ksn := rt::push_byte(seen, 10)
   ## seed the queue with the root's direct deps.
   scan_deps_into_queue(a, root_pkg, rootdir, queue, edges)
-  mut qpos := 0
+  mut qpos : usize = 0
   while qpos < queue.len {
     qbase := unchecked bitcast(usize, queue.data)
     qstr := str_at(queue.data, queue.len)
@@ -4105,8 +4105,8 @@ wexit := fn(status : usize) -> usize {
 }
 
 parse_uint_arg := fn(s : str) -> usize {
-  mut v := 0
-  mut i := 0
+  mut v : usize = 0
+  mut i : usize = 0
   if s.len == 0 { return 0 }
   while i < s.len {
     c := bytes(s)[i]
@@ -4196,7 +4196,7 @@ build_and_run := fn(in out a : rt::Arena, outp : str, keep_artifacts : bool, gba
   av := rt::bump(a, (argc + 2) * 8)
   wword(av + 0, prog_c)
   mut ai := arg_first
-  mut ak := 1
+  mut ak : usize = 1
   while ai < arg_last {
     ac := cstr(a, arg_at(cmd, ai))
     wword(av + ak * 8, ac)
@@ -4339,8 +4339,8 @@ manifest_all_target_preflight := fn(in out a : rt::Arena, pkg_al : str, target :
 run_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, n : usize, mode : usize) -> usize {
   count := manifest_target_count(a, pkg_al)
   names := manifest_target_names(a, pkg_al)
-  mut name_count := 0
-  mut ni := 0
+  mut name_count : usize = 0
+  mut ni : usize = 0
   while ni < names.len {
     if bytes(names)[ni] == 10 { name_count += 1 }
     ni += 1
@@ -4367,8 +4367,8 @@ run_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, n 
   ## Build commands additionally run a check child for every target, closing the partial-output hole
   ## where a later source error would otherwise be discovered after an earlier artifact was produced.
   nb := unchecked bitcast(usize, names.ptr)
-  mut pre_start := 0
-  mut pre_idx := 0
+  mut pre_start : usize = 0
+  mut pre_idx : usize = 0
   while pre_idx < count {
     mut pre_end := pre_start
     while pre_end < names.len and bytes(names)[pre_end] != 10 { pre_end += 1 }
@@ -4395,7 +4395,7 @@ run_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, n 
     mut drop_selector := true
     if name_count == 1 {
       nb := unchecked bitcast(usize, names.ptr)
-      mut end := 0
+      mut end : usize = 0
       while end < names.len and bytes(names)[end] != 10 { end += 1 }
       target = str_at(nb, end)
       if target == "all" {
@@ -4408,8 +4408,8 @@ run_all_manifest_targets := fn(in out a : rt::Arena, pkg_al : str, cmd : str, n 
     if sp.kind != 0 { spawn_error(a, "target build", "alatyr", sp); return 19 }
     return wexit(unchecked bitcast(usize, sp.code))
   }
-  mut start := 0
-  mut idx := 0
+  mut start : usize = 0
+  mut idx : usize = 0
   while idx < count {
     mut end := start
     while end < names.len and bytes(names)[end] != 10 { end += 1 }
@@ -4477,9 +4477,9 @@ new_package := fn(in out a : rt::Arena, name : str) -> usize {
 ## changing the driver/lower test artifact or its exit-code contract.
 test_gas_has_desc := fn(gas : str) -> bool {
   needle := ".Ltestdesc"
-  mut i := 0
+  mut i : usize = 0
   while i + needle.len <= gas.len {
-    mut j := 0
+    mut j : usize = 0
     mut same := true
     while j < needle.len {
       if bytes(gas)[i + j] != bytes(needle)[j] { same = false }
@@ -4522,7 +4522,7 @@ amb_idc := fn(c : usize) -> bool { return (c >= 48 and c <= 57) or (c >= 65 and 
 ## does the literal `lit` occur at `src[i..]`? (byte compare; false if it would run past the end)
 amb_lit_at := fn(src : str, i : usize, n : usize, lit : str) -> bool {
   if i + lit.len > n { return false }
-  mut j := 0
+  mut j : usize = 0
   mut ok := true
   while j < lit.len { if bytes(src)[i + j] != bytes(lit)[j] { ok = false } ; j = j + 1 }
   return ok
@@ -4540,10 +4540,10 @@ pub lib_dir := fn(in out a : rt::Arena) -> str {
   rl := unchecked bitcast(usize, r)
   exe := str_at(buf.data, rl)
   eb := unchecked bitcast(usize, exe.ptr)
-  mut cut := 0
-  mut i := 0
+  mut cut : usize = 0
+  mut i : usize = 0
   while i < rl { if bytes(exe)[i] == 47 { cut = i } ; i = i + 1 }   ## last '/'
-  mut prev := 0
+  mut prev : usize = 0
   i = 0
   while i < cut { if bytes(exe)[i] == 47 { prev = i + 1 } ; i = i + 1 }
   dirbase := str_at(eb + prev, cut - prev)
@@ -4596,7 +4596,7 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
   mut sq := rt::Vec(data = rt::bump(a, 4096 * 8), len = 0, cap = 4096)
   ## seed with the user sources
   ub := unchecked bitcast(usize, user_paths.ptr)
-  mut up := 0
+  mut up : usize = 0
   while up < user_paths.len {
     mut ue := up
     while ue < user_paths.len and bytes(user_paths)[ue] != 10 { ue = ue + 1 }
@@ -4664,7 +4664,7 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
   mut needs_slice := false
   mut has_slice_decl := false
   ## drain the scan queue (it grows as transitive refs are discovered)
-  mut qi := 0
+  mut qi : usize = 0
   while qi < rt::vec_len(sq) {
     entry_idx := qi
     sptr := rt::vec_get(sq, qi)
@@ -4673,7 +4673,7 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
     is_lib := entry_idx >= user_q_end
     src := str_at(sptr, slen)
     n := slen
-    mut i := 0
+    mut i : usize = 0
     while i < n {
       c := bytes(src)[i]
       ## `@alloc(…)` in a USER source → force the base prelude (see `needs_alloc` above). An independent
@@ -4776,7 +4776,7 @@ pub ambient_paths := fn(in out a : rt::Arena, user_paths : str, libdir : str, is
       } else {
         mut boundary := true
         if i > 0 { boundary = amb_idc(bytes(src)[i - 1]) == false }
-        mut rl := 0
+        mut rl : usize = 0
         if boundary {
           if amb_lit_at(src, i, n, "alloc") { rl = 5 }
           else if amb_lit_at(src, i, n, "std") { rl = 3 }
@@ -5027,7 +5027,7 @@ osplit_on := fn(in out a : rt::Arena) -> bool {
   ## split codegen fault — it was this env-read truncation; a correct fallback, but the flag was ignored.)
   env := read_proc(a, cstr(a, "/proc/self/environ"), 2097152)
   mut found := false
-  mut i := 0
+  mut i : usize = 0
   while i < env.len and (not found) {
     ## match `ALATYR_OSPLIT=1` (A L A T Y R _ O S P L I T = 1 → 15 bytes).
     if i + 15 <= env.len and bytes(env)[i] == 65 and bytes(env)[i + 1] == 76 and bytes(env)[i + 2] == 65 and bytes(env)[i + 3] == 84 and bytes(env)[i + 4] == 89 and bytes(env)[i + 5] == 82 and bytes(env)[i + 6] == 95 and bytes(env)[i + 7] == 79 and bytes(env)[i + 8] == 83 and bytes(env)[i + 9] == 80 and bytes(env)[i + 10] == 76 and bytes(env)[i + 11] == 73 and bytes(env)[i + 12] == 84 and bytes(env)[i + 13] == 61 and bytes(env)[i + 14] == 49 {
@@ -5477,7 +5477,7 @@ write_build_plan := fn(in out a : rt::Arena, pkg_al : str, root_file : str, is_p
   if is_pkg and kind != "source" {
     dyns := manifest_dynamic_lib_names(a, pkg_al)
     mut dyn_seen := rt::strbuf(a, dyns.len + 16)
-    mut i := 0
+    mut i : usize = 0
     while i < dyns.len {
       mut e := i
       while e < dyns.len and bytes(dyns)[e] != 10 { e += 1 }
@@ -5608,7 +5608,7 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
   ## IR dev verb, `docs/ir.md` slice 0a)
   mut mode := 0
   mut oi := 0
-  mut fi := 1
+  mut fi : usize = 1
   mut test_jobs := 1
   mut test_keep_going := false
   if n == 1 { return cli_help(a, 2, 40) }
@@ -5756,8 +5756,8 @@ pub run_cli := fn(in out a : rt::Arena) -> usize {
     if iv == "--self-test" { return ir::self_test(a) }
     if iv == "--modules" {
       if n < 4 { return cli_config_diag(a, "ir --modules requires at least one source file") }
-      mut mlen := 0
-      mut mi := 3
+      mut mlen : usize = 0
+      mut mi : usize = 3
       while mi < n { ml := arg_at(cmd, mi); mlen = mlen + ml.len + 1; mi += 1 }
       mut mb := rt::strbuf(a, mlen + 16)
       mi = 3

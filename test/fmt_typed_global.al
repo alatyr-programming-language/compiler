@@ -4,6 +4,6 @@
 ## binding stays inferred. LIMIT (40) + STEP (2) = 42.
 LIMIT : u64 = 40
 mut TICK : i64 = 0
-STEP := 2
+STEP : u64 = 2
 
 main := fn() -> u64 { return LIMIT + STEP }

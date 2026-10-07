@@ -5,7 +5,7 @@
 main := fn() -> u64 {
   r := Result(u64, u64).Ok(20)
   o := Option(u64).Some(22)
-  mut t := 0
+  mut t : u64 = 0
   match r {
     Ok(v) => { t = t + v }
     Err(e) => { t = t + e + 100 }

@@ -8,7 +8,7 @@ o_param := fn(v : E) -> u64 { match v { A | B => { return 7 }; C | D => { return
 o_deref := fn(q : ptr(E)) -> u64 { match deref(q) { A | B => { return 7 }; C | D => { return 0 } } return 0 }
 o_call_src := fn() -> E { return E.B }
 main := fn() -> u64 {
-  mut total := 0
+  mut total : u64 = 0
   total += o_param(E.A)
   a : E = E.A
   match a { A | B => { total += 7 }; C | D => {} }

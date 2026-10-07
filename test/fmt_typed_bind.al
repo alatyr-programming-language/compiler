@@ -2,6 +2,6 @@
 ## `name := v`), while an untyped `:=` binding stays `:=` (§5 tooling). Idempotent + still runs: 42.
 main := fn() -> u64 {
   a : u64 = 40
-  b := 2
+  b : u64 = 2
   return a + b
 }

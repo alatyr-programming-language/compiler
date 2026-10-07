@@ -93,7 +93,7 @@ abi_c_is_u8_pair := fn(decls : ptr(rt::Vec), src : ptr(u8), s : usize, n : usize
 pub abi_c_param_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx : i64, pidx : usize) -> usize {
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
-  mut k := 0
+  mut k : usize = 0
   mut res := 1
   loop {
     match pp {
@@ -129,7 +129,7 @@ pub abi_c_param_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, 
 pub abi_c_param_tyspan := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64, pidx : usize) -> CSpan {
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
-  mut k := 0
+  mut k : usize = 0
   mut res := CSpan(s = 0, n = 0)
   loop {
     match pp {
@@ -160,11 +160,11 @@ pub abi_c_eightbyte_is_sse := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
   ## there is no per-field SSE decision to make on either caller or callee side.
   if abi_c_is_u8_pair(decls, src, s, n) { return false }
   mut f := d.fields_head
-  mut nf := 0
+  mut nf : usize = 0
   loop { match f { Some(fq) => { fd := deref(fld_p(fq)); nf = nf + 1; f = fd.next }; None => { break } } }
   if struct_words(decls, src, s, n, a) != nf { panic("selfhost: @abi(c) aggregate with a non-eightbyte-aligned field (sub-8-byte float packing / a multi-word field) not yet supported — each field must occupy one eightbyte") }
   mut g := d.fields_head
-  mut k := 0
+  mut k : usize = 0
   mut res := false
   loop {
     match g {
@@ -194,7 +194,7 @@ abi_c_arg_int_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, ci
     if abi_c_is_u8_pair(decls, src, ts.s, ts.n) { return 1 }
     nw := abi_c_param_words(decls, src, a, cidx, pidx)
     mut c := 0
-    mut ei := 0
+    mut ei : usize = 0
     while ei < nw {
       if abi_c_eightbyte_is_sse(decls, src, a, ts.s, ts.n, ei) == false { c = c + 1 }
       ei += 1
@@ -221,7 +221,7 @@ abi_c_arg_sse_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, ci
     if abi_c_is_u8_pair(decls, src, ts.s, ts.n) { return 0 }
     nw := abi_c_param_words(decls, src, a, cidx, pidx)
     mut c := 0
-    mut ei := 0
+    mut ei : usize = 0
     while ei < nw {
       if abi_c_eightbyte_is_sse(decls, src, a, ts.s, ts.n, ei) { c = c + 1 }
       ei += 1
@@ -239,7 +239,7 @@ abi_c_arg_sse_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, ci
 pub abi_c_param_is_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), cidx : i64, pidx : usize) -> bool {
   d := deref(decl_at(Decl, rt::vec_get(deref(decls), usize(cidx))))
   mut pp := d.params_head
-  mut k := 0
+  mut k : usize = 0
   mut res := false
   loop {
     match pp {
@@ -304,8 +304,8 @@ pub abi_c_ret_mem_call := fn(e : ptr(Expr), decls : ptr(rt::Vec), src : ptr(u8),
 ## sum of the INTEGER eightbyte counts of args 0..j-1. So arg `j`'s integer eightbytes ride %rdi.. at
 ## `emit_argreg(abi_c_int_base(j))` onward. INDEPENDENT of the SSE counter.
 abi_c_int_base := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx : i64, j : usize) -> usize {
-  mut base := 0
-  mut u := 0
+  mut base : usize = 0
+  mut u : usize = 0
   while u < j {
     base = base + abi_c_arg_int_words(decls, src, a, cidx, u)
     u += 1
@@ -317,8 +317,8 @@ abi_c_int_base := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx : 
 ## 0..j-1. So arg `j`'s float eightbytes ride %xmm.. at `emit_xmmreg(abi_c_sse_base(j))` onward.
 ## INDEPENDENT of the integer counter (SysV counts int and SSE arg registers separately).
 abi_c_sse_base := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx : i64, j : usize) -> usize {
-  mut base := 0
-  mut u := 0
+  mut base : usize = 0
+  mut u : usize = 0
   while u < j {
     base = base + abi_c_arg_sse_words(decls, src, a, cidx, u)
     u += 1
@@ -431,9 +431,9 @@ ACDisp := struct { on_stack : bool, ibase : usize, sbase : usize, swoff : usize 
 ## variadic-aware `vac_arg_disp` below (a strict generalization that adds trailing-arg-by-expression classing).
 pub abi_c_arg_disp := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx : i64, j : usize, sret_shift : usize) -> ACDisp {
   mut iu := sret_shift
-  mut su := 0
-  mut sc := 0
-  mut k := 0
+  mut su : usize = 0
+  mut sc : usize = 0
+  mut k : usize = 0
   mut res := ACDisp(on_stack = false, ibase = 0, sbase = 0, swoff = 0)
   while k <= j {
     if abi_c_param_is_mem(decls, src, a, cidx, k) {
@@ -460,9 +460,9 @@ pub abi_c_arg_disp := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cid
 ## MEMORY struct's and every register-overflow arg's word count). Declared-param form (receiving side).
 abi_c_stack_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx : i64, nvals : usize, sret_shift : usize) -> usize {
   mut iu := sret_shift
-  mut su := 0
-  mut sc := 0
-  mut k := 0
+  mut su : usize = 0
+  mut sc : usize = 0
+  mut k : usize = 0
   while k < nvals {
     if abi_c_param_is_mem(decls, src, a, cidx, k) {
       sc = sc + abi_c_param_words(decls, src, a, cidx, k)
@@ -488,9 +488,9 @@ abi_c_stack_words := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena, cidx
 vac_arg_disp := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), cidx : i64, j : usize, sret_shift : usize, nfixed : usize) -> ACDisp {
   a := arena_of(cx)
   mut iu := sret_shift
-  mut su := 0
-  mut sc := 0
-  mut k := 0
+  mut su : usize = 0
+  mut sc : usize = 0
+  mut k : usize = 0
   mut res := ACDisp(on_stack = false, ibase = 0, sbase = 0, swoff = 0)
   while k <= j {
     if vac_is_mem(cx, args_head, a, cidx, nfixed, k) {
@@ -517,9 +517,9 @@ vac_arg_disp := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), cidx : i64,
 vac_stack_words := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), cidx : i64, nvals : usize, sret_shift : usize, nfixed : usize) -> usize {
   a := arena_of(cx)
   mut iu := sret_shift
-  mut su := 0
-  mut sc := 0
-  mut k := 0
+  mut su : usize = 0
+  mut sc : usize = 0
+  mut k : usize = 0
   while k < nvals {
     if vac_is_mem(cx, args_head, a, cidx, nfixed, k) {
       sc = sc + vac_param_words(cx, args_head, a, cidx, nfixed, k)
@@ -544,8 +544,8 @@ vac_stack_words := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), cidx : i
 vac_xmm_count := fn(cx : ptr(LCtx), args_head : Option(ptr(mut Arg)), cidx : i64, nvals : usize, sret_shift : usize, nfixed : usize) -> usize {
   a := arena_of(cx)
   mut iu := sret_shift
-  mut su := 0
-  mut k := 0
+  mut su : usize = 0
+  mut k : usize = 0
   while k < nvals {
     if vac_is_mem(cx, args_head, a, cidx, nfixed, k) == false {
       iw := vac_int_words(cx, args_head, a, cidx, nfixed, k)
@@ -608,7 +608,7 @@ pub emit_abi_c_call_args := fn(args_head : Option(ptr(mut Arg)), nvals : usize, 
   ## the area top), then store. An AGGREGATE (MEMORY struct / overflow enum·str·struct) pushes its
   ## word-0 ADDRESS → copy word `ce` from `ce*8(%rax)` (up-growing) to `(swoff+ce)*8(%rsp)`; an
   ## overflow SCALAR (integer value / f64 bits) pushes the value itself → store the one word directly.
-  mut mk := 0
+  mut mk : usize = 0
   while mk < nvals {
     dm := vac_arg_disp(cx, args_head, cidx, mk, sret_shift, nfixed)
     if dm.on_stack {
@@ -624,7 +624,7 @@ pub emit_abi_c_call_args := fn(args_head : Option(ptr(mut Arg)), nvals : usize, 
           continue
         }
         w := vac_param_words(cx, args_head, a, cidx, nfixed, mk)
-        mut ce := 0
+        mut ce : usize = 0
         while ce < w {
           push_str(sb, "  movq ")
           push_int(sb, i64(ce * 8))
@@ -644,7 +644,7 @@ pub emit_abi_c_call_args := fn(args_head : Option(ptr(mut Arg)), nvals : usize, 
   ## REGISTER ARGS — PHASE 1: push each register-placed arg's anchor in source order, SKIPPING the
   ## stack args (already copied above). `emit_arg` leaves a scalar's value / an f64's bits / a ≤16-byte
   ## aggregate's word-0 address on the stack (arg 0 deepest).
-  mut k := 0
+  mut k : usize = 0
   while k < nvals {
     if vac_arg_disp(cx, args_head, cidx, k, sret_shift, nfixed).on_stack == false {
       emit_arg(arg_expr_at(args_head, k, a), sb, cx, a, nl, str_arg_tmp_off(args_head, 0 - 1, 0 - 1, 0 - 1, k, cx, a))
@@ -672,9 +672,9 @@ pub emit_abi_c_call_args := fn(args_head : Option(ptr(mut Arg)), nvals : usize, 
           push_str(sb, "\n")
           continue
         }
-        mut ic := 0
-        mut scnt := 0
-        mut ei := 0
+        mut ic : usize = 0
+        mut scnt : usize = 0
+        mut ei : usize = 0
         while ei < w {
           push_str(sb, "  movq ")
           push_int(sb, i64(ei * 8))
@@ -744,8 +744,8 @@ pub emit_abi_c_ret_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena,
   if nw > 2 { return }
   ## INTEGER eightbytes: the k-th integer eightbyte arrives in result int reg k (retreg 0 = %rax,
   ## 1 = %rdx); relocate it to retreg(ei). A self-move (int reg already at its word slot) is skipped.
-  mut ic := 0
-  mut ei := 0
+  mut ic : usize = 0
+  mut ei : usize = 0
   while ei < nw {
     if abi_c_eightbyte_is_sse(decls, src, a, d.ret_ts, d.ret_tl, ei) == false {
       if ic != ei {
@@ -761,7 +761,7 @@ pub emit_abi_c_ret_agg := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Arena,
   }
   ## SSE eightbytes: the k-th SSE eightbyte arrives in %xmm k; move it into retreg(ei).
   mut sc := 0
-  mut ej := 0
+  mut ej : usize = 0
   while ej < nw {
     if abi_c_eightbyte_is_sse(decls, src, a, d.ret_ts, d.ret_tl, ej) {
       push_str(sb, "  movq ")
@@ -794,7 +794,7 @@ pub emit_abi_c_ret_agg_def := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
   if nw > 2 { return }
   ## SSE eightbytes FIRST: eightbyte `ei` sits in retreg(ei) → move it into %xmm(sc) (class order).
   mut sc := 0
-  mut ei := 0
+  mut ei : usize = 0
   while ei < nw {
     if abi_c_eightbyte_is_sse(decls, src, a, ret_ts, ret_tl, ei) {
       push_str(sb, "  movq ")
@@ -808,8 +808,8 @@ pub emit_abi_c_ret_agg_def := fn(decls : ptr(rt::Vec), src : ptr(u8), a : rt::Ar
   }
   ## INTEGER eightbytes: the ic-th integer eightbyte (in retreg(ej)) rides SysV int result reg ic
   ## (retreg 0 = %rax, 1 = %rdx). A self-move (already at its slot) is skipped.
-  mut ic := 0
-  mut ej := 0
+  mut ic : usize = 0
+  mut ej : usize = 0
   while ej < nw {
     if abi_c_eightbyte_is_sse(decls, src, a, ret_ts, ret_tl, ej) == false {
       if ic != ej {

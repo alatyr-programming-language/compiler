@@ -17,7 +17,7 @@ main := fn() -> u64 {
   b := pick(false)                      ## 2
   ## expression match with a negative literal pattern, bound to a local
   n : i64 = 0 - 5
-  z := match n { -5 => 0, -9 => 1, _ => 9 }   ## 0
+  z : u64 = match n { -5 => 0, -9 => 1, _ => 9 }   ## 0
   s := sgn(0 - 1)                       ## 0
   a + b + z + s                         ## 40 + 2 + 0 + 0 = 42
 }

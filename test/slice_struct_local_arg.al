@@ -7,7 +7,7 @@ sum_idx := fn(s : Slice(P)) -> u64 {
 }
 
 sum_for := fn(s : Slice(P)) -> u64 {
-  mut acc := 0
+  mut acc : u64 = 0
   for p in s {
     acc = acc + p.x + p.y
   }

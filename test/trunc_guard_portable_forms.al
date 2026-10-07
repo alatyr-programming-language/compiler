@@ -36,7 +36,7 @@ res := fn(x : u64) -> Result(u64, u64) {
 main := fn() -> u64 {
   o := Outer(p = Pair(a = 18, b = 19))
   q := res(2)
-  mut acc := 0
+  mut acc : u64 = 0
   acc = acc + o.p.a + o.p.b                    ## chained struct fields: 18 + 19
   acc = acc + match q {                        ## a parameterized return type, matched
     Result::Ok(v) => { v }
