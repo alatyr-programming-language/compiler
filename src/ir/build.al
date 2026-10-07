@@ -1575,13 +1575,36 @@ ib_place_st := fn(bp : ptr(mut IbB), in out a : rt::Arena, pl : IbPlace) -> Opti
 ib_pointee := fn(bp : ptr(mut IbB), ts : usize, tn : usize) -> Option(IbSpan) {
   if tn == 0 { return Option(IbSpan).None }
   src := ib_b_src(bp)
-  ps := lower_layout::ptr_target_pointee_s(src, ts, tn)
-  pn := lower_layout::ptr_target_pointee_n(src, ts, tn)
+  full : IbSpan = ib_ptr_type_span(src, ts, tn)
+  ps := lower_layout::ptr_target_pointee_s(src, full.s, full.n)
+  pn := lower_layout::ptr_target_pointee_n(src, full.s, full.n)
   if pn == 0 { return Option(IbSpan).None }
   Option(IbSpan).Some(IbSpan(s = ps, n = pn))
 }
 ## A source span `[s, s+n)`.
 IbSpan := struct { s : usize, n : usize }
+## The whole `ptr( … )` type a declared type span starts: a parameter's annotation span covers only
+## the `ptr` head (the parser records the head), so the `( … )` group after it is found by bracket
+## depth, within the published source extent. Any other span is answered unchanged.
+ib_ptr_type_span := fn(src : ptr(u8), ts : usize, tn : usize) -> IbSpan {
+  end := ast::src_extent()
+  if tn < 3 or ts + 3 > end or str_at((src + ts), 3) != "ptr" { return IbSpan(s = ts, n = tn) }
+  mut p := ts + 3
+  while p < end and str_at((src + p), 1) == " " { p = p + 1 }
+  if p >= end or str_at((src + p), 1) != "(" { return IbSpan(s = ts, n = tn) }
+  mut depth : usize = 0
+  while p < end {
+    c := str_at((src + p), 1)
+    if c == "(" { depth = depth + 1 }
+    if c == ")" {
+      depth = depth - 1
+      if depth == 0 { return IbSpan(s = ts, n = p + 1 - ts) }
+    }
+    if c == "\n" or c == "=" or c == "{" { return IbSpan(s = ts, n = tn) }
+    p = p + 1
+  }
+  IbSpan(s = ts, n = tn)
+}
 
 ## The place a struct named `[s, s+n)` occupies: a struct local's object, or the struct a pointer
 ## local or parameter (declared `ptr(S)`) points at — WORD tier only through a pointer (see above).
