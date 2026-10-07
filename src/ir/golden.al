@@ -16,7 +16,7 @@
 ## One golden: its module name (the file stem), its source, and the report it must print.
 Golden := struct { name : str, src : str, want : str }
 
-golden_count := fn() -> usize { 9 }
+golden_count := fn() -> usize { 10 }
 golden_at := fn(i : usize) -> Golden {
   if i == 0 { return Golden(name = "ig_arith", src = g_arith_src(), want = g_arith_want()) }
   if i == 1 { return Golden(name = "ig_logic", src = g_logic_src(), want = g_logic_want()) }
@@ -26,6 +26,7 @@ golden_at := fn(i : usize) -> Golden {
   if i == 5 { return Golden(name = "ig_litfold", src = g_litfold_src(), want = g_litfold_want()) }
   if i == 6 { return Golden(name = "ig_sys", src = g_sys_src(), want = g_sys_want()) }
   if i == 7 { return Golden(name = "ig_agg", src = g_agg_src(), want = g_agg_want()) }
+  if i == 8 { return Golden(name = "ig_place", src = g_place_src(), want = g_place_want()) }
   Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want())
 }
 
@@ -95,6 +96,14 @@ g_agg_src := fn() -> str {
 }
 g_agg_want := fn() -> str {
   "fn ig_agg::mk Built\nfn mk(%0 : i64 s) -> i64 s {\n  $0 : frame 16 align 8\n  $1 : frame 16 align 8\n  zero $0, 16\n  store i64 [$0 + 0], %0\n  %1 = const.u i8 7\n  store i8 [$0 + 8], %1\n  %2 = const.u i8 9\n  store i8 [$0 + 8], %2\n  copy $1, $0, 16\n  %3 = load.s i64 [$1 + 0]\n  %4 = const.s i64 3\n  %5 = cmp.== i64 %4, 0\n  trap_if %5 div_zero  @8389\n  %6 = cmp.== i64 %3, -9223372036854775808\n  %7 = cmp.== i64 %4, -1\n  if %6 {\n    %8 = mov bool %7\n  } else {\n    %9 = const bool 0\n    %8 = mov bool %9\n  }\n  trap_if %8 div_overflow  @8389\n  %10 = div.chk.s i64 %3, %4 div_zero  @8389\n  %11 = load.u i8 [$1 + 8]\n  %12 = ext.u i64 <- i8 %11\n  %13 = fit.u i64 <- i64 %12 narrow  @8399\n  %14 = add.chk.s i64 %10, %13 overflow  @8389\n  ret %14\n}\nfn ig_agg::sz Built\nfn sz() -> i64 u {\n  %0 = const.u i64 16\n  %1 = const.u i64 2\n  %2 = add.chk.u i64 %0, %1 overflow  @8490\n  ret %2\n}\nfn ig_agg::pk NotYet(stmt Assign, ig_agg.al:13:21)\nir: functions=3 built=2 notyet=1 sema_gaps=0 verify_failed=0\n"
+}
+
+## Slice 3b (`docs/ir-slice-3.md` §6): pointers as places, address-taken locals, mutable module scalars.
+g_place_src := fn() -> str {
+  "S := struct { a : i64, b : u64 }\n## a field through a pointer, `deref(p).f`, a scalar through `deref(q)`\nbump := fn(p : ptr(mut S), q : ptr(mut u64)) {\n  p.a = p.a + 1\n  deref(p).b = deref(q)\n  deref(q) = 0\n}\n## an address-taken local lives in a frame object; a mutable module scalar is a whole-cell store\nmut G : u32 = 3\ntake := fn() -> u64 {\n  mut n : u64 = 5\n  m := ptr(mut n)\n  deref(m) = 6\n  G = G + 1\n  n\n}\n## outside 3b: a narrow scalar through a pointer (agreement with the legacy word is not proved)\nlow := fn(q : ptr(mut u8)) { deref(q) = 1 }\n"
+}
+g_place_want := fn() -> str {
+  "TBD"
 }
 
 ## Refusals: constructs outside the subset, and sema gaps (D6).

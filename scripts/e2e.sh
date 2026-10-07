@@ -857,17 +857,17 @@ check_large_source() {
 # docs/ir-slice-1.md §2 (slice 1b): the builder builds and verifies real programs. The eight golden builds
 # of `ir --self-test` (src/ir/golden.al: arithmetic and its traps, logic, control flow, shifts, calls,
 # literal-only folding (1c), syscall trampolines and pointer scalars (2a, docs/ir-slice-2.md), struct locals
-# (3a, docs/ir-slice-3.md), refusals) compare the verb's whole report with a reviewed text; their programs live in the compiler,
+# (3a, docs/ir-slice-3.md), pointer places (3b), refusals) compare the verb's whole report with a reviewed text; their programs live in the compiler,
 # not under test/, so the corpus manifest gains no row. NotYet names the first construct outside the
 # subset with its location, and a refused function falls back (nothing is emitted from the IR yet).
 check_ir_build() {
   local out="$T/ir_golden.out" rep="$T/ir_build.out" rc g ok=1
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_sys ig_agg ig_notyet; do
+  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_sys ig_agg ig_place ig_notyet; do
     grep -q "^ok   golden $g: " "$out" || ok=0
   done
-  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 9 ]; then
-    echo "ok   ir golden builds: 9 programs built, verified and printed exactly as reviewed"
+  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 10 ]; then
+    echo "ok   ir golden builds: 10 programs built, verified and printed exactly as reviewed"
   else
     echo "FAIL ir golden builds: rc=$rc"; grep -E '^(FAIL|ok   golden)' "$out" | head -12 | sed 's/^/     /'; fail=1
   fi
@@ -881,7 +881,7 @@ check_ir_build() {
 check_ir_dev_verb() {
   local out="$T/ir_selftest.out" rc
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 26 passed, 0 failed' "$out" \
+  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 27 passed, 0 failed' "$out" \
     && [ "$(grep -c '^ok   planted #' "$out")" = 14 ]; then
     echo "ok   ir --self-test: storage, verify, print, 14 planted violations each refused by its rule"
   else
@@ -8586,6 +8586,19 @@ run_rv64 ir_size_align 42
 run_wat ir_size_align 42
 run_a64 ir_struct_assign_self 21
 run_rv64 ir_struct_assign_self 21
+## IR slice 3b (`docs/ir-slice-3.md` §6): pointers as places. `ir_ptr_place` is IR-built end to end on
+## the register twins (the legacy twins trapped on its field places). `ir_ptr_agree` writes in the IR
+## and reads in a legacy function and the reverse; riscv64's legacy emitter has no field place through
+## a pointer (a located trap), so it is asserted on aarch64. `ir_global_mut` stores whole module cells.
+run ir_ptr_place 42
+run_a64 ir_ptr_place 42
+run_rv64 ir_ptr_place 42
+run ir_ptr_agree 42
+run_a64 ir_ptr_agree 42
+run ir_global_mut 42
+run_a64 ir_global_mut 42
+run_rv64 ir_global_mut 42
+run_wat ir_global_mut 42
 ## Explicit overflow-policy operations (Concurrency §6.3 / CG-8): wrapping_*/saturating_*/checked_* (->
 ## Option)/overflowing_* (-> (T,bool)) on the integer interpretations, exercised at the u8/u64/i32
 ## boundaries. A NEUTRAL library addition (lib/base/num.al) resting on the x86_64-gated scalar
