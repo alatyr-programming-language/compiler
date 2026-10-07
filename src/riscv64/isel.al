@@ -359,6 +359,19 @@ sr_load := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
   sr_put(sb, "(t0)\n")
   sr_st2(sb, ip)
 }
+## The argument run of call or syscall `ip` into a0, a1, … (the one register mapping both share).
+sr_args := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) {
+  n := ir::i_n(ip)
+  mut j : usize = 0
+  while j < n {
+    av := ir::pool_get(x.f, ir::i_pool(ip) + j)
+    sr_ldv(sb, "t0", av)
+    sr_put(sb, "  mv a")
+    sr_u(sb, j)
+    sr_put(sb, ", t0\n")
+    j = j + 1
+  }
+}
 ## A direct call: the arguments in a0..a7, `call` the callee's legacy label, the result from a0,
 ## re-canonicalized from the destination's type.
 sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
@@ -368,18 +381,9 @@ sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool
   match cdo {
     Some(cd) => {
       if not cd.is_fn or cd.name_len == 0 { return false }
-      mut j : usize = 0
-      while j < n {
-        av := ir::pool_get(x.f, ir::i_pool(ip) + j)
-        sr_ldv(sb, "t0", av)
-        sr_put(sb, "  mv a")
-        sr_u(sb, j)
-        sr_put(sb, ", t0\n")
-        j = j + 1
-      }
-      cname := str_at((x.src + cd.name_start), cd.name_len)
+      sr_args(sb, x, ip)
       sr_put(sb, "  call ")
-      sr_put(sb, cname)
+      sr_put_label(sb, x.src, cd)
       sr_put(sb, "\n")
       dv : Option(usize) = sr_dst(ip)
       mut ok := true
@@ -393,6 +397,23 @@ sr_call := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool
       ok
     }
     None => { false }
+  }
+}
+## `%r = syscall %nr(args…)` (ABI §5): the Linux RISC-V system-call convention — the number in a7, up to
+## six arguments in a0..a5, `ecall`, the result in a0 (re-canonicalized from the destination's type).
+sr_syscall := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
+  n := ir::i_n(ip)
+  if n > 6 { return false }
+  if not sr_lda(sb, "a7", ip) { return false }
+  sr_args(sb, x, ip)
+  sr_put(sb, "  ecall\n")
+  dv : Option(usize) = sr_dst(ip)
+  match dv {
+    Some(d) => {
+      sr_stv(sb, "a0", d)
+      sr_canon_slot(sb, x, d)
+    }
+    None => { true }
   }
 }
 
@@ -481,6 +502,7 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
     OpAddrSym => { sr_addr(sb, x, ip) }
     OpLoad => { sr_load(sb, ip) }
     OpCall => { sr_call(sb, x, ip) }
+    OpSyscall => { sr_syscall(sb, x, ip) }
     OpBlock | OpUnch => { sr_push(x, a, i); true }
     OpLoop => { sr_push(x, a, i); sr_def_lbl(sb, x, i); true }
     OpIf => {
@@ -528,7 +550,7 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
     }
     OpFConst | OpAddrFrame | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
       | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpStore | OpBSwap | OpCopy | OpZero | OpGep | OpBound | OpCallInd
-      | OpCallC | OpSyscall | OpSwitch => { false }
+      | OpCallC | OpSwitch => { false }
   }
 }
 
@@ -546,6 +568,14 @@ sr_sp_adjust := fn(in out sb : rt::StrBuf, frame : i64, down : bool) {
   if down { sr_put(sb, "\n  sub sp, sp, t6\n") } else { sr_put(sb, "\n  add sp, sp, t6\n") }
 }
 
+## The label of function declaration `d`: the bare name the legacy `emit_rv_fn` defines, or for a
+## bodyless `@abi(syscall)` trampoline its module-qualified symbol (`ir::put_fn_symbol`), because the
+## same call is declared in more than one module (`docs/ir-slice-2.md`).
+sr_put_label := fn(in out sb : rt::StrBuf, src : ptr(u8), d : Decl) {
+  if d.kind == lower_layout::DECL_KIND_SYSCALL { ir::put_fn_symbol(sb, src, d); return }
+  nm := str_at((src + d.name_start), d.name_len)
+  sr_put(sb, nm)
+}
 ## Select function `f` (declaration `d`) into `sb`. Answers false when the function is refused.
 sr_fn := fn(in out sb : rt::StrBuf, x : SrX, d : Decl, in out a : rt::Arena) -> bool {
   nv := ir::fn_nvregs(x.f)
@@ -553,10 +583,9 @@ sr_fn := fn(in out sb : rt::StrBuf, x : SrX, d : Decl, in out a : rt::Arena) -> 
   if np > 8 { return false }
   mut frame : i64 = 16 + i64(nv) * 8
   if frame % 16 != 0 { frame = frame + 8 }
-  fname := str_at((x.src + d.name_start), d.name_len)
   sr_put(sb, "# ir: selected from the shared IR\n")
   emit_rv_export(sb, x.src, d.name_start, d.name_len)
-  sr_put(sb, fname)
+  sr_put_label(sb, x.src, d)
   sr_put(sb, ":\n")
   sr_sp_adjust(sb, frame, true)
   sr_put(sb, "  sd ra, 8(sp)\n  sd s0, 0(sp)\n  mv s0, sp\n")

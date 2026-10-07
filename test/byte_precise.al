@@ -9,7 +9,7 @@ write_slice := fn(in out dst : Slice(u8)) {
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   bp := unchecked bitcast(ptr(mut u8), bitcast(usize, r))
   p0 := unchecked bitcast(ptr(mut bits8), bitcast(usize, bp))
   p1 := unchecked bitcast(ptr(mut bits8), bitcast(usize, bp) + 1)

@@ -7,8 +7,8 @@
 ## that each `OsArena` is consumed (freed) exactly once on every normal exit. It is
 ## the linear resource the `alloc` tier (`Vec`/`String`/…) will build on.
 ##
-## `mmap(2)` / `munmap(2)` via `@abi(syscall)` (Linux x86_64: mmap = 9,
-## munmap = 11). Raw-level, so wrapped in `unchecked`.
+## `mmap(2)` / `munmap(2)` via `@abi(syscall)`, numbered per target by `std::sysno` (ABI §5).
+## Raw-level, so wrapped in `unchecked`.
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 sys_munmap := @abi(syscall) fn(num : usize, addr : usize, len : usize) -> isize
 
@@ -29,7 +29,7 @@ pub arena := fn(len : usize) -> Result(OsArena, io::IoError) {
     return Result(OsArena, io::IoError).Err(io::IoError.InvalidInput)
   }
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, len, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, len, 3, 34, bitcast(usize, neg1), 0)
   if r < 0 {
     e := i32(0 - r)
     return io::io_error_result(OsArena, e)
@@ -56,7 +56,7 @@ pub region := fn(a : ptr(OsArena)) -> Arena {
 ## defunct, and there is nothing more to consume.
 pub free := fn(a : OsArena) -> isize {
   addr := unchecked bitcast(usize, a.base)
-  r := unchecked sys_munmap(11, addr, a.cap)
+  r := unchecked sys_munmap(std::sysno::MUNMAP, addr, a.cap)
   forget(a)
   return r
 }
