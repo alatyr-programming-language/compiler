@@ -1,9 +1,8 @@
 # Shared IR, slice 3 — design note and HANDOFF (aggregates, places, layout)
 
-Status: **plan, before code.** Stacked on `lane/ir-slice-2a` (PR #901). It refines `docs/ir.md` §7.2
-row 3, which is the authority on scope. This note was written at the end of the slice-2 lane as the
-handoff for a fresh lane: §0–§2 are the plan, §3 is what the previous lane measured and must not be
-re-derived, §4 the open questions.
+Status: **3a in review** (§5). It refines `docs/ir.md` §7.2 row 3, which is the authority on scope.
+§0–§2 are the plan written at the end of the slice-2 lane, §3 what that lane measured, §4 the open
+questions, §5 onwards each PR as built.
 
 ## 0. What slice 3 must make true
 
@@ -89,3 +88,80 @@ move late (3c/3d), and predict per PR by measuring, never by family.
   during the migration? Proposal: the legacy one for every type that crosses to legacy code (§3.7's
   "adopt the target's existing convention"), and `lower_layout::field_byte_place` only when both ends are
   IR-built — never two layouts for one type inside one program.
+
+Q4 is settled by `docs/ir.md` §3.7 and rule 7.1.1 (owner, 2026-10-07): the proposal above, with
+agreement proved per tier by a fixture that writes in IR and reads in legacy code and the reverse, and
+a function refused (`NotYet`) where it cannot be proved. Q3 is settled as option (a) by D6 and is the
+sema lane's; until it lands, an aggregate expression's type comes from the declaration it names.
+
+## 5. 3a — local structs (as built)
+
+Stacked on #901 (slice 2a) **and #903** (sema records each value's type spelling): the field reads
+and the literals beside them that 3a builds are typed by #903's records; without them they are sema
+gaps and fall back.
+
+- **Builder** (`src/ir/build.al`, "aggregates"): a binding sema records as an aggregate is a struct
+  local when its type — the annotation, else the struct the initializer names (a literal's name, a
+  struct local) — is a struct 3a lays out: WORD or BYTE tier (`lower_layout::layout_kind`), every field
+  a kernel scalar, no `@packed`/`@align`/`@offset`/`@endian` (3e). Its frame object is sized by
+  `layout_type_size_bytes` and aligned as `align(T)` answers; a field's place is
+  `lower_layout::field_byte_place` (a `ByteOff`). A struct literal is built into a fresh object (zeroed
+  first when the layout has padding), field by field in declaration order; a field initializer that is
+  a literal-only expression takes the field's declared type (Types §2.3). `s.f` is a `load` whose type
+  is sema's record of the read and must equal the field's; `s.f = v` a `store`; `t := s`, `t = s` a
+  `copy`; `s = S(…)` builds the literal in its own object before the copy (#909). `size(T)`/`align(T)`
+  of a scalar name or of such a struct is a `const` (the values x86_64's fold answers). A type name
+  resolves from the function's module (the builder publishes `set_type_ref_module` for the build, as
+  x86_64's emit loop does, and restores it).
+- **Selectors**: aarch64 and riscv64 place frame objects after the vreg slots (`ir::frame_place`) and
+  select `addr $k`, `load`/`store` with a frame or pointer base at any offset, `copy` and `zero`
+  (word loops for a multiple of 8, byte loops otherwise). **wasm** refuses a function with a frame
+  object (§3.5) until the shadow stack exists. The x86_64 dev selector (`alatyr x86-ir`, D5) selects
+  the same ops (`leaq`, sized `mov`, `rep movsb`/`rep stosb`), so `scripts/ir_diff.sh` compares the
+  built struct functions against x86_64's legacy lowering too; x86_64's default emission is untouched.
+- **Outside 3a** (`NotYet`): a struct parameter or result, a nested-struct or array field, a field
+  read off anything but a struct local, a global struct, `ptr(s)`, an aggregate whose type no
+  declaration names.
+
+### 5.1 Predicted manifest transitions (measured before the gate)
+
+Fresh manifests of the base (#901 + #903 merged) and of 3a on the gate machine, joined on (backend,
+path), plus the four new fixtures:
+
+| backend | path | before → after | why |
+|---|---|---|---|
+| aarch64, riscv64 | `test/size_type_arg.al` | run/133 → run/42 | `size(T)` is a `const` (#713) |
+| wasm | `test/size_type_arg.al` | run/134 → run/42 | same; no frame object, so wasm selects it |
+| aarch64 | `test/when_guard_struct.al` | run/133 → run/66 | `Cfg.size()` of the struct kept for aarch64 by its `when` guard: 66 is aarch64's value by the fixture's own comment |
+| wasm | `test/package/module_type_shadow/src/geo/child.al` | assemble/1 → assemble/1 | `run` is selected from the IR; the program still fails to assemble on the missing `$main` |
+| aarch64, riscv64 | `test/ir_struct_local.al` (new) | — → run/42 | legacy: run/133 |
+| aarch64, riscv64 | `test/ir_struct_field_signed.al` (new) | — → run/42 | legacy: run/2 (#765) |
+| aarch64, riscv64, wasm | `test/ir_size_align.al` (new) | — → run/42 | legacy: run/133, wasm run/134 |
+| aarch64, riscv64 | `test/ir_struct_assign_self.al` (new) | — → run/21 | legacy and x86_64: 22 (#909) |
+
+No x86_64 row moves. The new fixtures' other rows: x86_64 42 (21-fixture: 22), wasm
+`ir_struct_local` run/134, `ir_struct_field_signed` run/2 (#765 on wasm), `ir_struct_assign_self`
+run/0 (#909).
+
+Few corpus rows move because a corpus function that holds a struct local almost always also calls a
+library function, takes a struct parameter, or matches an enum — later slices' constructs — and the
+fallback is per function (§1, item 6: 3f measures what statement barriers would add).
+
+### 5.2 Gate (omen, `full.sh --force-sweeps`, on #901 + #903 + 3a)
+
+Every stage green except the expected corpus-manifest mismatch, which is exactly §5.1 plus #903's own
+transition (`wasm test/package/qualified_fn_alias/package.al` run/134 → run/134, stderr) and the 16
+ADDED rows of the four fixtures. Fixpoint `seed == Stage1 == Stage2` (no promotion owed); e2e green;
+sweeps clean (the #765 fixture is asserted with `run_x86`, because the wasm sweep walks every `run`
+row and wasm still answers #765's value). `xbackend_diff --count` (fresh manifests, fixtures in both):
+2619 → 2611 rows (TRAP 2276 → 2267; WRONG-VALUE 26 → 27: the two #909 rows where the twins now answer
+the literal's value and x86_64 does not, and aarch64 `when_guard_struct`'s target-dependent 66, less
+the two #765 rows fixed). Census, corpus functions built: 638 → 666 (`lib/` 63, `src/` 29 unchanged); verifier accepted
+all 758; `ir_diff`: the #909 fixture is the one new disagreement (x86_64 22, x86-via-IR 21), beside
+#875.
+
+### 5.3 What 3a does not close
+
+#765 stays open for wasm (no frame objects there yet) and for a struct parameter (3d); #713 for a
+generic `size(T)` (slice 6) and an enum/array operand; #769 needs 3d. The twins' legacy struct paths
+are still reached by every function that falls back, so none is deleted (rule 7.1.7).

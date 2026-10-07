@@ -19,12 +19,17 @@
 ## IR-built and a legacy-emitted function call each other. A narrow parameter and a narrow call result
 ## are re-canonicalized from their IR type, because a legacy peer does not promise canonical form.
 ##
+## Frame objects (slice 3a: struct locals and aggregate temporaries, `docs/ir.md` §3.3) follow the vreg
+## slots, each at its alignment (`ir::frame_place`); an address operand `$k` is `s0 + <its offset>`.
+## `load`/`store` take the width from the IR type, `copy`/`zero` move whole words when the size is a
+## multiple of 8 and bytes otherwise.
+##
 ## A selector may REFUSE a function (an op it does not select, more than 8 parameters); the caller then
 ## rewinds the output and emits the function the legacy way.
 (Decl) := ast
 
 ## What one function is selected against (see `aarch64::isel`'s `SaX`).
-SrX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fid : usize, fspan : usize, stk : ptr(mut ir::WBuf) }
+SrX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fid : usize, fspan : usize, stk : ptr(mut ir::WBuf), fobj : ptr(mut ir::WBuf) }
 
 ## The number of the next function this selector emits, for its `.Lir<n>_<k>` labels.
 mut SR_FN : usize = 0
@@ -338,10 +343,73 @@ sr_addr := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool
   }
 }
 ## `load T [a + off]`: the width from `T`, the extension from its spelled signedness.
-sr_load := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
-  off := ir::i_off(ip)
-  if off < 0 or off > SR_DISP_MAX { return false }
-  if not sr_lda(sb, "t0", ip) { return false }
+## An ADDRESS operand into `reg`: a `ptr` vreg's value, or a frame object's address `s0 + off`.
+sr_base := fn(in out sb : rt::StrBuf, x : SrX, reg : str, k : ir::OpndK, v : i64) -> bool {
+  match k {
+    OkVReg => { sr_ldv(sb, reg, usize(v)); true }
+    OkFrame => {
+      sr_put(sb, "  li "); sr_put(sb, reg); sr_put(sb, ", "); sr_int(sb, i64(ir::wb_get(x.fobj, usize(v))))
+      sr_put(sb, "\n  add "); sr_put(sb, reg); sr_put(sb, ", s0, "); sr_put(sb, reg); sr_put(sb, "\n")
+      true
+    }
+    OkNone | OkImm | OkSym | OkFn | OkLabel => { false }
+  }
+}
+## The displacement of an access whose base is in t0: the offset folded into t0 first when the 12-bit
+## signed displacement cannot encode it.
+sr_mem_off := fn(in out sb : rt::StrBuf, off : i64) -> i64 {
+  if off >= 0 and off <= SR_DISP_MAX { return off }
+  sr_put(sb, "  li t6, "); sr_int(sb, off); sr_put(sb, "\n  add t0, t0, t6\n")
+  0
+}
+## `store T [a + off], v`: the value's low `T`-width bytes.
+sr_store := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sr_base(sb, x, "t0", ir::i_ak(ip), ir::i_av(ip)) { return false }
+  if not sr_ldb(sb, "t1", ip) { return false }
+  ty : ir::Kty = ir::i_ty(ip)
+  mut mn : str = ""
+  match ty {
+    KI8 | KBool => { mn = "  sb" }
+    KI16 => { mn = "  sh" }
+    KI32 => { mn = "  sw" }
+    KI64 | KPtr => { mn = "  sd" }
+    KF32 | KF64 | KNone => { return false }
+  }
+  off := sr_mem_off(sb, ir::i_off(ip))
+  sr_put(sb, mn)
+  sr_put(sb, " t1, ")
+  sr_int(sb, off)
+  sr_put(sb, "(t0)\n")
+  true
+}
+## `addr $k`: the frame object's address.
+sr_addr_frame := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sr_base(sb, x, "t2", ir::i_ak(ip), ir::i_av(ip)) { return false }
+  sr_st2(sb, ip)
+}
+## `copy dst, src, n` (t0 ← dst, t1 ← src) and `zero dst, n` (t0 ← dst): a counted loop over 8-byte
+## words when `n` is a multiple of 8, over bytes otherwise. Nothing for `n == 0`.
+sr_mem := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst), copy : bool) -> bool {
+  n := ir::i_n(ip)
+  if not sr_base(sb, x, "t0", ir::i_ak(ip), ir::i_av(ip)) { return false }
+  if copy { if not sr_base(sb, x, "t1", ir::i_bk(ip), ir::i_bv(ip)) { return false } }
+  if n == 0 { return true }
+  words := n % 8 == 0
+  mut cnt : usize = n
+  mut step : str = "1"
+  if words { cnt = n / 8; step = "8" }
+  sr_put(sb, "  li t3, "); sr_u(sb, cnt); sr_put(sb, "\n1:\n")
+  if copy {
+    if words { sr_put(sb, "  ld t2, 0(t1)\n  sd t2, 0(t0)\n") } else { sr_put(sb, "  lbu t2, 0(t1)\n  sb t2, 0(t0)\n") }
+    sr_put(sb, "  addi t1, t1, "); sr_put(sb, step); sr_put(sb, "\n")
+  } else {
+    if words { sr_put(sb, "  sd zero, 0(t0)\n") } else { sr_put(sb, "  sb zero, 0(t0)\n") }
+  }
+  sr_put(sb, "  addi t0, t0, "); sr_put(sb, step); sr_put(sb, "\n  addi t3, t3, -1\n  bnez t3, 1b\n")
+  true
+}
+sr_load := fn(in out sb : rt::StrBuf, x : SrX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sr_base(sb, x, "t0", ir::i_ak(ip), ir::i_av(ip)) { return false }
   ty : ir::Kty = ir::i_ty(ip)
   sg : ir::Sgn = ir::i_sg(ip)
   mut mn : str = ""
@@ -353,6 +421,7 @@ sr_load := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
     KBool => { mn = "  lbu" }
     KF32 | KF64 | KNone => { return false }
   }
+  off := sr_mem_off(sb, ir::i_off(ip))
   sr_put(sb, mn)
   sr_put(sb, " t2, ")
   sr_int(sb, off)
@@ -500,7 +569,11 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
     OpFit => { sr_fit(sb, x, ip) }
     OpCmp => { sr_cmp(sb, ip) }
     OpAddrSym => { sr_addr(sb, x, ip) }
-    OpLoad => { sr_load(sb, ip) }
+    OpLoad => { sr_load(sb, x, ip) }
+    OpStore => { sr_store(sb, x, ip) }
+    OpAddrFrame => { sr_addr_frame(sb, x, ip) }
+    OpCopy => { sr_mem(sb, x, ip, true) }
+    OpZero => { sr_mem(sb, x, ip, false) }
     OpCall => { sr_call(sb, x, ip) }
     OpSyscall => { sr_syscall(sb, x, ip) }
     OpBlock | OpUnch => { sr_push(x, a, i); true }
@@ -548,8 +621,8 @@ sr_inst := fn(in out sb : rt::StrBuf, x : SrX, in out a : rt::Arena, i : usize) 
       sr_put(sb, "1:\n")
       true
     }
-    OpFConst | OpAddrFrame | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpStore | OpBSwap | OpCopy | OpZero | OpGep | OpBound | OpCallInd
+    OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpGep | OpBound | OpCallInd
       | OpCallC | OpSwitch => { false }
   }
 }
@@ -581,8 +654,9 @@ sr_fn := fn(in out sb : rt::StrBuf, x : SrX, d : Decl, in out a : rt::Arena) -> 
   nv := ir::fn_nvregs(x.f)
   np := ir::fn_nparams(x.f)
   if np > 8 { return false }
-  mut frame : i64 = 16 + i64(nv) * 8
-  if frame % 16 != 0 { frame = frame + 8 }
+  ## The vreg slots, then the frame objects (`x.fobj`'s last word is their end), rounded to 16.
+  mut frame : i64 = i64(ir::wb_get(x.fobj, ir::wb_len(x.fobj) - 1))
+  if frame % 16 != 0 { frame = frame + (16 - frame % 16) }
   sr_put(sb, "# ir: selected from the shared IR\n")
   emit_rv_export(sb, x.src, d.name_start, d.name_len)
   sr_put_label(sb, x.src, d)
@@ -624,7 +698,8 @@ pub rv_isel_try := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf, 
   match si {
     SiBuilt(f) => {
       d : Decl = deref(lower_ctx::decl_get(decls, di))
-      x := SrX(f = f, p = p, src = src, decls = decls, fid = SR_FN, fspan = d.name_start, stk = ir::wb_new(ia, 16))
+      fo := ir::frame_place(f, ia, 16 + ir::fn_nvregs(f) * 8)
+      x := SrX(f = f, p = p, src = src, decls = decls, fid = SR_FN, fspan = d.name_start, stk = ir::wb_new(ia, 16), fobj = fo)
       mark := sb.len
       if sr_fn(sb, x, d, ia) {
         SR_FN = SR_FN + 1

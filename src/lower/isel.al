@@ -22,6 +22,10 @@
 ## narrow value from its IR type (a parameter at entry, a result after the `call`), because a legacy
 ## peer does not promise it.
 ##
+## Frame objects (slice 3a, `docs/ir.md` §3.3) sit below the vreg slots, each at its alignment; an
+## address operand `$k` is `leaq <its offset>(%rbp)`. `load`/`store` take the width from the IR type,
+## `copy`/`zero` are `rep movsb`/`rep stosb` (%rdi, %rsi, %rcx are caller-saved).
+##
 ## A selector may REFUSE a function (an op it does not select, more than 6 parameters or arguments —
 ## the legacy stack-argument layout is not modelled —, a declaration whose label the legacy emitter
 ## spells specially); the caller then rewinds the output and emits the function the legacy way.
@@ -32,8 +36,11 @@
 
 ## What one function is selected against: the IR, the program its symbols index, the source, the
 ## declaration list, a per-program function number for local labels, the function's own name span
-## (the location of a trap that carries none), and the region stack (opener instruction indices).
-SxX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fid : usize, fspan : usize, stk : ptr(mut ir::WBuf) }
+## (the location of a trap that carries none), the region stack (opener instruction indices), and the
+## frame objects: their placement (`ir::frame_place` from 0: one offset per object, then the end) and
+## `ftop`, the bytes the frame reserves below %rbp (the vreg slots and then the objects, each rounded
+## to 16) — object `k` lives at `-ftop + off_k(%rbp)`.
+SxX := struct { f : ptr(mut ir::IrFn), p : ir::IrProg, src : ptr(u8), decls : ptr(rt::Vec), fid : usize, fspan : usize, stk : ptr(mut ir::WBuf), fobj : ptr(mut ir::WBuf), ftop : i64 }
 
 ## The number of the next function this selector emits, for its `.Lxir<n>_<k>` labels.
 mut SX_FN : usize = 0
@@ -389,11 +396,55 @@ sx_addr := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool
     None => { false }
   }
 }
-## `load T [a + off]`: the width from `T`, the extension from its spelled signedness.
-sx_load := fn(in out sb : rt::StrBuf, ip : ptr(mut ir::IrInst)) -> bool {
+## An ADDRESS operand into `r`: a `ptr` vreg's value, or a frame object's address.
+sx_base := fn(in out sb : rt::StrBuf, x : SxX, r : SxR, k : ir::OpndK, v : i64) -> bool {
+  match k {
+    OkVReg => { sx_ldv(sb, r, sx_slot(usize(v))); true }
+    OkFrame => {
+      sx_put(sb, "  leaq "); sx_int(sb, i64(ir::wb_get(x.fobj, usize(v))) - x.ftop); sx_put(sb, "(%rbp), "); sx_put(sb, sx_rq(r)); sx_put(sb, "\n")
+      true
+    }
+    OkNone | OkImm | OkSym | OkFn | OkLabel => { false }
+  }
+}
+## `store T [a + off], v`: the value's low `T`-width bytes (base in %rax, value in %rcx).
+sx_store := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
   off := ir::i_off(ip)
   if not sx_imm32(off) { return false }
-  if not sx_lda(sb, SxR.XrAx, ip) { return false }
+  if not sx_base(sb, x, SxR.XrAx, ir::i_ak(ip), ir::i_av(ip)) { return false }
+  if not sx_ldb(sb, SxR.XrCx, ip) { return false }
+  ty : ir::Kty = ir::i_ty(ip)
+  mut mn : str = ""
+  match ty {
+    KI8 | KBool => { mn = "  movb %cl, " }
+    KI16 => { mn = "  movw %cx, " }
+    KI32 => { mn = "  movl %ecx, " }
+    KI64 | KPtr => { mn = "  movq %rcx, " }
+    KF32 | KF64 | KNone => { return false }
+  }
+  sx_put(sb, mn)
+  sx_int(sb, off)
+  sx_put(sb, "(%rax)\n")
+  true
+}
+## `addr $k`.
+sx_addr_frame := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
+  if not sx_base(sb, x, SxR.XrAx, ir::i_ak(ip), ir::i_av(ip)) { return false }
+  sx_strax(sb, ip)
+}
+## `copy dst, src, n` = `rep movsb`; `zero dst, n` = `rep stosb` of %al = 0.
+sx_mem := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst), copy : bool) -> bool {
+  if not sx_base(sb, x, SxR.XrDi, ir::i_ak(ip), ir::i_av(ip)) { return false }
+  if copy { if not sx_base(sb, x, SxR.XrSi, ir::i_bk(ip), ir::i_bv(ip)) { return false } }
+  sx_put(sb, "  movq $"); sx_u(sb, ir::i_n(ip)); sx_put(sb, ", %rcx\n")
+  if copy { sx_put(sb, "  rep movsb\n") } else { sx_put(sb, "  xorl %eax, %eax\n  rep stosb\n") }
+  true
+}
+## `load T [a + off]`: the width from `T`, the extension from its spelled signedness.
+sx_load := fn(in out sb : rt::StrBuf, x : SxX, ip : ptr(mut ir::IrInst)) -> bool {
+  off := ir::i_off(ip)
+  if not sx_imm32(off) { return false }
+  if not sx_base(sb, x, SxR.XrAx, ir::i_ak(ip), ir::i_av(ip)) { return false }
   ty : ir::Kty = ir::i_ty(ip)
   sg : ir::Sgn = ir::i_sg(ip)
   mut mn : str = ""
@@ -558,7 +609,11 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
     OpFit => { sx_fit(sb, x, ip) }
     OpCmp => { sx_cmp(sb, ip) }
     OpAddrSym => { sx_addr(sb, x, ip) }
-    OpLoad => { sx_load(sb, ip) }
+    OpLoad => { sx_load(sb, x, ip) }
+    OpStore => { sx_store(sb, x, ip) }
+    OpAddrFrame => { sx_addr_frame(sb, x, ip) }
+    OpCopy => { sx_mem(sb, x, ip, true) }
+    OpZero => { sx_mem(sb, x, ip, false) }
     OpCall => { sx_call(sb, x, ip) }
     OpBlock | OpUnch => { sx_stk_push(x, a, SxAt(i)); true }
     OpLoop => { sx_stk_push(x, a, SxAt(i)); sx_def_lbl(sb, x, SxAt(i)); true }
@@ -604,8 +659,8 @@ sx_inst := fn(in out sb : rt::StrBuf, x : SxX, in out a : rt::Arena, i : usize) 
       sx_trap_unless(sb, x, "jz", ir::i_tk(ip), ip)
       true
     }
-    OpFConst | OpAddrFrame | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
-      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpStore | OpBSwap | OpCopy | OpZero | OpGep | OpBound | OpCallInd
+    OpFConst | OpFnAddr | OpNot | OpNeg | OpTrunc | OpFCmp | OpFAdd | OpFSub | OpFMul | OpFDiv | OpFNeg
+      | OpIToF | OpFToI | OpFExt | OpFDemote | OpBits | OpBSwap | OpGep | OpBound | OpCallInd
       | OpCallC | OpSyscall | OpSwitch => { false }
   }
 }
@@ -619,8 +674,7 @@ sx_fn := fn(in out sb : rt::StrBuf, x : SxX, d : Decl, in out a : rt::Arena) -> 
   np := ir::fn_nparams(x.f)
   if np > SX_MAX_ARGS or not sx_plain_label(x, d) { return false }
   if str_at((x.src + d.name_start), d.name_len) == "_start" { return false }
-  mut frame : i64 = i64(nv) * 8
-  if frame % 16 != 0 { frame = frame + 8 }
+  frame := x.ftop
   sx_put(sb, "# ir: selected from the shared IR\n")
   exn := export_name(x.src, d.name_start, d.name_len)
   if exn.n != 0 and entry_export_moved(d.mod_start, d.mod_len, d.name_start, d.name_len) == false {
@@ -672,7 +726,12 @@ pub x86_isel_try := fn(decls : ptr(rt::Vec), di : usize, in out sb : rt::StrBuf,
   match si {
     SiBuilt(f) => {
       d : Decl = deref(lower_ctx::decl_get(decls, di))
-      x := SxX(f = f, p = p, src = src, decls = decls, fid = SX_FN, fspan = d.name_start, stk = ir::wb_new(ia, 16))
+      fo := ir::frame_place(f, ia, 0)
+      mut vb : i64 = i64(ir::fn_nvregs(f)) * 8
+      if vb % 16 != 0 { vb = vb + 8 }
+      mut ob : i64 = i64(ir::wb_get(fo, ir::wb_len(fo) - 1))
+      if ob % 16 != 0 { ob = ob + (16 - ob % 16) }
+      x := SxX(f = f, p = p, src = src, decls = decls, fid = SX_FN, fspan = d.name_start, stk = ir::wb_new(ia, 16), fobj = fo, ftop = vb + ob)
       mark := sb.len
       if sx_fn(sb, x, d, ia) {
         SX_FN = SX_FN + 1
