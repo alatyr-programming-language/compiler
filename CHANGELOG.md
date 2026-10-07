@@ -122,6 +122,9 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`ptr(G[i])` of a struct-element array global points at the element (x86_64).** The address took
+  the word stride, so reads and writes through the pointer hit an earlier element (#825). It now takes
+  the element stride the element read and write use. The compiler's own GAS is unchanged.
 - **An annotated enum local takes its declared width (x86_64).** `h : Option(S) = Option.None` was
   sized from the bare literal head, so it was a word short: a whole-value store through `ptr(h)`
   overran the next local, and a re-assignment was refused (#899). The annotation now decides. The

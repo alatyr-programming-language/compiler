@@ -10649,6 +10649,9 @@ run_x86 issue861_payload_ptr_local 42
 # #899 — an annotated enum local (`h : Option(S) = Option.None`) takes its declared width; the bare literal
 # head sized `T` as one word and under-reserved it.
 run_x86 issue899_annotated_enum_local 42
+# #825 — `ptr(G[i])` of a struct-element array global takes the element stride, so reads and writes
+# through it agree with `G[i]` (it took the word stride and pointed into an earlier element).
+run_x86 issue825_global_struct_elem_addr 42
 # #852 — `Option(ptr(T))` as a payload component of another enum's variant: one folded payload word in the
 # local store and the return registers, and the match binding typed as the folded Option.
 run_x86 issue852_option_ptr_enum_payload 42
