@@ -9,7 +9,7 @@ sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usiz
 Pt := struct { x : u64, y : u64 }
 readpt := fn(p : ptr(mut Pt)) -> u64 { deref(p).x + deref(p).y }
 main := fn() -> u64 {
-  r0 := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, 0 - 1), 0)
+  r0 := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, 0 - 1), 0)
   base := unchecked bitcast(usize, r0)
   p := unchecked bitcast(ptr(mut Pt), base + 64)
   deref(p) = Pt(x = 30, y = 12)

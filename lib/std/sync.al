@@ -36,7 +36,7 @@ pub lock := fn(T : type, m : ptr(Mutex(T))) -> ptr(mut T) {
     if r.1 {
       held = true
     } else {
-      fr := unchecked sys_futex(202, base, 0, 1, 0, 0, 0)
+      fr := unchecked sys_futex(std::sysno::FUTEX, base, 0, 1, 0, 0, 0)
     }
   }
   return unchecked bitcast(ptr(mut T), base + 8)
@@ -48,5 +48,5 @@ pub unlock := fn(T : type, m : ptr(Mutex(T))) {
   base := unchecked bitcast(usize, m)
   sp : ptr(mut u64) = unchecked bitcast(ptr(mut u64), base)
   atomic::store(sp, 0, Ordering.seq_cst)
-  fr := unchecked sys_futex(202, base, 1, 1, 0, 0, 0)
+  fr := unchecked sys_futex(std::sysno::FUTEX, base, 1, 1, 0, 0, 0)
 }

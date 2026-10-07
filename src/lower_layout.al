@@ -3475,6 +3475,9 @@ pub ex_slice_hi := fn(v : ptr(Expr)) -> ptr(Expr) {
 pub DECL_KIND_VALUE : u8 = 0
 ## `Decl.kind` of a function declaration, named for the same reason.
 pub DECL_KIND_FN : u8 = 1
+## `Decl.kind` of a bodyless `@abi(syscall)` declaration (the parser's kind 4): a trampoline from the
+## target's call convention to its system-call convention, built by the shared IR (`docs/ir-slice-2.md`).
+pub DECL_KIND_SYSCALL : u8 = 4
 ## Does module declaration `d` own the one-word scalar data cell each twin emits for a scalar global —
 ## `<name>: .quad <init>` on aarch64/riscv64, `(global $<name> (mut i64) …)` on wasm? The twins'
 ## `emit_*_program` data loops emit exactly these; an IR selector addresses a global (`addr @g`) only

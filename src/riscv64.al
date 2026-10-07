@@ -145,7 +145,7 @@ rv_next_label := fn() -> i64 { r := RV_NL ; RV_NL = RV_NL + 1 ; r }
 ## to fold as `x86_64` "so the sweep compares like-for-like", which made `target.arch == Arch.x86_64`
 ## TRUE while emitting RISC-V instructions: a conformance defect that also made every library arch gate
 ## inert. ONE accessor so the `comptime if` fold and the `when`-guard fold can never drift apart.
-rv_target_arch := fn() -> str { "riscv64" }
+pub rv_target_arch := fn() -> str { "riscv64" }
 
 ## Fold a `comptime if <cond>` predicate at emit time — the rv64 dual of the x86 lower's `decl_guard_fold`.
 ## 1 = TRUE (emit the then-branch), 0 = FALSE (emit the else-branch), -1 = cannot fold (a typeinfo /
@@ -8066,11 +8066,20 @@ emit_rv_export := fn(in out sb : rt::StrBuf, src : ptr(u8), name_s : usize, name
 }
 ## Emit the `call` target for a call to `[cs,cl)`: the callee's `@extern("sym")` external symbol
 ## (Modules §7.2) if it is a bodyless import, else the bare call name.
+## A call whose span IS a bodyless `@abi(syscall)` declaration's own name span was resolved by the front
+## half (`driver::d_qual_expr`) to that trampoline, named by its module-qualified label
+## (`docs/ir-slice-2.md`).
 rv_emit_call_target := fn(in out sb : rt::StrBuf, decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize) {
   cnt := rt::vec_len(deref(decls))
   mut es := 0
   mut en := 0
   mut i := 0
+  while i < cnt {
+    sd := deref(decl_get(decls, i))
+    if sd.kind == lower_layout::DECL_KIND_SYSCALL and sd.name_start == cs and sd.name_len == cl and cl != 0 { ir::put_fn_symbol(sb, src, sd); return }
+    i += 1
+  }
+  i = 0
   while i < cnt {
     d := deref(decl_get(decls, i))
     if d.kind == 1 and streq(src, d.name_start, d.name_len, cs, cl) {
@@ -8611,6 +8620,9 @@ pub emit_rv_program := fn(decls : ptr(rt::Vec), in out sb : rt::StrBuf, src : pt
       ## (`src/riscv64/isel.al`); every other one keeps its legacy emission (owner decision D7).
       if not (d.kind == lower_layout::DECL_KIND_FN and rv_isel_try(decls, i, sb, src, a)) { emit_rv_fn(d, sb, a, src, decls) }
     }
+    ## IR slice 2a: a bodyless `@abi(syscall)` declaration is a trampoline the shared IR builds
+    ## (`docs/ir-slice-2.md`). The legacy emitter has none, so a refused one stays absent, as before.
+    if d.kind == lower_layout::DECL_KIND_SYSCALL { sys_sel := rv_isel_try(decls, i, sb, src, a) }
     i += 1
   }
   ## emit one monomorphized instance per RECORDED (generic-fn, type) pair, with the instance

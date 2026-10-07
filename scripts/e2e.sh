@@ -854,19 +854,19 @@ check_large_source() {
 # verifier rule (V1–V10); a verifier that refused nothing would fail it. The report checks read an
 # EXISTING corpus program, so the corpus manifest gains no row. On the parent compiler `ir` is an
 # unknown argument (rc 40, no stdout), so every check below fails there.
-# docs/ir-slice-1.md §2 (slice 1b): the builder builds and verifies real programs. The seven golden builds
+# docs/ir-slice-1.md §2 (slice 1b): the builder builds and verifies real programs. The eight golden builds
 # of `ir --self-test` (src/ir/golden.al: arithmetic and its traps, logic, control flow, shifts, calls,
-# literal-only folding (1c), refusals) compare the verb's whole report with a reviewed text; their programs live in the compiler,
+# literal-only folding (1c), syscall trampolines and pointer scalars (2a, docs/ir-slice-2.md), refusals) compare the verb's whole report with a reviewed text; their programs live in the compiler,
 # not under test/, so the corpus manifest gains no row. NotYet names the first construct outside the
 # subset with its location, and a refused function falls back (nothing is emitted from the IR yet).
 check_ir_build() {
   local out="$T/ir_golden.out" rep="$T/ir_build.out" rc g ok=1
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_notyet; do
+  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_sys ig_notyet; do
     grep -q "^ok   golden $g: " "$out" || ok=0
   done
-  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 7 ]; then
-    echo "ok   ir golden builds: 7 programs built, verified and printed exactly as reviewed"
+  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 8 ]; then
+    echo "ok   ir golden builds: 8 programs built, verified and printed exactly as reviewed"
   else
     echo "FAIL ir golden builds: rc=$rc"; grep -E '^(FAIL|ok   golden)' "$out" | head -12 | sed 's/^/     /'; fail=1
   fi
@@ -879,7 +879,7 @@ check_ir_build() {
 check_ir_dev_verb() {
   local out="$T/ir_selftest.out" rc
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 24 passed, 0 failed' "$out" \
+  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 25 passed, 0 failed' "$out" \
     && [ "$(grep -c '^ok   planted #' "$out")" = 14 ]; then
     echo "ok   ir --self-test: storage, verify, print, 14 planted violations each refused by its rule"
   else

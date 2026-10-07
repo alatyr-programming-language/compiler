@@ -208,17 +208,20 @@ ib_int_ks := fn(bytes : u64, s : Sgn) -> Option(IbKS) {
   if bytes == 8 { return Option(IbKS).Some(IbKS(ty = Kty.KI64, sg = s)) }
   Option(IbKS).None
 }
-## The kernel type of a recorded value type, when slice 1 builds values of it (integers and `bool`).
+## The kernel type of a recorded value type, when the builder builds values of it: integers and `bool`
+## (slice 1), and a pointer as the one-word address it is (slice 2: a pointer crosses a call, a return
+## and a binding like any scalar; dereferencing one is a place, slice 3).
 ib_vty_ks := fn(t : VTy) -> Option(IbKS) {
   c : VCls = t.cls
   match c {
     VcInt => { ib_int_ks(t.bytes, t.sg) }
     VcBool => { Option(IbKS).Some(IbKS(ty = Kty.KBool, sg = Sgn.SgNone)) }
-    VcAbsent | VcUnknown | VcLit | VcPtr | VcFloat | VcAgg => { Option(IbKS).None }
+    VcPtr => { Option(IbKS).Some(IbKS(ty = Kty.KPtr, sg = Sgn.SgNone)) }
+    VcAbsent | VcUnknown | VcLit | VcFloat | VcAgg => { Option(IbKS).None }
   }
 }
 ## Why a recorded value type gives no kernel type: a sema gap for the untyped classes, otherwise a type
-## slice 1 does not build (a pointer, a float, an aggregate, an integer wider than 64 bits).
+## the builder does not build yet (a float, an aggregate, an integer wider than 64 bits).
 ib_vty_why := fn(t : VTy) -> NyWhy {
   c : VCls = t.cls
   match c {
@@ -545,6 +548,10 @@ ib_canon := fn(v : i64, k : IbKS) -> i64 {
 ## A name: the innermost local binding, else a module constant or immutable global. Its type is sema's
 ## record of this use, and it must be the binding's own (both are sema's).
 ib_bx_var := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s : usize, n : usize) -> Option(VRegId) {
+  ## A name whose span IS a module value's own name span was resolved by the front half (`m::NAME`,
+  ## `driver::d_qual_var`): it is that value, never a local spelled the same.
+  idv : Option(u64) = ib_decl_named_at(ib_b_decls(bp), s, n, false)
+  match idv { Some(x) => { return ib_bx_global_at(bp, a, e, usize(x)) }; None => {} }
   found : Option(VRegId) = ib_lookup(bp, s, n)
   match found {
     Some(r) => { return ib_bx_local(bp, e, r) }
@@ -557,10 +564,14 @@ ib_bx_local := fn(bp : ptr(mut IbB), e : ptr(Expr), r : VRegId) -> Option(VRegId
   if not ib_ks_eq(ib_vreg_ks(ib_b_f(bp), r), k) { return ib_no(bp, e, NyWhy.NwDisagree) }
   Option(VRegId).Some(r)
 }
-## The one value declaration named `[s, s+n)`: in the function's own module when it has one there, else
-## the only one in the program. None when there is none or the name is ambiguous.
+## The one value declaration named `[s, s+n)`: the declaration whose own name span it IS (the twins'
+## front half rewrites a resolved `m::NAME` to its target's name span, `driver::d_qual_expr`), else the
+## one in the function's own module, else the only one in the program. None when there is none or the
+## name is ambiguous.
 ib_global_decl := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(u64) {
   bv : IbB = deref(bp)
+  idn : Option(u64) = ib_decl_named_at(bv.decls, s, n, false)
+  match idn { Some(x) => { return idn }; None => {} }
   cnt := rt::vec_len(deref(bv.decls))
   mut own : Option(u64) = Option(u64).None
   mut any : Option(u64) = Option(u64).None
@@ -723,9 +734,14 @@ ib_int_operands := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), l 
   }
   Option(IbIntOp).Some(IbIntOp(ty = k.ty, sg = k.sg, l = lv, r = rv))
 }
-## The integer result type sema recorded for an operator expression `e`.
+## The integer result type sema recorded for an operator expression `e`. Pointer arithmetic is a place
+## computation (`gep`, slice 3), outside the subset; any other non-integer is sema's records disagreeing.
 ib_int_ty := fn(bp : ptr(mut IbB), e : ptr(Expr)) -> Option(IbKS) {
   k := ib_ty(bp, e)?
+  if kty_is_ptr(k.ty) {
+    ib_refuse_expr(bp, e, NyWhy.NwOutside)
+    return Option(IbKS).None
+  }
   if not kty_is_int(k.ty) {
     ib_refuse_expr(bp, e, NyWhy.NwDisagree)
     return Option(IbKS).None
@@ -1124,11 +1140,33 @@ ib_num_value := fn(e : ptr(Expr)) -> Option(i64) {
 }
 ## unchecked-ok: `decls` holds Decl record addresses (the parser's `rt::Vec` of handles).
 ib_decl_ptr := fn(decls : ptr(rt::Vec), i : usize) -> ptr(Decl) { unchecked bitcast(ptr(Decl), rt::vec_get(deref(decls), i)) }
-## The index of the ONE non-generic function declaration named `[cs, cs+cl)`; none when there is no such
-## function or several (an overload set is slice 2's mangling, so it is refused here).
+## The declaration whose own name span is exactly `[s, s+n)` — a function when `want_fn`, else a value —
+## the identity a call or a name carries once the front half resolved it (`driver::d_qual_expr`).
+ib_decl_named_at := fn(decls : ptr(rt::Vec), s : usize, n : usize, want_fn : bool) -> Option(u64) {
+  cnt := rt::vec_len(deref(decls))
+  mut i : usize = 0
+  while i < cnt {
+    d : Decl = deref(ib_decl_ptr(decls, i))
+    if d.name_start == s and d.name_len == n and n != 0 and d.is_fn == want_fn { return Option(u64).Some(u64(i)) }
+    i = i + 1
+  }
+  Option(u64).None
+}
+## The function a call to `[cs, cs+cl)` names: the declaration the call's span IS (resolved by the front
+## half), else the ONE non-generic function declaration of that name; none when there is no such function
+## or several (an overload set is the mangling's, `docs/ir-slice-2.md`, so it is refused here).
 ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
   decls := ib_b_decls(bp)
   src := ib_b_src(bp)
+  idc : Option(u64) = ib_decl_named_at(decls, cs, cl, true)
+  match idc {
+    Some(x) => {
+      dx : Decl = deref(ib_decl_ptr(decls, usize(x)))
+      if dx.is_generic { return Option(u64).None }
+      return idc
+    }
+    None => {}
+  }
   cnt := rt::vec_len(deref(decls))
   mut found : Option(u64) = Option(u64).None
   mut hits : usize = 0
@@ -1493,6 +1531,7 @@ pub build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize,
   why.span = u64(d.name_start)
   why.w = NyWhy.NwOutside
   if d.is_generic { why.c = Construct.CGeneric; return BuildOut.Refused }
+  if d.is_fn and d.kind == lower_layout::DECL_KIND_SYSCALL { return ib_build_syscall(p, src, d, a, why) }
   if not d.is_fn or lower::extern_symbol(src, d.name_start, d.name_len).n != 0 { why.c = Construct.CBodyless; return BuildOut.Refused }
   mut has_ret := false
   mut rk := IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
@@ -1545,6 +1584,73 @@ pub build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize,
   }
   fb : IbB = deref(bp)
   if fb.failed { why.c = fb.fail_c; why.w = fb.fail_w; why.span = fb.fail_s; return BuildOut.Refused }
+  fid := prog_add(p, a, f)
+  BuildOut.Built(fid)
+}
+
+## A bodyless `@abi(syscall)` declaration `name := @abi(syscall) fn(num, a1, …) -> R` (ABI §5): the
+## TRAMPOLINE from the Alatyr call convention to the system-call convention. Its first parameter is
+## the call's number, which the library supplies per target (owner decision D3, `std::sysno`); the
+## rest are the call's arguments. Built as one op:
+##   fn name(%0 : num, %1 …) -> R { %r = syscall %0(%1, …); ret %r }
+## so each selector spells the target's trap instruction and registers once (`docs/ir.md` §3.7), and
+## a caller — IR-built or legacy — calls the trampoline's label like any function. Every parameter and
+## the result must be a one-word kernel scalar; a result the builder cannot build (`Never`) refuses.
+ib_build_syscall := fn(p : IrProg, src : ptr(u8), d : Decl, in out a : rt::Arena, in out why : BuildWhy) -> BuildOut {
+  why.c = Construct.CSignature
+  mut has_ret := false
+  mut rk := IbKS(ty = Kty.KNone, sg = Sgn.SgNone)
+  if d.ret_tl != 0 {
+    rko : Option(IbKS) = ib_name_ks(src, d.ret_ts, d.ret_tl)
+    match rko { Some(kk) => { rk = kk; has_ret = true }; None => { return BuildOut.Refused } }
+  }
+  if d.arity == 0 { return BuildOut.Refused }
+  fnm := str_at((src + d.name_start), d.name_len)
+  f := fn_new(a, fnm.ptr, fnm.len, has_ret, rk.ty, rk.sg)
+  mut pp := d.params_head
+  mut first := true
+  loop {
+    match pp {
+      Some(pq) => {
+        pm := deref(param_p(pq))
+        pk : Option(IbKS) = ib_name_ks(src, pm.ts, pm.tl)
+        match pk {
+          Some(kk) => {
+            if pm.pmode != 0 { return BuildOut.Refused }
+            ## The number is an integer; an argument is any one-word scalar.
+            if first and not kty_is_int(kk.ty) { return BuildOut.Refused }
+            pv := new_param(f, a, kk.ty, kk.sg)
+          }
+          None => { return BuildOut.Refused }
+        }
+        first = false
+        pp = pm.next
+      }
+      None => { break }
+    }
+  }
+  np := fn_nparams(f)
+  mut it := inst0(Op.OpSyscall)
+  onr := o_vreg(VRegId(0))
+  set_a(it, onr)
+  mut j : usize = 1
+  while j < np {
+    slot := pool_push(f, a, j)
+    if j == 1 { it.pool = slot }
+    j = j + 1
+  }
+  it.n = np - 1
+  if has_ret {
+    rv := new_vreg(f, a, rk.ty, rk.sg)
+    set_dst(it, rv)
+    k1 := emit(f, a, it)
+    orv := o_vreg(rv)
+    k2 := e_ret(f, a, orv)
+  } else {
+    k3 := emit(f, a, it)
+    on := o_none()
+    k4 := e_ret(f, a, on)
+  }
   fid := prog_add(p, a, f)
   BuildOut.Built(fid)
 }

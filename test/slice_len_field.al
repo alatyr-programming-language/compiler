@@ -13,7 +13,7 @@ main := fn() -> u64 {
   n1 := scalar_len(arr[0..3])                ## 3
 
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   base := unchecked bitcast(usize, r)
   s0 := "a"
   deref(unchecked bitcast(ptr(mut usize), base)) = bitcast(usize, s0.ptr)

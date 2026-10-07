@@ -23,7 +23,7 @@ sys_read := @abi(syscall) fn(num : usize, fd : usize, buf : ptr(mut u8), len : u
 ## byte count written, or a negative `-errno`). The slice's pointer/length go
 ## straight to the syscall, so no copy occurs (I1/I2). `1` is the `write` number.
 pub write_fd := fn(fd : usize, buf : [u8]) -> isize {
-  unchecked sys_write(1, fd, buf.ptr, buf.len)
+  unchecked sys_write(std::sysno::WRITE, fd, buf.ptr, buf.len)
 }
 
 ## Write a string to standard output (fd 1). Returns the byte count written (or
@@ -103,14 +103,14 @@ io_result := fn(r : isize) -> Result(usize, IoError) {
 ## `IoError` — the fallible counterpart of `write_fd` (which returns the raw
 ## result). The slice goes straight to the syscall (no copy, I1/I2).
 pub write := fn(fd : usize, buf : [u8]) -> Result(usize, IoError) {
-  r := unchecked sys_write(1, fd, buf.ptr, buf.len)
+  r := unchecked sys_write(std::sysno::WRITE, fd, buf.ptr, buf.len)
   io_result(r)
 }
 
 ## Read up to `len` bytes from `fd` into the buffer at `buf`, returning
 ## `Ok(bytes_read)` (`Ok(0)` = end of input) or the mapped `IoError`.
 pub read := fn(fd : usize, buf : ptr(mut u8), len : usize) -> Result(usize, IoError) {
-  r := unchecked sys_read(0, fd, buf, len)
+  r := unchecked sys_read(std::sysno::READ, fd, buf, len)
   io_result(r)
 }
 
@@ -126,8 +126,8 @@ pub read_stdin := fn(buf : ptr(mut u8), len : usize) -> Result(usize, IoError) {
 ## plain value (the spec does not mark `File` linear); closing is explicit.
 pub File := struct { fd : i32 }
 
-## The Linux `open(2)` (number `2`), `close(2)` (`3`), and `lseek(2)` (`8`)
-## syscalls (Linux x86_64). Raw-level, wrapped in `unchecked` by the callers.
+## The Linux `open(2)`, `close(2)` and `lseek(2)` syscalls, numbered per target by `std::sysno`
+## (`open` exists on x86_64 only). Raw-level, wrapped in `unchecked` by the callers.
 sys_open := @abi(syscall) fn(num : usize, path : ptr(u8), flags : usize, mode : usize) -> isize
 sys_close := @abi(syscall) fn(num : usize, fd : usize) -> isize
 sys_lseek := @abi(syscall) fn(num : usize, fd : usize, off : isize, whence : usize) -> isize
@@ -160,7 +160,7 @@ pub open := fn(path : str, flags : i32) -> Result(File, IoError) {
     i += 1
   }
   fl := usize(bitcast(u32, flags))
-  r := unchecked sys_open(2, ptr(cpath[0]), fl, 420)
+  r := unchecked sys_open(std::sysno::OPEN, ptr(cpath[0]), fl, 420)
   if r < 0 {
     e := i32(0 - r)
     return io_error_result(File, e)
@@ -172,14 +172,14 @@ pub open := fn(path : str, flags : i32) -> Result(File, IoError) {
 ## `Ok(bytes_read)` (`Ok(0)` = end of file) or the mapped `IoError`.
 pub file_read := fn(f : File, buf : ptr(mut u8), len : usize) -> Result(usize, IoError) {
   fd := usize(bitcast(u32, f.fd))
-  r := unchecked sys_read(0, fd, buf, len)
+  r := unchecked sys_read(std::sysno::READ, fd, buf, len)
   io_result(r)
 }
 
 ## Write a byte slice to the open file; `Ok(bytes_written)` or the mapped error.
 pub file_write := fn(f : File, buf : [u8]) -> Result(usize, IoError) {
   fd := usize(bitcast(u32, f.fd))
-  r := unchecked sys_write(1, fd, buf.ptr, buf.len)
+  r := unchecked sys_write(std::sysno::WRITE, fd, buf.ptr, buf.len)
   io_result(r)
 }
 
@@ -187,14 +187,14 @@ pub file_write := fn(f : File, buf : [u8]) -> Result(usize, IoError) {
 pub file_seek := fn(f : File, pos : usize) -> Result(usize, IoError) {
   fd := usize(bitcast(u32, f.fd))
   off := bitcast(isize, pos)
-  r := unchecked sys_lseek(8, fd, off, 0)
+  r := unchecked sys_lseek(std::sysno::LSEEK, fd, off, 0)
   io_result(r)
 }
 
 ## Close the open file's descriptor; `Ok(0)` on success or the mapped error.
 pub file_close := fn(f : File) -> Result(usize, IoError) {
   fd := usize(bitcast(u32, f.fd))
-  r := unchecked sys_close(3, fd)
+  r := unchecked sys_close(std::sysno::CLOSE, fd)
   io_result(r)
 }
 
@@ -231,7 +231,7 @@ pub write_file := fn(path : str, buf : [u8]) -> Result(usize, IoError) {
 ## syscall takes a pointer + length).
 write_byte := fn(c : u8) -> isize {
   buf : [u8; 1] = [c]
-  unchecked sys_write(1, 1, ptr(buf[0]), 1)
+  unchecked sys_write(std::sysno::WRITE, 1, ptr(buf[0]), 1)
 }
 
 ## Print an unsigned integer in base-10, most-significant digit first (recursive:

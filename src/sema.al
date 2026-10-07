@@ -8585,29 +8585,33 @@ sema_vty_call_args := fn(cs : usize, cl : usize, na : usize, ah : Option(ptr(mut
   while i < upto {
     d := deref(decl_get(decls, i))
     if d.is_fn and name_matches(src, d.name_start, d.name_len, cs, cl) {
-      mut pp := d.params_head
-      mut g : Option(ptr(mut Arg)) = ah
-      ## null-ok: Arg.next — an argument list ends in a null link (ast.al "0 = end").
-      loop {
-        match g {
-          Some(gq) => {
-            ga := deref(arg_p(gq))
-            match pp {
-              Some(pq) => {
-                pm := deref(param_p(pq))
-                sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
-                pp = pm.next
-              }
-              None => { return }
-            }
-            g = ga.next
-          }
-          None => { break }
-        }
-      }
+      sema_vty_args_at(d, ah, decls, src)
       return
     }
     i += 1
+  }
+}
+## Each argument of a call to `d` takes its parameter's declared type as its context (a literal
+## argument's record becomes that type).
+sema_vty_args_at := fn(d : Decl, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) {
+  mut pp := d.params_head
+  mut g : Option(ptr(mut Arg)) = ah
+  loop {
+    match g {
+      Some(gq) => {
+        ga := deref(arg_p(gq))
+        match pp {
+          Some(pq) => {
+            pm := deref(param_p(pq))
+            sema_vty_ctx(ga.e, pm.ts, pm.tl, decls, src)
+            pp = pm.next
+          }
+          None => { return }
+        }
+        g = ga.next
+      }
+      None => { break }
+    }
   }
 }
 ## The value class a `Ty`'s kind alone decides: an aggregate (Types §3.2: never an IR value) or a
@@ -8766,7 +8770,36 @@ sema_vty_call := fn(e : ptr(Expr), cs : usize, cl : usize, na : usize, ah : Opti
   }
   ct := expr_call_result_ty(e, decls, rt::vec_len(deref(decls)), src)
   if ct.nl != 0 { return sema_vty_name(src, ct.ns, ct.nl, decls) }
-  ir::vty_unknown()
+  sema_vty_syscall(cs, cl, ah, decls, src)
+}
+## docs/ir-slice-2.md — the value type of a call to a bodyless `@abi(syscall)` declaration: its declared
+## result. The checker's `callee_ret_ty` resolves ordinary functions only, so a syscall call's value was
+## recorded unknown and every IR caller of a trampoline was refused as a sema gap. This answers for the
+## RECORD alone (the verdict does not read it): the one syscall declaration of that name, else unknown.
+## A literal argument takes its parameter's declared type, as an ordinary call's does.
+sema_vty_syscall := fn(cs : usize, cl : usize, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
+  cnt := rt::vec_len(deref(decls))
+  mut hit : Option(u64) = Option(u64).None
+  mut nhit : usize = 0
+  mut i : usize = 0
+  while i < cnt {
+    d := deref(decl_get(decls, i))
+    if d.is_fn and d.kind == lower_layout::DECL_KIND_SYSCALL and (d.name_start == cs or streq(src, d.name_start, d.name_len, cs, cl)) {
+      if d.name_start == cs { return sema_vty_syscall_at(d, ah, decls, src) }
+      hit = Option(u64).Some(u64(i))
+      nhit = nhit + 1
+    }
+    i = i + 1
+  }
+  if nhit != 1 { return ir::vty_unknown() }
+  match hit {
+    Some(x) => { dx := deref(decl_get(decls, usize(x))); sema_vty_syscall_at(dx, ah, decls, src) }
+    None => { ir::vty_unknown() }
+  }
+}
+sema_vty_syscall_at := fn(d : Decl, ah : Option(ptr(mut Arg)), decls : ptr(rt::Vec), src : ptr(u8)) -> ir::VTy {
+  sema_vty_args_at(d, ah, decls, src)
+  sema_vty_name(src, d.ret_ts, d.ret_tl, decls)
 }
 ## A context gives the literal-only expression `e` the type `t`: rewrite its record, and its literal
 ## parts' (an arithmetic operand, an `unchecked` body, a value `if`'s arms).

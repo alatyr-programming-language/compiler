@@ -30,11 +30,11 @@ main := fn() -> u64 {
   if xs[2..6].len == 4 { k += 1 }            ## a typed ARRAY range slice's len
   ## `.ptr` off a homeless view, through a real write(2): the byte COUNT must come back, and the
   ## bytes themselves are checked against the stdout golden.
-  w1 := unchecked sys_write(1, 1, "hi\n".ptr, 3)
+  w1 := unchecked sys_write(std::sysno::WRITE, 1, "hi\n".ptr, 3)
   if w1 == 3 { k += 1 }
-  w2 := unchecked sys_write(1, 1, sub(s, 0, 5).ptr, 5)
+  w2 := unchecked sys_write(std::sysno::WRITE, 1, sub(s, 0, 5).ptr, 5)
   if w2 == 5 { k += 1 }
-  w3 := unchecked sys_write(1, 1, bytes(s).ptr, 8)
+  w3 := unchecked sys_write(std::sysno::WRITE, 1, bytes(s).ptr, 8)
   if w3 == 8 { k += 1 }
   if s.len == 8 { k += 1 }                   ## POSITIVE CONTROL — a `str` LOCAL
   if p.name.len == 2 { k += 1 }              ## POSITIVE CONTROL — a `str` FIELD
