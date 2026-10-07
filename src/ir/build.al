@@ -141,10 +141,14 @@ CallOut := enum { CoValue(VRegId), CoVoid, CoRefused }
 ## The loop stack is four parallel buffers: each loop's exit label, its continue label, whether it
 ## carries a value (`lhasres`, 0/1) with that value's vreg (`lres`, read only when `lhasres` is 1), and
 ## whether a `break` reached it (`lbroken`, 0/1: a loop no `break` leaves never falls through).
+## The binding table is parallel buffers too: each binding's name, and either its vreg (`bagg` 0) or,
+## for a struct local (slice 3a), its frame object in `bvregs` with `bagg` 1, its struct declaration
+## (`bsd`) and the type name span it was declared with (`bts`/`btn`).
 IbB := struct {
   f : ptr(mut IrFn), p : IrProg,
   src : ptr(u8), decls : ptr(rt::Vec), mod_s : usize, mod_n : usize,
   bnames : ptr(mut WBuf), blens : ptr(mut WBuf), bvregs : ptr(mut WBuf),
+  bagg : ptr(mut WBuf), bsd : ptr(mut WBuf), bts : ptr(mut WBuf), btn : ptr(mut WBuf),
   lexit : ptr(mut WBuf), lcont : ptr(mut WBuf), lres : ptr(mut WBuf), lhasres : ptr(mut WBuf), lbroken : ptr(mut WBuf),
   unch : bool, term : bool,
   failed : bool, fail_c : Construct, fail_w : NyWhy, fail_s : u64,
@@ -341,21 +345,40 @@ ib_wrap_to := fn(bp : ptr(mut IbB), in out a : rt::Arena, x : VRegId, to : IbKS)
 
 ## ── bindings (one vreg per binding; shadowing never shares one, §3.3) ──
 
-ib_bind := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, v : VRegId) {
+## What a name is bound to: a scalar's vreg, or a struct local's frame object with its struct
+## declaration and the type name span it was declared with (slice 3a), or nothing.
+IbBind := enum { BdNone, BdVal(VRegId), BdAgg(FrameId, usize, usize, usize) }
+
+ib_bind_push := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, w : usize, agg : usize, sd : usize, ts : usize, tn : usize) {
   bv : IbB = deref(bp)
   k1 := wb_push(bv.bnames, a, s)
   k2 := wb_push(bv.blens, a, n)
-  k3 := wb_push(bv.bvregs, a, usize(v))
+  k3 := wb_push(bv.bvregs, a, w)
+  k4 := wb_push(bv.bagg, a, agg)
+  k5 := wb_push(bv.bsd, a, sd)
+  k6 := wb_push(bv.bts, a, ts)
+  k7 := wb_push(bv.btn, a, tn)
 }
-## The innermost binding of the name `[s, s+n)`, if any.
-ib_lookup := fn(bp : ptr(mut IbB), s : usize, n : usize) -> Option(VRegId) {
+ib_bind := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, v : VRegId) {
+  ib_bind_push(bp, a, s, n, usize(v), 0, 0, 0, 0)
+}
+## Bind `[s, s+n)` to the struct local in frame object `fr`, of struct type `st`.
+ib_bind_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize, fr : FrameId, st : IbSt) {
+  ib_bind_push(bp, a, s, n, usize(fr), 1, st.di, st.s, st.n)
+}
+## The innermost binding of the name `[s, s+n)`.
+ib_lookup := fn(bp : ptr(mut IbB), s : usize, n : usize) -> IbBind {
   bv : IbB = deref(bp)
   mut i := wb_len(bv.bnames)
   while i > 0 {
     i = i - 1
-    if wb_get(bv.blens, i) == n and streq(bv.src, wb_get(bv.bnames, i), n, s, n) { return Option(VRegId).Some(VRegId(wb_get(bv.bvregs, i))) }
+    if wb_get(bv.blens, i) == n and streq(bv.src, wb_get(bv.bnames, i), n, s, n) {
+      w := wb_get(bv.bvregs, i)
+      if wb_get(bv.bagg, i) == 1 { return IbBind.BdAgg(FrameId(w), wb_get(bv.bsd, i), wb_get(bv.bts, i), wb_get(bv.btn, i)) }
+      return IbBind.BdVal(VRegId(w))
+    }
   }
-  Option(VRegId).None
+  IbBind.BdNone
 }
 ## Drop the bindings made since the scope that recorded `mark` opened.
 ib_wb_cut := fn(w : ptr(mut WBuf), n : usize) { if n < wb_len(w) { deref(w).len = n } }
@@ -365,6 +388,10 @@ ib_scope_drop := fn(bp : ptr(mut IbB), mark : usize) {
   ib_wb_cut(bv.bnames, mark)
   ib_wb_cut(bv.blens, mark)
   ib_wb_cut(bv.bvregs, mark)
+  ib_wb_cut(bv.bagg, mark)
+  ib_wb_cut(bv.bsd, mark)
+  ib_wb_cut(bv.bts, mark)
+  ib_wb_cut(bv.btn, mark)
 }
 
 ## ── the loop stack ──
@@ -436,7 +463,8 @@ ib_bx := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Option(VR
     Expr::Call(cs, cl, na, ah) => { return ib_bx_callv(bp, a, e, cs, cl, na, ah) }
     Expr::Loop(body) => { return ib_bx_value_loop(bp, a, e, body) }
     Expr::Bitcast(inner, ts, tl) => { return ib_bx_bitcast(bp, a, e, inner, ts, tl) }
-    Expr::Match | Expr::StructLit | Expr::Field | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
+    Expr::Field(b, fs, fl) => { return ib_bx_field(bp, a, e, b, fs, fl) }
+    Expr::Match | Expr::StructLit | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit
       | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Lambda
       | Expr::FnRef => { ib_refuse_expr(bp, e, NyWhy.NwOutside) }
   }
@@ -552,10 +580,13 @@ ib_bx_var := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), s : usiz
   ## `driver::d_qual_var`): it is that value, never a local spelled the same.
   idv : Option(u64) = ib_decl_named_at(ib_b_decls(bp), s, n, false)
   match idv { Some(x) => { return ib_bx_global_at(bp, a, e, usize(x)) }; None => {} }
-  found : Option(VRegId) = ib_lookup(bp, s, n)
+  found : IbBind = ib_lookup(bp, s, n)
   match found {
-    Some(r) => { return ib_bx_local(bp, e, r) }
-    None => {}
+    BdVal(r) => { return ib_bx_local(bp, e, r) }
+    ## A struct local is memory, never an IR value (§3.2): only a field read, a copy or an aggregate
+    ## position reads it.
+    BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) }
+    BdNone => {}
   }
   ib_bx_global(bp, a, e, s, n)
 }
@@ -887,6 +918,13 @@ ib_call := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), cs : usize
     Some(sk) => { if na == 2 { sv : Option(VRegId) = ib_bx_shift(bp, a, e, sk, ah); return ib_call_out(sv) } }
     None => {}
   }
+  lo : Option(LayoutQ) = ib_layout_q_of(nm)
+  match lo {
+    Some(q) => {
+      if na == 1 and not ib_fn_named(bp, cs, cl) { lv : Option(VRegId) = ib_bx_layout_q(bp, a, e, q, ah); return ib_call_out(lv) }
+    }
+    None => {}
+  }
   ib_call_user(bp, a, e, cs, cl, na, ah)
 }
 ib_call_out := fn(v : Option(VRegId)) -> CallOut {
@@ -1183,6 +1221,427 @@ ib_callee_decl := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> Option(u64) {
   found
 }
 
+## ── aggregates (slice 3a, `docs/ir-slice-3.md` §1) ──
+##
+## A struct local is a FRAME OBJECT (`docs/ir.md` §3.3), never an IR value (§3.2): a struct literal is
+## built field by field into a fresh object, a field read is a `load` and a field write a `store` at the
+## field's byte offset, and a whole-struct assignment is a `copy`. The layout comes from `lower_layout`
+## once, here (`field_byte_place`, `layout_type_size_bytes`); the IR carries only byte offsets and
+## widths. In 3a an aggregate never crosses a call (a struct parameter or result is still
+## `NotYet(signature)`), so the layout is internal to one function.
+##
+## Sema records an aggregate as `VcAgg` with no type name (`docs/ir-slice-3.md` §3.4), so the struct
+## TYPE is taken from the declaration the expression names: a binding's annotation, a struct literal's
+## name, the struct local a name is bound to. Every scalar the builder reads out of a struct is still
+## sema's: a field read must carry the field's declared type in sema's record, else the function is
+## refused (`NwDisagree`), which is what types a signed field's division signed (#765).
+##
+## 3a builds the WORD-tier struct whose every field is a kernel scalar and that carries no layout
+## attribute (`@packed`, `@align`, `@offset`, `@endian` are slice 3e); any other struct is
+## `NotYet(outside)`.
+
+## A struct type the builder lays out: its declaration's index, the name span it was named by (the
+## span `lower_layout` resolves), and its byte size.
+IbSt := struct { di : usize, s : usize, n : usize, size : usize }
+## A field of a struct: its byte offset in the object and its kernel type.
+IbFld := struct { off : ByteOff, ty : Kty, sg : Sgn }
+## An aggregate value in memory: its frame object, and whether the builder made that object for this
+## value alone (a literal's fresh object may be bound directly; a local's must be copied).
+IbObj := struct { fr : FrameId, fresh : bool }
+
+## Is a recorded value type an aggregate?
+ib_vty_is_agg := fn(t : VTy) -> bool {
+  c : VCls = t.cls
+  match c { VcAgg => { true }; VcAbsent | VcUnknown | VcLit | VcInt | VcBool | VcPtr | VcFloat => { false } }
+}
+
+## The struct type named `[s, s+n)`, when the builder lays it out (see the band comment).
+ib_struct_named := fn(bp : ptr(mut IbB), in out a : rt::Arena, s : usize, n : usize) -> Option(IbSt) {
+  bv : IbB = deref(bp)
+  sdi := lower_layout::struct_decl_of(bv.decls, bv.src, s, n)
+  if sdi < 0 { return Option(IbSt).None }
+  d : Decl = deref(ib_decl_ptr(bv.decls, usize(sdi)))
+  if d.is_generic { return Option(IbSt).None }
+  lk := lower_layout::layout_kind(bv.decls, bv.src, s, n, a)
+  if lower_layout::layout_kind_is_packed(lk) or lower_layout::layout_kind_is_byte(lk) { return Option(IbSt).None }
+  if lower_layout::struct_align_attr(bv.decls, bv.src, s, n) >= 1 { return Option(IbSt).None }
+  mut f := d.fields_head
+  mut nf : usize = 0
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
+        match ko { Some(k) => {}; None => { return Option(IbSt).None } }
+        if fd.wsize != 1 { return Option(IbSt).None }
+        if lower_layout::field_offset_attr(bv.src, fd.ns) >= 0 or lower_layout::field_align_attr(bv.src, fd.ns) >= 0
+          or lower_layout::field_endian_attr(bv.src, fd.ns) >= 0 { return Option(IbSt).None }
+        nf = nf + 1
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  if nf == 0 { return Option(IbSt).None }
+  sz := lower_layout::layout_type_size_bytes(bv.decls, bv.src, s, n, a)
+  if sz == 0 { return Option(IbSt).None }
+  Option(IbSt).Some(IbSt(di = usize(sdi), s = s, n = n, size = sz))
+}
+## The struct type of a struct local bound with declaration `sd` and type span `[ts, ts+tn)`.
+ib_struct_bound := fn(bp : ptr(mut IbB), in out a : rt::Arena, sd : usize, ts : usize, tn : usize) -> Option(IbSt) {
+  so : Option(IbSt) = ib_struct_named(bp, a, ts, tn)
+  match so { Some(st) => { if st.di == sd { return so } }; None => {} }
+  Option(IbSt).None
+}
+## Does struct `st` have a field narrower than its slot (padding the literal must not leave undefined)?
+ib_struct_padded := fn(bp : ptr(mut IbB), st : IbSt) -> bool {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  mut w : usize = 0
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
+        match ko { Some(k) => { w = w + usize(kty_bytes(k.ty)) }; None => { return true } }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  w != st.size
+}
+## Field `[fs, fs+fl)` of struct `st`: its declared kernel type and its byte place.
+ib_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt, fs : usize, fl : usize) -> Option(IbFld) {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  mut f := d.fields_head
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        if fd.nl == fl and streq(bv.src, fd.ns, fd.nl, fs, fl) {
+          ko : Option(IbKS) = ib_name_ks(bv.src, fd.ts, fd.tl)
+          match ko {
+            Some(k) => {
+              fp := lower_layout::field_byte_place(bv.decls, bv.src, st.s, st.n, fs, fl, a)
+              if not fp.addressable or fp.off < 0 { return Option(IbFld).None }
+              ## V6 holds the access inside the object; this keeps a place past it out of the IR.
+              if usize(fp.off) + usize(kty_bytes(k.ty)) > st.size { return Option(IbFld).None }
+              return Option(IbFld).Some(IbFld(off = ByteOff(usize(fp.off)), ty = k.ty, sg = k.sg))
+            }
+            None => { return Option(IbFld).None }
+          }
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  Option(IbFld).None
+}
+
+## A fresh frame object for one value of struct `st` (§3.3: one object per value, never a pool).
+ib_new_obj := fn(bp : ptr(mut IbB), in out a : rt::Arena, st : IbSt) -> FrameId { new_frame(ib_b_f(bp), a, st.size, 8) }
+ib_store_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, fd : IbFld, v : VRegId) {
+  on := o_none()
+  ofr := o_frame(fr)
+  ov := o_vreg(v)
+  i := e_mem(ib_b_f(bp), a, Op.OpStore, fd.ty, Sgn.SgNone, on, ofr, byte_off_imm(fd.off), ov)
+}
+ib_load_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, fd : IbFld) -> VRegId {
+  d := ib_fresh(bp, a, IbKS(ty = fd.ty, sg = fd.sg))
+  od := o_vreg(d)
+  ofr := o_frame(fr)
+  on := o_none()
+  i := e_mem(ib_b_f(bp), a, Op.OpLoad, fd.ty, fd.sg, od, ofr, byte_off_imm(fd.off), on)
+  d
+}
+## `copy $dst, $src, n` — a whole struct value.
+ib_copy_obj := fn(bp : ptr(mut IbB), in out a : rt::Arena, dst : FrameId, src : FrameId, n : usize) {
+  mut it := inst0(Op.OpCopy)
+  od := o_frame(dst)
+  os := o_frame(src)
+  set_a(it, od)
+  set_b(it, os)
+  it.n = n
+  i := emit(ib_b_f(bp), a, it)
+}
+## `zero $k, n`.
+ib_zero_obj := fn(bp : ptr(mut IbB), in out a : rt::Arena, fr : FrameId, n : usize) {
+  mut it := inst0(Op.OpZero)
+  ofr := o_frame(fr)
+  set_a(it, ofr)
+  it.n = n
+  i := emit(ib_b_f(bp), a, it)
+}
+
+## The struct type an aggregate expression names by its own declaration: a struct literal's name, or
+## the struct local a name is bound to. Anything else is `None` (sema does not record it, §3.4).
+ib_agg_type_of := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr)) -> Option(IbSt) {
+  match deref(e) {
+    Expr::StructLit(ss, sl, nf, fh) => { return ib_struct_named(bp, a, ss, sl) }
+    Expr::Var(s, n) => {
+      if ib_names_global(bp, s, n) { return Option(IbSt).None }
+      b : IbBind = ib_lookup(bp, s, n)
+      match b {
+        BdAgg(fr, sd, ts, tn) => { return ib_struct_bound(bp, a, sd, ts, tn) }
+        BdVal(v) => {}
+        BdNone => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  Option(IbSt).None
+}
+## Does the name `[s, s+n)` resolve to a module value by span identity (`m::NAME` after the front half)?
+ib_names_global := fn(bp : ptr(mut IbB), s : usize, n : usize) -> bool {
+  g : Option(u64) = ib_decl_named_at(ib_b_decls(bp), s, n, false)
+  match g { Some(x) => { true }; None => { false } }
+}
+
+## The aggregate value `e` of struct type `st`, in memory. Sema must have recorded `e` as an aggregate.
+ib_agg := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt) -> Option(IbObj) {
+  if ib_b_failed(bp) { return Option(IbObj).None }
+  t : VTy = sty_get(e)
+  if not ib_vty_is_agg(t) {
+    w : NyWhy = ib_vty_why(t)
+    if not nywhy_is_gap(w) { w = NyWhy.NwDisagree }
+    ib_refuse_expr(bp, e, w)
+    return Option(IbObj).None
+  }
+  et : Option(IbSt) = ib_agg_type_of(bp, a, e)
+  match et {
+    Some(x) => {
+      if x.di != st.di {
+        ib_refuse_expr(bp, e, NyWhy.NwDisagree)
+        return Option(IbObj).None
+      }
+    }
+    None => {
+      ib_refuse_expr(bp, e, NyWhy.NwOutside)
+      return Option(IbObj).None
+    }
+  }
+  match deref(e) {
+    Expr::StructLit(ss, sl, nf, fh) => { return ib_agg_lit(bp, a, e, st, nf, fh) }
+    Expr::Var(s, n) => {
+      b : IbBind = ib_lookup(bp, s, n)
+      match b {
+        BdAgg(fr, sd, ts, tn) => { return Option(IbObj).Some(IbObj(fr = fr, fresh = false)) }
+        BdVal(v) => {}
+        BdNone => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::Field | Expr::EnumLit
+      | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try | Expr::FloatLit
+      | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast | Expr::Loop => {}
+  }
+  ib_refuse_expr(bp, e, NyWhy.NwOutside)
+  Option(IbObj).None
+}
+## A struct literal `S(f0 = e0, …)` into a fresh object. The parser hands the initializers over in the
+## struct's DECLARATION order (TYP-8), and they are evaluated and stored in that order; a literal that
+## does not initialize every field is outside 3a. A struct with padding is zeroed first, so no byte of
+## the object is undefined.
+ib_agg_lit := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), st : IbSt, nf : usize, fh : Option(ptr(mut Arg))) -> Option(IbObj) {
+  bv : IbB = deref(bp)
+  d : Decl = deref(ib_decl_ptr(bv.decls, st.di))
+  fr := ib_new_obj(bp, a, st)
+  if ib_struct_padded(bp, st) { ib_zero_obj(bp, a, fr, st.size) }
+  mut f := d.fields_head
+  mut g : Option(ptr(mut Arg)) = fh
+  loop {
+    match f {
+      Some(fq) => {
+        fd := deref(ast::fld_p(fq))
+        match g {
+          Some(gq) => {
+            ga := deref(arg_p(gq))
+            flo : Option(IbFld) = ib_field(bp, a, st, fd.ns, fd.nl)
+            match flo {
+              Some(fld) => {
+                vo : Option(VRegId) = ib_value_at(bp, a, ga.e, IbKS(ty = fld.ty, sg = fld.sg))
+                match vo { Some(v) => { ib_store_field(bp, a, fr, fld, v) }; None => { return Option(IbObj).None } }
+              }
+              None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
+            }
+            g = ga.next
+          }
+          None => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }
+        }
+        f = fd.next
+      }
+      None => { break }
+    }
+  }
+  match g { Some(gx) => { ib_refuse_expr(bp, e, NyWhy.NwOutside); return Option(IbObj).None }; None => {} }
+  Option(IbObj).Some(IbObj(fr = fr, fresh = true))
+}
+
+## `s := e` / `s : S = e` for a struct local: the struct type is the annotation's, else the one the
+## initializer names. A fresh literal's object becomes the local's; any other value is copied into a
+## fresh object of its own (a local never shares another's memory).
+ib_bs_agg_decl := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), ns : usize, nl : usize, v : ptr(Expr)) {
+  src := ib_b_src(bp)
+  lts := ast::local_type_span(src, ns, nl)
+  mut sto : Option(IbSt) = Option(IbSt).None
+  if lts.n != 0 { sto = ib_struct_named(bp, a, lts.s, lts.n) } else { sto = ib_agg_type_of(bp, a, v) }
+  match sto {
+    Some(st) => {
+      oo : Option(IbObj) = ib_agg(bp, a, v, st)
+      match oo {
+        Some(o) => {
+          if o.fresh { ib_bind_agg(bp, a, ns, nl, o.fr, st); return }
+          fr := ib_new_obj(bp, a, st)
+          ib_copy_obj(bp, a, fr, o.fr, st.size)
+          ib_bind_agg(bp, a, ns, nl, fr, st)
+        }
+        None => {}
+      }
+    }
+    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## `s = e` into the struct local in object `fr`: the value is built in its own object first (a literal
+## reading `s` itself sees the old value), then copied.
+ib_bs_agg_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), fr : FrameId, sd : usize, ts : usize, tn : usize, v : ptr(Expr)) {
+  sto : Option(IbSt) = ib_struct_bound(bp, a, sd, ts, tn)
+  match sto {
+    Some(st) => {
+      oo : Option(IbObj) = ib_agg(bp, a, v, st)
+      match oo { Some(o) => { ib_copy_obj(bp, a, fr, o.fr, st.size) }; None => {} }
+    }
+    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+  }
+}
+## `s.f = v` on a struct local: a `store` at the field's place, the value at the field's declared type.
+ib_bs_field_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), bns : usize, bnl : usize, fns : usize, fnl : usize, fv : ptr(Expr)) {
+  if ib_names_global(bp, bns, bnl) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
+  b : IbBind = ib_lookup(bp, bns, bnl)
+  match b {
+    BdAgg(fr, sd, ts, tn) => {
+      sto : Option(IbSt) = ib_struct_bound(bp, a, sd, ts, tn)
+      match sto {
+        Some(st) => {
+          flo : Option(IbFld) = ib_field(bp, a, st, fns, fnl)
+          match flo {
+            Some(fld) => {
+              vo : Option(VRegId) = ib_value_at(bp, a, fv, IbKS(ty = fld.ty, sg = fld.sg))
+              match vo { Some(v) => { ib_store_field(bp, a, fr, fld, v) }; None => {} }
+              return
+            }
+            None => {}
+          }
+        }
+        None => {}
+      }
+    }
+    BdVal(v) => {}
+    BdNone => {}
+  }
+  ib_refuse_stmt(bp, h, NyWhy.NwOutside)
+}
+## `s.f` on a struct local: a `load` at the field's place, at its declared type, which must be sema's
+## record of the read (#765: the field's signedness is the value's from here on).
+ib_bx_field := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), b : ptr(Expr), fs : usize, fl : usize) -> Option(VRegId) {
+  match deref(b) {
+    Expr::Var(s, n) => {
+      if ib_names_global(bp, s, n) { return ib_no(bp, e, NyWhy.NwOutside) }
+      bd : IbBind = ib_lookup(bp, s, n)
+      match bd {
+        BdAgg(fr, sd, ts, tn) => {
+          sto : Option(IbSt) = ib_struct_bound(bp, a, sd, ts, tn)
+          match sto {
+            Some(st) => {
+              fo : Option(IbFld) = ib_field(bp, a, st, fs, fl)
+              match fo {
+                Some(fld) => {
+                  k := ib_ty(bp, e)?
+                  if not ib_ks_eq(k, IbKS(ty = fld.ty, sg = fld.sg)) { return ib_no(bp, e, NyWhy.NwDisagree) }
+                  lv := ib_load_field(bp, a, fr, fld)
+                  return Option(VRegId).Some(lv)
+                }
+                None => {}
+              }
+            }
+            None => {}
+          }
+        }
+        BdVal(v) => {}
+        BdNone => {}
+      }
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  ib_no(bp, e, NyWhy.NwOutside)
+}
+
+## The layout queries `size(T)` and `align(T)` (Types §6), folded to a `const` (§4).
+LayoutQ := enum { LqSize, LqAlign }
+ib_layout_q_of := fn(nm : str) -> Option(LayoutQ) {
+  if nm == "size" { return Option(LayoutQ).Some(LayoutQ.LqSize) }
+  if nm == "align" { return Option(LayoutQ).Some(LayoutQ.LqAlign) }
+  Option(LayoutQ).None
+}
+## Is there a function declaration named `[cs, cs+cl)` (a user `size`/`align` is not the builtin)?
+ib_fn_named := fn(bp : ptr(mut IbB), cs : usize, cl : usize) -> bool {
+  bv : IbB = deref(bp)
+  cnt := rt::vec_len(deref(bv.decls))
+  mut i : usize = 0
+  while i < cnt {
+    d : Decl = deref(ib_decl_ptr(bv.decls, i))
+    if d.is_fn and d.name_len == cl and streq(bv.src, d.name_start, d.name_len, cs, cl) { return true }
+    i = i + 1
+  }
+  false
+}
+## `size(T)` / `align(T)` of a type NAME: a kernel scalar by the target-independent scalar table
+## (`lower_layout::type_byte_size` / `type_byte_align`, the answer x86_64's fold gives), or a struct
+## 3a lays out (its layout's size; a WORD-tier struct is 8-aligned). Any other operand — a value, an
+## enum, an array or view, a generic parameter — is outside 3a. The result is sema's record of the call.
+ib_bx_layout_q := fn(bp : ptr(mut IbB), in out a : rt::Arena, e : ptr(Expr), q : LayoutQ, ah : Option(ptr(mut Arg))) -> Option(VRegId) {
+  a0 := deref(arg_at(ah, "argument list ended early"))
+  match deref(a0.e) {
+    Expr::Var(s, n) => {
+      bd : IbBind = ib_lookup(bp, s, n)
+      match bd { BdNone => {}; BdVal(v) => { return ib_no(bp, e, NyWhy.NwOutside) }; BdAgg(fr, sd, ts, tn) => { return ib_no(bp, e, NyWhy.NwOutside) } }
+      src := ib_b_src(bp)
+      mut bytes : usize = 0
+      ko : Option(IbKS) = ib_name_ks(src, s, n)
+      match ko {
+        Some(k) => {
+          match q {
+            LqSize => { bytes = lower_layout::type_byte_size(src, s, n) }
+            LqAlign => { bytes = lower_layout::type_byte_align(src, s, n) }
+          }
+        }
+        None => {
+          sto : Option(IbSt) = ib_struct_named(bp, a, s, n)
+          match sto {
+            Some(st) => { match q { LqSize => { bytes = st.size }; LqAlign => { bytes = 8 } } }
+            None => { return ib_no(bp, e, NyWhy.NwOutside) }
+          }
+        }
+      }
+      k := ib_int_ty(bp, e)?
+      c := ib_konst(bp, a, k, i64(bytes))
+      return Option(VRegId).Some(c)
+    }
+    Expr::Num | Expr::BoolLit | Expr::Bin | Expr::If | Expr::Match | Expr::Call | Expr::StructLit | Expr::Field
+      | Expr::EnumLit | Expr::AddrOf | Expr::Deref | Expr::StrLit | Expr::ArrayLit | Expr::Index | Expr::Try
+      | Expr::FloatLit | Expr::Slice | Expr::CompField | Expr::Unchecked | Expr::Lambda | Expr::FnRef | Expr::Bitcast
+      | Expr::Loop => {}
+  }
+  ib_no(bp, e, NyWhy.NwOutside)
+}
+
 ## ── statements ──
 
 ## Build the statement list at `h` in a scope of its own.
@@ -1308,7 +1767,8 @@ ib_bs_one := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt)) {
       ## A terminator inside the region ends it; nothing more is emitted before its `end`.
       ib_plain(bp, a, Op.OpEnd)
     }
-    Stmt::FieldAssign | Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
+    Stmt::FieldAssign(bns, bnl, fns, fnl, fv, nx) => { ib_bs_field_assign(bp, a, h, bns, bnl, fns, fnl, fv) }
+    Stmt::Match | Stmt::DerefAssign | Stmt::IndexAssign | Stmt::IndexFieldAssign
       | Stmt::FieldPathAssign | Stmt::CompIf | Stmt::CompFor | Stmt::CompMatch | Stmt::CompForRange
       | Stmt::AllocWith => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
   }
@@ -1338,14 +1798,16 @@ ib_bs_assign := fn(bp : ptr(mut IbB), in out a : rt::Arena, h : ptr(mut Stmt), n
   src := ib_b_src(bp)
   if ast::local_is_uninit(src, ns, nl) { ib_refuse_stmt(bp, h, NyWhy.NwOutside); return }
   if ast::assign_is_decl(src, ns, nl) {
+    if ib_vty_is_agg(sty_bind_get(ns)) { ib_bs_agg_decl(bp, a, h, ns, nl, v); return }
     nvo : Option(VRegId) = ib_decl_value(bp, a, h, ns, v)
     match nvo { Some(nv) => { ib_bind(bp, a, ns, nl, nv) }; None => {} }
     return
   }
-  found : Option(VRegId) = ib_lookup(bp, ns, nl)
+  found : IbBind = ib_lookup(bp, ns, nl)
   match found {
-    Some(dv) => { ib_assign_to(bp, a, dv, v) }
-    None => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
+    BdVal(dv) => { ib_assign_to(bp, a, dv, v) }
+    BdAgg(fr, sd, ts, tn) => { ib_bs_agg_assign(bp, a, h, fr, sd, ts, tn, v) }
+    BdNone => { ib_refuse_stmt(bp, h, NyWhy.NwOutside) }
   }
 }
 ## A declaration's fresh vreg, holding its initializer at the binding's type.
@@ -1543,6 +2005,7 @@ pub build_one := fn(p : IrProg, decls : ptr(rt::Vec), src : ptr(u8), di : usize,
   f := fn_new(a, fnm.ptr, fnm.len, has_ret, rk.ty, rk.sg)
   nb := IbB(f = f, p = p, src = src, decls = decls, mod_s = d.mod_start, mod_n = d.mod_len,
           bnames = wb_new(a, 16), blens = wb_new(a, 16), bvregs = wb_new(a, 16),
+          bagg = wb_new(a, 16), bsd = wb_new(a, 16), bts = wb_new(a, 16), btn = wb_new(a, 16),
           lexit = wb_new(a, 8), lcont = wb_new(a, 8), lres = wb_new(a, 8), lhasres = wb_new(a, 8), lbroken = wb_new(a, 8),
           unch = false, term = false, failed = false, fail_c = Construct.CEmpty, fail_w = NyWhy.NwOutside,
           fail_s = u64(d.name_start), span0 = u64(d.name_start))
