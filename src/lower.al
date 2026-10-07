@@ -318,6 +318,10 @@ streq := fn(src : ptr(u8), a_s : usize, a_n : usize, b_s : usize, b_n : usize) -
 mut ROOT_MOD_S : usize = 0
 mut ROOT_MOD_L : usize = 0
 pub set_root_module := fn(s : usize, l : usize) -> i64 { ROOT_MOD_S = s ; ROOT_MOD_L = l ; return 0 }
+## The published root module span, for a consumer that publishes a naming module itself
+## (`lower_layout::set_type_ref_module` from the shared IR builder, `ir::build`).
+pub root_mod_s := fn() -> usize { ROOT_MOD_S }
+pub root_mod_l := fn() -> usize { ROOT_MOD_L }
 
 ## The package driver publishes the one declaration selected by a non-default raw `Target.entry`.
 ## DCE must treat that declaration as a root even when it has no internal caller: the loader reaches
