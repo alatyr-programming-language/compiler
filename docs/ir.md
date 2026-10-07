@@ -492,6 +492,66 @@ removes the question instead:
    | `test/query_unselected_branch.al` | the unselected `else` (`no_such_name()`), walked because sema cannot fold `compiles(1)` |
    | `test/comptime_resolves_args.al` ×3 | the checker refuses `resolves(f, args…)` (#890) |
    | `test/single_hash_comment.al` | `target.arch != Arch.i386`: sema knows no variant `i386` |
+8. **What the checker leaves unknown is recorded too** (prerequisite (c)). `check_expr` answers a `Ty`
+   it can afford to be tolerant with: it resolves names among the declarations before the one being
+   checked, keeps a pointer's pointee only when it is a struct or an enum, and leaves a qualified or
+   generic callee's result, a `deref`, an element, a payload binding and a value read through an
+   unknown base `UNKNOWN`. That stays the verdict's business. Beside each node's value type the
+   recorder now keeps the **spelling** of that type (`ir::TySpell`): the declaration text that names
+   it — a parameter's or a field's annotation, a callee's `-> R`, a variant's payload component, a
+   pointer's pointee — read through the resolvers the checker and the layout already use
+   (`type_decl_index`'s Modules §3 rank, the visibility check's module-segment match, a module alias
+   followed one hop, `ptr_target_pointee`, `typearg_at`). The value type of a field, a pointee, an
+   element, a tuple component, a `?` payload, a match binding or a call result is derived from it.
+
+   - **Scope.** A spelling read in a generic declaration (a generic callee's result, a generic
+     struct's field, a generic enum's payload) carries that declaration and its instance: the
+     `( … )` group of the struct instance it was reached through, or the call that reached it. A
+     bare type parameter is replaced by what the instance binds it to — the written type argument,
+     or, with the type arguments omitted, the type matching the callee's parameter types against the
+     arguments' spellings gives it (`self : Result(T, E)` against a `Result(Handle(u8), AllocError)`
+     binds `T`). This is substitution of a declaration's own parameter, never a type read off an
+     expression's shape. A type parameter of the declaration being checked stays one: the record of
+     a value of type `T` is `VcUnknown`, because only the instance knows it (below).
+   - **Types no text spells** are wrappers of a spelling: a pointer to it (`ptr(x)` of a value), an
+     array of it (`[e0, e1, …]`), a view of it (`a[lo..hi]` of such an array); and three builtins:
+     the byte view `str`, its byte `u8`, and the native signed integer an unannotated literal
+     defaults to (Types §9.1 — an unannotated `[1, 2, 3]`, a value `loop` whose `break`s carry only
+     literals, a range of two literal bounds).
+   - **Code the checker does not walk** is walked for its records only, as in item 7: a value
+     `loop`'s body (#888), a lambda's body (the driver lifts it into a declaration whose captured
+     names become untyped trailing parameters; each use of an enclosing local in the body records
+     that local's type at the use, the key the lifted capture parameter is declared at), and the place
+     of a nested field store (`deref(deref(pp)).v = …`).
+   - **Calls.** A syscall-ABI fn is a fn; a type alias names its target; the writing module's own
+     alias of a head shadows a module of that name (`strbuf := rt`); a type's name as a head names
+     its module (`Option::unwrap_or`); same-named fns are told apart by argument count, by the
+     receiver's type head (`r.unwrap()` over a `Result`), or — `when` alternatives of one module —
+     by sharing one result spelling; a fn-typed local or field is called through its `fn(…) -> R`;
+     `size(T)`/`align(T)` are `usize`; an `atomic::` or `volatile::load` operation reads its
+     operand's pointee; an arithmetic operator over an aggregate is the operator fn declared for it.
+
+   Measured with the 1e probe (operand records at x86's legacy signedness decisions, the
+   self-build plus every corpus program through x86_64), distinct source lines with an operand sema
+   left `VcUnknown`/`VcAbsent`, before → after:
+
+   | set | before | after |
+   |---|---|---|
+   | `src/` (self-build) | 1958 lines (3601 rows) | **0** |
+   | corpus + `lib/` (2272 sources) | 924 lines (13366 rows) | **109** (326 rows) |
+
+   What remains is not a recorder gap of this kind:
+
+   | class | lines | why |
+   |---|---|---|
+   | the instance's type | 43 | an operand of a type parameter's type (`a < b` over `T`, `deref(p)` of a `ptr(K)`), a pack element or `v.(f)`: one node is emitted once per instance, and no single record holds. Only the instance knows the type |
+   | `typeinfo` members | 6 | `typeinfo(T).n`, `.fields.len`, `Field.offset`: Comptime §5.1 names the members but not their types |
+   | calls of values the checker types as non-functions | 16 | a parameter declared `g : u64` called as `g(x)`, an indexed fn-array element `fs[i](3)`, a `when`-guarded companion value: the call has no declared result |
+   | a lambda passed to a higher-order callee | 9 | the driver specializes it into the callee instead of lifting it, so its captures are never declared parameters |
+   | the rest | 35 | each a shape the recorder does not read yet: a tuple literal's type, a payload of a generic enum matched without its instance, a field of a generic struct inferred through an implicit type argument, … |
+
+   The same measurement shows the next prerequisite's input: with more operands typed, 1977 rows of
+   the self-build compare or combine a signed with an unsigned operand (1178 before) — prerequisite (d).
 
 **What slice 1 closes structurally.** Slice 1 (scalar core) consumes the recorded type, so on the three
 twins it closes the scalar shapes of the family: **#764** (all dividend shapes are scalar), **#766**'s
