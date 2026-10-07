@@ -2551,6 +2551,23 @@ run_pkg_callees module_fn_ancestor module-fn-ancestor 42 +geo__helper +geo__gid_
 run_pkg_callees module_fn_shadow   module-fn-shadow   42 +geo__child__helper +geo__bump -aother__helper -aother__bump
 run_pkg_check_build_located module_fn_sibling_reject   1 geo__child
 run_pkg_check_build_located module_fn_ambiguous_reject 1 caller
+## Issue #871 — two child modules with one stem (`src/a/x.al`, `src/b/x.al`) are two modules, and a module
+## head is resolved relative to the module that writes it: `x` in `a` is `a::x`, `x` in the root is the
+## root's own `src/x.al`. The resolver matched the head's LAST segment and the last candidate won, so
+## both projections called `b__x__f` (the program answered 4 before the root `x` was added).
+run_pkg_callees issue871_same_stem_children issue871-same-stem-children 42 +a__x__f +b__x__f +x__f
+## …and a head that names neither child, matching only their last segment, is refused at build time
+## (the check verb does not resolve call targets, so this one is build-only and located by source line).
+p871="$ROOT/test/package/issue871_same_stem_ambiguous_reject"
+rm -rf "$p871/target"
+out871=$( (cd "$p871" && "$CC" build package.al) 2>&1 ); rc871=$?
+rm -rf "$p871/target"
+if [ "$rc871" != 0 ] && printf '%s\n' "$out871" | grep -qF 'names two different modules that both end in its last segment' \
+   && printf '%s\n' "$out871" | grep -qF 'main := fn() -> u64 { return a::ga() + b::gb() + f() }'; then
+  echo "ok   pkg_build_reject(issue871_same_stem_ambiguous_reject): rc $rc871, located ambiguity"
+else
+  echo "FAIL pkg_build_reject(issue871_same_stem_ambiguous_reject): rc $rc871, got '$out871'"; fail=1
+fi
 ## Issue #655 — `sema::check_program` decided which modules to TRUST by looking for `__` in the
 ## mangled module name, and the parser mangles a nested submodule `src/geo/child.al` to `geo__child`.
 ## Every nested submodule of every package was therefore skipped WHOLESALE, `src/lower/*.al` (ten

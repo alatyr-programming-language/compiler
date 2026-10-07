@@ -122,6 +122,12 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **Two child modules with one stem stay two modules.** `src/a/x.al` and `src/b/x.al` collapsed: a module
+  head was matched by its last segment and the last candidate won, so every `x` import bound `b::x` (a
+  silent wrong value, #871). A head is now resolved relative to the module that writes it (Modules
+  §1/§5/§3 — `x` in `a` is `a`'s child `a::x`, the nearest enclosing scope first, then the full path from
+  the root); a head that only matches the last segment of two different modules is refused at build time
+  with its source line. The compiler's own GAS is unchanged.
 - **A wide struct or enum returned as a literal keeps every component (x86_64).** A struct or enum
   returned through the hidden result pointer as a literal with an aggregate field or payload (an enum or
   struct literal, a `str`, a bare `Option.Some(p)`) stored the `$0` placeholder and displaced the fields
