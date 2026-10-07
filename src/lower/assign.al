@@ -899,6 +899,11 @@ pub emit_struct_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrB
               ## exactly like a slice LOCAL binding (ptr at word 0, len at word 1), which is what
               ## `field_word_offset` + the `.len` field read expect.
               emit_pair_field_store(ga.e, base - off, sb, cx, a, nl)
+            } else if wsz > 1 and struct_call_words(ga.e, cx, a) > 1 {
+              ## a multi-word STRUCT field fed by a struct-returning CALL (`W(s = mk())`): it walked past
+              ## every branch above into the ARRAY branch below, whose `emit_array_assign` matches only an
+              ## `ArrayLit` — the call was not made and the field kept its stale words (a silent wrong value).
+              emit_struct_call_words_at(ga.e, base - off, sb, cx, a, nl)
             } else if wsz > 1 or array_lit_info(ga.e).is_a {
               ## an ARRAY field — store the array-literal value's elements into the field's words. The
               ## `array_lit_info` disjunct covers the ONE-ELEMENT array literal (`[u64; 1]`, parser
@@ -1241,7 +1246,23 @@ pub emit_st_deref_assign := fn(dptr : ptr(Expr), val : ptr(Expr), in out sb : st
       }
     }
     push_str(sb, "  popq %rax\n")
-  } else if elit_scalar_payloads(val, cx) {
+  } else if struct_lit_info(val).is_s or (enum_lit_info(val).is_e and elit_word_payloads(val, cx) == false) {
+    ## #892 — an aggregate literal with a component wider than one word, or one whose word is not its
+    ## plain value (a folded `Option.Some(p)` / `Option.None`): `emit_agg_lit_temp` builds it with the
+    ## complete frame writer, then the words are copied to the pointee (`emit_agg_lit_temp`'s note).
+    ## A direct byte-layout struct pointee has no word image to copy into; it keeps a located refusal.
+    if dvps.n != 0 and std_struct_has_direct_byte_layout(cx.decls, cx.src, dvps.s, dvps.n, deref(cx.mar)) {
+      panic("selfhost: storing a struct literal with an aggregate field through a pointer to a byte-layout struct is not lowered — assign the fields one by one")
+    }
+    lnw := agg_lit_store_words(val, CSpan(s = dvps.s, n = dvps.n), cx, a)
+    if lnw == 0 { panic("selfhost: storing an aggregate literal through a pointer whose pointee width does not resolve — bind the value to a typed local first") }
+    lsave := cx.agg_next
+    lbase := emit_agg_lit_temp(val, lnw, sb, cx, a, nl)
+    emit_gas(dptr, sb, cx, a, nl)
+    push_str(sb, "  popq %r11\n")
+    emit_frame_words_to_r11(lbase, lnw, sb)
+    cx.agg_next = lsave
+  } else if elit_word_payloads(val, cx) {
     ## storing an ENUM LITERAL with scalar payloads through the pointer (`deref(p) = E.V(x)`): the
     ## discriminant at word 0, each scalar payload at words 1.. — all at `-(k*8)(%rax)`, the
     ## down-growing pointee layout the enum match reads. Was the scalar path → one garbage word.
