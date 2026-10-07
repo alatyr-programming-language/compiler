@@ -419,11 +419,11 @@ removes the question instead:
    module — it resolves against it but does not refuse a program over its body, so a check gap on a
    stdlib feature cannot reject a well-typed user program. Until slice 1e's prerequisite (a) that also
    meant `lib/` had no records at all: the slice-1e probe measured 561 of the corpus's 676 distinct
-   untyped (`VcAbsent`) operand lines at x86's legacy signedness decisions in `lib/`. Now, whenever a
-   consumer has asked for records (`ir::sty_on()`), each library declaration is checked by
-   `check_decl` exactly as a user one is, **for its records only** (`sema_lib_record`): the verdict
-   stays TRUST, the census instruments the walk would move are restored, and with records off — every
-   ordinary x86_64 check and build — nothing runs. The twins' record run (which always records) does
+   untyped (`VcAbsent`) operand lines at x86's legacy signedness decisions in `lib/`. Now each
+   library declaration is checked by `check_decl` exactly as a user one is, **for its records only**
+   (`sema_lib_record`): the verdict stays TRUST and the census instruments the walk would move are
+   restored. (When this landed the walk ran only when a consumer asked for records; since item 9
+   recording is on for every check.) The twins' record run (which always records) does
    not walk library bodies yet (`sema::set_lib_records(false)`): with the walk, their builder selects
    from the IR every library function whose records it completes, which moved 66 corpus outputs and 3
    manifest rows (only the link/assemble diagnostics of builds that already failed; every run
@@ -552,6 +552,51 @@ removes the question instead:
 
    The same measurement shows the next prerequisite's input: with more operands typed, 1977 rows of
    the self-build compare or combine a signed with an unsigned operand (1178 before) — prerequisite (d).
+9. **One operator's integer operands share a signedness** (prerequisite (d)). Types §4.2 classes a
+   signed<->unsigned change as a **numeric** conversion, §4.3 makes only **widen** implicit, and §4.5 /
+   §5.3 make an operator an ordinary overloadable function with no `iN`-and-`uM` signature; Types §12
+   item 5 is the conformance rule. With no context an integer literal is the target's native signed
+   integer (Types §9.1, Declarations §3.4: "a literal that needs a non-default type with no context
+   MUST be annotated or constructed"). So a binary operator other than `and`/`or`/`not` whose two
+   operands sema recorded as integers of opposite signedness is ill-formed, and `check_expr` refuses
+   it after recording (`sema_mixed_signedness`, diagnostic class `SIGNEDNESS_CONVERSION_DIAG_MARKER`,
+   "implicit signed/unsigned conversion …"), on all four backends at once. A literal-only operand is
+   `VcLit`, never an integer of its own, so `n + 1` and `0 - k` stay accepted (§2.3). `unchecked`
+   changes what an operation does on overflow, never which operations exist, so it does not exempt a
+   pair.
+
+   - **The verdict reads the records, so recording is on for every check** (`ir::STY_ON` starts true).
+     A refusal that fired only when a consumer had asked for records would make `check` and `build`
+     disagree with `x86-ir` and the census. Measured on the self-build, records cost ~35% of a
+     self-compile (200 s → 271 s with the census channel open as well).
+   - **Scope.** The rule covers binary operators. The other sinks where the same implicit numeric
+     conversion hides — an annotated binding's initializer, an argument, a `return`, a store — are not
+     refused yet (`x : usize = k` with `k : i64` still checks); they are the next increment of the
+     same rule. A generic body's operand of a type-parameter type is `VcUnknown` (item 8), so a mix
+     that only an instance can see (`T` against `usize`) is not refused: Comptime §9.3 checks a generic
+     "per satisfying instantiation", which needs per-instance records — the 1e question
+     (docs/ir-slice-1.md §7).
+   - **Bindings shadow, and the records follow.** The checker kept the FIRST of two same-named `for`
+     variables or match payload bindings in its local list (`if local_in(…) {} else { push }`), so a
+     second loop's `u64` counter or a second match's `u64` payload was typed as the first one's
+     `i64`, and the refusal would have fired on a well-typed program. Each binding is now pushed, so
+     the innermost entry is the one `local_lookup` and `sema_vty_var` find (Declarations §6.1;
+     `test/signedness_shadow_records.al`).
+   - **The tree.** The self-build had 1977 such rows when #903 typed the operands. Each was fixed at its
+     root, never by a cast at a site that hides a wrong type: an unannotated literal-initialized local or
+     module binding gets the type it is used as (`mut i : usize = 0`, `mut IRP_NBIN : usize = 0`), and a
+     frame-slot offset (an `i64`: slots grow downward from `%rbp`) meeting a word count converts the count
+     at the site (`dst - i64(k) + 1`). The self-build now has **0** rows; so does `lib/` over the corpus
+     (`std::thread::spawn`'s stack length was its one). The seed still reproduces the tree
+     (`seed == Stage1 == Stage2`): the change moves the compiler's own GAS only through its own source
+     text, never through how it emits, so it owes **no** promotion.
+   - **The corpus.** 60 programs mixed. 59 spell the type they meant (`mut acc : u64 = 0`,
+     `0..u64(9)`, `xs : [u64; 4] = …`, `z : u64 = loop { … }`) and keep their rows — six twin rows
+     improve, since a typed value `loop` now builds the same on aarch64/riscv64 as on x86_64.
+     `test/unchecked_mixed_signedness.al` mixed on purpose (the x86 `unchecked` peel's operand-order bug,
+     #764's family); the pair is now ill-formed, so it is a `build_reject_has` fixture, with
+     `signedness_mixed_compare`, `signedness_mixed_literal_default` and the accepted forms in
+     `signedness_spelled_ok`.
 
 **What slice 1 closes structurally.** Slice 1 (scalar core) consumes the recorded type, so on the three
 twins it closes the scalar shapes of the family: **#764** (all dividend shapes are scalar), **#766**'s
