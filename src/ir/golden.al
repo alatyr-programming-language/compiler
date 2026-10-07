@@ -16,7 +16,7 @@
 ## One golden: its module name (the file stem), its source, and the report it must print.
 Golden := struct { name : str, src : str, want : str }
 
-golden_count := fn() -> usize { 7 }
+golden_count := fn() -> usize { 8 }
 golden_at := fn(i : usize) -> Golden {
   if i == 0 { return Golden(name = "ig_arith", src = g_arith_src(), want = g_arith_want()) }
   if i == 1 { return Golden(name = "ig_logic", src = g_logic_src(), want = g_logic_want()) }
@@ -24,6 +24,7 @@ golden_at := fn(i : usize) -> Golden {
   if i == 3 { return Golden(name = "ig_shift", src = g_shift_src(), want = g_shift_want()) }
   if i == 4 { return Golden(name = "ig_call", src = g_call_src(), want = g_call_want()) }
   if i == 5 { return Golden(name = "ig_litfold", src = g_litfold_src(), want = g_litfold_want()) }
+  if i == 6 { return Golden(name = "ig_sys", src = g_sys_src(), want = g_sys_want()) }
   Golden(name = "ig_notyet", src = g_notyet_src(), want = g_notyet_want())
 }
 
@@ -75,6 +76,15 @@ g_litfold_src := fn() -> str {
 }
 g_litfold_want := fn() -> str {
   "fn ig_litfold::low Built\nfn low() -> i8 s {\n  %0 = const.s i8 -128\n  ret %0\n}\nfn ig_litfold::span Built\nfn span() -> i64 u {\n  %0 = const.u i64 42\n  ret %0\n}\nfn ig_litfold::wrapped Built\nfn wrapped() -> i8 u {\n  unchecked {\n    %0 = const.u i8 255\n  }\n  ret %0\n}\nir: functions=3 built=3 notyet=0 sema_gaps=0 verify_failed=0\n"
+}
+
+## Slice 2a (`docs/ir-slice-2.md`): a bodyless `@abi(syscall)` declaration is a trampoline of one
+## `syscall` op, and a pointer is a one-word scalar that crosses a call.
+g_sys_src := fn() -> str {
+  "sys_write := @abi(syscall) fn(num : usize, fd : usize, buf : ptr(u8), len : usize) -> isize\nnone := fn(p : ptr(u8)) -> isize { unchecked sys_write(1, 1, p, 0) }\nsame := fn(p : ptr(u8), q : ptr(u8)) -> bool { p == q }\n"
+}
+g_sys_want := fn() -> str {
+  "fn ig_sys::sys_write Built\nfn sys_write(%0 : i64 u, %1 : i64 u, %2 : ptr, %3 : i64 u) -> i64 s {\n  %4 = syscall %0(%1, %2, %3)\n  ret %4\n}\nfn ig_sys::none Built\nfn none(%0 : ptr) -> i64 s {\n  unchecked {\n    %1 = const.u i64 1\n    %2 = const.u i64 1\n    %3 = const.u i64 0\n    %4 = call @sys_write(%1, %2, %0, %3)\n  }\n  ret %4\n}\nfn ig_sys::same Built\nfn same(%0 : ptr, %1 : ptr) -> bool {\n  %2 = cmp.== ptr %0, %1\n  ret %2\n}\nir: functions=3 built=3 notyet=0 sema_gaps=0 verify_failed=0\n"
 }
 
 ## Refusals: constructs outside the subset, and sema gaps (D6).

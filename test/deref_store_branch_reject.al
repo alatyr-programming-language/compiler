@@ -6,7 +6,7 @@
 sys_mmap := @abi(syscall) fn(num : usize, addr : usize, len : usize, prot : usize, flags : usize, fd : usize, off : usize) -> isize
 Rec := struct { a : u64, b : u64 }
 main := fn() -> u64 {
-  r0 := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, 0 - 1), 0)
+  r0 := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, 0 - 1), 0)
   base := unchecked bitcast(usize, r0)
   p := unchecked bitcast(ptr(mut Rec), base + 128)
   cond := true

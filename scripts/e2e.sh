@@ -854,19 +854,19 @@ check_large_source() {
 # verifier rule (V1–V10); a verifier that refused nothing would fail it. The report checks read an
 # EXISTING corpus program, so the corpus manifest gains no row. On the parent compiler `ir` is an
 # unknown argument (rc 40, no stdout), so every check below fails there.
-# docs/ir-slice-1.md §2 (slice 1b): the builder builds and verifies real programs. The seven golden builds
+# docs/ir-slice-1.md §2 (slice 1b): the builder builds and verifies real programs. The eight golden builds
 # of `ir --self-test` (src/ir/golden.al: arithmetic and its traps, logic, control flow, shifts, calls,
-# literal-only folding (1c), refusals) compare the verb's whole report with a reviewed text; their programs live in the compiler,
+# literal-only folding (1c), syscall trampolines and pointer scalars (2a, docs/ir-slice-2.md), refusals) compare the verb's whole report with a reviewed text; their programs live in the compiler,
 # not under test/, so the corpus manifest gains no row. NotYet names the first construct outside the
 # subset with its location, and a refused function falls back (nothing is emitted from the IR yet).
 check_ir_build() {
   local out="$T/ir_golden.out" rep="$T/ir_build.out" rc g ok=1
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_notyet; do
+  for g in ig_arith ig_logic ig_flow ig_shift ig_call ig_litfold ig_sys ig_notyet; do
     grep -q "^ok   golden $g: " "$out" || ok=0
   done
-  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 7 ]; then
-    echo "ok   ir golden builds: 7 programs built, verified and printed exactly as reviewed"
+  if [ "$rc" = 0 ] && [ "$ok" = 1 ] && [ "$(grep -c '^ok   golden ' "$out")" = 8 ]; then
+    echo "ok   ir golden builds: 8 programs built, verified and printed exactly as reviewed"
   else
     echo "FAIL ir golden builds: rc=$rc"; grep -E '^(FAIL|ok   golden)' "$out" | head -12 | sed 's/^/     /'; fail=1
   fi
@@ -879,7 +879,7 @@ check_ir_build() {
 check_ir_dev_verb() {
   local out="$T/ir_selftest.out" rc
   "$CC" ir --self-test > "$out" 2>&1; rc=$?
-  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 24 passed, 0 failed' "$out" \
+  if [ "$rc" = 0 ] && grep -qx 'ir self-test: 25 passed, 0 failed' "$out" \
     && [ "$(grep -c '^ok   planted #' "$out")" = 14 ]; then
     echo "ok   ir --self-test: storage, verify, print, 14 planted violations each refused by its rule"
   else
@@ -10667,6 +10667,23 @@ run_x86 issue824_option_ptr_global_array 42
 # #828 — nested calls passing `Option(ptr(T))` values with no frame home (field reads, call results, an
 # element, a global): every staged folded word fits the measured agg-temp pool (#815).
 run_x86 issue828_option_ptr_nested_args 42
+# #892 — an aggregate literal stored through a pointer (`deref(p) = E.V(…)` / `S(…)`) is built by the frame
+# writer and copied whole: an aggregate component or a bare `Option.Some(p)` stored $0 and displaced the rest.
+run_x86 issue892_deref_store_agg_lit 42
+# #836 — a wide (hidden result pointer) struct or enum returned as a literal keeps its aggregate fields.
+run_x86 issue836_sret_agg_lit 42
+# #861 — a local initialized from an ordinary enum payload's `ptr(S)` binding (`m := deref(q)`, `r := q`)
+# is typed: the struct copy and the typed pointer (both read 0 untyped).
+run_x86 issue861_payload_ptr_local 42
+# #899 — an annotated enum local (`h : Option(S) = Option.None`) takes its declared width; the bare literal
+# head sized `T` as one word and under-reserved it.
+run_x86 issue899_annotated_enum_local 42
+# #825 — `ptr(G[i])` of a struct-element array global takes the element stride, so reads and writes
+# through it agree with `G[i]` (it took the word stride and pointed into an earlier element).
+run_x86 issue825_global_struct_elem_addr 42
+# #829 — a loop nest deeper than 64 leaves each loop through its own label (the 65th loop frame was
+# dropped and every later break jumped to another loop).
+run_x86 issue829_deep_loop_nest 42
 # #852 — `Option(ptr(T))` as a payload component of another enum's variant: one folded payload word in the
 # local store and the return registers, and the match binding typed as the folded Option.
 run_x86 issue852_option_ptr_enum_payload 42

@@ -21,7 +21,7 @@ getv := fn(m : ptr(om::OMap(u64, u64)), key : u64) -> u64 {
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   bp := unchecked bitcast(ptr(mut bits8), bitcast(usize, r))
   mut ar := arena_over(bp, 65536)
   mut m := om::omap(u64, u64, ptr(ar), 2)          ## cap 2 → inserting 6 forces two doublings

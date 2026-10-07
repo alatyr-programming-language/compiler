@@ -8,9 +8,9 @@ strm := alloc::string
 
 main := fn() -> u64 {
   neg1 : isize = 0 - 1
-  rt0 := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  rt0 := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   tbase := unchecked bitcast(usize, rt0)
-  rs0 := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  rs0 := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   mut ar := arena_over(unchecked bitcast(ptr(mut bits8), bitcast(usize, rs0)), 65536)
   s0 := "one"
   s1 := "two"

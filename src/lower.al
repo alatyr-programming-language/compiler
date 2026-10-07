@@ -851,7 +851,7 @@ mut DCV_N : usize = 0
 ## there instead of guessing; `reject_callee_ambiguous` turns it into a located diagnostic at the one
 ## emit site that mangles a call, so the ambiguity cannot fail silently either way.
 callee_decl_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize) -> i64 {
-  idx := callee_decl_ranked(decls, src, cs, cl, ms, ml, true)
+  idx := callee_decl_ranked(decls, src, cs, cl, ms, ml, true, ms, ml)
   if idx >= 0 { return idx }
   ## A named alias (`f := M::g`) has no function declaration under the spelling `f`, so the
   ## ordinary name scan necessarily returns -1. Resolve the binding before the emitter falls back to
@@ -888,7 +888,7 @@ callee_decl_idx_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl :
       }
     }
   }
-  idx := callee_decl_ranked(decls, src, cs, cl, hs, hl, false)
+  idx := callee_decl_ranked(decls, src, cs, cl, hs, hl, false, caller_s, caller_l)
   if idx >= 0 { return idx }
   ## The module path may name a comptime re-export rather than a function declaration. Resolve that
   ## alias to its defining declaration; this is the same binding path used by bare imported calls.
@@ -897,9 +897,15 @@ callee_decl_idx_qual := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl :
 }
 ## The shared body. `bare` selects the §3 ancestor ranking (a bare call) over the historical
 ## head-preference-then-first-definition resolution (a qualified call).
-callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, bare : bool) -> i64 {
+## `caller_s`/`caller_l` is the calling module; for a qualified call (`bare` false) it is what a module
+## head `ms`/`ml` is resolved RELATIVE to (#871, `qual_head_pick`).
+callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : usize, ms : usize, ml : usize, bare : bool, caller_s : usize, caller_l : usize) -> i64 {
   cnt := rt::vec_len(deref(decls))
   th := name_hash(src, cs, cl)
+  if bare == false {
+    qi := qual_head_pick(decls, src, cs, cl, cs, cl, ms, ml, caller_s, caller_l)
+    if qi >= 0 { return qi }
+  }
   mut found := -1
   mut hits := 0
   mut best := 0 - 1
@@ -911,7 +917,7 @@ callee_decl_ranked := fn(decls : ptr(rt::Vec), src : ptr(u8), cs : usize, cl : u
     if DNH == 0 or DNH_N != cnt or rt::rec_get(unchecked bitcast(ptr(mut u8), DNH), i) == th {
       d := deref(decl_get(decls, i))
       if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, cs, cl) {
-        if mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) { return i64(i) }
+        if bare and mod_head_matches(src, d.mod_start, d.mod_len, ms, ml) { return i64(i) }
         hits += 1
         if found < 0 { found = i64(i) }
         if bare {
@@ -1019,9 +1025,43 @@ binding_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
   mut tl := nl
   if bh.n != 0 and bh.tn != 0 { ts = bh.ts; tl = bh.tn }
   if hl == 0 { return 0 - 1 }
-  ## the bound module names exactly one function of that name — resolve it there.
+  ## the bound module names exactly one function of that name — resolve it there, the head read
+  ## relative to the binding's own module (#871).
+  qual_head_pick(decls, src, ts, tl, ns, nl, hs, hl, cs, cl)
+}
+
+## #871 — how well the candidate module `[as_, al)` answers a module HEAD `[hs, hl)` written in module
+## `[cs, cl)`. Modules §1/§5: a file `a/x.al` puts `x` into `a`'s scope, and §3 lets a module name what
+## its ancestors' scopes hold, so `x` written in `a` (or in `a`'s descendants) is `a::x`. Ranks, best
+## first: the head is that child of an ancestor-or-self of the naming module (rank 2 + the ancestor's
+## path length, so the nearest scope wins); the head is the full path from the root (1); only the head's
+## LAST segment matches (0 — the historical lib-path leniency, `strbuf` reaching `alloc__strbuf`).
+## -1: the candidate is not the module the head can mean.
+mod_head_rank := fn(src : ptr(u8), as_ : usize, al : usize, hs : usize, hl : usize, cs : usize, cl : usize) -> i64 {
+  if al > hl + 2 {
+    pl := al - hl - 2
+    sep := str_at((src + as_ + pl), 2)
+    if (sep == "__" or sep == "::") and mod_seg_eq(src, as_ + pl + 2, hl, hs, hl) {
+      r := mod_anc_rank_from(src, as_, pl, cs, cl)
+      if r >= 0 { return r + 2 }
+    }
+  }
+  if mod_seg_eq(src, as_, al, hs, hl) { return 1 }
+  if mod_head_matches(src, as_, al, hs, hl) { return 0 }
+  -1
+}
+
+## #871 — the function or alias named `[ts, tl)` in the module a HEAD `[hs, hl)` written in module
+## `[cs, cl)` names, by `mod_head_rank`; -1 when no candidate's module answers the head. Two or more
+## candidates that answer it only by the last-segment leniency, from DIFFERENT modules, are refused
+## (located at the name `[ls, ll)`): the head names neither, and picking one is how `a/x.al` and
+## `b/x.al` collapsed — every `x` bound whichever came last.
+qual_head_pick := fn(decls : ptr(rt::Vec), src : ptr(u8), ts : usize, tl : usize, ls : usize, ll : usize, hs : usize, hl : usize, cs : usize, cl : usize) -> i64 {
+  cnt := rt::vec_len(deref(decls))
   th := name_hash(src, ts, tl)
   mut res := 0 - 1
+  mut best := 0 - 1
+  mut lenient_other := false
   mut j := dni_lo(cnt, th)
   je := dni_hi(cnt, th)
   while j < je {
@@ -1029,9 +1069,22 @@ binding_callee_idx := fn(decls : ptr(rt::Vec), src : ptr(u8), ns : usize, nl : u
     j += 1
     if dnh_skip(cnt, k, th) == false {
       d := deref(decl_get(decls, k))
-      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ts, tl)
-         and mod_head_matches(src, d.mod_start, d.mod_len, hs, hl) { res = i64(k) }
+      if (d.kind == 1 or d.kind == 4) and streq(src, d.name_start, d.name_len, ts, tl) {
+        r := mod_head_rank(src, d.mod_start, d.mod_len, hs, hl, cs, cl)
+        if r > best {
+          best = r
+          res = i64(k)
+          lenient_other = false
+        } else if r == best and r == 0 and res >= 0 {
+          rd := deref(decl_get(decls, usize(res)))
+          if mod_seg_eq(src, rd.mod_start, rd.mod_len, d.mod_start, d.mod_len) == false { lenient_other = true }
+        }
+      }
     }
+  }
+  if lenient_other {
+    lower_show_src_line(src, ls)
+    panic("selfhost: this module path names two different modules that both end in its last segment (Modules §1/§5) — spell the full path from the package root, or the path from an enclosing module")
   }
   res
 }
@@ -5368,21 +5421,47 @@ slit_scalar_fields := fn(v : ptr(Expr), cx : ptr(LCtx)) -> bool {
   nw := struct_words(cx.decls, cx.src, si.ss, si.sl, deref(cx.mar))
   nw == struct_lit_nf(v)
 }
-## True iff `v` is an enum literal `E.V(p0, …)` whose EVERY payload is a SCALAR value (not a struct /
-## str / nested-enum literal) — the case the DerefAssign pointer-store fast path handles; a complex
-## payload is deferred to the existing slow path (no regression).
-elit_scalar_payloads := fn(v : ptr(Expr), cx : ptr(LCtx)) -> bool {
+## True iff `v` is an enum literal `E.V(p0, …)` whose EVERY payload is ONE plain word — the case the
+## one-push-per-payload pointer-store and wide-return fast paths handle. Every other payload is stored by
+## `emit_enum_assign` through an agg-temp block (`emit_agg_lit_temp`, #892): a struct / nested-enum /
+## variant literal (a bare `Option.Some(p)` is one, and needs its fold), a `str` or view pair, an array
+## literal, a multi-word struct or enum VAR, or an aggregate-returning call.
+elit_word_payloads := fn(v : ptr(Expr), cx : ptr(LCtx)) -> bool {
   ef := enum_lit_full(v)
   if ef.is_e == false { return false }
-  mut g : Option(ptr(mut Arg)) = ef.phead
+  lit_word_components(ef.phead, cx)
+}
+
+## True iff `e` is a unit-variant literal of an enum none of whose variants carries a payload — a
+## one-word value equal to its discriminant.
+unit_word_enum_lit := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  ef := enum_lit_full(e)
+  if ef.is_e == false { return false }
+  match ef.phead { Some(pq) => { return false }; None => {} }
+  if enum_decl_of(cx.decls, cx.src, ef.es, ef.el) < 0 { return false }
+  enum_inst_words(cx.decls, cx.src, ef.es, ef.el, arena_of(cx)) == 0
+}
+
+## True iff every value of the literal component list `head` (enum payloads or struct-literal field
+## values) is ONE plain word, so a one-push-per-component store is exact (`elit_word_payloads`).
+lit_word_components := fn(head : Option(ptr(mut Arg)), cx : ptr(LCtx)) -> bool {
+  a := arena_of(cx)
+  mut g : Option(ptr(mut Arg)) = head
   mut ok := true
   loop {
     match g {
       Some(gq) => {
         ga := deref(arg_p(gq))
-        ## reject a struct / nested-enum / str payload (a str is 2 words: `is_str_operand` catches a literal,
-        ## a var, and `sub(…)`) — any of those is >1 word and would mis-store at the 1-word-per-payload path.
-        if struct_lit_info(ga.e).is_s or enum_lit_info(ga.e).is_e or is_str_operand(ga.e, cx) { ok = false }
+        if struct_lit_info(ga.e).is_s or is_str_operand(ga.e, cx) or pair_value_expr(ga.e, cx) or array_lit_info(ga.e).is_a { ok = false }
+        ## A variant literal is one plain word only when it names a unit variant of a payload-free enum
+        ## (`Kty.KNone`): its discriminant is the whole value. A payloaded enum, and a bare `Option.None`
+        ## / `Option.Some(p)` (whose folded word is not its variant index), take the frame writer.
+        if enum_lit_info(ga.e).is_e and unit_word_enum_lit(ga.e, cx) == false { ok = false }
+        ## A niche-folded `Option(ptr(T))` VAR is its one folded word, whatever `1 + arity` would say.
+        gva := var_agg_info(ga.e, cx.slots, cx.src)
+        gfold := gva.ek == 3 and is_niche_folded(cx.src, gva.s, gva.n)
+        if payload_agg_words(ga.e, cx, a) > 1 or (payload_enum_words(ga.e, cx, a) > 1 and gfold == false) { ok = false }
+        if enum_ret_call_d(ga.e, cx.decls, cx.src, a) or struct_call_words(ga.e, cx, a) > 1 { ok = false }
         g = ga.next
       }
       None => { break }
@@ -7441,6 +7520,75 @@ emit_global_agg_store := fn(fv : ptr(Expr), gs : usize, gn : usize, off : i64, t
 ## words, FAIL LOUD (Priority-1). Returns true iff `G` is an aggregate global (the caller then skips the
 ## scalar path); false for a scalar global (unchanged fast path → fixpoint-neutral: every mut global the
 ## compiler itself whole-assigns is a scalar).
+## #892 / #836 — an AGGREGATE LITERAL stored at a computed ADDRESS (`deref(p) = S(…)` / `E.V(…)`, a
+## wide struct or enum literal returned through the hidden result pointer) is built by the ONE frame
+## writer — `emit_struct_assign` / `emit_enum_assign`, which own every component kind (a folded
+## `Option(ptr(T))`, a nested struct or enum literal, a `str`, a multi-word var, an enum or struct
+## call) — into an agg-temp block, and the block is then copied word by word. The per-component scalar
+## pushes these stores used before stored the `$0` placeholder for every aggregate component and
+## shifted every later word: `deref(p) = E.V(1, Option.Some(q))` stored `None`, and a wide
+## `W(…, p = P.V(…), …)` return read `PN`. The scalar fast paths remain only where every component is
+## provably one word (`slit_scalar_fields`, `elit_word_payloads`).
+##
+## `nw` words starting at the returned block base (word k at slot `base - k`): one `agg_alloc` block,
+## or several adjacent blocks for a value wider than the scanned block width (`agg_alloc` hands them
+## out contiguously, and `emit_fn` re-emits with a wider pool when the body takes more, #772).
+agg_alloc_words := fn(cx : ptr(LCtx), nw : usize) -> i64 {
+  if cx.agg_next < 0 { panic("selfhost: storing an aggregate literal through a pointer needs the aggregate-value temp pool, which this context does not have") }
+  mut base := agg_alloc(cx)
+  mut have := usize(cx.agg_w)
+  while have < nw {
+    base = agg_alloc(cx)
+    have += usize(cx.agg_w)
+  }
+  base
+}
+
+## Build the aggregate literal `v` (a struct or enum literal) of `nw` words into a fresh agg-temp block
+## and return the block base. The caller copies the words out (`emit_frame_words_to_r11`) and then
+## restores `cx.agg_next`, so the block lives only for the one store.
+emit_agg_lit_temp := fn(v : ptr(Expr), nw : usize, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) -> i64 {
+  base := agg_alloc_words(cx, nw)
+  if struct_lit_info(v).is_s { emit_struct_assign(v, base, sb, cx, a, nl) }
+  else if enum_lit_info(v).is_e { emit_enum_assign(v, base, sb, cx, a, nl) }
+  else { panic("selfhost: emit_agg_lit_temp takes a struct or enum literal") }
+  base
+}
+
+## Copy `nw` frame words of the block at `base` (word k at slot `base - k`) to `k*8(%r11)` — the
+## ascending pointee layout every by-reference aggregate read uses.
+emit_frame_words_to_r11 := fn(base : i64, nw : usize, in out sb : strbuf::StrBuf) {
+  for k in 0..nw {
+    push_str(sb, "  movq -")
+    push_frame_word(sb, usize(base), k)
+    push_str(sb, "(%rbp), %rcx\n  movq %rcx, ")
+    push_int(sb, i64(k * 8))
+    push_str(sb, "(%r11)\n")
+  }
+}
+
+## The word count of the aggregate literal `v` as stored into a destination of type `dt` (`{0,0}` when
+## the destination type is not known): the destination's instance width when it names the aggregate,
+## so a generic literal (`Option.Some(S(…))` into an `Option(S)`) takes its substituted width; else the
+## literal's own declared width. 0 when neither resolves.
+agg_lit_store_words := fn(v : ptr(Expr), dt : CSpan, cx : ptr(LCtx), a : rt::Arena) -> usize {
+  sli := struct_lit_info(v)
+  if sli.is_s {
+    if dt.n != 0 and struct_decl_of(cx.decls, cx.src, base_type_name(cx.src, dt.s, dt.n).s, base_type_name(cx.src, dt.s, dt.n).n) >= 0 {
+      return struct_words(cx.decls, cx.src, dt.s, dt.n, a)
+    }
+    return struct_words(cx.decls, cx.src, sli.ss, sli.sl, a)
+  }
+  eli := enum_lit_info(v)
+  if eli.is_e {
+    if dt.n != 0 and enum_decl_of(cx.decls, cx.src, base_type_name(cx.src, dt.s, dt.n).s, base_type_name(cx.src, dt.s, dt.n).n) >= 0 {
+      return 1 + enum_inst_words(cx.decls, cx.src, dt.s, dt.n, a)
+    }
+    if enum_decl_of(cx.decls, cx.src, eli.es, eli.el) >= 0 { return 1 + enum_inst_words(cx.decls, cx.src, eli.es, eli.el, a) }
+  }
+  0
+}
+
 emit_mut_global_whole_assign := fn(gs : usize, gn : usize, v : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) -> bool {
   gv := mut_global_value(cx.decls, cx.src, gs, gn)
   if unchecked bitcast(usize, gv) == 0 { return false }
@@ -11589,14 +11737,33 @@ emit_struct_value := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx
 emit_struct_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(e) {
     Expr::StructLit(cs, cl, nf, fhead) => {
-      for k in 0..nf {
-        fk := arg_expr_at(fhead, k, a)
-        emit_gas(fk, sb, cx, a, nl)                       ## field value on the stack
-        push_str(sb, "  popq %rcx\n  movq -")
+      if lit_word_components(fhead, cx) == false {
+        ## #836 — a field wider than one word (an enum / struct literal, a `str`, a multi-word var) or a
+        ## variant literal: build the whole literal with the frame writer, then copy it through the hidden
+        ## result pointer (`emit_agg_lit_temp`'s note). One push per field stored `$0` for the aggregate
+        ## field and displaced every later field.
+        if std_struct_has_direct_byte_layout(cx.decls, cx.src, cx.ret_ss, cx.ret_sl, deref(cx.mar)) {
+          panic("selfhost: a wide (> 7-word) byte-layout struct returned as a literal with an aggregate field is not lowered — bind it to a local first (`t := S(…)` then `return t`)")
+        }
+        snw := agg_lit_store_words(e, CSpan(s = cx.ret_ss, n = cx.ret_sl), cx, a)
+        if snw == 0 { panic("selfhost: a wide struct literal return whose width does not resolve") }
+        ssave := cx.agg_next
+        sbase := emit_agg_lit_temp(e, snw, sb, cx, a, nl)
+        push_str(sb, "  movq -")
         push_int(sb, i64((cx.sret_slot + 1) * 8))
-        push_str(sb, "(%rbp), %rax\n  movq %rcx, ")
-        push_int(sb, i64(k * 8))
-        push_str(sb, "(%rax)\n")
+        push_str(sb, "(%rbp), %r11\n")
+        emit_frame_words_to_r11(sbase, snw, sb)
+        cx.agg_next = ssave
+      } else {
+        for k in 0..nf {
+          fk := arg_expr_at(fhead, k, a)
+          emit_gas(fk, sb, cx, a, nl)                       ## field value on the stack
+          push_str(sb, "  popq %rcx\n  movq -")
+          push_int(sb, i64((cx.sret_slot + 1) * 8))
+          push_str(sb, "(%rbp), %rax\n  movq %rcx, ")
+          push_int(sb, i64(k * 8))
+          push_str(sb, "(%rax)\n")
+        }
       }
     }
     Expr::Var(s, n) => {
@@ -11742,12 +11909,39 @@ emit_struct_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LC
 ## register-staging `emit_enum_value` can't be reused (it tops out at %r11 = 7 words), so words go
 ## STRAIGHT to memory. Handles `return E.V(<struct lit>)` / `E.V(a, b, …)` (EnumLit) and `return v`
 ## (an enum Var); the pointer is reloaded per word (a field value that is a call would clobber it).
+## True iff the wide enum literal `e` has exactly one payload and it is a struct VAR, which the
+## `np == 1` arm of `emit_enum_to_sret` copies whole from its frame words.
+sret_enum_struct_var_payload := fn(e : ptr(Expr), cx : ptr(LCtx)) -> bool {
+  ef := enum_lit_full(e)
+  if ef.is_e == false { return false }
+  match ef.phead {
+    Some(pq) => {
+      pa := deref(arg_p(pq))
+      match pa.next { Some(nq) => { return false }; None => {} }
+      return var_agg_info(pa.e, cx.slots, cx.src).ek == 2
+    }
+    None => { return false }
+  }
+}
+
 emit_enum_to_sret := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(e) {
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
       disc := variant_index(cx.decls, cx.src, es, el, vs, vl, deref(cx.mar))
       ## payload → words 1.. (emitted BEFORE the disc, which is written last).
-      if np == 1 {
+      if elit_word_payloads(e, cx) == false and sret_enum_struct_var_payload(e, cx) == false {
+        ## #836 / #892 — a payload wider than one word, or a variant literal (a bare `Option.Some(p)`):
+        ## the frame writer builds the whole value, then it is copied through the result pointer.
+        enw := agg_lit_store_words(e, CSpan(s = cx.ret_ss, n = cx.ret_sl), cx, a)
+        if enw == 0 { panic("selfhost: a wide enum literal return whose width does not resolve") }
+        esave := cx.agg_next
+        ebase := emit_agg_lit_temp(e, enw, sb, cx, a, nl)
+        push_str(sb, "  movq -")
+        push_int(sb, i64((cx.sret_slot + 1) * 8))
+        push_str(sb, "(%rbp), %r11\n")
+        emit_frame_words_to_r11(ebase, enw, sb)
+        cx.agg_next = esave
+      } else if np == 1 {
         ga := deref(arg_at(phead, "argument list ended early"))
         psl := struct_lit_info(ga.e)
         va := var_agg_info(ga.e, cx.slots, cx.src)
@@ -18349,7 +18543,7 @@ pub emit_gas := fn(e : ptr(Expr), in out sb : strbuf::StrBuf, cx : ptr(LCtx), a 
       cx.cont = i64(ltop)
       if cx.defer_active {
         defer_frame_push(cx)
-        cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+        loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
       }
       loop_push(cx, i64(ldone), i64(ltop), 1)   ## value-bearing frame
       emit_stmts(b, sb, cx, nl)
@@ -22970,6 +23164,40 @@ emit_enum_place_words_at := fn(v : ptr(Expr), base : i64, in out sb : strbuf::St
   false
 }
 
+## The word count of a STRUCT-returning call `e` (register or hidden-result-pointer return); 0 when `e`
+## is not one. Asked by the aggregate frame writers before their one-word scalar fallback.
+struct_call_words := fn(e : ptr(Expr), cx : ptr(LCtx), a : rt::Arena) -> usize {
+  if struct_ret_call(e, cx.decls, cx.src, a) == false and sret_ret_call(e, cx.decls, cx.src, a) == false { return 0 }
+  csp := call_ret_struct_span(e, cx.decls, cx.src, a)
+  struct_words(cx.decls, cx.src, csp.s, csp.n, deref(cx.mar))
+}
+
+## Deliver a STRUCT-returning call `e`'s complete value into the frame block whose word 0 is slot `fb`
+## (word k at `-(fb - k + 1) * 8(%rbp)`), and answer its word count. A register return is stored word
+## by word from the return registers; a wide (hidden result pointer) return gets `fb` itself as its
+## destination (`cx.sret_call`, as a `c := mk()` binding publishes its local). The component writers of
+## `emit_enum_assign` (a payload) and `emit_struct_assign` (a field) share it: each kept only word 0
+## (%rax) of such a call, or stored nothing at all.
+emit_struct_call_words_at := fn(e : ptr(Expr), fb : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) -> usize {
+  csw := struct_call_words(e, cx, a)
+  if sret_ret_call(e, cx.decls, cx.src, a) {
+    csov := cx.sret_call
+    cx.sret_call = fb
+    emit_struct_value(e, sb, cx, a, nl)
+    cx.sret_call = csov
+  } else {
+    emit_struct_value(e, sb, cx, a, nl)
+    for k in 0..csw {
+      push_str(sb, "  movq ")
+      emit_retreg(sb, k)
+      push_str(sb, ", -")
+      push_int(sb, (fb - i64(k) + 1) * 8)
+      push_str(sb, "(%rbp)\n")
+    }
+  }
+  csw
+}
+
 emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx : ptr(LCtx), a : rt::Arena, in out nl : usize) {
   match deref(v) {
     Expr::EnumLit(es, el, vs, vl, np, phead) => {
@@ -23108,6 +23336,10 @@ emit_enum_assign := fn(v : ptr(Expr), base : i64, in out sb : strbuf::StrBuf, cx
               pwok := emit_enum_place_words_at(ga.e, base - 1 - i, sb, cx, a, nl)
               if pwok == false { panic("selfhost: a multi-word enum VAR payload passed its own `ek == 3` guard but the shared enum-words writer declined it") }
               i += i64(pwv)
+            } else if struct_call_words(ga.e, cx, a) > 1 {
+              ## A multi-word STRUCT-returning CALL payload (`E.A(mk())`): the scalar arm below kept only
+              ## word 0 (%rax), a silent wrong value for every later field.
+              i += i64(emit_struct_call_words_at(ga.e, base - 1 - i, sb, cx, a, nl))
             } else {
               emit_gas(ga.e, sb, cx, a, nl)
               push_str(sb, "  popq %rax\n  movq %rax, -")
@@ -25057,15 +25289,34 @@ pub compfor_iter_arg := fn(src : ptr(u8), vs : usize, vl : usize) -> CSpan {
 ## indexes into now lives in `LCtx` (`cx.defer_*`) — see `lower_ctx.al`.
 ## The loop-target stack + each loop's defer-frame boundary now live in `LCtx` (`cx.loop_*`) — see
 ## `lower_ctx.al`. Push/pop one frame; the pairs are balanced at every call site.
+## #829: the frames are four words of `cx.loop_tab` (brk, cont, isexpr, dframe), grown before each write,
+## so every push is recorded whatever the nesting — the old `[_; 64]` push dropped the 65th frame.
 loop_push := fn(cx : ptr(LCtx), brk : i64, cont : i64, isexpr : usize) {
-  if cx.loop_sp < 64 {
-    cx.loop_brk[cx.loop_sp] = brk
-    cx.loop_cont[cx.loop_sp] = cont
-    cx.loop_isexpr[cx.loop_sp] = isexpr
-    cx.loop_sp = cx.loop_sp + 1
-  }
+  loop_reserve(cx, cx.loop_sp)
+  rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 0), usize(brk))
+  rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 1), usize(cont))
+  rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 2), isexpr)
+  cx.loop_sp = cx.loop_sp + 1
 }
 loop_pop := fn(cx : ptr(LCtx)) { if cx.loop_sp > 0 { cx.loop_sp = cx.loop_sp - 1 } }
+## Make frame `k` of the loop table writable.
+loop_reserve := fn(cx : ptr(LCtx), k : usize) {
+  mut lb := cx.loop_tab
+  mut lc := cx.loop_cap
+  rt::wtab_reserve(lb, lc, rt::wtab_words(cx.loop_sp, 4), rt::wtab_words(k + 1, 4))
+  cx.loop_tab = lb
+  cx.loop_cap = lc
+}
+## The defer-frame boundary of the loop about to be pushed (frame `loop_sp`), recorded before its push.
+loop_set_next_dframe := fn(cx : ptr(LCtx), v : usize) {
+  loop_reserve(cx, cx.loop_sp)
+  rt::wtab_set(cx.loop_tab, rt::wtab_at(cx.loop_sp, 4, 3), v)
+}
+## Frame `k`'s break label, continue label, value-bearing flag and defer-frame boundary.
+loop_brk_at := fn(cx : ptr(LCtx), k : usize) -> i64 { i64(rt::wtab_get(cx.loop_tab, rt::wtab_at(k, 4, 0))) }
+loop_cont_at := fn(cx : ptr(LCtx), k : usize) -> i64 { i64(rt::wtab_get(cx.loop_tab, rt::wtab_at(k, 4, 1))) }
+loop_isexpr_at := fn(cx : ptr(LCtx), k : usize) -> usize { rt::wtab_get(cx.loop_tab, rt::wtab_at(k, 4, 2)) }
+loop_dframe_at := fn(cx : ptr(LCtx), k : usize) -> usize { rt::wtab_get(cx.loop_tab, rt::wtab_at(k, 4, 3)) }
 ## DEFER (§9.3): push/pop a per-block frame (a snapshot of `cx.defer_n`, the block's drain boundary)
 ## at a nested statement-block's entry/exit. Frame ops emit NO gas and are CALLED ONLY when `cx.defer_active`
 ## (a defer-free fn never touches the frame stack — the TOOL-1 fixpoint is byte-neutral for the tree).
@@ -25516,7 +25767,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             ## (for a `break`/`continue` drain), gated on `cx.defer_active` so a defer-free fn stays byte-identical.
             if cx.defer_active {
               defer_frame_push(cx)
-              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+              loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
             }
             loop_push(cx, i64(ldone), i64(lguard), 0)   ## depth-frame for labeled break/continue (byte-neutral)
             ## TAIL (see the `ExprStmt` arm): a LOOP body's last statement is NEVER the function's return
@@ -25556,7 +25807,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             cx.cont = i64(ltop)     ## `continue` re-enters the top (no guard)
             if cx.defer_active {
               defer_frame_push(cx)
-              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+              loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
             }
             loop_push(cx, i64(ldone), i64(ltop), 0)     ## depth-frame for labeled break/continue (byte-neutral)
             ## TAIL: a `loop` body's last statement is never the fn's return value (see the `While` arm).
@@ -25636,11 +25887,11 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             mut tisexpr : usize = 1
             if depth != 0 {
               if depth >= cx.loop_sp { panic("selfhost: break to a label beyond the enclosing loop nesting") }
-              btgt = cx.loop_brk[(cx.loop_sp - 1) - depth]
-              tisexpr = cx.loop_isexpr[(cx.loop_sp - 1) - depth]
+              btgt = loop_brk_at(cx, (cx.loop_sp - 1) - depth)
+              tisexpr = loop_isexpr_at(cx, (cx.loop_sp - 1) - depth)
             } else if cx.loop_sp > 0 {
-              btgt = cx.loop_brk[cx.loop_sp - 1]
-              tisexpr = cx.loop_isexpr[cx.loop_sp - 1]
+              btgt = loop_brk_at(cx, cx.loop_sp - 1)
+              tisexpr = loop_isexpr_at(cx, cx.loop_sp - 1)
             }
             if unchecked bitcast(usize, value) != 0 {
               if tisexpr == 0 { panic("selfhost: `break <expr>` targets a non-value loop (loop-expression value only from a loop consumed for a value, Control Flow §7.2)") }
@@ -25655,9 +25906,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             if cx.defer_sp > 0 {
               mut bdb := 0
               if depth != 0 {
-                bdb = cx.loop_dframe[(cx.loop_sp - 1) - depth]
+                bdb = loop_dframe_at(cx, (cx.loop_sp - 1) - depth)
               } else if cx.loop_sp > 0 {
-                bdb = cx.loop_dframe[cx.loop_sp - 1]
+                bdb = loop_dframe_at(cx, cx.loop_sp - 1)
               }
               sv := cx.defer_n
               emit_defer_chain(sb, cx, a, nl, bdb)
@@ -25675,7 +25926,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             mut ctgt := cx.cont
             if depth != 0 {
               if depth >= cx.loop_sp { panic("selfhost: continue to a label beyond the enclosing loop nesting") }
-              ctgt = cx.loop_cont[(cx.loop_sp - 1) - depth]
+              ctgt = loop_cont_at(cx, (cx.loop_sp - 1) - depth)
             }
             ## DEFER (§9.3): a `continue` re-enters the target loop's next iteration, so drain THIS iteration's
             ## defers (the target loop body-frame boundary) before jumping — SAVE & RESTORE the ledger (an
@@ -25683,9 +25934,9 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             if cx.defer_sp > 0 {
               mut cdb := 0
               if depth != 0 {
-                cdb = cx.loop_dframe[(cx.loop_sp - 1) - depth]
+                cdb = loop_dframe_at(cx, (cx.loop_sp - 1) - depth)
               } else if cx.loop_sp > 0 {
-                cdb = cx.loop_dframe[cx.loop_sp - 1]
+                cdb = loop_dframe_at(cx, cx.loop_sp - 1)
               }
               sv := cx.defer_n
               emit_defer_chain(sb, cx, a, nl, cdb)
@@ -26211,7 +26462,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             cx.cont = i64(lcont)
             if cx.defer_active {
               defer_frame_push(cx)
-              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+              loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
             }
             loop_push(cx, i64(ld), i64(lcont), 0)   ## depth-frame (a `for` is never value-bearing); byte-neutral
             ## TAIL: a `for` body's last statement is never the fn's return value (see the `While` arm).
@@ -26269,7 +26520,7 @@ emit_stmts := fn(head : Option(ptr(mut Stmt)), in out sb : strbuf::StrBuf, cx : 
             cx.cont = i64(lcont)
             if cx.defer_active {
               defer_frame_push(cx)
-              cx.loop_dframe[cx.loop_sp] = cx.defer_frame[cx.defer_sp - 1]
+              loop_set_next_dframe(cx, cx.defer_frame[cx.defer_sp - 1])
             }
             loop_push(cx, i64(ldone), i64(lcont), 0)   ## depth-frame (a `for` is never value-bearing); byte-neutral
             ## TAIL: a `for` body's last statement is never the fn's return value (see the `While` arm).
@@ -27134,7 +27385,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
       ir_inl_tmp = i64(ib) + i64(inl_reserve) - 1
     }
   }
-  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = Option.None, ind_fn_fmask = 0)
+  mut cxv := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = ir_tslot, str_tmp = ir_str_tmp, agg_tmp = ir_agg_tmp, inl_tmp = ir_inl_tmp, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = ir_agg_next, agg_peak = ir_agg_next, agg_w = ir_agg_w, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = ir_swidth, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
   cxv.fn_id = di
   cxv.ctslots = ptr(ir_cts)
   cx := ptr(cxv)
@@ -27310,6 +27561,7 @@ emit_fn_ir := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCtx)
     ri = ri + 1
   }
   push_str(sb, "  movq %rbp, %rsp\n  popq %rbp\n  ret\n")
+  rt::wtab_free(cxv.loop_tab, cxv.loop_cap)
   agg_pool_fit(cxv.agg_peak, ir_agg_next, ir_agg_words)
 }
 
@@ -27896,7 +28148,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## this branch never fires for the self-host build (byte-identical → the TOOL-1 fixpoint holds).
   if fn_is_naked(p.src, d.name_start, d.name_len) {
     push_str(sb, ":\n")
-    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = Option.None, ind_fn_fmask = 0)
+    mut ncx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = 0, ret_enum = false, ret_struct = false, ret_tuple = false, ret_str = false, ret_float = false, ret_ss = 0, ret_sl = 0, tslot = -1, str_tmp = -1, agg_tmp = -1, inl_tmp = -1, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = 0, gp_l = 0, it_s = 0, it_l = 0, gp2_s = 0, gp2_l = 0, it2_s = 0, it2_l = 0, gp3_s = 0, gp3_l = 0, it3_s = 0, it3_l = 0, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = -1, agg_peak = -1, agg_w = 0, tcomps = ptr(tup_layout), tail = false, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = false, sret_slot = 0, sret_call = -1, vchk = true, defer_active = false, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
     ncx.fn_id = di
     ncx.ctslots = ptr(ct_slots)
     emit_stmts(d.body_stmts, sb, ptr(ncx), nl)
@@ -27904,6 +28156,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
     ## naked fn that is the closing `ret()` / `syscall()`. Emit it as a raw instruction too (a non-raw
     ## trailing expr in a naked fn is undefined and emits nothing).
     if is_raw_instr_call(d.value, p.src, deref(p.mar)) { emit_raw_instr(d.value, sb, ptr(ncx), deref(p.mar)) }
+    rt::wtab_free(ncx.loop_tab, ncx.loop_cap)
     return AggPoolFit.Held
   }
   push_str(sb, ":\n  pushq %rbp\n  movq %rsp, %rbp\n  subq $")
@@ -28159,7 +28412,7 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   ## push/drain ops are skipped and the emitted tree gas stays byte-identical (the TOOL-1 fixpoint is
   ## neutral). `defer_sp` starts at 0: the fn body has NO frame, only nested blocks push.
   d_has_defer := stmts_have_defer(d.body_stmts, p.src, deref(p.mar))
-  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_brk = [0; 64], loop_cont = [0; 64], loop_isexpr = [0; 64], loop_dframe = [0; 64], ir_stop = Option.None, ind_fn_fmask = 0)
+  mut cx := LCtx(src = p.src, slots = ptr(slots), decls = p.decls, mar = p.mar, epi = lepi, ret_enum = renum, ret_struct = rstruct, ret_tuple = rtuple, ret_str = rstr, ret_float = rfloat, ret_ss = ers, ret_sl = erl, tslot = i64(lt), str_tmp = str_tmp_top, agg_tmp = agg_tmp_top, inl_tmp = inl_tmp_base, mod_s = d.mod_start, mod_l = d.mod_len, brk = -1, cont = -1, gp_s = gps, gp_l = gpl, it_s = its, it_l = itl, gp2_s = gps2, gp2_l = gpl2, it2_s = its2, it2_l = itl2, gp3_s = gps3, gp3_l = gpl3, it3_s = its3, it3_l = itl3, cf_var_s = 0, cf_var_l = 0, cf_fld_s = 0, cf_fld_l = 0, cf_ty_s = 0, cf_ty_l = 0, cf_pay_s = 0, cf_pay_l = 0, cf_pay_ty_s = 0, cf_pay_ty_l = 0, cf_curvar_s = 0, cf_curvar_l = 0, cf_vloop_s = 0, cf_vloop_l = 0, pack_args = Option.None, agg_next = agg_tmp_base, agg_peak = agg_tmp_base, agg_w = aggw, tcomps = ptr(tup_layout), tail = tailmode, call_cidx = -1, mdepth = 0, swidth = scr_w, ret_sret = d_is_sret, sret_slot = sret_slot, sret_call = -1, vchk = true, defer_active = d_has_defer, defer_n = 0, defer_sp = 0, defer_inner = [0; 128], defer_blk = [0; 128], defer_blk_head = [Option.None; 128], defer_frame = [0; 64], loop_sp = 0, loop_tab = rt::WTab(0), loop_cap = rt::Words(0), ir_stop = Option.None, ind_fn_fmask = 0)
   cx.fn_id = di
   cx.ctslots = ptr(ct_slots)
   emit_stmts(d.body_stmts, sb, ptr(cx), nl)
@@ -28243,6 +28496,8 @@ emit_fn_pool := fn(d : Decl, di : usize, in out sb : strbuf::StrBuf, p : ptr(PCt
   emit_csreg_moves(sb, cs_save_base, false)
   push_str(sb, "  movq %rbp, %rsp\n  popq %rbp\n  ret\n")
   sf := 0
+  ## #829: the loop-target table is this function's own mapping (a loop-free function never made one).
+  rt::wtab_free(cx.loop_tab, cx.loop_cap)
   agg_pool_fit(cx.agg_peak, agg_tmp_base, aggpoolw)
 }
 

@@ -3475,10 +3475,12 @@ pub ex_slice_hi := fn(v : ptr(Expr)) -> ptr(Expr) {
 pub DECL_KIND_VALUE : u8 = 0
 ## `Decl.kind` of a function declaration, named for the same reason.
 pub DECL_KIND_FN : u8 = 1
-## `Decl.kind` of a struct, an enum and an `@abi(syscall)` function declaration, named for sema's
-## record pass (docs/ir.md §3.8) for the same reason.
+## `Decl.kind` of a struct and an enum declaration, named for sema's record pass (docs/ir.md §3.8) for
+## the same reason.
 pub DECL_KIND_STRUCT : u8 = 2
 pub DECL_KIND_ENUM : u8 = 3
+## `Decl.kind` of a bodyless `@abi(syscall)` declaration (the parser's kind 4): a trampoline from the
+## target's call convention to its system-call convention, built by the shared IR (`docs/ir-slice-2.md`).
 pub DECL_KIND_SYSCALL : u8 = 4
 ## Does module declaration `d` own the one-word scalar data cell each twin emits for a scalar global —
 ## `<name>: .quad <init>` on aarch64/riscv64, `(global $<name> (mut i64) …)` on wasm? The twins'

@@ -122,6 +122,40 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **A loop nest deeper than 64 leaves through the right loop (x86_64).** The loop-target frames were
+  `[_; 64]` arrays whose push dropped the 65th frame while every pop still popped, so each later
+  `break`/`continue` jumped to another loop's label (#829). They now live in a word table that grows
+  with the nesting (#801's form) and is released with the function. The compiler's own GAS is
+  unchanged.
+- **`ptr(G[i])` of a struct-element array global points at the element (x86_64).** The address took
+  the word stride, so reads and writes through the pointer hit an earlier element (#825). It now takes
+  the element stride the element read and write use. The compiler's own GAS is unchanged.
+- **An annotated enum local takes its declared width (x86_64).** `h : Option(S) = Option.None` was
+  sized from the bare literal head, so it was a word short: a whole-value store through `ptr(h)`
+  overran the next local, and a re-assignment was refused (#899). The annotation now decides. The
+  compiler's own GAS is unchanged.
+- **A local initialized from an enum payload's `ptr(S)` binding is typed (x86_64).** `m := deref(q)`
+  and `r := q` over `B(q) => …` took one untyped word, so `m.w` and `deref(r).v` read 0 (#861). An arm
+  with a `deref` copy now types the binding for its body; a plain copy is retyped in place as the
+  typed pointer. The compiler's own GAS is unchanged.
+- **Two child modules with one stem stay two modules.** `src/a/x.al` and `src/b/x.al` collapsed: a module
+  head was matched by its last segment and the last candidate won, so every `x` import bound `b::x` (a
+  silent wrong value, #871). A head is now resolved relative to the module that writes it (Modules
+  §1/§5/§3 — `x` in `a` is `a`'s child `a::x`, the nearest enclosing scope first, then the full path from
+  the root); a head that only matches the last segment of two different modules is refused at build time
+  with its source line. The compiler's own GAS is unchanged.
+- **A wide struct or enum returned as a literal keeps every component (x86_64).** A struct or enum
+  returned through the hidden result pointer as a literal with an aggregate field or payload (an enum or
+  struct literal, a `str`, a bare `Option.Some(p)`) stored the `$0` placeholder and displaced the fields
+  after it (#836). The literal is now built by the frame writer and copied through the result pointer.
+  The compiler's own GAS is unchanged.
+
+- **An aggregate literal stored at an address keeps every component (x86_64).** `deref(p) = E.V(…)` and
+  `deref(p) = S(…)` with a component wider than one word (a struct or payloaded-enum literal, a `str`, a
+  multi-word struct var, a struct-returning call) or a bare `Option.Some(p)` stored the `$0` placeholder
+  and displaced the components after it (#892). The literal is now built by the frame writer and copied whole. The frame writers also deliver every word of a struct-returning call used as an enum payload or
+  a struct field (they kept word 0, or stored nothing). The compiler's own GAS is unchanged.
+
 ## 0.2.12 — 2026-10-02
 
 - **Seed promotion; the bootstrap traps an unrepresentable signedness change.** The frozen

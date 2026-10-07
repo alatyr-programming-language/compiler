@@ -825,9 +825,12 @@ pub LCtx := struct {
   ## global is the wrong form for per-function state). The `loop_push`/`loop_pop`
   ## pairs are balanced at every call site, so `loop_sp` was already 0 at each function boundary and
   ## per-function initialisation here is equivalent to the globals' cross-function persistence.
+  ## #829 — the frames live in an `rt` word table (`loop_tab`/`loop_cap`, four words per frame: brk, cont,
+  ## isexpr, dframe) that grows with the nesting (#801's form). They were four `[_; 64]` arrays whose
+  ## push skipped a 65th frame while every pop still popped, so from there on a `break`/`continue`
+  ## jumped to ANOTHER loop's label — a silent wrong value on x86_64.
   loop_sp : usize,
-  loop_brk : [i64; 64], loop_cont : [i64; 64], loop_isexpr : [usize; 64],
-  loop_dframe : [usize; 64],
+  loop_tab : rt::WTab, loop_cap : rt::Words,
   ## STOP sentinel for `emit_stmts`: when non-zero, `emit_stmts` halts BEFORE the statement at this
   ## handle. Zero (the default) = walk the whole `nx` chain, so every ordinary `emit_stmts` caller is
   ## unaffected. Two users, both scoped save/restore around a single `emit_stmts(…, cx, …)` on the SAME

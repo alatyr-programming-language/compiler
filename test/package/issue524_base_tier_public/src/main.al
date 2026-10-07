@@ -64,7 +64,7 @@ main := fn() -> u64 {
 
   ## ---- alloc.al: the §5.1 mechanism surface and the §5.2.1 arena surface ----
   neg1 : isize = 0 - 1
-  r := unchecked sys_mmap(9, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
+  r := unchecked sys_mmap(std::sysno::MMAP, 0, 65536, 3, 34, bitcast(usize, neg1), 0)
   bp := unchecked bitcast(ptr(mut bits8), bitcast(usize, r))
   mut ar := base::alloc::arena_over(bp, 65536)
   if base::alloc::mechanism(ar) != Mechanism.region { return 17 }

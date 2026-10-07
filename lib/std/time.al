@@ -1,4 +1,4 @@
-## std::time — wall-clock and monotonic time via `clock_gettime(2)` (Linux x86_64 syscall 228).
+## std::time — wall-clock and monotonic time via `clock_gettime(2)` (numbered by `std::sysno`).
 ##
 ## `clock_gettime(clk_id, *timespec)` writes a `{sec, nsec}` pair (two 8-byte words) to the pointer.
 ## Taking `ptr` of a bare local is not a place, so the timespec buffer is an ARENA slot (its raw
@@ -29,7 +29,7 @@ read_clock := fn(a : ptr(mut Arena), clk : usize) -> Timespec {
   nsecp := unchecked bitcast(ptr(mut i64), tp + 8)
   deref(secp) = 0
   deref(nsecp) = 0
-  r := unchecked sys_clock_gettime(228, clk, tp)
+  r := unchecked sys_clock_gettime(std::sysno::CLOCK_GETTIME, clk, tp)
   if r < 0 { return Timespec(sec = 0, nsec = 0) }
   Timespec(sec = deref(secp), nsec = deref(nsecp))
 }
