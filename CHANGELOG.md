@@ -122,6 +122,10 @@ tag lives in the sibling repository; a `v1.0.0` here would mean something else e
 
 ## Unreleased
 
+- **`ptr(G[i])` of a struct-element array global points at the element (x86_64).** The address took
+  the word stride, so reads and writes through the pointer hit an earlier element (#825). It now takes
+  the element stride the element read and write use. The compiler's own GAS is unchanged.
+
 ## 0.2.12 — 2026-10-02
 
 - **Seed promotion; the bootstrap traps an unrepresentable signedness change.** The frozen
