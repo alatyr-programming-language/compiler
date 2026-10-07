@@ -100,10 +100,10 @@ g_agg_want := fn() -> str {
 
 ## Slice 3b (`docs/ir-slice-3.md` §6): pointers as places, address-taken locals, mutable module scalars.
 g_place_src := fn() -> str {
-  "S := struct { a : i64, b : u64 }\n## a field through a pointer, `deref(p).f`, a scalar through `deref(q)`\nbump := fn(p : ptr(mut S), q : ptr(mut u64)) {\n  p.a = p.a + 1\n  deref(p).b = deref(q)\n  deref(q) = 0\n}\n## an address-taken local lives in a frame object; a mutable module scalar is a whole-cell store\nmut G : u32 = 3\ntake := fn() -> u64 {\n  mut n : u64 = 5\n  m := ptr(mut n)\n  deref(m) = 6\n  G = G + 1\n  n\n}\n## outside 3b: a narrow scalar through a pointer (agreement with the legacy word is not proved)\nlow := fn(q : ptr(mut u8)) { deref(q) = 1 }\n"
+  "S := struct { a : i64, b : u64 }\n## a field through a pointer, `deref(p).f`, a scalar through `deref(q)`\nbump := fn(p : ptr(mut S), q : ptr(mut u64)) {\n  p.a = p.a + 1\n  deref(p).b = deref(q)\n  deref(q) = 0\n}\n## an address-taken local lives in a frame object; a mutable module scalar is a whole-cell store\nmut G : u32 = 3\ntake := fn() -> u64 {\n  mut n : u64 = 5\n  m : ptr(mut u64) = ptr(mut n)\n  deref(m) = 6\n  G = G + 1\n  n\n}\n## outside 3b: a narrow scalar through a pointer (agreement with the legacy word is not proved)\nlow := fn(q : ptr(mut u8)) { deref(q) = 1 }\n"
 }
 g_place_want := fn() -> str {
-  "TBD"
+  "fn ig_place::bump Built\nfn bump(%0 : ptr, %1 : ptr) {\n  %2 = load.s i64 [%0 + 0]\n  %3 = const.s i64 1\n  %4 = add.chk.s i64 %2, %3 overflow  @8347\n  store i64 [%0 + 0], %4\n  %5 = load.u i64 [%1 + 0]\n  store i64 [%0 + 8], %5\n  %6 = const.u i64 0\n  store i64 [%1 + 0], %6\n  ret\n}\nfn ig_place::take Built\nfn take() -> i64 u {\n  $0 : frame 8 align 8\n  %0 = const.u i64 5\n  %1 = mov i64 %0\n  store i64 [$0 + 0], %1\n  %2 = addr $0\n  %3 = mov ptr %2\n  %4 = const.u i64 6\n  store i64 [%3 + 0], %4\n  %5 = addr @G\n  %6 = load.u i32 [%5 + 0]\n  %7 = const.u i32 1\n  %8 = ext.u i64 <- i32 %6\n  %9 = ext.u i64 <- i32 %7\n  %10 = add.chk.u i64 %8, %9 overflow  @8602\n  %11 = fit.u i32 <- i64 %10 overflow  @8602\n  %12 = ext.u i64 <- i32 %11\n  %13 = addr @G\n  store i64 [%13 + 0], %12\n  %14 = load.u i64 [$0 + 0]\n  ret %14\n}\nfn ig_place::low NotYet(stmt DerefAssign, ig_place.al:18:36)\nir: functions=3 built=2 notyet=1 sema_gaps=0 verify_failed=0\n"
 }
 
 ## Refusals: constructs outside the subset, and sema gaps (D6).
